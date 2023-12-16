@@ -1,0 +1,1188 @@
+- id:
+    taskspace: T
+    task_idx: (6, 0)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies: []
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (5, 0)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (6, 0)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (5, 1)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (6, 0)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (5, 2)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (6, 0)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (4, 0)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (5, 0)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (4, 1)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (5, 0)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (4, 2)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (5, 0)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (4, 3)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (5, 1)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (4, 4)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (5, 1)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (4, 5)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (5, 1)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (4, 6)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (5, 2)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (4, 7)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (5, 2)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (4, 8)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (5, 2)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 0)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 0)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 1)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 0)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 2)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 0)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 3)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 1)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 4)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 1)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 5)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 1)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 6)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 2)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 7)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 2)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 8)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 2)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 9)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 3)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 10)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 3)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 11)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 3)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 12)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 4)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 13)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 4)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 14)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 4)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 15)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 5)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 16)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 5)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 17)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 5)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 18)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 6)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 19)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 6)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 20)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 6)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 21)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 7)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 22)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 7)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 23)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 7)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 24)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 8)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 25)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 8)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (3, 26)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (4, 8)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (2, 0)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (3, 0)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 1)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 2)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (2, 1)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (3, 3)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 4)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 5)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (2, 2)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (3, 6)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 7)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 8)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (2, 3)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (3, 9)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 10)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 11)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (2, 4)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (3, 12)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 13)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 14)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (2, 5)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (3, 15)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 16)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 17)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (2, 6)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (3, 18)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 19)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 20)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (2, 7)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (3, 21)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 22)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 23)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (2, 8)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (3, 24)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 25)
+    instance: 0
+  - taskspace: T
+    task_idx: (3, 26)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (1, 0)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (2, 0)
+    instance: 0
+  - taskspace: T
+    task_idx: (2, 1)
+    instance: 0
+  - taskspace: T
+    task_idx: (2, 2)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (1, 1)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (2, 3)
+    instance: 0
+  - taskspace: T
+    task_idx: (2, 4)
+    instance: 0
+  - taskspace: T
+    task_idx: (2, 5)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (1, 2)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (2, 6)
+    instance: 0
+  - taskspace: T
+    task_idx: (2, 7)
+    instance: 0
+  - taskspace: T
+    task_idx: (2, 8)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
+- id:
+    taskspace: T
+    task_idx: (0, 0)
+    instance: 0
+  runtime:
+    (CPU[0],):
+      task_time: 10000
+      device_fraction: 0
+      gil_accesses: 0
+      gil_fraction: 0
+      memory: 0
+  dependencies:
+  - taskspace: T
+    task_idx: (1, 0)
+    instance: 0
+  - taskspace: T
+    task_idx: (1, 1)
+    instance: 0
+  - taskspace: T
+    task_idx: (1, 2)
+    instance: 0
+  data_dependencies:
+    read: []
+    write: []
+    read_write: []
+  mapping: null
+  order: 0
