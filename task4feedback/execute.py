@@ -29,11 +29,11 @@ from parla.common.globals import (
     CUPY_ENABLED,
     get_current_context,
 )
-
-from parla.array import asarray
-from parla.devices import cpu, gpu
-from parla.tasks import specialize
-from parla import gpu_sleep_nogil, gpu_sleep_gil
+from parla.common.parray.from_data import asarray
+from parla.cython.device_manager import cpu, gpu
+from parla.cython.variants import specialize
+from parla import gpu_sleep_nogil
+from parla.cython.core import gpu_bsleep_nogil, gpu_bsleep_gil
 import numpy as np
 
 from fractions import Fraction
@@ -59,7 +59,7 @@ def estimate_frequency(n_samples=10, ticks=1900000000):
     times = np.zeros(n_samples)
     for i in range(n_samples):
         start = time.perf_counter()
-        gpu_sleep_nogil(device_id, int(ticks), stream)
+        gpu_bsleep_nogil(device_id, int(ticks), stream)
         stream.synchronize()
         end = time.perf_counter()
         print(f"...collected frequency sample {i} ", end - start)
@@ -118,7 +118,7 @@ def free_sleep_gpu(duration: float, config: RunConfig = None):
 
     cycles_per_second = _GPUInfo.get_cycles()
     ticks = int(cycles_per_second * duration)
-    gpu_sleep_nogil(device.id, ticks, stream)
+    gpu_bsleep_nogil(device.id, ticks, stream)
 
     if config.inner_sync:
         stream.synchronize()
@@ -139,67 +139,124 @@ def lock_sleep_gpu(duration: float, config: RunConfig = None):
 
     cycles_per_second = _GPUInfo.get_cycles()
     ticks = int(cycles_per_second * duration)
-    gpu_sleep_gil(device.id, ticks, stream)
+    gpu_bsleep_gil(device.id, ticks, stream)
 
     if config.inner_sync:
         stream.synchronize()
 
 
-def generate_data(
-    data_config: Dict[int, DataInfo], data_scale: float, data_movement_type
-) -> List[np.ndarray]:
-    value = 0
-    data_list = []
-    # If data does not exist, this loop will not be iterated.
-    for data_idx in data_config:
-        data_info = data_config[data_idx]
+def write_data_tag(block: "np.ndarray | cupy.ndarray", id: DataID):
+    n, d = block.shape
+    n_idx = len(id.idx)
 
-        data_location = data_info.location
-        data_size = data_info.size
+    if d < 1:
+        raise ValueError(
+            "Data block dimension must be at least 1. Current dimension of {id} is {d}."
+        )
 
-        if data_location == DeviceType.CPU_DEVICE:
-            data = np.zeros([data_size, data_scale], dtype=np.float32) + value + 1
-            data_list.append(data)
+    if n < n_idx + 2:
+        raise ValueError(
+            "Data block length must be at least 2 + the maximum id size. Current length of {id} is {n}. Expected at least {n_idx}."
+        )
 
-        elif data_location > DeviceType.ANY_GPU_DEVICE:
-            import cupy as cp
+    # Write starting generation of the data to first index
+    generation_idx = [0 for _ in range(d)]
+    block[generation_idx] = 0
 
-            with cp.cuda.Device(data_location - 1) as device:
-                data = cp.zeros([data_size, data_scale], dtyp=np.float32) + value + 1
-                device.synchronize()
-                data_list.append(data)
+    # Write Data ID to the next consecutive indicies
+    # ID is terminated with "-1"
+    for i in range(1, n_idx + 2):
+        current_idx = [0 for _ in range(d)]
+        current_idx[0] = i
+        if i - 1 < n_idx:
+            block[generation_idx] = id.idx[i - 1]
         else:
-            raise NotImplementedError("This device is not supported for data")
-        value += 1
-
-    return data_list
+            block[generation_idx] = -1
 
 
-# TODO(wlr): Rewrite this supporting multiple device placement.
+def generate_array(
+    data_info: DataInfo, data_scale: int = 1
+) -> Dict[Device, "np.ndarray | cupy.ndarray"]:
+    data_id = data_info.id
+    data_location = data_info.location
+    data_size = data_info.size
+
+    # Write bytes to float
+    n = data_size // 4
+
+    location_to_block = dict()
+
+    if not isinstance(data_location, tuple):
+        data_location = (data_location,)
+
+    for location in data_location:
+        assert location is not None
+        if location.architecture == Architecture.CPU:
+            block = np.zeros([n, data_scale], dtype=np.float32)
+            write_data_tag(block, data_id)
+        elif location.architecture == Architecture.GPU:
+            with cupy.cuda.Device(location.device_id) as device:
+                block = cupy.zeros([n, data_scale], dtype=np.float32)
+                write_data_tag(block, data_id)
+                device.synchronize()
+        else:
+            raise NotImplementedError(
+                "There is no valid block type specified for Architecture: {location.architecture}"
+            )
+        location_to_block[location] = block
+
+    return location_to_block
+
+
+def generate_parray(
+    location_to_block: Dict[Device, "np.ndarray | cupy.ndarray"]
+) -> PArray:
+    parray: PArray | None = None
+    for i, (location, block) in enumerate(location_to_block.items()):
+        if i == 0:
+            parray = asarray(block)
+        else:
+            assert parray is not None
+            # NOTE: This assumes only a single CPU that is device -1
+            if location.architecture == Architecture.CPU:
+                target_id = -1
+            elif location.architecture == Architecture.GPU:
+                target_id = location.device_id
+            else:
+                raise NotImplementedError(
+                    "Only CPU and GPU Architectures are supported by PArray."
+                )
+
+            # Perform read at destimation
+            parray._auto_move(target_id, do_write=False)
+            # Assumes the above call is blocking
+
+    assert parray is not None
+    return parray
+
+
 def generate_data(
-    data_config: Dict[int, DataInfo], data_scale: float, data_movement_type
-) -> List[np.ndarray]:
-    if data_movement_type == MovementType.NO_MOVEMENT:
-        return None
+    data_config: Dict[DataID, DataInfo],
+    data_scale: int = 1,
+    movement_type: MovementType = MovementType.NO_MOVEMENT,
+) -> Dict[DataID, PArray | Dict[Device, "np.ndarray | cupy.ndarray"]]:
+    data_blocks = dict()
 
-    elif data_movement_type == MovementType.LAZY_MOVEMENT:
-        data_list = create_arrays(data_config, data_scale)
+    if movement_type == MovementType.NO_MOVEMENT:
+        return data_blocks
 
-    if data_movement_type == MovementType.EAGER_MOVEMENT:
-        data_list = create_arrays(data_config, data_scale)
-        data_list = make_parrays(data_list)
-        if len(data_list) > 0:
-            assert isinstance(data_list[0], PArray)
-    """
-    if len(data_list) > 0:
-        print("[validation] Generated data type:", type(data_list[0]))
-    """
-    return data_list
+    for data_idx, data_info in data_config.items():
+        value = generate_array(data_info, data_scale)
+        if movement_type == MovementType.EAGER_MOVEMENT:
+            value = generate_parray(value)
+        data_blocks[data_idx] = value
+
+    return data_blocks
 
 
 def get_kernel_info(
-    info: TaskRuntimeInfo, config: RunConfig = None
-) -> Tuple[float, float, int]:
+    info: TaskRuntimeInfo, config: Optional[RunConfig] = None
+) -> Tuple[Tuple[float, float], int]:
     task_time = info.task_time
     gil_fraction = info.gil_fraction
     gil_accesses = info.gil_accesses
@@ -221,8 +278,10 @@ def get_kernel_info(
 
 def convert_context_to_devices(context):
     device_list = []
-
     for device in context.devices:
+        print("CONTEXT: ", context.devices, type(context.devices))
+        print("DEVICE: ", device, type(device))
+        print("ARCHITECTURE: ", device.architecture, type(device.architecture))
         if device.architecture.name == "CPU":
             dev = Device(Architecture.CPU, device.id)
         elif device.architecture.name == "GPU":
@@ -342,7 +401,7 @@ def build_parla_device(mapping: Device, runtime_info: TaskRuntimeInfo):
 
 
 def build_parla_device_tuple(
-    mapping: Device | Tuple[Device], runtime_info: TaskPlacementInfo
+    mapping: Device | Tuple[Device, ...], runtime_info: TaskPlacementInfo
 ):
     if isinstance(mapping, Device):
         mapping = (mapping,)
@@ -373,7 +432,7 @@ def build_parla_device_tuple(
 
 
 def build_parla_placement(
-    mapping: Device | Tuple[Device] | None, task_placment_info: TaskPlacementInfo
+    mapping: Device | Tuple[Device, ...] | None, task_placment_info: TaskPlacementInfo
 ):
     if mapping is None:
         mapping_list = task_placment_info.locations
@@ -387,7 +446,10 @@ def build_parla_placement(
 
 
 def parse_task_info(
-    task: TaskInfo, taskspaces: Dict[str, TaskSpace], config: RunConfig, data_list: List
+    task: TaskInfo,
+    taskspaces: Dict[str, TaskSpace],
+    config: RunConfig,
+    data_dict: Dict[DataID, "np.ndarray | cupy.ndarray | PArray"] | None = None,
 ):
     """
     Parse a tasks configuration into Parla objects to launch the task.
@@ -410,32 +472,38 @@ def parse_task_info(
     # Data information
     data_information = task.data_dependencies
 
-    # TODO(wlr): Fix Lazy Movement
-    if config.movement_type == MovementType.EAGER_MOVEMENT:
-        read_data_list = data_information.read
-        write_data_list = data_information.write
-        rw_data_list = data_information.read_write
+    # Extract DataID lists
+    read_data_list = data_information.read
+    write_data_list = data_information.write
+    rw_data_list = data_information.read_write
+
+    if config.movement_type == MovementType.NO_MOVEMENT:
+        INOUT = []
+        IN = []
+        OUT = []
     else:
-        read_data_list = []
-        write_data_list = []
-        rw_data_list = []
+        assert data_dict is not None
 
-    # Remove duplicated data blocks between in/out and inout
-    if len(read_data_list) > 0 and len(rw_data_list) > 0:
-        read_data_list = list(set(read_data_list).difference(set(rw_data_list)))
-    if len(write_data_list) > 0 and len(rw_data_list) > 0:
-        write_data_list = list(set(write_data_list).difference(set(rw_data_list)))
+        # Remove duplicated data blocks between in/out and inout
+        if len(read_data_list) > 0 and len(rw_data_list) > 0:
+            read_data_list = list(set(read_data_list).difference(set(rw_data_list)))
+        if len(write_data_list) > 0 and len(rw_data_list) > 0:
+            write_data_list = list(set(write_data_list).difference(set(rw_data_list)))
 
-    # Construct data blocks.
-    INOUT = [] if len(rw_data_list) == 0 else [data_list[d] for d in rw_data_list]
-
-    IN = [] if len(read_data_list) == 0 else [data_list[d] for d in read_data_list]
-    OUT = [] if len(write_data_list) == 0 else [data_list[d] for d in write_data_list]
+        # Construct data blocks.
+        INOUT = (
+            [] if len(rw_data_list) == 0 else [data_dict[d.id] for d in rw_data_list]
+        )
+        IN = (
+            []
+            if len(read_data_list) == 0
+            else [data_dict[d.id] for d in read_data_list]
+        )
 
     return (
         task_name,
         (task_idx, taskspace, dependencies, placement_list),
-        (IN, OUT, INOUT),
+        (IN, INOUT),
         placement_info,
     )
 
@@ -443,7 +511,7 @@ def parse_task_info(
 def create_task(task_name, task_info, data_info, runtime_info, config: RunConfig):
     try:
         task_idx, T, dependencies, placement_set = task_info
-        IN, OUT, INOUT = data_info
+        IN, INOUT = data_info
 
         @spawn(
             T[task_idx],
@@ -485,8 +553,8 @@ def execute_tasks(
 
 
 def execute_graph(
-    data_config: Dict[int, DataInfo],
     tasks: Dict[TaskID, TaskInfo],
+    data_config: Dict[DataID, DataInfo],
     run_config: RunConfig,
     timing: List[TimeSample],
 ):
@@ -534,8 +602,8 @@ def execute_graph(
 
 def run(
     tasks: Dict[TaskID, TaskInfo],
-    data_config: Dict[int, DataInfo] = None,
-    run_config: RunConfig = None,
+    data_config: Optional[Dict[DataID, DataInfo]] = None,
+    run_config: Optional[RunConfig] = None,
 ) -> TimeSample:
     if run_config is None:
         run_config = RunConfig(
@@ -546,6 +614,9 @@ def run(
             data_scale=1,
         )
 
+    if data_config is None:
+        data_config = {}
+
     timing = []
 
     for outer in range(run_config.outer_iterations):
@@ -553,7 +624,7 @@ def run(
 
         with Parla(logfile=run_config.logfile):
             internal_start_t = time.perf_counter()
-            execute_graph(data_config, tasks, run_config, timing)
+            execute_graph(tasks, data_config, run_config, timing)
             internal_end_t = time.perf_counter()
 
         outer_end_t = time.perf_counter()
