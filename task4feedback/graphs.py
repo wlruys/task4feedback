@@ -438,11 +438,8 @@ def make_stencil_graph(config: StencilConfig) -> Tuple[TaskMap, DataMap]:
                     # Filter to only orthogonal stencil directions (no diagonals)
                     # This is inefficient, but allows easy testing of other stencil types
                     stencil_tuple = np.subtract(stencil_tuple, config.neighbor_distance)
-                    if np.count_nonzero(stencil_tuple) == 1:
+                    if np.count_nonzero(stencil_tuple) <= 1:
                         dependency_grid = tuple(np.add(grid_tuple, stencil_tuple))
-                        print("task_idx", grid_tuple)
-                        print("stencil_tuple", stencil_tuple)
-                        print("dependency_grid", dependency_grid)
                         out_of_bounds = any(
                             element < 0 or element >= config.width
                             for element in dependency_grid
@@ -466,7 +463,6 @@ def make_stencil_graph(config: StencilConfig) -> Tuple[TaskMap, DataMap]:
                 data_dependencies,
                 task_mapping,
             )
-            print(task_dict[task_id])
 
     return task_dict, data_dict
 
