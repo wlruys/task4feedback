@@ -1,14 +1,14 @@
-from utility.graphs import *
-from utility.load import *
+from task4feedback.graphs import *
+from task4feedback.load import *
 
 from rich import print
 
 # from utility.execute import run
-from utility.visualize import *
+from task4feedback.visualize import *
 
-from utility.simulator.preprocess import *
-from utility.simulator.simulator import *
-from utility.simulator.topology import *
+from task4feedback.simulator.preprocess import *
+from task4feedback.simulator.simulator import *
+from task4feedback.simulator.topology import *
 
 
 def run():
@@ -23,35 +23,44 @@ def run():
     runtime_info = TaskRuntimeInfo(task_time=100000, device_fraction=1)
     task_configs.add((gpu), runtime_info)
 
-    data_config = DataGraphConfig(pattern=1)
+    data_config = NoDataGraphConfig()
 
-    config = CholeskyConfig(blocks=4, task_config=task_configs, data_config=data_config)
+    def custom_tasks(task_id: TaskID) -> TaskPlacementInfo:
+        placement_info = TaskPlacementInfo()
 
+        import random
+
+        time = random.randint(10000, 20000)
+        device_tuple = (Device(Architecture.GPU, -1),)
+        runtime_info = TaskRuntimeInfo(task_time=time)
+
+        placement_info.add(device_tuple, runtime_info)
+
+        return placement_info
+
+    config = CholeskyConfig(blocks=4, data_config=data_config, task_config=custom_tasks)
+    # config = SerialConfig(
+    #     steps=2, chains=1, task_config=custom_tasks, data_config=data_config
+    # )
+
+    # tasks, data = make_serial_graph(config)
     tasks, data = make_cholesky_graph(config)
 
     write_tasks_to_yaml(tasks, "graph")
     write_data_to_yaml(data, "graph")
 
     tasklist, taskmap, datamap = read_graph("graph")
-    apply_mapping(taskmap, gpu1)
 
     topology = TopologyManager.get_generator("frontera")(None)
 
     scheduler = SimulatedScheduler(topology=topology, scheduler_type="parla")
     scheduler.register_taskmap(taskmap)
-    # scheduler.register_datamap(datamap)
-    # print("Tasklist", tasklist)
     scheduler.add_initial_tasks(tasklist)
 
     start_t = time.perf_counter()
     scheduler.run()
     end_t = time.perf_counter()
-    print("Time taken", end_t - start_t)
-
-    print(scheduler.mechanisms)
-    print(scheduler.time)
-
-    print(topology)
+    print("Simulated Time: ", scheduler.time)
 
 
 run()
