@@ -415,7 +415,6 @@ def make_stencil_graph(config: StencilConfig) -> Tuple[TaskMap, DataMap]:
     # Build task graph
 
     dimensions = tuple(config.width for _ in range(config.dimensions))
-    print("dimensions", dimensions)
 
     for t in range(config.steps):
         grid_generator = np.ndindex(dimensions)
