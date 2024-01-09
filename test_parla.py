@@ -113,24 +113,23 @@ def test():
         return placement_info
 
     # config = IndependentConfig(
-    #     task_count=10, data_config=data_config, task_config=custom_tasks
+    #     task_count=args.steps, data_config=data_config, task_config=custom_tasks
     # )
-    # config = CholeskyConfig(blocks=4, data_config=data_config)
-    # config = ReductionConfig(levels=3, branch_factor=3, data_config=data_config)
-    config = StencilConfig(
-        dimensions=1,
-        width=args.width,
-        steps=args.steps,
-        data_config=data_config,
-        task_config=custom_tasks,
-    )
-    # config = SweepConfig(
+    # config = ReductionConfig(levels=args.steps, branch_factor=2, data_config=data_config, task_config=custom_tasks)
+    # config = StencilConfig(
+    #     dimensions=1,
     #     width=args.width,
     #     steps=args.steps,
-    #     dimensions=2,
     #     data_config=data_config,
     #     task_config=custom_tasks,
     # )
+    config = SweepConfig(
+        width=args.width,
+        steps=args.steps,
+        dimensions=2,
+        data_config=data_config,
+        task_config=custom_tasks,
+    )
     # config = SerialConfig(
     #     chains=1, steps=args.steps, data_config=data_config, task_config=custom_tasks
     # )
@@ -149,7 +148,6 @@ def test():
     timing = run(tasks, data, run_config=run_config)
     end_t = time.perf_counter()
     print("Internal time:", timing)
-    print("Time taken:", end_t - start_t, "seconds")
 
 
 test()
