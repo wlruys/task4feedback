@@ -1,0 +1,3 @@
+[submodule "doozer"]
+	path = doozer
+	url = https://github.com/wlruys/doozer.git

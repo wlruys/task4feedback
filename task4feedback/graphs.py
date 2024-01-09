@@ -698,3 +698,14 @@ def make_sweep_graph(config: SweepConfig) -> Tuple[TaskMap, DataMap]:
             )
 
     return task_dict, data_dict
+
+
+def make_graph(config: GraphConfig) -> Tuple[TaskMap, DataMap]:
+    """
+    Generates a synthetic task graph based on the provided configuration.
+    """
+    for func in graph_generators:
+        if isinstance(config, func.__annotations__["config"]):
+            return func(config)
+
+    raise ValueError(f"Invalid graph configuration: {config}")

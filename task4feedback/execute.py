@@ -118,7 +118,7 @@ def free_sleep_gpu(duration: float, config: RunConfig = None):
 
     cycles_per_second = _GPUInfo.get_cycles()
     ticks = int(cycles_per_second * duration)
-    gpu_bsleep_nogil(device.id, ticks, stream)
+    gpu_bsleep_nogil(device.gpu_id, ticks, stream)
 
     if config.inner_sync:
         stream.synchronize()
@@ -279,13 +279,10 @@ def get_kernel_info(
 def convert_context_to_devices(context):
     device_list = []
     for device in context.devices:
-        print("CONTEXT: ", context.devices, type(context.devices))
-        print("DEVICE: ", device, type(device))
-        print("ARCHITECTURE: ", device.architecture, type(device.architecture))
         if device.architecture.name == "CPU":
-            dev = Device(Architecture.CPU, device.id)
+            dev = Device(Architecture.CPU, 0)
         elif device.architecture.name == "GPU":
-            dev = Device(Architecture.GPU, device.id)
+            dev = Device(Architecture.GPU, device.gpu_id)
         else:
             raise ValueError(f"Invalid architecture: {device.architecture.name}")
         device_list.append(dev)
@@ -512,6 +509,12 @@ def create_task(task_name, task_info, data_info, runtime_info, config: RunConfig
     try:
         task_idx, T, dependencies, placement_set = task_info
         IN, INOUT = data_info
+
+        if config.verbose:
+            print(
+                f"Creating Task {task_name} with dependencies {dependencies} on placement {placement_set}",
+                flush=True,
+            )
 
         @spawn(
             T[task_idx],
