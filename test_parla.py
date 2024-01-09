@@ -126,7 +126,7 @@ def test():
     config = SweepConfig(
         width=args.width,
         steps=args.steps,
-        dimensions=2,
+        dimensions=1,
         data_config=data_config,
         task_config=custom_tasks,
     )

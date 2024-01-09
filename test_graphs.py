@@ -29,17 +29,17 @@ def run():
 
     # config = CholeskyConfig(blocks=4, data_config=data_config)
     # config = ReductionConfig(levels=3, branch_factor=3, data_config=data_config)
-    # config = StencilConfig(dimensions=1, width=3, steps=2, data_config=data_config)
+    config = StencilConfig(dimensions=1, width=3, steps=2, data_config=data_config)
     # config = SweepConfig(width=3, steps=2, dimensions=2, data_config=data_config)
     # config = SerialConfig(chains=2, steps=10, data_config=data_config)
     # config = MapReduceConfig(data_config=data_config)
-    config = ScatterReductionConfig(levels=3, branch_factor=3, data_config=data_config)
+    # config = ScatterReductionConfig(levels=3, branch_factor=3, data_config=data_config)
 
     # tasks, data = make_sweep_graph(config)
-    tasks, data = make_scatter_reduction_graph(config)
+    tasks, data = make_stencil_graph(config)
 
-    # write_tasks_to_yaml(tasks, "graph")
-    # write_data_to_yaml(data, "graph")
+    write_tasks_to_yaml(tasks, "graph")
+    write_data_to_yaml(data, "graph")
 
     tasklist, taskmap, datamap = read_graph("graph")
 

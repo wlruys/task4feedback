@@ -274,7 +274,6 @@ def make_reduction_graph(config: ReductionConfig) -> Tuple[TaskMap, DataMap]:
 
     for level in range(config.levels - 1, -1, -1):
         tasks_in_level = config.branch_factor ** (level)
-        print("tasks in level", tasks_in_level)
         subtree_segment = tasks_in_level / config.n_devices
 
         for j in range(tasks_in_level):
@@ -366,7 +365,6 @@ def make_scatter_reduction_graph(config: ScatterReductionConfig):
     # Reduction phase
     for level in range(config.levels - 1, -1, -1):
         tasks_in_level = config.branch_factor ** (level)
-        print("tasks in level", tasks_in_level)
         subtree_segment = tasks_in_level / config.n_devices
 
         for j in range(tasks_in_level):
@@ -616,7 +614,6 @@ def make_butterfly_graph(config: ButterflyConfig) -> Tuple[TaskMap, DataMap]:
                 dependency_list.append(dependency)
 
                 step = 2 ** (config.steps - i)
-                print("step", step)
 
                 left_idx = j - step
                 if left_idx >= 0 and left_idx < config.width:
@@ -670,7 +667,6 @@ def make_sweep_graph(config: SweepConfig) -> Tuple[TaskMap, DataMap]:
 
             # Task Placement Info
             task_placement_info = configurations(task_id)
-            print(task_placement_info)
 
             # Task Dependencies
             dependency_list = []
