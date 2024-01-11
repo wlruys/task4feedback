@@ -1,0 +1,11 @@
+Metadata-Version: 2.1
+Name: task4feedback
+Version: 0.0.1
+Maintainer-email: William Ruys <will.ruys@gmail.com>, Hochan Lee <hochan@utexas.edu>
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: psutil
+Requires-Dist: pyyaml
+Requires-Dist: numpy
+
+# Task4Feedback

@@ -555,6 +555,35 @@ def execute_tasks(
     return taskspaces
 
 
+def parse_tasks(
+    taskspaces, tasks: Dict[TaskID, TaskInfo], run_config: RunConfig, data_list=None
+):
+    info_dict = dict()
+    spawn_start_t = time.perf_counter()
+
+    # Spawn tasks
+    for task, details in tasks.items():
+        task_name, task_info, data_info, runtime_info = parse_task_info(
+            details, taskspaces, run_config, data_list
+        )
+        info_dict[task] = (task_name, task_info, data_info, runtime_info)
+
+    spawn_end_t = time.perf_counter()
+
+    return info_dict, taskspaces
+
+
+def execute_tasks_from_info(info_dict, run_config):
+    spawn_start_t = time.perf_counter()
+
+    # Spawn tasks
+    for task, details in info_dict.items():
+        task_name, task_info, data_info, runtime_info = details
+        create_task(task_name, task_info, data_info, runtime_info, run_config)
+
+    spawn_end_t = time.perf_counter()
+
+
 def execute_graph(
     tasks: Dict[TaskID, TaskInfo],
     data_config: Dict[DataID, DataInfo],
@@ -578,9 +607,14 @@ def execute_graph(
                 if space_name not in taskspaces:
                     taskspaces[space_name] = TaskSpace(space_name)
 
+            info_dict, taskspaces = parse_tasks(
+                taskspaces, tasks, run_config, data_list=data_list
+            )
+
             graph_start_t = time.perf_counter()
 
-            execute_tasks(taskspaces, tasks, run_config, data_list=data_list)
+            # execute_tasks(taskspaces, tasks, run_config, data_list=data_list)
+            execute_tasks_from_info(info_dict, run_config)
 
             for taskspace in taskspaces.values():
                 await taskspace
