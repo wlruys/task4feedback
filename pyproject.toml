@@ -1,10 +1,6 @@
-[build-system]
-requires = ["scikit-build-core>=0.5", "pyyaml", "cython", "numpy"]
-build-backend = "scikit_build_core.build"
-
 [project]
-name = "parla"
-version = "0.3.1"
+name = "task4feedback"
+version = "0.0.1"
 maintainers = [
     { name = "William Ruys", email = "will.ruys@gmail.com" },
     { name = "Hochan Lee", email = "hochan@utexas.edu" },
@@ -13,27 +9,6 @@ description = ""
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = ["psutil", "pyyaml", "numpy"]
-
-[tool.scikit-build]
-minimum-version = "0.5"
-build-dir = "build"
-wheel.packages = ["src/python/parla"]
-wheel.license-files = []
-cmake.minimum-version = "3.22.1"
-cmake.build-type = "Debug"
-cmake.verbose = true
-ninja.minimum-version = "1.11"
-
-[tool.scikit-build.cmake.define]
-PARLA_ENABLE_NVTX = "OFF"
-PARLA_ENABLE_LOGGING = "OFF"
-PARLA_ENABLE_CUDA = "OFF"
-PARLA_ENABLE_HIP = "OFF"
-
-[project.optional-dependencies]
-gpu = ["cupy>=9.2"]
-crosspy = ["crosspy", "cupy>=9.2"]
-dev = ["ruff", "cython-lint", "cython"]
 
 [tool.cython-lint]
 ignore = [
