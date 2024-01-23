@@ -44,7 +44,7 @@ def map_task(task: SimulatedTask, scheduler_state: SystemState) -> Optional[Devi
     if check_status := task.check_status(
         TaskStatus.MAPPABLE, objects.taskmap, current_time
     ):
-        task.assigned_devices = (Device(Architecture.GPU, np.random.randint(0, 4)),)
+        task.assigned_devices = (Device(Architecture.CPU, 0),)
         devices = task.assigned_devices
         # print(f"Task {task.name} assigned to device {devices}")
         assert devices is not None
@@ -324,7 +324,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         self.active_scheduler -= 1
 
         if remaining_tasks := length(self.launchable_tasks) and self.success_count:
-            mapping_pair = (current_time + 100, Mapper())
+            mapping_pair = (current_time, Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
 
@@ -380,7 +380,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         self.success_count += 1
         if self.active_scheduler == 0:
-            mapping_pair = (current_time + 100, Mapper())
+            mapping_pair = (current_time, Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
 

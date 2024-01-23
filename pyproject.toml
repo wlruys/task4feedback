@@ -10,6 +10,12 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = ["psutil", "pyyaml", "numpy"]
 
+
+[project.optional-dependencies]
+graph = ["pydot", "networkx", "hypernetx", "matplotlib", "seaborn"]
+dev = ["ruff"]
+rl = ["torch", "torchvision", "torchaudio"]
+
 [tool.cython-lint]
 ignore = [
     'E504', # break after binary operator

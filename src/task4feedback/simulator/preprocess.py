@@ -193,6 +193,19 @@ def build_networkx_graph(
     return G, labels
 
 
+def create_data_objects(datamap: DataMap) -> Dict[DataID, SimulatedData]:
+    data_objects = dict()
+
+    for data in datamap.values():
+        data_objects[data.id] = SimulatedData(data.location, data)
+
+    from rich import print
+
+    print(data_objects)
+
+    return data_objects
+
+
 def apply_networkx_order(G: nx.DiGraph, tasks: SimulatedTaskMap) -> List[TaskID]:
     """
     Sort a graph by a topology, and return a valid order of the graph.

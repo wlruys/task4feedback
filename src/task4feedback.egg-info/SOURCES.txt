@@ -40,3 +40,4 @@ src/task4feedback/simulator/schedulers/__init__.py
 src/task4feedback/simulator/schedulers/minimal.py
 src/task4feedback/simulator/schedulers/parla.py
 src/task4feedback/simulator/schedulers/scheduler.py
+test/test_sim.py

@@ -1,3 +1,10 @@
 psutil
 pyyaml
 numpy
+
+[dev]
+ruff
+
+[graph]
+pydot
+networkx
