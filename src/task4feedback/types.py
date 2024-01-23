@@ -9,6 +9,7 @@ from typing import (
     Set,
     Type,
     Mapping,
+    MutableMapping,
 )
 from dataclasses import dataclass, field, InitVar
 from enum import IntEnum
@@ -427,7 +428,7 @@ class TaskRuntimeInfo:
 type TaskRuntimeSpec = TaskRuntimeInfo | Mapping[Device, TaskRuntimeInfo] | List[
     TaskRuntimeInfo
 ]
-type TaskRuntimeMap = Mapping[Devices, TaskRuntimeSpec]
+type TaskRuntimeMap = MutableMapping[Devices, TaskRuntimeSpec]
 
 
 @dataclass(slots=True)

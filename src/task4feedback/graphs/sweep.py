@@ -15,7 +15,9 @@ class SweepDataGraphConfig(DataGraphConfig):
     def __post_init__(self):
         self.initial_placement = lambda x: Device(Architecture.CPU, 0)
 
-        self.initial_sizes = lambda x: self.large_size if x[0] == 0 else self.small_size
+        self.initial_sizes = (
+            lambda x: self.large_size if x.idx[0] == 0 else self.small_size
+        )
 
         def edges(task_id: TaskID):
             data_info = TaskDataInfo()
@@ -44,6 +46,9 @@ class SweepDataGraphConfig(DataGraphConfig):
         self.edges = edges
 
 
+sweep_task_mapping_gpu = partial(round_robin_task_mapping_gpu, index=1)
+
+
 @dataclass(slots=True)
 class SweepConfig(GraphConfig):
     """
@@ -54,21 +59,14 @@ class SweepConfig(GraphConfig):
     dimensions: int = 1
     steps: int = 1
 
-    def __post_init__(self):
-        if self.fixed_architecture == Architecture.CPU:
-            self.mapping = lambda x: Device(self.fixed_architecture, 0)
-        else:
-            self.mapping = lambda x: Device(
-                self.fixed_architecture, x[1] % self.n_devices
-            )
-
 
 @register_graph_generator
-def make_sweep_graph(config: SweepConfig) -> Tuple[TaskMap, DataMap]:
+def make_sweep_graph(
+    config: SweepConfig, data_config: DataGraphConfig = NoDataGraphConfig()
+) -> Tuple[TaskMap, DataMap]:
     check_config(config)
     from rich import print
 
-    data_config = config.data_config
     configurations = config.task_config
 
     task_dict = dict()
@@ -102,7 +100,7 @@ def make_sweep_graph(config: SweepConfig) -> Tuple[TaskMap, DataMap]:
             )
 
             # Task Mapping
-            task_mapping = get_mapping(config, task_idx)
+            task_mapping = get_mapping(config, task_id)
 
             task_dict[task_id] = TaskInfo(
                 task_id,

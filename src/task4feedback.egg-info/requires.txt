@@ -8,3 +8,11 @@ ruff
 [graph]
 pydot
 networkx
+hypernetx
+matplotlib
+seaborn
+
+[rl]
+torch
+torchvision
+torchaudio

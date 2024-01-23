@@ -10,7 +10,14 @@ Requires-Dist: numpy
 Provides-Extra: graph
 Requires-Dist: pydot; extra == "graph"
 Requires-Dist: networkx; extra == "graph"
+Requires-Dist: hypernetx; extra == "graph"
+Requires-Dist: matplotlib; extra == "graph"
+Requires-Dist: seaborn; extra == "graph"
 Provides-Extra: dev
 Requires-Dist: ruff; extra == "dev"
+Provides-Extra: rl
+Requires-Dist: torch; extra == "rl"
+Requires-Dist: torchvision; extra == "rl"
+Requires-Dist: torchaudio; extra == "rl"
 
 # Task4Feedback

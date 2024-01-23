@@ -205,11 +205,23 @@ def build_networkx_graph(
     return G, labels
 
 
+def convert_devices_to_list(devices: Optional[Devices]) -> List[Device]:
+    if devices is None:
+        # Default to CPU 0
+        devices = Device(Architecture.CPU, 0)
+
+    if isinstance(devices, Device):
+        return [devices]
+    else:
+        return list(devices)
+
+
 def create_data_objects(datamap: DataMap) -> Dict[DataID, SimulatedData]:
     data_objects = dict()
 
     for data in datamap.values():
-        data_objects[data.id] = SimulatedData(data.location, data)
+        devices = convert_devices_to_list(data.location)
+        data_objects[data.id] = SimulatedData(devices, data)
 
     from rich import print
 

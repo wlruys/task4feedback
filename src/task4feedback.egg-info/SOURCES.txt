@@ -2,7 +2,6 @@ README.md
 pyproject.toml
 src/task4feedback/__init__.py
 src/task4feedback/execute.py
-src/task4feedback/graphs.py
 src/task4feedback/load.py
 src/task4feedback/logging.py
 src/task4feedback/threads.py
@@ -14,6 +13,18 @@ src/task4feedback.egg-info/SOURCES.txt
 src/task4feedback.egg-info/dependency_links.txt
 src/task4feedback.egg-info/requires.txt
 src/task4feedback.egg-info/top_level.txt
+src/task4feedback/graphs/__init__.py
+src/task4feedback/graphs/butterfly.py
+src/task4feedback/graphs/cholesky.py
+src/task4feedback/graphs/fully_connected.py
+src/task4feedback/graphs/independent.py
+src/task4feedback/graphs/map_reduce.py
+src/task4feedback/graphs/reduction.py
+src/task4feedback/graphs/scatter_reduction.py
+src/task4feedback/graphs/serial.py
+src/task4feedback/graphs/stencil.py
+src/task4feedback/graphs/sweep.py
+src/task4feedback/graphs/utilities.py
 src/task4feedback/simulator/__init__.py
 src/task4feedback/simulator/data.py
 src/task4feedback/simulator/datapool.py
