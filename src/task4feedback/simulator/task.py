@@ -4,7 +4,7 @@ from ..types import TaskID, TaskInfo, TaskState, TaskStatus, DataAccess, Time, T
 from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 from ..types import Architecture, Device
 from ..types import DataInfo
-from typing import List, Dict, Set, Tuple, Optional, Self, Sequence
+from typing import List, Dict, Set, Tuple, Optional, Self, Sequence, Mapping
 
 from .queue import PriorityQueue
 from dataclasses import dataclass, field
@@ -288,8 +288,8 @@ class SimulatedDataTask(SimulatedTask):
         raise NotImplementedError("TODO: implement set_resources for SimulatedDataTask")
 
 
-SimulatedTaskMap = Dict[
+type SimulatedTaskMap = Mapping[
     TaskID, SimulatedTask | SimulatedComputeTask | SimulatedDataTask
 ]
-SimulatedComputeTaskMap = Dict[TaskID, SimulatedComputeTask]
-SimulatedDataTaskMap = Dict[TaskID, SimulatedDataTask]
+type SimulatedComputeTaskMap = Mapping[TaskID, SimulatedComputeTask]
+type SimulatedDataTaskMap = Mapping[TaskID, SimulatedDataTask]

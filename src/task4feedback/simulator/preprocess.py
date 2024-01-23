@@ -137,20 +137,32 @@ def filter_data_dependenices(task: SimulatedTask):
     data_info.write = write
 
 
-def create_task_graph(
-    graph: TaskMap, data=False
-) -> Tuple[SimulatedComputeTaskMap, SimulatedDataTaskMap]:
+def create_task_graph(graph: TaskMap, data=False) -> SimulatedComputeTaskMap:
     """
     Create a task graph from a task map.
     """
     compute_tasks = create_compute_tasks(graph)
-    if data:
-        recent_writers = find_recent_writers(graph)
-        data_tasks = create_data_tasks(compute_tasks, recent_writers)
-    else:
-        data_tasks = False
+    return compute_tasks
 
-    return compute_tasks, data_tasks
+
+def create_data_task_graph(
+    graph: TaskMap, compute_tasks: SimulatedComputeTaskMap
+) -> SimulatedDataTaskMap:
+    recent_writers = find_recent_writers(graph)
+    data_tasks = create_data_tasks(compute_tasks, recent_writers)
+    return data_tasks
+
+
+def combine_task_graphs(
+    graph1: SimulatedTaskMap, graph2: SimulatedTaskMap
+) -> SimulatedTaskMap:
+    """
+    Combine two task graphs into one.
+    """
+    graph = dict()
+    graph.update(graph1)
+    graph.update(graph2)
+    return graph
 
 
 def read_graph(
@@ -159,14 +171,14 @@ def read_graph(
     tasks = read_tasks_from_yaml(graph_name)
     datamap = read_data_from_yaml(graph_name)
 
-    compute_tasks, data_tasks = create_task_graph(tasks, data=False)
+    compute_tasks = create_task_graph(tasks, data=False)
     if data:
-        taskmap = {**compute_tasks, **data_tasks}
+        data_tasks = create_data_task_graph(tasks, compute_tasks)
+        taskmap = combine_task_graphs(compute_tasks, data_tasks)
     else:
         taskmap = compute_tasks
 
     tasklist = list(compute_tasks.keys())
-
     populate_dependents(taskmap)
 
     return tasklist, taskmap, datamap

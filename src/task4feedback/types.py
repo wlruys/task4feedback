@@ -1,4 +1,15 @@
-from typing import List, Dict, Tuple, Union, Optional, Callable, Self, Set
+from typing import (
+    List,
+    Dict,
+    Tuple,
+    Union,
+    Optional,
+    Callable,
+    Self,
+    Set,
+    Type,
+    Mapping,
+)
 from dataclasses import dataclass, field, InitVar
 from enum import IntEnum
 
@@ -136,7 +147,7 @@ class Device:
         return str(self)
 
 
-Devices = Device | Tuple[Device, ...]
+type Devices = Device | Tuple[Device, ...]
 
 #########################################
 # Data Information
@@ -413,15 +424,17 @@ class TaskRuntimeInfo:
     memory: int = 0
 
 
+type TaskRuntimeSpec = TaskRuntimeInfo | Mapping[Device, TaskRuntimeInfo] | List[
+    TaskRuntimeInfo
+]
+type TaskRuntimeMap = Mapping[Devices, TaskRuntimeSpec]
+
+
 @dataclass(slots=True)
 class TaskPlacementInfo:
     locations: list[Device | Tuple[Device, ...]] = field(default_factory=list)
-    # info: Dict[NDevices, Dict[LocalIdx, Dict[Device, TaskRuntimeInfo]]]
-    info: Dict[
-        Device | Tuple[Device, ...],
-        TaskRuntimeInfo | Dict[Device, TaskRuntimeInfo] | List[TaskRuntimeInfo],
-    ] = field(default_factory=dict)
-    lookup: defaultdict[int, defaultdict[int, Dict[Device, TaskRuntimeInfo]]] = field(
+    info: TaskRuntimeMap = field(default_factory=dict)
+    lookup: Mapping[int, Mapping[int, Dict[Device, TaskRuntimeInfo]]] = field(
         default_factory=lambda: defaultdict(lambda: defaultdict(dict))
     )
 
@@ -581,7 +594,7 @@ class TaskInfo:
 
 
 # Graph Type Aliases
-TaskMap = Dict[TaskID, TaskInfo]
+type TaskMap = Mapping[TaskID, TaskInfo]
 
 #########################################
 # Execution Records
@@ -831,7 +844,7 @@ def make_task_runtime_from_dict(task_runtime: Dict) -> TaskRuntimeInfo:
     )
 
 
-def device_from_string(device_str: str) -> Device | Tuple[Device, ...] | None:
+def device_from_string(device_str: str) -> Optional[Devices]:
     """
     Convert a device string (or string of a device tuple) to a device set
     """

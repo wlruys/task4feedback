@@ -61,7 +61,7 @@ def write_object_to_dict(obj):
     return sub_dict
 
 
-def write_data_to_yaml(data: Dict[DataID, DataInfo], basename: str = "graph"):
+def write_data_to_yaml(data: Mapping[DataID, DataInfo], basename: str = "graph"):
     """
     Write the data specifiers to a yaml file
     """
@@ -73,7 +73,7 @@ def write_data_to_yaml(data: Dict[DataID, DataInfo], basename: str = "graph"):
         yaml.dump(data, file, default_flow_style=False, sort_keys=False)
 
 
-def write_tasks_to_yaml(tasks: Dict[TaskID, TaskInfo], basename: str = "graph"):
+def write_tasks_to_yaml(tasks: Mapping[TaskID, TaskInfo], basename: str = "graph"):
     """
     Write the task graph to a yaml file
     """
@@ -86,7 +86,7 @@ def write_tasks_to_yaml(tasks: Dict[TaskID, TaskInfo], basename: str = "graph"):
 
 
 def write_task_mapping_to_yaml(
-    task_mapping: Dict[TaskID, Device | Tuple[Device]], basename: str = "graph"
+    task_mapping: Mapping[TaskID, Devices], basename: str = "graph"
 ):
     """
     Write the task -> device mapping to a yaml file
@@ -103,7 +103,7 @@ def write_task_mapping_to_yaml(
         yaml.dump(maplist, file, default_flow_style=False, sort_keys=False)
 
 
-def write_task_order_to_yaml(task_order: Dict[TaskID, int], basename: str = "graph"):
+def write_task_order_to_yaml(task_order: Mapping[TaskID, int], basename: str = "graph"):
     """
     Write the task -> order mapping to a yaml file
     """
@@ -120,10 +120,10 @@ def write_task_order_to_yaml(task_order: Dict[TaskID, int], basename: str = "gra
 
 
 def write_to_yaml(
-    tasks: Optional[Dict[TaskID, TaskInfo]] = None,
-    data: Optional[Dict[int, DataInfo]] = None,
-    mapping: Optional[Dict[TaskID, Device | Tuple[Device]]] = None,
-    order: Optional[Dict[TaskID, int]] = None,
+    tasks: Optional[Mapping[TaskID, TaskInfo]] = None,
+    data: Optional[Mapping[DataID, DataInfo]] = None,
+    mapping: Optional[Mapping[TaskID, Device | Tuple[Device]]] = None,
+    order: Optional[Mapping[TaskID, int]] = None,
     basename: str = "graph",
 ):
     """
@@ -148,7 +148,7 @@ def write_to_yaml(
 ########################################
 
 
-def read_tasks_from_dict(task_dict: Dict) -> TaskInfo:
+def read_tasks_from_dict(task_dict: Mapping) -> TaskInfo:
     """
     Read a task from a dictionary
     """
@@ -181,7 +181,7 @@ def read_tasks_from_dict(task_dict: Dict) -> TaskInfo:
     )
 
 
-def read_mapping_from_dict(mapping_dict: Dict) -> Tuple[TaskID, Device | Tuple[Device]]:
+def read_mapping_from_dict(mapping_dict: Mapping) -> Tuple[TaskID, Optional[Devices]]:
     """
     Read a task -> device mapping from a dictionary
     """
@@ -192,7 +192,7 @@ def read_mapping_from_dict(mapping_dict: Dict) -> Tuple[TaskID, Device | Tuple[D
     return task_id, task_mapping
 
 
-def read_order_from_dict(order_dict: Dict) -> Tuple[TaskID, int]:
+def read_order_from_dict(order_dict: Mapping) -> Tuple[TaskID, int]:
     """
     Read a task -> order mapping from a dictionary
     """
@@ -248,7 +248,7 @@ def read_tasks_from_yaml(basename: str = "graph") -> Dict[TaskID, TaskInfo]:
 
 def read_task_mapping_from_yaml(
     basename: str = "graph",
-) -> Dict[TaskID, Device | Tuple[Device]]:
+) -> Mapping[TaskID, Optional[Devices]]:
     """
     Read the task -> device mapping from a yaml file
     """
@@ -261,7 +261,7 @@ def read_task_mapping_from_yaml(
             mappings = [read_mapping_from_dict(mapping) for mapping in mappings]
 
         for mapping in mappings:
-            task_mapping[mapping.id] = mapping.mapping
+            task_mapping[mapping[0]] = mapping[1]
     except FileNotFoundError:
         raise Warning(f"Could not find mapping file {taskfile}")
         return None
@@ -329,11 +329,7 @@ def write_to_pgraph(
         comma = ", ".join([f"{getattr(info, slot)}" for slot in info.__slots__])
         return comma
 
-    def unpack_runtime(
-        runtime: TaskPlacementInfo
-        | TaskRuntimeInfo
-        | Dict[Device | Tuple[Device, ...], TaskRuntimeInfo]
-    ):
+    def unpack_runtime(runtime: TaskPlacementInfo | TaskRuntimeMap | TaskRuntimeSpec):
         print("Unpacking runtime: ", type(runtime))
         if isinstance(runtime, TaskPlacementInfo):
             return unpack_runtime(runtime.info)
