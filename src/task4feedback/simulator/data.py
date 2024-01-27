@@ -129,13 +129,17 @@ class DataStatus:
 
     def set_state(
         self, device: Device, state: TaskState, data_state: DataState, initial=False
-    ):
+    ) -> Optional[DataState]:
+        prior_state = None
+
         if not initial:
             prior_state = self.device2state[state][device]
             self.state2device[state][prior_state].remove(device)
 
         self.device2state[state][device] = data_state
         self.state2device[state][data_state].add(device)
+
+        return prior_state
 
     def check_state(
         self, device: Device, state: TaskState, data_state: DataState
@@ -195,7 +199,7 @@ class DataStatus:
         for device in status.keys():
             if status[device] == DataState.MOVING:
                 raise RuntimeError(
-                    f"Cannot write while a device that is moving that data. Status: {status}"
+                    f"Cannot write while device {device} is moving data {self}. Status: {status}"
                 )
 
         # Ensure no device is using the data if check_use is True
@@ -203,7 +207,7 @@ class DataStatus:
             for device in status.keys():
                 if self.is_used(device, DataUses.USED):
                     raise RuntimeError(
-                        f"Cannot write while a device that is using that data. Status: {status}"
+                        f"Cannot write while a device {device} that is using that data. Status: {status}"
                     )
 
     def write(
@@ -238,17 +242,21 @@ class DataStatus:
         target_device: Device,
         state: TaskState,
         update: bool = False,
-    ):
+    ) -> Optional[DataState]:
         # Ensure that the target device is valid
         status = self.device2state[state]
 
         if update:
-            self.set_state(target_device, state, DataState.VALID)
+            prior_state = self.set_state(target_device, state, DataState.VALID)
         else:
             if not self.check_state(target_device, state, DataState.VALID):
                 raise RuntimeError(
                     f"Task {task} cannot read from data that is not valid. Status: {status}"
                 )
+                prior_state = None
+            prior_state = self.get_state(target_device, state)
+
+        return prior_state
 
     def start_use(
         self,
@@ -257,17 +265,19 @@ class DataStatus:
         state: TaskState,
         operation: AccessType,
         update: bool = False,
-    ):
+    ) -> Optional[DataState]:
         if operation == AccessType.READ:
-            self.read(
+            old_state = self.read(
                 task=task, target_device=target_device, state=state, update=update
             )
         else:
-            self.write(
+            old_state = self.write(
                 task=task, target_device=target_device, state=state, update=update
             )
 
         self.add_task(target_device, task, TaskStateToUse[state])
+
+        return old_state
 
     def finish_use(self, task: TaskID, target_device: Device, state: TaskState):
         self.remove_task(target_device, task, TaskStateToUse[state])
@@ -305,7 +315,8 @@ class DataStatus:
             movement_flag = DataMovementFlags.FIRST_MOVE
         else:
             raise RuntimeError(
-                f"Task {task} cannot finish moving data to a device that is not moving."
+                f"Task {task} cannot finish moving data to a device unless is already moving or valid.",
+                f"Status: {self.get_state(target_device, TaskState.LAUNCHED)}",
             )
 
         self.remove_task(source_device, task, DataUses.MOVING)

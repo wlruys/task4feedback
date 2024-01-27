@@ -55,6 +55,7 @@ def reduction_task_mapping_gpu(
     return Device(Architecture.GPU, device_id=device_index)
 
 
+@dataclass(slots=True)
 class ReductionConfig(GraphConfig):
     levels: int = 2
     branch_factor: int = 2

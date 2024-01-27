@@ -48,7 +48,10 @@ src/task4feedback/simulator/rl/networks/fcn.py
 src/task4feedback/simulator/rl/networks/gcn.py
 src/task4feedback/simulator/rl/networks/test_fcn.py
 src/task4feedback/simulator/schedulers/__init__.py
+src/task4feedback/simulator/schedulers/data_management.py
 src/task4feedback/simulator/schedulers/minimal.py
 src/task4feedback/simulator/schedulers/parla.py
 src/task4feedback/simulator/schedulers/scheduler.py
+test/test_depth.py
+test/test_lru_eviction.py
 test/test_sim.py

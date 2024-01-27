@@ -2,9 +2,9 @@ from __future__ import annotations
 from ..types import TaskID, TaskInfo, TaskState, TaskStatus, DataAccess, Time, TaskType
 
 from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
-from ..types import Architecture, Device
+from ..types import Architecture, Device, Devices
 from ..types import DataInfo
-from typing import List, Dict, Set, Tuple, Optional, Self, Sequence, Mapping
+from typing import List, Dict, Set, Tuple, Optional, Self, Sequence, Mapping, MutableMapping
 
 from .queue import PriorityQueue
 from dataclasses import dataclass, field
@@ -93,6 +93,8 @@ class SimulatedTask:
     counters: TaskCounters = field(init=False)
     dependents: List[TaskID] = field(default_factory=list)
     resources: List[ResourceSet] = field(default_factory=list)
+    depth: int = 0
+    type: TaskType = TaskType.BASE
 
     def __post_init__(self):
         self.counters = TaskCounters(self.info)
@@ -224,21 +226,19 @@ class SimulatedTask:
     def __hash__(self) -> int:
         return hash(self.name)
 
-    def __eq__(self, other: Self) -> bool:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SimulatedTask):
+            return NotImplemented
         return self.name == other.name
 
     def get_runtime_info(
-        self, device: Device | Tuple[Device, ...]
+        self, device: Devices
     ) -> List[TaskRuntimeInfo]:
         return self.info.runtime[device]
 
     def set_duration(
-        self, device: Device | Tuple[Device, ...], system_state: "SystemState"
+        self, device: Devices, system_state: "SystemState"
     ):
-        raise NotImplementedError
-
-    @property
-    def type(self):
         raise NotImplementedError
 
 
@@ -272,9 +272,10 @@ class SimulatedComputeTask(SimulatedTask):
 @dataclass(slots=True)
 class SimulatedDataTask(SimulatedTask):
     type: TaskType = TaskType.DATA
+    parent: Optional[TaskID] = None
 
     def set_duration(
-        self, device: Device | Tuple[Device, ...], system_state: "SystemState"
+        self, device: Devices, system_state: "SystemState"
     ):
         # Data movement tasks are single device
         assert isinstance(device, Device)
@@ -283,13 +284,13 @@ class SimulatedDataTask(SimulatedTask):
         raise NotImplementedError("TODO: implement set_duration for SimulatedDataTask")
 
     def set_resources(
-        self, devices: Device | Tuple[Device, ...], data_inputs: bool = False
+        self, devices: Devices, data_inputs: bool = False
     ):
         raise NotImplementedError("TODO: implement set_resources for SimulatedDataTask")
 
 
-type SimulatedTaskMap = Mapping[
+type SimulatedTaskMap = MutableMapping[
     TaskID, SimulatedTask | SimulatedComputeTask | SimulatedDataTask
 ]
-type SimulatedComputeTaskMap = Mapping[TaskID, SimulatedComputeTask]
-type SimulatedDataTaskMap = Mapping[TaskID, SimulatedDataTask]
+type SimulatedComputeTaskMap = MutableMapping[TaskID, SimulatedComputeTask]
+type SimulatedDataTaskMap = MutableMapping[TaskID, SimulatedDataTask]

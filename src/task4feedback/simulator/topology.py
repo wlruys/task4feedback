@@ -353,7 +353,9 @@ class TopologyManager:
 
 
 @TopologyManager.register_generator("frontera")
-def generate_4gpus_1cpu_toplogy(config: Optional[Dict[str, int]]) -> SimulatedTopology:
+def generate_4gpus_1cpu_toplogy(
+    config: Optional[Dict[str, int]] = None
+) -> SimulatedTopology:
     """
     This function creates 4 GPUs and 1 CPU architecture.
 

@@ -1,8 +1,9 @@
 from ..types import Architecture, Device, TaskID, TaskState, ResourceType
 from dataclasses import dataclass, field
 from .queue import *
+from .datapool import *
 from enum import IntEnum
-from typing import List, Dict, Set, Tuple, Optional, Self
+from typing import List, Dict, Set, Tuple, Optional, Self, Type
 from fractions import Fraction
 from decimal import Decimal
 from collections import defaultdict as DefaultDict
@@ -88,17 +89,26 @@ class ResourceSet:
                 return False
         return True
 
-    def __eq__(self, other: Self) -> bool:
-        for key in other.store:
-            if self.store[key] != other.store[key]:
-                return False
-        return True
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Self):
+            for key in other.store:
+                if self.store[key] != other.store[key]:
+                    return False
+            return True
+        else:
+            return False
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(slots=True)
 class SimulatedDevice:
     name: Device
     resources: ResourceSet
+    datapool: DataPool = field(default_factory=DataPool)
+    eviction_pool_type: Type[EvictionPool] = LRUEvictionPool
+    eviction_pool: EvictionPool = field(init=False)
+
+    def __post_init__(self):
+        self.eviction_pool = self.eviction_pool_type()
 
     def __str__(self) -> str:
         return f"Device({self.name})"
@@ -117,3 +127,15 @@ class SimulatedDevice:
 
     def __getitem__(self, key: ResourceType) -> Numeric:
         return self.resources[key]
+
+    def add_data(self, data: SimulatedData):
+        self.datapool.add(data)
+
+    def remove_data(self, data: SimulatedData):
+        self.datapool.remove(data)
+
+    def add_evictable(self, data: SimulatedData):
+        self.eviction_pool.add(data)
+
+    def remove_evictable(self, data: SimulatedData):
+        self.eviction_pool.remove(data)

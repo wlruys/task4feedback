@@ -15,8 +15,6 @@ class ScatterReductionConfig(GraphConfig):
 @register_graph_generator
 def make_scatter_reduction_graph(config: ScatterReductionConfig):
     check_config(config)
-
-    data_config = config.data_config
     configurations = config.task_config
 
     task_dict = dict()

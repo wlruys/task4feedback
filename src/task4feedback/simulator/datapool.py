@@ -1,7 +1,6 @@
 from __future__ import annotations
 from ..types import DataID
 from .data import *
-from .device import *
 from dataclasses import dataclass, field, InitVar
 from typing import Dict, List, Set, Tuple, Union, Self
 
@@ -32,6 +31,9 @@ class DataNodeList:
 
         node.next = self.tail
         node.prev = self.tail.prev
+
+        assert self.tail.prev is not None
+
         self.tail.prev.next = node
         self.tail.prev = node
         self.size += 1
@@ -39,6 +41,10 @@ class DataNodeList:
     def remove(self, data: DataInfo):
         node = self.map[data.id]
         del self.map[data.id]
+
+        assert node.prev is not None
+        assert node.next is not None
+
         node.prev.next = node.next
         node.next.prev = node.prev
         self.size -= 1
@@ -79,6 +85,12 @@ class EvictionPool:
     def get(self) -> DataID:
         raise NotImplementedError
 
+    def __len__(self):
+        raise NotImplementedError
+
+    def __contains__(self, data: SimulatedData | DataID):
+        raise NotImplementedError
+
 
 @dataclass(slots=True)
 class LRUEvictionPool(EvictionPool):
@@ -94,11 +106,13 @@ class LRUEvictionPool(EvictionPool):
         assert self.evictable_size >= 0
 
     def peek(self) -> DataID:
+        assert self.datalist.head.next is not None
         data = self.datalist.head.next.data
         assert data is not None
         return data.id
 
     def get(self) -> DataID:
+        assert self.datalist.head.next is not None
         data = self.datalist.head.next.data
         assert data is not None
         self.datalist.remove(data)
@@ -108,65 +122,23 @@ class LRUEvictionPool(EvictionPool):
 
 
 @dataclass(slots=True)
-class DeviceDataPool:
-    states2data: Dict[DataState, Set[DataID]] = field(default_factory=dict)
-    evictable: EvictionPool = field(default_factory=LRUEvictionPool)
-
-    def __post_init__(self):
-        for state in [DataState.PLANNED, DataState.MOVING, DataState.VALID]:
-            self.states2data[state] = set()
-
-    def add_data(self, data: SimulatedData, state: DataState):
-        if state not in self.states2data:
-            self.states2data[state] = set()
-
-        if state == DataState.EVICTABLE:
-            self.evictable.add(data)
-        else:
-            self.states2data[state].add(data.name)
-
-    def remove_data(self, data: SimulatedData, state: DataState):
-        if state == DataState.EVICTABLE:
-            self.evictable.remove(data)
-        else:
-            self.states2data[state].remove(data.name)
-
-    def get_data_in_state(self, state: DataState) -> Sequence[DataID]:
-        if state == DataState.EVICTABLE:
-            return [list(d.info for d in self.evictable.datalist)]  # type: ignore
-        else:
-            datalist = self.states2data[state]
-        return list(datalist)
-
-    def get_evictable_size(self) -> int:
-        return self.evictable.evictable_size
-
-    def peek_evictable(self) -> DataID:
-        return self.evictable.peek()
-
-    def get_evictable(self) -> DataID:
-        return self.evictable.get()
-
-    def add_evictable(self, data: SimulatedData):
-        self.evictable.add(data)
-
-    def remove_evictable(self, data: SimulatedData):
-        self.evictable.remove(data)
-
-
-@dataclass(slots=True)
 class DataPool:
-    devices: InitVar[Sequence[SimulatedDevice]]
-    devices2pools: Dict[Device, DeviceDataPool] = field(default_factory=dict)
+    datalist: Set[DataID] = field(default_factory=set)
 
-    def __post_init__(self, devices: Sequence[SimulatedDevice]):
-        for device in devices:
-            self.devices2pools[device.name] = DeviceDataPool()
+    def add(self, data: SimulatedData | DataID):
+        if isinstance(data, SimulatedData):
+            data = data.name
+        self.datalist.add(data)
 
-    def add_data(
-        self, device: Device, data: SimulatedData, state: DataState, inital=False
-    ):
-        self.devices2pools[device].add_data(data, state)
+    def remove(self, data: SimulatedData | DataID):
+        if isinstance(data, SimulatedData):
+            data = data.name
+        self.datalist.remove(data)
 
-    def remove_data(self, device: Device, data: SimulatedData, state: DataState):
-        self.devices2pools[device].remove_data(data, state)
+    def __contains__(self, data: SimulatedData | DataID):
+        if isinstance(data, SimulatedData):
+            data = data.name
+        return data in self.datalist
+
+    def __len__(self):
+        return len(self.datalist)

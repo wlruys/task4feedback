@@ -99,6 +99,7 @@ class SimulatedScheduler:
 
                 # Process Event
                 new_events = self.process_event(event)
+
                 # Update Log
                 self.record()
 

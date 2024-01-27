@@ -377,6 +377,7 @@ class TaskState(IntEnum):
 
 
 class TaskType(IntEnum):
+    BASE = -1
     COMPUTE = 0
     DATA = 1
 
