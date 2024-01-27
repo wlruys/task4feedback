@@ -13,6 +13,7 @@ from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
 from dataclasses import dataclass, InitVar
 from collections import defaultdict as DefaultDict
+from copy import copy, deepcopy
 
 from rich import print
 
@@ -104,18 +105,17 @@ class SystemState:
         for device in self.topology.devices:
             self.objects.add_device(device)
 
-        self.data_pool = DataPool(devices=self.topology.devices)
         self.resource_pool = ResourcePool(devices=self.topology.devices)
 
     def register_tasks(self, taskmap: SimulatedTaskMap, copy: bool = False):
         if copy:
-            self.objects.taskmap = taskmap.copy()
+            self.objects.taskmap = deepcopy(taskmap)
         else:
             self.objects.taskmap = taskmap
 
     def register_data(self, datamap: Dict[DataID, SimulatedData], copy: bool = False):
         if copy:
-            self.objects.datamap = datamap.copy()
+            self.objects.datamap = deepcopy(datamap)
         else:
             self.objects.datamap = datamap
 
@@ -123,7 +123,7 @@ class SystemState:
         self, devicemap: Dict[Device, SimulatedDevice], copy: bool = False
     ):
         if copy:
-            self.objects.devicemap = devicemap.copy()
+            self.objects.devicemap = deepcopy(devicemap)
         else:
             self.objects.devicemap = devicemap
 

@@ -8,6 +8,11 @@ from fractions import Fraction
 from decimal import Decimal
 from collections import defaultdict as DefaultDict
 
+from eviction.base import EvictionPool
+from eviction.lru import LRUEvictionPool
+
+
+
 Numeric = int | float | Fraction | Decimal
 
 

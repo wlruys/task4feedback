@@ -367,16 +367,11 @@ class ParlaArchitecture(SchedulerArchitecture):
         current_time = scheduler_state.time
         next_events: Sequence[EventPair] = []
 
-        # print(task)
-        # print(scheduler_state.resource_pool[Device(Architecture.GPU, 1)])
-        # print(self)
-
         self._verify_correct_task_completed(task, scheduler_state)
         complete_task(task, scheduler_state)
 
         # Update status of dependencies
         task.notify_state(TaskState.COMPLETED, objects.taskmap, scheduler_state.time)
-        # print(scheduler_state.resource_pool[Device(Architecture.GPU, 1)])
 
         self.success_count += 1
         if self.active_scheduler == 0:

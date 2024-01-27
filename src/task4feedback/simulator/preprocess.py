@@ -138,7 +138,9 @@ def create_data_tasks(
                 data_dependencies=data_info,
             )
 
-            data_task = SimulatedDataTask(name=data_task_id, info=data_task_info, parent=task.name)
+            data_task = SimulatedDataTask(
+                name=data_task_id, info=data_task_info, parent=task.name
+            )
             data_tasks[data_task_id] = data_task
             task.add_data_dependency(data_task_id)
 

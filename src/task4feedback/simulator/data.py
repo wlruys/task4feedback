@@ -136,6 +136,9 @@ class DataStatus:
             prior_state = self.device2state[state][device]
             self.state2device[state][prior_state].remove(device)
 
+            if prior_state == data_state:
+                return prior_state
+
         self.device2state[state][device] = data_state
         self.state2device[state][data_state].add(device)
 
@@ -284,45 +287,45 @@ class DataStatus:
 
     def start_move(
         self, task: TaskID, source_device: Device, target_device: Device
-    ) -> DataMovementFlags:
+    ) -> DataState:
         if not self.check_state(source_device, TaskState.LAUNCHED, DataState.VALID):
             raise RuntimeError(
                 f"Task {task} cannot move data from a device that is not valid."
             )
 
-        old_state = self.get_state(target_device, TaskState.LAUNCHED)
+        prior_target_state = self.get_state(target_device, TaskState.LAUNCHED)
 
-        if self.check_state(target_device, TaskState.LAUNCHED, DataState.VALID):
-            movement_flag = DataMovementFlags.ALREADY_THERE
-        elif self.check_state(target_device, TaskState.LAUNCHED, DataState.MOVING):
-            movement_flag = DataMovementFlags.ALREADY_MOVING
-        else:
-            movement_flag = DataMovementFlags.FIRST_MOVE
+        if prior_target_state != DataState.VALID:
             self.set_state(target_device, TaskState.LAUNCHED, DataState.MOVING)
 
         self.add_task(source_device, task, DataUses.MOVING)
         self.add_task(target_device, task, DataUses.MOVING)
 
-        return movement_flag
+        return prior_target_state
 
     def finish_move(
         self, task: TaskID, source_device: Device, target_device: Device
-    ) -> DataMovementFlags:
-        if self.check_state(target_device, TaskState.LAUNCHED, DataState.VALID):
-            movement_flag = DataMovementFlags.ALREADY_THERE
-        elif self.check_state(target_device, TaskState.LAUNCHED, DataState.MOVING):
+    ) -> DataState:
+        if not self.check_state(source_device, TaskState.LAUNCHED, DataState.VALID):
+            raise RuntimeError(
+                f"Task {task} cannot move data from a device that is not valid."
+            )
+
+        prior_target_state = self.get_state(target_device, TaskState.LAUNCHED)
+
+        if prior_target_state == DataState.MOVING:
+            pass  # Do nothing
+        elif prior_target_state == DataState.VALID:
             self.set_state(target_device, TaskState.LAUNCHED, DataState.VALID)
-            movement_flag = DataMovementFlags.FIRST_MOVE
         else:
             raise RuntimeError(
-                f"Task {task} cannot finish moving data to a device unless is already moving or valid.",
-                f"Status: {self.get_state(target_device, TaskState.LAUNCHED)}",
+                f"Task {task} cannot finish moving data to a device that is not valid or moving."
             )
 
         self.remove_task(source_device, task, DataUses.MOVING)
         self.remove_task(target_device, task, DataUses.MOVING)
 
-        return movement_flag
+        return prior_target_state
 
     def __rich_repr__(self):
         yield "MAPPED", self.device2state[TaskState.MAPPED]
@@ -374,12 +377,12 @@ class SimulatedData:
 
     def start_move(
         self, task: TaskID, source_device: Device, target_device: Device
-    ) -> DataMovementFlags:
+    ) -> DataState:
         return self.status.start_move(task, source_device, target_device)
 
     def finish_move(
         self, task: TaskID, source_device: Device, target_device: Device
-    ) -> DataMovementFlags:
+    ) -> DataState:
         return self.status.finish_move(task, source_device, target_device)
 
     def __str__(self):
@@ -398,6 +401,11 @@ class SimulatedData:
 
     def __eq__(self, other):
         return self.name == other.name
+
+    def get_devices(
+        self, state: TaskState, data_states: Sequence[DataState]
+    ) -> Sequence[Device]:
+        return self.status.get_devices(state, data_states)
 
 
 SimulatedDataMap = Dict[DataID, SimulatedData]

@@ -4,7 +4,17 @@ from ..types import TaskID, TaskInfo, TaskState, TaskStatus, DataAccess, Time, T
 from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 from ..types import Architecture, Device, Devices
 from ..types import DataInfo
-from typing import List, Dict, Set, Tuple, Optional, Self, Sequence, Mapping, MutableMapping
+from typing import (
+    List,
+    Dict,
+    Set,
+    Tuple,
+    Optional,
+    Self,
+    Sequence,
+    Mapping,
+    MutableMapping,
+)
 
 from .queue import PriorityQueue
 from dataclasses import dataclass, field
@@ -95,6 +105,9 @@ class SimulatedTask:
     resources: List[ResourceSet] = field(default_factory=list)
     depth: int = 0
     type: TaskType = TaskType.BASE
+    parent: Optional[TaskID] = None
+    data_tasks: Optional[List[TaskID]] = None
+    spawn_tasks: Optional[List[TaskID]] = None
 
     def __post_init__(self):
         self.counters = TaskCounters(self.info)
@@ -206,9 +219,6 @@ class SimulatedTask:
                 return True
         return status in self.status
 
-    def set_resources(self, devices: Device | Tuple[Device, ...]):
-        raise NotImplementedError
-
     def __str__(self) -> str:
         return f"Task({self.name}, {self.state})"
 
@@ -231,35 +241,36 @@ class SimulatedTask:
             return NotImplemented
         return self.name == other.name
 
-    def get_runtime_info(
-        self, device: Devices
-    ) -> List[TaskRuntimeInfo]:
+    def get_runtime_info(self, device: Devices) -> List[TaskRuntimeInfo]:
         return self.info.runtime[device]
 
-    def set_duration(
-        self, device: Devices, system_state: "SystemState"
-    ):
+    def set_duration(self, device: Devices, system_state: "SystemState"):
+        raise NotImplementedError
+
+    def set_resources(self, devices: Devices, data_inputs: bool = False):
+        raise NotImplementedError
+
+    def add_data_dependency(self, task: TaskID):
         raise NotImplementedError
 
 
 @dataclass(slots=True)
 class SimulatedComputeTask(SimulatedTask):
-    datatasks: List[Self] = field(default_factory=list)
     type: TaskType = TaskType.COMPUTE
 
     def add_data_dependency(self, task: TaskID):
         self.add_dependency(task, states=[TaskState.COMPLETED])
 
-    def set_duration(
-        self, device: Device | Tuple[Device, ...], system_state: "SystemState"
-    ):
+        if self.data_tasks is None:
+            self.data_tasks = []
+        self.data_tasks.append(task)
+
+    def set_duration(self, device: Devices, system_state: "SystemState"):
         runtime_infos = self.get_runtime_info(device)
         max_time = max([runtime_info.task_time for runtime_info in runtime_infos])
         self.duration = Time(max_time)
 
-    def set_resources(
-        self, devices: Device | Tuple[Device, ...], data_inputs: bool = False
-    ):
+    def set_resources(self, devices: Devices, data_inputs: bool = False):
         if isinstance(devices, Device):
             devices = (devices,)
         runtime_info_list = self.get_runtime_info(devices)
@@ -272,24 +283,18 @@ class SimulatedComputeTask(SimulatedTask):
 @dataclass(slots=True)
 class SimulatedDataTask(SimulatedTask):
     type: TaskType = TaskType.DATA
-    parent: Optional[TaskID] = None
 
-    def set_duration(
-        self, device: Devices, system_state: "SystemState"
-    ):
+    def set_duration(self, device: Devices, system_state: "SystemState"):
         # Data movement tasks are single device
         assert isinstance(device, Device)
 
-        # TODO: This is the data movement time
         raise NotImplementedError("TODO: implement set_duration for SimulatedDataTask")
 
-    def set_resources(
-        self, devices: Devices, data_inputs: bool = False
-    ):
+    def set_resources(self, devices: Devices, data_inputs: bool = False):
         raise NotImplementedError("TODO: implement set_resources for SimulatedDataTask")
 
 
-type SimulatedTaskMap = MutableMapping[
+type SimulatedTaskMap = Mapping[
     TaskID, SimulatedTask | SimulatedComputeTask | SimulatedDataTask
 ]
 type SimulatedComputeTaskMap = MutableMapping[TaskID, SimulatedComputeTask]
