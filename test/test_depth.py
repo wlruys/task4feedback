@@ -8,7 +8,7 @@ from rich.traceback import install
 def test_serial_depth():
     length = 10
     chains = 10
-    config = SerialConfig(steps=length, chains=chains)
+    config = ChainConfig(steps=length, chains=chains)
     graph, data = make_graph(config)
 
     assert len(graph) == length * chains
@@ -22,7 +22,7 @@ def test_serial_depth():
 def test_serial_depth_data():
     length = 4
     chains = 1
-    config = SerialConfig(steps=length, chains=chains)
+    config = ChainConfig(steps=length, chains=chains)
     data_config = ChainDataGraphConfig()
     graph, data = make_graph(config, data_config=data_config)
 

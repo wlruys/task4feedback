@@ -112,16 +112,17 @@ class SimulatedTask:
     def __post_init__(self):
         self.counters = TaskCounters(self.info)
 
-    def set_status(self, new_status: TaskStatus, time: Time):
+    def set_status(self, new_status: TaskStatus, time: Time, verify: bool = True):
         # print(f"Setting {self.name} to {new_status}. Status: {self.status}")
         self.times[new_status] = time
         self.status.add(new_status)
 
-    def set_state(self, new_state: TaskState, time: Time):
+    def set_state(self, new_state: TaskState, time: Time, verify: bool = True):
         # print(f"Setting {self.name} to {new_state}. State: {self.state}")
 
-        TaskStatus.check_valid_transition(self.status, new_state)
-        TaskState.check_valid_transition(self.state, new_state)
+        if verify:
+            TaskStatus.check_valid_transition(self.status, new_state)
+            TaskState.check_valid_transition(self.state, new_state)
 
         self.times[new_state] = time
         self.state = new_state
@@ -129,6 +130,14 @@ class SimulatedTask:
     def set_states(self, new_states: List[TaskState], time: Time):
         for state in new_states:
             self.set_state(state, time)
+
+    @property
+    def read_accesses(self) -> List[DataAccess]:
+        return self.info.data_dependencies.read
+
+    @property
+    def write_accesses(self) -> List[DataAccess]:
+        return self.info.data_dependencies.write
 
     @property
     def priority(self) -> int:
@@ -198,7 +207,10 @@ class SimulatedTask:
 
         for taskid in self.dependents:
             task = taskmap[taskid]
+            # print(f"Task {self.name} notifying {task.name} of {state}")
+            # print(task.counters)
             if new_status := task.counters.notified_state(state):
+                # print(f"Task {self.name} notifying {task.name} of {new_status}")
                 task.notify_status(new_status, taskmap, time)
 
         self.set_state(state, time)
@@ -259,7 +271,7 @@ class SimulatedComputeTask(SimulatedTask):
     type: TaskType = TaskType.COMPUTE
 
     def add_data_dependency(self, task: TaskID):
-        self.add_dependency(task, states=[TaskState.COMPLETED])
+        self.add_dependency(task, states=[TaskState.LAUNCHED, TaskState.COMPLETED])
 
         if self.data_tasks is None:
             self.data_tasks = []
@@ -270,7 +282,7 @@ class SimulatedComputeTask(SimulatedTask):
         max_time = max([runtime_info.task_time for runtime_info in runtime_infos])
         self.duration = Time(max_time)
 
-    def set_resources(self, devices: Devices, data_inputs: bool = False):
+    def set_resources(self, devices: Devices):
         if isinstance(devices, Device):
             devices = (devices,)
         runtime_info_list = self.get_runtime_info(devices)
@@ -283,15 +295,18 @@ class SimulatedComputeTask(SimulatedTask):
 @dataclass(slots=True)
 class SimulatedDataTask(SimulatedTask):
     type: TaskType = TaskType.DATA
+    source: Optional[Device] = None
+    local_index: int = 0
 
     def set_duration(self, device: Devices, system_state: "SystemState"):
         # Data movement tasks are single device
-        assert isinstance(device, Device)
+        if not isinstance(device, Device):
+            assert len(device) == 1
 
-        raise NotImplementedError("TODO: implement set_duration for SimulatedDataTask")
+        self.duration = Time(0)
 
-    def set_resources(self, devices: Devices, data_inputs: bool = False):
-        raise NotImplementedError("TODO: implement set_resources for SimulatedDataTask")
+    def set_resources(self, devices: Devices):
+        self.resources.append(ResourceSet(vcus=0, memory=0, copy=1))
 
 
 type SimulatedTaskMap = Mapping[

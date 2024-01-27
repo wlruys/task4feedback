@@ -127,7 +127,7 @@ class DataStatus:
         for device in devices:
             self.device2uses[device] = DataUse()
 
-    def set_state(
+    def set_data_state(
         self, device: Device, state: TaskState, data_state: DataState, initial=False
     ) -> Optional[DataState]:
         prior_state = None
@@ -144,24 +144,32 @@ class DataStatus:
 
         return prior_state
 
-    def check_state(
+    def check_data_state(
         self, device: Device, state: TaskState, data_state: DataState
     ) -> bool:
         return self.device2state[state][device] == data_state
 
-    def get_state(self, device: Device, state: TaskState) -> DataState:
+    def get_data_state(self, device: Device, state: TaskState) -> DataState:
         return self.device2state[state][device]
 
-    def get_use(self, device: Device) -> DataUse:
+    def get_data_use(self, device: Device) -> DataUse:
         return self.device2uses[device]
 
-    def get_devices(
-        self, state: TaskState, data_states: Sequence[DataState]
+    def get_devices_from_states(
+        self, states: Sequence[TaskState], data_states: Sequence[DataState]
     ) -> Sequence[Device]:
         devices = []
-        for data_state in data_states:
-            devices.extend(self.state2device[state][data_state])
+
+        for task_state in states:
+            for data_state in data_states:
+                devices.extend(self.state2device[task_state][data_state])
+
         return devices
+
+    def get_device_set_from_state(
+        self, state: TaskState, data_state: DataState
+    ) -> Set[Device]:
+        return self.state2device[state][data_state]
 
     def add_task(self, device: Device, task: TaskID, use: DataUses):
         self.device2uses[device].add_task(task, use)
@@ -186,12 +194,12 @@ class DataStatus:
         force: bool = False,
     ) -> bool:
         if force:
-            self.set_state(device, state, new_data_state)
+            self.set_data_state(device, state, new_data_state)
             return True  # Change
         else:
-            prior_data_state = self.get_state(device, state)
+            prior_data_state = self.get_data_state(device, state)
             if new_data_state > prior_data_state:
-                self.set_state(device, state, new_data_state)
+                self.set_data_state(device, state, new_data_state)
                 return True  # Change
         return False  # No change
 
@@ -208,7 +216,7 @@ class DataStatus:
         # Ensure no device is using the data if check_use is True
         if check_use:
             for device in status.keys():
-                if self.is_used(device, DataUses.USED):
+                if self.is_used(device=device, use=DataUses.USED):
                     raise RuntimeError(
                         f"Cannot write while a device {device} that is using that data. Status: {status}"
                     )
@@ -230,14 +238,16 @@ class DataStatus:
         for device in status.keys():
             if device == target_device:
                 if update:
-                    self.set_state(device, state, DataState.VALID)
+                    self.set_data_state(
+                        device=device, state=state, data_state=DataState.VALID
+                    )
                 else:
-                    if not self.check_state(device, state, DataState.VALID):
+                    if not self.check_data_state(device, state, DataState.VALID):
                         raise RuntimeError(
                             f"Task {task} cannot write to data that is not valid. Status: {status}"
                         )
             else:
-                self.set_state(device, state, DataState.NONE)
+                self.set_data_state(device, state, DataState.NONE)
 
     def read(
         self,
@@ -250,14 +260,14 @@ class DataStatus:
         status = self.device2state[state]
 
         if update:
-            prior_state = self.set_state(target_device, state, DataState.VALID)
+            prior_state = self.set_data_state(target_device, state, DataState.VALID)
         else:
-            if not self.check_state(target_device, state, DataState.VALID):
+            if not self.check_data_state(target_device, state, DataState.VALID):
                 raise RuntimeError(
                     f"Task {task} cannot read from data that is not valid. Status: {status}"
                 )
                 prior_state = None
-            prior_state = self.get_state(target_device, state)
+            prior_state = self.get_data_state(target_device, state)
 
         return prior_state
 
@@ -288,15 +298,17 @@ class DataStatus:
     def start_move(
         self, task: TaskID, source_device: Device, target_device: Device
     ) -> DataState:
-        if not self.check_state(source_device, TaskState.LAUNCHED, DataState.VALID):
+        if not self.check_data_state(
+            source_device, TaskState.LAUNCHED, DataState.VALID
+        ):
             raise RuntimeError(
                 f"Task {task} cannot move data from a device that is not valid."
             )
 
-        prior_target_state = self.get_state(target_device, TaskState.LAUNCHED)
+        prior_target_state = self.get_data_state(target_device, TaskState.LAUNCHED)
 
         if prior_target_state != DataState.VALID:
-            self.set_state(target_device, TaskState.LAUNCHED, DataState.MOVING)
+            self.set_data_state(target_device, TaskState.LAUNCHED, DataState.MOVING)
 
         self.add_task(source_device, task, DataUses.MOVING)
         self.add_task(target_device, task, DataUses.MOVING)
@@ -306,17 +318,19 @@ class DataStatus:
     def finish_move(
         self, task: TaskID, source_device: Device, target_device: Device
     ) -> DataState:
-        if not self.check_state(source_device, TaskState.LAUNCHED, DataState.VALID):
+        if not self.check_data_state(
+            source_device, TaskState.LAUNCHED, DataState.VALID
+        ):
             raise RuntimeError(
                 f"Task {task} cannot move data from a device that is not valid."
             )
 
-        prior_target_state = self.get_state(target_device, TaskState.LAUNCHED)
+        prior_target_state = self.get_data_state(target_device, TaskState.LAUNCHED)
 
         if prior_target_state == DataState.MOVING:
             pass  # Do nothing
         elif prior_target_state == DataState.VALID:
-            self.set_state(target_device, TaskState.LAUNCHED, DataState.VALID)
+            self.set_data_state(target_device, TaskState.LAUNCHED, DataState.VALID)
         else:
             raise RuntimeError(
                 f"Task {task} cannot finish moving data to a device that is not valid or moving."
@@ -350,7 +364,7 @@ class SimulatedData:
 
         for device in starting_devices:
             for state in TaskState:
-                self.status.set_state(device, state, DataState.VALID, initial=True)
+                self.status.set_data_state(device, state, DataState.VALID, initial=True)
 
     @property
     def name(self) -> DataID:
@@ -361,7 +375,7 @@ class SimulatedData:
         return self.info.size
 
     def get_state(self, device: Device, state: TaskState) -> DataState:
-        return self.status.get_state(device, state)
+        return self.status.get_data_state(device, state)
 
     def start_use(
         self,
@@ -402,10 +416,13 @@ class SimulatedData:
     def __eq__(self, other):
         return self.name == other.name
 
-    def get_devices(
-        self, state: TaskState, data_states: Sequence[DataState]
+    def get_devices_from_states(
+        self, states: Sequence[TaskState], data_states: Sequence[DataState]
     ) -> Sequence[Device]:
-        return self.status.get_devices(state, data_states)
+        return self.status.get_devices_from_states(states, data_states)
+
+    def is_valid(self, device: Device, state: TaskState) -> bool:
+        return self.status.check_data_state(device, state, DataState.VALID)
 
 
-SimulatedDataMap = Dict[DataID, SimulatedData]
+type SimulatedDataMap = Dict[DataID, SimulatedData]

@@ -4,6 +4,7 @@ from .task import *
 from .data import *
 from .device import *
 import networkx as nx
+from .topology import *
 
 
 def data_from_task(task: TaskInfo, access: AccessType) -> List[DataID]:
@@ -106,7 +107,9 @@ def create_compute_tasks(graph: TaskMap) -> SimulatedComputeTaskMap:
     compute_tasks = dict()
 
     for task in graph.values():
-        compute_tasks[task.id] = SimulatedComputeTask(task.id, task)
+        compute_task = SimulatedComputeTask(task.id, task)
+        filter_data_dependenices(compute_task)
+        compute_tasks[task.id] = compute_task
 
     return compute_tasks
 
@@ -129,7 +132,7 @@ def create_data_tasks(
 
             runtime = TaskPlacementInfo()
             runtime.add(Device(Architecture.ANY, -1), TaskRuntimeInfo())
-            data_info = TaskDataInfo(read=[DataAccess(id=data)])
+            data_info = TaskDataInfo(read=[DataAccess(id=data, device=0)])
 
             data_task_info = TaskInfo(
                 id=data_task_id,
@@ -141,6 +144,7 @@ def create_data_tasks(
             data_task = SimulatedDataTask(
                 name=data_task_id, info=data_task_info, parent=task.name
             )
+            data_task.local_index = 0
             data_tasks[data_task_id] = data_task
             task.add_data_dependency(data_task_id)
 
@@ -153,11 +157,11 @@ def filter_data_dependenices(task: SimulatedTask):
     write = data_info.write
     read_write = data_info.read_write
 
-    read_set = set([d for d in read]).union([d for d in read_write])
-    write_set = set([d for d in write]).union([d for d in read_write])
+    read_set = set([d.id for d in read]).union([d.id for d in read_write])
+    write_set = set([d.id for d in write]).union([d.id for d in read_write])
 
-    read = list(read_set)
-    write = list(write_set)
+    read = list(DataAccess(id=d) for d in read_set)
+    write = list(DataAccess(id=d) for d in write_set)
 
     data_info.read = read
     data_info.write = write
@@ -199,7 +203,7 @@ def create_sim_graph(
         data_tasks = create_data_task_graph(tasks, compute_tasks)
         taskmap = combine_task_graphs(compute_tasks, data_tasks)
     else:
-        taskmap = compute_tasks
+        taskmap: SimulatedTaskMap = compute_tasks
 
     tasklist = list(compute_tasks.keys())
     populate_dependents(taskmap)
@@ -251,16 +255,18 @@ def convert_devices_to_list(devices: Optional[Devices]) -> List[Device]:
         return list(devices)
 
 
-def create_data_objects(datamap: DataMap) -> Dict[DataID, SimulatedData]:
+def create_data_objects(
+    datamap: DataMap, topology: SimulatedTopology
+) -> SimulatedDataMap:
     data_objects = dict()
 
-    for data in datamap.values():
-        devices = convert_devices_to_list(data.location)
-        data_objects[data.id] = SimulatedData(devices, data)
+    devices = topology.devices
+    devices = [device.name for device in devices]
 
-    from rich import print
-
-    print(data_objects)
+    for data_info in datamap.values():
+        data_objects[data_info.id] = SimulatedData(
+            system_devices=devices, info=data_info
+        )
 
     return data_objects
 
@@ -277,6 +283,13 @@ def apply_networkx_order(G: nx.DiGraph, tasks: SimulatedTaskMap) -> List[TaskID]
         tasks[node].info.order = i
 
     return nodes
+
+
+def topological_sort(tasklist: List[TaskID], taskmap: SimulatedTaskMap) -> List[TaskID]:
+    G, labels = build_networkx_graph(taskmap)
+    apply_networkx_order(G, taskmap)
+
+    return sort_tasks_by_order(tasklist, taskmap)
 
 
 def sort_tasks_by_order(tasklist: List[TaskID], taskmap: SimulatedTaskMap):
@@ -296,7 +309,7 @@ def populate_dependents(taskmap: SimulatedTaskMap):
             taskmap[dependency].dependents.append(task.name)
 
 
-def apply_mapping(taskmap: SimulatedTaskMap, device: Device):
+def apply_mapping(taskmap: SimulatedTaskMap, device: Optional[Device]):
     """
     Apply a mapping to a taskmap.
     @param taskmap: SimulatedTaskMap
@@ -318,5 +331,26 @@ def _compute_depth(taskmap: SimulatedTaskMap, heads: Sequence[SimulatedTask]):
 
 
 def compute_depths(taskmap: SimulatedTaskMap):
+    """
+    The function "compute_depths" calculates the depth of each task in a task map.
+
+    :param taskmap: The `taskmap` parameter is a dictionary that represents a simulated task map.
+    The `Task` class has a `dependencies` attribute, which is a list of task IDs that the task depends on.
+    :type taskmap: SimulatedTaskMap
+    """
     heads = [task for task in taskmap.values() if len(task.dependencies) == 0]
     _compute_depth(taskmap, heads)
+
+
+def get_initial_tasks(taskmap: SimulatedTaskMap) -> List[TaskID]:
+    """
+    Get a list of tasks that have no dependencies.
+    """
+    return [task.name for task in taskmap.values() if len(task.dependencies) == 0]
+
+
+def get_terminal_tasks(taskmap: SimulatedTaskMap) -> List[TaskID]:
+    """
+    Get a list of tasks that have no dependents.
+    """
+    return [task.name for task in taskmap.values() if len(task.dependents) == 0]

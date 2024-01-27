@@ -5,7 +5,7 @@ from .independent import *
 from .map_reduce import *
 from .reduction import *
 from .scatter_reduction import *
-from .serial import *
+from .chain import *
 from .stencil import *
 from .sweep import *
 from .utilities import *

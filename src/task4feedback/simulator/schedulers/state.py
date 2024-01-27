@@ -127,108 +127,22 @@ class SystemState:
         else:
             self.objects.devicemap = devicemap
 
-    def check_resources(self, taskid: TaskID, state: TaskState) -> bool:
+    def check_resources(self, phase: TaskState, taskid: TaskID) -> bool:
         # Check that the resources are available
         raise NotImplementedError()
 
-    def acquire_resources(self, taskid: TaskID, state: TaskState):
+    def acquire_resources(self, phase: TaskState, taskid: TaskID):
         # Reserve the resources
         raise NotImplementedError()
 
-    def release_resources(self, taskid: TaskID, state: TaskState):
+    def release_resources(self, phase: TaskState, taskid: TaskID):
         # Release the resources
         raise NotImplementedError()
 
-    def use_data(
-        self, taskid: TaskID, state: TaskState, data: DataID, access: AccessType
-    ):
+    def use_data(self, phase: TaskState, taskid: TaskID):
         # Update data tracking
         raise NotImplementedError()
 
-    def release_data(
-        self, taskid: TaskID, state: TaskState, data: DataID, access: AccessType
-    ):
+    def release_data(self, phase: TaskState, taskid: TaskID):
         # Update data tracking
         raise NotImplementedError()
-
-
-@dataclass(slots=True)
-class SchedulerArchitecture:
-    topology: InitVar[SimulatedTopology]
-    completed_tasks: List[TaskID] = field(default_factory=list)
-
-    def __post_init__(self, topology: SimulatedTopology):
-        assert topology is not None
-
-    def __getitem__(self, event: Event) -> Callable[[SystemState], Sequence[EventPair]]:
-        try:
-            function = getattr(self, event.func)
-        except AttributeError:
-            raise NotImplementedError(
-                f"SchedulerArchitecture does not implement function {event.func} for event {event}."
-            )
-
-        def wrapper(scheduler_state: SystemState) -> Sequence[EventPair]:
-            return function(scheduler_state, event)
-
-        return wrapper
-
-    def initialize(
-        self, tasks: List[TaskID], scheduler_state: SystemState
-    ) -> Sequence[EventPair]:
-        raise NotImplementedError()
-        return []
-
-    def add_initial_tasks(self, task: SimulatedTask):
-        pass
-
-    def mapper(self, scheduler_state: SystemState, event: Event) -> Sequence[EventPair]:
-        raise NotImplementedError()
-        return []
-
-    def reserver(
-        self, scheduler_state: SystemState, event: Event
-    ) -> Sequence[EventPair]:
-        raise NotImplementedError()
-        return []
-
-    def launcher(
-        self, scheduler_state: SystemState, event: Event
-    ) -> Sequence[EventPair]:
-        raise NotImplementedError()
-        return []
-
-    def complete_task(
-        self, scheduler_state: SystemState, event: Event
-    ) -> Sequence[EventPair]:
-        return []
-
-    def __str__(self):
-        return f"SchedulerArchitecture()"
-
-    def __repr__(self):
-        self.__str__()
-
-
-class SchedulerOptions:
-    scheduler_map: Dict[str, Type[SchedulerArchitecture]] = dict()
-
-    @staticmethod
-    def register_scheduler(scheduler_type: str) -> Callable[[Type], Type]:
-        def decorator(cls):
-            if scheduler_type in SchedulerOptions.scheduler_map:
-                raise ValueError(
-                    f"Scheduler type {scheduler_type} is already registered."
-                )
-            SchedulerOptions.scheduler_map[scheduler_type] = cls
-            return cls
-
-        return decorator
-
-    @staticmethod
-    def get_scheduler(scheduler_type: str) -> Type[SchedulerArchitecture]:
-        if scheduler_type not in SchedulerOptions.scheduler_map:
-            raise ValueError(
-                f"Scheduler type `{scheduler_type}` is not registered. Registered types are: {list(SchedulerOptions.scheduler_map.keys())}"
-            )
-        return SchedulerOptions.scheduler_map[scheduler_type]

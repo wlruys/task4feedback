@@ -26,7 +26,7 @@ class ChainDataGraphConfig(DataGraphConfig):
 
 
 @dataclass(slots=True)
-class SerialConfig(GraphConfig):
+class ChainConfig(GraphConfig):
     """
     Used to configure the generation of a serial synthetic task graph.
 
@@ -48,8 +48,8 @@ class SerialConfig(GraphConfig):
 
 
 @register_graph_generator
-def make_serial_graph(
-    config: SerialConfig, data_config: DataGraphConfig = NoDataGraphConfig()
+def make_chain_graph(
+    config: ChainConfig, data_config: DataGraphConfig = NoDataGraphConfig()
 ) -> Tuple[TaskMap, DataMap]:
     check_config(config)
     configurations = config.task_config

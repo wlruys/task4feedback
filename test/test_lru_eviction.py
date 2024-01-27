@@ -31,6 +31,8 @@ def test_datapool():
 
     for data in datalist:
         pool.add_data(cpu, data, DataState.EVICTABLE, initial=True)
+    for data in datalist:
+        
 
     for i in range(10):
         data = pool.get_next_evictable(cpu)

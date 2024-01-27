@@ -32,9 +32,13 @@ class SimulatedScheduler:
     events: EventQueue = EventQueue()
 
     def __post_init__(self, topology: SimulatedTopology, scheduler_type: str = "parla"):
-        self.state = SystemState(topology=topology)
-        scheduler_arch = SchedulerOptions.get_scheduler(scheduler_type)
+        scheduler_arch = SchedulerOptions.get_architecture(scheduler_type)
+        scheduler_state = SchedulerOptions.get_state(scheduler_type)
+
         print(f"Scheduler Architecture: {scheduler_arch}")
+        print(f"Scheduler State: {scheduler_state}")
+
+        self.state = scheduler_state(topology=topology)
         self.mechanisms = scheduler_arch(topology=topology)
 
     def __str__(self):
@@ -91,8 +95,6 @@ class SimulatedScheduler:
             if event_pair:
                 event_count += 1
                 completion_time, event = event_pair
-                # print(f"Event: {event} at {completion_time}")
-                # print("State", self.mechanisms)
 
                 # Advance time
                 self.time = max(self.time, completion_time)

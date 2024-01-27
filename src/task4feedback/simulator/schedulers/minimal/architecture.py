@@ -1,20 +1,27 @@
-from ..task import SimulatedTask, SimulatedDataTask, SimulatedComputeTask
-from ..data import *
-from ..device import *
-from ..queue import *
-from ..events import *
-from ..resources import *
-from ..task import *
-from ..topology import *
+from ...resources import List
+from ...topology import List
+from ...task import List, SimulatedTask, SimulatedDataTask, SimulatedComputeTask
+from ...data import *
+from ...device import *
+from ...queue import *
+from ...events import *
+from ...resources import *
+from ...task import *
+from ...topology import *
 
-from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
-from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ....types import Architecture, Device, TaskID, TaskState, TaskType, Time
+from ....types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Sequence
 from dataclasses import dataclass, InitVar
 from collections import defaultdict as DefaultDict
 
-from .scheduler import SchedulerArchitecture, SystemState, SchedulerOptions
+from ..state import (
+    SystemState,
+    ObjectRegistry,
+)
+
+from ..architecture import SchedulerArchitecture, SchedulerOptions
 
 from rich import print
 
@@ -28,6 +35,97 @@ StatesToResources[TaskState.LAUNCHED] = [ResourceType.VCU, ResourceType.COPY]
 StatesToResources[TaskState.RESERVED] = [ResourceType.MEMORY]
 StatesToResources[TaskState.COMPLETED] = []
 AllResources = [ResourceType.VCU, ResourceType.MEMORY, ResourceType.COPY]
+
+
+def check_mapped_resources(task: SimulatedTask, scheduler_state: SystemState) -> bool:
+    return True
+
+
+def check_reserved_resources(task: SimulatedTask, scheduler_state: SystemState) -> bool:
+    assert isinstance(task, SimulatedComputeTask)
+    rp = scheduler_state.resource_pool
+    devices = task.assigned_devices
+    if devices is None:
+        raise ValueError(f"Task {task.name} does not have assigned devices.")
+
+    resources_to_update = StatesToResources[TaskState.RESERVED]
+
+    can_fit = rp.check_resources(
+        devices=devices,
+        state=TaskState.RESERVED,
+        types=resources_to_update,
+        resources=task.resources,
+    )
+
+    if can_fit:
+        # Get size of data dependencies
+        data_dependencies = task.info.data_dependencies
+        read_data = data_dependencies.read
+
+    return can_fit
+
+
+def check_launched_resources(task: SimulatedTask, scheduler_state: SystemState) -> bool:
+    assert isinstance(task, SimulatedComputeTask)
+    rp = scheduler_state.resource_pool
+    devices = task.assigned_devices
+    if devices is None:
+        raise ValueError(f"Task {task.name} does not have assigned devices.")
+
+    resources_to_update = StatesToResources[TaskState.LAUNCHED]
+
+    can_fit = rp.check_resources(
+        devices=devices,
+        state=TaskState.LAUNCHED,
+        types=resources_to_update,
+        resources=task.resources,
+    )
+
+    return can_fit
+
+
+@dataclass(slots=True)
+class MinimalState(SystemState):
+    def check_resources(self, taskid: TaskID, state: TaskState) -> bool:
+        # Check that the resources are available
+        rp = self.resource_pool
+        task = self.objects.get_task(taskid)
+        assert task is not None
+
+        if state == TaskState.MAPPED:
+            return True
+
+        if task.resources is None:
+            raise ValueError(f"Task {taskid} does not have resources.")
+
+        devices = task.assigned_devices
+        if devices is None:
+            raise ValueError(f"Task {taskid} does not have assigned devices.")
+
+        task_requirements_check = rp.check_resources(
+            devices=devices,
+            state=TaskState,
+        )
+
+    def acquire_resources(self, taskid: TaskID, state: TaskState):
+        # Reserve the resources
+        pass
+
+    def release_resources(self, taskid: TaskID, state: TaskState):
+        # Release the resources
+        pass
+
+    def use_data(
+        self, taskid: TaskID, state: TaskState, data: DataID, access: AccessType
+    ):
+        # Update data tracking
+        pass
+
+    def release_data(
+        self, taskid: TaskID, state: TaskState, data: DataID, access: AccessType
+    ):
+        # Update data tracking
+        pass
 
 
 def map_task(task: SimulatedTask, scheduler_state: SystemState) -> Optional[Device]:
@@ -44,9 +142,9 @@ def map_task(task: SimulatedTask, scheduler_state: SystemState) -> Optional[Devi
     if check_status := task.check_status(
         TaskStatus.MAPPABLE, objects.taskmap, current_time
     ):
-        task.assigned_devices = (Device(Architecture.CPU, 0),)
+        task.assigned_devices = (Device(Architecture.GPU, np.random.randint(0, 4)),)
         devices = task.assigned_devices
-        # print(f"Task {task.name} assigned to device {devices}")
+        print(f"Task {task.name} assigned to device {devices}")
         assert devices is not None
 
         if devices is None:
@@ -173,32 +271,21 @@ def complete_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
     return True
 
 
-@SchedulerOptions.register_scheduler("parla")
+@SchedulerOptions.register_architecture("minimal")
 @dataclass(slots=True)
-class ParlaArchitecture(SchedulerArchitecture):
+class MinimalArchitecture(SchedulerArchitecture):
     topology: InitVar[SimulatedTopology]
 
     spawned_tasks: TaskQueue = TaskQueue()
-
-    # Mapping Phase
-    mappable_tasks: TaskQueue = TaskQueue()
-    # Reserving Phase
-    reservable_tasks: Dict[Device, TaskQueue] = field(default_factory=dict)
-    # Launching Phase
     launchable_tasks: Dict[Device, Dict[TaskType, TaskQueue]] = field(
         default_factory=dict
     )
     launched_tasks: Dict[Device, TaskQueue] = field(default_factory=dict)
 
-    success_count: int = 0
-    active_scheduler: int = 0
-
     def __post_init__(self, topology: SimulatedTopology):
         assert topology is not None
 
         for device in topology.devices:
-            self.reservable_tasks[device.name] = TaskQueue()
-
             self.launchable_tasks[device.name] = dict()
             self.launchable_tasks[device.name][TaskType.DATA] = TaskQueue()
             self.launchable_tasks[device.name][TaskType.COMPUTE] = TaskQueue()
@@ -218,24 +305,27 @@ class ParlaArchitecture(SchedulerArchitecture):
         # Initialize the event queue
         next_event = Mapper()
         next_time = Time(0)
-        self.active_scheduler += 1
         return [(next_time, next_event)]
 
     def add_initial_tasks(
-        self, tasks: List[SimulatedTask], scheduler_state: SystemState
+        self, tasks: Sequence[SimulatedTask], scheduler_state: SystemState
     ):
-        """
-        Append an initial task who does not have any dependency to
-        a spawned task queue.
-        """
+        # print("Spawning initial tasks...", tasks)
+
+        current_time = scheduler_state.time
+        assert current_time is not None
+
+        objects = scheduler_state.objects
+        assert objects is not None
+
         for task in tasks:
+            # task.check_status(TaskStatus.MAPPABLE, objects.taskmap, current_time)
             self.spawned_tasks.put(task)
 
     def mapper(
         self, scheduler_state: SystemState, event: Mapper
     ) -> Sequence[EventPair]:
         # print("Mapping tasks...")
-        self.success_count = 0
         next_tasks = TaskIterator(self.spawned_tasks)
 
         current_time = scheduler_state.time
@@ -248,38 +338,11 @@ class ParlaArchitecture(SchedulerArchitecture):
             assert task is not None
 
             if device := map_task(task, scheduler_state):
-                self.reservable_tasks[device].put_id(task_id=taskid, priority=priority)
-                task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
-                next_tasks.success()
-                self.success_count += 1
-            else:
-                next_tasks.fail()
-                continue
-
-        reserver_pair = (current_time, Reserver())
-        return [reserver_pair]
-
-    def reserver(
-        self, scheduler_state: SystemState, event: Reserver
-    ) -> Sequence[EventPair]:
-        objects = scheduler_state.objects
-        current_time = scheduler_state.time
-
-        next_tasks = MultiTaskIterator(self.reservable_tasks)
-        for priority, taskid in next_tasks:
-            task = objects.get_task(taskid)
-            assert task is not None
-
-            if reserve_success := reserve_task(task, scheduler_state):
-                devices = task.assigned_devices
-                assert devices is not None
-                device = devices[0]
                 self.launchable_tasks[device][task.type].put_id(
                     task_id=taskid, priority=priority
                 )
-                task.notify_state(TaskState.RESERVED, objects.taskmap, current_time)
+                task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
                 next_tasks.success()
-                self.success_count += 1
             else:
                 next_tasks.fail()
                 continue
@@ -296,6 +359,9 @@ class ParlaArchitecture(SchedulerArchitecture):
         current_time = scheduler_state.time
 
         next_events: Sequence[EventPair] = []
+        if remaining_tasks := length(self.launchable_tasks):
+            mapping_pair = (current_time + 100, Mapper())
+            next_events.append(mapping_pair)
 
         # print(f"Remaining tasks: {remaining_tasks}")
 
@@ -303,6 +369,14 @@ class ParlaArchitecture(SchedulerArchitecture):
         for priority, taskid in next_tasks:
             task = objects.get_task(taskid)
             assert task is not None
+
+            # print(f"Processing task {taskid}...")
+
+            if reserve_success := reserve_task(task, scheduler_state):
+                task.notify_state(TaskState.RESERVED, objects.taskmap, current_time)
+            else:
+                next_tasks.fail()
+                continue
 
             # Process LAUNCHABLE state
             if launch_success := launch_task(task, scheduler_state):
@@ -316,17 +390,9 @@ class ParlaArchitecture(SchedulerArchitecture):
                 completion_event = TaskCompleted(task=taskid)
                 next_events.append((completion_time, completion_event))
                 next_tasks.success()
-                self.success_count += 1
             else:
                 next_tasks.fail()
                 continue
-
-        self.active_scheduler -= 1
-
-        if remaining_tasks := length(self.launchable_tasks) and self.success_count:
-            mapping_pair = (current_time, Mapper())
-            next_events.append(mapping_pair)
-            self.active_scheduler += 1
 
         return next_events
 
@@ -361,22 +427,20 @@ class ParlaArchitecture(SchedulerArchitecture):
     def complete_task(
         self, scheduler_state: SystemState, event: TaskCompleted
     ) -> Sequence[EventPair]:
-        # print(f"Completing task: {event.task}...")
+        print(f"Completing task: {event.task}...")
         objects = scheduler_state.objects
+        assert objects is not None
         task = objects.get_task(event.task)
-        current_time = scheduler_state.time
-        next_events: Sequence[EventPair] = []
+        assert task is not None
+        # print(task)
+        # print(scheduler_state.resource_pool[Device(Architecture.GPU, 1)])
+        print(self)
 
         self._verify_correct_task_completed(task, scheduler_state)
         complete_task(task, scheduler_state)
 
         # Update status of dependencies
         task.notify_state(TaskState.COMPLETED, objects.taskmap, scheduler_state.time)
+        # print(scheduler_state.resource_pool[Device(Architecture.GPU, 1)])
 
-        self.success_count += 1
-        if self.active_scheduler == 0:
-            mapping_pair = (current_time, Mapper())
-            next_events.append(mapping_pair)
-            self.active_scheduler += 1
-
-        return next_events
+        return []
