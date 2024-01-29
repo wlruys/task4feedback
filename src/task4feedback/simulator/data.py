@@ -134,10 +134,11 @@ class DataStatus:
 
         if not initial:
             prior_state = self.device2state[state][device]
-            self.state2device[state][prior_state].remove(device)
 
             if prior_state == data_state:
                 return prior_state
+
+            self.state2device[state][prior_state].remove(device)
 
         self.device2state[state][device] = data_state
         self.state2device[state][data_state].add(device)
