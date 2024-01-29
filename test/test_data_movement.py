@@ -44,6 +44,8 @@ def test_serial():
 
     tasklist, task_map = create_sim_graph(tasks, data, use_data=True)
 
+    print(task_map)
+
     topology = TopologyManager().get_generator("frontera")(None)
     data_map = create_data_objects(data, topology=topology)
     print(data_map)

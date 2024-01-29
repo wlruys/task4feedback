@@ -66,6 +66,7 @@ TaskStateToUse = {}
 TaskStateToUse[TaskState.MAPPED] = DataUses.MAPPED
 TaskStateToUse[TaskState.RESERVED] = DataUses.RESERVED
 TaskStateToUse[TaskState.LAUNCHED] = DataUses.USED
+TaskStateToUse[TaskState.COMPLETED] = DataUses.USED
 
 NonEvictableUses = [DataUses.RESERVED, DataUses.MOVING, DataUses.USED]
 
@@ -346,8 +347,15 @@ class DataStatus:
         if prior_target_state != DataState.VALID:
             self.set_data_state(target_device, TaskState.LAUNCHED, DataState.MOVING)
 
-        self.add_task(source_device, task, DataUses.MOVING)
-        self.add_task(target_device, task, DataUses.MOVING)
+        if source_device != target_device:
+            print(
+                f"Adding task {task} to uses of Data {self.id} on device {target_device}"
+            )
+            print(
+                f"Adding task {task} to uses of Data {self.id} on device {source_device}"
+            )
+            self.add_task(source_device, task, DataUses.MOVING)
+            self.add_task(target_device, task, DataUses.MOVING)
 
         return prior_target_state
 
@@ -358,6 +366,8 @@ class DataStatus:
         target_device: Device,
         verbose: bool = False,
     ) -> DataState:
+        from rich import print
+
         if not self.check_data_state(
             source_device, TaskState.LAUNCHED, DataState.VALID
         ):
@@ -367,17 +377,24 @@ class DataStatus:
 
         prior_target_state = self.get_data_state(target_device, TaskState.LAUNCHED)
 
-        if prior_target_state == DataState.MOVING:
+        if prior_target_state == DataState.VALID:
             pass  # Do nothing
-        elif prior_target_state == DataState.VALID:
+        elif prior_target_state == DataState.MOVING:
             self.set_data_state(target_device, TaskState.LAUNCHED, DataState.VALID)
         else:
             raise RuntimeError(
                 f"Task {task} cannot finish moving data to a device that is not valid or moving."
             )
 
-        self.remove_task(source_device, task, DataUses.MOVING)
-        self.remove_task(target_device, task, DataUses.MOVING)
+        if source_device != target_device:
+            print(
+                f"Removing task {task} to uses of Data {self.id} on device {target_device}"
+            )
+            print(
+                f"Removing task {task} to uses of Data {self.id} on device {source_device}"
+            )
+            self.remove_task(source_device, task, DataUses.MOVING)
+            self.remove_task(target_device, task, DataUses.MOVING)
 
         return prior_target_state
 

@@ -279,7 +279,7 @@ def _release_resources_completed(
         devices = (devices,)
 
     resources = get_required_resources(
-        TaskState.COMPLETED, task, devices, state.objects, count_data=False
+        TaskState.LAUNCHED, task, devices, state.objects, count_data=False
     )
 
     print(
@@ -381,7 +381,7 @@ def _release_data(
         data = state.objects.get_data(data_id)
         assert data is not None
 
-        data.finish_use(task.name, device, phase, operation=access_type)
+        data.finish_use(task.name, device, TaskState.LAUNCHED, operation=access_type)
 
 
 def _move_data(
@@ -438,6 +438,9 @@ def _finish_move(
     assert source_device is not None
 
     # Mark data as valid on target device
+    print(
+        f"Finishing move for data {data.name} from {source_device} to {target_device}"
+    )
     prior_state = data.finish_move(task.name, source_device, target_device)
 
 

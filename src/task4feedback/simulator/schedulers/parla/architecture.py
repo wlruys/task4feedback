@@ -83,9 +83,10 @@ def launch_task(
             print(f"Task {task.name} has sufficient resources.")
             scheduler_state.acquire_resources(phase, task)
             scheduler_state.use_data(phase, task, verbose=verbose)
-            scheduler_state.get_task_duration(
+            duration = scheduler_state.get_task_duration(
                 task, task.assigned_devices, verbose=verbose
             )
+            task.duration = duration
             return True
         print(
             f"Task {task.name} cannot be launched: Status: {check_status}, Resources: {can_fit}"
