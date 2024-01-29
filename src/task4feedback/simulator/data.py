@@ -56,8 +56,10 @@ class DataUses(IntEnum):
     """ A mapped compute task is using the data """
     RESERVED = 2
     """ A reserved compute task is using the data """
-    MOVING = 3
-    """ A data task is currently moving the data to OR from the device """
+    MOVING_TO = 3
+    """ A data task is currently moving the data to the device """
+    MOVING_FROM = 4
+    """ A data task is currently moving the data from the device """
     USED = 4
     """ A launched compute task is using the data """
 
@@ -68,7 +70,12 @@ TaskStateToUse[TaskState.RESERVED] = DataUses.RESERVED
 TaskStateToUse[TaskState.LAUNCHED] = DataUses.USED
 TaskStateToUse[TaskState.COMPLETED] = DataUses.USED
 
-NonEvictableUses = [DataUses.RESERVED, DataUses.MOVING, DataUses.USED]
+NonEvictableUses = [
+    DataUses.RESERVED,
+    DataUses.MOVING_TO,
+    DataUses.MOVING_FROM,
+    DataUses.USED,
+]
 
 
 @dataclass(slots=True)
@@ -179,6 +186,9 @@ class DataStatus:
 
     def remove_task(self, device: Device, task: TaskID, use: DataUses):
         self.device2uses[device].remove_task(task, use)
+
+    def get_tasks_from_usage(self, device: Device, use: DataUses) -> List[TaskID]:
+        return list(self.device2uses[device].tasks[use])
 
     def is_evictable(self, device: Device) -> bool:
         return self.device2uses[device].is_evictable()
@@ -354,8 +364,8 @@ class DataStatus:
             print(
                 f"Adding task {task} to uses of Data {self.id} on device {source_device}"
             )
-            self.add_task(source_device, task, DataUses.MOVING)
-            self.add_task(target_device, task, DataUses.MOVING)
+            self.add_task(source_device, task, DataUses.MOVING_FROM)
+            self.add_task(target_device, task, DataUses.MOVING_TO)
 
         return prior_target_state
 
@@ -393,8 +403,8 @@ class DataStatus:
             print(
                 f"Removing task {task} to uses of Data {self.id} on device {source_device}"
             )
-            self.remove_task(source_device, task, DataUses.MOVING)
-            self.remove_task(target_device, task, DataUses.MOVING)
+            self.remove_task(source_device, task, DataUses.MOVING_TO)
+            self.remove_task(target_device, task, DataUses.MOVING_FROM)
 
         return prior_target_state
 
@@ -510,6 +520,9 @@ class SimulatedData:
         self, states: Sequence[TaskState], data_states: Sequence[DataState]
     ) -> Sequence[Device]:
         return self.status.get_devices_from_states(states, data_states)
+
+    def get_tasks_from_usage(self, device: Device, use: DataUses) -> Sequence[TaskID]:
+        return self.status.get_tasks_from_usage(device, use)
 
     def is_valid(self, device: Device, state: TaskState) -> bool:
         return self.status.check_data_state(device, state, DataState.VALID)
