@@ -398,13 +398,13 @@ class DataStatus:
 
         if source_device != target_device:
             print(
-                f"Removing task {task} to uses of Data {self.id} on device {target_device}"
+                f"Removing task {task} to use {DataUses.MOVING_TO} of Data {self.id} on device {target_device}"
             )
             print(
-                f"Removing task {task} to uses of Data {self.id} on device {source_device}"
+                f"Removing task {task} to use {DataUses.MOVING_FROM} of Data {self.id} on device {source_device}"
             )
-            self.remove_task(source_device, task, DataUses.MOVING_TO)
-            self.remove_task(target_device, task, DataUses.MOVING_FROM)
+            self.remove_task(target_device, task, DataUses.MOVING_TO)
+            self.remove_task(source_device, task, DataUses.MOVING_FROM)
 
         return prior_target_state
 

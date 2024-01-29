@@ -203,11 +203,16 @@ class ConnectionPool:
     def get_transfer_time(
         self, source: NamedDevice, target: NamedDevice, data_size: int
     ) -> Time:
+        if source == target:
+            return Time(0)
+
         source_idx = self.get_index(source)
         target_idx = self.get_index(target)
         bandwidth = self.bandwidth[source_idx, target_idx]
+        assert bandwidth > 0, f"No known bandwidth between {source} and {target}"
         time_in_seconds = data_size / bandwidth
         time_in_microseconds = int(time_in_seconds * 1e6)
+        print(f"Transfer time: {time_in_microseconds} us")
         return Time(time_in_microseconds)
 
     def get_connection_string(self, source: NamedDevice, target: NamedDevice) -> str:
@@ -318,6 +323,11 @@ class SimulatedTopology:
 
     def get_device_string(self, device: SimulatedDevice) -> str:
         return f"{device} (mem={device[ResourceType.MEMORY]})"
+
+    def get_transfer_time(
+        self, source: NamedDevice, target: NamedDevice, data_size: int
+    ) -> Time:
+        return self.connection_pool.get_transfer_time(source, target, data_size)
 
     def __str__(self) -> str:
         s = f"Topology: {self.name}\n"

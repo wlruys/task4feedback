@@ -449,22 +449,51 @@ def _compute_task_duration(
     task: SimulatedComputeTask,
     devices: Devices,
     verbose: bool = False,
-) -> Time:
+) -> Tuple[Time, Time]:
     assert isinstance(task, SimulatedComputeTask)
     assert devices is not None
 
     runtime_infos = task.get_runtime_info(devices)
     max_time = max([runtime_info.task_time for runtime_info in runtime_infos])
-    return Time(max_time)
+    duration = Time(max_time)
+
+    completion_time = state.time + duration
+    return duration, completion_time
 
 
 def _data_task_duration(
     state: SystemState,
     task: SimulatedDataTask,
-    devices: Devices,
+    target_devices: Devices,
     verbose: bool = False,
-) -> Time:
-    return Time(10)
+) -> Tuple[Time, Time]:
+    assert isinstance(task, SimulatedDataTask)
+    assert target_devices is not None
+    assert task.source is not None
+
+    if isinstance(target_devices, Tuple):
+        target = target_devices[0]
+    else:
+        target = target_devices
+
+    data = state.objects.get_data(task.read_accesses[0].id)
+    assert data is not None
+
+    other_moving_tasks = data.get_tasks_from_usage(target, DataUses.MOVING_TO)
+    if len(other_moving_tasks) > 0:
+        duration = Time(0)
+        other_task = other_moving_tasks[0]
+        assert (
+            other_task != task.name
+        ), f"Current task {task} should not be in the list of moving tasks {other_moving_tasks} during duration calculation."
+
+        other_task = state.objects.get_task(other_task)
+        completion_time = other_task.completion_time
+    else:
+        duration = state.topology.get_transfer_time(task.source, target, data.size)
+        completion_time = state.time + duration
+
+    return duration, completion_time
 
 
 @SchedulerOptions.register_state("parla")
@@ -536,7 +565,7 @@ class ParlaState(SystemState):
 
     def get_task_duration(
         self, task: SimulatedTask, devices: Devices, verbose: bool = False
-    ) -> Time:
+    ) -> Tuple[Time, Time]:
         if isinstance(task, SimulatedComputeTask):
             return _compute_task_duration(self, task, devices, verbose=verbose)
         elif isinstance(task, SimulatedDataTask):

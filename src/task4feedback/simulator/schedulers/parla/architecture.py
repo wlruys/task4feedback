@@ -82,11 +82,12 @@ def launch_task(
         if can_fit := scheduler_state.check_resources(phase, task):
             print(f"Task {task.name} has sufficient resources.")
             scheduler_state.acquire_resources(phase, task)
-            scheduler_state.use_data(phase, task, verbose=verbose)
-            duration = scheduler_state.get_task_duration(
+            duration, completion_time = scheduler_state.get_task_duration(
                 task, task.assigned_devices, verbose=verbose
             )
+            scheduler_state.use_data(phase, task, verbose=verbose)
             task.duration = duration
+            task.completion_time = completion_time
             return True
         print(
             f"Task {task.name} cannot be launched: Status: {check_status}, Resources: {can_fit}"
@@ -273,7 +274,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             if launch_success := launch_task(task, scheduler_state):
                 print(f"Task {task.name} launched on device {task.assigned_devices}")
                 task.notify_state(TaskState.LAUNCHED, objects.taskmap, current_time)
-                completion_time = current_time + task.duration
+                completion_time = task.completion_time
 
                 device = task.assigned_devices[0]  # type: ignore
                 self.launched_tasks[device].put_id(taskid, completion_time)

@@ -27,6 +27,7 @@ from .datapool import DataPool
 @dataclass(slots=True)
 class TaskTimes:
     duration: Time = field(default_factory=Time)
+    completion_time: Time = field(default_factory=Time)
     state_times: Dict[TaskState, Time] = field(default_factory=dict)
     status_times: Dict[TaskStatus, Time] = field(default_factory=dict)
 
@@ -154,6 +155,14 @@ class SimulatedTask:
     @duration.setter
     def duration(self, time: Time):
         self.times.duration = time
+
+    @property
+    def completion_time(self) -> Time:
+        return self.times.completion_time
+
+    @completion_time.setter
+    def completion_time(self, time: Time):
+        self.times.completion_time = time
 
     @property
     def dependencies(self) -> List[TaskID]:
