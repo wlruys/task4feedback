@@ -23,7 +23,7 @@ def test_serial():
         return 1
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
-        if task_id.task_idx[0] % 2 == 0:
+        if True:  # task_id.task_idx[0] % 2 == 0:
             device_tuple = (gpu0,)
         else:
             device_tuple = (gpu1,)
@@ -46,6 +46,7 @@ def test_serial():
 
     topology = TopologyManager().get_generator("frontera")(None)
     data_map = create_data_objects(data, topology=topology)
+    print(data_map)
 
     scheduler = SimulatedScheduler(topology=topology, scheduler_type="parla")
     scheduler.register_taskmap(task_map)
