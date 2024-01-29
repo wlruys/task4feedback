@@ -116,20 +116,25 @@ def test():
     #     task_count=args.steps, data_config=data_config, task_config=custom_tasks
     # )
     # config = ReductionConfig(levels=args.steps, branch_factor=2, data_config=data_config, task_config=custom_tasks)
-    # config = StencilConfig(
-    #     dimensions=1,
+    config = StencilConfig(
+        dimensions=1,
+        width=args.width,
+        steps=args.steps,
+        task_config=custom_tasks,
+    )
+    # config = SweepConfig(
     #     width=args.width,
     #     steps=args.steps,
+    #     dimensions=1,
     #     data_config=data_config,
     #     task_config=custom_tasks,
     # )
-    config = SweepConfig(
-        width=args.width,
-        steps=args.steps,
-        dimensions=1,
-        data_config=data_config,
-        task_config=custom_tasks,
-    )
+    #
+    # config = ButterflyConfig(
+    #     width=args.width,
+    #     steps=args.steps,
+    #     task_config=custom_tasks,
+    # )
     # config = SerialConfig(
     #     chains=1, steps=args.steps, data_config=data_config, task_config=custom_tasks
     # )

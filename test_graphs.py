@@ -18,25 +18,32 @@ def run():
     gpu1 = Device(Architecture.GPU, 1)
     gpu2 = Device(Architecture.GPU, 2)
 
-    # data_config = ChainDataGraphConfig(data_size=1000)
-    # data_config = CholeskyDataGraphConfig(data_size=1000)
-    # data_config = SweepDataGraphConfig(small_size=10, large_size=1000)
-    # data_config = StencilDataGraphConfig(
-    #    small_size=10, large_size=1000, dimensions=1, width=3, neighbor_distance=1
-    # )
+    def custom_tasks(task_id: TaskID) -> TaskPlacementInfo:
+        placement_info = TaskPlacementInfo()
 
-    data_config = NoDataGraphConfig()
+        import random
 
-    # config = CholeskyConfig(blocks=4, data_config=data_config)
-    # config = ReductionConfig(levels=3, branch_factor=3, data_config=data_config)
-    config = StencilConfig(dimensions=1, width=3, steps=2, data_config=data_config)
-    # config = SweepConfig(width=3, steps=2, dimensions=2, data_config=data_config)
+        time = random.randint(10000, 20000)
+        device_tuple = (Device(Architecture.GPU, -1),)
+        runtime_info = TaskRuntimeInfo(task_time=time)
+
+        placement_info.add(device_tuple, runtime_info)
+
+        time = random.randint(50000, 70000)
+        device_tuple = (Device(Architecture.CPU, -1),)
+        runtime_info = TaskRuntimeInfo(task_time=time)
+        placement_info.add(device_tuple, runtime_info)
+
+        return placement_info
+
+    data_config = SweepDataGraphConfig()
+    config = SweepConfig(width=4, steps=4, dimensions=1, task_config=custom_tasks)
     # config = SerialConfig(chains=2, steps=10, data_config=data_config)
     # config = MapReduceConfig(data_config=data_config)
     # config = ScatterReductionConfig(levels=3, branch_factor=3, data_config=data_config)
 
     # tasks, data = make_sweep_graph(config)
-    tasks, data = make_stencil_graph(config)
+    tasks, data = make_graph(config, data_config=data_config)
 
     write_tasks_to_yaml(tasks, "graph")
     write_data_to_yaml(data, "graph")

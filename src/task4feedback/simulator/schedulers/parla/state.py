@@ -80,6 +80,36 @@ def get_required_resources(
     return resources
 
 
+def _check_nearest_source(
+    state: SystemState, taskid: TaskID
+) -> Optional[Device | SimulatedDevice]:
+    task = state.objects.get_task(taskid)
+    devices = task.assigned_devices
+
+    assert isinstance(task, SimulatedDataTask)
+    assert devices is not None
+    assert isinstance(devices, Device) or len(devices) == 1
+
+    data_id = task.read_accesses[0].id
+    data = state.objects.get_data(data_id)
+    assert data is not None
+
+    device = devices[0] if isinstance(devices, tuple) else devices
+    device = state.objects.get_device(device)
+    assert device is not None
+
+    valid_sources = data.get_devices_from_states(
+        [TaskState.LAUNCHED], [DataState.VALID]
+    )
+    valid_sources = [state.objects.get_device(d) for d in valid_sources]
+
+    source_device = state.topology.nearest_valid_connection(
+        device, valid_sources, require_copy_engines=True, require_symmetric=True
+    )
+
+    return source_device
+
+
 def _acquire_resources_mapped(state: SystemState, taskid: TaskID):
     task = state.objects.get_task(taskid)
     devices = task.assigned_devices
@@ -114,6 +144,10 @@ def _check_resources_reserved(state: SystemState, taskid: TaskID) -> bool:
 
     resources = get_required_resources(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
+    )
+
+    print(
+        f"Checking resources for task {taskid} on devices {devices} with resources {resources}."
     )
 
     can_fit = state.resource_pool.check_resources(
@@ -240,6 +274,56 @@ def _release_resources_completed(state: SystemState, taskid: TaskID):
         types=AllResources,
         resources=task.resources,
     )
+
+
+def _use_data_planned(
+    state: SystemState,
+    phase: TaskState,
+    data_accesses: List[DataAccess],
+    taskid: TaskID,
+    access_type: AccessType,
+):
+    task = state.objects.get_task(taskid)
+    devices = task.assigned_devices
+    assert devices is not None
+
+    for data_access in data_accesses:
+        data_id = data_access.id
+        device_idx = data_access.device
+        device = devices[device_idx]
+
+        data = state.objects.get_data(data_id)
+        assert data is not None
+
+        if phase == TaskState.RESERVED:
+            data.finish_use(taskid, device, TaskState.MAPPED, AccessType.READ)
+
+        data.start_use(taskid, device, phase, AccessType.READ)
+
+
+def _use_data_planned(
+    state: SystemState,
+    phase: TaskState,
+    data_accesses: List[DataAccess],
+    taskid: TaskID,
+    access_type: AccessType,
+):
+    task = state.objects.get_task(taskid)
+    devices = task.assigned_devices
+    assert devices is not None
+
+    for data_access in task.read_accesses:
+        data_id = data_access.id
+        device_idx = data_access.device
+        device = devices[device_idx]
+
+        data = state.objects.get_data(data_id)
+        assert data is not None
+
+        if phase == TaskState.RESERVED:
+            data.finish_use(taskid, device, TaskState.MAPPED, AccessType.READ)
+
+        data.start_use(taskid, device, phase, AccessType.READ)
 
 
 @SchedulerOptions.register_state("parla")

@@ -386,7 +386,13 @@ class SimulatedData:
     ):
         self.status.start_use(task, target_device, state, operation)
 
-    def finish_use(self, task: TaskID, target_device: Device, state: TaskState):
+    def finish_use(
+        self,
+        task: TaskID,
+        target_device: Device,
+        state: TaskState,
+        access_type: AccessType,
+    ):
         self.status.finish_use(task, target_device, state)
 
     def start_move(
