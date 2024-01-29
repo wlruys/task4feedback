@@ -11,21 +11,14 @@ class ButterflyConfig(GraphConfig):
     width: int = 9
     steps: int = 4
 
-    def __post_init__(self):
-        if self.fixed_architecture == Architecture.CPU:
-            self.mapping = lambda x: Device(self.fixed_architecture, 0)
-        else:
-            self.mapping = lambda x: Device(
-                self.fixed_architecture, x[1] % self.n_devices
-            )
-
 
 @register_graph_generator
-def make_butterfly_graph(config: ButterflyConfig) -> Tuple[TaskMap, DataMap]:
+def make_butterfly_graph(
+    config: ButterflyConfig, data_config: DataGraphConfig = NoDataGraphConfig()
+) -> Tuple[TaskMap, DataMap]:
     check_config(config)
     from rich import print
 
-    data_config = config.data_config
     configurations = config.task_config
 
     task_dict = dict()
