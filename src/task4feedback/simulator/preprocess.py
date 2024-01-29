@@ -157,7 +157,7 @@ def filter_data_dependenices(task: SimulatedTask):
     write = data_info.write
     read_write = data_info.read_write
 
-    read_set = set([d.id for d in read]).union([d.id for d in read_write])
+    read_set = set([d.id for d in read]).difference([d.id for d in read_write])
     write_set = set([d.id for d in write]).union([d.id for d in read_write])
 
     read = list(DataAccess(id=d) for d in read_set)

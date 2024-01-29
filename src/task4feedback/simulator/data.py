@@ -106,6 +106,7 @@ class DataUse:
 
 @dataclass(slots=True)
 class DataStatus:
+    id: DataID
     devices: InitVar[Sequence[Device]]
     device2state: Dict[TaskState, Dict[Device, DataState]] = field(default_factory=dict)
     state2device: Dict[TaskState, Dict[DataState, Set[Device]]] = field(
@@ -229,6 +230,8 @@ class DataStatus:
         state: TaskState,
         verify: bool = False,
         update: bool = False,
+        initial: bool = False,
+        verbose: bool = False,
     ):
         if verify:
             # Assumes that this happens before the task is added to the device uses list
@@ -245,7 +248,7 @@ class DataStatus:
                 else:
                     if not self.check_data_state(device, state, DataState.VALID):
                         raise RuntimeError(
-                            f"Task {task} cannot write to data that is not valid. Status: {status}"
+                            f"Task {task} cannot write to data that is not valid on device {device}. Status: {status}"
                         )
             else:
                 self.set_data_state(device, state, DataState.NONE)
@@ -256,6 +259,8 @@ class DataStatus:
         target_device: Device,
         state: TaskState,
         update: bool = False,
+        initial: bool = False,
+        verbose: bool = False,
     ) -> Optional[DataState]:
         # Ensure that the target device is valid
         status = self.device2state[state]
@@ -265,7 +270,7 @@ class DataStatus:
         else:
             if not self.check_data_state(target_device, state, DataState.VALID):
                 raise RuntimeError(
-                    f"Task {task} cannot read from data that is not valid. Status: {status}"
+                    f"Task {task} cannot read from data that is not valid on device {target_device}. Status: {status}"
                 )
                 prior_state = None
             prior_state = self.get_data_state(target_device, state)
@@ -279,25 +284,55 @@ class DataStatus:
         state: TaskState,
         operation: AccessType,
         update: bool = False,
+        initial: bool = False,
+        verbose: bool = False,
     ) -> Optional[DataState]:
         if operation == AccessType.READ:
             old_state = self.read(
-                task=task, target_device=target_device, state=state, update=update
+                task=task,
+                target_device=target_device,
+                state=state,
+                update=update,
+                initial=initial,
+                verbose=verbose,
             )
         else:
             old_state = self.write(
-                task=task, target_device=target_device, state=state, update=update
+                task=task,
+                target_device=target_device,
+                state=state,
+                update=update,
+                initial=initial,
+                verbose=verbose,
             )
 
+        print(
+            f"Adding task {task} to uses of Data {self.id} on device {target_device} for state {state}, {TaskStateToUse[state]}"
+        )
         self.add_task(target_device, task, TaskStateToUse[state])
 
         return old_state
 
-    def finish_use(self, task: TaskID, target_device: Device, state: TaskState):
+    def finish_use(
+        self,
+        task: TaskID,
+        target_device: Device,
+        state: TaskState,
+        operation: AccessType,
+        update: bool = False,
+        verbose: bool = False,
+    ):
+        print(
+            f"Removing task {task} to uses of Data {self.id} on device {target_device} for state {state}, {TaskStateToUse[state]}"
+        )
         self.remove_task(target_device, task, TaskStateToUse[state])
 
     def start_move(
-        self, task: TaskID, source_device: Device, target_device: Device
+        self,
+        task: TaskID,
+        source_device: Device,
+        target_device: Device,
+        verbose: bool = False,
     ) -> DataState:
         if not self.check_data_state(
             source_device, TaskState.LAUNCHED, DataState.VALID
@@ -317,7 +352,11 @@ class DataStatus:
         return prior_target_state
 
     def finish_move(
-        self, task: TaskID, source_device: Device, target_device: Device
+        self,
+        task: TaskID,
+        source_device: Device,
+        target_device: Device,
+        verbose: bool = False,
     ) -> DataState:
         if not self.check_data_state(
             source_device, TaskState.LAUNCHED, DataState.VALID
@@ -355,7 +394,7 @@ class SimulatedData:
     status: DataStatus = field(init=False)
 
     def __post_init__(self, system_devices: Sequence[Device]):
-        self.status = DataStatus(system_devices)
+        self.status = DataStatus(id=self.info.id, devices=system_devices)
 
         starting_devices = self.info.location
         assert starting_devices is not None
@@ -363,9 +402,16 @@ class SimulatedData:
         if isinstance(starting_devices, Device):
             starting_devices = (starting_devices,)
 
-        for device in starting_devices:
+        for device in system_devices:
             for state in TaskState:
-                self.status.set_data_state(device, state, DataState.VALID, initial=True)
+                if device not in starting_devices:
+                    self.status.set_data_state(
+                        device, state, DataState.NONE, initial=True
+                    )
+                else:
+                    self.status.set_data_state(
+                        device, state, DataState.VALID, initial=True
+                    )
 
     @property
     def name(self) -> DataID:
@@ -384,27 +430,47 @@ class SimulatedData:
         target_device: Device,
         state: TaskState,
         operation: AccessType,
+        update: bool = False,
+        verbose: bool = False,
     ):
-        self.status.start_use(task, target_device, state, operation)
+        self.status.start_use(
+            task, target_device, state, operation, update=update, verbose=verbose
+        )
 
     def finish_use(
         self,
         task: TaskID,
         target_device: Device,
         state: TaskState,
-        access_type: AccessType,
+        operation: AccessType,
+        update: bool = False,
+        verbose: bool = False,
     ):
-        self.status.finish_use(task, target_device, state)
+        self.status.finish_use(
+            task, target_device, state, operation, update=update, verbose=verbose
+        )
 
     def start_move(
-        self, task: TaskID, source_device: Device, target_device: Device
+        self,
+        task: TaskID,
+        source_device: Device,
+        target_device: Device,
+        verbose: bool = False,
     ) -> DataState:
-        return self.status.start_move(task, source_device, target_device)
+        return self.status.start_move(
+            task, source_device, target_device, verbose=verbose
+        )
 
     def finish_move(
-        self, task: TaskID, source_device: Device, target_device: Device
+        self,
+        task: TaskID,
+        source_device: Device,
+        target_device: Device,
+        verbose: bool = False,
     ) -> DataState:
-        return self.status.finish_move(task, source_device, target_device)
+        return self.status.finish_move(
+            task, source_device, target_device, verbose=verbose
+        )
 
     def __str__(self):
         return f"Data({self.name}) | Status: {self.status}"

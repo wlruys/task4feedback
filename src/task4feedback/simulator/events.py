@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 class Event:
     func: str
     time: Optional[Time] = None
+    verbose: bool = False
 
     def __eq__(self, other):
         return self.func == other.func and self.time == other.time

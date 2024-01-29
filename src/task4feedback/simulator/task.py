@@ -172,7 +172,6 @@ class SimulatedTask:
 
     @assigned_devices.setter
     def assigned_devices(self, devices: Tuple[Device, ...]):
-        # print(f"Setting {self.name} to {devices}")
         self.info.mapping = devices
 
     @property
@@ -198,19 +197,20 @@ class SimulatedTask:
     def add_dependent(self, task: TaskID):
         self.dependents.append(task)
 
-    def notify_state(self, state: TaskState, taskmap: SimulatedTaskMap, time: Time):
+    def notify_state(
+        self,
+        state: TaskState,
+        taskmap: SimulatedTaskMap,
+        time: Time,
+        verbose: bool = False,
+    ):
         # Notify only if changed
-        # print(f"Task {self.name} in state {self.state}. Notifying {state}")
         if self.state == state:
-            # print(f"Task {self.name} already in state {state}")
             return
 
         for taskid in self.dependents:
             task = taskmap[taskid]
-            # print(f"Task {self.name} notifying {task.name} of {state}")
-            # print(task.counters)
             if new_status := task.counters.notified_state(state):
-                # print(f"Task {self.name} notifying {task.name} of {new_status}")
                 task.notify_status(new_status, taskmap, time)
 
         self.set_state(state, time)
@@ -223,9 +223,17 @@ class SimulatedTask:
         self.set_status(status, time)
 
     def check_status(
-        self, status: TaskStatus, taskmap: SimulatedTaskMap, time: Time
+        self,
+        status: TaskStatus,
+        taskmap: SimulatedTaskMap,
+        time: Time,
+        verbose: bool = False,
     ) -> bool:
+        print(f"Checking if {self.name} is status {status}")
+        print(f"Matching state: {TaskStatus.matching_state(status)}")
         if checked_state := TaskStatus.matching_state(status):
+            print("Dependency list", self.info.dependencies)
+            print("Checking state of dependencies", self.counters)
             if status not in self.status and self.counters.check_count(checked_state):
                 self.notify_status(status, taskmap, time)
                 return True
@@ -256,9 +264,6 @@ class SimulatedTask:
     def get_runtime_info(self, device: Devices) -> List[TaskRuntimeInfo]:
         return self.info.runtime[device]
 
-    def set_duration(self, device: Devices, system_state: "SystemState"):
-        raise NotImplementedError
-
     def set_resources(self, devices: Devices, data_inputs: bool = False):
         raise NotImplementedError
 
@@ -277,11 +282,6 @@ class SimulatedComputeTask(SimulatedTask):
             self.data_tasks = []
         self.data_tasks.append(task)
 
-    def set_duration(self, device: Devices, system_state: "SystemState"):
-        runtime_infos = self.get_runtime_info(device)
-        max_time = max([runtime_info.task_time for runtime_info in runtime_infos])
-        self.duration = Time(max_time)
-
     def set_resources(self, devices: Devices):
         if isinstance(devices, Device):
             devices = (devices,)
@@ -297,13 +297,6 @@ class SimulatedDataTask(SimulatedTask):
     type: TaskType = TaskType.DATA
     source: Optional[Device] = None
     local_index: int = 0
-
-    def set_duration(self, device: Devices, system_state: "SystemState"):
-        # Data movement tasks are single device
-        if not isinstance(device, Device):
-            assert len(device) == 1
-
-        self.duration = Time(0)
 
     def set_resources(self, devices: Devices):
         self.resources.append(ResourceSet(vcus=0, memory=0, copy=1))

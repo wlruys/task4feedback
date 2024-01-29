@@ -33,92 +33,74 @@ def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
 
 
 def map_task(
-    task: SimulatedTask, scheduler_state: SystemState
+    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
 ) -> Optional[Tuple[Device, ...]]:
     phase = TaskState.MAPPED
     objects = scheduler_state.objects
     assert objects is not None
 
-    resource_pool = scheduler_state.resource_pool
-    assert resource_pool is not None
-
     current_time = scheduler_state.time
     assert current_time is not None
 
     # Check if task is mappable
-    if check_status := task.check_status(
-        TaskStatus.MAPPABLE, objects.taskmap, current_time
-    ):
-        task.assigned_devices = chose_random_placement(task)
-        devices = task.assigned_devices
-        print(f"Task {task.name} assigned to device {devices}")
-        assert devices is not None
+    if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
+        chosen_devices = chose_random_placement(task)
+        task.assigned_devices = chosen_devices
+        scheduler_state.acquire_resources(phase, task, verbose=verbose)
+        scheduler_state.use_data(phase, task, verbose=verbose)
 
-        if devices is None:
-            raise ValueError(
-                f"Task {task.name} has no assigned devices. Minimal scheduler requires that all tasks have an assigned device at spawn."
-            )
-
-        scheduler_state.acquire_resources(TaskState.MAPPED, task.name)
-
-        return devices
+        return chosen_devices
     return None
 
 
-def reserve_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
+def reserve_task(
+    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
+) -> bool:
     phase = TaskState.RESERVED
     objects = scheduler_state.objects
     assert objects is not None
 
-    resource_pool = scheduler_state.resource_pool
-    assert resource_pool is not None
-
     current_time = scheduler_state.time
     assert current_time is not None
 
-    if check_reservable := task.check_status(
-        TaskStatus.RESERVABLE, objects.taskmap, current_time
-    ):
-        devices = task.assigned_devices
-        assert devices is not None
-
-        if can_fit := scheduler_state.check_resources(phase, task.name):
-            scheduler_state.acquire_resources(phase, task.name)
+    if check_status := scheduler_state.check_task_status(task, TaskStatus.RESERVABLE):
+        if can_fit := scheduler_state.check_resources(phase, task, verbose=verbose):
+            scheduler_state.acquire_resources(phase, task, verbose=verbose)
+            scheduler_state.use_data(phase, task, verbose=verbose)
             return True
     return False
 
 
-def launch_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
+def launch_task(
+    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
+) -> bool:
     phase = TaskState.LAUNCHED
-    objects = scheduler_state.objects
-    assert objects is not None
-    current_time = scheduler_state.time
-    assert current_time is not None
 
+    print(f"Trying to launch task {task.name}...")
     # Process LAUNCHABLE state
-    if check_launchable_status := task.check_status(
-        TaskStatus.LAUNCHABLE, objects.taskmap, current_time
-    ):
-        assert task.assigned_devices is not None
-
-        if check_launchable_resources := scheduler_state.check_resources(
-            phase, task.name
-        ):
-            scheduler_state.acquire_resources(phase, task.name)
-            task.set_duration(task.assigned_devices, scheduler_state)
+    if check_status := scheduler_state.check_task_status(task, TaskStatus.LAUNCHABLE):
+        if can_fit := scheduler_state.check_resources(phase, task):
+            print(f"Task {task.name} has sufficient resources.")
+            scheduler_state.acquire_resources(phase, task)
+            scheduler_state.use_data(phase, task, verbose=verbose)
+            scheduler_state.get_task_duration(
+                task, task.assigned_devices, verbose=verbose
+            )
             return True
+        print(
+            f"Task {task.name} cannot be launched: Status: {check_status}, Resources: {can_fit}"
+        )
+    print(f"Task {task.name} cannot be launched: Status: {check_status}")
     return False
 
 
-def complete_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
+def complete_task(
+    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
+) -> bool:
     phase = TaskState.COMPLETED
-    resource_pool = scheduler_state.resource_pool
-    assert resource_pool is not None
 
-    devices = task.assigned_devices
-    assert devices is not None
-
-    scheduler_state.release_resources(phase, task.name)
+    scheduler_state.release_data(phase, task, verbose=verbose)
+    scheduler_state.release_resources(phase, task, verbose=verbose)
 
     return True
 
@@ -184,7 +166,7 @@ class ParlaArchitecture(SchedulerArchitecture):
     def mapper(
         self, scheduler_state: SystemState, event: Mapper
     ) -> Sequence[EventPair]:
-        # print("Mapping tasks...")
+        print("Mapping tasks...")
         self.success_count = 0
         next_tasks = TaskIterator(self.spawned_tasks)
 
@@ -211,6 +193,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 continue
 
         reserver_pair = (current_time, Reserver())
+        print(f"Mapping tasks complete.")
         return [reserver_pair]
 
     def _enqueue_data_tasks(self, task: SimulatedTask, scheduler_state: SystemState):
@@ -239,6 +222,7 @@ class ParlaArchitecture(SchedulerArchitecture):
     def reserver(
         self, scheduler_state: SystemState, event: Reserver
     ) -> Sequence[EventPair]:
+        print("Reserving tasks...")
         objects = scheduler_state.objects
         current_time = scheduler_state.time
 
@@ -266,6 +250,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 continue
 
         launcher_pair = (current_time, Launcher())
+        print(f"Reserving tasks complete.")
         return [launcher_pair]
 
     def launcher(
@@ -277,8 +262,6 @@ class ParlaArchitecture(SchedulerArchitecture):
         current_time = scheduler_state.time
 
         next_events: Sequence[EventPair] = []
-
-        # print(f"Remaining tasks: {remaining_tasks}")
 
         next_tasks = MultiTaskIterator(self.launchable_tasks)
         for priority, taskid in next_tasks:
@@ -309,6 +292,8 @@ class ParlaArchitecture(SchedulerArchitecture):
             mapping_pair = (current_time, Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
+
+        print(f"Launching tasks complete.")
 
         return next_events
 
@@ -360,5 +345,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             mapping_pair = (current_time, Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
+
+        print(f"Task {task.name} completed.")
 
         return next_events

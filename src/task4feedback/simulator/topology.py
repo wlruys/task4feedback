@@ -57,7 +57,10 @@ class ConnectionPool:
         return self.bandwidth[source_idx, target_idx]
 
     def count_active_connections(
-        self, source: NamedDevice, target: Optional[NamedDevice] = None
+        self,
+        source: NamedDevice,
+        target: Optional[NamedDevice] = None,
+        verbose: bool = False,
     ):
         source_idx = self.get_index(source)
 
@@ -99,6 +102,7 @@ class ConnectionPool:
         target: NamedDevice,
         value: int,
         bidirectional: bool = False,
+        verbose: bool = False,
     ) -> bool:
         source_idx = self.get_index(source)
         target_idx = self.get_index(target)
@@ -130,11 +134,15 @@ class ConnectionPool:
 
         return True
 
-    def acquire_connection(self, src: NamedDevice, dst: NamedDevice):
-        self.update_connection_usage(src, dst, 1)
+    def acquire_connection(
+        self, src: NamedDevice, dst: NamedDevice, verbose: bool = False
+    ):
+        self.update_connection_usage(src, dst, 1, verbose=verbose)
 
-    def release_connection(self, src: NamedDevice, dst: NamedDevice):
-        self.update_connection_usage(src, dst, -1)
+    def release_connection(
+        self, src: NamedDevice, dst: NamedDevice, verbose: bool = False
+    ):
+        self.update_connection_usage(src, dst, -1, verbose=verbose)
 
     def check_connection_available(
         self,
@@ -142,6 +150,7 @@ class ConnectionPool:
         target: SimulatedDevice,
         require_copy_engines: bool = True,
         require_symmetric=True,
+        verbose: bool = False,
     ) -> bool:
         source_idx = self.get_index(source)
         target_idx = self.get_index(target)
@@ -178,7 +187,8 @@ class ConnectionPool:
                     >= self.host[ResourceType.COPY]
                 ):
                     return False
-        return False
+
+        return True
 
     def sort_by_bandwidth(
         self, target: NamedDevice, devices: Sequence[NamedDevice]
@@ -261,11 +271,15 @@ class SimulatedTopology:
     ):
         return self.connection_pool.count_active_connections(source, target)
 
-    def acquire_connection(self, src: NamedDevice, dst: NamedDevice):
-        self.connection_pool.acquire_connection(src, dst)
+    def acquire_connection(
+        self, src: NamedDevice, dst: NamedDevice, verbose: bool = False
+    ):
+        self.connection_pool.acquire_connection(src, dst, verbose)
 
-    def release_connection(self, src: NamedDevice, dst: NamedDevice):
-        self.connection_pool.release_connection(src, dst)
+    def release_connection(
+        self, src: NamedDevice, dst: NamedDevice, verbose: bool = False
+    ):
+        self.connection_pool.release_connection(src, dst, verbose)
 
     def check_connection_available(
         self,
@@ -273,9 +287,10 @@ class SimulatedTopology:
         target: SimulatedDevice,
         require_copy_engines: bool = True,
         require_symmetric=True,
+        verbose: bool = False,
     ) -> bool:
         return self.connection_pool.check_connection_available(
-            source, target, require_copy_engines, require_symmetric
+            source, target, require_copy_engines, require_symmetric, verbose
         )
 
     def nearest_valid_connection(
@@ -288,6 +303,7 @@ class SimulatedTopology:
         sorted_sources = self.connection_pool.sort_by_bandwidth(target, sources)
         for source in sorted_sources:
             assert isinstance(source, SimulatedDevice)
+            print(f"Checking {source} -> {target} connection")
 
             if self.check_connection_available(
                 source, target, require_copy_engines, require_symmetric

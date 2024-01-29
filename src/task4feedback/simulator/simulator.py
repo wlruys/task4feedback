@@ -96,6 +96,8 @@ class SimulatedScheduler:
                 event_count += 1
                 completion_time, event = event_pair
 
+                print(f"Event: {event} | Time: {completion_time}")
+
                 # Advance time
                 self.time = max(self.time, completion_time)
 

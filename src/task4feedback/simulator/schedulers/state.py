@@ -127,22 +127,40 @@ class SystemState:
         else:
             self.objects.devicemap = devicemap
 
-    def check_resources(self, phase: TaskState, taskid: TaskID) -> bool:
+    def check_resources(
+        self, phase: TaskState, taskid: TaskID, verbose: bool = False
+    ) -> bool:
         # Check that the resources are available
         raise NotImplementedError()
 
-    def acquire_resources(self, phase: TaskState, taskid: TaskID):
+    def acquire_resources(
+        self, phase: TaskState, taskid: TaskID, verbose: bool = False
+    ):
         # Reserve the resources
         raise NotImplementedError()
 
-    def release_resources(self, phase: TaskState, taskid: TaskID):
+    def release_resources(
+        self, phase: TaskState, taskid: TaskID, verbose: bool = False
+    ):
         # Release the resources
         raise NotImplementedError()
 
-    def use_data(self, phase: TaskState, taskid: TaskID):
+    def use_data(self, phase: TaskState, taskid: TaskID, verbose: bool = False):
         # Update data tracking
         raise NotImplementedError()
 
-    def release_data(self, phase: TaskState, taskid: TaskID):
+    def release_data(self, phase: TaskState, taskid: TaskID, verbose: bool = False):
         # Update data tracking
+        raise NotImplementedError()
+
+    def get_task_duration(
+        self, task: SimulatedTask, devices: Devices, verbose: bool = False
+    ):
+        # Get the duration of a task
+        raise NotImplementedError()
+
+    def check_task_status(
+        self, task: SimulatedTask, status: TaskStatus, verbose: bool = False
+    ):
+        # Check the status of a task
         raise NotImplementedError()
