@@ -60,7 +60,7 @@ def make_butterfly_graph(
             )
 
             # Task Mapping
-            task_mapping = get_mapping(config, task_idx)
+            task_mapping = get_mapping(config, task_id)
 
             task_dict[task_id] = TaskInfo(
                 task_id,
