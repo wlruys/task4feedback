@@ -2,9 +2,19 @@ from __future__ import annotations
 from ..types import TaskID, TaskInfo, TaskState, TaskStatus, DataAccess, Time, TaskType
 
 from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
-from ..types import Architecture, Device
+from ..types import Architecture, Device, Devices
 from ..types import DataInfo
-from typing import List, Dict, Set, Tuple, Optional, Self, Sequence, Mapping
+from typing import (
+    List,
+    Dict,
+    Set,
+    Tuple,
+    Optional,
+    Self,
+    Sequence,
+    Mapping,
+    MutableMapping,
+)
 
 from .queue import PriorityQueue
 from dataclasses import dataclass, field
@@ -12,11 +22,13 @@ from dataclasses import dataclass, field
 from .resources import ResourcePool
 from .device import ResourceSet
 from .datapool import DataPool
+from ..logging import logger
 
 
 @dataclass(slots=True)
 class TaskTimes:
     duration: Time = field(default_factory=Time)
+    completion_time: Time = field(default_factory=Time)
     state_times: Dict[TaskState, Time] = field(default_factory=dict)
     status_times: Dict[TaskStatus, Time] = field(default_factory=dict)
 
@@ -93,20 +105,26 @@ class SimulatedTask:
     counters: TaskCounters = field(init=False)
     dependents: List[TaskID] = field(default_factory=list)
     resources: List[ResourceSet] = field(default_factory=list)
+    depth: int = 0
+    type: TaskType = TaskType.BASE
+    parent: Optional[TaskID] = None
+    data_tasks: Optional[List[TaskID]] = None
+    spawn_tasks: Optional[List[TaskID]] = None
 
     def __post_init__(self):
         self.counters = TaskCounters(self.info)
 
-    def set_status(self, new_status: TaskStatus, time: Time):
+    def set_status(self, new_status: TaskStatus, time: Time, verify: bool = True):
         # print(f"Setting {self.name} to {new_status}. Status: {self.status}")
         self.times[new_status] = time
         self.status.add(new_status)
 
-    def set_state(self, new_state: TaskState, time: Time):
+    def set_state(self, new_state: TaskState, time: Time, verify: bool = True):
         # print(f"Setting {self.name} to {new_state}. State: {self.state}")
 
-        TaskStatus.check_valid_transition(self.status, new_state)
-        TaskState.check_valid_transition(self.state, new_state)
+        if verify:
+            TaskStatus.check_valid_transition(self.status, new_state)
+            TaskState.check_valid_transition(self.state, new_state)
 
         self.times[new_state] = time
         self.state = new_state
@@ -114,6 +132,18 @@ class SimulatedTask:
     def set_states(self, new_states: List[TaskState], time: Time):
         for state in new_states:
             self.set_state(state, time)
+
+    @property
+    def read_accesses(self) -> List[DataAccess]:
+        return self.info.data_dependencies.read
+
+    @property
+    def write_accesses(self) -> List[DataAccess]:
+        return self.info.data_dependencies.write
+
+    @property
+    def read_write_accesses(self) -> List[DataAccess]:
+        return self.info.data_dependencies.read_write
 
     @property
     def priority(self) -> int:
@@ -132,6 +162,14 @@ class SimulatedTask:
         self.times.duration = time
 
     @property
+    def completion_time(self) -> Time:
+        return self.times.completion_time
+
+    @completion_time.setter
+    def completion_time(self, time: Time):
+        self.times.completion_time = time
+
+    @property
     def dependencies(self) -> List[TaskID]:
         return self.info.dependencies
 
@@ -148,7 +186,6 @@ class SimulatedTask:
 
     @assigned_devices.setter
     def assigned_devices(self, devices: Tuple[Device, ...]):
-        # print(f"Setting {self.name} to {devices}")
         self.info.mapping = devices
 
     @property
@@ -174,12 +211,21 @@ class SimulatedTask:
     def add_dependent(self, task: TaskID):
         self.dependents.append(task)
 
-    def notify_state(self, state: TaskState, taskmap: SimulatedTaskMap, time: Time):
+    def notify_state(
+        self,
+        state: TaskState,
+        taskmap: SimulatedTaskMap,
+        time: Time,
+        verbose: bool = False,
+    ):
         # Notify only if changed
-        # print(f"Task {self.name} in state {self.state}. Notifying {state}")
         if self.state == state:
-            # print(f"Task {self.name} already in state {state}")
             return
+
+        logger.state.debug(
+            "Notifying dependents of state change",
+            extra=dict(task=self.name, state=state, time=time),
+        )
 
         for taskid in self.dependents:
             task = taskmap[taskid]
@@ -189,6 +235,11 @@ class SimulatedTask:
         self.set_state(state, time)
 
     def notify_status(self, status: TaskStatus, taskmap: SimulatedTaskMap, time: Time):
+        logger.state.debug(
+            "Notifying dependents of status change",
+            extra=dict(task=self.name, status=status, time=time),
+        )
+
         for taskid in self.dependents:
             task = taskmap[taskid]
             task.counters.notified_status(status)
@@ -196,16 +247,17 @@ class SimulatedTask:
         self.set_status(status, time)
 
     def check_status(
-        self, status: TaskStatus, taskmap: SimulatedTaskMap, time: Time
+        self,
+        status: TaskStatus,
+        taskmap: SimulatedTaskMap,
+        time: Time,
+        verbose: bool = False,
     ) -> bool:
         if checked_state := TaskStatus.matching_state(status):
             if status not in self.status and self.counters.check_count(checked_state):
                 self.notify_status(status, taskmap, time)
                 return True
         return status in self.status
-
-    def set_resources(self, devices: Device | Tuple[Device, ...]):
-        raise NotImplementedError
 
     def __str__(self) -> str:
         return f"Task({self.name}, {self.state})"
@@ -224,72 +276,61 @@ class SimulatedTask:
     def __hash__(self) -> int:
         return hash(self.name)
 
-    def __eq__(self, other: Self) -> bool:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SimulatedTask):
+            return NotImplemented
         return self.name == other.name
 
-    def get_runtime_info(
-        self, device: Device | Tuple[Device, ...]
-    ) -> List[TaskRuntimeInfo]:
+    def get_runtime_info(self, device: Devices) -> List[TaskRuntimeInfo]:
         return self.info.runtime[device]
 
-    def set_duration(
-        self, device: Device | Tuple[Device, ...], system_state: "SystemState"
-    ):
+    def get_resources(
+        self, devices: Devices, data_inputs: bool = False
+    ) -> List[ResourceSet]:
         raise NotImplementedError
 
-    @property
-    def type(self):
+    def add_data_dependency(self, task: TaskID):
         raise NotImplementedError
 
 
 @dataclass(slots=True)
 class SimulatedComputeTask(SimulatedTask):
-    datatasks: List[Self] = field(default_factory=list)
     type: TaskType = TaskType.COMPUTE
 
     def add_data_dependency(self, task: TaskID):
-        self.add_dependency(task, states=[TaskState.COMPLETED])
+        self.add_dependency(task, states=[TaskState.LAUNCHED, TaskState.COMPLETED])
 
-    def set_duration(
-        self, device: Device | Tuple[Device, ...], system_state: "SystemState"
-    ):
-        runtime_infos = self.get_runtime_info(device)
-        max_time = max([runtime_info.task_time for runtime_info in runtime_infos])
-        self.duration = Time(max_time)
+        if self.data_tasks is None:
+            self.data_tasks = []
+        self.data_tasks.append(task)
 
-    def set_resources(
-        self, devices: Device | Tuple[Device, ...], data_inputs: bool = False
-    ):
+    def get_resources(self, devices: Devices) -> List[ResourceSet]:
+        resources = []
+
         if isinstance(devices, Device):
             devices = (devices,)
         runtime_info_list = self.get_runtime_info(devices)
         for runtime_info in runtime_info_list:
             vcus = runtime_info.device_fraction
             memory = runtime_info.memory
-            self.resources.append(ResourceSet(vcus=vcus, memory=memory, copy=0))
+            resources.append(ResourceSet(vcus=vcus, memory=memory, copy=0))
+
+        return resources
 
 
 @dataclass(slots=True)
 class SimulatedDataTask(SimulatedTask):
     type: TaskType = TaskType.DATA
+    source: Optional[Device] = None
+    local_index: int = 0
+    real: bool = True
 
-    def set_duration(
-        self, device: Device | Tuple[Device, ...], system_state: "SystemState"
-    ):
-        # Data movement tasks are single device
-        assert isinstance(device, Device)
-
-        # TODO: This is the data movement time
-        raise NotImplementedError("TODO: implement set_duration for SimulatedDataTask")
-
-    def set_resources(
-        self, devices: Device | Tuple[Device, ...], data_inputs: bool = False
-    ):
-        raise NotImplementedError("TODO: implement set_resources for SimulatedDataTask")
+    def get_resources(self, devices: Devices) -> List[ResourceSet]:
+        return [ResourceSet(vcus=0, memory=0, copy=1)]
 
 
 type SimulatedTaskMap = Mapping[
     TaskID, SimulatedTask | SimulatedComputeTask | SimulatedDataTask
 ]
-type SimulatedComputeTaskMap = Mapping[TaskID, SimulatedComputeTask]
-type SimulatedDataTaskMap = Mapping[TaskID, SimulatedDataTask]
+type SimulatedComputeTaskMap = MutableMapping[TaskID, SimulatedComputeTask]
+type SimulatedDataTaskMap = MutableMapping[TaskID, SimulatedDataTask]

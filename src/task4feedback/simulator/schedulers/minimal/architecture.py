@@ -1,27 +1,27 @@
-from ..resources import List
-from ..topology import List
-from ..task import List, SimulatedTask, SimulatedDataTask, SimulatedComputeTask
-from ..data import *
-from ..device import *
-from ..queue import *
-from ..events import *
-from ..resources import *
-from ..task import *
-from ..topology import *
+from ...resources import List
+from ...topology import List
+from ...task import List, SimulatedTask, SimulatedDataTask, SimulatedComputeTask
+from ...data import *
+from ...device import *
+from ...queue import *
+from ...events import *
+from ...resources import *
+from ...task import *
+from ...topology import *
 
-from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
-from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ....types import Architecture, Device, TaskID, TaskState, TaskType, Time
+from ....types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Sequence
 from dataclasses import dataclass, InitVar
 from collections import defaultdict as DefaultDict
 
-from .scheduler import (
-    SchedulerArchitecture,
+from ..state import (
     SystemState,
-    SchedulerOptions,
     ObjectRegistry,
 )
+
+from ..architecture import SchedulerArchitecture, SchedulerOptions
 
 from rich import print
 
@@ -271,7 +271,7 @@ def complete_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
     return True
 
 
-@SchedulerOptions.register_scheduler("minimal")
+@SchedulerOptions.register_architecture("minimal")
 @dataclass(slots=True)
 class MinimalArchitecture(SchedulerArchitecture):
     topology: InitVar[SimulatedTopology]

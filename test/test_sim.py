@@ -18,6 +18,23 @@ def run():
     gpu1 = Device(Architecture.GPU, 1)
     gpu2 = Device(Architecture.GPU, 2)
 
+    task_configs = TaskPlacementInfo()
+
+    runtime_info = TaskRuntimeInfo(task_time=100000, device_fraction=1)
+    task_configs.add((gpu), runtime_info)
+
+    def custom_placement(data_id: DataID) -> Devices:
+        return (
+            Device(Architecture.GPU, data_id.idx[0] % 4),
+            Device(Architecture.CPU, 0),
+        )
+
+    data_config = CholeskyDataGraphConfig()
+    # data_config.initial_placement = partial(
+    #     round_robin_data_initial_placement_gpu, n_devices=4, index=0
+    # )
+    data_config.initial_placement = custom_placement
+
     def custom_tasks(task_id: TaskID) -> TaskPlacementInfo:
         placement_info = TaskPlacementInfo()
 
@@ -29,31 +46,15 @@ def run():
 
         placement_info.add(device_tuple, runtime_info)
 
-        time = random.randint(50000, 70000)
-        device_tuple = (Device(Architecture.CPU, -1),)
-        runtime_info = TaskRuntimeInfo(task_time=time)
-        placement_info.add(device_tuple, runtime_info)
-
         return placement_info
 
-    data_config = SweepDataGraphConfig()
-    config = SweepConfig(width=4, steps=4, dimensions=1, task_config=custom_tasks)
-    # config = SerialConfig(chains=2, steps=10, data_config=data_config)
-    # config = MapReduceConfig(data_config=data_config)
-    # config = ScatterReductionConfig(levels=3, branch_factor=3, data_config=data_config)
-
-    # tasks, data = make_sweep_graph(config)
+    config = CholeskyConfig(blocks=4, task_config=custom_tasks)
     tasks, data = make_graph(config, data_config=data_config)
 
-    write_tasks_to_yaml(tasks, "graph")
-    write_data_to_yaml(data, "graph")
+    data_objects = create_data_objects(data)
 
-    tasklist, taskmap, datamap = read_graph("graph")
-
-    populate_dependents(taskmap)
-
-    networkx_graph, networkx_label = build_networkx_graph(taskmap)
-    plot_pydot(networkx_graph)
+    for data in data_objects.values():
+        print(data)
 
 
 run()

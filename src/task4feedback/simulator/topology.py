@@ -57,7 +57,10 @@ class ConnectionPool:
         return self.bandwidth[source_idx, target_idx]
 
     def count_active_connections(
-        self, source: NamedDevice, target: Optional[NamedDevice] = None
+        self,
+        source: NamedDevice,
+        target: Optional[NamedDevice] = None,
+        verbose: bool = False,
     ):
         source_idx = self.get_index(source)
 
@@ -99,6 +102,7 @@ class ConnectionPool:
         target: NamedDevice,
         value: int,
         bidirectional: bool = False,
+        verbose: bool = False,
     ) -> bool:
         source_idx = self.get_index(source)
         target_idx = self.get_index(target)
@@ -130,11 +134,15 @@ class ConnectionPool:
 
         return True
 
-    def acquire_connection(self, src: NamedDevice, dst: NamedDevice):
-        self.update_connection_usage(src, dst, 1)
+    def acquire_connection(
+        self, src: NamedDevice, dst: NamedDevice, verbose: bool = False
+    ):
+        self.update_connection_usage(src, dst, 1, verbose=verbose)
 
-    def release_connection(self, src: NamedDevice, dst: NamedDevice):
-        self.update_connection_usage(src, dst, -1)
+    def release_connection(
+        self, src: NamedDevice, dst: NamedDevice, verbose: bool = False
+    ):
+        self.update_connection_usage(src, dst, -1, verbose=verbose)
 
     def check_connection_available(
         self,
@@ -142,6 +150,7 @@ class ConnectionPool:
         target: SimulatedDevice,
         require_copy_engines: bool = True,
         require_symmetric=True,
+        verbose: bool = False,
     ) -> bool:
         source_idx = self.get_index(source)
         target_idx = self.get_index(target)
@@ -178,7 +187,8 @@ class ConnectionPool:
                     >= self.host[ResourceType.COPY]
                 ):
                     return False
-        return False
+
+        return True
 
     def sort_by_bandwidth(
         self, target: NamedDevice, devices: Sequence[NamedDevice]
@@ -193,9 +203,13 @@ class ConnectionPool:
     def get_transfer_time(
         self, source: NamedDevice, target: NamedDevice, data_size: int
     ) -> Time:
+        if source == target:
+            return Time(0)
+
         source_idx = self.get_index(source)
         target_idx = self.get_index(target)
         bandwidth = self.bandwidth[source_idx, target_idx]
+        assert bandwidth > 0, f"No known bandwidth between {source} and {target}"
         time_in_seconds = data_size / bandwidth
         time_in_microseconds = int(time_in_seconds * 1e6)
         return Time(time_in_microseconds)
@@ -261,11 +275,15 @@ class SimulatedTopology:
     ):
         return self.connection_pool.count_active_connections(source, target)
 
-    def acquire_connection(self, src: NamedDevice, dst: NamedDevice):
-        self.connection_pool.acquire_connection(src, dst)
+    def acquire_connection(
+        self, src: NamedDevice, dst: NamedDevice, verbose: bool = False
+    ):
+        self.connection_pool.acquire_connection(src, dst, verbose)
 
-    def release_connection(self, src: NamedDevice, dst: NamedDevice):
-        self.connection_pool.release_connection(src, dst)
+    def release_connection(
+        self, src: NamedDevice, dst: NamedDevice, verbose: bool = False
+    ):
+        self.connection_pool.release_connection(src, dst, verbose)
 
     def check_connection_available(
         self,
@@ -273,9 +291,10 @@ class SimulatedTopology:
         target: SimulatedDevice,
         require_copy_engines: bool = True,
         require_symmetric=True,
+        verbose: bool = False,
     ) -> bool:
         return self.connection_pool.check_connection_available(
-            source, target, require_copy_engines, require_symmetric
+            source, target, require_copy_engines, require_symmetric, verbose
         )
 
     def nearest_valid_connection(
@@ -302,6 +321,11 @@ class SimulatedTopology:
 
     def get_device_string(self, device: SimulatedDevice) -> str:
         return f"{device} (mem={device[ResourceType.MEMORY]})"
+
+    def get_transfer_time(
+        self, source: NamedDevice, target: NamedDevice, data_size: int
+    ) -> Time:
+        return self.connection_pool.get_transfer_time(source, target, data_size)
 
     def __str__(self) -> str:
         s = f"Topology: {self.name}\n"
@@ -353,7 +377,9 @@ class TopologyManager:
 
 
 @TopologyManager.register_generator("frontera")
-def generate_4gpus_1cpu_toplogy(config: Optional[Dict[str, int]]) -> SimulatedTopology:
+def generate_4gpus_1cpu_toplogy(
+    config: Optional[Dict[str, int]] = None
+) -> SimulatedTopology:
     """
     This function creates 4 GPUs and 1 CPU architecture.
 
@@ -385,9 +411,9 @@ def generate_4gpus_1cpu_toplogy(config: Optional[Dict[str, int]]) -> SimulatedTo
         CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
     else:
         # Default configuration for testing
-        P2P_BW = 200
-        H2D_BW = 100
-        D2H_BW = 100
+        P2P_BW = 2e6
+        H2D_BW = 1e6
+        D2H_BW = 1e6
 
         GPU_MEM = parse_size("16 GB")
         CPU_MEM = parse_size("130 GB")

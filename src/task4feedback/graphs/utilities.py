@@ -67,6 +67,12 @@ def default_data_initial_placement(data_id: DataID) -> Devices:
     return Device(Architecture.CPU, 0)
 
 
+def round_robin_data_initial_placement_gpu(
+    data_id: DataID, n_devices: int = 4, index: int = 0
+) -> Devices:
+    return Device(Architecture.GPU, data_id.idx[index] % n_devices)
+
+
 def default_data_sizes(data_id: DataID) -> int:
     """
     Default data initial size function for a synthetic task graph.
@@ -153,12 +159,14 @@ def get_data_dependencies(
     return data_dependencies, data_dict
 
 
-def make_graph(config: GraphConfig) -> Tuple[TaskMap, DataMap]:
+def make_graph(
+    config: GraphConfig, data_config: DataGraphConfig = NoDataGraphConfig()
+) -> Tuple[TaskMap, DataMap]:
     """
     Generates a synthetic task graph based on the provided configuration.
     """
     for func in graph_generators:
         if isinstance(config, func.__annotations__["config"]):
-            return func(config)
+            return func(config, data_config=data_config)
 
     raise ValueError(f"Invalid graph configuration: {config}")

@@ -13,6 +13,7 @@ from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
 from dataclasses import dataclass, InitVar
 from collections import defaultdict as DefaultDict
+from copy import copy, deepcopy
 
 from rich import print
 
@@ -104,18 +105,17 @@ class SystemState:
         for device in self.topology.devices:
             self.objects.add_device(device)
 
-        self.data_pool = DataPool(devices=self.topology.devices)
         self.resource_pool = ResourcePool(devices=self.topology.devices)
 
     def register_tasks(self, taskmap: SimulatedTaskMap, copy: bool = False):
         if copy:
-            self.objects.taskmap = taskmap.copy()
+            self.objects.taskmap = deepcopy(taskmap)
         else:
             self.objects.taskmap = taskmap
 
     def register_data(self, datamap: Dict[DataID, SimulatedData], copy: bool = False):
         if copy:
-            self.objects.datamap = datamap.copy()
+            self.objects.datamap = deepcopy(datamap)
         else:
             self.objects.datamap = datamap
 
@@ -123,112 +123,53 @@ class SystemState:
         self, devicemap: Dict[Device, SimulatedDevice], copy: bool = False
     ):
         if copy:
-            self.objects.devicemap = devicemap.copy()
+            self.objects.devicemap = deepcopy(devicemap)
         else:
             self.objects.devicemap = devicemap
 
-    def check_resources(self, taskid: TaskID, state: TaskState) -> bool:
+    def check_resources(
+        self, phase: TaskState, taskid: TaskID, verbose: bool = False
+    ) -> bool:
         # Check that the resources are available
         raise NotImplementedError()
 
-    def acquire_resources(self, taskid: TaskID, state: TaskState):
+    def acquire_resources(
+        self, phase: TaskState, taskid: TaskID, verbose: bool = False
+    ):
         # Reserve the resources
         raise NotImplementedError()
 
-    def release_resources(self, taskid: TaskID, state: TaskState):
+    def release_resources(
+        self, phase: TaskState, taskid: TaskID, verbose: bool = False
+    ):
         # Release the resources
         raise NotImplementedError()
 
-    def use_data(
-        self, taskid: TaskID, state: TaskState, data: DataID, access: AccessType
-    ):
+    def use_data(self, phase: TaskState, taskid: TaskID, verbose: bool = False):
         # Update data tracking
         raise NotImplementedError()
 
-    def release_data(
-        self, taskid: TaskID, state: TaskState, data: DataID, access: AccessType
-    ):
+    def release_data(self, phase: TaskState, taskid: TaskID, verbose: bool = False):
         # Update data tracking
         raise NotImplementedError()
 
-
-@dataclass(slots=True)
-class SchedulerArchitecture:
-    topology: InitVar[SimulatedTopology]
-    completed_tasks: List[TaskID] = field(default_factory=list)
-
-    def __post_init__(self, topology: SimulatedTopology):
-        assert topology is not None
-
-    def __getitem__(self, event: Event) -> Callable[[SystemState], Sequence[EventPair]]:
-        try:
-            function = getattr(self, event.func)
-        except AttributeError:
-            raise NotImplementedError(
-                f"SchedulerArchitecture does not implement function {event.func} for event {event}."
-            )
-
-        def wrapper(scheduler_state: SystemState) -> Sequence[EventPair]:
-            return function(scheduler_state, event)
-
-        return wrapper
-
-    def initialize(
-        self, tasks: List[TaskID], scheduler_state: SystemState
-    ) -> Sequence[EventPair]:
+    def get_task_duration(
+        self, task: SimulatedTask, devices: Devices, verbose: bool = False
+    ):
+        # Get the duration of a task
         raise NotImplementedError()
-        return []
 
-    def add_initial_tasks(self, task: SimulatedTask):
-        pass
-
-    def mapper(self, scheduler_state: SystemState, event: Event) -> Sequence[EventPair]:
+    def check_task_status(
+        self, task: SimulatedTask, status: TaskStatus, verbose: bool = False
+    ):
+        # Check the status of a task
         raise NotImplementedError()
-        return []
 
-    def reserver(
-        self, scheduler_state: SystemState, event: Event
-    ) -> Sequence[EventPair]:
+    def finalize_stats(self):
         raise NotImplementedError()
-        return []
 
-    def launcher(
-        self, scheduler_state: SystemState, event: Event
-    ) -> Sequence[EventPair]:
+    def launch_stats(self, task: SimulatedTask):
         raise NotImplementedError()
-        return []
 
-    def complete_task(
-        self, scheduler_state: SystemState, event: Event
-    ) -> Sequence[EventPair]:
-        return []
-
-    def __str__(self):
-        return f"SchedulerArchitecture()"
-
-    def __repr__(self):
-        self.__str__()
-
-
-class SchedulerOptions:
-    scheduler_map: Dict[str, Type[SchedulerArchitecture]] = dict()
-
-    @staticmethod
-    def register_scheduler(scheduler_type: str) -> Callable[[Type], Type]:
-        def decorator(cls):
-            if scheduler_type in SchedulerOptions.scheduler_map:
-                raise ValueError(
-                    f"Scheduler type {scheduler_type} is already registered."
-                )
-            SchedulerOptions.scheduler_map[scheduler_type] = cls
-            return cls
-
-        return decorator
-
-    @staticmethod
-    def get_scheduler(scheduler_type: str) -> Type[SchedulerArchitecture]:
-        if scheduler_type not in SchedulerOptions.scheduler_map:
-            raise ValueError(
-                f"Scheduler type `{scheduler_type}` is not registered. Registered types are: {list(SchedulerOptions.scheduler_map.keys())}"
-            )
-        return SchedulerOptions.scheduler_map[scheduler_type]
+    def completion_stats(self, task: SimulatedTask):
+        raise NotImplementedError()

@@ -1,13 +1,24 @@
-from ..types import Architecture, Device, TaskID, TaskState, ResourceType
+from ..types import Architecture, Device, TaskID, TaskState, ResourceType, Time
 from dataclasses import dataclass, field
 from .queue import *
+from .datapool import *
 from enum import IntEnum
-from typing import List, Dict, Set, Tuple, Optional, Self
+from typing import List, Dict, Set, Tuple, Optional, Self, Type
 from fractions import Fraction
 from decimal import Decimal
 from collections import defaultdict as DefaultDict
 
+from .eviction.base import EvictionPool
+from .eviction.lru import LRUEvictionPool
+
+
 Numeric = int | float | Fraction | Decimal
+
+resource_names = {
+    ResourceType.VCU: "vcu",
+    ResourceType.MEMORY: "memory",
+    ResourceType.COPY: "copy",
+}
 
 
 @dataclass(slots=True, init=False)
@@ -88,17 +99,60 @@ class ResourceSet:
                 return False
         return True
 
-    def __eq__(self, other: Self) -> bool:
-        for key in other.store:
-            if self.store[key] != other.store[key]:
-                return False
-        return True
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Self):
+            for key in other.store:
+                if self.store[key] != other.store[key]:
+                    return False
+            return True
+        else:
+            return False
+
+    def __str__(self):
+        string = f"ResourceSet("
+        for key in self.store:
+            string += f"{resource_names[key]}={self.store[key]} "
+        string += ")"
+        return string
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(slots=True)
+class DeviceStats:
+    active_movement: int = 0
+    active_compute: int = 0
+
+    last_active_compute: Time = field(default_factory=Time)
+    last_active_movement: Time = field(default_factory=Time)
+
+    idle_time_compute: Time = field(default_factory=Time)
+    idle_time_movement: Time = field(default_factory=Time)
+    idle_time: Time = field(default_factory=Time)
+
+    outgoing_transfers: int = 0
+    incoming_transfers: int = 0
+
+    next_free_compute: Dict[TaskState, Time] = field(
+        default_factory=lambda: DefaultDict(Time)
+    )
+
+    next_free: Dict[TaskState, Time] = field(default_factory=lambda: DefaultDict(Time))
+
+
+@dataclass(slots=True)
 class SimulatedDevice:
     name: Device
     resources: ResourceSet
+    stats: DeviceStats = field(default_factory=DeviceStats)
+    datapool: DataPool = field(default_factory=DataPool)
+    eviction_pool_type: Type[EvictionPool] = LRUEvictionPool
+    eviction_pool: EvictionPool = field(init=False)
+    eviction_targets: List[Device] = field(default_factory=list)
+    memory_space: Device = field(init=False)
+
+    def __post_init__(self):
+        self.eviction_pool = self.eviction_pool_type()
+        self.eviction_targets = [Device(Architecture.CPU, 0)]
+        self.memory_space = self.name
 
     def __str__(self) -> str:
         return f"Device({self.name})"
@@ -117,3 +171,15 @@ class SimulatedDevice:
 
     def __getitem__(self, key: ResourceType) -> Numeric:
         return self.resources[key]
+
+    def add_data(self, data: SimulatedData):
+        self.datapool.add(data)
+
+    def remove_data(self, data: SimulatedData):
+        self.datapool.remove(data)
+
+    def add_evictable(self, data: SimulatedData):
+        self.eviction_pool.add(data)
+
+    def remove_evictable(self, data: SimulatedData):
+        self.eviction_pool.remove(data)

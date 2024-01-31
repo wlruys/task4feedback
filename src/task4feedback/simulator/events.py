@@ -1,11 +1,12 @@
-from ..types import TaskID, TaskInfo, TaskState, Optional
+from ..types import TaskID, TaskInfo, TaskState, Optional, Time
 from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
 class Event:
     func: str
-    time: Optional[float] = None
+    time: Optional[Time] = None
+    verbose: bool = False
 
     def __eq__(self, other):
         return self.func == other.func and self.time == other.time

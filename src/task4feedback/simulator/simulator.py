@@ -18,6 +18,8 @@ from .schedulers import *
 
 from rich import print
 
+from .analysis.recorder import RecorderList
+
 
 @dataclass(slots=True)
 class SimulatedScheduler:
@@ -28,13 +30,18 @@ class SimulatedScheduler:
     mechanisms: SchedulerArchitecture = field(init=False)
     state: SystemState = field(init=False)
     log_level: int = 0
+    recorders: RecorderList = field(default_factory=RecorderList)
 
     events: EventQueue = EventQueue()
 
     def __post_init__(self, topology: SimulatedTopology, scheduler_type: str = "parla"):
-        self.state = SystemState(topology=topology)
-        scheduler_arch = SchedulerOptions.get_scheduler(scheduler_type)
+        scheduler_arch = SchedulerOptions.get_architecture(scheduler_type)
+        scheduler_state = SchedulerOptions.get_state(scheduler_type)
+
         print(f"Scheduler Architecture: {scheduler_arch}")
+        print(f"Scheduler State: {scheduler_state}")
+
+        self.state = scheduler_state(topology=topology)
         self.mechanisms = scheduler_arch(topology=topology)
 
     def __str__(self):
@@ -66,16 +73,18 @@ class SimulatedScheduler:
         yield "architecture", self.mechanisms
         yield "events", self.events
 
-    def record(self):
-        pass
+    def record(self, event: Event, new_events: Sequence[EventPair]):
+        self.recorders.save(self.time, self.mechanisms, self.state, event, new_events)
 
-    def process_event(self, event: Event):
+    def process_event(self, event: Event) -> List[EventPair]:
         # New events are created from the current event.
         new_event_pairs = self.mechanisms[event](self.state)
 
         # Append new events and their completion times to the event queue
         for completion_time, new_event in new_event_pairs:
             self.events.put(new_event, completion_time)
+
+        return new_event_pairs
 
     def run(self):
         new_event_pairs = self.mechanisms.initialize(self.tasks, self.state)
@@ -91,16 +100,18 @@ class SimulatedScheduler:
             if event_pair:
                 event_count += 1
                 completion_time, event = event_pair
-                # print(f"Event: {event} at {completion_time}")
-                # print("State", self.mechanisms)
 
                 # Advance time
                 self.time = max(self.time, completion_time)
 
                 # Process Event
                 new_events = self.process_event(event)
+
                 # Update Log
-                self.record()
+                self.record(event, new_events)
+
+        self.state.finalize_stats()
 
         print(f"Event Count: {event_count}")
-        # print(self.mechanisms)
+        if not self.mechanisms.complete(self.state):
+            raise RuntimeError("Scheduler terminated without completing all tasks.")

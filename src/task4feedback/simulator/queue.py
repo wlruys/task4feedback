@@ -54,6 +54,9 @@ class PriorityQueue:
         self.queue.remove(item)
         heapq.heapify(self.queue)
 
+    def empty(self):
+        return len(self.queue) == 0
+
 
 class QueueIterator(object):
     def __init__(self, q: PriorityQueue, maxiter: int = -1, peek: bool = True):

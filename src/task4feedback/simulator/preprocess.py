@@ -4,13 +4,16 @@ from .task import *
 from .data import *
 from .device import *
 import networkx as nx
+from .topology import *
 
 
 def data_from_task(task: TaskInfo, access: AccessType) -> List[DataID]:
     return [d.id for d in task.data_dependencies[access]]
 
 
-def find_writer_bfs(graph: TaskMap, node: TaskID, target: DataID) -> TaskID | DataID:
+def find_writer_bfs(
+    graph: TaskMap, node: TaskID, target: DataID, verbose: bool = False
+) -> TaskID | DataID:
     """
     Return last task to touch the data.
     @param graph: TaskMap (TaskID -> TaskInfo)
@@ -25,17 +28,29 @@ def find_writer_bfs(graph: TaskMap, node: TaskID, target: DataID) -> TaskID | Da
 
     while queue:
         s = queue.pop(0)
+        if verbose:
+            print(f"Checking dependencies of {s}")
         for neighbor_id in graph[s].dependencies:
             neighbor = graph[neighbor_id]
+
             writes_to = data_from_task(neighbor, AccessType.WRITE)
+            writes_to = writes_to + data_from_task(neighbor, AccessType.READ_WRITE)
+            write_to = set(writes_to)
+
+            if verbose:
+                print(f"Dependency {neighbor_id} writes to {writes_to}")
 
             if target in writes_to:
+                if verbose:
+                    print(f"Found writer {neighbor_id} to {target}")
                 return neighbor_id if neighbor_id != node else target
 
             if neighbor_id not in visited:
                 visited.append(neighbor.id)
                 queue.append(neighbor.id)
 
+    if verbose:
+        print(f"Could not find writer to {target} from {node}.")
     return target
 
 
@@ -43,34 +58,46 @@ DataWriter = Dict[DataID, TaskID | DataID]
 DataWriters = Dict[TaskID, DataWriter]
 
 
-def most_recent_writer(graph: TaskMap, task: TaskInfo) -> DataWriter:
+def most_recent_writer(
+    graph: TaskMap, task: TaskInfo, verbose: bool = False
+) -> DataWriter:
     """
     For each of a tasks inputs, return the most recent writer.
     If this is the first task to write the data, return the DataID itself.
     """
 
     read_data = data_from_task(task, AccessType.READ)
-    write_data = data_from_task(task, AccessType.READ_WRITE)
+    read_write_data = data_from_task(task, AccessType.READ_WRITE)
 
-    read_data = read_data + write_data
+    read_data = read_data + read_write_data
     touches = set(read_data)
+
+    if verbose:
+        print(f"Task {task.id} reads data: {touches}")
 
     recent_writer = dict()
 
     for target in touches:
-        recent_writer[target] = find_writer_bfs(graph, task.id, target)
+        if verbose:
+            print(f"Looking for most recent writer to Data {target}")
+        recent_writer[target] = find_writer_bfs(graph, task.id, target, verbose=verbose)
 
     return recent_writer
 
 
-def find_recent_writers(graph: TaskMap) -> DataWriters:
+def find_recent_writers(graph: TaskMap, verbose: bool = False) -> DataWriters:
     """
     For each task, find the most recent writer for each of its inputs.
     """
     recent_writers = dict()
 
+    if verbose:
+        print("Finding recent writers...")
+
     for task in graph.values():
-        recent_writers[task.id] = most_recent_writer(graph, task)
+        if verbose:
+            print(f"Looking at data from task: {task.id}")
+        recent_writers[task.id] = most_recent_writer(graph, task, verbose=verbose)
 
     return recent_writers
 
@@ -82,7 +109,9 @@ def create_compute_tasks(graph: TaskMap) -> SimulatedComputeTaskMap:
     compute_tasks = dict()
 
     for task in graph.values():
-        compute_tasks[task.id] = SimulatedComputeTask(task.id, task)
+        compute_task = SimulatedComputeTask(task.id, task)
+        filter_data_dependenices(compute_task)
+        compute_tasks[task.id] = compute_task
 
     return compute_tasks
 
@@ -105,7 +134,7 @@ def create_data_tasks(
 
             runtime = TaskPlacementInfo()
             runtime.add(Device(Architecture.ANY, -1), TaskRuntimeInfo())
-            data_info = TaskDataInfo(read=[DataAccess(id=data)])
+            data_info = TaskDataInfo(read=[DataAccess(id=data, device=0)])
 
             data_task_info = TaskInfo(
                 id=data_task_id,
@@ -114,7 +143,10 @@ def create_data_tasks(
                 data_dependencies=data_info,
             )
 
-            data_task = SimulatedDataTask(name=data_task_id, info=data_task_info)
+            data_task = SimulatedDataTask(
+                name=data_task_id, info=data_task_info, parent=task.name
+            )
+            data_task.local_index = 0
             data_tasks[data_task_id] = data_task
             task.add_data_dependency(data_task_id)
 
@@ -127,17 +159,24 @@ def filter_data_dependenices(task: SimulatedTask):
     write = data_info.write
     read_write = data_info.read_write
 
-    read_set = set([d for d in read]).union([d for d in read_write])
-    write_set = set([d for d in write]).union([d for d in read_write])
+    # Remove read-write dependencies from read and write
+    # All sets must be disjoint
 
-    read = list(read_set)
-    write = list(write_set)
+    read_set = set([d.id for d in read]).difference([d.id for d in read_write])
+    write_set = set([d.id for d in write]).difference([d.id for d in read_write])
+
+    assert (
+        len(read_set.intersection(write_set)) == 0
+    ), "Read and write sets must be disjoint"
+
+    read = list(DataAccess(id=d) for d in read_set)
+    write = list(DataAccess(id=d) for d in write_set)
 
     data_info.read = read
     data_info.write = write
 
 
-def create_task_graph(graph: TaskMap, data=False) -> SimulatedComputeTaskMap:
+def create_task_graph(graph: TaskMap) -> SimulatedComputeTaskMap:
     """
     Create a task graph from a task map.
     """
@@ -146,9 +185,9 @@ def create_task_graph(graph: TaskMap, data=False) -> SimulatedComputeTaskMap:
 
 
 def create_data_task_graph(
-    graph: TaskMap, compute_tasks: SimulatedComputeTaskMap
+    graph: TaskMap, compute_tasks: SimulatedComputeTaskMap, verbose: bool = False
 ) -> SimulatedDataTaskMap:
-    recent_writers = find_recent_writers(graph)
+    recent_writers = find_recent_writers(graph, verbose=False)
     data_tasks = create_data_tasks(compute_tasks, recent_writers)
     return data_tasks
 
@@ -165,23 +204,32 @@ def combine_task_graphs(
     return graph
 
 
-def read_graph(
-    graph_name: str, data=False
-) -> Tuple[List[TaskID], SimulatedTaskMap, DataMap]:
-    tasks = read_tasks_from_yaml(graph_name)
-    datamap = read_data_from_yaml(graph_name)
-
-    compute_tasks = create_task_graph(tasks, data=False)
-    if data:
+def create_sim_graph(
+    tasks: TaskMap, data: DataMap, use_data: bool = False
+) -> Tuple[List[TaskID], SimulatedTaskMap]:
+    compute_tasks = create_task_graph(tasks)
+    if use_data:
         data_tasks = create_data_task_graph(tasks, compute_tasks)
         taskmap = combine_task_graphs(compute_tasks, data_tasks)
     else:
-        taskmap = compute_tasks
+        taskmap: SimulatedTaskMap = compute_tasks
 
     tasklist = list(compute_tasks.keys())
     populate_dependents(taskmap)
+    # compute_depths(taskmap)
 
-    return tasklist, taskmap, datamap
+    return tasklist, taskmap
+
+
+def read_sim_graph(
+    graph_name: str, use_data: bool = False
+) -> Tuple[List[TaskID], SimulatedTaskMap, DataMap]:
+    tasks = read_tasks_from_yaml(graph_name)
+    data = read_data_from_yaml(graph_name)
+
+    tasklist, taskmap = create_sim_graph(tasks, data, use_data)
+
+    return tasklist, taskmap, data
 
 
 def build_networkx_graph(
@@ -216,16 +264,18 @@ def convert_devices_to_list(devices: Optional[Devices]) -> List[Device]:
         return list(devices)
 
 
-def create_data_objects(datamap: DataMap) -> Dict[DataID, SimulatedData]:
+def create_data_objects(
+    datamap: DataMap, topology: SimulatedTopology
+) -> SimulatedDataMap:
     data_objects = dict()
 
-    for data in datamap.values():
-        devices = convert_devices_to_list(data.location)
-        data_objects[data.id] = SimulatedData(devices, data)
+    devices = topology.devices
+    devices = [device.name for device in devices]
 
-    from rich import print
-
-    print(data_objects)
+    for data_info in datamap.values():
+        data_objects[data_info.id] = SimulatedData(
+            system_devices=devices, info=data_info
+        )
 
     return data_objects
 
@@ -242,6 +292,13 @@ def apply_networkx_order(G: nx.DiGraph, tasks: SimulatedTaskMap) -> List[TaskID]
         tasks[node].info.order = i
 
     return nodes
+
+
+def topological_sort(tasklist: List[TaskID], taskmap: SimulatedTaskMap) -> List[TaskID]:
+    G, labels = build_networkx_graph(taskmap)
+    apply_networkx_order(G, taskmap)
+
+    return sort_tasks_by_order(tasklist, taskmap)
 
 
 def sort_tasks_by_order(tasklist: List[TaskID], taskmap: SimulatedTaskMap):
@@ -261,7 +318,7 @@ def populate_dependents(taskmap: SimulatedTaskMap):
             taskmap[dependency].dependents.append(task.name)
 
 
-def apply_mapping(taskmap: SimulatedTaskMap, device: Device):
+def apply_mapping(taskmap: SimulatedTaskMap, device: Optional[Device]):
     """
     Apply a mapping to a taskmap.
     @param taskmap: SimulatedTaskMap
@@ -269,3 +326,40 @@ def apply_mapping(taskmap: SimulatedTaskMap, device: Device):
     """
     for task in taskmap.values():
         task.info.mapping = device
+
+
+def _compute_depth_internal(taskmap: SimulatedTaskMap, task: SimulatedTask, depth: int):
+    task.depth = max(depth, task.depth)
+    for dependent in task.dependents:
+        _compute_depth_internal(taskmap, taskmap[dependent], depth + 1)
+
+
+def _compute_depth(taskmap: SimulatedTaskMap, heads: Sequence[SimulatedTask]):
+    for head in heads:
+        _compute_depth_internal(taskmap, head, 0)
+
+
+def compute_depths(taskmap: SimulatedTaskMap):
+    """
+    The function "compute_depths" calculates the depth of each task in a task map.
+
+    :param taskmap: The `taskmap` parameter is a dictionary that represents a simulated task map.
+    The `Task` class has a `dependencies` attribute, which is a list of task IDs that the task depends on.
+    :type taskmap: SimulatedTaskMap
+    """
+    heads = [task for task in taskmap.values() if len(task.dependencies) == 0]
+    _compute_depth(taskmap, heads)
+
+
+def get_initial_tasks(taskmap: SimulatedTaskMap) -> List[TaskID]:
+    """
+    Get a list of tasks that have no dependencies.
+    """
+    return [task.name for task in taskmap.values() if len(task.dependencies) == 0]
+
+
+def get_terminal_tasks(taskmap: SimulatedTaskMap) -> List[TaskID]:
+    """
+    Get a list of tasks that have no dependents.
+    """
+    return [task.name for task in taskmap.values() if len(task.dependents) == 0]
