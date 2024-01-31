@@ -18,7 +18,7 @@ from .schedulers import *
 
 from rich import print
 
-from .analysis.recorder import Recorder, Snapshots
+from .analysis.recorder import RecorderList
 
 
 @dataclass(slots=True)
@@ -30,7 +30,7 @@ class SimulatedScheduler:
     mechanisms: SchedulerArchitecture = field(init=False)
     state: SystemState = field(init=False)
     log_level: int = 0
-    recorder: Recorder = field(default_factory=Snapshots)
+    recorders: RecorderList = field(default_factory=RecorderList)
 
     events: EventQueue = EventQueue()
 
@@ -73,16 +73,18 @@ class SimulatedScheduler:
         yield "architecture", self.mechanisms
         yield "events", self.events
 
-    def record(self, event):
-        self.recorder.save(self.time, self.mechanisms, self.state)
+    def record(self, event: Event, new_events: Sequence[EventPair]):
+        self.recorders.save(self.time, self.mechanisms, self.state, event, new_events)
 
-    def process_event(self, event: Event):
+    def process_event(self, event: Event) -> List[EventPair]:
         # New events are created from the current event.
         new_event_pairs = self.mechanisms[event](self.state)
 
         # Append new events and their completion times to the event queue
         for completion_time, new_event in new_event_pairs:
             self.events.put(new_event, completion_time)
+
+        return new_event_pairs
 
     def run(self):
         new_event_pairs = self.mechanisms.initialize(self.tasks, self.state)
@@ -106,13 +108,10 @@ class SimulatedScheduler:
                 new_events = self.process_event(event)
 
                 # Update Log
-                self.record(event)
+                self.record(event, new_events)
 
         self.state.finalize_stats()
 
         print(f"Event Count: {event_count}")
         if not self.mechanisms.complete(self.state):
             raise RuntimeError("Scheduler terminated without completing all tasks.")
-
-        for device in self.state.topology.devices:
-            print(f"Device {device.name}: {device.stats.idle_time}")

@@ -6,6 +6,7 @@ from typing import Dict, List, Set, Tuple, Union, Self
 
 from .base import EvictionPool
 
+
 @dataclass(slots=True)
 class DataNode:
     data: Optional[DataInfo] = None
@@ -26,7 +27,10 @@ class DataNodeList:
         self.head.next = self.tail
         self.tail.prev = self.head
 
-    def append(self, data: DataInfo):
+    def append(self, data: DataInfo) -> bool:
+        if data.id in self.map:
+            return False
+
         node = DataNode(data)
         self.map[data.id] = node
 
@@ -39,7 +43,12 @@ class DataNodeList:
         self.tail.prev = node
         self.size += 1
 
-    def remove(self, data: DataInfo):
+        return True
+
+    def remove(self, data: DataInfo) -> bool:
+        if data.id not in self.map:
+            return False
+
         node = self.map[data.id]
         del self.map[data.id]
 
@@ -49,6 +58,8 @@ class DataNodeList:
         node.prev.next = node.next
         node.next.prev = node.prev
         self.size -= 1
+
+        return True
 
     def __iter__(self):
         node = self.head.next
@@ -64,7 +75,7 @@ class DataNodeList:
         return self.size
 
     def __str__(self):
-        return f"DataNodeList({self.size})"
+        return f"DataNodeList({self.size}, {self.map.keys()})"
 
     def __repr__(self):
         return self.__str__()
@@ -75,13 +86,13 @@ class LRUEvictionPool(EvictionPool):
     datalist: DataNodeList = field(default_factory=DataNodeList)
 
     def add(self, data: SimulatedData):
-        self.datalist.append(data.info)
-        self.evictable_size += data.size
+        if self.datalist.append(data.info):
+            self.evictable_size += data.size
 
     def remove(self, data: SimulatedData):
-        self.datalist.remove(data.info)
-        self.evictable_size -= data.size
-        assert self.evictable_size >= 0
+        if self.datalist.remove(data.info):
+            self.evictable_size -= data.size
+            assert self.evictable_size >= 0
 
     def peek(self) -> DataID:
         assert self.datalist.head.next is not None
@@ -97,3 +108,20 @@ class LRUEvictionPool(EvictionPool):
         self.evictable_size -= data.size
         assert self.evictable_size >= 0
         return data.id
+
+    def __len__(self):
+        return len(self.datalist)
+
+    def __contains__(self, data: SimulatedData | DataID):
+        if isinstance(data, SimulatedData):
+            return data.info.id in self.datalist.map
+        elif isinstance(data, DataID):
+            return data in self.datalist.map
+        else:
+            raise TypeError(f"Expected SimulatedData or DataID, got {type(data)}")
+
+    def __str__(self):
+        return f"LRUEvictionPool({self.evictable_size}, {self.datalist})"
+
+    def __repr__(self):
+        return self.__str__()

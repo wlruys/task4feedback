@@ -168,7 +168,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
     def initialize(
         self, tasks: List[TaskID], scheduler_state: SystemState
-    ) -> Sequence[EventPair]:
+    ) -> List[EventPair]:
         objects = scheduler_state.objects
 
         task_objects = [objects.get_task(task) for task in tasks]
@@ -192,9 +192,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         for task in tasks:
             self.spawned_tasks.put(task)
 
-    def mapper(
-        self, scheduler_state: SystemState, event: Mapper
-    ) -> Sequence[EventPair]:
+    def mapper(self, scheduler_state: SystemState, event: Mapper) -> List[EventPair]:
         self.success_count = 0
         next_tasks = TaskIterator(self.spawned_tasks)
 
@@ -265,7 +263,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
     def reserver(
         self, scheduler_state: SystemState, event: Reserver
-    ) -> Sequence[EventPair]:
+    ) -> List[EventPair]:
         objects = scheduler_state.objects
         current_time = scheduler_state.time
 
@@ -307,7 +305,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
     def launcher(
         self, scheduler_state: SystemState, event: Launcher
-    ) -> Sequence[EventPair]:
+    ) -> List[EventPair]:
         objects = scheduler_state.objects
         current_time = scheduler_state.time
 
@@ -317,7 +315,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 extra=dict(time=current_time, phase=TaskState.LAUNCHED),
             )
 
-        next_events: Sequence[EventPair] = []
+        next_events: List[EventPair] = []
 
         next_tasks = MultiTaskIterator(self.launchable_tasks)
         for priority, taskid in next_tasks:
@@ -391,7 +389,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
     def complete_task(
         self, scheduler_state: SystemState, event: TaskCompleted
-    ) -> Sequence[EventPair]:
+    ) -> List[EventPair]:
         objects = scheduler_state.objects
         task = objects.get_task(event.task)
         current_time = scheduler_state.time
@@ -404,7 +402,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 ),
             )
 
-        next_events: Sequence[EventPair] = []
+        next_events: List[EventPair] = []
 
         self._verify_correct_task_completed(task, scheduler_state)
         complete_task(task, scheduler_state)

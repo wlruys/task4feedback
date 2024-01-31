@@ -448,10 +448,13 @@ def _use_data(
     for data_access in data_accesses:
         data_id = data_access.id
         device_idx = data_access.device
-        device = devices[device_idx]
+        device_id = devices[device_idx]
 
         data = state.objects.get_data(data_id)
         assert data is not None
+
+        device = state.objects.get_device(device_id)
+        assert device is not None
 
         update_state = True
         initial_state = False
@@ -459,10 +462,15 @@ def _use_data(
         if phase == TaskState.MAPPED:
             initial_state = True
         elif phase == TaskState.RESERVED:
-            data.finish_use(task.name, device, TaskState.MAPPED, operation=access_type)
+            data.finish_use(
+                task.name, device_id, TaskState.MAPPED, operation=access_type
+            )
+
+            device.eviction_pool.remove(data)
+
         elif phase == TaskState.LAUNCHED:
             data.finish_use(
-                task.name, device, TaskState.RESERVED, operation=access_type
+                task.name, device_id, TaskState.RESERVED, operation=access_type
             )
             # State updates at runtime are managed by data movement tasks
             # Compute tasks only verify and evict
@@ -478,7 +486,7 @@ def _use_data(
 
         data.start_use(
             task.name,
-            device,
+            device_id,
             phase,
             operation=access_type,
             update=update_state,
@@ -505,12 +513,18 @@ def _release_data(
     for data_access in data_accesses:
         data_id = data_access.id
         device_idx = data_access.device
-        device = devices[device_idx]
+        device_id = devices[device_idx]
+
+        device = state.objects.get_device(device_id)
+        assert device is not None
 
         data = state.objects.get_data(data_id)
         assert data is not None
 
-        data.finish_use(task.name, device, TaskState.LAUNCHED, operation=access_type)
+        data.finish_use(task.name, device_id, TaskState.LAUNCHED, operation=access_type)
+
+        if data.is_evictable(device_id):
+            device.eviction_pool.add(data)
 
 
 def _move_data(
@@ -735,22 +749,6 @@ class ParlaState(SystemState):
                 device.stats.last_active_compute, device.stats.last_active_movement
             )
 
-            print(f"Device {device.name} idle time: {device.stats.idle_time}")
-            print(
-                f"Device {device.name} idle time compute: {device.stats.idle_time_compute}"
-            )
-            print(
-                f"Device {device.name} idle time movement: {device.stats.idle_time_movement}"
-            )
-
-            print(f"Device {device.name} last active: {last_active}")
-            print(
-                f"Device {device.name} last active compute: {device.stats.last_active_compute}"
-            )
-            print(
-                f"Device {device.name} last active movement: {device.stats.last_active_movement}"
-            )
-            print(f"Time: {self.time}")
             device.stats.idle_time += self.time - last_active
 
             device.stats.idle_time_compute += (

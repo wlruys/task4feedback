@@ -28,7 +28,7 @@ class SchedulerArchitecture:
     def __post_init__(self, topology: SimulatedTopology):
         assert topology is not None
 
-    def __getitem__(self, event: Event) -> Callable[[SystemState], Sequence[EventPair]]:
+    def __getitem__(self, event: Event) -> Callable[[SystemState], List[EventPair]]:
         try:
             function = getattr(self, event.func)
         except AttributeError:
@@ -36,39 +36,35 @@ class SchedulerArchitecture:
                 f"SchedulerArchitecture does not implement function {event.func} for event {event}."
             )
 
-        def wrapper(scheduler_state: SystemState) -> Sequence[EventPair]:
+        def wrapper(scheduler_state: SystemState) -> List[EventPair]:
             return function(scheduler_state, event)
 
         return wrapper
 
     def initialize(
         self, tasks: List[TaskID], scheduler_state: SystemState
-    ) -> Sequence[EventPair]:
+    ) -> List[EventPair]:
         raise NotImplementedError()
         return []
 
     def add_initial_tasks(self, task: SimulatedTask):
         pass
 
-    def mapper(self, scheduler_state: SystemState, event: Event) -> Sequence[EventPair]:
+    def mapper(self, scheduler_state: SystemState, event: Event) -> List[EventPair]:
         raise NotImplementedError()
         return []
 
-    def reserver(
-        self, scheduler_state: SystemState, event: Event
-    ) -> Sequence[EventPair]:
+    def reserver(self, scheduler_state: SystemState, event: Event) -> List[EventPair]:
         raise NotImplementedError()
         return []
 
-    def launcher(
-        self, scheduler_state: SystemState, event: Event
-    ) -> Sequence[EventPair]:
+    def launcher(self, scheduler_state: SystemState, event: Event) -> List[EventPair]:
         raise NotImplementedError()
         return []
 
     def complete_task(
         self, scheduler_state: SystemState, event: Event
-    ) -> Sequence[EventPair]:
+    ) -> List[EventPair]:
         return []
 
     def __str__(self):

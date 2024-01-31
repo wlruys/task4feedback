@@ -607,5 +607,8 @@ class SimulatedData:
     def is_valid(self, device: Device, state: TaskState) -> bool:
         return self.status.check_data_state(device, state, DataState.VALID)
 
+    def is_evictable(self, device: Device) -> bool:
+        return self.status.is_evictable(device)
+
 
 type SimulatedDataMap = Dict[DataID, SimulatedData]
