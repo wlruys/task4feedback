@@ -212,7 +212,6 @@ class ConnectionPool:
         assert bandwidth > 0, f"No known bandwidth between {source} and {target}"
         time_in_seconds = data_size / bandwidth
         time_in_microseconds = int(time_in_seconds * 1e6)
-        print(f"Transfer time: {time_in_microseconds} us")
         return Time(time_in_microseconds)
 
     def get_connection_string(self, source: NamedDevice, target: NamedDevice) -> str:
@@ -308,7 +307,6 @@ class SimulatedTopology:
         sorted_sources = self.connection_pool.sort_by_bandwidth(target, sources)
         for source in sorted_sources:
             assert isinstance(source, SimulatedDevice)
-            print(f"Checking {source} -> {target} connection")
 
             if self.check_connection_available(
                 source, target, require_copy_engines, require_symmetric

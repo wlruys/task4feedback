@@ -12,6 +12,7 @@ from typing import List, Dict, Set, Tuple, Optional, Sequence
 from dataclasses import dataclass, field, InitVar
 from collections import defaultdict as DefaultDict
 from enum import IntEnum
+from ..logging import logger
 
 
 class DataMovementFlags(IntEnum):
@@ -147,6 +148,18 @@ class DataStatus:
             if prior_state == data_state:
                 return prior_state
 
+            if logger.ENABLE_LOGGING:
+                logger.data.debug(
+                    f"Setting data state of {self.id} on device {device} from {prior_state} to {data_state}",
+                    extra=dict(
+                        data=self.id,
+                        device=device,
+                        state=state,
+                        data_state=data_state,
+                        prior_state=prior_state,
+                    ),
+                )
+
             self.state2device[state][prior_state].remove(device)
 
         self.device2state[state][device] = data_state
@@ -248,6 +261,19 @@ class DataStatus:
             # Assumes that this happens before the task is added to the device uses list
             self.verify_write(target_device, state)
 
+        if logger.ENABLE_LOGGING:
+            logger.data.info(
+                f"Performing write of data {self.id} on device {target_device} for task {task}",
+                extra=dict(
+                    data=self.id,
+                    task=task,
+                    device=target_device,
+                    state=state,
+                    update=update,
+                    initial=initial,
+                ),
+            )
+
         # Invalidate all other devices and check that the target device is valid
         status = self.device2state[state]
         for device in status.keys():
@@ -276,6 +302,19 @@ class DataStatus:
         # Ensure that the target device is valid
         status = self.device2state[state]
 
+        if logger.ENABLE_LOGGING:
+            logger.data.info(
+                f"Performing read of data {self.id} on device {target_device} for task {task}",
+                extra=dict(
+                    data=self.id,
+                    task=task,
+                    device=target_device,
+                    state=state,
+                    update=update,
+                    initial=initial,
+                ),
+            )
+
         if update:
             prior_state = self.set_data_state(target_device, state, DataState.VALID)
         else:
@@ -298,6 +337,12 @@ class DataStatus:
         initial: bool = False,
         verbose: bool = False,
     ) -> Optional[DataState]:
+        if logger.ENABLE_LOGGING:
+            logger.data.debug(
+                f"Using data on device {target_device} from task {task}",
+                extra=dict(task=task, data=self.id, operation=operation, state=state),
+            )
+
         if operation == AccessType.READ:
             old_state = self.read(
                 task=task,
@@ -317,9 +362,6 @@ class DataStatus:
                 verbose=verbose,
             )
 
-        print(
-            f"Adding task {task} to uses of Data {self.id} on device {target_device} for state {state}, {TaskStateToUse[state]}"
-        )
         self.add_task(target_device, task, TaskStateToUse[state])
 
         return old_state
@@ -333,9 +375,11 @@ class DataStatus:
         update: bool = False,
         verbose: bool = False,
     ):
-        print(
-            f"Removing task {task} to uses of Data {self.id} on device {target_device} for state {state}, {TaskStateToUse[state]}"
-        )
+        if logger.ENABLE_LOGGING:
+            logger.data.debug(
+                f"Finished using data {self.id} on device {target_device} from task {task}",
+                extra=dict(task=task, data=self.id, operation=operation, state=state),
+            )
         self.remove_task(target_device, task, TaskStateToUse[state])
 
     def start_move(
@@ -345,6 +389,14 @@ class DataStatus:
         target_device: Device,
         verbose: bool = False,
     ) -> DataState:
+        if logger.ENABLE_LOGGING:
+            logger.data.info(
+                f"Starting move of data {self.id} from device {source_device} to device {target_device} for task {task}",
+                extra=dict(
+                    task=task, data=self.id, source=source_device, target=target_device
+                ),
+            )
+
         if not self.check_data_state(
             source_device, TaskState.LAUNCHED, DataState.VALID
         ):
@@ -358,12 +410,6 @@ class DataStatus:
             self.set_data_state(target_device, TaskState.LAUNCHED, DataState.MOVING)
 
         if source_device != target_device:
-            print(
-                f"Adding task {task} to uses of Data {self.id} on device {target_device}"
-            )
-            print(
-                f"Adding task {task} to uses of Data {self.id} on device {source_device}"
-            )
             self.add_task(source_device, task, DataUses.MOVING_FROM)
             self.add_task(target_device, task, DataUses.MOVING_TO)
 
@@ -377,6 +423,14 @@ class DataStatus:
         verbose: bool = False,
     ) -> DataState:
         from rich import print
+
+        if logger.ENABLE_LOGGING:
+            logger.data.info(
+                f"Finishing move of data {self.id} from device {source_device} to device {target_device} for task {task}",
+                extra=dict(
+                    task=task, data=self.id, source=source_device, target=target_device
+                ),
+            )
 
         if not self.check_data_state(
             source_device, TaskState.LAUNCHED, DataState.VALID
@@ -397,12 +451,6 @@ class DataStatus:
             )
 
         if source_device != target_device:
-            print(
-                f"Removing task {task} to use {DataUses.MOVING_TO} of Data {self.id} on device {target_device}"
-            )
-            print(
-                f"Removing task {task} to use {DataUses.MOVING_FROM} of Data {self.id} on device {source_device}"
-            )
             self.remove_task(target_device, task, DataUses.MOVING_TO)
             self.remove_task(source_device, task, DataUses.MOVING_FROM)
 

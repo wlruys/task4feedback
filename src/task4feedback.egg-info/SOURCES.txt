@@ -3,7 +3,6 @@ pyproject.toml
 src/task4feedback/__init__.py
 src/task4feedback/execute.py
 src/task4feedback/load.py
-src/task4feedback/logging.py
 src/task4feedback/threads.py
 src/task4feedback/tracer.py
 src/task4feedback/types.py
@@ -25,6 +24,9 @@ src/task4feedback/graphs/scatter_reduction.py
 src/task4feedback/graphs/stencil.py
 src/task4feedback/graphs/sweep.py
 src/task4feedback/graphs/utilities.py
+src/task4feedback/logging/__init__.py
+src/task4feedback/logging/loggers.py
+src/task4feedback/logging/parse_blog.py
 src/task4feedback/simulator/__init__.py
 src/task4feedback/simulator/data.py
 src/task4feedback/simulator/datapool.py

@@ -1,17 +1,11 @@
-from task4feedback.simulator.data import TaskID, TaskState
-from task4feedback.simulator.device import TaskID, TaskState
-from task4feedback.simulator.events import TaskID, TaskState
-from task4feedback.simulator.queue import TaskID
-from task4feedback.simulator.resources import TaskID, TaskState
-from task4feedback.simulator.task import TaskID, TaskState
-from task4feedback.simulator.topology import TaskID
-from task4feedback.types import TaskID, TaskState
 from ....types import *
 from ...data import *
 from ...device import *
 
 from ..state import *
 from ..architecture import *
+
+from ....logging import logger
 
 from dataclasses import dataclass, field, InitVar
 
@@ -78,6 +72,11 @@ def get_required_resources(
         copy: int = t_req[ResourceType.COPY]
         resources.append(ResourceSet(vcus=vcus, memory=mem, copy=copy))
 
+    logger.resource.debug(
+        "Required resources",
+        extra=dict(task=task.name, phase=phase, resources=resources),
+    )
+
     return resources
 
 
@@ -95,20 +94,29 @@ def _check_nearest_source(
     data = state.objects.get_data(data_id)
     assert data is not None
 
-    device = devices[0] if isinstance(devices, tuple) else devices
-    device = state.objects.get_device(device)
+    device_id = devices[0] if isinstance(devices, tuple) else devices
+    device = state.objects.get_device(device_id)
     assert device is not None
 
-    valid_sources = data.get_devices_from_states(
+    valid_sources_ids = data.get_devices_from_states(
         [TaskState.LAUNCHED], [DataState.VALID]
     )
-    valid_sources = [state.objects.get_device(d) for d in valid_sources]
-    print(f"Valid sources: {valid_sources}")
-    print(f"Target device: {device}")
+    valid_sources = [state.objects.get_device(d) for d in valid_sources_ids]
 
     source_device = state.topology.nearest_valid_connection(
         device, valid_sources, require_copy_engines=True, require_symmetric=True
     )
+
+    if logger.ENABLE_LOGGING:
+        logger.data.debug(
+            f"Finding nearest data source for {data.name} on {device_id}: {valid_sources_ids} -> {source_device}",
+            extra=dict(
+                data=data.name,
+                target=device_id,
+                valid_sources=valid_sources_ids,
+                source=source_device,
+            ),
+        )
 
     return source_device
 
@@ -133,6 +141,21 @@ def _acquire_resources_mapped(
     state.resource_pool.add_resources(
         devices, TaskState.MAPPED, AllResources, resources
     )
+
+    if logger.ENABLE_LOGGING:
+        for device in devices:
+            remaining = state.resource_pool.pool[device][TaskState.MAPPED]
+
+            logger.resource.debug(
+                "Resources after acquiring",
+                extra=dict(
+                    task=task.name,
+                    device=device,
+                    resources=remaining,
+                    phase=TaskState.MAPPED,
+                    pool=TaskState.MAPPED,
+                ),
+            )
 
 
 def _check_resources_reserved(
@@ -188,6 +211,20 @@ def _acquire_resources_reserved(
         devices, TaskState.RESERVED, resource_types, resources
     )
 
+    if logger.ENABLE_LOGGING:
+        for device in devices:
+            remaining = state.resource_pool.pool[device][TaskState.RESERVED]
+            logger.resource.debug(
+                "Resources after acquiring",
+                extra=dict(
+                    task=task.name,
+                    device=device,
+                    resources=remaining,
+                    phase=TaskState.RESERVED,
+                    pool=TaskState.RESERVED,
+                ),
+            )
+
 
 def _check_resources_launched(
     state: SystemState, task: SimulatedTask, verbose: bool = False
@@ -211,11 +248,9 @@ def _check_resources_launched(
         resources=resources,
     )
 
-    print(f"Can fit: {can_fit}")
-
     if isinstance(task, SimulatedDataTask):
         source_device = _check_nearest_source(state, task)
-        print(f"Nearest source: {source_device}")
+
         if source_device is None:
             return False
 
@@ -242,10 +277,6 @@ def _acquire_resources_launched(
 
     resource_types = StatesToResources[TaskState.LAUNCHED]
 
-    print(
-        f"Acquiring resources for task {task} on devices {devices} with resources {resources}."
-    )
-
     state.resource_pool.add_resources(
         devices, TaskState.RESERVED, resource_types, resources
     )
@@ -261,12 +292,38 @@ def _acquire_resources_launched(
         assert source_device is not None
 
         state.topology.acquire_connection(source_device, target_device)
+        if logger.ENABLE_LOGGING:
+            logger.resource.info(
+                "Acquired connection",
+                extra=dict(task=task.name, source=source_device, target=target_device),
+            )
 
-    print("Resources after acquiring:")
-    for device in devices:
-        print(
-            f"Device {device}: {state.resource_pool.pool[device][TaskState.LAUNCHED]}"
-        )
+    if logger.ENABLE_LOGGING:
+        for device in devices:
+            remaining_reserved = state.resource_pool.pool[device][TaskState.RESERVED]
+            remaining_launched = state.resource_pool.pool[device][TaskState.LAUNCHED]
+
+            logger.resource.debug(
+                "Resources after acquiring",
+                extra=dict(
+                    task=task.name,
+                    device=device,
+                    resources=remaining_reserved,
+                    phase=TaskState.LAUNCHED,
+                    pool=TaskState.RESERVED,
+                ),
+            )
+
+            logger.resource.debug(
+                "Resources after acquiring",
+                extra=dict(
+                    task=task.name,
+                    device=device,
+                    resources=remaining_launched,
+                    phase=TaskState.LAUNCHED,
+                    pool=TaskState.LAUNCHED,
+                ),
+            )
 
 
 def _release_resources_completed(
@@ -282,21 +339,11 @@ def _release_resources_completed(
         TaskState.LAUNCHED, task, devices, state.objects, count_data=False
     )
 
-    print(
-        f"Releasing resources for task {task} on devices {devices} with resources {resources}."
-    )
-
     # Free resources from all pools
     if isinstance(task, SimulatedComputeTask):
         state.resource_pool.remove_resources(
             devices=devices,
             state=TaskState.MAPPED,
-            types=AllResources,
-            resources=task.resources,
-        )
-        state.resource_pool.remove_resources(
-            devices=devices,
-            state=TaskState.RESERVED,
             types=AllResources,
             resources=task.resources,
         )
@@ -307,6 +354,18 @@ def _release_resources_completed(
         assert source_device is not None
 
         state.topology.release_connection(source_device, target_device)
+        if logger.ENABLE_LOGGING:
+            logger.resource.info(
+                "Released connection",
+                extra=dict(task=task.name, source=source_device, target=target_device),
+            )
+
+    state.resource_pool.remove_resources(
+        devices=devices,
+        state=TaskState.RESERVED,
+        types=AllResources,
+        resources=task.resources,
+    )
 
     state.resource_pool.remove_resources(
         devices=devices,
@@ -314,6 +373,45 @@ def _release_resources_completed(
         types=AllResources,
         resources=task.resources,
     )
+
+    if logger.ENABLE_LOGGING:
+        for device in devices:
+            remaining_reserved = state.resource_pool.pool[device][TaskState.RESERVED]
+            remaining_mapped = state.resource_pool.pool[device][TaskState.MAPPED]
+            remaining_launched = state.resource_pool.pool[device][TaskState.LAUNCHED]
+
+            logger.resource.debug(
+                "Resources after releasing",
+                extra=dict(
+                    task=task.name,
+                    device=device,
+                    resources=remaining_mapped,
+                    phase=TaskState.COMPLETED,
+                    pool=TaskState.MAPPED,
+                ),
+            )
+
+            logger.resource.debug(
+                "Resources after releasing",
+                extra=dict(
+                    task=task.name,
+                    device=device,
+                    resources=remaining_reserved,
+                    phase=TaskState.COMPLETED,
+                    pool=TaskState.RESERVED,
+                ),
+            )
+
+            logger.resource.debug(
+                "Resources after releasing",
+                extra=dict(
+                    task=task.name,
+                    device=device,
+                    resources=remaining_launched,
+                    phase=TaskState.COMPLETED,
+                    pool=TaskState.LAUNCHED,
+                ),
+            )
 
 
 def _use_data(
@@ -438,9 +536,6 @@ def _finish_move(
     assert source_device is not None
 
     # Mark data as valid on target device
-    print(
-        f"Finishing move for data {data.name} from {source_device} to {target_device}"
-    )
     prior_state = data.finish_move(task.name, source_device, target_device)
 
 

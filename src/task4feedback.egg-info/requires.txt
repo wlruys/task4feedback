@@ -1,6 +1,7 @@
 psutil
 pyyaml
 numpy
+python-json-logger
 
 [dev]
 ruff
@@ -14,5 +15,3 @@ seaborn
 
 [rl]
 torch
-torchvision
-torchaudio

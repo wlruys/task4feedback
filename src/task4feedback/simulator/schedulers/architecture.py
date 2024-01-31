@@ -77,6 +77,9 @@ class SchedulerArchitecture:
     def __repr__(self):
         self.__str__()
 
+    def complete(self, scheduler_state: SystemState) -> bool:
+        raise NotImplementedError()
+
 
 class SchedulerOptions:
     architecture_map: Dict[str, Type[SchedulerArchitecture]] = dict()

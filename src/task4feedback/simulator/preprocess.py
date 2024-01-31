@@ -207,7 +207,7 @@ def create_sim_graph(
 
     tasklist = list(compute_tasks.keys())
     populate_dependents(taskmap)
-    compute_depths(taskmap)
+    # compute_depths(taskmap)
 
     return tasklist, taskmap
 

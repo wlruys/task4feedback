@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from .resources import ResourcePool
 from .device import ResourceSet
 from .datapool import DataPool
+from ..logging import logger
 
 
 @dataclass(slots=True)
@@ -217,6 +218,11 @@ class SimulatedTask:
         if self.state == state:
             return
 
+        logger.state.debug(
+            "Notifying dependents of state change",
+            extra=dict(task=self.name, state=state, time=time),
+        )
+
         for taskid in self.dependents:
             task = taskmap[taskid]
             if new_status := task.counters.notified_state(state):
@@ -225,6 +231,11 @@ class SimulatedTask:
         self.set_state(state, time)
 
     def notify_status(self, status: TaskStatus, taskmap: SimulatedTaskMap, time: Time):
+        logger.state.debug(
+            "Notifying dependents of status change",
+            extra=dict(task=self.name, status=status, time=time),
+        )
+
         for taskid in self.dependents:
             task = taskmap[taskid]
             task.counters.notified_status(status)
@@ -238,11 +249,7 @@ class SimulatedTask:
         time: Time,
         verbose: bool = False,
     ) -> bool:
-        print(f"Checking if {self.name} is status {status}")
-        print(f"Matching state: {TaskStatus.matching_state(status)}")
         if checked_state := TaskStatus.matching_state(status):
-            print("Dependency list", self.info.dependencies)
-            print("Checking state of dependencies", self.counters)
             if status not in self.status and self.counters.check_count(checked_state):
                 self.notify_status(status, taskmap, time)
                 return True

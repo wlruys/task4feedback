@@ -50,6 +50,14 @@ def map_task(
         scheduler_state.use_data(phase, task, verbose=verbose)
 
         return chosen_devices
+
+    if logger.ENABLE_LOGGING:
+        logger.runtime.debug(
+            f"Task {task.name} cannot be mapped: Invalid status.",
+            extra=dict(
+                task=task.name, phase=phase, counters=task.counters, status=task.status
+            ),
+        )
     return None
 
 
@@ -68,6 +76,18 @@ def reserve_task(
             scheduler_state.acquire_resources(phase, task, verbose=verbose)
             scheduler_state.use_data(phase, task, verbose=verbose)
             return True
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be reserved: Insufficient resources.",
+                extra=dict(task=task.name, phase=phase),
+            )
+    if logger.ENABLE_LOGGING:
+        logger.runtime.debug(
+            f"Task {task.name} cannot be reserved: Invalid status.",
+            extra=dict(
+                task=task.name, phase=phase, counters=task.counters, status=task.status
+            ),
+        )
     return False
 
 
@@ -76,11 +96,8 @@ def launch_task(
 ) -> bool:
     phase = TaskState.LAUNCHED
 
-    print(f"Trying to launch task {task.name}...")
-    # Process LAUNCHABLE state
     if check_status := scheduler_state.check_task_status(task, TaskStatus.LAUNCHABLE):
         if can_fit := scheduler_state.check_resources(phase, task):
-            print(f"Task {task.name} has sufficient resources.")
             scheduler_state.acquire_resources(phase, task)
             duration, completion_time = scheduler_state.get_task_duration(
                 task, task.assigned_devices, verbose=verbose
@@ -89,10 +106,18 @@ def launch_task(
             task.duration = duration
             task.completion_time = completion_time
             return True
-        print(
-            f"Task {task.name} cannot be launched: Status: {check_status}, Resources: {can_fit}"
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be launched: Insufficient resources.",
+                extra=dict(task=task.name, phase=phase),
+            )
+    if logger.ENABLE_LOGGING:
+        logger.runtime.debug(
+            f"Task {task.name} cannot be launched: Invalid status.",
+            extra=dict(
+                task=task.name, phase=phase, counters=task.counters, status=task.status
+            ),
         )
-    print(f"Task {task.name} cannot be launched: Status: {check_status}")
     return False
 
 
@@ -168,16 +193,18 @@ class ParlaArchitecture(SchedulerArchitecture):
     def mapper(
         self, scheduler_state: SystemState, event: Mapper
     ) -> Sequence[EventPair]:
-        print("Mapping tasks...")
         self.success_count = 0
         next_tasks = TaskIterator(self.spawned_tasks)
 
         current_time = scheduler_state.time
         objects = scheduler_state.objects
 
-        for priority, taskid in next_tasks:
-            # print(f"Processing task {taskid}")
+        if logger.ENABLE_LOGGING:
+            logger.runtime.info(
+                "Mapping tasks", extra=dict(time=current_time, phase=TaskState.MAPPED)
+            )
 
+        for priority, taskid in next_tasks:
             task = objects.get_task(taskid)
             assert task is not None
 
@@ -186,7 +213,11 @@ class ParlaArchitecture(SchedulerArchitecture):
                     self.reservable_tasks[device].put_id(
                         task_id=taskid, priority=priority
                     )
-
+                if logger.ENABLE_LOGGING:
+                    logger.runtime.info(
+                        f"Task {task.name}, mapped successfully.",
+                        extra=dict(task=taskid, device=devices),
+                    )
                 task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
@@ -195,7 +226,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                 continue
 
         reserver_pair = (current_time, Reserver())
-        print(f"Mapping tasks complete.")
         return [reserver_pair]
 
     def _enqueue_data_tasks(self, task: SimulatedTask, scheduler_state: SystemState):
@@ -207,6 +237,16 @@ class ParlaArchitecture(SchedulerArchitecture):
             for data_task_id in task.data_tasks:
                 data_task: SimulatedDataTask = objects.get_task(data_task_id)
                 assert data_task is not None
+
+                if logger.ENABLE_LOGGING:
+                    logger.runtime.debug(
+                        f"Enqueuing data task {data_task_id}",
+                        extra=dict(
+                            task=data_task_id,
+                            device=task.assigned_devices,
+                            phase=TaskState.RESERVED,
+                        ),
+                    )
 
                 device = task.assigned_devices[data_task.local_index]
                 data_task.assigned_devices = (device,)
@@ -224,9 +264,14 @@ class ParlaArchitecture(SchedulerArchitecture):
     def reserver(
         self, scheduler_state: SystemState, event: Reserver
     ) -> Sequence[EventPair]:
-        print("Reserving tasks...")
         objects = scheduler_state.objects
         current_time = scheduler_state.time
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.info(
+                "Reserving tasks",
+                extra=dict(time=current_time, phase=TaskState.RESERVED),
+            )
 
         next_tasks = MultiTaskIterator(self.reservable_tasks)
         for priority, taskid in next_tasks:
@@ -243,25 +288,32 @@ class ParlaArchitecture(SchedulerArchitecture):
                 self.launchable_tasks[device][TaskType.COMPUTE].put_id(
                     task_id=taskid, priority=priority
                 )
+                if logger.ENABLE_LOGGING:
+                    logger.runtime.info(
+                        f"Task {taskid} reserved successfully.",
+                        extra=dict(task=taskid),
+                    )
                 task.notify_state(TaskState.RESERVED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
-                print(f"Task {task.name} reserved on device {device}")
             else:
                 next_tasks.fail()
                 continue
 
         launcher_pair = (current_time, Launcher())
-        print(f"Reserving tasks complete.")
         return [launcher_pair]
 
     def launcher(
         self, scheduler_state: SystemState, event: Launcher
     ) -> Sequence[EventPair]:
-        print("Launching tasks...")
-
         objects = scheduler_state.objects
         current_time = scheduler_state.time
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.info(
+                "Launching tasks",
+                extra=dict(time=current_time, phase=TaskState.LAUNCHED),
+            )
 
         next_events: Sequence[EventPair] = []
 
@@ -272,12 +324,22 @@ class ParlaArchitecture(SchedulerArchitecture):
 
             # Process LAUNCHABLE state
             if launch_success := launch_task(task, scheduler_state):
-                print(f"Task {task.name} launched on device {task.assigned_devices}")
                 task.notify_state(TaskState.LAUNCHED, objects.taskmap, current_time)
                 completion_time = task.completion_time
 
                 device = task.assigned_devices[0]  # type: ignore
                 self.launched_tasks[device].put_id(taskid, completion_time)
+
+                if logger.ENABLE_LOGGING:
+                    logger.runtime.info(
+                        f"Task {taskid} launched successfully.",
+                        extra=dict(
+                            task=taskid,
+                            device=device,
+                            time=current_time,
+                            completion_time=completion_time,
+                        ),
+                    )
 
                 # Create completion event
                 completion_event = TaskCompleted(task=taskid)
@@ -294,8 +356,6 @@ class ParlaArchitecture(SchedulerArchitecture):
             mapping_pair = (current_time, Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
-
-        print(f"Launching tasks complete.")
 
         return next_events
 
@@ -330,10 +390,18 @@ class ParlaArchitecture(SchedulerArchitecture):
     def complete_task(
         self, scheduler_state: SystemState, event: TaskCompleted
     ) -> Sequence[EventPair]:
-        print(f"Completing task: {event.task}...")
         objects = scheduler_state.objects
         task = objects.get_task(event.task)
         current_time = scheduler_state.time
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.info(
+                f"Completing task {event.task}",
+                extra=dict(
+                    task=event.task, time=current_time, phase=TaskState.COMPLETED
+                ),
+            )
+
         next_events: Sequence[EventPair] = []
 
         self._verify_correct_task_completed(task, scheduler_state)
@@ -348,6 +416,16 @@ class ParlaArchitecture(SchedulerArchitecture):
             next_events.append(mapping_pair)
             self.active_scheduler += 1
 
-        print(f"Task {task.name} completed.")
-
         return next_events
+
+    def complete(self, scheduler_state: SystemState) -> bool:
+        complete_flag = self.spawned_tasks.empty()
+        for device in self.reservable_tasks:
+            complete_flag = complete_flag and self.reservable_tasks[device].empty()
+        for device in self.launchable_tasks:
+            for task_type in self.launchable_tasks[device]:
+                complete_flag = (
+                    complete_flag and self.launchable_tasks[device][task_type].empty()
+                )
+
+        return complete_flag
