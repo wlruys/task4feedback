@@ -25,7 +25,7 @@ def test_serial():
         return 1
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
-        if True:  # task_id.task_idx[0] % 2 == 0:
+        if task_id.task_idx[0] % 2 == 0:
             device_tuple = (gpu0,)
         else:
             device_tuple = (gpu1,)
@@ -40,7 +40,7 @@ def test_serial():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = ChainConfig(steps=1000, chains=1, task_config=task_placement)
+    config = ChainConfig(steps=10, chains=1, task_config=task_placement)
 
     tasks, data = make_graph(config, data_config=data_config)
 

@@ -25,7 +25,7 @@ src/task4feedback/graphs/stencil.py
 src/task4feedback/graphs/sweep.py
 src/task4feedback/graphs/utilities.py
 src/task4feedback/logging/__init__.py
-src/task4feedback/logging/loggers.py
+src/task4feedback/logging/logger.py
 src/task4feedback/logging/parse_blog.py
 src/task4feedback/simulator/__init__.py
 src/task4feedback/simulator/data.py
@@ -39,6 +39,8 @@ src/task4feedback/simulator/simulator.py
 src/task4feedback/simulator/task.py
 src/task4feedback/simulator/topology.py
 src/task4feedback/simulator/utility.py
+src/task4feedback/simulator/analysis/__init__.py
+src/task4feedback/simulator/analysis/recorder.py
 src/task4feedback/simulator/eviction/__init__.py
 src/task4feedback/simulator/eviction/base.py
 src/task4feedback/simulator/eviction/lru.py

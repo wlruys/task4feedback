@@ -32,8 +32,10 @@ def find_writer_bfs(
             print(f"Checking dependencies of {s}")
         for neighbor_id in graph[s].dependencies:
             neighbor = graph[neighbor_id]
+
             writes_to = data_from_task(neighbor, AccessType.WRITE)
             writes_to = writes_to + data_from_task(neighbor, AccessType.READ_WRITE)
+            write_to = set(writes_to)
 
             if verbose:
                 print(f"Dependency {neighbor_id} writes to {writes_to}")
@@ -65,9 +67,9 @@ def most_recent_writer(
     """
 
     read_data = data_from_task(task, AccessType.READ)
-    write_data = data_from_task(task, AccessType.READ_WRITE)
+    read_write_data = data_from_task(task, AccessType.READ_WRITE)
 
-    read_data = read_data + write_data
+    read_data = read_data + read_write_data
     touches = set(read_data)
 
     if verbose:
@@ -157,8 +159,15 @@ def filter_data_dependenices(task: SimulatedTask):
     write = data_info.write
     read_write = data_info.read_write
 
+    # Remove read-write dependencies from read and write
+    # All sets must be disjoint
+
     read_set = set([d.id for d in read]).difference([d.id for d in read_write])
-    write_set = set([d.id for d in write]).union([d.id for d in read_write])
+    write_set = set([d.id for d in write]).difference([d.id for d in read_write])
+
+    assert (
+        len(read_set.intersection(write_set)) == 0
+    ), "Read and write sets must be disjoint"
 
     read = list(DataAccess(id=d) for d in read_set)
     write = list(DataAccess(id=d) for d in write_set)

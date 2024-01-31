@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, InitVar
 from collections import defaultdict as DefaultDict
 from enum import IntEnum
 from ..logging import logger
+from ..types import Time
 
 
 class DataMovementFlags(IntEnum):
@@ -77,6 +78,14 @@ NonEvictableUses = [
     DataUses.MOVING_FROM,
     DataUses.USED,
 ]
+
+
+@dataclass(slots=True)
+class DataStats:
+    read_count: int = 0
+    write_count: int = 0
+    move_count: int = 0
+    move_time: Time = field(default_factory=Time)
 
 
 @dataclass(slots=True)
@@ -257,13 +266,13 @@ class DataStatus:
         initial: bool = False,
         verbose: bool = False,
     ):
-        if verify:
+        if verify and not initial:
             # Assumes that this happens before the task is added to the device uses list
             self.verify_write(target_device, state)
 
         if logger.ENABLE_LOGGING:
             logger.data.info(
-                f"Performing write of data {self.id} on device {target_device} for task {task}",
+                f"Performing write of data {self.id} on device {target_device} for task {task} in phase {state}",
                 extra=dict(
                     data=self.id,
                     task=task,
@@ -288,6 +297,9 @@ class DataStatus:
                             f"Task {task} cannot write to data that is not valid on device {device}. Status: {status}"
                         )
             else:
+                assert (
+                    self.get_data_state(device, state) != DataState.MOVING
+                ), f"Task {task} cannot invalidate data that is moving. Status: {status}"
                 self.set_data_state(device, state, DataState.NONE)
 
     def read(
@@ -304,7 +316,7 @@ class DataStatus:
 
         if logger.ENABLE_LOGGING:
             logger.data.info(
-                f"Performing read of data {self.id} on device {target_device} for task {task}",
+                f"Performing read of data {self.id} on device {target_device} for task {task} in phase {state}",
                 extra=dict(
                     data=self.id,
                     task=task,
@@ -349,18 +361,37 @@ class DataStatus:
                 target_device=target_device,
                 state=state,
                 update=update,
-                initial=initial,
+                initial=False,
                 verbose=verbose,
             )
-        else:
+        elif operation == AccessType.READ_WRITE:
+            # This is a write WITH a read
+            # Assume that this means data usage
+            # for compute thats this means that the data must be valid
+            # before this is called
             old_state = self.write(
                 task=task,
                 target_device=target_device,
                 state=state,
                 update=update,
-                initial=initial,
+                initial=False,
                 verbose=verbose,
             )
+        elif operation == AccessType.WRITE:
+            # This is a write WITHOUT a read
+            # Assume that this means data creation
+            # The write is always valid and evicts all other data
+
+            old_state = self.write(
+                task=task,
+                target_device=target_device,
+                state=state,
+                update=True,
+                initial=True,
+                verbose=verbose,
+            )
+        else:
+            raise ValueError(f"Invalid data operation {operation}")
 
         self.add_task(target_device, task, TaskStateToUse[state])
 
@@ -467,6 +498,7 @@ class SimulatedData:
     system_devices: InitVar[Sequence[Device]]
     info: DataInfo
     status: DataStatus = field(init=False)
+    stats: DataStats = field(default_factory=DataStats)
 
     def __post_init__(self, system_devices: Sequence[Device]):
         self.status = DataStatus(id=self.info.id, devices=system_devices)

@@ -1,4 +1,4 @@
-from ..types import Architecture, Device, TaskID, TaskState, ResourceType
+from ..types import Architecture, Device, TaskID, TaskState, ResourceType, Time
 from dataclasses import dataclass, field
 from .queue import *
 from .datapool import *
@@ -104,15 +104,39 @@ class ResourceSet:
 
 
 @dataclass(slots=True)
+class DeviceStats:
+    last_active_compute: Time = field(default_factory=Time)
+    last_active_movement: Time = field(default_factory=Time)
+
+    idle_time_compute: Time = field(default_factory=Time)
+    idle_time_movement: Time = field(default_factory=Time)
+    idle_time: Time = field(default_factory=Time)
+
+    outgoing_transfers: int = 0
+    incoming_transfers: int = 0
+
+    next_free_compute: Dict[TaskState, Time] = field(
+        default_factory=lambda: DefaultDict(Time)
+    )
+
+    next_free: Dict[TaskState, Time] = field(default_factory=lambda: DefaultDict(Time))
+
+
+@dataclass(slots=True)
 class SimulatedDevice:
     name: Device
     resources: ResourceSet
+    stats: DeviceStats = field(default_factory=DeviceStats)
     datapool: DataPool = field(default_factory=DataPool)
     eviction_pool_type: Type[EvictionPool] = LRUEvictionPool
     eviction_pool: EvictionPool = field(init=False)
+    eviction_targets: List[Device] = field(default_factory=list)
+    memory_space: Device = field(init=False)
 
     def __post_init__(self):
         self.eviction_pool = self.eviction_pool_type()
+        self.eviction_targets = [Device(Architecture.CPU, 0)]
+        self.memory_space = self.name
 
     def __str__(self) -> str:
         return f"Device({self.name})"

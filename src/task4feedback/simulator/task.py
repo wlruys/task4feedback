@@ -142,6 +142,10 @@ class SimulatedTask:
         return self.info.data_dependencies.write
 
     @property
+    def read_write_accesses(self) -> List[DataAccess]:
+        return self.info.data_dependencies.read_write
+
+    @property
     def priority(self) -> int:
         return self.info.order
 

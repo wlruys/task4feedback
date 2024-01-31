@@ -18,6 +18,8 @@ from .schedulers import *
 
 from rich import print
 
+from .analysis.recorder import Recorder, Snapshots
+
 
 @dataclass(slots=True)
 class SimulatedScheduler:
@@ -28,6 +30,7 @@ class SimulatedScheduler:
     mechanisms: SchedulerArchitecture = field(init=False)
     state: SystemState = field(init=False)
     log_level: int = 0
+    recorder: Recorder = field(default_factory=Snapshots)
 
     events: EventQueue = EventQueue()
 
@@ -70,8 +73,8 @@ class SimulatedScheduler:
         yield "architecture", self.mechanisms
         yield "events", self.events
 
-    def record(self):
-        pass
+    def record(self, event):
+        self.recorder.save(self.time, self.mechanisms, self.state)
 
     def process_event(self, event: Event):
         # New events are created from the current event.
@@ -103,7 +106,7 @@ class SimulatedScheduler:
                 new_events = self.process_event(event)
 
                 # Update Log
-                self.record()
+                self.record(event)
 
         print(f"Event Count: {event_count}")
         if not self.mechanisms.complete(self.state):

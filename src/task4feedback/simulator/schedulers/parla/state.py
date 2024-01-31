@@ -115,6 +115,7 @@ def _check_nearest_source(
                 target=device_id,
                 valid_sources=valid_sources_ids,
                 source=source_device,
+                time=state.time,
             ),
         )
 
@@ -154,6 +155,7 @@ def _acquire_resources_mapped(
                     resources=remaining,
                     phase=TaskState.MAPPED,
                     pool=TaskState.MAPPED,
+                    time=state.time,
                 ),
             )
 
@@ -222,6 +224,7 @@ def _acquire_resources_reserved(
                     resources=remaining,
                     phase=TaskState.RESERVED,
                     pool=TaskState.RESERVED,
+                    time=state.time,
                 ),
             )
 
@@ -295,7 +298,12 @@ def _acquire_resources_launched(
         if logger.ENABLE_LOGGING:
             logger.resource.info(
                 "Acquired connection",
-                extra=dict(task=task.name, source=source_device, target=target_device),
+                extra=dict(
+                    task=task.name,
+                    source=source_device,
+                    target=target_device,
+                    time=state.time,
+                ),
             )
 
     if logger.ENABLE_LOGGING:
@@ -311,6 +319,7 @@ def _acquire_resources_launched(
                     resources=remaining_reserved,
                     phase=TaskState.LAUNCHED,
                     pool=TaskState.RESERVED,
+                    time=state.time,
                 ),
             )
 
@@ -322,6 +331,7 @@ def _acquire_resources_launched(
                     resources=remaining_launched,
                     phase=TaskState.LAUNCHED,
                     pool=TaskState.LAUNCHED,
+                    time=state.time,
                 ),
             )
 
@@ -357,7 +367,12 @@ def _release_resources_completed(
         if logger.ENABLE_LOGGING:
             logger.resource.info(
                 "Released connection",
-                extra=dict(task=task.name, source=source_device, target=target_device),
+                extra=dict(
+                    task=task.name,
+                    source=source_device,
+                    target=target_device,
+                    time=state.time,
+                ),
             )
 
     state.resource_pool.remove_resources(
@@ -388,6 +403,7 @@ def _release_resources_completed(
                     resources=remaining_mapped,
                     phase=TaskState.COMPLETED,
                     pool=TaskState.MAPPED,
+                    time=state.time,
                 ),
             )
 
@@ -399,6 +415,7 @@ def _release_resources_completed(
                     resources=remaining_reserved,
                     phase=TaskState.COMPLETED,
                     pool=TaskState.RESERVED,
+                    time=state.time,
                 ),
             )
 
@@ -422,6 +439,9 @@ def _use_data(
     access_type: AccessType,
     verbose: bool = False,
 ):
+    if len(data_accesses) == 0:
+        return
+
     devices = task.assigned_devices
     assert devices is not None
 
@@ -466,6 +486,9 @@ def _release_data(
     access_type: AccessType,
     verbose: bool = False,
 ):
+    if len(data_accesses) == 0:
+        return
+
     assert phase == TaskState.COMPLETED
 
     devices = task.assigned_devices
@@ -488,6 +511,9 @@ def _move_data(
     task: SimulatedTask,
     verbose: bool = False,
 ):
+    if len(data_accesses) == 0:
+        return
+
     devices = task.assigned_devices
     assert devices is not None
 
@@ -496,8 +522,12 @@ def _move_data(
 
     # move data is called from a data movement task at launch time
     # each data movement task moves one data item onto a single target device
-    assert len(data_accesses) == 1
-    assert len(devices) == 1
+    assert (
+        len(data_accesses) == 1
+    ), f"Data Task {task.name} should only move one data item: {data_accesses}"
+    assert (
+        len(devices) == 1
+    ), f"Data Task {task.name} should only move to one device: {devices}"
     target_device = devices[0]
     assert target_device is not None
 
@@ -515,6 +545,9 @@ def _move_data(
 def _finish_move(
     state: SystemState, data_accesses: List[DataAccess], task: SimulatedTask
 ):
+    if len(data_accesses) == 0:
+        return
+
     devices = task.assigned_devices
     assert devices is not None
 
@@ -523,8 +556,12 @@ def _finish_move(
 
     # move data is called from a data movement task at launch time
     # each data movement task moves one data item onto a single target device
-    assert len(data_accesses) == 1
-    assert len(devices) == 1
+    assert (
+        len(data_accesses) == 1
+    ), f"Data Task {task.name} should only move one data item: {data_accesses}"
+    assert (
+        len(devices) == 1
+    ), f"Data Task {task.name} should only move to one device: {devices}"
     target_device = devices[0]
     assert target_device is not None
 
@@ -635,6 +672,9 @@ class ParlaState(SystemState):
     def use_data(self, phase: TaskState, task: SimulatedTask, verbose: bool = False):
         if isinstance(task, SimulatedComputeTask):
             _use_data(self, phase, task.read_accesses, task, AccessType.READ)
+            _use_data(
+                self, phase, task.read_write_accesses, task, AccessType.READ_WRITE
+            )
             _use_data(self, phase, task.write_accesses, task, AccessType.WRITE)
         elif isinstance(task, SimulatedDataTask):
             # Data movement tasks only exist at launch time
@@ -643,6 +683,7 @@ class ParlaState(SystemState):
             # All data movement tasks are single data item tasks
             # They read from a single source device onto a single target device
             _move_data(self, task.read_accesses, task)
+            _move_data(self, task.read_write_accesses, task)
 
     def release_data(
         self,
@@ -654,9 +695,13 @@ class ParlaState(SystemState):
 
         if isinstance(task, SimulatedComputeTask):
             _release_data(self, phase, task.read_accesses, task, AccessType.READ)
+            _release_data(
+                self, phase, task.read_write_accesses, task, AccessType.READ_WRITE
+            )
             _release_data(self, phase, task.write_accesses, task, AccessType.WRITE)
         elif isinstance(task, SimulatedDataTask):
             _finish_move(self, task.read_accesses, task)
+            _finish_move(self, task.read_write_accesses, task)
 
     def get_task_duration(
         self, task: SimulatedTask, devices: Devices, verbose: bool = False
