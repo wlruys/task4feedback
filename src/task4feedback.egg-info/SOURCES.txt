@@ -40,6 +40,7 @@ src/task4feedback/simulator/task.py
 src/task4feedback/simulator/topology.py
 src/task4feedback/simulator/utility.py
 src/task4feedback/simulator/analysis/__init__.py
+src/task4feedback/simulator/analysis/plot.py
 src/task4feedback/simulator/analysis/recorder.py
 src/task4feedback/simulator/eviction/__init__.py
 src/task4feedback/simulator/eviction/base.py

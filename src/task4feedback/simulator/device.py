@@ -14,6 +14,12 @@ from .eviction.lru import LRUEvictionPool
 
 Numeric = int | float | Fraction | Decimal
 
+resource_names = {
+    ResourceType.VCU: "vcu",
+    ResourceType.MEMORY: "memory",
+    ResourceType.COPY: "copy",
+}
+
 
 @dataclass(slots=True, init=False)
 class ResourceSet:
@@ -101,6 +107,13 @@ class ResourceSet:
             return True
         else:
             return False
+
+    def __str__(self):
+        string = f"ResourceSet("
+        for key in self.store:
+            string += f"{resource_names[key]}={self.store[key]} "
+        string += ")"
+        return string
 
 
 @dataclass(slots=True)

@@ -86,11 +86,11 @@ class IdleTime(Recorder):
 
 @dataclass(slots=True)
 class ResourceUsage(Recorder):
-    memory_usage: Dict[Time, Dict[Device, List[int]]] = field(default_factory=dict)
-    vcu_usage: Dict[Time, Dict[Device, List[Fraction]]] = field(default_factory=dict)
-    copy_usage: Dict[Time, Dict[Device, List[int]]] = field(default_factory=dict)
+    memory_usage: Dict[Device, Dict[Time, int]] = field(default_factory=dict)
+    vcu_usage: Dict[Device, Dict[Time, Fraction]] = field(default_factory=dict)
+    copy_usage: Dict[Device, Dict[Time, int]] = field(default_factory=dict)
 
-    phase: TaskState = TaskState.LAUNCHED
+    phase: TaskState = TaskState.RESERVED
 
     def save(
         self,
@@ -102,26 +102,104 @@ class ResourceUsage(Recorder):
     ):
         resource_pool = system_state.resource_pool
 
-        if time not in self.memory_usage:
-            self.memory_usage[time] = {}
-        if time not in self.vcu_usage:
-            self.vcu_usage[time] = {}
-        if time not in self.copy_usage:
-            self.copy_usage[time] = {}
-
         for device in resource_pool.pool:
-            if device not in self.memory_usage[time]:
-                self.memory_usage[time][device] = []
-            if device not in self.vcu_usage[time]:
-                self.vcu_usage[time][device] = []
-            if device not in self.copy_usage[time]:
-                self.copy_usage[time][device] = []
+            if device not in self.memory_usage:
+                self.memory_usage[device] = {}
+            if device not in self.vcu_usage:
+                self.vcu_usage[device] = {}
+            if device not in self.copy_usage:
+                self.copy_usage[device] = {}
 
             resources = resource_pool.pool[device][self.phase]
 
-            self.memory_usage[time][device] = resources[ResourceType.MEMORY]
-            self.vcu_usage[time][device] = resources[ResourceType.VCU]
-            self.copy_usage[time][device] = resources[ResourceType.COPY]
+            if time not in self.memory_usage[device]:
+                self.memory_usage[device][time] = 0
+            if time not in self.vcu_usage[device]:
+                self.vcu_usage[device][time] = Fraction(0)
+            if time not in self.copy_usage[device]:
+                self.copy_usage[device][time] = 0
+
+            self.memory_usage[device][time] = max(
+                resources[ResourceType.MEMORY], self.memory_usage[device][time]
+            )
+            self.vcu_usage[device][time] = max(
+                resources[ResourceType.VCU], self.vcu_usage[device][time]
+            )
+            self.copy_usage[device][time] = max(
+                resources[ResourceType.COPY], self.copy_usage[device][time]
+            )
+
+
+@dataclass(slots=True)
+class MappedResourceUsage(ResourceUsage):
+    phase: TaskState = TaskState.MAPPED
+
+
+@dataclass(slots=True)
+class ReservedResourceUsage(ResourceUsage):
+    phase: TaskState = TaskState.RESERVED
+
+
+@dataclass(slots=True)
+class LaunchedResourceUsage(ResourceUsage):
+    phase: TaskState = TaskState.LAUNCHED
+
+
+@dataclass(slots=True)
+class ResourceUsageList(Recorder):
+    memory_usage: Dict[Device, Dict[Time, List[int]]] = field(default_factory=dict)
+    vcu_usage: Dict[Device, Dict[Time, List[Fraction]]] = field(default_factory=dict)
+    copy_usage: Dict[Device, Dict[Time, List[int]]] = field(default_factory=dict)
+
+    phase: TaskState = TaskState.RESERVED
+
+    def save(
+        self,
+        time: Time,
+        arch_state: SchedulerArchitecture,
+        system_state: SystemState,
+        current_event: Event,
+        new_events: Sequence[EventPair],
+    ):
+        resource_pool = system_state.resource_pool
+
+        for device in resource_pool.pool:
+            if device not in self.memory_usage:
+                self.memory_usage[device] = {}
+            if device not in self.vcu_usage:
+                self.vcu_usage[device] = {}
+            if device not in self.copy_usage:
+                self.copy_usage[device] = {}
+
+            resources = resource_pool.pool[device][self.phase]
+
+            if time not in self.memory_usage[device]:
+                self.memory_usage[device][time] = []
+            if time not in self.vcu_usage[device]:
+                self.vcu_usage[device][time] = []
+            if time not in self.copy_usage[device]:
+                self.copy_usage[device][time] = []
+
+            self.memory_usage[device][time].append(resources[ResourceType.MEMORY])
+
+            self.vcu_usage[device][time].append(resources[ResourceType.VCU])
+
+            self.copy_usage[device][time].append(resources[ResourceType.COPY])
+
+
+@dataclass(slots=True)
+class MappedResourceUsageList(ResourceUsageList):
+    phase: TaskState = TaskState.MAPPED
+
+
+@dataclass(slots=True)
+class ReservedResourceUsageList(ResourceUsageList):
+    phase: TaskState = TaskState.RESERVED
+
+
+@dataclass(slots=True)
+class LaunchedResourceUsageList(ResourceUsageList):
+    phase: TaskState = TaskState.LAUNCHED
 
 
 @dataclass(slots=True)

@@ -22,10 +22,17 @@ AllResources = [ResourceType.VCU, ResourceType.MEMORY, ResourceType.COPY]
 
 
 def get_required_memory_for_data(
-    phase: TaskState, device: Device, data_id: DataID, objects: ObjectRegistry
+    phase: TaskState,
+    device: Device,
+    data_id: DataID,
+    objects: ObjectRegistry,
+    access_type: AccessType,
 ) -> int:
     data = objects.get_data(data_id)
-    if is_valid := data.is_valid(device, phase):
+    print(phase, device, data_id, data.is_valid(device, phase))
+    if is_valid := data.is_valid(device, phase) and (
+        access_type == AccessType.READ or access_type == AccessType.READ_WRITE
+    ):
         return 0
     else:
         return data.size
@@ -37,12 +44,13 @@ def get_required_memory(
     devices: Tuple[Device, ...],
     data_accesses: List[DataAccess],
     objects: ObjectRegistry,
+    access_type: AccessType = AccessType.READ,
 ) -> None:
     for data_access in data_accesses:
         idx = data_access.device
         device = devices[idx]
         memory[idx] += get_required_memory_for_data(
-            phase, device, data_access.id, objects
+            phase, device, data_access.id, objects, access_type
         )
 
 
@@ -57,12 +65,20 @@ def get_required_resources(
     if isinstance(devices, Device):
         devices = (devices,)
 
-    task.set_resources(devices)
+    if phase == TaskState.MAPPED or (
+        phase == TaskState.RESERVED and isinstance(task, SimulatedDataTask)
+    ):
+        resources = task.get_resources(devices)
+        task.resources = resources
+    else:
+        resources = task.resources
 
-    memory: List[int] = [s[ResourceType.MEMORY] for s in task.resources]
+    memory: List[int] = [s[ResourceType.MEMORY] for s in resources]
 
     if count_data:
         get_required_memory(memory, phase, devices, task.read_accesses, objects)
+        get_required_memory(memory, phase, devices, task.read_write_accesses, objects)
+        get_required_memory(memory, phase, devices, task.write_accesses, objects)
 
     resources = []
     for i in range(len(devices)):
@@ -209,6 +225,7 @@ def _acquire_resources_reserved(
     resources = get_required_resources(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
     )
+
     state.resource_pool.add_resources(
         devices, TaskState.RESERVED, resource_types, resources
     )
@@ -275,7 +292,7 @@ def _acquire_resources_launched(
         devices = (devices,)
 
     resources = get_required_resources(
-        TaskState.LAUNCHED, task, devices, state.objects, count_data=False
+        TaskState.LAUNCHED, task, devices, state.objects, count_data=True
     )
 
     resource_types = StatesToResources[TaskState.LAUNCHED]
@@ -484,7 +501,7 @@ def _use_data(
                 data.stats.read_count += 1
                 data.stats.write_count += 1
 
-        data.start_use(
+        old_state, evicted_locations = data.start_use(
             task.name,
             device_id,
             phase,
@@ -492,6 +509,23 @@ def _use_data(
             update=update_state,
             verbose=verbose,
         )
+
+        if phase == TaskState.LAUNCHED:
+            for device in evicted_locations:
+                for pool in [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED]:
+                    print(
+                        f"Evicting data {data.name} from device {device} in pool {pool}"
+                    )
+                    print("Before eviction")
+                    print(state.resource_pool.pool[device][pool])
+                    state.resource_pool.remove_device_resources(
+                        device,
+                        pool,
+                        [ResourceType.MEMORY],
+                        ResourceSet(memory=data.size, vcus=0, copy=0),
+                    )
+                    print("After eviction")
+                    print(state.resource_pool.pool[device][pool])
 
 
 def _release_data(

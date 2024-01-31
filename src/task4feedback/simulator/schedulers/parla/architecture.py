@@ -98,6 +98,11 @@ def launch_task(
 
     if check_status := scheduler_state.check_task_status(task, TaskStatus.LAUNCHABLE):
         if can_fit := scheduler_state.check_resources(phase, task):
+            if logger.ENABLE_LOGGING:
+                logger.runtime.critical(
+                    f"Launching task {task.name} on devices {task.assigned_devices}",
+                    extra=dict(task=task.name, devices=task.assigned_devices),
+                )
             scheduler_state.acquire_resources(phase, task)
             duration, completion_time = scheduler_state.get_task_duration(
                 task, task.assigned_devices, verbose=verbose
@@ -175,6 +180,41 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         # Initialize the set of visible tasks
         self.add_initial_tasks(task_objects, scheduler_state)
+
+        # Initialize memory for starting data blocks
+        for data in objects.datamap.values():
+            devices = data.info.location
+            if devices is not None:
+                if isinstance(devices, Device):
+                    devices = (devices,)
+
+                for device in devices:
+                    for pool in [
+                        TaskState.MAPPED,
+                        TaskState.RESERVED,
+                        TaskState.LAUNCHED,
+                    ]:
+                        resource_set = ResourceSet(
+                            memory=data.info.size, vcus=0, copy=0
+                        )
+
+                        if logger.ENABLE_LOGGING:
+                            logger.data.info(
+                                f"Initializing data resource {data.name} on device {device} in pool {pool} with resources: {resource_set}",
+                                extra=dict(
+                                    data=data.name,
+                                    device=device,
+                                    pool=pool,
+                                    resources=resource_set,
+                                ),
+                            )
+
+                        scheduler_state.resource_pool.add_device_resource(
+                            device,
+                            pool,
+                            [ResourceType.MEMORY],
+                            resource_set,
+                        )
 
         # Initialize the event queue
         next_event = Mapper()
@@ -353,7 +393,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         self.active_scheduler -= 1
 
         if remaining_tasks := length(self.launchable_tasks) and self.success_count:
-            mapping_pair = (current_time, Mapper())
+            mapping_pair = (current_time + Time(10), Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
 
@@ -395,7 +435,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         current_time = scheduler_state.time
 
         if logger.ENABLE_LOGGING:
-            logger.runtime.info(
+            logger.runtime.critical(
                 f"Completing task {event.task}",
                 extra=dict(
                     task=event.task, time=current_time, phase=TaskState.COMPLETED

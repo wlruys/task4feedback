@@ -284,7 +284,9 @@ class SimulatedTask:
     def get_runtime_info(self, device: Devices) -> List[TaskRuntimeInfo]:
         return self.info.runtime[device]
 
-    def set_resources(self, devices: Devices, data_inputs: bool = False):
+    def get_resources(
+        self, devices: Devices, data_inputs: bool = False
+    ) -> List[ResourceSet]:
         raise NotImplementedError
 
     def add_data_dependency(self, task: TaskID):
@@ -302,14 +304,18 @@ class SimulatedComputeTask(SimulatedTask):
             self.data_tasks = []
         self.data_tasks.append(task)
 
-    def set_resources(self, devices: Devices):
+    def get_resources(self, devices: Devices) -> List[ResourceSet]:
+        resources = []
+
         if isinstance(devices, Device):
             devices = (devices,)
         runtime_info_list = self.get_runtime_info(devices)
         for runtime_info in runtime_info_list:
             vcus = runtime_info.device_fraction
             memory = runtime_info.memory
-            self.resources.append(ResourceSet(vcus=vcus, memory=memory, copy=0))
+            resources.append(ResourceSet(vcus=vcus, memory=memory, copy=0))
+
+        return resources
 
 
 @dataclass(slots=True)
@@ -319,8 +325,8 @@ class SimulatedDataTask(SimulatedTask):
     local_index: int = 0
     real: bool = True
 
-    def set_resources(self, devices: Devices):
-        self.resources.append(ResourceSet(vcus=0, memory=0, copy=1))
+    def get_resources(self, devices: Devices) -> List[ResourceSet]:
+        return [ResourceSet(vcus=0, memory=0, copy=1)]
 
 
 type SimulatedTaskMap = Mapping[

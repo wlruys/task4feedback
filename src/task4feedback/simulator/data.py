@@ -265,7 +265,7 @@ class DataStatus:
         update: bool = False,
         initial: bool = False,
         verbose: bool = False,
-    ):
+    ) -> Tuple[Optional[DataState], List[Device]]:
         if verify and not initial:
             # Assumes that this happens before the task is added to the device uses list
             self.verify_write(target_device, state)
@@ -282,6 +282,9 @@ class DataStatus:
                     initial=initial,
                 ),
             )
+
+        evicted_locations = []
+        old_state = self.get_data_state(target_device, state)
 
         # Invalidate all other devices and check that the target device is valid
         status = self.device2state[state]
@@ -300,7 +303,12 @@ class DataStatus:
                 assert (
                     self.get_data_state(device, state) != DataState.MOVING
                 ), f"Task {task} cannot invalidate data that is moving. Status: {status}"
-                self.set_data_state(device, state, DataState.NONE)
+                prev_state = self.set_data_state(device, state, DataState.NONE)
+
+                if prev_state == DataState.VALID:
+                    evicted_locations.append(device)
+
+        return old_state, evicted_locations
 
     def read(
         self,
@@ -348,7 +356,7 @@ class DataStatus:
         update: bool = False,
         initial: bool = False,
         verbose: bool = False,
-    ) -> Optional[DataState]:
+    ) -> Tuple[Optional[DataState], List[Device]]:
         if logger.ENABLE_LOGGING:
             logger.data.debug(
                 f"Using data on device {target_device} from task {task}",
@@ -356,6 +364,7 @@ class DataStatus:
             )
 
         if operation == AccessType.READ:
+            evicted_locations = []
             old_state = self.read(
                 task=task,
                 target_device=target_device,
@@ -369,7 +378,7 @@ class DataStatus:
             # Assume that this means data usage
             # for compute thats this means that the data must be valid
             # before this is called
-            old_state = self.write(
+            old_state, evicted_locations = self.write(
                 task=task,
                 target_device=target_device,
                 state=state,
@@ -382,7 +391,7 @@ class DataStatus:
             # Assume that this means data creation
             # The write is always valid and evicts all other data
 
-            old_state = self.write(
+            old_state, evicted_locations = self.write(
                 task=task,
                 target_device=target_device,
                 state=state,
@@ -395,7 +404,7 @@ class DataStatus:
 
         self.add_task(target_device, task, TaskStateToUse[state])
 
-        return old_state
+        return old_state, evicted_locations
 
     def finish_use(
         self,
@@ -539,10 +548,11 @@ class SimulatedData:
         operation: AccessType,
         update: bool = False,
         verbose: bool = False,
-    ):
-        self.status.start_use(
+    ) -> Tuple[Optional[DataState], List[Device]]:
+        old_state, evicted_locations = self.status.start_use(
             task, target_device, state, operation, update=update, verbose=verbose
         )
+        return old_state, evicted_locations
 
     def finish_use(
         self,
