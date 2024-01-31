@@ -108,6 +108,11 @@ class SimulatedScheduler:
                 # Update Log
                 self.record(event)
 
+        self.state.finalize_stats()
+
         print(f"Event Count: {event_count}")
         if not self.mechanisms.complete(self.state):
             raise RuntimeError("Scheduler terminated without completing all tasks.")
+
+        for device in self.state.topology.devices:
+            print(f"Device {device.name}: {device.stats.idle_time}")

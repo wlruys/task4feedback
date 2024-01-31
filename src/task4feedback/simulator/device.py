@@ -105,6 +105,9 @@ class ResourceSet:
 
 @dataclass(slots=True)
 class DeviceStats:
+    active_movement: int = 0
+    active_compute: int = 0
+
     last_active_compute: Time = field(default_factory=Time)
     last_active_movement: Time = field(default_factory=Time)
 

@@ -1,4 +1,4 @@
-from .types import *
+from ..types import *
 import re
 
 #########################################
@@ -10,6 +10,7 @@ class LogState(IntEnum):
     """
     Specifies the meaning of a log line. Used for parsing the log file.
     """
+
     ADDING_DEPENDENCIES = 0
     ADD_CONSTRAINT = 1
     ASSIGNED_TASK = 2
@@ -19,11 +20,12 @@ class LogState(IntEnum):
     COMPLETED_TASK = 6
     UNKNOWN = 7
 
-task_filter = re.compile(r'InnerTask\{ .*? \}')
+
+task_filter = re.compile(r"InnerTask\{ .*? \}")
 
 
 def get_time(line: str) -> int:
-    logged_time = line.split('>>')[0].strip().strip("\`").strip('[]')
+    logged_time = line.split(">>")[0].strip().strip("\`").strip("[]")
     return int(logged_time)
 
 
@@ -47,45 +49,46 @@ def check_log_line(line: str) -> int:
 
 
 def convert_task_id(task_id: str, instance: int = 0) -> TaskID:
-    id = task_id.strip().split('_')
+    id = task_id.strip().split("_")
     taskspace = id[0]
     task_idx = tuple([int(i) for i in id[1:]])
     return TaskID(taskspace, task_idx, int(instance))
 
 
 def get_task_properties(line: str):
-    message = line.split('>>')[1].strip()
+    message = line.split(">>")[1].strip()
     tasks = re.findall(task_filter, message)
     tprops = []
     for task in tasks:
         properties = {}
-        task = task.strip('InnerTask{').strip('}').strip()
-        task_properties = task.split(',')
+        task = task.strip("InnerTask{").strip("}").strip()
+        task_properties = task.split(",")
         for prop in task_properties:
-            prop_name, prop_value = prop.strip().split(':')
+            prop_name, prop_value = prop.strip().split(":")
             properties[prop_name] = prop_value.strip()
 
         # If ".dm." is in the task name, ignore it since
         # this is a data movement task.
         # TODO(hc): we may need to verify data movemnt task too.
-        if ".dm." in properties['name']:
+        if ".dm." in properties["name"]:
             continue
 
-        properties['name'] = convert_task_id(
-            properties['name'], properties['instance'])
+        properties["name"] = convert_task_id(properties["name"], properties["instance"])
 
         tprops.append(properties)
 
     return tprops
 
 
-def parse_blog(filename: str = 'parla.blog') -> Tuple[Dict[TaskID, TaskTime],  Dict[TaskID, List[TaskID]]]:
-
+def parse_blog(
+    filename: str = "parla.blog",
+) -> Tuple[Dict[TaskID, TaskTime], Dict[TaskID, List[TaskID]]]:
     try:
         result = subprocess.run(
-            ['bread', '-s', r"-f `[%r] >> %m`", filename], stdout=subprocess.PIPE)
+            ["bread", "-s", r"-f `[%r] >> %m`", filename], stdout=subprocess.PIPE
+        )
 
-        output = result.stdout.decode('utf-8')
+        output = result.stdout.decode("utf-8")
     except subprocess.CalledProcessError as e:
         raise Exception(e.output)
 
@@ -119,14 +122,12 @@ def parse_blog(filename: str = 'parla.blog') -> Tuple[Dict[TaskID, TaskTime],  D
 
             task_properties = task_properties[0]
 
-            task_start_times[task_properties['name']] = start_time
-            task_start_order.append(task_properties['name'])
+            task_start_times[task_properties["name"]] = start_time
+            task_start_order.append(task_properties["name"])
 
-            current_name = task_properties['name']
+            current_name = task_properties["name"]
 
-            base_name = TaskID(current_name.taskspace,
-                               current_name.task_idx,
-                               0)
+            base_name = TaskID(current_name.taskspace, current_name.task_idx, 0)
 
             if base_name in final_instance_map:
                 if current_name.instance > final_instance_map[base_name].instance:
@@ -146,10 +147,8 @@ def parse_blog(filename: str = 'parla.blog') -> Tuple[Dict[TaskID, TaskTime],  D
 
             task_properties = task_properties[0]
 
-            current_name = task_properties['name']
-            base_name = TaskID(current_name.taskspace,
-                               current_name.task_idx,
-                               0)
+            current_name = task_properties["name"]
+            base_name = TaskID(current_name.taskspace, current_name.task_idx, 0)
 
             task_runahead_times[base_name] = runahead_time
             task_runahead_order.append(base_name)
@@ -163,10 +162,8 @@ def parse_blog(filename: str = 'parla.blog') -> Tuple[Dict[TaskID, TaskTime],  D
 
             task_properties = task_properties[0]
 
-            current_name = task_properties['name']
-            base_name = TaskID(current_name.taskspace,
-                               current_name.task_idx,
-                               0)
+            current_name = task_properties["name"]
+            base_name = TaskID(current_name.taskspace, current_name.task_idx, 0)
 
             task_end_times[base_name] = end_time
             task_end_order.append(base_name)
@@ -179,14 +176,12 @@ def parse_blog(filename: str = 'parla.blog') -> Tuple[Dict[TaskID, TaskTime],  D
                 continue
 
             notifying_task = task_properties[0]
-            current_name = notifying_task['name']
-            current_state = notifying_task['get_state']
-            instance = notifying_task['instance']
+            current_name = notifying_task["name"]
+            current_state = notifying_task["get_state"]
+            instance = notifying_task["instance"]
 
             if int(instance) > 0:
-                base_name = TaskID(current_name.taskspace,
-                                   current_name.task_idx,
-                                   0)
+                base_name = TaskID(current_name.taskspace, current_name.task_idx, 0)
                 task_states[base_name] += [current_state]
 
             task_states[current_name] += [current_state]
@@ -200,10 +195,8 @@ def parse_blog(filename: str = 'parla.blog') -> Tuple[Dict[TaskID, TaskTime],  D
 
             task_properties = task_properties[0]
 
-            current_name = task_properties['name']
-            base_name = TaskID(current_name.taskspace,
-                               current_name.task_idx,
-                               0)
+            current_name = task_properties["name"]
+            base_name = TaskID(current_name.taskspace, current_name.task_idx, 0)
 
             task_assigned_times[base_name] = assigned_time
 
@@ -213,11 +206,11 @@ def parse_blog(filename: str = 'parla.blog') -> Tuple[Dict[TaskID, TaskTime],  D
             if task_properties[0]["is_data_task"] == "1":
                 continue
 
-            current_task = task_properties[0]['name']
+            current_task = task_properties[0]["name"]
             current_dependencies = []
 
             for d in task_properties[1:]:
-                dependency = d['name']
+                dependency = d["name"]
                 current_dependencies.append(dependency)
 
             task_dependencies[current_task] = current_dependencies

@@ -164,3 +164,12 @@ class SystemState:
     ):
         # Check the status of a task
         raise NotImplementedError()
+
+    def finalize_stats(self):
+        raise NotImplementedError()
+
+    def launch_stats(self, task: SimulatedTask):
+        raise NotImplementedError()
+
+    def completion_stats(self, task: SimulatedTask):
+        raise NotImplementedError()

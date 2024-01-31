@@ -46,6 +46,9 @@ class Time:
     unit: str = "us"
     display_unit: str = "us"
 
+    def __post_init__(self):
+        assert self.duration >= 0, f"Time cannot be negative: {self.duration}"
+
     def scale_between(self, target_unit: str) -> int | Fraction | Decimal:
         if target_unit not in time_units:
             raise ValueError(f"Invalid time unit: {target_unit}")
@@ -80,6 +83,14 @@ class Time:
         else:
             raise TypeError(f"Invalid type for Time.__add__: {type(other)}:{other}")
 
+    def __sub__(self, other):
+        if isinstance(other, Time) and self.unit == other.unit:
+            return Time(self.duration - other.duration)
+        elif isinstance(other, int):
+            return Time(self.duration - other)
+        else:
+            raise TypeError(f"Invalid type for Time.__sub__: {type(other)}:{other}")
+
     def __iadd__(self, other):
         if isinstance(other, Time) and self.unit == other.unit:
             self.duration += other.duration
@@ -87,6 +98,16 @@ class Time:
             self.duration += other
         else:
             raise TypeError(f"Invalid type for Time.__add__: {type(other)}:{other}")
+        return self
+
+    def __isub__(self, other):
+        if isinstance(other, Time) and self.unit == other.unit:
+            self.duration -= other.duration
+        elif isinstance(other, int):
+            self.duration -= other
+        else:
+            raise TypeError(f"Invalid type for Time.__sub__: {type(other)}:{other}")
+        assert self.duration >= 0, f"Time cannot be negative: {self.duration}"
         return self
 
     def __eq__(self, __value: object) -> bool:

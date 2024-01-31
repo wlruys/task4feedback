@@ -105,6 +105,7 @@ def launch_task(
             scheduler_state.use_data(phase, task, verbose=verbose)
             task.duration = duration
             task.completion_time = completion_time
+            scheduler_state.launch_stats(task)
             return True
         if logger.ENABLE_LOGGING:
             logger.runtime.debug(
@@ -128,6 +129,7 @@ def complete_task(
 
     scheduler_state.release_data(phase, task, verbose=verbose)
     scheduler_state.release_resources(phase, task, verbose=verbose)
+    scheduler_state.completion_stats(task)
 
     return True
 

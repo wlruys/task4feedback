@@ -317,6 +317,7 @@ class SimulatedDataTask(SimulatedTask):
     type: TaskType = TaskType.DATA
     source: Optional[Device] = None
     local_index: int = 0
+    real: bool = True
 
     def set_resources(self, devices: Devices):
         self.resources.append(ResourceSet(vcus=0, memory=0, copy=1))

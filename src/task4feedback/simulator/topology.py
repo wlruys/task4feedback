@@ -411,9 +411,9 @@ def generate_4gpus_1cpu_toplogy(
         CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
     else:
         # Default configuration for testing
-        P2P_BW = 200
-        H2D_BW = 100
-        D2H_BW = 100
+        P2P_BW = 2e6
+        H2D_BW = 1e6
+        D2H_BW = 1e6
 
         GPU_MEM = parse_size("16 GB")
         CPU_MEM = parse_size("130 GB")
