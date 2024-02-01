@@ -256,6 +256,16 @@ class DataStatus:
                         f"Cannot write while a device {device} that is using that data. Status: {status}"
                     )
 
+    def evict(
+        self,
+        task: TaskID,
+        target_device: Device,
+        state: TaskState,
+        verify: bool = False,
+        verbose: bool = False,
+    ) -> Tuple[DataState, List[Device]]:
+        raise NotImplementedError()
+
     def write(
         self,
         task: TaskID,

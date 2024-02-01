@@ -7,6 +7,30 @@ import networkx as nx
 from .topology import *
 
 
+def summarize_dependencies(taskmap: TaskMap | SimulatedTaskMap):
+    @dataclass(slots=True)
+    class DependencySummary:
+        read: List[DataID]
+        write: List[DataID]
+        read_write: List[DataID]
+        depends_on: List[TaskID]
+
+    summarized = {}
+
+    for task in taskmap.values():
+        if isinstance(task, SimulatedTask):
+            task = task.info
+
+        read = [d.id for d in task.data_dependencies.read]
+        write = [d.id for d in task.data_dependencies.write]
+        read_write = [d.id for d in task.data_dependencies.read_write]
+        depends_on = task.dependencies
+
+        summarized[task.id] = DependencySummary(read, write, read_write, depends_on)
+
+    return summarized
+
+
 def data_from_task(task: TaskInfo, access: AccessType) -> List[DataID]:
     return [d.id for d in task.data_dependencies[access]]
 
@@ -205,7 +229,7 @@ def combine_task_graphs(
 
 
 def create_sim_graph(
-    tasks: TaskMap, data: DataMap, use_data: bool = False
+    tasks: TaskMap, data: DataMap, use_data: bool = True
 ) -> Tuple[List[TaskID], SimulatedTaskMap]:
     compute_tasks = create_task_graph(tasks)
     if use_data:

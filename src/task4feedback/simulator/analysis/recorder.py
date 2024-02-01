@@ -4,7 +4,7 @@ from fractions import Fraction
 
 from ..events import *
 from ..queue import EventPair
-from ..data import SimulatedData
+from ..data import SimulatedData, DataState
 from ..device import SimulatedDevice, ResourceSet, ResourceType
 from ..schedulers import SchedulerArchitecture, SystemState
 from ..task import *
@@ -39,6 +39,14 @@ class Recorder:
     ):
         raise NotImplementedError()
 
+    def finalize(
+        self,
+        time: Time,
+        arch_state: SchedulerArchitecture,
+        system_state: SystemState,
+    ):
+        pass
+
 
 @dataclass(slots=True)
 class RecorderList:
@@ -60,6 +68,15 @@ class RecorderList:
     ):
         for recorder in self.recorders:
             recorder.save(time, arch_state, system_state, current_event, new_events)
+
+    def finalize(
+        self,
+        time: Time,
+        arch_state: SchedulerArchitecture,
+        system_state: SystemState,
+    ):
+        for recorder in self.recorders:
+            recorder.finalize(time, arch_state, system_state)
 
 
 @dataclass(slots=True)
@@ -228,8 +245,8 @@ class EventRecorder(Recorder):
 class TaskRecord:
     name: TaskID
     type: TaskType = TaskType.COMPUTE
-    start_time: int = 0
-    end_time: int = 0
+    start_time: Time = Time(0)
+    end_time: Time = Time(0)
     devices: Optional[Devices] = None
 
 
@@ -242,8 +259,8 @@ class ComputeTaskRecord:
 class DataTaskRecord:
     name: TaskID
     type: TaskType = TaskType.DATA
-    start_time: int = 0
-    end_time: int = 0
+    start_time: Time = Time(0)
+    end_time: Time = Time(0)
     devices: Optional[Devices] = None
     source: Optional[Device] = None
     data: Optional[DataID] = None
@@ -265,17 +282,17 @@ class ComputeTaskRecorder(Recorder):
         if isinstance(current_event, TaskCompleted):
             name = current_event.task
             task = system_state.objects.get_task(name)
-            current_time = system_state.time
+            current_time = Time(system_state.time.duration)
 
             if isinstance(task, SimulatedComputeTask):
                 if name not in self.tasks:
                     self.tasks[name] = TaskRecord(
                         name,
-                        end_time=current_time.duration,
+                        end_time=current_time,
                         devices=task.assigned_devices,
                     )
                 else:
-                    self.tasks[name].end_time = current_time.duration
+                    self.tasks[name].end_time = current_time
 
         for event_pair in new_events:
             event = event_pair[1]
@@ -283,16 +300,16 @@ class ComputeTaskRecorder(Recorder):
                 name = event.task
                 task = system_state.objects.get_task(name)
                 if isinstance(task, SimulatedComputeTask):
-                    current_time = system_state.time
+                    current_time = Time(system_state.time.duration)
 
                     if name not in self.tasks:
                         self.tasks[name] = TaskRecord(
                             name,
-                            start_time=current_time.duration,
+                            start_time=current_time,
                             devices=task.assigned_devices,
                         )
                     else:
-                        self.tasks[name].start_time = current_time.duration
+                        self.tasks[name].start_time = current_time
 
 
 @dataclass(slots=True)
@@ -310,7 +327,7 @@ class DataTaskRecorder(Recorder):
         if isinstance(current_event, TaskCompleted):
             name = current_event.task
             task = system_state.objects.get_task(name)
-            current_time = system_state.time
+            current_time = Time(system_state.time.duration)
 
             if isinstance(task, SimulatedDataTask):
                 if name not in self.tasks:
@@ -320,12 +337,12 @@ class DataTaskRecorder(Recorder):
 
                     self.tasks[name] = DataTaskRecord(
                         name,
-                        end_time=current_time.duration,
+                        end_time=current_time,
                         devices=task.assigned_devices,
                         source=task.source,
                     )
                 else:
-                    self.tasks[name].end_time = current_time.duration
+                    self.tasks[name].end_time = current_time
 
         for event_pair in new_events:
             event = event_pair[1]
@@ -333,7 +350,7 @@ class DataTaskRecorder(Recorder):
                 name = event.task
                 task = system_state.objects.get_task(name)
                 if isinstance(task, SimulatedDataTask):
-                    current_time = system_state.time
+                    current_time = Time(system_state.time.duration)
 
                     if name not in self.tasks:
                         data_id = task.read_accesses[0].id
@@ -342,11 +359,129 @@ class DataTaskRecorder(Recorder):
 
                         self.tasks[name] = DataTaskRecord(
                             name,
-                            start_time=current_time.duration,
+                            start_time=current_time,
                             devices=task.assigned_devices,
                             source=task.source,
                             data=data_id,
                             data_size=data_size,
                         )
                     else:
-                        self.tasks[name].start_time = current_time.duration
+                        self.tasks[name].start_time = current_time
+
+
+@dataclass(slots=True)
+class ValidInterval:
+    name: DataID
+    start_time: Optional[Time]
+    end_time: Optional[Time]
+
+
+@dataclass(slots=True)
+class DataValidRecorder(Recorder):
+    valid: Dict[DataID, Dict[Device, bool]] = field(default_factory=dict)
+    current_interval: Dict[DataID, Dict[Device, ValidInterval]] = field(
+        default_factory=dict
+    )
+    intervals: Dict[DataID, Dict[Device, List[ValidInterval]]] = field(
+        default_factory=dict
+    )
+    phase: TaskState = TaskState.LAUNCHED
+
+    def __post_init__(self):
+        self.valid = {}
+
+    def save(
+        self,
+        time: Time,
+        arch_state: SchedulerArchitecture,
+        system_state: SystemState,
+        current_event: Event,
+        new_events: Sequence[EventPair],
+    ):
+        time = Time(system_state.time.duration)
+
+        for data in system_state.objects.datamap.values():
+            data_id = data.name
+
+            if data_id not in self.valid:
+                self.valid[data_id] = {}
+
+            if data_id not in self.intervals:
+                self.intervals[data_id] = {}
+
+            if data_id not in self.current_interval:
+                self.current_interval[data_id] = {}
+
+            valid_sources_ids = data.get_devices_from_states(
+                [TaskState.LAUNCHED], [DataState.VALID]
+            )
+
+            for device in system_state.topology.devices:
+                device = device.name
+                if device not in self.valid[data_id]:
+                    self.valid[data_id][device] = False
+
+                if device not in self.intervals[data_id]:
+                    self.intervals[data_id][device] = []
+
+                if device in valid_sources_ids:
+                    old = self.valid[data_id][device]
+                    self.valid[data_id][device] = True
+
+                    if old is False:
+                        if data_id in self.current_interval:
+                            if device in self.current_interval[data_id]:
+                                current_interval = self.current_interval[data_id][
+                                    device
+                                ]
+                                self.intervals[data_id][device].append(current_interval)
+
+                        self.current_interval[data_id][device] = ValidInterval(
+                            name=data_id, start_time=time, end_time=None
+                        )
+
+                else:
+                    old = self.valid[data_id][device]
+                    self.valid[data_id][device] = False
+                    create_flag = False
+                    if old is True:
+                        # print("Ending interval", data_id, device)
+                        if data_id in self.current_interval:
+                            if device in self.current_interval[data_id]:
+                                current_interval = self.current_interval[data_id][
+                                    device
+                                ]
+                                if current_interval.start_time is not None:
+                                    current_interval.end_time = time
+                                # print(
+                                #     "Internal Ending interval",
+                                #     data_id,
+                                #     device,
+                                #     current_interval,
+                                # )
+                            else:
+                                create_flag = True
+                        else:
+                            create_flag = True
+
+                        if create_flag:
+                            # print("Creating new interval", data_id, device)
+                            current_interval = ValidInterval(
+                                name=data_id, start_time=Time(0), end_time=time
+                            )
+                            self.current_interval[data_id][device] = current_interval
+
+    def finalize(
+        self,
+        time: Time,
+        arch_state: SchedulerArchitecture,
+        system_state: SystemState,
+    ):
+        # print("Before finalize")
+        # print(self)
+        for data_id in self.current_interval:
+            for device in self.current_interval[data_id]:
+                current_interval = self.current_interval[data_id][device]
+                if current_interval.end_time is None:
+                    current_interval.end_time = time
+                self.intervals[data_id][device].append(current_interval)

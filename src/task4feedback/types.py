@@ -13,7 +13,7 @@ from typing import (
 )
 from dataclasses import dataclass, field, InitVar
 from enum import IntEnum
-
+from functools import total_ordering
 from collections import defaultdict
 
 from fractions import Fraction
@@ -40,6 +40,7 @@ time_scale: List[int | Fraction] = [
 ]
 
 
+@total_ordering
 @dataclass(slots=True)
 class Time:
     duration: int = 0
@@ -184,6 +185,7 @@ class AccessType(IntEnum):
     READ = 0
     WRITE = 1
     READ_WRITE = 2
+    EVICT = 3
 
 
 @dataclass(slots=True)
@@ -401,6 +403,7 @@ class TaskType(IntEnum):
     BASE = -1
     COMPUTE = 0
     DATA = 1
+    EVICTION = 2
 
 
 class ResourceType(IntEnum):

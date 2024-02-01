@@ -89,13 +89,13 @@ class ResourceSet:
 
     def __lt__(self, other: Self) -> bool:
         for key in other.store:
-            if self.store[key] > other.store[key]:
+            if self.store[key] >= other.store[key]:
                 return False
         return True
 
     def __le__(self, other: Self) -> bool:
         for key in other.store:
-            if self.store[key] >= other.store[key]:
+            if self.store[key] > other.store[key]:
                 return False
         return True
 
@@ -114,6 +114,18 @@ class ResourceSet:
             string += f"{resource_names[key]}={self.store[key]} "
         string += ")"
         return string
+
+    def __add__(self, other: Self):
+        return ResourceSet(0, 0, 0).add_all(self).add_all(other)
+
+    def __sub__(self, other: Self):
+        return ResourceSet(0, 0, 0).add_all(self).subtract_all(other)
+
+    def __iadd__(self, other: Self) -> Self:
+        return self.add_all(other)
+
+    def __isub__(self, other: Self) -> Self:
+        return self.subtract_all(other)
 
 
 @dataclass(slots=True)

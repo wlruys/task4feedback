@@ -7,7 +7,7 @@ from .resources import *
 from .task import *
 from .topology import *
 
-from ..types import Architecture, Device, TaskID, TaskState, TaskType, Time
+from ..types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
 from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 
 from typing import List, Dict, Set, Tuple, Optional, Callable
@@ -18,7 +18,7 @@ from .schedulers import *
 
 from rich import print
 
-from .analysis.recorder import RecorderList
+from .analysis.recorder import RecorderList, Recorder
 
 
 @dataclass(slots=True)
@@ -60,6 +60,18 @@ class SimulatedScheduler:
 
     def register_datamap(self, datamap: SimulatedDataMap):
         self.state.register_data(datamap)
+
+    @property
+    def taskmap(self):
+        return self.state.objects.taskmap
+
+    @property
+    def datamap(self):
+        return self.state.objects.datamap
+
+    @property
+    def devicemap(self):
+        return self.state.objects.devicemap
 
     def add_initial_tasks(self, tasks: List[TaskID]):
         self.tasks.extend(tasks)
@@ -111,6 +123,7 @@ class SimulatedScheduler:
                 self.record(event, new_events)
 
         self.state.finalize_stats()
+        self.recorders.finalize(self.time, self.mechanisms, self.state)
 
         print(f"Event Count: {event_count}")
         if not self.mechanisms.complete(self.state):

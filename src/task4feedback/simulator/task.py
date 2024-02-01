@@ -329,6 +329,11 @@ class SimulatedDataTask(SimulatedTask):
         return [ResourceSet(vcus=0, memory=0, copy=1)]
 
 
+@dataclass(slots=True)
+class SimulatedEvictionTask(SimulatedDataTask):
+    type: TaskType = TaskType.EVICTION
+
+
 type SimulatedTaskMap = Mapping[
     TaskID, SimulatedTask | SimulatedComputeTask | SimulatedDataTask
 ]

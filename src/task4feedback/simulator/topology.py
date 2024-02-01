@@ -375,6 +375,16 @@ class TopologyManager:
             raise ValueError(f"Topology {name} is not registered.")
         return TopologyManager.generator_map[name]
 
+    @staticmethod
+    def generate(
+        name: str, config: Optional[Dict[str, int]] = None
+    ) -> SimulatedTopology:
+        """
+        Generate a topology.
+        """
+        generator = TopologyManager.get_generator(name)
+        return generator(config)
+
 
 @TopologyManager.register_generator("frontera")
 def generate_4gpus_1cpu_toplogy(

@@ -29,7 +29,6 @@ def get_required_memory_for_data(
     access_type: AccessType,
 ) -> int:
     data = objects.get_data(data_id)
-    print(phase, device, data_id, data.is_valid(device, phase))
     if is_valid := data.is_valid(device, phase) and (
         access_type == AccessType.READ or access_type == AccessType.READ_WRITE
     ):
@@ -513,19 +512,12 @@ def _use_data(
         if phase == TaskState.LAUNCHED:
             for device in evicted_locations:
                 for pool in [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED]:
-                    print(
-                        f"Evicting data {data.name} from device {device} in pool {pool}"
-                    )
-                    print("Before eviction")
-                    print(state.resource_pool.pool[device][pool])
                     state.resource_pool.remove_device_resources(
                         device,
                         pool,
                         [ResourceType.MEMORY],
                         ResourceSet(memory=data.size, vcus=0, copy=0),
                     )
-                    print("After eviction")
-                    print(state.resource_pool.pool[device][pool])
 
 
 def _release_data(
