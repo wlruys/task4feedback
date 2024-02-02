@@ -10,10 +10,13 @@ from task4feedback.simulator.preprocess import *
 from task4feedback.simulator.simulator import *
 from task4feedback.simulator.topology import *
 
+from task4feedback.simulator.analysis.recorder import *
+from task4feedback.simulator.analysis.plot import *
+from task4feedback.simulator.interface import *
 from time import perf_counter as clock
 
 
-def test_serial():
+def test_data():
     cpu = Device(Architecture.CPU, 0)
     gpu0 = Device(Architecture.GPU, 0)
     gpu1 = Device(Architecture.GPU, 1)
@@ -22,7 +25,7 @@ def test_serial():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 1
+        return 100
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         if task_id.task_idx[0] % 2 == 0:
@@ -40,35 +43,31 @@ def test_serial():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = ChainConfig(steps=10, chains=1, task_config=task_placement)
+    config = ChainConfig(steps=3, chains=1, task_config=task_placement)
 
     tasks, data = make_graph(config, data_config=data_config)
 
-    tasklist, task_map = create_sim_graph(tasks, data, use_data=True)
+    topology = TopologyManager().generate("frontera", config=None)
 
-    # print(task_map)
-
-    topology = TopologyManager().get_generator("frontera")(None)
-    data_map = create_data_objects(data, topology=topology)
-    # print(data_map)
-
-    scheduler = SimulatedScheduler(topology=topology, scheduler_type="parla")
-    scheduler.register_taskmap(task_map)
-    scheduler.register_datamap(data_map)
-
-    topological_sort(tasklist, task_map)
-    print(tasklist)
-
-    scheduler.add_initial_tasks(tasklist)
-
-    # print(task_map)
+    simulator_config = SimulatorConfig(
+        topology=topology,
+        tasks=tasks,
+        data=data,
+        scheduler_type="parla",
+        recorders=[DataValidRecorder],
+    )
+    simulator = create_simulator(config=simulator_config)
 
     start_t = clock()
-    scheduler.run()
+    simulator.run()
     end_t = clock()
-    print(f"Time: {end_t - start_t}")
 
-    print(scheduler.time)
+    print(f"Time to Simulate: {end_t - start_t}")
+    print(f"Simulated Time: {simulator.time}")
+
+    intervals = simulator.recorders.recorders[0].intervals
+
+    make_plot(simulator.recorders.recorders[0])
 
 
-test_serial()
+test_data()
