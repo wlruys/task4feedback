@@ -113,8 +113,8 @@ def _check_nearest_source(
     device = state.objects.get_device(device_id)
     assert device is not None
 
-    valid_sources_ids = data.get_devices_from_states(
-        [TaskState.LAUNCHED], [DataState.VALID]
+    valid_sources_ids = data.get_device_set_from_states(
+        TaskState.LAUNCHED, DataState.VALID
     )
     valid_sources = [state.objects.get_device(d) for d in valid_sources_ids]
 

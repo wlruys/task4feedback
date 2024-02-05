@@ -248,6 +248,9 @@ class TaskRecord:
     start_time: Time = Time(0)
     end_time: Time = Time(0)
     devices: Optional[Devices] = None
+    read_data: List[DataID] = field(default_factory=list)
+    write_data: List[DataID] = field(default_factory=list)
+    read_write_data: List[DataID] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -290,6 +293,9 @@ class ComputeTaskRecorder(Recorder):
                         name,
                         end_time=current_time,
                         devices=task.assigned_devices,
+                        read_data=[d.id for d in task.read_accesses],
+                        write_data=[d.id for d in task.write_accesses],
+                        read_write_data=[d.id for d in task.read_write_accesses],
                     )
                 else:
                     self.tasks[name].end_time = current_time
@@ -307,6 +313,9 @@ class ComputeTaskRecorder(Recorder):
                             name,
                             start_time=current_time,
                             devices=task.assigned_devices,
+                            read_data=[d.id for d in task.read_accesses],
+                            write_data=[d.id for d in task.write_accesses],
+                            read_write_data=[d.id for d in task.read_write_accesses],
                         )
                     else:
                         self.tasks[name].start_time = current_time
@@ -374,6 +383,125 @@ class ValidInterval:
     name: DataID
     start_time: Optional[Time]
     end_time: Optional[Time]
+
+
+@dataclass(slots=True)
+class FasterDataValidRecorder(Recorder):
+    valid: Dict[DataID, Dict[Device, bool]] = field(default_factory=dict)
+    current_interval: Dict[DataID, Dict[Device, Optional[ValidInterval]]] = field(
+        default_factory=dict
+    )
+    intervals: Dict[DataID, Dict[Device, List[ValidInterval]]] = field(
+        default_factory=dict
+    )
+
+    def _update_valid(self, time: Time, valid_locations: Set[Device], data_id: DataID):
+        for device, old_value in self.valid[data_id].items():
+            if device in valid_locations:
+                if old_value is False:
+                    # Start a new interval
+                    current_interval = ValidInterval(
+                        name=data_id, start_time=time, end_time=None
+                    )
+                    self.current_interval[data_id][device] = current_interval
+
+                self.valid[data_id][device] = True
+            else:
+                if old_value is True:
+                    # End the current interval
+                    current_interval = self.current_interval[data_id][device]
+
+                    assert (
+                        current_interval is not None
+                    ), f"Cannot end an interval that does not exist. {time} {data_id} {device}"
+
+                    current_interval.end_time = time
+                    self.intervals[data_id][device].append(current_interval)
+                    self.current_interval[data_id][device] = None
+
+                self.valid[data_id][device] = False
+
+    def save(
+        self,
+        time: Time,
+        arch_state: SchedulerArchitecture,
+        system_state: SystemState,
+        current_event: Event,
+        new_events: Sequence[EventPair],
+    ):
+        time = Time(system_state.time.duration)
+
+        if len(self.valid) == 0:
+            # Record the initial state of the data
+            for data in system_state.objects.datamap.values():
+                data_id = data.name
+
+                self.valid[data_id] = {}
+                self.intervals[data_id] = {}
+                self.current_interval[data_id] = {}
+
+                valid_sources_ids = data.get_device_set_from_states(
+                    TaskState.LAUNCHED, DataState.VALID
+                )
+
+                for device in system_state.topology.devices:
+                    device_id = device.name
+                    self.intervals[data_id][device_id] = []
+
+                    if device_id not in self.valid[data_id]:
+                        self.valid[data_id][device_id] = False
+                        self.current_interval[data_id][device_id] = None
+
+                    else:
+                        self.valid[data_id][device.name] = True
+                        current_interval = ValidInterval(
+                            name=data_id, start_time=time, end_time=None
+                        )
+                        self.current_interval[data_id][device.name] = current_interval
+        else:
+            data_set = set()
+            if isinstance(current_event, TaskCompleted):
+                taskid = current_event.task
+                task = system_state.objects.get_task(taskid)
+                data_set.update(data_access.id for data_access in task.read_accesses)
+                data_set.update(data_access.id for data_access in task.write_accesses)
+                data_set.update(
+                    data_access.id for data_access in task.read_write_accesses
+                )
+            elif isinstance(current_event, Launcher):
+                for completion_time, new_event in new_events:
+                    if isinstance(new_event, TaskCompleted):
+                        task = system_state.objects.get_task(new_event.task)
+                        data_set.update(
+                            data_access.id for data_access in task.read_accesses
+                        )
+                        data_set.update(
+                            data_access.id for data_access in task.write_accesses
+                        )
+                        data_set.update(
+                            data_access.id for data_access in task.read_write_accesses
+                        )
+
+            for data_id in data_set:
+                data = system_state.objects.get_data(data_id)
+                valid_sources_ids = data.get_device_set_from_states(
+                    TaskState.LAUNCHED, DataState.VALID
+                )
+                self._update_valid(time, valid_sources_ids, data_id)
+
+    def finalize(
+        self,
+        time: Time,
+        arch_state: SchedulerArchitecture,
+        system_state: SystemState,
+    ):
+        # End all current intervals
+        for data_id in self.current_interval:
+            for device in self.current_interval[data_id]:
+                current_interval = self.current_interval[data_id][device]
+                if current_interval is not None:
+                    current_interval.end_time = time
+                    self.intervals[data_id][device].append(current_interval)
 
 
 @dataclass(slots=True)

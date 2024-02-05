@@ -209,9 +209,22 @@ class ConnectionPool:
         source_idx = self.get_index(source)
         target_idx = self.get_index(target)
         bandwidth = self.bandwidth[source_idx, target_idx]
-        assert bandwidth > 0, f"No known bandwidth between {source} and {target}"
-        time_in_seconds = data_size / bandwidth
-        time_in_microseconds = int(time_in_seconds * 1e6)
+        if bandwidth <= 0:
+            # If no direct connection, route through the host device
+            host_idx = self.get_index(self.host)
+            first_hop_bandwidth = self.bandwidth[source_idx, host_idx]
+            second_hop_bandwidth = self.bandwidth[host_idx, target_idx]
+            if first_hop_bandwidth <= 0 or second_hop_bandwidth <= 0:
+                raise ValueError(
+                    f"No connection between {source} and {target} or through the host"
+                )
+            time_in_seconds = (
+                data_size / first_hop_bandwidth + data_size / second_hop_bandwidth
+            )
+            time_in_microseconds = int(time_in_seconds * 1e6)
+        else:
+            time_in_seconds = data_size / bandwidth
+            time_in_microseconds = int(time_in_seconds * 1e6)
         return Time(time_in_microseconds)
 
     def get_connection_string(self, source: NamedDevice, target: NamedDevice) -> str:
@@ -421,9 +434,9 @@ def generate_4gpus_1cpu_toplogy(
         CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
     else:
         # Default configuration for testing
-        P2P_BW = 2e6
-        H2D_BW = 1e6
-        D2H_BW = 1e6
+        P2P_BW = parse_size("9 GB")  # 9 GB/s
+        H2D_BW = parse_size("7 GB")  # 7 GB/s
+        D2H_BW = parse_size("7 GB")  # 7 GB/s
 
         GPU_MEM = parse_size("16 GB")
         CPU_MEM = parse_size("130 GB")

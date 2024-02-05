@@ -54,7 +54,7 @@ def test_data():
         tasks=tasks,
         data=data,
         scheduler_type="parla",
-        recorders=[DataValidRecorder],
+        recorders=[DataValidRecorder, ComputeTaskRecorder, DataTaskRecorder],
     )
     simulator = create_simulator(config=simulator_config)
 
@@ -67,7 +67,12 @@ def test_data():
 
     intervals = simulator.recorders.recorders[0].intervals
 
-    make_plot(simulator.recorders.recorders[0])
+    make_plot(
+        simulator.recorders.recorders[0],
+        simulator.recorders.recorders[1],
+        simulator.recorders.recorders[2],
+        data_ids=[DataID(0)],
+    )
 
 
 test_data()

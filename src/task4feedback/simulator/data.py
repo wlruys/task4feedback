@@ -189,7 +189,7 @@ class DataStatus:
 
     def get_devices_from_states(
         self, states: Sequence[TaskState], data_states: Sequence[DataState]
-    ) -> Sequence[Device]:
+    ) -> List[Device]:
         devices = []
 
         for task_state in states:
@@ -618,8 +618,13 @@ class SimulatedData:
 
     def get_devices_from_states(
         self, states: Sequence[TaskState], data_states: Sequence[DataState]
-    ) -> Sequence[Device]:
+    ) -> List[Device]:
         return self.status.get_devices_from_states(states, data_states)
+
+    def get_device_set_from_states(
+        self, state: TaskState, data_state: DataState
+    ) -> Set[Device]:
+        return self.status.get_device_set_from_state(state, data_state)
 
     def get_tasks_from_usage(self, device: Device, use: DataUses) -> Sequence[TaskID]:
         return self.status.get_tasks_from_usage(device, use)

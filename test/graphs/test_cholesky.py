@@ -27,15 +27,12 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 100
+        return 32 * 1024 * 1024  # 32 MB
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
-        if task_id.task_idx[0] % 2 == 0:
-            device_tuple = (gpu0,)
-        else:
-            device_tuple = (gpu1,)
+        device_tuple = Device(Architecture.GPU, task_id.task_idx[0] % 4)
 
-        runtime_info = TaskRuntimeInfo(task_time=10000, device_fraction=1, memory=0)
+        runtime_info = TaskRuntimeInfo(task_time=4000, device_fraction=1, memory=0)
         placement_info = TaskPlacementInfo()
         placement_info.add(device_tuple, runtime_info)
 
@@ -55,7 +52,7 @@ def test_data():
         tasks=tasks,
         data=data,
         scheduler_type="parla",
-        recorders=[],
+        recorders=[FasterDataValidRecorder, ComputeTaskRecorder, DataTaskRecorder],
     )
     simulator = create_simulator(config=simulator_config)
 
@@ -77,7 +74,12 @@ def test_data():
 
     # print(simulator.recorders)
 
-    # make_plot(simulator.recorders.recorders[0])
+    make_plot(
+        simulator.recorders.recorders[0],
+        simulator.recorders.recorders[1],
+        simulator.recorders.recorders[2],
+        data_ids=[DataID((4, 1))],
+    )
 
 
 test_data()
