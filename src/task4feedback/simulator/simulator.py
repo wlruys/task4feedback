@@ -98,7 +98,7 @@ class SimulatedScheduler:
 
         return new_event_pairs
 
-    def run(self):
+    def run(self) -> Time:
         new_event_pairs = self.mechanisms.initialize(self.tasks, self.state)
         for completion_time, new_event in new_event_pairs:
             self.events.put(new_event, completion_time)
@@ -128,3 +128,5 @@ class SimulatedScheduler:
         print(f"Event Count: {event_count}")
         if not self.mechanisms.complete(self.state):
             raise RuntimeError("Scheduler terminated without completing all tasks.")
+
+        return self.time
