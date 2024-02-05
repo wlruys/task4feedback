@@ -55,18 +55,20 @@ class FasterResourceSet:
         return self
 
     def __lt__(self, other: Self) -> bool:
-        return (
+        status = (
             self.vcus < other.vcus
             and self.memory < other.memory
             and self.copy < other.copy
         )
+        return status
 
     def __le__(self, other: Self) -> bool:
-        return (
+        status = (
             self.vcus <= other.vcus
             and self.memory <= other.memory
             and self.copy <= other.copy
         )
+        return status
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Self):

@@ -40,14 +40,9 @@ class FasterResourcePool:
             }
             self.devicemap[device.name] = device
 
-    def add_device_resource(
-        self,
-        device: Device,
-        pool_state: TaskState,
-        type: ResourceGroup,
-        resources: FasterResourceSet,
-    ):
-        resource_set = self.pool[device][pool_state]
+    def _build_set(
+        self, type: ResourceGroup, resources: FasterResourceSet
+    ) -> FasterResourceSet:
         if type == ResourceGroup.PERSISTENT:
             resources = FasterResourceSet(vcus=0, memory=resources.memory, copy=0)
         elif type == ResourceGroup.NONPERSISTENT:
@@ -56,6 +51,18 @@ class FasterResourcePool:
             )
         else:
             resources = resources
+
+        return resources
+
+    def add_device_resource(
+        self,
+        device: Device,
+        pool_state: TaskState,
+        type: ResourceGroup,
+        resources: FasterResourceSet,
+    ):
+        resource_set = self.pool[device][pool_state]
+        resources = self._build_set(type, resources)
 
         resource_set += resources
         resource_set.verify()
@@ -68,14 +75,7 @@ class FasterResourcePool:
         resources: FasterResourceSet,
     ):
         resource_set = self.pool[device][pool_state]
-        if type == ResourceGroup.PERSISTENT:
-            resources = FasterResourceSet(vcus=0, memory=resources.memory, copy=0)
-        elif type == ResourceGroup.NONPERSISTENT:
-            resources = FasterResourceSet(
-                vcus=resources.vcus, memory=0, copy=resources.copy
-            )
-        else:
-            resources = resources
+        resources = self._build_set(type, resources)
 
         resource_set -= resources
         resource_set.verify()
@@ -116,21 +116,12 @@ class FasterResourcePool:
             )
         max_resources = self.devicemap[device].resources
         current_resources = self.pool[device][state]
+        proposed_resources = self._build_set(type, proposed_resources)
+        # max_resources = self._build_set(type, max_resources)
 
-        if type == ResourceGroup.PERSISTENT:
-            proposed_resources = FasterResourceSet(
-                vcus=0, memory=proposed_resources.memory, copy=0
-            )
-        elif type == ResourceGroup.NONPERSISTENT:
-            proposed_resources = FasterResourceSet(
-                vcus=proposed_resources.vcus, memory=0, copy=proposed_resources.copy
-            )
-        else:
-            proposed_resources = proposed_resources
-
-        if current_resources + proposed_resources > max_resources:
-            return False
-        return True
+        if max_resources >= (current_resources + proposed_resources):
+            return True
+        return False
 
     def check_resources(
         self,

@@ -82,6 +82,9 @@ class RecorderList:
             recorder.finalize(time, arch_state, system_state)
 
     def get(self, type: Type[Recorder]) -> Recorder:
+        if type not in self.recorder_dict:
+            raise KeyError(f"Recorder {type} not in list of recorders.")
+
         return self.recorder_dict[type]
 
 
@@ -112,6 +115,7 @@ class ResourceUsageRecorder(Recorder):
     memory_usage: Dict[Device, Dict[Time, int]] = field(default_factory=dict)
     vcu_usage: Dict[Device, Dict[Time, Fraction]] = field(default_factory=dict)
     copy_usage: Dict[Device, Dict[Time, int]] = field(default_factory=dict)
+    max_resources: Dict[Device, FasterResourceSet] = field(default_factory=dict)
 
     phase: TaskState = TaskState.RESERVED
 
@@ -124,6 +128,10 @@ class ResourceUsageRecorder(Recorder):
         new_events: Sequence[EventPair],
     ):
         resource_pool = system_state.resource_pool
+
+        if len(self.max_resources) == 0:
+            for device in system_state.topology.devices:
+                self.max_resources[device.name] = device.resources
 
         for device in resource_pool.pool:
             if device not in self.memory_usage:
@@ -173,6 +181,7 @@ class ResourceUsageListRecorder(Recorder):
     memory_usage: Dict[Device, Dict[Time, List[int]]] = field(default_factory=dict)
     vcu_usage: Dict[Device, Dict[Time, List[Fraction]]] = field(default_factory=dict)
     copy_usage: Dict[Device, Dict[Time, List[int]]] = field(default_factory=dict)
+    max_resources: Dict[Device, FasterResourceSet] = field(default_factory=dict)
 
     phase: TaskState = TaskState.RESERVED
 
@@ -185,6 +194,10 @@ class ResourceUsageListRecorder(Recorder):
         new_events: Sequence[EventPair],
     ):
         resource_pool = system_state.resource_pool
+
+        if len(self.max_resources) == 0:
+            for device in system_state.topology.devices:
+                self.max_resources[device.name] = device.resources
 
         for device in resource_pool.pool:
             if device not in self.memory_usage:
@@ -260,12 +273,12 @@ class TaskRecord:
 
 
 @dataclass(slots=True)
-class ComputeTaskRecord:
+class ComputeTaskRecord(TaskRecord):
     pass
 
 
 @dataclass(slots=True)
-class DataTaskRecord:
+class DataTaskRecord(TaskRecord):
     name: TaskID
     type: TaskType = TaskType.DATA
     start_time: Time = Time(0)
@@ -278,7 +291,7 @@ class DataTaskRecord:
 
 @dataclass(slots=True)
 class ComputeTaskRecorder(Recorder):
-    tasks: Dict[TaskID, TaskRecord] = field(default_factory=dict)
+    tasks: Dict[TaskID, ComputeTaskRecord] = field(default_factory=dict)
 
     def save(
         self,
@@ -295,8 +308,8 @@ class ComputeTaskRecorder(Recorder):
 
             if isinstance(task, SimulatedComputeTask):
                 if name not in self.tasks:
-                    self.tasks[name] = TaskRecord(
-                        name,
+                    self.tasks[name] = ComputeTaskRecord(
+                        name=name,
                         end_time=current_time,
                         devices=task.assigned_devices,
                         read_data=[d.id for d in task.read_accesses],
@@ -315,7 +328,7 @@ class ComputeTaskRecorder(Recorder):
                     current_time = Time(system_state.time.duration)
 
                     if name not in self.tasks:
-                        self.tasks[name] = TaskRecord(
+                        self.tasks[name] = ComputeTaskRecord(
                             name,
                             start_time=current_time,
                             devices=task.assigned_devices,

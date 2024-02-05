@@ -295,8 +295,6 @@ def _acquire_resources_launched(
         TaskState.LAUNCHED, task, devices, state.objects, count_data=True
     )
 
-    resource_types = StatesToResources[TaskState.LAUNCHED]
-
     state.resource_pool.add_resources(
         devices, TaskState.RESERVED, ResourceGroup.NONPERSISTENT, resources
     )
