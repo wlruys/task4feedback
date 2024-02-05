@@ -3,3 +3,9 @@
 __pycache__
 *.png
 *.yaml
+*.egg_info
+*.log
+build/
+dist/
+.zed
+.vscode/
