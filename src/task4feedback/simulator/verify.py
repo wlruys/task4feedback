@@ -60,7 +60,7 @@ def verify_resources_at_snapshot(
 ):
     current_usage = {}
     for device in devicemap.keys():
-        current_usage[device] = ResourceSet(vcus=0, memory=0, copy=0)
+        current_usage[device] = FasterResourceSet(vcus=0, memory=0, copy=0)
 
     for task in running_tasks:
         task = tasks[task]

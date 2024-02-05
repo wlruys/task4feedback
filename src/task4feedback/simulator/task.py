@@ -19,8 +19,8 @@ from typing import (
 from .queue import PriorityQueue
 from dataclasses import dataclass, field
 
-from .resources import ResourcePool
-from .device import ResourceSet
+from .resources import ResourcePool, FasterResourcePool
+from .device import ResourceSet, FasterResourceSet
 from .datapool import DataPool
 from ..logging import logger
 
@@ -104,7 +104,7 @@ class SimulatedTask:
     times: TaskTimes = field(default_factory=TaskTimes)
     counters: TaskCounters = field(init=False)
     dependents: List[TaskID] = field(default_factory=list)
-    resources: List[ResourceSet] = field(default_factory=list)
+    resources: List[FasterResourceSet] = field(default_factory=list)
     depth: int = 0
     type: TaskType = TaskType.BASE
     parent: Optional[TaskID] = None
@@ -286,7 +286,7 @@ class SimulatedTask:
 
     def get_resources(
         self, devices: Devices, data_inputs: bool = False
-    ) -> List[ResourceSet]:
+    ) -> List[FasterResourceSet]:
         raise NotImplementedError
 
     def add_data_dependency(self, task: TaskID):
@@ -304,7 +304,7 @@ class SimulatedComputeTask(SimulatedTask):
             self.data_tasks = []
         self.data_tasks.append(task)
 
-    def get_resources(self, devices: Devices) -> List[ResourceSet]:
+    def get_resources(self, devices: Devices) -> List[FasterResourceSet]:
         resources = []
 
         if isinstance(devices, Device):
@@ -313,7 +313,7 @@ class SimulatedComputeTask(SimulatedTask):
         for runtime_info in runtime_info_list:
             vcus = runtime_info.device_fraction
             memory = runtime_info.memory
-            resources.append(ResourceSet(vcus=vcus, memory=memory, copy=0))
+            resources.append(FasterResourceSet(vcus=vcus, memory=memory, copy=0))
 
         return resources
 
@@ -325,8 +325,8 @@ class SimulatedDataTask(SimulatedTask):
     local_index: int = 0
     real: bool = True
 
-    def get_resources(self, devices: Devices) -> List[ResourceSet]:
-        return [ResourceSet(vcus=0, memory=0, copy=1)]
+    def get_resources(self, devices: Devices) -> List[FasterResourceSet]:
+        return [FasterResourceSet(vcus=0, memory=0, copy=1)]
 
 
 @dataclass(slots=True)

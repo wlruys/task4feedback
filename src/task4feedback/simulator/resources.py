@@ -8,12 +8,164 @@ from ..types import (
     ResourceType,
 )
 from typing import List, Dict, Set, Tuple, Optional, Sequence
-from .device import SimulatedDevice, ResourceSet
+from enum import IntEnum
+from .device import SimulatedDevice, ResourceSet, FasterResourceSet
 from dataclasses import dataclass, InitVar, field
 
 import numpy as np
 
 NamedDevice = Device | SimulatedDevice
+
+
+class ResourceGroup(IntEnum):
+    PERSISTENT = 0
+    NONPERSISTENT = 1
+    ALL = 2
+
+
+@dataclass(slots=True)
+class FasterResourcePool:
+    devices: InitVar[Sequence[SimulatedDevice]]
+    devicemap: Dict[Device, SimulatedDevice] = field(init=False)
+    pool: Dict[Device, Dict[TaskState, FasterResourceSet]] = field(init=False)
+
+    def __post_init__(self, devices: Sequence[SimulatedDevice]):
+        self.pool = {}
+        self.devicemap = {}
+        for device in devices:
+            self.pool[device.name] = {
+                TaskState.MAPPED: FasterResourceSet(vcus=0, memory=0, copy=0),
+                TaskState.RESERVED: FasterResourceSet(vcus=0, memory=0, copy=0),
+                TaskState.LAUNCHED: FasterResourceSet(vcus=0, memory=0, copy=0),
+            }
+            self.devicemap[device.name] = device
+
+    def add_device_resource(
+        self,
+        device: Device,
+        pool_state: TaskState,
+        type: ResourceGroup,
+        resources: FasterResourceSet,
+    ):
+        resource_set = self.pool[device][pool_state]
+        if type == ResourceGroup.PERSISTENT:
+            resources = FasterResourceSet(vcus=0, memory=resources.memory, copy=0)
+        elif type == ResourceGroup.NONPERSISTENT:
+            resources = FasterResourceSet(
+                vcus=resources.vcus, memory=0, copy=resources.copy
+            )
+        else:
+            resources = resources
+
+        resource_set += resources
+        resource_set.verify()
+
+    def remove_device_resources(
+        self,
+        device: Device,
+        pool_state: TaskState,
+        type: ResourceGroup,
+        resources: FasterResourceSet,
+    ):
+        resource_set = self.pool[device][pool_state]
+        if type == ResourceGroup.PERSISTENT:
+            resources = FasterResourceSet(vcus=0, memory=resources.memory, copy=0)
+        elif type == ResourceGroup.NONPERSISTENT:
+            resources = FasterResourceSet(
+                vcus=resources.vcus, memory=0, copy=resources.copy
+            )
+        else:
+            resources = resources
+
+        resource_set -= resources
+        resource_set.verify()
+
+    def add_resources(
+        self,
+        devices: Sequence[Device],
+        state: TaskState,
+        type: ResourceGroup,
+        resources: Sequence[FasterResourceSet],
+    ):
+        for device, resource in zip(devices, resources):
+            self.add_device_resource(device, state, type, resource)
+
+    def remove_resources(
+        self,
+        devices: Sequence[Device],
+        state: TaskState,
+        type: ResourceGroup,
+        resources: Sequence[FasterResourceSet],
+    ):
+        for device, resource in zip(devices, resources):
+            self.remove_device_resources(device, state, type, resource)
+
+    def check_device_resources(
+        self,
+        device: Device,
+        state: TaskState,
+        type: ResourceGroup,
+        proposed_resources: FasterResourceSet,
+    ) -> bool:
+        if device not in self.pool:
+            return False
+
+        if state not in self.pool[device]:
+            raise ValueError(
+                f"Invalid state {state} for Device Resource Request. Valid states are {self.pool[device].keys()}"
+            )
+        max_resources = self.devicemap[device].resources
+        current_resources = self.pool[device][state]
+
+        if type == ResourceGroup.PERSISTENT:
+            proposed_resources = FasterResourceSet(
+                vcus=0, memory=proposed_resources.memory, copy=0
+            )
+        elif type == ResourceGroup.NONPERSISTENT:
+            proposed_resources = FasterResourceSet(
+                vcus=proposed_resources.vcus, memory=0, copy=proposed_resources.copy
+            )
+        else:
+            proposed_resources = proposed_resources
+
+        if current_resources + proposed_resources > max_resources:
+            return False
+        return True
+
+    def check_resources(
+        self,
+        devices: Sequence[Device],
+        state: TaskState,
+        type: ResourceGroup,
+        resources: Sequence[FasterResourceSet],
+    ) -> bool:
+        for device, resource in zip(devices, resources):
+            if not self.check_device_resources(device, state, type, resource):
+                return False
+        return True
+
+    def __str__(self) -> str:
+        return f"FasterResourcePool({self.pool})"
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __getitem__(
+        self, device: Device, state: Optional[TaskState] = None
+    ) -> Dict[TaskState, FasterResourceSet] | FasterResourceSet:
+        if state is None:
+            return self.pool[device]
+        else:
+            return self.pool[device][state]
+
+    def __setitem__(self, device: Device, state: TaskState, value: FasterResourceSet):
+        self.pool[device][state] = value
+
+    def __contains__(self, device: Device, state: TaskState) -> bool:
+        return device in self.pool and state in self.pool[device]
+
+    def print_device_status(self, device: Device):
+        print(f"Device {device} has resources: {self.pool[device]}")
 
 
 @dataclass(slots=True)

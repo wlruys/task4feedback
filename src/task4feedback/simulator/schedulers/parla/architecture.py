@@ -194,7 +194,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                         TaskState.RESERVED,
                         TaskState.LAUNCHED,
                     ]:
-                        resource_set = ResourceSet(
+                        resource_set = FasterResourceSet(
                             memory=data.info.size, vcus=0, copy=0
                         )
 
@@ -212,7 +212,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                         scheduler_state.resource_pool.add_device_resource(
                             device,
                             pool,
-                            [ResourceType.MEMORY],
+                            ResourceGroup.PERSISTENT,
                             resource_set,
                         )
 
@@ -309,7 +309,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
-                "Reserving tasks",
+                "Reserving tasks.",
                 extra=dict(time=current_time, phase=TaskState.RESERVED),
             )
 
@@ -351,7 +351,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
-                "Launching tasks",
+                "Launching tasks.",
                 extra=dict(time=current_time, phase=TaskState.LAUNCHED),
             )
 

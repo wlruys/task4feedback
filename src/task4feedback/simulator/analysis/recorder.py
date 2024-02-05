@@ -50,13 +50,16 @@ class Recorder:
 
 @dataclass(slots=True)
 class RecorderList:
+    recorder_dict: Dict[Type[Recorder], Recorder] = field(default_factory=dict)
     recorder_types: List[Type[Recorder]] = field(default_factory=list)
     recorders: List[Recorder] = field(init=False)
 
     def __post_init__(self):
         self.recorders = []
         for recorder_type in self.recorder_types:
-            self.recorders.append(recorder_type())
+            new_recorder = recorder_type()
+            self.recorders.append(new_recorder)
+            self.recorder_dict[recorder_type] = new_recorder
 
     def save(
         self,
@@ -77,6 +80,9 @@ class RecorderList:
     ):
         for recorder in self.recorders:
             recorder.finalize(time, arch_state, system_state)
+
+    def get(self, type: Type[Recorder]) -> Recorder:
+        return self.recorder_dict[type]
 
 
 @dataclass(slots=True)
@@ -102,7 +108,7 @@ class IdleTime(Recorder):
 
 
 @dataclass(slots=True)
-class ResourceUsage(Recorder):
+class ResourceUsageRecorder(Recorder):
     memory_usage: Dict[Device, Dict[Time, int]] = field(default_factory=dict)
     vcu_usage: Dict[Device, Dict[Time, Fraction]] = field(default_factory=dict)
     copy_usage: Dict[Device, Dict[Time, int]] = field(default_factory=dict)
@@ -137,33 +143,33 @@ class ResourceUsage(Recorder):
                 self.copy_usage[device][time] = 0
 
             self.memory_usage[device][time] = max(
-                resources[ResourceType.MEMORY], self.memory_usage[device][time]
+                resources.memory, self.memory_usage[device][time]
             )
             self.vcu_usage[device][time] = max(
-                resources[ResourceType.VCU], self.vcu_usage[device][time]
+                resources.vcus, self.vcu_usage[device][time]
             )
             self.copy_usage[device][time] = max(
-                resources[ResourceType.COPY], self.copy_usage[device][time]
+                resources.copy, self.copy_usage[device][time]
             )
 
 
 @dataclass(slots=True)
-class MappedResourceUsage(ResourceUsage):
+class MappedResourceUsageRecorder(ResourceUsageRecorder):
     phase: TaskState = TaskState.MAPPED
 
 
 @dataclass(slots=True)
-class ReservedResourceUsage(ResourceUsage):
+class ReservedResourceUsageRecorder(ResourceUsageRecorder):
     phase: TaskState = TaskState.RESERVED
 
 
 @dataclass(slots=True)
-class LaunchedResourceUsage(ResourceUsage):
+class LaunchedResourceUsageRecorder(ResourceUsageRecorder):
     phase: TaskState = TaskState.LAUNCHED
 
 
 @dataclass(slots=True)
-class ResourceUsageList(Recorder):
+class ResourceUsageListRecorder(Recorder):
     memory_usage: Dict[Device, Dict[Time, List[int]]] = field(default_factory=dict)
     vcu_usage: Dict[Device, Dict[Time, List[Fraction]]] = field(default_factory=dict)
     copy_usage: Dict[Device, Dict[Time, List[int]]] = field(default_factory=dict)
@@ -197,25 +203,25 @@ class ResourceUsageList(Recorder):
             if time not in self.copy_usage[device]:
                 self.copy_usage[device][time] = []
 
-            self.memory_usage[device][time].append(resources[ResourceType.MEMORY])
+            self.memory_usage[device][time].append(resources.memory)
 
-            self.vcu_usage[device][time].append(resources[ResourceType.VCU])
+            self.vcu_usage[device][time].append(resources.vcus)
 
-            self.copy_usage[device][time].append(resources[ResourceType.COPY])
+            self.copy_usage[device][time].append(resources.copy)
 
 
 @dataclass(slots=True)
-class MappedResourceUsageList(ResourceUsageList):
+class MappedResourceUsageListRecorder(ResourceUsageListRecorder):
     phase: TaskState = TaskState.MAPPED
 
 
 @dataclass(slots=True)
-class ReservedResourceUsageList(ResourceUsageList):
+class ReservedResourceUsageListRecorder(ResourceUsageListRecorder):
     phase: TaskState = TaskState.RESERVED
 
 
 @dataclass(slots=True)
-class LaunchedResourceUsageList(ResourceUsageList):
+class LaunchedResourceUsageListRecorder(ResourceUsageListRecorder):
     phase: TaskState = TaskState.LAUNCHED
 
 

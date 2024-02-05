@@ -1,6 +1,6 @@
 from ..types import Architecture, Device, TaskID, DataID, DataInfo, ResourceType, Time
 from typing import List, Dict, Set, Tuple, Optional, Callable, Sequence, Type
-from .device import SimulatedDevice, ResourceSet
+from .device import SimulatedDevice, ResourceSet, FasterResourceSet
 from dataclasses import dataclass, field, InitVar
 from .utility import parse_size
 
@@ -164,15 +164,11 @@ class ConnectionPool:
 
         # Check if copy engines are available (if required)
         if require_copy_engines:
-            if (
-                self.count_active_connections(source)
-                >= source.resources.store[ResourceType.COPY]
-            ):
+            if self.count_active_connections(source) >= source.resources.copy:
                 return False
             if (
                 require_symmetric
-                and self.count_active_connections(target)
-                >= target.resources.store[ResourceType.COPY]
+                and self.count_active_connections(target) >= target.resources.copy
             ):
                 return False
 
@@ -447,13 +443,13 @@ def generate_4gpus_1cpu_toplogy(
     # Create devices
     gpus = [
         SimulatedDevice(
-            Device(Architecture.GPU, i), ResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
+            Device(Architecture.GPU, i), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
         )
         for i in range(4)
     ]
     cpus = [
         SimulatedDevice(
-            Device(Architecture.CPU, 0), ResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
+            Device(Architecture.CPU, 0), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
         )
     ]
 

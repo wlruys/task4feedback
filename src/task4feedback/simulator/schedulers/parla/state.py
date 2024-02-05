@@ -60,7 +60,7 @@ def get_required_resources(
     objects: ObjectRegistry,
     count_data: bool = True,
     verbose: bool = False,
-) -> List[ResourceSet]:
+) -> List[FasterResourceSet]:
     if isinstance(devices, Device):
         devices = (devices,)
 
@@ -72,7 +72,7 @@ def get_required_resources(
     else:
         resources = task.resources
 
-    memory: List[int] = [s[ResourceType.MEMORY] for s in resources]
+    memory: List[int] = [s.memory for s in resources]
 
     if count_data:
         get_required_memory(memory, phase, devices, task.read_accesses, objects)
@@ -82,15 +82,16 @@ def get_required_resources(
     resources = []
     for i in range(len(devices)):
         t_req = task.resources[i]
-        vcus: Numeric = t_req[ResourceType.VCU]
-        mem: int = memory[i]
-        copy: int = t_req[ResourceType.COPY]
-        resources.append(ResourceSet(vcus=vcus, memory=mem, copy=copy))
+        mem = memory[i]
+        vcus = t_req.vcus
+        copy = t_req.copy
+        resources.append(FasterResourceSet(vcus=vcus, memory=mem, copy=copy))
 
-    logger.resource.debug(
-        "Required resources",
-        extra=dict(task=task.name, phase=phase, resources=resources),
-    )
+    if logger.ENABLE_LOGGING:
+        logger.resource.debug(
+            f"Required resources {resources} for {task.name} in {phase} phase",
+            extra=dict(task=task.name, phase=phase, resources=resources),
+        )
 
     return resources
 
@@ -155,7 +156,7 @@ def _acquire_resources_mapped(
         TaskState.MAPPED, task, devices, state.objects, count_data=True
     )
     state.resource_pool.add_resources(
-        devices, TaskState.MAPPED, AllResources, resources
+        devices, TaskState.MAPPED, ResourceGroup.ALL, resources
     )
 
     if logger.ENABLE_LOGGING:
@@ -163,7 +164,7 @@ def _acquire_resources_mapped(
             remaining = state.resource_pool.pool[device][TaskState.MAPPED]
 
             logger.resource.debug(
-                "Resources after acquiring",
+                f"Resources after acquiring for mapped task {task.name} on {device}: {remaining}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -198,7 +199,7 @@ def _check_resources_reserved(
     can_fit = state.resource_pool.check_resources(
         devices=devices,
         state=TaskState.RESERVED,
-        types=resources_types,
+        type=ResourceGroup.PERSISTENT,
         resources=resources,
     )
 
@@ -219,21 +220,21 @@ def _acquire_resources_reserved(
     if isinstance(devices, Device):
         devices = (devices,)
 
-    resource_types = StatesToResources[TaskState.RESERVED]
+    # resource_types = StatesToResources[TaskState.RESERVED]
 
     resources = get_required_resources(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
     )
 
     state.resource_pool.add_resources(
-        devices, TaskState.RESERVED, resource_types, resources
+        devices, TaskState.RESERVED, ResourceGroup.PERSISTENT, resources
     )
 
     if logger.ENABLE_LOGGING:
         for device in devices:
             remaining = state.resource_pool.pool[device][TaskState.RESERVED]
             logger.resource.debug(
-                "Resources after acquiring",
+                f"Resources after acquiring for reserved task {task.name} on {device}: {remaining}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -254,7 +255,7 @@ def _check_resources_launched(
     if isinstance(devices, Device):
         devices = (devices,)
 
-    resources_types = StatesToResources[TaskState.LAUNCHED]
+    # resources_types = StatesToResources[TaskState.LAUNCHED]
 
     resources = get_required_resources(
         TaskState.RESERVED, task, devices, state.objects, count_data=False
@@ -263,7 +264,7 @@ def _check_resources_launched(
     can_fit = state.resource_pool.check_resources(
         devices=devices,
         state=TaskState.RESERVED,
-        types=resources_types,
+        type=ResourceGroup.NONPERSISTENT,
         resources=resources,
     )
 
@@ -297,11 +298,11 @@ def _acquire_resources_launched(
     resource_types = StatesToResources[TaskState.LAUNCHED]
 
     state.resource_pool.add_resources(
-        devices, TaskState.RESERVED, resource_types, resources
+        devices, TaskState.RESERVED, ResourceGroup.NONPERSISTENT, resources
     )
 
     state.resource_pool.add_resources(
-        devices, TaskState.LAUNCHED, AllResources, resources
+        devices, TaskState.LAUNCHED, ResourceGroup.ALL, resources
     )
 
     if isinstance(task, SimulatedDataTask):
@@ -328,7 +329,7 @@ def _acquire_resources_launched(
             remaining_launched = state.resource_pool.pool[device][TaskState.LAUNCHED]
 
             logger.resource.debug(
-                "Resources after acquiring",
+                f"Reserved Resources after acquiring launched task {task.name} on {device}: {remaining_reserved}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -340,7 +341,7 @@ def _acquire_resources_launched(
             )
 
             logger.resource.debug(
-                "Resources after acquiring",
+                f"Launched Resources after acquiring launched task {task.name} on {device}: {remaining_launched}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -370,7 +371,7 @@ def _release_resources_completed(
         state.resource_pool.remove_resources(
             devices=devices,
             state=TaskState.MAPPED,
-            types=AllResources,
+            type=ResourceGroup.ALL,
             resources=task.resources,
         )
     elif isinstance(task, SimulatedDataTask):
@@ -394,14 +395,14 @@ def _release_resources_completed(
     state.resource_pool.remove_resources(
         devices=devices,
         state=TaskState.RESERVED,
-        types=AllResources,
+        type=ResourceGroup.ALL,
         resources=task.resources,
     )
 
     state.resource_pool.remove_resources(
         devices=devices,
         state=TaskState.LAUNCHED,
-        types=AllResources,
+        type=ResourceGroup.ALL,
         resources=task.resources,
     )
 
@@ -412,7 +413,7 @@ def _release_resources_completed(
             remaining_launched = state.resource_pool.pool[device][TaskState.LAUNCHED]
 
             logger.resource.debug(
-                "Resources after releasing",
+                f"Mapped resources after releasing task {task} on {device}: {resources}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -424,7 +425,7 @@ def _release_resources_completed(
             )
 
             logger.resource.debug(
-                "Resources after releasing",
+                f"Reserved Resources after releasing task {task} on {device}: {remaining_reserved}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -436,7 +437,7 @@ def _release_resources_completed(
             )
 
             logger.resource.debug(
-                "Resources after releasing",
+                f"Launched Resources after releasing task {task} on {device}: {remaining_launched}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -515,8 +516,8 @@ def _use_data(
                     state.resource_pool.remove_device_resources(
                         device,
                         pool,
-                        [ResourceType.MEMORY],
-                        ResourceSet(memory=data.size, vcus=0, copy=0),
+                        ResourceGroup.PERSISTENT,
+                        FasterResourceSet(memory=data.size, vcus=0, copy=0),
                     )
 
 
@@ -634,6 +635,7 @@ def _compute_task_duration(
     assert devices is not None
 
     runtime_infos = task.get_runtime_info(devices)
+
     max_time = max([runtime_info.task_time for runtime_info in runtime_infos])
     duration = Time(max_time)
 

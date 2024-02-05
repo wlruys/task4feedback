@@ -22,6 +22,71 @@ resource_names = {
 
 
 @dataclass(slots=True, init=False)
+class FasterResourceSet:
+    vcus: Fraction = Fraction(0)
+    memory: int = 0
+    copy: int = 0
+
+    def __init__(self, vcus: Numeric, memory: int, copy: int):
+        self.vcus = Fraction(vcus)
+        self.memory = memory
+        self.copy = copy
+
+    def __add__(self, other: Self):
+        return FasterResourceSet(
+            self.vcus + other.vcus, self.memory + other.memory, self.copy + other.copy
+        )
+
+    def __sub__(self, other: Self):
+        return FasterResourceSet(
+            self.vcus - other.vcus, self.memory - other.memory, self.copy - other.copy
+        )
+
+    def __iadd__(self, other: Self):
+        self.vcus += other.vcus
+        self.memory += other.memory
+        self.copy += other.copy
+        return self
+
+    def __isub__(self, other: Self):
+        self.vcus -= other.vcus
+        self.memory -= other.memory
+        self.copy -= other.copy
+        return self
+
+    def __lt__(self, other: Self) -> bool:
+        return (
+            self.vcus < other.vcus
+            and self.memory < other.memory
+            and self.copy < other.copy
+        )
+
+    def __le__(self, other: Self) -> bool:
+        return (
+            self.vcus <= other.vcus
+            and self.memory <= other.memory
+            and self.copy <= other.copy
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Self):
+            return (
+                self.vcus == other.vcus
+                and self.memory == other.memory
+                and self.copy == other.copy
+            )
+        else:
+            return False
+
+    def __str__(self) -> str:
+        return f"ResourceSet(vcus={self.vcus}, memory={self.memory}, copy={self.copy})"
+
+    def verify(self):
+        if self.vcus < 0 or self.memory < 0 or self.copy < 0:
+            raise ValueError(f"ResourceSet {self} contains negative value.")
+
+
+@dataclass(slots=True, init=False)
 class ResourceSet:
     store: DefaultDict[ResourceType, Numeric] = field(
         default_factory=lambda: DefaultDict(int)
@@ -153,7 +218,7 @@ class DeviceStats:
 @dataclass(slots=True)
 class SimulatedDevice:
     name: Device
-    resources: ResourceSet
+    resources: FasterResourceSet
     stats: DeviceStats = field(default_factory=DeviceStats)
     datapool: DataPool = field(default_factory=DataPool)
     eviction_pool_type: Type[EvictionPool] = LRUEvictionPool
@@ -182,7 +247,12 @@ class SimulatedDevice:
         return self.name < other.name
 
     def __getitem__(self, key: ResourceType) -> Numeric:
-        return self.resources[key]
+        if key == ResourceType.VCU:
+            return self.resources.vcus
+        elif key == ResourceType.MEMORY:
+            return self.resources.memory
+        elif key == ResourceType.COPY:
+            return self.resources.copy
 
     def add_data(self, data: SimulatedData):
         self.datapool.add(data)
