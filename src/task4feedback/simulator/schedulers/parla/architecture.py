@@ -258,6 +258,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                         f"Task {task.name}, mapped successfully.",
                         extra=dict(task=taskid, device=devices),
                     )
+                event.tasks.add(taskid)
                 task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
@@ -333,6 +334,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                         f"Task {taskid} reserved successfully.",
                         extra=dict(task=taskid),
                     )
+                event.tasks.add(taskid)
                 task.notify_state(TaskState.RESERVED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
@@ -380,6 +382,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                             completion_time=completion_time,
                         ),
                     )
+                event.tasks.add(taskid)
 
                 # Create completion event
                 completion_event = TaskCompleted(task=taskid)

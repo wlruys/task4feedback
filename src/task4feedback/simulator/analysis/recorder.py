@@ -274,7 +274,8 @@ class TaskRecord:
 
 @dataclass(slots=True)
 class ComputeTaskRecord(TaskRecord):
-    pass
+    map_time: Time = Time(0)
+    reserve_time: Time = Time(0)
 
 
 @dataclass(slots=True)
@@ -287,6 +288,7 @@ class DataTaskRecord(TaskRecord):
     source: Optional[Device] = None
     data: Optional[DataID] = None
     data_size: Optional[int] = None
+    reserve_time: Time = Time(0)
 
 
 @dataclass(slots=True)
@@ -315,6 +317,8 @@ class ComputeTaskRecorder(Recorder):
                         read_data=[d.id for d in task.read_accesses],
                         write_data=[d.id for d in task.write_accesses],
                         read_write_data=[d.id for d in task.read_write_accesses],
+                        reserve_time=task.times.state_times[TaskState.RESERVED],
+                        map_time=task.times.state_times[TaskState.MAPPED],
                     )
                 else:
                     self.tasks[name].end_time = current_time
@@ -335,6 +339,8 @@ class ComputeTaskRecorder(Recorder):
                             read_data=[d.id for d in task.read_accesses],
                             write_data=[d.id for d in task.write_accesses],
                             read_write_data=[d.id for d in task.read_write_accesses],
+                            reserve_time=task.times.state_times[TaskState.RESERVED],
+                            map_time=task.times.state_times[TaskState.MAPPED],
                         )
                     else:
                         self.tasks[name].start_time = current_time
@@ -368,6 +374,7 @@ class DataTaskRecorder(Recorder):
                         end_time=current_time,
                         devices=task.assigned_devices,
                         source=task.source,
+                        reserve_time=task.times.state_times[TaskState.RESERVED],
                     )
                 else:
                     self.tasks[name].end_time = current_time
@@ -392,6 +399,7 @@ class DataTaskRecorder(Recorder):
                             source=task.source,
                             data=data_id,
                             data_size=data_size,
+                            reserve_time=task.times.state_times[TaskState.RESERVED],
                         )
                     else:
                         self.tasks[name].start_time = current_time

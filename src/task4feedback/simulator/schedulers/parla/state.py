@@ -29,7 +29,11 @@ def get_required_memory_for_data(
     access_type: AccessType,
 ) -> int:
     data = objects.get_data(data_id)
-    if is_valid := data.is_valid(device, phase) and (
+    if phase == TaskState.LAUNCHED:
+        print(
+            f"Checking data {data.name} on device {device} in phase {phase} with access type {access_type} and valid: {data.is_valid_or_moving(device, phase)}"
+        )
+    if is_valid := data.is_valid_or_moving(device, phase) and (
         access_type == AccessType.READ or access_type == AccessType.READ_WRITE
     ):
         return 0
@@ -294,6 +298,7 @@ def _acquire_resources_launched(
     resources = get_required_resources(
         TaskState.LAUNCHED, task, devices, state.objects, count_data=True
     )
+    print(f"Task {task.name} launching with resources: {resources}")
 
     state.resource_pool.add_resources(
         devices, TaskState.RESERVED, ResourceGroup.NONPERSISTENT, resources

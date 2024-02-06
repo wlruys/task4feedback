@@ -1,0 +1,17 @@
+psutil
+pyyaml
+numpy
+python-json-logger
+
+[dev]
+ruff
+
+[graph]
+pydot
+networkx
+hypernetx
+matplotlib
+seaborn
+
+[rl]
+torch

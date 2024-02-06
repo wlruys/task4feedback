@@ -21,6 +21,7 @@ class Event:
 @dataclass(slots=True)
 class PhaseEvent(Event):
     max_tasks: int | None = None
+    tasks: set[TaskID] = field(default_factory=set)
 
 
 @dataclass(slots=True)

@@ -19,6 +19,10 @@ from .schedulers import *
 from rich import print
 
 from .analysis.recorder import RecorderList, Recorder
+from .randomizer import Randomizer
+from .watcher import Watcher
+
+from enum import Enum
 
 
 @dataclass(slots=True)
@@ -31,6 +35,8 @@ class SimulatedScheduler:
     state: SystemState = field(init=False)
     log_level: int = 0
     recorders: RecorderList = field(default_factory=RecorderList)
+    randomizer: Randomizer = field(default_factory=Randomizer)
+    watcher: Watcher = field(default_factory=Watcher)
 
     events: EventQueue = EventQueue()
 
@@ -73,7 +79,9 @@ class SimulatedScheduler:
     def devicemap(self):
         return self.state.objects.devicemap
 
-    def add_initial_tasks(self, tasks: List[TaskID]):
+    def add_initial_tasks(self, tasks: List[TaskID], apply_sort: bool = True):
+        if apply_sort:
+            tasks = self.randomizer.task_order(tasks, self.taskmap)
         self.tasks.extend(tasks)
 
     def __repr__(self):
@@ -99,6 +107,7 @@ class SimulatedScheduler:
         return new_event_pairs
 
     def run(self) -> Time:
+        watcher_status = True
         new_event_pairs = self.mechanisms.initialize(self.tasks, self.state)
         for completion_time, new_event in new_event_pairs:
             self.events.put(new_event, completion_time)
@@ -122,11 +131,19 @@ class SimulatedScheduler:
                 # Update Log
                 self.record(event, new_events)
 
+                # Check Watcher Conditions
+                watcher_status = self.watcher.check_conditions(
+                    self.state, self.mechanisms, event
+                )
+
+                if not watcher_status:
+                    break
+
         self.state.finalize_stats()
         self.recorders.finalize(self.time, self.mechanisms, self.state)
 
         print(f"Event Count: {event_count}")
-        if not self.mechanisms.complete(self.state):
+        if not self.mechanisms.complete(self.state) and watcher_status:
             raise RuntimeError("Scheduler terminated without completing all tasks.")
 
         return self.time

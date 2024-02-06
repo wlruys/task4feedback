@@ -53,6 +53,13 @@ class TaskTimes:
         else:
             self.status_times[state] = time
 
+    def get_state(self, time: Time) -> TaskState:
+        current = TaskState.SPAWNED
+        for state in [TaskState.MAPPED, TaskState.LAUNCHED, TaskState.COMPLETED]:
+            if self.state_times[state] <= time:
+                current = state
+        return current
+
 
 @dataclass(slots=True, init=False)
 class TaskCounters:

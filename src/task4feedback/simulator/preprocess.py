@@ -5,6 +5,8 @@ from .data import *
 from .device import *
 import networkx as nx
 from .topology import *
+from copy import deepcopy
+import random
 
 
 def summarize_dependencies(taskmap: TaskMap | SimulatedTaskMap):
