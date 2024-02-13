@@ -26,3 +26,6 @@ class EvictionPool:
 
     def __contains__(self, data: SimulatedData | DataID):
         raise NotImplementedError
+
+    def empty(self) -> bool:
+        raise NotImplementedError

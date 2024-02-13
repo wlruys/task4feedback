@@ -128,6 +128,11 @@ class SimulatedScheduler:
                 # Process Event
                 new_events = self.process_event(event)
 
+                # print("---")
+                # data_objects = self.state.objects.datamap
+                # for data in data_objects.values():
+                #     print(data)
+
                 # Update Log
                 self.record(event, new_events)
 

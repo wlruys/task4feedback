@@ -8,13 +8,13 @@ maintainers = [
 description = ""
 readme = "README.md"
 requires-python = ">=3.8"
-dependencies = ["psutil", "pyyaml", "numpy"]
+dependencies = ["psutil", "pyyaml", "numpy", "python-json-logger"]
 
 
 [project.optional-dependencies]
 graph = ["pydot", "networkx", "hypernetx", "matplotlib", "seaborn"]
 dev = ["ruff"]
-rl = ["torch", "torchvision", "torchaudio"]
+rl = ["torch"]
 
 [tool.cython-lint]
 ignore = [

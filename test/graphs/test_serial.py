@@ -54,7 +54,7 @@ def test_data():
         tasks=tasks,
         data=data,
         scheduler_type="parla",
-        recorders=[DataValidRecorder, ComputeTaskRecorder, DataTaskRecorder],
+        recorders=[LaunchedResourceUsageListRecorder],
     )
     simulator = create_simulator(config=simulator_config)
 
@@ -65,14 +65,6 @@ def test_data():
     print(f"Time to Simulate: {end_t - start_t}")
     print(f"Simulated Time: {simulator.time}")
 
-    intervals = simulator.recorders.recorders[0].intervals
 
-    make_plot(
-        simulator.recorders.recorders[0],
-        simulator.recorders.recorders[1],
-        simulator.recorders.recorders[2],
-        data_ids=[DataID(0)],
-    )
-
-
-test_data()
+if __name__ == "__main__":
+    test_data()

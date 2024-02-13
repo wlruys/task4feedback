@@ -42,7 +42,7 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = SweepConfig(steps=30, width=40, dimensions=1, task_config=task_placement)
+    config = SweepConfig(steps=3, width=4, dimensions=1, task_config=task_placement)
     tasks, data = make_graph(config, data_config=data_config)
 
     topology = TopologyManager().generate("frontera", config=None)
@@ -65,4 +65,5 @@ def test_data():
     print(f"Simulated Time: {simulator.time}")
 
 
-test_data()
+if __name__ == "__main__":
+    test_data()

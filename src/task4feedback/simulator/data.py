@@ -131,6 +131,7 @@ class DataStatus:
         default_factory=dict
     )
     device2uses: Dict[Device, DataUse] = field(default_factory=dict)
+    eviction_tasks: Set[TaskID] = field(default_factory=set)
 
     def __post_init__(self, devices: Sequence[Device]):
         for state in TaskState:
@@ -206,6 +207,12 @@ class DataStatus:
     def add_task(self, device: Device, task: TaskID, use: DataUses):
         self.device2uses[device].add_task(task, use)
 
+    def add_eviction_task(self, task: TaskID):
+        self.eviction_tasks.add(task)
+
+    def remove_eviction_task(self, task: TaskID):
+        self.eviction_tasks.remove(task)
+
     def remove_task(self, device: Device, task: TaskID, use: DataUses):
         self.device2uses[device].remove_task(task, use)
 
@@ -256,15 +263,70 @@ class DataStatus:
                         f"Cannot write while a device {device} that is using that data. Status: {status}"
                     )
 
-    def evict(
+    def start_evict(
         self,
         task: TaskID,
+        source_device: Device,
         target_device: Device,
         state: TaskState,
         verify: bool = False,
         verbose: bool = False,
     ) -> Tuple[DataState, List[Device]]:
-        raise NotImplementedError()
+
+        if logger.ENABLE_LOGGING:
+            logger.data.info(
+                f"Start eviction of {self.id} from device {source_device}.",
+                extra=dict(
+                    task=task,
+                    data=self.id,
+                    source=source_device,
+                    target=target_device,
+                    state=state,
+                ),
+            )
+
+        current_state = self.get_data_state(source_device, state)
+        assert (
+            current_state == DataState.VALID
+        ), f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device}."
+
+        if source_device != target_device:
+            self.start_move(task, source_device, target_device, verbose=verbose)
+        self.add_eviction_task(task)
+
+        return current_state, [source_device]
+
+    def finish_evict(
+        self,
+        task: TaskID,
+        source_device: Device,
+        target_device: Device,
+        state: TaskState,
+        verify: bool = False,
+        verbose: bool = False,
+    ):
+        if logger.ENABLE_LOGGING:
+            logger.data.info(
+                f"Finish eviction of {self.id} from device {source_device}.",
+                extra=dict(
+                    task=task,
+                    data=self.id,
+                    source=source_device,
+                    target=target_device,
+                    state=state,
+                ),
+            )
+
+        current_state = self.get_data_state(source_device, state)
+        assert (
+            current_state == DataState.MOVING
+        ), f"Data {self.id} must be MOVING to be finished, but is {current_state} on {source_device}."
+
+        if source_device != target_device:
+            self.finish_move(task, source_device, target_device, verbose=verbose)
+        self.remove_eviction_task(task)
+
+        return current_state, [source_device]
 
     def write(
         self,

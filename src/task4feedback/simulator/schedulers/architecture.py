@@ -30,6 +30,7 @@ class SchedulerArchitecture:
 
     def __getitem__(self, event: Event) -> Callable[[SystemState], List[EventPair]]:
         try:
+            print(f"Getting function for event {event.func}")
             function = getattr(self, event.func)
         except AttributeError:
             raise NotImplementedError(
@@ -55,6 +56,10 @@ class SchedulerArchitecture:
         return []
 
     def reserver(self, scheduler_state: SystemState, event: Event) -> List[EventPair]:
+        raise NotImplementedError()
+        return []
+
+    def eviction(self, scheduler_state: SystemState, event: Event) -> List[EventPair]:
         raise NotImplementedError()
         return []
 

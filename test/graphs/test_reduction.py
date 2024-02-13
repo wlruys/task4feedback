@@ -64,4 +64,5 @@ def test_data():
     print(f"Simulated Time: {simulator.time}")
 
 
-test_data()
+if __name__ == "__main__":
+    test_data()

@@ -87,6 +87,9 @@ class FasterResourceSet:
         if self.vcus < 0 or self.memory < 0 or self.copy < 0:
             raise ValueError(f"ResourceSet {self} contains negative value.")
 
+    def __len__(self):
+        return (self.vcus > 0) + (self.memory > 0) + (self.copy > 0)
+
 
 @dataclass(slots=True, init=False)
 class ResourceSet:
@@ -267,3 +270,7 @@ class SimulatedDevice:
 
     def remove_evictable(self, data: SimulatedData):
         self.eviction_pool.remove(data)
+
+    @property
+    def evictable_bytes(self):
+        return self.eviction_pool.evictable_size

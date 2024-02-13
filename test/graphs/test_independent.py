@@ -24,13 +24,10 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 100
+        return 4 * 1024 * 1024 * 1024  # 1 GB
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
-        if task_id.task_idx[0] % 2 == 0:
-            device_tuple = (gpu0,)
-        else:
-            device_tuple = (gpu1,)
+        device_tuple = (gpu0,)
 
         runtime_info = TaskRuntimeInfo(task_time=10000, device_fraction=1, memory=0)
         placement_info = TaskPlacementInfo()
@@ -38,11 +35,12 @@ def test_data():
 
         return placement_info
 
-    data_config = ReusedDataGraphConfig(n_partitions=3)
+    data_config = IndependentDataGraphConfig()
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = IndependentConfig(task_count=10, task_config=task_placement)
+    # config = IndependentConfig(task_count=4, task_config=task_placement)
+    config = ChainConfig(chains=1, steps=4, task_config=task_placement)
     tasks, data = make_graph(config, data_config=data_config)
 
     topology = TopologyManager().generate("frontera", config=None)
@@ -52,7 +50,7 @@ def test_data():
         tasks=tasks,
         data=data,
         scheduler_type="parla",
-        recorders=[],
+        recorders=[LaunchedResourceUsageListRecorder],
     )
     simulator = create_simulator(config=simulator_config)
 
@@ -63,5 +61,8 @@ def test_data():
     print(f"Time to Simulate: {end_t - start_t}")
     print(f"Simulated Time: {simulator.time}")
 
+    print(simulator.recorders.get(LaunchedResourceUsageListRecorder).memory_usage)
 
-test_data()
+
+if __name__ == "__main__":
+    test_data()
