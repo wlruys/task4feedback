@@ -51,6 +51,7 @@ src/task4feedback/simulator/analysis/recorder.py
 src/task4feedback/simulator/eviction/__init__.py
 src/task4feedback/simulator/eviction/base.py
 src/task4feedback/simulator/eviction/lru.py
+src/task4feedback/simulator/eviction/usage.py
 src/task4feedback/simulator/rl/pseudo.py
 src/task4feedback/simulator/rl/models/a2c.py
 src/task4feedback/simulator/rl/models/dqn.py

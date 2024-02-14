@@ -1,6 +1,6 @@
 from ..types import TaskID, TaskInfo, TaskState, Optional, Time, Device, Devices
 from dataclasses import dataclass, field
-from .device import FasterResourceSet
+from .resourceset import FasterResourceSet
 from typing import Dict, Set
 
 
@@ -34,6 +34,7 @@ class TaskEvent(Event):
 @dataclass(slots=True)
 class Eviction(Event):
     func: str = "eviction"
+    parent_task: TaskID = field(default_factory=TaskID)
     requested_resources: Dict[Device, FasterResourceSet] = field(default_factory=list)
 
 

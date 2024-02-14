@@ -5,7 +5,8 @@ from fractions import Fraction
 from ..events import *
 from ..queue import EventPair
 from ..data import SimulatedData, DataState
-from ..device import SimulatedDevice, ResourceSet, ResourceType
+from ..device import SimulatedDevice, ResourceType
+from ..resourceset import FasterResourceSet
 from ..schedulers import SchedulerArchitecture, SystemState
 from ..task import *
 from ...types import (

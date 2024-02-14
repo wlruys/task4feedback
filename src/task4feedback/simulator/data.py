@@ -263,7 +263,32 @@ class DataStatus:
                         f"Cannot write while a device {device} that is using that data. Status: {status}"
                     )
 
-    def start_evict(
+    def get_eviction_target(
+        self,
+        source_device: Device,
+        potential_targets: Sequence[Device],
+        state: TaskState,
+    ) -> Device:
+        valid_copies = self.get_device_set_from_state(state, DataState.VALID)
+        target_device = source_device
+
+        current_state = self.get_data_state(source_device, state)
+        assert (
+            current_state == DataState.VALID
+        ), f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device}."
+
+        if len(valid_copies) == 1:
+            target_device = potential_targets[0]
+
+        return target_device
+
+    def initialize_eviction(
+        self,
+        task: TaskID,
+    ) -> None:
+        self.eviction_tasks.add(task)
+
+    def start_eviction(
         self,
         task: TaskID,
         source_device: Device,
@@ -292,11 +317,10 @@ class DataStatus:
 
         if source_device != target_device:
             self.start_move(task, source_device, target_device, verbose=verbose)
-        self.add_eviction_task(task)
 
         return current_state, [source_device]
 
-    def finish_evict(
+    def finish_eviction(
         self,
         task: TaskID,
         source_device: Device,
@@ -318,13 +342,48 @@ class DataStatus:
             )
 
         current_state = self.get_data_state(source_device, state)
-        assert (
-            current_state == DataState.MOVING
-        ), f"Data {self.id} must be MOVING to be finished, but is {current_state} on {source_device}."
 
         if source_device != target_device:
             self.finish_move(task, source_device, target_device, verbose=verbose)
+
+        self.set_data_state(source_device, state, DataState.NONE)
         self.remove_eviction_task(task)
+
+        return current_state, [source_device]
+
+    def evict(
+        self,
+        task: TaskID,
+        source_device: Device,
+        target_device: Device,
+        state: TaskState,
+        verify: bool = False,
+        verbose: bool = False,
+    ) -> Tuple[DataState, List[Device]]:
+        if logger.ENABLE_LOGGING:
+            logger.data.info(
+                f"Evicting data {self.id} from device {source_device} to device {target_device} for task {task} in phase {state}",
+                extra=dict(
+                    task=task,
+                    data=self.id,
+                    source=source_device,
+                    target=target_device,
+                    state=state,
+                ),
+            )
+
+        if state == TaskState.LAUNCHED:
+            raise ValueError(
+                f"Incorrect usage. Use start_eviction and finish_eviction for {state} phase."
+            )
+
+        current_state = self.get_data_state(source_device, state)
+        assert (
+            current_state == DataState.VALID
+        ), f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device}."
+
+        if source_device != target_device:
+            self.set_data_state(target_device, state, DataState.VALID)
 
         return current_state, [source_device]
 
@@ -701,6 +760,14 @@ class SimulatedData:
 
     def is_evictable(self, device: Device) -> bool:
         return self.status.is_evictable(device)
+
+    def get_eviction_target(
+        self,
+        source_device: Device,
+        potential_targets: Sequence[Device],
+        state: TaskState,
+    ) -> Device:
+        return self.status.get_eviction_target(source_device, potential_targets, state)
 
 
 type SimulatedDataMap = Dict[DataID, SimulatedData]

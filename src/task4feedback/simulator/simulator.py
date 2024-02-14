@@ -1,6 +1,7 @@
 from .task import SimulatedTask, SimulatedDataTask, SimulatedComputeTask
 from .data import *
 from .device import *
+from .resourceset import *
 from .queue import *
 from .events import *
 from .resources import *

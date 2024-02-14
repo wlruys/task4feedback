@@ -106,6 +106,9 @@ def _check_eviction(
     verbose: bool = False,
 ) -> Optional[Eviction]:
 
+    if task.eviction_requested:
+        return None
+
     # Only generate an eviction event if it would free enough resources to run the next task
     resource_differences = _get_difference_reserved(state, task, verbose=verbose)
     verbose = True
@@ -122,7 +125,9 @@ def _check_eviction(
         if evictable_memory < resources.memory:
             return None
 
-    return Eviction(requested_resources=resource_differences)
+    task.eviction_requested = True
+
+    return Eviction(parent_task=task.name, requested_resources=resource_differences)
 
 
 def _check_nearest_source(
@@ -327,6 +332,10 @@ def _check_resources_launched(
         type=ResourceGroup.NONPERSISTENT,
         resources=resources,
     )
+    print(f"Resources required for task {task.name} in LAUNCHED state: {resources}")
+    print(
+        f"Current resources in use for task {task.name} in LAUNCHED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
+    )
 
     if isinstance(task, SimulatedDataTask):
         source_device = _check_nearest_source(state, task)
@@ -364,7 +373,7 @@ def _acquire_resources_launched(
         devices, TaskState.LAUNCHED, ResourceGroup.ALL, resources
     )
 
-    if isinstance(task, SimulatedDataTask):
+    if isinstance(task, SimulatedDataTask) or isinstance(task, SimulatedEvictionTask):
         assert len(devices) == 1
         target_device = devices[0]
         source_device = task.source
@@ -433,7 +442,7 @@ def _release_resources_completed(
             type=ResourceGroup.ALL,
             resources=task.resources,
         )
-    elif isinstance(task, SimulatedDataTask):
+    elif isinstance(task, SimulatedDataTask) or isinstance(task, SimulatedEvictionTask):
         assert len(devices) == 1
         target_device = devices[0]
         source_device = task.source
@@ -464,8 +473,6 @@ def _release_resources_completed(
         type=ResourceGroup.ALL,
         resources=task.resources,
     )
-
-    state.resource_pool.set_evict_flags(devices, flag=True)
 
     if logger.ENABLE_LOGGING:
         for device in devices:
@@ -695,6 +702,89 @@ def _finish_move(
     prior_state = data.finish_move(task.name, source_device, target_device)
 
 
+def _start_evict(
+    state: SystemState,
+    data_accesses: List[DataAccess],
+    task: SimulatedEvictionTask,
+    access_type: AccessType,
+    verbose: bool = False,
+):
+    if len(data_accesses) == 0:
+        return
+
+    devices = task.assigned_devices
+    assert devices is not None
+
+    assert len(devices) == 1
+    assert len(data_accesses) == 1
+
+    assert task.source is not None
+
+    for data_access in data_accesses:
+        data_id = data_access.id
+        device_idx = data_access.device
+        device_id = devices[device_idx]
+
+        data = state.objects.get_data(data_id)
+        assert data is not None
+
+        device = state.objects.get_device(device_id)
+        assert device is not None
+
+        data.status.start_eviction(
+            task=task.name,
+            target_device=device_id,
+            source_device=task.source,
+            state=TaskState.LAUNCHED,
+        )
+
+
+def _finish_evict(
+    state: SystemState,
+    data_accesses: List[DataAccess],
+    task: SimulatedEvictionTask,
+    access_type: AccessType,
+    verbose: bool = False,
+):
+    if len(data_accesses) == 0:
+        return
+
+    devices = task.assigned_devices
+    assert devices is not None
+
+    assert len(devices) == 1
+    assert len(data_accesses) == 1
+
+    assert task.source is not None
+
+    for data_access in data_accesses:
+        data_id = data_access.id
+        device_idx = data_access.device
+        device_id = devices[device_idx]
+
+        data = state.objects.get_data(data_id)
+        assert data is not None
+
+        device = state.objects.get_device(device_id)
+        assert device is not None
+
+        old_state, evicted_locations = data.status.finish_eviction(
+            task=task.name,
+            target_device=device_id,
+            source_device=task.source,
+            state=TaskState.COMPLETED,
+        )
+
+        for device in evicted_locations:
+            for pool in [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED]:
+                state.resource_pool.remove_device_resources(
+                    device,
+                    pool,
+                    ResourceGroup.PERSISTENT,
+                    FasterResourceSet(memory=data.size, vcus=0, copy=0),
+                )
+
+
 def _compute_task_duration(
     state: SystemState,
     task: SimulatedComputeTask,
@@ -719,7 +809,6 @@ def _data_task_duration(
     target_devices: Devices,
     verbose: bool = False,
 ) -> Tuple[Time, Time]:
-    assert isinstance(task, SimulatedDataTask)
     assert target_devices is not None
     assert task.source is not None
 
@@ -747,6 +836,21 @@ def _data_task_duration(
             task.real = False
         duration = state.topology.get_transfer_time(task.source, target, data.size)
         completion_time = state.time + duration
+
+    return duration, completion_time
+
+
+def _eviction_task_duration(
+    state: SystemState,
+    task: SimulatedEvictionTask,
+    devices: Devices,
+    verbose: bool = False,
+) -> Tuple[Time, Time]:
+
+    assert isinstance(task, SimulatedEvictionTask)
+    duration, completion_time = _data_task_duration(
+        state, task, devices, verbose=verbose
+    )
 
     return duration, completion_time
 
@@ -817,6 +921,9 @@ class ParlaState(SystemState):
             # They read from a single source device onto a single target device
             _move_data(self, task.read_accesses, task)
             _move_data(self, task.read_write_accesses, task)
+        elif isinstance(task, SimulatedEvictionTask):
+            # All eviction tasks store data in "read access"
+            _start_evict(self, task.read_accesses, task, AccessType.EVICT)
 
     def release_data(
         self,
@@ -835,6 +942,8 @@ class ParlaState(SystemState):
         elif isinstance(task, SimulatedDataTask):
             _finish_move(self, task.read_accesses, task)
             _finish_move(self, task.read_write_accesses, task)
+        elif isinstance(task, SimulatedEvictionTask):
+            _finish_evict(self, task.read_accesses, task, AccessType.EVICT)
 
     def get_task_duration(
         self, task: SimulatedTask, devices: Devices, verbose: bool = False

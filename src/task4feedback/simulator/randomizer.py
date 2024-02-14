@@ -20,13 +20,15 @@ def gaussian_noise(task: SimulatedTask) -> int:
     return int(noise)
 
 
+def no_noise(task: SimulatedTask) -> int:
+    return 0
+
+
 def random_topological_sort(
     tasklist: List[TaskID], taskmap: SimulatedTaskMap, verbose: bool = False
 ) -> List[TaskID]:
     L = []
     S = set(get_initial_tasks(taskmap))
-
-    from rich import print
 
     taskmapcopy = deepcopy(taskmap)
     i = 0

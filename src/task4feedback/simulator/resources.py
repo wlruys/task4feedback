@@ -9,7 +9,8 @@ from ..types import (
 )
 from typing import List, Dict, Set, Tuple, Optional, Sequence
 from enum import IntEnum
-from .device import SimulatedDevice, ResourceSet, FasterResourceSet
+from .resourceset import FasterResourceSet, ResourceSet
+from .device import SimulatedDevice
 from dataclasses import dataclass, InitVar, field
 
 import numpy as np
@@ -66,6 +67,10 @@ class FasterResourcePool:
     ):
         resource_set = self.pool[device][pool_state]
         resources = self._build_set(type, resources)
+        if pool_state == TaskState.RESERVED:
+            print(
+                f"Adding resources {resources} to {device} in state {pool_state}: {resource_set} + {resources}"
+            )
 
         resource_set += resources
         resource_set.verify()
@@ -213,6 +218,9 @@ class FasterResourcePool:
             return self.pool[device]
         else:
             return self.pool[device][state]
+
+    def get(self, device: Device, state: TaskState) -> FasterResourceSet:
+        return self.pool[device][state]
 
     def __setitem__(self, device: Device, state: TaskState, value: FasterResourceSet):
         self.pool[device][state] = value

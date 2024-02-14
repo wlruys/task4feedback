@@ -1,6 +1,7 @@
 from ..types import Architecture, Device, TaskID, DataID, DataInfo, ResourceType, Time
 from typing import List, Dict, Set, Tuple, Optional, Callable, Sequence, Type
-from .device import SimulatedDevice, ResourceSet, FasterResourceSet
+from .device import SimulatedDevice
+from .resourceset import ResourceSet, FasterResourceSet
 from dataclasses import dataclass, field, InitVar
 from .utility import parse_size
 

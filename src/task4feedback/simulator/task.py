@@ -18,9 +18,7 @@ from typing import (
 
 from .queue import PriorityQueue
 from dataclasses import dataclass, field
-
-from .resources import ResourcePool, FasterResourcePool
-from .device import ResourceSet, FasterResourceSet
+from .resourceset import ResourceSet, FasterResourceSet
 from .datapool import DataPool
 from ..logging import logger
 
@@ -116,7 +114,9 @@ class SimulatedTask:
     type: TaskType = TaskType.BASE
     parent: Optional[TaskID] = None
     data_tasks: Optional[List[TaskID]] = None
+    eviction_tasks: Optional[List[TaskID]] = None
     spawn_tasks: Optional[List[TaskID]] = None
+    eviction_requested: bool = False
 
     def __post_init__(self):
         self.counters = TaskCounters(self.info)
@@ -296,8 +296,14 @@ class SimulatedTask:
     ) -> List[FasterResourceSet]:
         raise NotImplementedError
 
-    def add_data_dependency(self, task: TaskID):
-        raise NotImplementedError
+    def add_eviction_dependency(self, task: SimulatedTask):
+        assert task.type == TaskType.EVICTION
+        self.add_dependency(task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED])
+        task.dependents.append(self.name)
+
+        if self.eviction_tasks is None:
+            self.eviction_tasks = []
+        self.eviction_tasks.append(task.name)
 
 
 @dataclass(slots=True)
