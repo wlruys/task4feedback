@@ -81,8 +81,11 @@ def run_device_eviction(
     new_eviction_tasks = []
 
     while quota > 0 and not eviction_pool.empty():
+        print(f"Quota: {quota}.")
         data_id = eviction_pool.peek()
         data = objects.get_data(data_id)
+        print("Data ID: ", data_id, data.info.size)
+        print("Data Pool: ", eviction_pool)
         assert data is not None
 
         eviction_task = eviction_init(parent_task, scheduler_state, device, data)
@@ -94,12 +97,19 @@ def run_device_eviction(
         quota -= data.info.size
         popped = eviction_pool.get()
 
+    if quota > 0:
+        raise RuntimeError(
+            f"Eviction quota not met for device {device.name}. Remaining: {quota}."
+        )
+
     return new_eviction_tasks
 
 
 def run_eviction(
     scheduler_state: ParlaState, event: Eviction, verbose: bool = False
 ) -> List[Tuple[Device, TaskID]]:
+
+    print(f"Running eviction requested by {event.parent_task}.")
 
     eviction_tasks = []
     for device, requested_resources in event.requested_resources.items():
@@ -131,22 +141,28 @@ def reserve_task(
             scheduler_state.use_data(phase, task, verbose=verbose)
             return True, None
 
+        else:
+            if logger.ENABLE_LOGGING:
+                logger.runtime.debug(
+                    f"Task {task.name} cannot be reserved: Insufficient resources.",
+                    extra=dict(task=task.name, phase=phase),
+                )
+            print(f"Task {task.name} cannot be reserved: Insufficient resources.")
+
+            return False, scheduler_state.check_eviction(task)
+    else:
         if logger.ENABLE_LOGGING:
             logger.runtime.debug(
-                f"Task {task.name} cannot be reserved: Insufficient resources.",
-                extra=dict(task=task.name, phase=phase),
+                f"Task {task.name} cannot be reserved: Invalid status.",
+                extra=dict(
+                    task=task.name,
+                    phase=phase,
+                    counters=task.counters,
+                    status=task.status,
+                ),
             )
-
-        return False, scheduler_state.check_eviction(task)
-
-    if logger.ENABLE_LOGGING:
-        logger.runtime.debug(
-            f"Task {task.name} cannot be reserved: Invalid status.",
-            extra=dict(
-                task=task.name, phase=phase, counters=task.counters, status=task.status
-            ),
-        )
-    return False, None
+            print(f"Task {task.name} cannot be reserved: Invalid status.")
+        return False, None
 
 
 def launch_task(
@@ -154,9 +170,9 @@ def launch_task(
 ) -> bool:
     phase = TaskState.LAUNCHED
 
-    print(f"Trying to launch task {task.name}.")
-    print(f"Task status: {task.status}.")
-    print(f"Task counters: {task.counters}.")
+    # print(f"Trying to launch task {task.name}.")
+    # print(f"Task status: {task.status}.")
+    # print(f"Task counters: {task.counters}.")
 
     if check_status := scheduler_state.check_task_status(task, TaskStatus.LAUNCHABLE):
         if can_fit := scheduler_state.check_resources(phase, task):
@@ -176,14 +192,14 @@ def launch_task(
             return True
         else:
             if logger.ENABLE_LOGGING:
-                print(f"Task {task.name} cannot be launched: Insufficient resources.")
+                # print(f"Task {task.name} cannot be launched: Insufficient resources.")
                 logger.runtime.debug(
                     f"Task {task.name} cannot be launched: Insufficient resources.",
                     extra=dict(task=task.name, phase=phase),
                 )
     else:
         if logger.ENABLE_LOGGING:
-            print(f"Task {task.name} cannot be launched: Invalid status.")
+            # print(f"Task {task.name} cannot be launched: Invalid status.")
             logger.runtime.debug(
                 f"Task {task.name} cannot be launched: Invalid status.",
                 extra=dict(
@@ -200,7 +216,6 @@ def complete_task(
     task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
 ) -> bool:
     phase = TaskState.COMPLETED
-
     scheduler_state.release_data(phase, task, verbose=verbose)
     scheduler_state.release_resources(phase, task, verbose=verbose)
     scheduler_state.completion_stats(task)
@@ -351,6 +366,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             data = objects.get_data(data_access.id)
 
             active_eviction_tasks = data.status.eviction_tasks
+            print("Active eviction tasks: ", active_eviction_tasks)
             for eviction_task_id in active_eviction_tasks:
                 eviction_task = objects.get_task(eviction_task_id)
                 assert eviction_task is not None
@@ -415,10 +431,14 @@ class ParlaArchitecture(SchedulerArchitecture):
                 extra=dict(time=current_time, phase=TaskState.RESERVED),
             )
 
+        # print(f"Reserving tasks")
+
         next_tasks = MultiTaskIterator(self.reservable_tasks)
         for priority, taskid in next_tasks:
             task = objects.get_task(taskid)
             assert task is not None
+
+            # print(f"Atempting to reserve task {taskid}.")
 
             reserve_success, eviction_event = reserve_task(task, scheduler_state)
 
@@ -429,6 +449,9 @@ class ParlaArchitecture(SchedulerArchitecture):
 
                 self._enqueue_data_tasks(task, scheduler_state)
                 self._add_eviction_dependencies(task, scheduler_state)
+                # print(f"Task {taskid} reserved successfully.")
+                # print(task.dependencies)
+                # print(task.counters)
 
                 self.launchable_tasks[device][TaskType.COMPUTE].put_id(
                     task_id=taskid, priority=priority
@@ -572,6 +595,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         current_time = scheduler_state.time
 
         if logger.ENABLE_LOGGING:
+            # print(f"Completing task {event.task}")
             logger.runtime.critical(
                 f"Completing task {event.task}",
                 extra=dict(

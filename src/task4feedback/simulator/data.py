@@ -208,9 +208,11 @@ class DataStatus:
         self.device2uses[device].add_task(task, use)
 
     def add_eviction_task(self, task: TaskID):
+        print(f"Adding eviction task {task} to {self.id}")
         self.eviction_tasks.add(task)
 
     def remove_eviction_task(self, task: TaskID):
+        print(f"Removing eviction task {task} from {self.id}")
         self.eviction_tasks.remove(task)
 
     def remove_task(self, device: Device, task: TaskID, use: DataUses):

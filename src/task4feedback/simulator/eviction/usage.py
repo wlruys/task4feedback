@@ -13,7 +13,7 @@ def _create_eviction_task(
 
     eviction_space = str(parent_task) + "_eviction"
     eviction_id = TaskID(taskspace=eviction_space, task_idx=data.name.idx)
-    eviction_dependencies = []
+    eviction_dependencies = list(data.status.eviction_tasks)
     data_dependencies = TaskDataInfo(read=[DataAccess(id=data.name, device=0)])
     eviction_runtime = TaskPlacementInfo()
     eviction_runtime.add(Device(Architecture.ANY, -1), TaskRuntimeInfo())

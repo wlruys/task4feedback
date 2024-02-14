@@ -105,8 +105,10 @@ def _check_eviction(
     task: SimulatedTask,
     verbose: bool = False,
 ) -> Optional[Eviction]:
+    print("Checking eviction for task: ", task.name)
 
     if task.eviction_requested:
+        print(f"Eviction already requested for task {task.name}")
         return None
 
     # Only generate an eviction event if it would free enough resources to run the next task
@@ -266,6 +268,11 @@ def _check_resources_reserved(
         state=TaskState.RESERVED,
         type=ResourceGroup.PERSISTENT,
         resources=resources,
+    )
+
+    print(f"Resources required for task {task.name} in RESERVED state: {resources}")
+    print(
+        f"Current resources in use for task {task.name} in RESERVED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
     )
 
     return can_fit
@@ -777,6 +784,7 @@ def _finish_evict(
 
         for device in evicted_locations:
             for pool in [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED]:
+                print(f"Finishing eviction: {device} for {data.name}")
                 state.resource_pool.remove_device_resources(
                     device,
                     pool,
@@ -851,6 +859,8 @@ def _eviction_task_duration(
     duration, completion_time = _data_task_duration(
         state, task, devices, verbose=verbose
     )
+    duration = Time(1000)
+    completion_time = state.time + duration
 
     return duration, completion_time
 
@@ -932,18 +942,22 @@ class ParlaState(SystemState):
         verbose: bool = False,
     ):
         assert phase == TaskState.COMPLETED
-
+        print("RELEASING DATA")
+        print("Task is type: ", type(task))
         if isinstance(task, SimulatedComputeTask):
+            print("COMPLETED COMPUTE")
             _release_data(self, phase, task.read_accesses, task, AccessType.READ)
             _release_data(
                 self, phase, task.read_write_accesses, task, AccessType.READ_WRITE
             )
             _release_data(self, phase, task.write_accesses, task, AccessType.WRITE)
+        elif isinstance(task, SimulatedEvictionTask):
+            print("COMPLETED EVICTION")
+            _finish_evict(self, task.read_accesses, task, AccessType.EVICT)
         elif isinstance(task, SimulatedDataTask):
+            print("COMPLETED DATA")
             _finish_move(self, task.read_accesses, task)
             _finish_move(self, task.read_write_accesses, task)
-        elif isinstance(task, SimulatedEvictionTask):
-            _finish_evict(self, task.read_accesses, task, AccessType.EVICT)
 
     def get_task_duration(
         self, task: SimulatedTask, devices: Devices, verbose: bool = False
