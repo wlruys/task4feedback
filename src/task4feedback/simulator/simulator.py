@@ -83,6 +83,7 @@ class SimulatedScheduler:
     def add_initial_tasks(self, tasks: List[TaskID], apply_sort: bool = True):
         if apply_sort:
             tasks = self.randomizer.task_order(tasks, self.taskmap)
+            print(f"Initial Task Order: {tasks}")
         self.tasks.extend(tasks)
 
     def __repr__(self):

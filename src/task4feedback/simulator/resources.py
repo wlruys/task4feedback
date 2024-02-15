@@ -67,10 +67,6 @@ class FasterResourcePool:
     ):
         resource_set = self.pool[device][pool_state]
         resources = self._build_set(type, resources)
-        if pool_state == TaskState.RESERVED:
-            print(
-                f"Adding resources {resources} to {device} in state {pool_state}: {resource_set} + {resources}"
-            )
 
         resource_set += resources
         resource_set.verify()

@@ -81,19 +81,19 @@ def run_device_eviction(
     new_eviction_tasks = []
 
     while quota > 0 and not eviction_pool.empty():
-        print(f"Quota: {quota}.")
+        # print(f"Quota: {quota}.")
         data_id = eviction_pool.peek()
         data = objects.get_data(data_id)
-        print("Data ID: ", data_id, data.info.size)
-        print("Data Pool: ", eviction_pool)
+        # print("Data ID: ", data_id, data.info.size)
+        # print("Data Pool: ", eviction_pool)
         assert data is not None
 
         eviction_task = eviction_init(parent_task, scheduler_state, device, data)
         objects.add_task(eviction_task)
         new_eviction_tasks.append((device_id, eviction_task.name))
-        print(
-            f"Created eviction task {eviction_task.name} for data {data.name} on device {device.name} with size {data.info.size}."
-        )
+        # print(
+        #    f"Created eviction task {eviction_task.name} for data {data.name} on device {device.name} with size {data.info.size}."
+        # )
         quota -= data.info.size
         popped = eviction_pool.get()
 
@@ -109,7 +109,7 @@ def run_eviction(
     scheduler_state: ParlaState, event: Eviction, verbose: bool = False
 ) -> List[Tuple[Device, TaskID]]:
 
-    print(f"Running eviction requested by {event.parent_task}.")
+    # print(f"Running eviction requested by {event.parent_task}.")
 
     eviction_tasks = []
     for device, requested_resources in event.requested_resources.items():
@@ -147,7 +147,7 @@ def reserve_task(
                     f"Task {task.name} cannot be reserved: Insufficient resources.",
                     extra=dict(task=task.name, phase=phase),
                 )
-            print(f"Task {task.name} cannot be reserved: Insufficient resources.")
+            # print(f"Task {task.name} cannot be reserved: Insufficient resources.")
 
             return False, scheduler_state.check_eviction(task)
     else:
@@ -161,7 +161,7 @@ def reserve_task(
                     status=task.status,
                 ),
             )
-            print(f"Task {task.name} cannot be reserved: Invalid status.")
+            # print(f"Task {task.name} cannot be reserved: Invalid status.")
         return False, None
 
 
@@ -366,7 +366,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             data = objects.get_data(data_access.id)
 
             active_eviction_tasks = data.status.eviction_tasks
-            print("Active eviction tasks: ", active_eviction_tasks)
+            # print("Active eviction tasks: ", active_eviction_tasks)
             for eviction_task_id in active_eviction_tasks:
                 eviction_task = objects.get_task(eviction_task_id)
                 assert eviction_task is not None
@@ -489,7 +489,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 "Evicting data.",
                 extra=dict(time=current_time),
             )
-        print("Evicting data.")
+        # print("Evicting data.")
         eviction_tasks = run_eviction(scheduler_state, event)
         for device, eviction_task in eviction_tasks:
             self.launchable_tasks[device][TaskType.EVICTION].put_id(

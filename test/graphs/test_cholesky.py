@@ -28,24 +28,23 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 32 * 1024  # 32 MB
+        return 32 * 1024 * 1024  # 1 GB
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         device_tuple = Device(Architecture.GPU, task_id.task_idx[0] % 4)
 
-        runtime_info = TaskRuntimeInfo(
-            task_time=4000, device_fraction=1, memory=int(1e7)
-        )
+        runtime_info = TaskRuntimeInfo(task_time=4000, device_fraction=1, memory=int(0))
         placement_info = TaskPlacementInfo()
         placement_info.add(device_tuple, runtime_info)
 
         return placement_info
 
     data_config = CholeskyDataGraphConfig()
+    # data_config = NoDataGraphConfig()
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = CholeskyConfig(blocks=4, task_config=task_placement)
+    config = CholeskyConfig(blocks=5, task_config=task_placement)
     tasks, data = make_graph(config, data_config=data_config)
 
     topology = TopologyManager().generate("frontera", config=None)
@@ -55,12 +54,7 @@ def test_data():
         tasks=tasks,
         data=data,
         scheduler_type="parla",
-        # recorders=[FasterDataValidRecorder, ComputeTaskRecorder, DataTaskRecorder],
-        # recorders=[
-        #     LaunchedResourceUsageListRecorder,
-        #     ComputeTaskRecorder,
-        #     DataTaskRecorder,
-        # ],
+        randomizer=Randomizer(),
     )
     simulator = create_simulator(config=simulator_config)
 
@@ -68,7 +62,7 @@ def test_data():
     simulated_time = simulator.run()
     end_t = clock()
 
-    print(f"Time to Simulate: {end_t - start_t}")
+    # print(f"Time to Simulate: {end_t - start_t}")
     print(f"Simulated Time: {simulated_time}")
 
     # print(

@@ -58,7 +58,7 @@ def test_data():
     simulator.run()
     end_t = clock()
 
-    print(f"Time to Simulate: {end_t - start_t}")
+    # print(f"Time to Simulate: {end_t - start_t}")
     print(f"Simulated Time: {simulator.time}")
 
     print(simulator.recorders.get(LaunchedResourceUsageListRecorder).memory_usage)

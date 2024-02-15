@@ -37,6 +37,7 @@ src/task4feedback/simulator/preprocess.py
 src/task4feedback/simulator/queue.py
 src/task4feedback/simulator/randomizer.py
 src/task4feedback/simulator/resources.py
+src/task4feedback/simulator/resourceset.py
 src/task4feedback/simulator/simulator.py
 src/task4feedback/simulator/task.py
 src/task4feedback/simulator/topology.py
@@ -71,4 +72,3 @@ src/task4feedback/simulator/schedulers/parla/__init__.py
 src/task4feedback/simulator/schedulers/parla/architecture.py
 src/task4feedback/simulator/schedulers/parla/state.py
 test/test_depth.py
-test/test_lru_eviction.py

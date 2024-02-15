@@ -5,6 +5,7 @@ from .device import *
 from .preprocess import *
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
+from .randomizer import Randomizer
 
 
 @dataclass(slots=True)
@@ -18,6 +19,7 @@ class SimulatorConfig:
     simulated_tasks: SimulatedTaskMap = field(init=False)
     simulated_data: SimulatedDataMap = field(init=False)
     use_data: bool = True
+    randomizer: Randomizer = field(default_factory=Randomizer)
 
 
 def create_simulator(config: SimulatorConfig):
@@ -28,6 +30,7 @@ def create_simulator(config: SimulatorConfig):
         topology=config.topology,
         scheduler_type=config.scheduler_type,
         recorders=recorders,
+        randomizer=config.randomizer,
     )
 
     tasklist, simulated_tasks = create_sim_graph(
@@ -40,7 +43,6 @@ def create_simulator(config: SimulatorConfig):
     scheduler.register_datamap(simulated_data)
     scheduler.register_taskmap(simulated_tasks)
 
-    topological_sort(tasklist, simulated_tasks)
-    scheduler.add_initial_tasks(tasklist)
+    scheduler.add_initial_tasks(tasklist, apply_sort=True)
 
     return scheduler
