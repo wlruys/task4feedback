@@ -1,5 +1,7 @@
-from ..types import TaskID, TaskInfo, TaskState, Optional, Time
+from ..types import TaskID, TaskInfo, TaskState, Optional, Time, Device, Devices
 from dataclasses import dataclass, field
+from .resourceset import FasterResourceSet
+from typing import Dict, Set
 
 
 @dataclass(slots=True)
@@ -21,11 +23,19 @@ class Event:
 @dataclass(slots=True)
 class PhaseEvent(Event):
     max_tasks: int | None = None
+    tasks: set[TaskID] = field(default_factory=set)
 
 
 @dataclass(slots=True)
 class TaskEvent(Event):
     task: TaskID = field(default_factory=TaskID)
+
+
+@dataclass(slots=True)
+class Eviction(Event):
+    func: str = "eviction"
+    parent_task: TaskID = field(default_factory=TaskID)
+    requested_resources: Dict[Device, FasterResourceSet] = field(default_factory=list)
 
 
 @dataclass(slots=True)

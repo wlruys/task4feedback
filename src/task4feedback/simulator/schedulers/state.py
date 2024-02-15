@@ -93,7 +93,7 @@ class ObjectRegistry:
 class SystemState:
     topology: SimulatedTopology
     data_pool: DataPool = field(init=False)
-    resource_pool: ResourcePool = field(init=False)
+    resource_pool: FasterResourcePool = field(init=False)
     objects: ObjectRegistry = field(init=False)
     time: Time = field(default_factory=Time)
 
@@ -105,7 +105,7 @@ class SystemState:
         for device in self.topology.devices:
             self.objects.add_device(device)
 
-        self.resource_pool = ResourcePool(devices=self.topology.devices)
+        self.resource_pool = FasterResourcePool(devices=self.topology.devices)
 
     def register_tasks(self, taskmap: SimulatedTaskMap, copy: bool = False):
         if copy:

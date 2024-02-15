@@ -48,12 +48,12 @@ def check_reserved_resources(task: SimulatedTask, scheduler_state: SystemState) 
     if devices is None:
         raise ValueError(f"Task {task.name} does not have assigned devices.")
 
-    resources_to_update = StatesToResources[TaskState.RESERVED]
+    # resources_to_update = StatesToResources[TaskState.RESERVED]
 
     can_fit = rp.check_resources(
         devices=devices,
         state=TaskState.RESERVED,
-        types=resources_to_update,
+        type=ResourceGroup.PERSISTENT,
         resources=task.resources,
     )
 
@@ -77,7 +77,7 @@ def check_launched_resources(task: SimulatedTask, scheduler_state: SystemState) 
     can_fit = rp.check_resources(
         devices=devices,
         state=TaskState.LAUNCHED,
-        types=resources_to_update,
+        type=ResourceGroup.PERSISTENT,
         resources=task.resources,
     )
 
@@ -182,18 +182,18 @@ def reserve_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
         devices = task.assigned_devices
         assert devices is not None
 
-        resources_to_update = StatesToResources[TaskState.RESERVED]
+        # resources_to_update = StatesToResources[TaskState.RESERVED]
 
         if can_fit := resource_pool.check_resources(
             devices=devices,
             state=TaskState.RESERVED,
-            types=resources_to_update,
+            type=ResourceGroup.PERSISTENT,
             resources=task.resources,
         ):
             resource_pool.add_resources(
                 devices=devices,
                 state=TaskState.RESERVED,
-                types=resources_to_update,
+                type=ResourceGroup.PERSISTENT,
                 resources=task.resources,
             )
             return True
@@ -213,29 +213,29 @@ def launch_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
         TaskStatus.LAUNCHABLE, objects.taskmap, current_time
     ):
         assert task.assigned_devices is not None
-        resources_to_update = StatesToResources[TaskState.LAUNCHED]
+        # resources_to_update = StatesToResources[TaskState.LAUNCHED]
 
         if check_launchable_resources := resource_pool.check_resources(
             devices=task.assigned_devices,
             state=TaskState.RESERVED,
-            types=resources_to_update,
+            type=ResourceGroup.PERSISTENT,
             resources=task.resources,
         ):
             # Update resource pool for RESERVED resources (for correctness)
             resource_pool.add_resources(
                 devices=task.assigned_devices,
                 state=TaskState.RESERVED,
-                types=resources_to_update,
+                type=ResourceGroup.PERSISTENT,
                 resources=task.resources,
             )
             # Update resource pool for LAUNCHED resources (for metadata) (Tracks resources that are currently use)
             resource_pool.add_resources(
                 devices=task.assigned_devices,
                 state=TaskState.LAUNCHED,
-                types=AllResources,
+                type=ResourceGroup.ALL,
                 resources=task.resources,
             )
-            task.set_duration(task.assigned_devices, scheduler_state)
+            # task.set_duration(task.assigned_devices, scheduler_state)
             return True
     return False
 
@@ -251,20 +251,20 @@ def complete_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
     resource_pool.remove_resources(
         devices=devices,
         state=TaskState.MAPPED,
-        types=AllResources,
+        type=ResourceGroup.ALL,
         resources=task.resources,
     )
     resource_pool.remove_resources(
         devices=devices,
         state=TaskState.RESERVED,
-        types=AllResources,
+        type=ResourceGroup.ALL,
         resources=task.resources,
     )
 
     resource_pool.remove_resources(
         devices=devices,
         state=TaskState.LAUNCHED,
-        types=AllResources,
+        type=ResourceGroup.ALL,
         resources=task.resources,
     )
 

@@ -29,8 +29,8 @@ def get_required_memory_for_data(
     access_type: AccessType,
 ) -> int:
     data = objects.get_data(data_id)
-    print(phase, device, data_id, data.is_valid(device, phase))
-    if is_valid := data.is_valid(device, phase) and (
+
+    if is_valid := data.is_valid_or_moving(device, phase) and (
         access_type == AccessType.READ or access_type == AccessType.READ_WRITE
     ):
         return 0
@@ -61,7 +61,7 @@ def get_required_resources(
     objects: ObjectRegistry,
     count_data: bool = True,
     verbose: bool = False,
-) -> List[ResourceSet]:
+) -> List[FasterResourceSet]:
     if isinstance(devices, Device):
         devices = (devices,)
 
@@ -73,7 +73,7 @@ def get_required_resources(
     else:
         resources = task.resources
 
-    memory: List[int] = [s[ResourceType.MEMORY] for s in resources]
+    memory: List[int] = [s.memory for s in resources]
 
     if count_data:
         get_required_memory(memory, phase, devices, task.read_accesses, objects)
@@ -83,17 +83,50 @@ def get_required_resources(
     resources = []
     for i in range(len(devices)):
         t_req = task.resources[i]
-        vcus: Numeric = t_req[ResourceType.VCU]
-        mem: int = memory[i]
-        copy: int = t_req[ResourceType.COPY]
-        resources.append(ResourceSet(vcus=vcus, memory=mem, copy=copy))
+        mem = memory[i]
+        vcus = t_req.vcus
+        copy = t_req.copy
+        resources.append(FasterResourceSet(vcus=vcus, memory=mem, copy=copy))
 
-    logger.resource.debug(
-        "Required resources",
-        extra=dict(task=task.name, phase=phase, resources=resources),
-    )
+    if logger.ENABLE_LOGGING:
+        logger.resource.debug(
+            f"Required resources {resources} for {task.name} in {phase} phase",
+            extra=dict(task=task.name, phase=phase, resources=resources),
+        )
 
     return resources
+
+
+def _check_eviction(
+    state: SystemState,
+    task: SimulatedTask,
+    verbose: bool = False,
+) -> Optional[Eviction]:
+    # print("Checking eviction for task: ", task.name)
+
+    if task.eviction_requested:
+        # print(f"Eviction already requested for task {task.name}")
+        return None
+
+    # Only generate an eviction event if it would free enough resources to run the next task
+    resource_differences = _get_difference_reserved(state, task, verbose=verbose)
+    verbose = True
+    # print("Time: ", state.time)
+    if verbose:
+        print(
+            f"Cannot allocate memory for task {task.name}. Requires {resource_differences} more memory."
+        )
+    for device, resources in resource_differences.items():
+        evictable_memory = state.objects.get_device(device).evictable_bytes
+        if verbose:
+            print(f"Evictable memory on {device}: {evictable_memory}")
+            print(f"Required Memory on {device}: {resources.memory}")
+        if evictable_memory < resources.memory:
+            return None
+
+    task.eviction_requested = True
+
+    return Eviction(parent_task=task.name, requested_resources=resource_differences)
 
 
 def _check_nearest_source(
@@ -114,8 +147,8 @@ def _check_nearest_source(
     device = state.objects.get_device(device_id)
     assert device is not None
 
-    valid_sources_ids = data.get_devices_from_states(
-        [TaskState.LAUNCHED], [DataState.VALID]
+    valid_sources_ids = data.get_device_set_from_states(
+        TaskState.LAUNCHED, DataState.VALID
     )
     valid_sources = [state.objects.get_device(d) for d in valid_sources_ids]
 
@@ -156,7 +189,7 @@ def _acquire_resources_mapped(
         TaskState.MAPPED, task, devices, state.objects, count_data=True
     )
     state.resource_pool.add_resources(
-        devices, TaskState.MAPPED, AllResources, resources
+        devices, TaskState.MAPPED, ResourceGroup.ALL, resources
     )
 
     if logger.ENABLE_LOGGING:
@@ -164,7 +197,7 @@ def _acquire_resources_mapped(
             remaining = state.resource_pool.pool[device][TaskState.MAPPED]
 
             logger.resource.debug(
-                "Resources after acquiring",
+                f"Resources after acquiring for mapped task {task.name} on {device}: {remaining}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -174,6 +207,39 @@ def _acquire_resources_mapped(
                     time=state.time,
                 ),
             )
+
+
+def _get_difference_reserved(
+    state: SystemState, task: SimulatedTask, verbose: bool = False
+) -> Dict[Device, FasterResourceSet]:
+    devices = task.assigned_devices
+
+    if isinstance(task, SimulatedDataTask):
+        raise RuntimeError(
+            f"Data tasks should never hit the Reserver. Invalid task: {task}"
+        )
+
+    assert devices is not None
+    if isinstance(devices, Device):
+        devices = (devices,)
+
+    resources = get_required_resources(
+        TaskState.RESERVED, task, devices, state.objects, count_data=True
+    )
+
+    # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
+    # print(
+    #    f"Resources in use for task {task.name} in RESERVED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
+    # )
+
+    missing_resources = state.resource_pool.get_difference(
+        devices=devices,
+        state=TaskState.RESERVED,
+        type=ResourceGroup.PERSISTENT,
+        resources=resources,
+    )
+
+    return missing_resources
 
 
 def _check_resources_reserved(
@@ -190,8 +256,6 @@ def _check_resources_reserved(
     if isinstance(devices, Device):
         devices = (devices,)
 
-    resources_types = StatesToResources[TaskState.RESERVED]
-
     resources = get_required_resources(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
     )
@@ -199,9 +263,14 @@ def _check_resources_reserved(
     can_fit = state.resource_pool.check_resources(
         devices=devices,
         state=TaskState.RESERVED,
-        types=resources_types,
+        type=ResourceGroup.PERSISTENT,
         resources=resources,
     )
+
+    # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
+    # print(
+    #    f"Current resources in use for task {task.name} in RESERVED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
+    # )
 
     return can_fit
 
@@ -220,21 +289,21 @@ def _acquire_resources_reserved(
     if isinstance(devices, Device):
         devices = (devices,)
 
-    resource_types = StatesToResources[TaskState.RESERVED]
+    # resource_types = StatesToResources[TaskState.RESERVED]
 
     resources = get_required_resources(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
     )
 
     state.resource_pool.add_resources(
-        devices, TaskState.RESERVED, resource_types, resources
+        devices, TaskState.RESERVED, ResourceGroup.PERSISTENT, resources
     )
 
     if logger.ENABLE_LOGGING:
         for device in devices:
             remaining = state.resource_pool.pool[device][TaskState.RESERVED]
             logger.resource.debug(
-                "Resources after acquiring",
+                f"Resources after acquiring for reserved task {task.name} on {device}: {remaining}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -255,7 +324,7 @@ def _check_resources_launched(
     if isinstance(devices, Device):
         devices = (devices,)
 
-    resources_types = StatesToResources[TaskState.LAUNCHED]
+    # resources_types = StatesToResources[TaskState.LAUNCHED]
 
     resources = get_required_resources(
         TaskState.RESERVED, task, devices, state.objects, count_data=False
@@ -264,9 +333,13 @@ def _check_resources_launched(
     can_fit = state.resource_pool.check_resources(
         devices=devices,
         state=TaskState.RESERVED,
-        types=resources_types,
+        type=ResourceGroup.NONPERSISTENT,
         resources=resources,
     )
+    # print(f"Resources required for task {task.name} in LAUNCHED state: {resources}")
+    # print(
+    #    f"Current resources in use for task {task.name} in LAUNCHED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
+    # )
 
     if isinstance(task, SimulatedDataTask):
         source_device = _check_nearest_source(state, task)
@@ -294,18 +367,17 @@ def _acquire_resources_launched(
     resources = get_required_resources(
         TaskState.LAUNCHED, task, devices, state.objects, count_data=True
     )
-
-    resource_types = StatesToResources[TaskState.LAUNCHED]
+    # print(f"Task {task.name} launching with resources: {resources}")
 
     state.resource_pool.add_resources(
-        devices, TaskState.RESERVED, resource_types, resources
+        devices, TaskState.RESERVED, ResourceGroup.NONPERSISTENT, resources
     )
 
     state.resource_pool.add_resources(
-        devices, TaskState.LAUNCHED, AllResources, resources
+        devices, TaskState.LAUNCHED, ResourceGroup.ALL, resources
     )
 
-    if isinstance(task, SimulatedDataTask):
+    if isinstance(task, SimulatedDataTask) or isinstance(task, SimulatedEvictionTask):
         assert len(devices) == 1
         target_device = devices[0]
         source_device = task.source
@@ -329,7 +401,7 @@ def _acquire_resources_launched(
             remaining_launched = state.resource_pool.pool[device][TaskState.LAUNCHED]
 
             logger.resource.debug(
-                "Resources after acquiring",
+                f"Reserved Resources after acquiring launched task {task.name} on {device}: {remaining_reserved}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -341,7 +413,7 @@ def _acquire_resources_launched(
             )
 
             logger.resource.debug(
-                "Resources after acquiring",
+                f"Launched Resources after acquiring launched task {task.name} on {device}: {remaining_launched}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -371,10 +443,10 @@ def _release_resources_completed(
         state.resource_pool.remove_resources(
             devices=devices,
             state=TaskState.MAPPED,
-            types=AllResources,
+            type=ResourceGroup.ALL,
             resources=task.resources,
         )
-    elif isinstance(task, SimulatedDataTask):
+    elif isinstance(task, SimulatedDataTask) or isinstance(task, SimulatedEvictionTask):
         assert len(devices) == 1
         target_device = devices[0]
         source_device = task.source
@@ -395,14 +467,14 @@ def _release_resources_completed(
     state.resource_pool.remove_resources(
         devices=devices,
         state=TaskState.RESERVED,
-        types=AllResources,
+        type=ResourceGroup.ALL,
         resources=task.resources,
     )
 
     state.resource_pool.remove_resources(
         devices=devices,
         state=TaskState.LAUNCHED,
-        types=AllResources,
+        type=ResourceGroup.ALL,
         resources=task.resources,
     )
 
@@ -413,7 +485,7 @@ def _release_resources_completed(
             remaining_launched = state.resource_pool.pool[device][TaskState.LAUNCHED]
 
             logger.resource.debug(
-                "Resources after releasing",
+                f"Mapped resources after releasing task {task} on {device}: {resources}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -425,7 +497,7 @@ def _release_resources_completed(
             )
 
             logger.resource.debug(
-                "Resources after releasing",
+                f"Reserved Resources after releasing task {task} on {device}: {remaining_reserved}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -437,7 +509,7 @@ def _release_resources_completed(
             )
 
             logger.resource.debug(
-                "Resources after releasing",
+                f"Launched Resources after releasing task {task} on {device}: {remaining_launched}",
                 extra=dict(
                     task=task.name,
                     device=device,
@@ -483,7 +555,8 @@ def _use_data(
                 task.name, device_id, TaskState.MAPPED, operation=access_type
             )
 
-            device.eviction_pool.remove(data)
+            # Data is not in the eviction pool if it is reserved
+            device.remove_evictable(data)
 
         elif phase == TaskState.LAUNCHED:
             data.finish_use(
@@ -513,19 +586,14 @@ def _use_data(
         if phase == TaskState.LAUNCHED:
             for device in evicted_locations:
                 for pool in [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED]:
-                    print(
-                        f"Evicting data {data.name} from device {device} in pool {pool}"
-                    )
-                    print("Before eviction")
-                    print(state.resource_pool.pool[device][pool])
                     state.resource_pool.remove_device_resources(
                         device,
                         pool,
-                        [ResourceType.MEMORY],
-                        ResourceSet(memory=data.size, vcus=0, copy=0),
+                        ResourceGroup.PERSISTENT,
+                        FasterResourceSet(memory=data.size, vcus=0, copy=0),
                     )
-                    print("After eviction")
-                    print(state.resource_pool.pool[device][pool])
+                # remove from eviction pools
+                state.objects.get_device(device).remove_evictable(data)
 
 
 def _release_data(
@@ -536,6 +604,8 @@ def _release_data(
     access_type: AccessType,
     verbose: bool = False,
 ):
+    from rich import print
+
     if len(data_accesses) == 0:
         return
 
@@ -557,6 +627,10 @@ def _release_data(
 
         data.finish_use(task.name, device_id, TaskState.LAUNCHED, operation=access_type)
 
+        # print(
+        #    f"Data {data.name} finished use on {device_id} in {phase} phase. Evitable: {data.is_evictable(device_id)}"
+        # )
+        # print(data)
         if data.is_evictable(device_id):
             device.eviction_pool.add(data)
 
@@ -632,6 +706,90 @@ def _finish_move(
     prior_state = data.finish_move(task.name, source_device, target_device)
 
 
+def _start_evict(
+    state: SystemState,
+    data_accesses: List[DataAccess],
+    task: SimulatedEvictionTask,
+    access_type: AccessType,
+    verbose: bool = False,
+):
+    if len(data_accesses) == 0:
+        return
+
+    devices = task.assigned_devices
+    assert devices is not None
+
+    assert len(devices) == 1
+    assert len(data_accesses) == 1
+
+    assert task.source is not None
+
+    for data_access in data_accesses:
+        data_id = data_access.id
+        device_idx = data_access.device
+        device_id = devices[device_idx]
+
+        data = state.objects.get_data(data_id)
+        assert data is not None
+
+        device = state.objects.get_device(device_id)
+        assert device is not None
+
+        data.status.start_eviction(
+            task=task.name,
+            target_device=device_id,
+            source_device=task.source,
+            state=TaskState.LAUNCHED,
+        )
+
+
+def _finish_evict(
+    state: SystemState,
+    data_accesses: List[DataAccess],
+    task: SimulatedEvictionTask,
+    access_type: AccessType,
+    verbose: bool = False,
+):
+    if len(data_accesses) == 0:
+        return
+
+    devices = task.assigned_devices
+    assert devices is not None
+
+    assert len(devices) == 1
+    assert len(data_accesses) == 1
+
+    assert task.source is not None
+
+    for data_access in data_accesses:
+        data_id = data_access.id
+        device_idx = data_access.device
+        device_id = devices[device_idx]
+
+        data = state.objects.get_data(data_id)
+        assert data is not None
+
+        device = state.objects.get_device(device_id)
+        assert device is not None
+
+        old_state, evicted_locations = data.status.finish_eviction(
+            task=task.name,
+            target_device=device_id,
+            source_device=task.source,
+            state=TaskState.COMPLETED,
+        )
+
+        for device in evicted_locations:
+            for pool in [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED]:
+                # print(f"Finishing eviction: {device} for {data.name}")
+                state.resource_pool.remove_device_resources(
+                    device,
+                    pool,
+                    ResourceGroup.PERSISTENT,
+                    FasterResourceSet(memory=data.size, vcus=0, copy=0),
+                )
+
+
 def _compute_task_duration(
     state: SystemState,
     task: SimulatedComputeTask,
@@ -642,6 +800,7 @@ def _compute_task_duration(
     assert devices is not None
 
     runtime_infos = task.get_runtime_info(devices)
+
     max_time = max([runtime_info.task_time for runtime_info in runtime_infos])
     duration = Time(max_time)
 
@@ -655,7 +814,6 @@ def _data_task_duration(
     target_devices: Devices,
     verbose: bool = False,
 ) -> Tuple[Time, Time]:
-    assert isinstance(task, SimulatedDataTask)
     assert target_devices is not None
     assert task.source is not None
 
@@ -687,6 +845,23 @@ def _data_task_duration(
     return duration, completion_time
 
 
+def _eviction_task_duration(
+    state: SystemState,
+    task: SimulatedEvictionTask,
+    devices: Devices,
+    verbose: bool = False,
+) -> Tuple[Time, Time]:
+
+    assert isinstance(task, SimulatedEvictionTask)
+    duration, completion_time = _data_task_duration(
+        state, task, devices, verbose=verbose
+    )
+    duration = Time(1000)
+    completion_time = state.time + duration
+
+    return duration, completion_time
+
+
 @SchedulerOptions.register_state("parla")
 @dataclass(slots=True)
 class ParlaState(SystemState):
@@ -702,6 +877,16 @@ class ParlaState(SystemState):
         else:
             raise RuntimeError(
                 f"Invalid phase {phase} in check_resource for task {task}"
+            )
+
+    def get_resource_difference(
+        self, phase: TaskState, task: SimulatedTask, verbose: bool = False
+    ) -> Dict[Device, FasterResourceSet]:
+        if phase == TaskState.RESERVED:
+            return _get_difference_reserved(self, task)
+        else:
+            raise NotImplementedError(
+                f"Invalid phase {phase} in get_resource_difference for task {task}"
             )
 
     def acquire_resources(
@@ -743,6 +928,9 @@ class ParlaState(SystemState):
             # They read from a single source device onto a single target device
             _move_data(self, task.read_accesses, task)
             _move_data(self, task.read_write_accesses, task)
+        elif isinstance(task, SimulatedEvictionTask):
+            # All eviction tasks store data in "read access"
+            _start_evict(self, task.read_accesses, task, AccessType.EVICT)
 
     def release_data(
         self,
@@ -751,14 +939,20 @@ class ParlaState(SystemState):
         verbose: bool = False,
     ):
         assert phase == TaskState.COMPLETED
-
+        # print("RELEASING DATA")
+        # print("Task is type: ", type(task))
         if isinstance(task, SimulatedComputeTask):
+            # print("COMPLETED COMPUTE")
             _release_data(self, phase, task.read_accesses, task, AccessType.READ)
             _release_data(
                 self, phase, task.read_write_accesses, task, AccessType.READ_WRITE
             )
             _release_data(self, phase, task.write_accesses, task, AccessType.WRITE)
+        elif isinstance(task, SimulatedEvictionTask):
+            # print("COMPLETED EVICTION")
+            _finish_evict(self, task.read_accesses, task, AccessType.EVICT)
         elif isinstance(task, SimulatedDataTask):
+            # print("COMPLETED DATA")
             _finish_move(self, task.read_accesses, task)
             _finish_move(self, task.read_write_accesses, task)
 
@@ -776,6 +970,11 @@ class ParlaState(SystemState):
         self, task: SimulatedTask, status: TaskStatus, verbose: bool = False
     ) -> bool:
         return task.check_status(status, self.objects.taskmap, self.time)
+
+    def check_eviction(
+        self, task: SimulatedTask, verbose: bool = False
+    ) -> Optional[Eviction]:
+        return _check_eviction(self, task, verbose=verbose)
 
     def finalize_stats(self):
         for device in self.topology.devices:

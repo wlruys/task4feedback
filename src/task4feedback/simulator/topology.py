@@ -1,6 +1,7 @@
 from ..types import Architecture, Device, TaskID, DataID, DataInfo, ResourceType, Time
 from typing import List, Dict, Set, Tuple, Optional, Callable, Sequence, Type
-from .device import SimulatedDevice, ResourceSet
+from .device import SimulatedDevice
+from .resourceset import ResourceSet, FasterResourceSet
 from dataclasses import dataclass, field, InitVar
 from .utility import parse_size
 
@@ -164,15 +165,11 @@ class ConnectionPool:
 
         # Check if copy engines are available (if required)
         if require_copy_engines:
-            if (
-                self.count_active_connections(source)
-                >= source.resources.store[ResourceType.COPY]
-            ):
+            if self.count_active_connections(source) >= source.resources.copy:
                 return False
             if (
                 require_symmetric
-                and self.count_active_connections(target)
-                >= target.resources.store[ResourceType.COPY]
+                and self.count_active_connections(target) >= target.resources.copy
             ):
                 return False
 
@@ -209,9 +206,22 @@ class ConnectionPool:
         source_idx = self.get_index(source)
         target_idx = self.get_index(target)
         bandwidth = self.bandwidth[source_idx, target_idx]
-        assert bandwidth > 0, f"No known bandwidth between {source} and {target}"
-        time_in_seconds = data_size / bandwidth
-        time_in_microseconds = int(time_in_seconds * 1e6)
+        if bandwidth <= 0:
+            # If no direct connection, route through the host device
+            host_idx = self.get_index(self.host)
+            first_hop_bandwidth = self.bandwidth[source_idx, host_idx]
+            second_hop_bandwidth = self.bandwidth[host_idx, target_idx]
+            if first_hop_bandwidth <= 0 or second_hop_bandwidth <= 0:
+                raise ValueError(
+                    f"No connection between {source} and {target} or through the host"
+                )
+            time_in_seconds = (
+                data_size / first_hop_bandwidth + data_size / second_hop_bandwidth
+            )
+            time_in_microseconds = int(time_in_seconds * 1e6)
+        else:
+            time_in_seconds = data_size / bandwidth
+            time_in_microseconds = int(time_in_seconds * 1e6)
         return Time(time_in_microseconds)
 
     def get_connection_string(self, source: NamedDevice, target: NamedDevice) -> str:
@@ -375,6 +385,16 @@ class TopologyManager:
             raise ValueError(f"Topology {name} is not registered.")
         return TopologyManager.generator_map[name]
 
+    @staticmethod
+    def generate(
+        name: str, config: Optional[Dict[str, int]] = None
+    ) -> SimulatedTopology:
+        """
+        Generate a topology.
+        """
+        generator = TopologyManager.get_generator(name)
+        return generator(config)
+
 
 @TopologyManager.register_generator("frontera")
 def generate_4gpus_1cpu_toplogy(
@@ -411,9 +431,9 @@ def generate_4gpus_1cpu_toplogy(
         CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
     else:
         # Default configuration for testing
-        P2P_BW = 2e6
-        H2D_BW = 1e6
-        D2H_BW = 1e6
+        P2P_BW = parse_size("9 GB")  # 9 GB/s
+        H2D_BW = parse_size("7 GB")  # 7 GB/s
+        D2H_BW = parse_size("7 GB")  # 7 GB/s
 
         GPU_MEM = parse_size("16 GB")
         CPU_MEM = parse_size("130 GB")
@@ -424,13 +444,13 @@ def generate_4gpus_1cpu_toplogy(
     # Create devices
     gpus = [
         SimulatedDevice(
-            Device(Architecture.GPU, i), ResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
+            Device(Architecture.GPU, i), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
         )
         for i in range(4)
     ]
     cpus = [
         SimulatedDevice(
-            Device(Architecture.CPU, 0), ResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
+            Device(Architecture.CPU, 0), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
         )
     ]
 

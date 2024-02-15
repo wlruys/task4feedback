@@ -30,7 +30,7 @@ class SchedulerArchitecture:
 
     def __getitem__(self, event: Event) -> Callable[[SystemState], List[EventPair]]:
         try:
-            # print(f"Getting function for event {event.func}")
+            print(f"Getting function for event {event.func}")
             function = getattr(self, event.func)
         except AttributeError:
             raise NotImplementedError(

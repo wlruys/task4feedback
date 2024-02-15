@@ -87,10 +87,12 @@ class LRUEvictionPool(EvictionPool):
 
     def add(self, data: SimulatedData):
         if self.datalist.append(data.info):
+            # print("Adding {data.info} to eviction pool: {data.size}, {self.evictable_size}")
             self.evictable_size += data.size
 
     def remove(self, data: SimulatedData):
         if self.datalist.remove(data.info):
+            # print(f"Removing {data.info} from eviction pool: {data.size}")
             self.evictable_size -= data.size
             assert self.evictable_size >= 0
 
@@ -125,3 +127,6 @@ class LRUEvictionPool(EvictionPool):
 
     def __repr__(self):
         return self.__str__()
+
+    def empty(self) -> bool:
+        return len(self.datalist) == 0

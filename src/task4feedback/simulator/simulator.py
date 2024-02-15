@@ -1,13 +1,14 @@
 from .task import SimulatedTask, SimulatedDataTask, SimulatedComputeTask
 from .data import *
 from .device import *
+from .resourceset import *
 from .queue import *
 from .events import *
 from .resources import *
 from .task import *
 from .topology import *
 
-from ..types import Architecture, Device, TaskID, TaskState, TaskType, Time
+from ..types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
 from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 
 from typing import List, Dict, Set, Tuple, Optional, Callable
@@ -18,7 +19,11 @@ from .schedulers import *
 
 from rich import print
 
-from .analysis.recorder import RecorderList
+from .analysis.recorder import RecorderList, Recorder
+from .randomizer import Randomizer
+from .watcher import Watcher
+
+from enum import Enum
 
 
 @dataclass(slots=True)
@@ -31,6 +36,8 @@ class SimulatedScheduler:
     state: SystemState = field(init=False)
     log_level: int = 0
     recorders: RecorderList = field(default_factory=RecorderList)
+    randomizer: Randomizer = field(default_factory=Randomizer)
+    watcher: Watcher = field(default_factory=Watcher)
 
     events: EventQueue = EventQueue()
 
@@ -61,7 +68,22 @@ class SimulatedScheduler:
     def register_datamap(self, datamap: SimulatedDataMap):
         self.state.register_data(datamap)
 
-    def add_initial_tasks(self, tasks: List[TaskID]):
+    @property
+    def taskmap(self):
+        return self.state.objects.taskmap
+
+    @property
+    def datamap(self):
+        return self.state.objects.datamap
+
+    @property
+    def devicemap(self):
+        return self.state.objects.devicemap
+
+    def add_initial_tasks(self, tasks: List[TaskID], apply_sort: bool = True):
+        if apply_sort:
+            tasks = self.randomizer.task_order(tasks, self.taskmap)
+            print(f"Initial Task Order: {tasks}")
         self.tasks.extend(tasks)
 
     def __repr__(self):
@@ -86,7 +108,8 @@ class SimulatedScheduler:
 
         return new_event_pairs
 
-    def run(self):
+    def run(self) -> Time:
+        watcher_status = True
         new_event_pairs = self.mechanisms.initialize(self.tasks, self.state)
         for completion_time, new_event in new_event_pairs:
             self.events.put(new_event, completion_time)
@@ -107,11 +130,27 @@ class SimulatedScheduler:
                 # Process Event
                 new_events = self.process_event(event)
 
+                # print("---")
+                # data_objects = self.state.objects.datamap
+                # for data in data_objects.values():
+                #     print(data)
+
                 # Update Log
                 self.record(event, new_events)
 
+                # Check Watcher Conditions
+                watcher_status = self.watcher.check_conditions(
+                    self.state, self.mechanisms, event
+                )
+
+                if not watcher_status:
+                    break
+
         self.state.finalize_stats()
+        self.recorders.finalize(self.time, self.mechanisms, self.state)
 
         print(f"Event Count: {event_count}")
-        if not self.mechanisms.complete(self.state):
+        if not self.mechanisms.complete(self.state) and watcher_status:
             raise RuntimeError("Scheduler terminated without completing all tasks.")
+
+        return self.time

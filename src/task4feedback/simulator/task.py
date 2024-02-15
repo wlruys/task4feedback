@@ -18,9 +18,7 @@ from typing import (
 
 from .queue import PriorityQueue
 from dataclasses import dataclass, field
-
-from .resources import ResourcePool
-from .device import ResourceSet
+from .resourceset import ResourceSet, FasterResourceSet
 from .datapool import DataPool
 from ..logging import logger
 
@@ -52,6 +50,13 @@ class TaskTimes:
             self.state_times[state] = time
         else:
             self.status_times[state] = time
+
+    def get_state(self, time: Time) -> TaskState:
+        current = TaskState.SPAWNED
+        for state in [TaskState.MAPPED, TaskState.LAUNCHED, TaskState.COMPLETED]:
+            if self.state_times[state] <= time:
+                current = state
+        return current
 
 
 @dataclass(slots=True, init=False)
@@ -104,12 +109,14 @@ class SimulatedTask:
     times: TaskTimes = field(default_factory=TaskTimes)
     counters: TaskCounters = field(init=False)
     dependents: List[TaskID] = field(default_factory=list)
-    resources: List[ResourceSet] = field(default_factory=list)
+    resources: List[FasterResourceSet] = field(default_factory=list)
     depth: int = 0
     type: TaskType = TaskType.BASE
     parent: Optional[TaskID] = None
     data_tasks: Optional[List[TaskID]] = None
+    eviction_tasks: Optional[List[TaskID]] = None
     spawn_tasks: Optional[List[TaskID]] = None
+    eviction_requested: bool = False
 
     def __post_init__(self):
         self.counters = TaskCounters(self.info)
@@ -286,11 +293,17 @@ class SimulatedTask:
 
     def get_resources(
         self, devices: Devices, data_inputs: bool = False
-    ) -> List[ResourceSet]:
+    ) -> List[FasterResourceSet]:
         raise NotImplementedError
 
-    def add_data_dependency(self, task: TaskID):
-        raise NotImplementedError
+    def add_eviction_dependency(self, task: SimulatedTask):
+        assert task.type == TaskType.EVICTION
+        self.add_dependency(task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED])
+        task.dependents.append(self.name)
+
+        if self.eviction_tasks is None:
+            self.eviction_tasks = []
+        self.eviction_tasks.append(task.name)
 
 
 @dataclass(slots=True)
@@ -304,7 +317,7 @@ class SimulatedComputeTask(SimulatedTask):
             self.data_tasks = []
         self.data_tasks.append(task)
 
-    def get_resources(self, devices: Devices) -> List[ResourceSet]:
+    def get_resources(self, devices: Devices) -> List[FasterResourceSet]:
         resources = []
 
         if isinstance(devices, Device):
@@ -313,7 +326,7 @@ class SimulatedComputeTask(SimulatedTask):
         for runtime_info in runtime_info_list:
             vcus = runtime_info.device_fraction
             memory = runtime_info.memory
-            resources.append(ResourceSet(vcus=vcus, memory=memory, copy=0))
+            resources.append(FasterResourceSet(vcus=vcus, memory=memory, copy=0))
 
         return resources
 
@@ -325,8 +338,13 @@ class SimulatedDataTask(SimulatedTask):
     local_index: int = 0
     real: bool = True
 
-    def get_resources(self, devices: Devices) -> List[ResourceSet]:
-        return [ResourceSet(vcus=0, memory=0, copy=1)]
+    def get_resources(self, devices: Devices) -> List[FasterResourceSet]:
+        return [FasterResourceSet(vcus=0, memory=0, copy=1)]
+
+
+@dataclass(slots=True)
+class SimulatedEvictionTask(SimulatedDataTask):
+    type: TaskType = TaskType.EVICTION
 
 
 type SimulatedTaskMap = Mapping[

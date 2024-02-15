@@ -1,8 +1,9 @@
 from __future__ import annotations
-from ...types import DataID
+from ...types import *
 from ..data import *
 from dataclasses import dataclass, field, InitVar
 from typing import Dict, List, Set, Tuple, Union, Self
+from ..task import SimulatedEvictionTask, SimulatedComputeTask
 
 
 @dataclass(slots=True)
@@ -25,4 +26,7 @@ class EvictionPool:
         raise NotImplementedError
 
     def __contains__(self, data: SimulatedData | DataID):
+        raise NotImplementedError
+
+    def empty(self) -> bool:
         raise NotImplementedError
