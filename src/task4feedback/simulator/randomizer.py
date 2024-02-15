@@ -47,8 +47,8 @@ def random_topological_sort(
     taskmapcopy = deepcopy(taskmap)
     i = 0
     while S:
-        # n = _random_set_pop(S)
-        n = _determinisitc_pop(S)
+        n = _random_pop(S)
+        # n = _determinisitc_pop(S)
         L.append(n)
 
         if verbose:
