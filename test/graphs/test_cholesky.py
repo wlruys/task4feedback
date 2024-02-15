@@ -44,7 +44,7 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = CholeskyConfig(blocks=5, task_config=task_placement)
+    config = CholeskyConfig(blocks=10, task_config=task_placement)
     tasks, data = make_graph(config, data_config=data_config)
 
     topology = TopologyManager().generate("frontera", config=None)
@@ -62,7 +62,7 @@ def test_data():
     simulated_time = simulator.run()
     end_t = clock()
 
-    # print(f"Time to Simulate: {end_t - start_t}")
+    print(f"Time to Simulate: {end_t - start_t}")
     print(f"Simulated Time: {simulated_time}")
 
     # print(
