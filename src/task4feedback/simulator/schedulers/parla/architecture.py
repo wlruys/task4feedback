@@ -286,10 +286,19 @@ class ParlaArchitecture(SchedulerArchitecture):
     eviction_occured: bool = False
 
     ### Information for RL ###
+
     max_outdegree: int = 0
     max_indegree: int = 0
     # Depth from a root task
     max_depth: int = 0
+    # Total workload planned across devices
+    total_active_workload: float = 0
+    # Workload per device
+    perdev_active_workload: Dict[Device, int] = field(default_factory=dict)
+    # # of total tasks
+    total_num_tasks: int = 0
+    # # of completed tasks
+    total_num_completed_tasks: int = 0
 
     def __post_init__(self, topology: SimulatedTopology):
         assert topology is not None
@@ -377,8 +386,10 @@ class ParlaArchitecture(SchedulerArchitecture):
                 task.info.depth = min(task.info.depth, taskmap[dep].info.depth + 1)
 
             self.max_depth = max(self.max_depth, task.info.depth)
+        self.total_num_tasks = len(tasks)
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
+                f"Total tasks: {self.total_num_tasks}\n"
                 f"Max out-degree: {self.max_outdegree} and in-degree: {self.max_indegree}."
             )
 
@@ -412,6 +423,9 @@ class ParlaArchitecture(SchedulerArchitecture):
                 task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
+                # Assumes that a task is assigned to a single device 
+                self.perdev_active_workload[task.assigned_devices[0]] += 1
+                self.total_active_workload += 1
             else:
                 next_tasks.fail()
                 continue
@@ -686,6 +700,10 @@ class ParlaArchitecture(SchedulerArchitecture):
             mapping_pair = (current_time, Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
+
+        self.perdev_active_workload[task.assigned_devices[0]] -= 1
+        self.total_active_workload -= 1
+        self.total_num_completed_tasks += 1
 
         return next_events
 
