@@ -42,6 +42,19 @@ def test_data():
             duration = 3000
         return duration
 
+    def func_type_id(task_id: TaskID):
+        func_id = 0
+        if task_id.taskspace == "POTRF":
+            func_id = 0
+        elif task_id.taskspace == "SYRK":
+            func_id = 1
+        elif task_id.taskspace == "SOLVE":
+            func_id = 2
+        elif task_id.taskspace == "GEMM":
+            func_id = 3
+        print(task_id.taskspace, " type id ", func_id)
+        return func_id
+
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         device_tuple = Device(Architecture.GPU, task_id.task_idx[0] % 4)
 
@@ -58,7 +71,8 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = CholeskyConfig(blocks=10, task_config=task_placement)
+    config = CholeskyConfig(blocks=10, task_config=task_placement,
+                            func_id=func_type_id)
     tasks, data = make_graph(config, data_config=data_config)
 
     topology = TopologyManager().generate("frontera", config=None)

@@ -167,6 +167,7 @@ def create_data_tasks(
                 dependencies=dependencies,
                 runtime=runtime,
                 data_dependencies=data_info,
+                func_id=task_info.func_id
             )
 
             data_task = SimulatedDataTask(

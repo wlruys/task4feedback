@@ -619,6 +619,9 @@ class TaskInfo:
     order: int = 0
     # Shortest depth from root tasks
     depth: int = 0
+    # User-defined task integer ID; in general, it is decided based
+    # on function (or kernel) that this task calls
+    func_id: int = 0
 
 
 # Graph Type Aliases
