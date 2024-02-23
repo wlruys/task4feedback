@@ -172,6 +172,7 @@ class Device:
 
 type Devices = Device | Tuple[Device, ...]
 
+
 #########################################
 # Data Information
 #########################################
@@ -316,6 +317,7 @@ class TaskDataInfo:
 
 
 DataMap = Dict[DataID, DataInfo]
+
 
 #########################################
 # Task Graph Information
@@ -617,8 +619,8 @@ class TaskInfo:
     data_dependencies: TaskDataInfo
     mapping: Device | Tuple[Device, ...] | None = None
     order: int = 0
-    # Shortest depth from root tasks
-    depth: int = 0
+    # Longest depth from root tasks
+    depth: int = -1
     # User-defined task integer ID; in general, it is decided based
     # on function (or kernel) that this task calls
     func_id: int = 0

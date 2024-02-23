@@ -22,8 +22,6 @@ from .resourceset import ResourceSet, FasterResourceSet
 from .datapool import DataPool
 from ..logging import logger
 
-import sys
-
 @dataclass(slots=True)
 class TaskTimes:
     duration: Time = field(default_factory=Time)
@@ -111,7 +109,6 @@ class SimulatedTask:
     counters: TaskCounters = field(init=False)
     dependents: List[TaskID] = field(default_factory=list)
     resources: List[FasterResourceSet] = field(default_factory=list)
-    depth: int = sys.maxsize
     type: TaskType = TaskType.BASE
     parent: Optional[TaskID] = None
     data_tasks: Optional[List[TaskID]] = None

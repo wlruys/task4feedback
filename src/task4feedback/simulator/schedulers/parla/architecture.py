@@ -363,6 +363,9 @@ class ParlaArchitecture(SchedulerArchitecture):
                         # Default state is evictable
                         scheduler_state.objects.get_device(device).add_evictable(data)
 
+        # Collect task graph information
+        self.collect_task_graph_info(task_objects, scheduler_state)
+
         # Initialize the event queue
         next_event = Mapper()
         next_time = Time(0)
@@ -376,19 +379,33 @@ class ParlaArchitecture(SchedulerArchitecture):
         Append an initial task who does not have any dependency to
         a spawned task queue.
         """
-
-        taskmap = scheduler_state.objects.taskmap
         for task in tasks:
             self.spawned_tasks.put(task)
+
+    def collect_task_graph_info(
+        self, tasks: List[SimulatedTask], scheduler_state: SystemState
+    ):
+        """
+        Collect a task graph information before simulation starts.
+        """
+        taskmap = scheduler_state.objects.taskmap
+        for task in tasks:
             self.max_outdegree = max(self.max_outdegree, len(task.dependents))
             self.max_indegree = max(self.max_indegree, len(task.dependencies))
 
             # Propagate depth to its successors
             for dep in task.dependencies:
-                task.info.depth = min(task.info.depth, taskmap[dep].info.depth + 1)
+                task.info.depth = max(task.info.depth, taskmap[dep].info.depth + 1)
+
+            if task.info.depth == -1:
+                # If its depth is not initialized
+                task.info.depth = 0
 
             self.max_depth = max(self.max_depth, task.info.depth)
         self.total_num_tasks = len(tasks)
+
+        print(f"max degree: {self.max_outdegree}, in-degree: {self.max_indegree}"
+              f" total tasks: {self.total_num_tasks}, max depth: {self.max_depth}")
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
                 f"Total tasks: {self.total_num_tasks}\n"
