@@ -617,6 +617,8 @@ class TaskInfo:
     data_dependencies: TaskDataInfo
     mapping: Device | Tuple[Device, ...] | None = None
     order: int = 0
+    # Shortest depth from root tasks
+    depth: int = 0
 
 
 # Graph Type Aliases

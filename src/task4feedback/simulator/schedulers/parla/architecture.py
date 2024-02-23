@@ -311,6 +311,8 @@ class ParlaArchitecture(SchedulerArchitecture):
             self.launchable_tasks[device.name][TaskType.COMPUTE] = TaskQueue()
             self.launchable_tasks[device.name][TaskType.EVICTION] = TaskQueue()
 
+            self.perdev_active_workload[device.name] = 0
+
             self.launched_tasks[device.name] = TaskQueue()
 
     def initialize(

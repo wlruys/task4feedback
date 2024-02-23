@@ -30,10 +30,24 @@ def test_data():
     def sizes(data_id: DataID) -> int:
         return 32 * 1024 * 1024  # 1 GB
 
+    def task_duration_per_func(task_id: TaskID):
+        duration = 4000
+        if task_id.taskspace == "POTRF":
+            duration = 8000
+        elif task_id.taskspace == "SYRK":
+            duration = 5000
+        elif task_id.taskspace == "SOLVE":
+            duration = 3000
+        elif task_id.taskspace == "GEMM":
+            duration = 3000
+        return duration
+
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         device_tuple = Device(Architecture.GPU, task_id.task_idx[0] % 4)
 
-        runtime_info = TaskRuntimeInfo(task_time=4000, device_fraction=1, memory=int(0))
+        runtime_info = TaskRuntimeInfo(
+            task_time=task_duration_per_func(task_id), device_fraction=1,
+            memory=int(0))
         placement_info = TaskPlacementInfo()
         placement_info.add(device_tuple, runtime_info)
 
