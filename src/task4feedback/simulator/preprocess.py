@@ -38,7 +38,7 @@ def data_from_task(task: TaskInfo, access: AccessType) -> List[DataID]:
 
 
 def find_writer_bfs(
-    graph: TaskMap, node: TaskID, target: DataID, verbose: bool = True
+    graph: TaskMap, node: TaskID, target: DataID, verbose: bool = False
 ) -> List[TaskID | DataID]:
     """
     Return last task to touch the data.
@@ -169,6 +169,7 @@ def create_data_tasks(
                 dependencies=dependencies,
                 runtime=runtime,
                 data_dependencies=data_info,
+                func_id=task_info.func_id
             )
 
             data_task = SimulatedDataTask(
@@ -233,7 +234,9 @@ def combine_task_graphs(
 
 
 def create_sim_graph(
-    tasks: TaskMap, data: DataMap, use_data: bool = True
+    tasks: TaskMap, data: DataMap, use_data: bool = True,
+    task_order_mode: TaskOrderType = TaskOrderType.DEFAULT,
+    task_order_log: List[TaskID] | None = None
 ) -> Tuple[List[TaskID], SimulatedTaskMap]:
     compute_tasks = create_task_graph(tasks)
     if use_data:
@@ -242,7 +245,22 @@ def create_sim_graph(
     else:
         taskmap: SimulatedTaskMap = compute_tasks
 
-    tasklist = list(compute_tasks.keys())
+    if task_order_mode == TaskOrderType.REPLAY_LAST_ITER:
+        assert task_order_log is not None
+        tasklist = task_order_log
+    elif task_order_mode == TaskOrderType.REPLAY_FILE:
+        tasklist = list(compute_tasks.keys())
+        # Read a stored task order and sort tasks by it
+        read_task_key = []
+        with open("saved_task_order.log", "r") as fp:
+            lines = fp.readlines()
+            for l in lines:
+                read_task_key.append(l.rstrip())
+        print("load task order:", read_task_key)
+        tasklist = sorted(list(compute_tasks.keys()), key=read_task_key)
+        print("sorted task order based on the loaded order:", tasklist)
+    else:
+        tasklist = list(compute_tasks.keys())
     populate_dependents(taskmap)
     # compute_depths(taskmap)
 

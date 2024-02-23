@@ -111,6 +111,12 @@ class DataUse:
 
         return DataUse(tasks=tasks, counters=counters, init=self.init)
 
+    def __deepcopy__(self, memo):
+        return DataUse(
+            tasks={k: {l for l in v} for k, v in self.tasks.items()},
+            counters={k: v for k, v in self.counters.items()},
+        )
+
     def __post_init__(self):
         if self.init:
             for use in DataUses:

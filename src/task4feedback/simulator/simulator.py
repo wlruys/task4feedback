@@ -8,12 +8,18 @@ from .resources import *
 from .task import *
 from .topology import *
 
+from .rl.models.model import *
+from .rl.models.env import *
+
 from ..types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
-from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
+from ..types import TaskOrderType
 
 from typing import List, Dict, Set, Tuple, Optional, Callable
-from dataclasses import dataclass, InitVar
+from dataclasses import dataclass
 from collections import defaultdict as DefaultDict
+
+from .schedulers.parla.state import RLState
 
 from .schedulers import *
 
@@ -31,6 +37,7 @@ from enum import Enum
 class SimulatedScheduler:
     topology: SimulatedTopology | None = None
     scheduler_type: str = "parla"
+    scheduler_state_type: str = "parla"
     tasks: List[TaskID] = field(default_factory=list)
     name: str = "SimulatedScheduler"
     mechanisms: SchedulerArchitecture | None = None
@@ -46,15 +53,33 @@ class SimulatedScheduler:
     event_count: int = 0
     init: bool = True
     use_eviction: bool = True
+    task_order_mode: TaskOrderType = TaskOrderType.DEFAULT
+    use_duration_noise: bool = False
+    noise_scale: float = 0
+    save_task_order: bool = False
+    save_task_noise: bool = False
+    load_task_noise: bool = False
 
-    def __post_init__(
-        self,
-    ):
+    ###########################
+    # RL related fields
+    ###########################
+
+    rl_env: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
+
+    def __post_init__(self):
         if self.state is None:
-            scheduler_state = SchedulerOptions.get_state(self.scheduler_type)
-            self.state = scheduler_state(
-                topology=self.topology, use_eviction=self.use_eviction
-            )
+            scheduler_state = SchedulerOptions.get_state(self.scheduler_state_type)
+            self.state = scheduler_state(topology=self.topology,
+                                         rl_env=self.rl_env,
+                                         rl_mapper=self.rl_mapper,
+                                         task_order_mode=self.task_order_mode,
+                                         use_duration_noise=self.use_duration_noise,
+                                         noise_scale=self.noise_scale,
+                                         save_task_order=self.save_task_order,
+                                         save_task_noise=self.save_task_noise,
+                                         load_task_noise=self.load_task_noise,
+                                         randomizer=self.randomizer)
         if self.mechanisms is None:
             scheduler_arch = SchedulerOptions.get_architecture(self.scheduler_type)
             self.mechanisms = scheduler_arch(topology=self.topology)
@@ -78,6 +103,9 @@ class SimulatedScheduler:
 
         return SimulatedScheduler(
             topology=self.topology,
+            # RL objects do not require deepdcopy
+            rl_env=self.rl_env,
+            rl_mapper=self.rl_mapper,
             scheduler_type=self.scheduler_type,
             tasks=tasks,
             name=self.name,
@@ -90,6 +118,7 @@ class SimulatedScheduler:
             randomizer=deepcopy(self.randomizer),
             current_event=deepcopy(self.current_event),
             use_eviction=self.use_eviction,
+            task_order_mode=self.task_order_mode,
         )
 
     def __str__(self):
@@ -135,8 +164,10 @@ class SimulatedScheduler:
     def add_initial_tasks(self, tasks: List[TaskID], apply_sort: bool = True):
         if apply_sort:
             tasks = self.randomizer.task_order(tasks, self.taskmap)
-            # print(f"Initial Task Order: {tasks}")
         self.tasks.extend(tasks)
+
+    # def add_initial_tasks(self, tasks: List[TaskID]):
+    #     self.tasks.extend(tasks)
 
     def __repr__(self):
         return self.__str__()
@@ -206,6 +237,8 @@ class SimulatedScheduler:
 
         self.recorders.finalize(self.time, self.mechanisms, self.state)
 
+        print(f"Elapsed Time,{self.time}")
+
         # print(f"Event Count: {self.event_count}")
 
         is_complete = self.mechanisms.complete(self.state)
@@ -215,3 +248,4 @@ class SimulatedScheduler:
             raise RuntimeError("Scheduler terminated without completing all tasks.")
 
         return is_complete and events_empty
+        # return self.time, self.tasks

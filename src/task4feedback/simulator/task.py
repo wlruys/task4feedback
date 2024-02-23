@@ -324,6 +324,7 @@ class SimulatedTask:
         yield "state", self.state
         yield "status", self.status
         yield "duration", self.duration
+        yield "func_id", self.info.func_id
         yield "dependencies", self.dependencies
         yield "assigned_devices", self.assigned_devices
 

@@ -6,14 +6,22 @@ from ..events import *
 from ..resources import *
 from ..task import *
 from ..topology import *
+from ..utility import *
+from ..randomizer import Randomizer
 
 from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
-from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
+from ...types import TaskOrderType
+
+from ..rl.models.model import *
+from ..rl.models.env import *
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
 from dataclasses import dataclass, InitVar
 from collections import defaultdict as DefaultDict
 from copy import copy, deepcopy
+
+import os
 
 # from rich import print
 
@@ -108,16 +116,32 @@ from time import perf_counter as clock
 
 @dataclass(slots=True)
 class SystemState:
+    randomizer: Randomizer
     topology: SimulatedTopology
+    task_order_mode: TaskOrderType
     data_pool: DataPool | None = None
     resource_pool: FasterResourcePool | None = None
     objects: ObjectRegistry | None = None
     time: Time = field(default_factory=Time)
     init: bool = True
     use_eviction: bool = True
+    use_duration_noise: bool = False
+    noise_scale: float = 0
+    save_task_order: bool = False
+    save_task_noise: bool = False
+    load_task_noise: bool = False
+    loaded_task_noises: Dict[str, int] | None = None
+
+    init: bool = True
+
+    # RL environment providing RL state and performing auxiliary operations
+    # TODO(hc): make these specific to RLState
+    rl_env: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
 
     def __deepcopy__(self, memo):
         s = clock()
+
         topology = deepcopy(self.topology)
         # print(f"Time to deepcopy topology: {clock() - s}")
 
@@ -138,6 +162,8 @@ class SystemState:
         # print(f"Time to deepcopy time: {clock() - s}")
 
         return SystemState(
+            randomizer=self.randomizer,
+            task_order_mode=self.task_order_mode,
             topology=topology,
             data_pool=data_pool,
             resource_pool=resource_pool,
@@ -145,6 +171,11 @@ class SystemState:
             time=time,
             init=self.init,
             use_eviction=self.use_eviction,
+            use_duration_noise=self.use_duration_noise,
+            noise_scale=self.noise_scale,
+            # RL components do not need deepcopy
+            rl_env=self.rl_env,
+            rl_mapper=self.rl_mapper,
         )
 
     def __post_init__(self):
@@ -156,6 +187,20 @@ class SystemState:
 
                 for device in self.topology.devices:
                     self.objects.add_device(device)
+
+        if self.save_task_order:
+            if os.path.exists("replay.order"):
+                print("replay.order is removed..")
+                os.remove("replay.order")
+
+        if self.save_task_noise:
+            if os.path.exists("replay.noise"):
+                print("replay.noise is removed..")
+                os.remove("replay.noise")
+
+        if self.load_task_noise:
+            self.loaded_task_noises = load_task_noise()
+            print("loaded task noises!:", self.loaded_task_noises)
 
             if self.resource_pool is None:
                 self.resource_pool = FasterResourcePool(devices=self.topology.devices)
@@ -213,6 +258,12 @@ class SystemState:
         # Get the duration of a task
         raise NotImplementedError()
 
+    def get_task_duration_completion(
+        self, task: SimulatedTask, devices: Devices, verbose: bool = False
+    ):
+        # Get the duration of a task
+        raise NotImplementedError()
+
     def check_task_status(
         self, task: SimulatedTask, status: TaskStatus, verbose: bool = False
     ):
@@ -226,4 +277,10 @@ class SystemState:
         raise NotImplementedError()
 
     def completion_stats(self, task: SimulatedTask):
+        raise NotImplementedError()
+
+    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+        raise NotImplementedError()
+
+    def complete(self):
         raise NotImplementedError()

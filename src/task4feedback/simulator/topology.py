@@ -440,7 +440,6 @@ def generate_ngpus_1cpu_toplogy(
         for key, value in default_config.items():
             if key in config:
                 default_config[key] = config[key]
-
     config = default_config
 
     P2P_BW = config["P2P_BW"]

@@ -1,6 +1,8 @@
 from ....types import *
 from ...data import *
 from ...device import *
+from ...utility import *
+from ...randomizer import *
 
 from ..state import *
 from ..architecture import *
@@ -1181,11 +1183,42 @@ class ParlaState(SystemState):
         self, task: SimulatedTask, devices: Devices, verbose: bool = False
     ) -> Tuple[Time, Time]:
         if isinstance(task, SimulatedComputeTask):
-            return _compute_task_duration(self, task, devices, verbose=verbose)
+            duration, completion_time = _compute_task_duration(
+                self, task, devices, verbose=verbose)
         elif isinstance(task, SimulatedDataTask):
-            return _data_task_duration(self, task, devices, verbose=verbose)
+            duration, completion_time = _data_task_duration(
+                self, task, devices, verbose=verbose)
         else:
             raise RuntimeError(f"Invalid task type for {task} of type {type(task)}")
+
+        return duration
+
+    def get_task_duration_completion(
+        self, task: SimulatedTask, devices: Devices, verbose: bool = False
+    ) -> Tuple[Time, Time]:
+        if isinstance(task, SimulatedComputeTask):
+            duration, completion_time = _compute_task_duration(
+                self, task, devices, verbose=verbose)
+        elif isinstance(task, SimulatedDataTask):
+            duration, completion_time = _data_task_duration(
+                self, task, devices, verbose=verbose)
+        else:
+            raise RuntimeError(f"Invalid task type for {task} of type {type(task)}")
+
+        assert ((self.use_duration_noise == False and self.load_task_noise == False)
+                or self.use_duration_noise != self.load_task_noise)
+        noise = Time()
+        if self.use_duration_noise:
+            noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
+            # print("task:", task.name, ", ", duration, " generated noise:", noise)
+        elif self.load_task_noise:
+            noise = Time(int(self.loaded_task_noises[str(task.name)]))
+            print("task:", task.name, " loaded noise:", noise)
+
+        if self.save_task_noise:
+            save_task_noise(task, noise)
+
+        return duration, completion_time + noise
 
     def check_task_status(
         self, task: SimulatedTask, status: TaskStatus, verbose: bool = False
@@ -1199,3 +1232,561 @@ class ParlaState(SystemState):
             return _check_eviction(self, task, verbose=verbose)
         else:
             return None
+
+    def finalize_stats(self):
+        for device in self.topology.devices:
+            last_active = max(
+                device.stats.last_active_compute, device.stats.last_active_movement
+            )
+
+            device.stats.idle_time += self.time - last_active
+
+            device.stats.idle_time_compute += (
+                self.time - device.stats.last_active_compute
+            )
+            device.stats.idle_time_movement += (
+                self.time - device.stats.last_active_movement
+            )
+
+    def launch_stats(self, task: SimulatedTask):
+        devices = task.assigned_devices
+        assert devices is not None
+
+        if isinstance(task, SimulatedComputeTask):
+            self.total_num_mapped_tasks -= 1
+
+        for device_id in devices:
+            device = self.objects.get_device(device_id)
+            assert device is not None
+
+            if device.stats.active_compute == 0 and device.stats.active_movement == 0:
+                last_active = max(
+                    device.stats.last_active_compute, device.stats.last_active_movement
+                )
+                duration = self.time - last_active
+                device.stats.idle_time += duration
+
+                if logger.ENABLE_LOGGING:
+                    logger.stats.debug(
+                        f"Device {device_id} was idle. Duration: {duration}, Last Active: {last_active}",
+                        extra=dict(device=device_id),
+                    )
+
+            if isinstance(task, SimulatedComputeTask):
+                if device.stats.active_compute == 0:
+                    duration = self.time - device.stats.last_active_compute
+                    device.stats.idle_time_compute += duration
+
+                    if logger.ENABLE_LOGGING:
+                        logger.stats.debug(
+                            f"Device {device_id} was compute idle. Duration: {duration}, Last Active: {device.stats.last_active_compute}",
+                            extra=dict(device=device_id),
+                        )
+
+            elif isinstance(task, SimulatedDataTask) and task.real:
+                if device.stats.active_movement == 0:
+                    duration = self.time - device.stats.last_active_movement
+                    device.stats.idle_time_movement += duration
+
+                    if logger.ENABLE_LOGGING:
+                        logger.stats.debug(
+                            f"Device {device_id} was movement idle. Duration: {duration}, Last Active: {device.stats.last_active_movement}",
+                            extra=dict(device=device_id),
+                        )
+
+            if isinstance(task, SimulatedComputeTask):
+                device.stats.last_active_compute = task.completion_time
+                device.stats.active_compute += 1
+            elif isinstance(task, SimulatedDataTask) and task.real:
+                device.stats.last_active_movement = task.completion_time
+                device.stats.active_movement += 1
+
+    def completion_stats(self, task: SimulatedTask):
+        if isinstance(task, SimulatedComputeTask):
+            self.total_num_completed_tasks += 1
+            for dev in task.assigned_devices:
+                workload = convert_to_float(
+                self.get_task_duration(task, task.info.runtime.locations[0]).
+                scale_to("ms"))
+                self.perdev_active_workload[dev] -= workload
+                self.total_active_workload -= workload
+                # print("removed workload ", dev, " = ", self.perdev_active_workload[dev])
+
+        devices = task.assigned_devices
+        assert devices is not None
+
+        for device_id in devices:
+            device = self.objects.get_device(device_id)
+            assert device is not None
+
+            if isinstance(task, SimulatedComputeTask):
+                device.stats.active_compute -= 1
+
+                if device.stats.active_compute == 0:
+                    if logger.ENABLE_LOGGING:
+                        logger.stats.debug(
+                            f"Device {device_id} is now compute idle. Time: {self.time}",
+                            extra=dict(device=device_id),
+                        )
+
+            elif isinstance(task, SimulatedDataTask) and task.real:
+                device.stats.active_movement -= 1
+
+                if device.stats.active_movement == 0:
+                    if logger.ENABLE_LOGGING:
+                        logger.stats.debug(
+                            f"Device {device_id} is now movement idle. Time: {self.time}",
+                            extra=dict(device=device_id),
+                        )
+
+                data_id = task.read_accesses[0].id
+                data = self.objects.get_data(data_id)
+                assert data is not None
+
+                data.stats.move_time += task.duration
+                data.stats.move_count += 1
+
+    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+        self.mapper_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+
+        if self.task_order_mode == TaskOrderType.RANDOM:
+            print("PARLA RANDOM SORT")
+            task_objects[:] = self.randomizer.task_order(
+                task_objects, self.objects.taskmap)
+        elif self.task_order_mode == TaskOrderType.HEFT:
+            print("HEFT SORT")
+            # Tasks are sorted in-place
+            _ = calculate_heft(
+                task_objects, self.objects.taskmap,
+                len(self.objects.devicemap)-1, self, True)
+
+        task_ids[:] = [t.name for t in task_objects]
+
+    def complete(self):
+        pass
+
+    def map_task(self, task: SimulatedTask, verbose: bool = False
+    ) -> Optional[Tuple[Device, ...]]:
+        """
+        Assigns a device to a task based on Parla's load-balancing and locality-aware policy.
+        """
+        phase = TaskState.MAPPED
+        objects = self.objects
+        assert objects is not None
+
+        current_time = self.time
+        assert current_time is not None
+
+        # Check if task is mappable
+        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
+            # chosen_devices = chose_random_placement(task)
+            chosen_devices = parla_mapping(task, self)
+
+            task.assigned_devices = chosen_devices
+            self.acquire_resources(phase, task, verbose=verbose)
+            self.use_data(phase, task, verbose=verbose)
+
+            # Assumes that a task is assigned to a single device 
+            for dev in task.assigned_devices:
+                workload = convert_to_float(
+                self.get_task_duration(task, task.info.runtime.locations[0]).
+                scale_to("ms"))
+                self.perdev_active_workload[dev] += workload
+                self.total_active_workload += workload
+            self.total_num_mapped_tasks += 1
+
+            return chosen_devices
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be mapped: Invalid status.",
+                extra=dict(
+                    task=task.name, phase=phase, counters=task.counters, status=task.status
+                ),
+            )
+        return None
+
+
+@SchedulerOptions.register_state("rl")
+@dataclass(slots=True)
+class RLState(ParlaState):
+    # Max out/indegree
+    max_outdegree: int = 0
+    max_indegree: int = 0
+    # Max expected execution time
+    max_duration: float = 0
+    # Depth from a root task
+    max_depth: int = 0
+    # # of total tasks
+    total_num_tasks: int = 0
+    # Target execution time (from heuristic)
+    target_exec_time: float = 0
+
+    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+        self.mapper_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+
+        # RL state always requires HEFT calculation for rewarding
+        # Tasks are sorted in-place
+        self.target_exec_time = calculate_heft(
+            task_objects, self.objects.taskmap, len(self.objects.devicemap)-1, self,
+            self.task_order_mode == TaskOrderType.HEFT)
+
+        if self.task_order_mode == TaskOrderType.RANDOM:
+            print("RANDOM SORT")
+            # Deep copy
+            task_objects[:] = self.randomizer.task_order(
+                task_objects, self.objects.taskmap)
+        elif self.task_order_mode == TaskOrderType.HEFT:
+            print("HEFT SORT") 
+
+        task_ids[:] = [t.name for t in task_objects]
+
+        # Collect task graph information
+        self.collect_task_graph_info(task_objects)
+        
+    def complete(self):
+        total_exec_time = convert_to_float(self.time.scale_to("ms"))
+        if self.rl_mapper.is_training_mode():
+            reward = 0 if total_exec_time == 0 else (self.target_exec_time - total_exec_time) / self.target_exec_time
+            # reward = -(1-reward) if reward < 0.8 else reward
+            self.rl_mapper.optimize_model(reward, self)
+        self.rl_mapper.complete_episode(total_exec_time)
+        
+    def map_task(self, task: SimulatedTask, verbose: bool = False
+    ) -> Optional[Tuple[Device, ...]]:
+
+        phase = TaskState.MAPPED
+        objects = self.objects
+        assert objects is not None
+
+        current_time = self.time
+        assert current_time is not None
+
+        # Check if task is mappable
+        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
+            curr_state = self.rl_env.create_state(task, self)
+            chosen_device_id = self.rl_mapper.select_device(task, curr_state, self)
+            chosen_device = (Device(Architecture.GPU, chosen_device_id),)
+
+            task.assigned_devices = chosen_device
+            self.acquire_resources(phase, task, verbose=verbose)
+            self.use_data(phase, task, verbose=verbose)
+
+            for dev in task.assigned_devices: 
+                workload = convert_to_float(
+                self.get_task_duration(task, task.info.runtime.locations[0]).
+                scale_to("ms"))
+                # print("workload ", dev, " = ", self.perdev_active_workload[dev])
+                self.perdev_active_workload[dev] += workload
+                self.total_active_workload += workload
+            self.total_num_mapped_tasks += 1
+
+            return chosen_device
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be mapped: Invalid status.",
+                extra=dict(
+                    task=task.name, phase=phase, counters=task.counters, status=task.status
+                ),
+            )
+        return None
+
+    def collect_task_graph_info(self, tasks: List[SimulatedTask]):
+        """
+        Collect a task graph information before simulation starts.
+        """
+        taskmap = self.objects.taskmap
+        for task in tasks:
+            self.max_outdegree = max(self.max_outdegree, len(task.dependents))
+            self.max_indegree = max(self.max_indegree, len(task.dependencies))
+            task_duration_float = convert_to_float(
+                self.get_task_duration(task, task.info.runtime.locations[0]).
+                scale_to("us"))
+            self.max_duration = max(self.max_duration, task_duration_float)
+
+            # Propagate depth to its successors
+            for dep in task.dependencies:
+                task.info.depth = max(task.info.depth, taskmap[dep].info.depth + 1)
+
+            if task.info.depth == -1:
+                # If its depth is not initialized
+                task.info.depth = 0
+
+            self.max_depth = max(self.max_depth, task.info.depth)
+        self.total_num_tasks = len(tasks)
+
+        print(f"max degree: {self.max_outdegree}, "
+              f"in-degree: {self.max_indegree}"
+              f" total tasks: {self.total_num_tasks}, "
+              f"max depth: {self.max_depth} \n"
+              f"max execution time: {self.max_duration}")
+        if logger.ENABLE_LOGGING:
+            logger.runtime.info(
+                f"Total tasks: {self.total_num_tasks}\n"
+                f"Max out-degree: {self.max_outdegree} "
+                f"and in-degree: {self.max_indegree}."
+            )
+
+
+@SchedulerOptions.register_state("heft")
+@dataclass(slots=True)
+class HEFTState(ParlaState):
+    target_exec_time: float = 0
+
+    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+        assert self.task_order_mode == TaskOrderType.HEFT
+
+        self.mapper_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+
+        print("HEFT ORDER")
+
+        # This state always assumes that the order is HEFT
+        # Calculate HEFT (ignore CPU)
+        self.target_exec_time = calculate_heft(
+            task_objects, self.objects.taskmap,
+            len(self.objects.devicemap) - 1, self, True
+        )
+
+        task_ids[:] = [t.name for t in task_objects]
+
+    def map_task(self, task: SimulatedTask, verbose: bool = False
+    ) -> Optional[Tuple[Device, ...]]:
+
+        phase = TaskState.MAPPED
+        objects = self.objects
+        assert objects is not None
+
+        current_time = self.time
+        print(task.name, " try to assign device")
+        assert current_time is not None
+
+        # Check if task is mappable
+        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
+            chosen_device_id = task.info.heft_allocation
+            chosen_device = (Device(Architecture.GPU, chosen_device_id),)
+            print(task.name, " chose device:", chosen_device_id)
+
+            task.assigned_devices = chosen_device
+            self.acquire_resources(phase, task, verbose=verbose)
+            self.use_data(phase, task, verbose=verbose)
+
+            self.total_num_mapped_tasks += 1
+
+            return chosen_device
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be mapped: Invalid status.",
+                extra=dict(
+                    task=task.name, phase=phase, counters=task.counters, status=task.status
+                ),
+            )
+        return None
+
+
+@SchedulerOptions.register_state("worst")
+@dataclass(slots=True)
+class WorstState(ParlaState):
+    """
+    The purpose of this class is to measure the worst theoretical exeuction time.
+    All tasks are chained and it assumes that data is always transfered.
+    To calculate the worst data transfer time, this class iterates all the HW connections
+    between GPU pairs and uses the worst bandwidth to transfer the data.
+    """
+    total_pure_task_duration_sum: bool = 0
+
+    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+        assert self.task_order_mode == TaskOrderType.HEFT
+
+        self.mapper_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+
+        print("WORST ORDER")
+
+    def map_task(self, task: SimulatedTask, verbose: bool = False
+    ) -> Optional[Tuple[Device, ...]]:
+
+        phase = TaskState.MAPPED
+        objects = self.objects
+        assert objects is not None
+
+        current_time = self.time
+        assert current_time is not None
+
+        # Check if task is mappable
+        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
+            # Assign all tasks to a single device
+            task.assigned_devices = (Device(Architecture.GPU, 0),)
+            self.acquire_resources(phase, task, verbose=verbose)
+            self.use_data(phase, task, verbose=verbose)
+
+            return task.assigned_devices
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be mapped: Invalid status.",
+                extra=dict(
+                    task=task.name, phase=phase, counters=task.counters, status=task.status
+                ),
+            )
+        return None
+
+    def get_task_duration_completion(
+        self, task: SimulatedTask, devices: Devices, verbose: bool = False
+    ) -> Tuple[Time, Time]:
+        """
+        This method gets and returns task duration and completion time normally.
+        On top of that, it also accumulates the task duration to get the
+        worst serial execution time. For data transfer tasks, it calculates
+        the worst data transfer time using the lowest bandwidth.
+        """
+
+        if isinstance(task, SimulatedComputeTask):
+            duration, completion_time = _compute_task_duration(
+                self, task, devices, verbose=verbose)
+            self.total_pure_task_duration_sum += float(duration.scale_to("ms"))
+        elif isinstance(task, SimulatedDataTask):
+            duration, completion_time = _data_task_duration(
+                self, task, devices, verbose=verbose)
+
+            # Calculate the worst data transfer time
+            data = self.objects.get_data(task.read_accesses[0].id)
+            worst_bandwidth = 9999999999999999
+            for d1 in range(len(self.topology.devices)):
+                for d2 in range(len(self.topology.devices)):
+                    if d1 == d2 or (d1 == 0 or d2 == 0):
+                        continue
+                    worst_bandwidth = min(worst_bandwidth,
+                        self.topology.connection_pool.bandwidth[d1, d2])
+            # print("worst bandwidth:", worst_bandwidth, " data size:", data.size)
+            worst_duration = int((data.size / worst_bandwidth) * 1e3)
+            # print("worst data transfer:", worst_duration, " actual transfer:", duration)
+            self.total_pure_task_duration_sum += float(worst_duration)
+        else:
+            raise RuntimeError(f"Invalid task type for {task} of type {type(task)}")
+        assert ((self.use_duration_noise == False and self.load_task_noise == False)
+                or self.use_duration_noise != self.load_task_noise)
+        noise = Time()
+        if self.use_duration_noise:
+            noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
+            # print("task:", task.name, ", ", duration, " generated noise:", noise)
+        elif self.load_task_noise:
+            noise = Time(int(self.loaded_task_noises[str(task.name)]))
+
+        if self.save_task_noise:
+            save_task_noise(task, noise)
+
+        return duration, completion_time + noise
+
+
+
+@SchedulerOptions.register_state("loadbalance")
+@dataclass(slots=True)
+class LoadBalancingState(ParlaState):
+
+    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+        assert self.task_order_mode == TaskOrderType.HEFT
+
+        self.mapper_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+
+        print("Load Balancing Task Mapper")
+
+    def map_task(self, task: SimulatedTask, verbose: bool = False
+    ) -> Optional[Tuple[Device, ...]]:
+
+        phase = TaskState.MAPPED
+        objects = self.objects
+        assert objects is not None
+
+        current_time = self.time
+        assert current_time is not None
+
+        # Check if task is mappable
+        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
+            chosen_device = load_balancing_mapping(task, self)
+            # Assign all tasks to a single device
+            task.assigned_devices = chosen_device
+            self.acquire_resources(phase, task, verbose=verbose)
+            self.use_data(phase, task, verbose=verbose)
+
+            for dev in task.assigned_devices:
+                workload = convert_to_float(
+                    self.get_task_duration(task, task.info.runtime.locations[0]).
+                    scale_to("ms"))
+                self.perdev_active_workload[dev] += workload
+                self.total_active_workload += workload
+            self.total_num_mapped_tasks += 1
+
+            return task.assigned_devices
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be mapped: Invalid status.",
+                extra=dict(
+                    task=task.name, phase=phase, counters=task.counters, status=task.status
+                ),
+            )
+        return None
+
+
+
+@SchedulerOptions.register_state("random")
+@dataclass(slots=True)
+class RandomState(ParlaState):
+
+    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+        assert self.task_order_mode == TaskOrderType.HEFT
+
+        self.mapper_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+
+        print("Random Task Mapper")
+
+    def map_task(self, task: SimulatedTask, verbose: bool = False
+    ) -> Optional[Tuple[Device, ...]]:
+
+        phase = TaskState.MAPPED
+        objects = self.objects
+        assert objects is not None
+
+        current_time = self.time
+        assert current_time is not None
+
+        # Check if task is mappable
+        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
+            chosen_device = random_mapping(task, self)
+            # Assign all tasks to a single device
+            task.assigned_devices = chosen_device
+            self.acquire_resources(phase, task, verbose=verbose)
+            self.use_data(phase, task, verbose=verbose)
+
+            for dev in task.assigned_devices:
+                workload = convert_to_float(
+                    self.get_task_duration(task, task.info.runtime.locations[0]).
+                    scale_to("ms"))
+                self.perdev_active_workload[dev] += workload
+                self.total_active_workload += workload
+            self.total_num_mapped_tasks += 1
+
+            return task.assigned_devices
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be mapped: Invalid status.",
+                extra=dict(
+                    task=task.name, phase=phase, counters=task.counters, status=task.status
+                ),
+            )
+        return None
+>>>>>>> c4d7ddd (Add degrees and depth)

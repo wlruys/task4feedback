@@ -54,6 +54,7 @@ class DQNAgent:
         sample = random.random()
         eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
                         math.exp(-1. * self.steps / self.eps_decay)
+        print("sample:", sample)
         self.steps += 1
         if (not self.is_training_mode()) or sample > eps_threshold:
             with torch.no_grad():
@@ -206,7 +207,7 @@ class DQNAgent:
         self.episode += 1
         self.print_model("started")
 
-    def finalize_episode(self):
+    def complete_episode(self):
         """ Finalize the current episode.
         """
         self.print_model("finished")
