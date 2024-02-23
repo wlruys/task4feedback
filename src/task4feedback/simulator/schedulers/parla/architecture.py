@@ -259,6 +259,14 @@ def complete_task(
     return True
 
 
+def get_indegree(task: SimulatedTask) -> int:
+    return len(task.dependencies)
+
+
+def get_outdegree(task: SimulatedTask) -> int:
+    return len(task.dependents)
+
+
 @SchedulerOptions.register_architecture("parla")
 @dataclass(slots=True)
 class ParlaArchitecture(SchedulerArchitecture):
@@ -276,6 +284,12 @@ class ParlaArchitecture(SchedulerArchitecture):
     success_count: int = 0
     active_scheduler: int = 0
     eviction_occured: bool = False
+
+    ### Information for RL ###
+    max_outdegree: int = 0
+    max_indegree: int = 0
+    # Depth from a root task
+    max_depth: int = 0
 
     def __post_init__(self, topology: SimulatedTopology):
         assert topology is not None
@@ -351,8 +365,22 @@ class ParlaArchitecture(SchedulerArchitecture):
         Append an initial task who does not have any dependency to
         a spawned task queue.
         """
+
+        taskmap = scheduler_state.objects.taskmap
         for task in tasks:
             self.spawned_tasks.put(task)
+            self.max_outdegree = max(self.max_outdegree, len(task.dependents))
+            self.max_indegree = max(self.max_indegree, len(task.dependencies))
+
+            # Propagate depth to its successors
+            for dep in task.dependencies:
+                task.info.depth = min(task.info.depth, taskmap[dep].info.depth + 1)
+
+            self.max_depth = max(self.max_depth, task.info.depth)
+        if logger.ENABLE_LOGGING:
+            logger.runtime.info(
+                f"Max out-degree: {self.max_outdegree} and in-degree: {self.max_indegree}."
+            )
 
     def mapper(self, scheduler_state: SystemState, event: Mapper) -> List[EventPair]:
         self.success_count = 0
