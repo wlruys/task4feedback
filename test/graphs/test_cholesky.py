@@ -16,6 +16,9 @@ from task4feedback.simulator.analysis.export import *
 from task4feedback.simulator.interface import *
 from task4feedback.simulator.verify import *
 
+from task4feedback.simulator.rl.models.a2c import *
+from task4feedback.simulator.rl.models.env import *
+
 from time import perf_counter as clock
 
 
@@ -77,12 +80,22 @@ def test_data():
 
     topology = TopologyManager().generate("frontera", config=None)
 
+    # Execution mode configuration
+    # TODO(hc): Readys testing/training
+    #           Parla testing
+    #           RL testing/training
+    num_gpus = 4
+    rl_env = RLEnvironment(num_gpus)
+    rl_agent = A2CAgent(rl_env)
+
     simulator_config = SimulatorConfig(
         topology=topology,
         tasks=tasks,
         data=data,
         scheduler_type="parla",
         randomizer=Randomizer(),
+        rl_environment=rl_env,
+        rl_mapper=rl_agent,
     )
     simulator = create_simulator(config=simulator_config)
 
