@@ -46,7 +46,7 @@ class SimulatedScheduler:
     ###########################
     # RL related fields
     ###########################
-    rl_environment: RLBaseEnvironment = None
+    rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
 
 
@@ -59,7 +59,7 @@ class SimulatedScheduler:
 
         self.state = scheduler_state(topology=topology)
         self.mechanisms = scheduler_arch(topology=topology,
-                                         rl_environment=self.rl_environment,
+                                         rl_env=self.rl_env,
                                          rl_mapper=self.rl_mapper)
 
     def __str__(self):

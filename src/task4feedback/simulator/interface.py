@@ -27,7 +27,7 @@ class SimulatorConfig:
     ###########################
     # RL related fields
     ###########################
-    rl_environment: RLBaseEnvironment = None
+    rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
 
 
@@ -40,7 +40,7 @@ def create_simulator(config: SimulatorConfig):
         scheduler_type=config.scheduler_type,
         recorders=recorders,
         randomizer=config.randomizer,
-        rl_environment=config.rl_environment,
+        rl_env=config.rl_env,
         rl_mapper=config.rl_mapper
     )
 

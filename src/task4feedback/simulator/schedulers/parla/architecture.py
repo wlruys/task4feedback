@@ -6,9 +6,10 @@ from ...events import *
 from ...resources import *
 from ...task import *
 from ...topology import *
+from ...utility import *
 
 from ....types import Architecture, Device, TaskID, TaskState, TaskType, Time
-from ....types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ....types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, RLInfo
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Sequence
 from dataclasses import dataclass, InitVar
@@ -25,6 +26,7 @@ from rich import print
 from ...rl.models.model import *
 from ...rl.models.env import *
 
+
 def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
     devices = task.info.runtime.locations
     # random.shuffle(devices)
@@ -37,8 +39,10 @@ def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
 
 
 def map_task(
-    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
-) -> Optional[Tuple[Device, ...]]:
+    task: SimulatedTask, scheduler_state: ParlaState,
+    rl_env: RLBaseEnvironment, rl_info: RLInfo,
+    verbose: bool = False) -> Optional[Tuple[Device, ...]]:
+
     phase = TaskState.MAPPED
     objects = scheduler_state.objects
     assert objects is not None
@@ -49,6 +53,7 @@ def map_task(
     # Check if task is mappable
     if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
         chosen_devices = chose_random_placement(task)
+        rl_env.create_state(task, rl_info, scheduler_state)
         task.assigned_devices = chosen_devices
         scheduler_state.acquire_resources(phase, task, verbose=verbose)
         scheduler_state.use_data(phase, task, verbose=verbose)
@@ -261,14 +266,6 @@ def complete_task(
     return True
 
 
-def get_indegree(task: SimulatedTask) -> int:
-    return len(task.dependencies)
-
-
-def get_outdegree(task: SimulatedTask) -> int:
-    return len(task.dependents)
-
-
 @SchedulerOptions.register_architecture("parla")
 @dataclass(slots=True)
 class ParlaArchitecture(SchedulerArchitecture):
@@ -290,27 +287,16 @@ class ParlaArchitecture(SchedulerArchitecture):
     ###########################
     # RL related fields
     ###########################
-    max_outdegree: int = 0
-    max_indegree: int = 0
-    # Depth from a root task
-    max_depth: int = 0
-    # Total workload planned across devices
-    total_active_workload: float = 0
-    # Workload per device
-    perdev_active_workload: Dict[Device, int] = field(default_factory=dict)
-    # # of total tasks
-    total_num_tasks: int = 0
-    # # of completed tasks
-    total_num_completed_tasks: int = 0
+
+    rl_info: RLInfo = field(default_factory=RLInfo)
     # RL environment providing RL state and performing auxiliary operations
     # This type is given by a script
-    rl_environment: RLBaseEnvironment = None
+    rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
 
     def __post_init__(self, topology: SimulatedTopology):
         assert topology is not None
 
-        self.rl_environment.create_state(None)
         for device in topology.devices:
             self.reservable_tasks[device.name] = TaskQueue()
 
@@ -319,7 +305,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             self.launchable_tasks[device.name][TaskType.COMPUTE] = TaskQueue()
             self.launchable_tasks[device.name][TaskType.EVICTION] = TaskQueue()
 
-            self.perdev_active_workload[device.name] = 0
+            self.rl_info.perdev_active_workload[device.name] = 0
 
             self.launched_tasks[device.name] = TaskQueue()
 
@@ -398,8 +384,12 @@ class ParlaArchitecture(SchedulerArchitecture):
         """
         taskmap = scheduler_state.objects.taskmap
         for task in tasks:
-            self.max_outdegree = max(self.max_outdegree, len(task.dependents))
-            self.max_indegree = max(self.max_indegree, len(task.dependencies))
+            self.rl_info.max_outdegree = max(self.rl_info.max_outdegree, len(task.dependents))
+            self.rl_info.max_indegree = max(self.rl_info.max_indegree, len(task.dependencies))
+            task_duration_float = convert_to_float(
+                scheduler_state.get_task_duration(task, task.info.runtime.locations[0])[0].
+                scale_to("us"))
+            self.rl_info.max_duration = max(self.rl_info.max_duration, task_duration_float)
 
             # Propagate depth to its successors
             for dep in task.dependencies:
@@ -409,15 +399,19 @@ class ParlaArchitecture(SchedulerArchitecture):
                 # If its depth is not initialized
                 task.info.depth = 0
 
-            self.max_depth = max(self.max_depth, task.info.depth)
-        self.total_num_tasks = len(tasks)
+            self.rl_info.max_depth = max(self.rl_info.max_depth, task.info.depth)
+        self.rl_info.total_num_tasks = len(tasks)
 
-        print(f"max degree: {self.max_outdegree}, in-degree: {self.max_indegree}"
-              f" total tasks: {self.total_num_tasks}, max depth: {self.max_depth}")
+        print(f"max degree: {self.rl_info.max_outdegree}, "
+              f"in-degree: {self.rl_info.max_indegree}"
+              f" total tasks: {self.rl_info.total_num_tasks}, "
+              f"max depth: {self.rl_info.max_depth} \n"
+              f"max execution time: {self.rl_info.max_duration}")
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
-                f"Total tasks: {self.total_num_tasks}\n"
-                f"Max out-degree: {self.max_outdegree} and in-degree: {self.max_indegree}."
+                f"Total tasks: {self.rl_info.total_num_tasks}\n"
+                f"Max out-degree: {self.rl_info.max_outdegree} "
+                f"and in-degree: {self.rl_info.max_indegree}."
             )
 
     def mapper(self, scheduler_state: SystemState, event: Mapper) -> List[EventPair]:
@@ -436,7 +430,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
-            if devices := map_task(task, scheduler_state):
+            if devices := map_task(task, scheduler_state, self.rl_env, self.rl_info):
                 for device in devices:
                     self.reservable_tasks[device].put_id(
                         task_id=taskid, priority=priority
@@ -451,8 +445,8 @@ class ParlaArchitecture(SchedulerArchitecture):
                 next_tasks.success()
                 self.success_count += 1
                 # Assumes that a task is assigned to a single device 
-                self.perdev_active_workload[task.assigned_devices[0]] += 1
-                self.total_active_workload += 1
+                self.rl_info.perdev_active_workload[task.assigned_devices[0]] += 1
+                self.rl_info.total_active_workload += 1
             else:
                 next_tasks.fail()
                 continue
@@ -728,9 +722,9 @@ class ParlaArchitecture(SchedulerArchitecture):
             next_events.append(mapping_pair)
             self.active_scheduler += 1
 
-        self.perdev_active_workload[task.assigned_devices[0]] -= 1
-        self.total_active_workload -= 1
-        self.total_num_completed_tasks += 1
+        self.rl_info.perdev_active_workload[task.assigned_devices[0]] -= 1
+        self.rl_info.total_active_workload -= 1
+        self.rl_info.total_num_completed_tasks += 1
 
         return next_events
 
