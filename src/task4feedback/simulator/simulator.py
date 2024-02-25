@@ -8,6 +8,9 @@ from .resources import *
 from .task import *
 from .topology import *
 
+from .rl.models.model import *
+from .rl.models.env import *
+
 from ..types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
 from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 
@@ -38,8 +41,14 @@ class SimulatedScheduler:
     recorders: RecorderList = field(default_factory=RecorderList)
     randomizer: Randomizer = field(default_factory=Randomizer)
     watcher: Watcher = field(default_factory=Watcher)
-
     events: EventQueue = EventQueue()
+
+    ###########################
+    # RL related fields
+    ###########################
+    rl_environment: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
+
 
     def __post_init__(self, topology: SimulatedTopology, scheduler_type: str = "parla"):
         scheduler_arch = SchedulerOptions.get_architecture(scheduler_type)
@@ -49,7 +58,9 @@ class SimulatedScheduler:
         print(f"Scheduler State: {scheduler_state}")
 
         self.state = scheduler_state(topology=topology)
-        self.mechanisms = scheduler_arch(topology=topology)
+        self.mechanisms = scheduler_arch(topology=topology,
+                                         rl_environment=self.rl_environment,
+                                         rl_mapper=self.rl_mapper)
 
     def __str__(self):
         return f"Scheduler {self.name} | Current Time: {self.time}"

@@ -22,6 +22,8 @@ from ...eviction.usage import *
 
 from rich import print
 
+from ...rl.models.model import *
+from ...rl.models.env import *
 
 def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
     devices = task.info.runtime.locations
@@ -285,8 +287,9 @@ class ParlaArchitecture(SchedulerArchitecture):
     active_scheduler: int = 0
     eviction_occured: bool = False
 
-    ### Information for RL ###
-
+    ###########################
+    # RL related fields
+    ###########################
     max_outdegree: int = 0
     max_indegree: int = 0
     # Depth from a root task
@@ -299,10 +302,15 @@ class ParlaArchitecture(SchedulerArchitecture):
     total_num_tasks: int = 0
     # # of completed tasks
     total_num_completed_tasks: int = 0
+    # RL environment providing RL state and performing auxiliary operations
+    # This type is given by a script
+    rl_environment: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
 
     def __post_init__(self, topology: SimulatedTopology):
         assert topology is not None
 
+        self.rl_environment.create_state(None)
         for device in topology.devices:
             self.reservable_tasks[device.name] = TaskQueue()
 

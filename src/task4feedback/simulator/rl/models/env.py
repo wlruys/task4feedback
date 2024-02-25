@@ -13,11 +13,11 @@ from .globals import *
 # TODO(hc): make this an rl environment class
 
 
-class ParlaRLBaseEnvironment:
+class RLBaseEnvironment:
   pass
 
 
-class READYSEnvironment(ParlaRLBaseEnvironment):
+class READYSEnvironment(RLBaseEnvironment):
   # [Features]
   # 1. dependency per device (5, GCN)
   # 2. dependentedependency per state (6 due to dependents, GCN)
@@ -119,12 +119,12 @@ class READYSEnvironment(ParlaRLBaseEnvironment):
           task.heft_makespan = earliest_start + duration
           if task.heft_makespan > self.max_heft:
               self.max_heft = task.heft_makespan
-       """
-       for key, value in agents.items():
-          print("Key:", key)
-          for vvalue in value:
-              print("span:", taskmap[vvalue.task].heft_makespan, ", ", vvalue)
-       """
+      """
+      for key, value in agents.items():
+         print("Key:", key)
+         for vvalue in value:
+             print("span:", taskmap[vvalue.task].heft_makespan, ", ", vvalue)
+      """
       
 
   def create_gcn_task_workload_state(
@@ -272,15 +272,15 @@ class READYSEnvironment(ParlaRLBaseEnvironment):
       pass
 
 
-class ParlaRLEnvironment(ParlaRLBaseEnvironment):
+class RLEnvironment(RLBaseEnvironment):
   """
     *** State features ***
 
-    1. Global information:
+    1. Global information (2):
       * Completed tasks / total tasks
       * Relative current wall-clock time
 
-    2. Task-specific information:
+    2. Task-specific information (5 + # devices):
       * In-degree / max in-degree
       * Out-degree / max out-degree
       * Task type ID
@@ -288,7 +288,7 @@ class ParlaRLEnvironment(ParlaRLBaseEnvironment):
       * Depth (from a root to the current task)
       * # parent tasks mapped per device / total # parent tasks
 
-    3. Device/network information:
+    3. Device/network information (3 * # devices):
       * Normalized resource usage (memory, VCUs)
       * # mapped tasks per device / # active tasks
       * Relative per-device idle time so far
@@ -296,7 +296,37 @@ class ParlaRLEnvironment(ParlaRLBaseEnvironment):
   """
 
   def __init__(self, num_devices: int):
+      self.task_state_offset = 2
+      self.device_utilization_state_offset = 5 + num_devices
+      self.device_state_len = 3 * num_devices
+      self.state_dim = self.task_state_offset + \
+                       self.device_utilization_state_offset + \
+                       self.device_state_len
+      self.out_dim = num_devices
+      print("state dimension:", self.state_dim)
+
+  def create_state(self, target_task: SimulatedTask):
+      print("create state is called")
+      current_state = torch.zeros(self.state_dim)
+      self.create_global_info(current_state)
+      self.create_task_property_info(current_state)
+      self.create_device_utilization_info(current_state)
+      return current_state
+
+  def create_global_info(self, current_state):
+      pass
+
+  def create_task_property_info(self, current_state):
+      pass
+ 
+  def create_device_utilization_info(self, current_state):
       pass
 
   def finalize_epoch(self, execution_time):
       pass
+
+  def get_state_dim(self):
+      return self.state_dim
+
+  def get_out_dim(self):
+      return self.out_dim

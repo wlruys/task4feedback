@@ -7,6 +7,9 @@ from .preprocess import *
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
 from .randomizer import Randomizer
 
+from .rl.models.model import *
+from .rl.models.env import *
+
 
 @dataclass(slots=True)
 class SimulatorConfig:
@@ -21,6 +24,12 @@ class SimulatorConfig:
     use_data: bool = True
     randomizer: Randomizer = field(default_factory=Randomizer)
 
+    ###########################
+    # RL related fields
+    ###########################
+    rl_environment: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
+
 
 def create_simulator(config: SimulatorConfig):
     simulated_data = create_data_objects(config.data, topology=config.topology)
@@ -31,6 +40,8 @@ def create_simulator(config: SimulatorConfig):
         scheduler_type=config.scheduler_type,
         recorders=recorders,
         randomizer=config.randomizer,
+        rl_environment=config.rl_environment,
+        rl_mapper=config.rl_mapper
     )
 
     tasklist, simulated_tasks = create_sim_graph(
