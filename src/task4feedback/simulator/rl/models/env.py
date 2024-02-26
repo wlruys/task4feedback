@@ -49,20 +49,22 @@ class RLEnvironment(RLBaseEnvironment):
 
   def __init__(self, num_devices: int):
       self.task_property_offset = 2
-      self.device_utilization_state_offset = 5 + num_devices
+      self.task_property_len = 5 + num_devices
+      self.device_utilization_state_offset = self.task_property_offset + \
+                                             self.task_property_len
       self.device_state_len = 3 * num_devices
-      self.state_dim = self.task_property_offset + \
-                       self.device_utilization_state_offset + \
+      self.state_dim = self.device_utilization_state_offset + \
                        self.device_state_len
       self.out_dim = num_devices
-      # print("state dimension:", self.state_dim)
+      self.num_devices = num_devices
+      print("state dimension:", self.state_dim)
 
   def create_state(self, target_task: SimulatedTask, rl_info: RLInfo, sched_state: "SystemState"):
       print("create state is called")
       current_state = torch.zeros(self.state_dim, dtype=torch.float)
       self.create_global_info(current_state, rl_info)
       self.create_task_property_info(current_state, target_task, rl_info, sched_state)
-      self.create_device_utilization_info(current_state, rl_info)
+      self.create_device_utilization_info(current_state, rl_info, sched_state)
       return current_state
 
   def create_global_info(self, current_state, rl_info: RLInfo):
@@ -92,15 +94,20 @@ class RLEnvironment(RLBaseEnvironment):
       # In-degree 
       if rl_info.max_indegree > 0:
           current_state[offset] = get_indegree(target_task) / rl_info.max_indegree
+      print(f"[{offset}]: indegree {get_indegree(target_task)}, total {rl_info.max_indegree}"
+            f": {current_state[offset].item()}")
 
       # Out-degree
       offset += 1
       if rl_info.max_outdegree > 0:
           current_state[offset] = get_outdegree(target_task) / rl_info.max_outdegree
+      print(f"[{offset}]: outdegree {get_outdegree(target_task)}, total {rl_info.max_outdegree}"
+            f": {current_state[offset].item()}")
 
       # Task function type
       offset += 1
       current_state[offset] = target_task.info.func_id
+      print(f"[{offset}]: funcid: {target_task.info.func_id}: {current_state[offset].item()}")
 
       # Task expected execution time
       offset += 1
@@ -112,14 +119,16 @@ class RLEnvironment(RLBaseEnvironment):
               sched_state.get_task_duration(
                   target_task,
                   target_task.info.runtime.locations[0])[0].scale_to("us"))
-          print("scale:", task_duration, " type:", type(task_duration))
-          print("max duration:", rl_info.max_duration, " type:", type(rl_info.max_duration))
           current_state[offset] = task_duration / rl_info.max_duration
+          print(f"[{offset}]: duration: {task_duration}, max duration: {rl_info.max_duration}"
+                f" : {current_state[offset].item()}")
       
       # Task depth
       offset += 1
       if rl_info.max_depth > 0:
           current_state[offset] = target_task.info.depth / rl_info.max_depth
+      print(f"[{offset}]: depth: {target_task.info.depth}, max depth: {rl_info.max_depth}"
+            f" : {current_state[offset].item()}")
 
       # Parent task distribution
       offset += 1
@@ -128,11 +137,43 @@ class RLEnvironment(RLBaseEnvironment):
           p = taskmap[pid]
           if isinstance(p, SimulatedComputeTask):
               p_dev_id = p.assigned_devices[0].device_id
-              print(p, " --> ", p_dev_id)
               current_state[offset + p_dev_id] += 1 
+              print(f"[{offset + p_dev_id}]: device id: {p_dev_id}: "
+                    f"{current_state[offset + p_dev_id]}")
  
-  def create_device_utilization_info(self, current_state, rl_info):
-      pass
+  def create_device_utilization_info(self, current_state, rl_info: RLInfo,
+                                     sched_state: "SystemState"):
+      """
+        ** Device/network information (3 * # devices):
+          * Normalized resource usage (memory, VCUs)
+          * # mapped tasks per device / # active tasks
+          * Relative per-device idle time so far
+      """
+      offset = self.device_utilization_state_offset
+
+      # Resource usage
+      print(f"[{offset}] resource usage: {current_state[offset]}")
+
+      # Num mapped tasks per device (normalized by the total number of active tasks)
+      offset += self.num_devices
+      print(f"[{offset}] start workload")
+      devicemap = sched_state.objects.devicemap
+      for device in devicemap:
+          # Ignore CPU device
+          if device.architecture == Architecture.CPU:
+              continue
+
+          dev_id = device.device_id
+          current_state[dev_id + offset] = rl_info.perdev_active_workload[device]
+          if rl_info.total_active_workload > 0:
+              current_state[dev_id + offset] = \
+                  current_state[dev_id + offset].item() / rl_info.total_active_workload
+          print(f"[{offset}] # tasks per device: {rl_info.perdev_active_workload[device]}"
+                f" total # tasks: {rl_info.total_active_workload}"
+                f" :{current_state[dev_id + offset - 1].item()}")
+
+      # Relative per-device idle time so far
+
 
   def finalize_epoch(self, execution_time):
       pass

@@ -94,7 +94,7 @@ def test_data():
         data=data,
         scheduler_type="parla",
         randomizer=Randomizer(),
-        rl_environment=rl_env,
+        rl_env=rl_env,
         rl_mapper=rl_agent,
     )
     simulator = create_simulator(config=simulator_config)
