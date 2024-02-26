@@ -6,6 +6,7 @@ from functools import partial
 from typing import Dict, List, Tuple
 from itertools import chain
 
+from ....logging import logger
 from ...utility import convert_to_float
 from ...task import SimulatedTask, SimulatedComputeTask
 from ....types import TaskState, TaskType, Device, Architecture, RLInfo
@@ -26,30 +27,32 @@ class RLBaseEnvironment:
 
 class RLEnvironment(RLBaseEnvironment):
   """
-    *** State features ***
+    *** RL state features ***
 
     1. Global information (2):
-      * Completed tasks / total tasks
-      * Relative current wall-clock time
+      * Completed tasks / total tasks (TODO(hc))
+      * Relative current wall-clock time (TODO(hc))
 
-    2. Task-specific information (5 + # devices):
+    2. Task-specific information (4 + # types + # devices):
       * In-degree / max in-degree
       * Out-degree / max out-degree
-      * Task type ID
+      * Task type ID (parameter)
       * Expected exectuion time / max expected exectuion timm
       * Depth (from a root to the current task)
       * # parent tasks mapped per device / total # parent tasks
 
     3. Device/network information (3 * # devices):
-      * Normalized resource usage (memory, VCUs)
+      * Normalized resource usage (memory, VCUs) (TODO(hc))
       * # mapped tasks per device / # active tasks
-      * Relative per-device idle time so far
+      * Relative per-device idle time so far (TODO(hc))
 
   """
 
+
   def __init__(self, num_devices: int):
       self.task_property_offset = 2
-      self.task_property_len = 5 + num_devices
+      self.num_task_types = 4
+      self.task_property_len = 4 + self.num_task_types + num_devices
       self.device_utilization_state_offset = self.task_property_offset + \
                                              self.task_property_len
       self.device_state_len = 3 * num_devices
@@ -57,26 +60,38 @@ class RLEnvironment(RLBaseEnvironment):
                        self.device_state_len
       self.out_dim = num_devices
       self.num_devices = num_devices
-      print("state dimension:", self.state_dim)
+      if logger.ENABLE_LOGGING:
+          logger.runtime.info(f"RL state dimension: {self.state_dim}.")
+
 
   def create_state(self, target_task: SimulatedTask, rl_info: RLInfo, sched_state: "SystemState"):
-      print("create state is called")
       current_state = torch.zeros(self.state_dim, dtype=torch.float)
       self.create_global_info(current_state, rl_info)
       self.create_task_property_info(current_state, target_task, rl_info, sched_state)
       self.create_device_utilization_info(current_state, rl_info, sched_state)
       return current_state
 
+
   def create_global_info(self, current_state, rl_info: RLInfo):
-      print(">> completed tasks:", rl_info.total_num_completed_tasks)
-      print(">> total tasks:", rl_info.total_num_tasks)
+      """
+        ** Global information (2):
+          * Completed tasks / total tasks (TODO(hc))
+          * Relative current wall-clock time (TODO(hc))
+      """
+
       # % of completed tasks
       current_state[0] = rl_info.total_num_completed_tasks / rl_info.total_num_tasks \
                          if rl_info.total_num_tasks > 0 else 0
-      print("[0]: ", current_state[0])
+
       # Relative wall clock time
       current_state[1] = 0
-      print("[1]: ", current_state[1])
+
+      if logger.ENABLE_LOGGING:
+          logger.runtime.debug(f"RL state [0]: {current_state[0].item()} "
+                               f"(# completed tasks: {rl_info.total_num_completed_tasks}"
+                               f", # total tasks: {rl_info.total_num_tasks}).")
+          logger.runtime.debug(f"RL state [1]: {current_state[1].item()} (wall clock).")
+
 
   def create_task_property_info(self, current_state, target_task: SimulatedTask,
                                 rl_info: RLInfo, sched_state: "SystemState"):
@@ -89,28 +104,37 @@ class RLEnvironment(RLBaseEnvironment):
           * Depth (from a root to the current task)
           * # parent tasks mapped per device / total # parent tasks
       """
+
       offset = self.task_property_offset
 
       # In-degree 
       if rl_info.max_indegree > 0:
           current_state[offset] = get_indegree(target_task) / rl_info.max_indegree
-      print(f"[{offset}]: indegree {get_indegree(target_task)}, total {rl_info.max_indegree}"
-            f": {current_state[offset].item()}")
+      if logger.ENABLE_LOGGING:
+          logger.runtime.debug(f"RL state [{offset}]: {current_state[offset].item()} "
+                               f"(indegree {get_indegree(target_task)}, "
+                               f"max indegree {rl_info.max_indegree}).")
 
       # Out-degree
       offset += 1
       if rl_info.max_outdegree > 0:
           current_state[offset] = get_outdegree(target_task) / rl_info.max_outdegree
-      print(f"[{offset}]: outdegree {get_outdegree(target_task)}, total {rl_info.max_outdegree}"
-            f": {current_state[offset].item()}")
+      if logger.ENABLE_LOGGING:
+          logger.runtime.debug(f"RL state [{offset}]: {current_state[offset].item()} "
+                               f"(outdegree {get_indegree(target_task)}, "
+                               f"max outdegree {rl_info.max_outdegree}).")
 
       # Task function type
       offset += 1
-      current_state[offset] = target_task.info.func_id
-      print(f"[{offset}]: funcid: {target_task.info.func_id}: {current_state[offset].item()}")
+      current_state[offset + target_task.info.func_id] = 1
+      if logger.ENABLE_LOGGING:
+          logger.runtime.debug(f"RL state [{offset}]: Task type vector base.")
+          logger.runtime.debug(f"RL state [{offset + target_task.info.func_id}]: "
+                               f"{current_state[offset + target_task.info.func_id].item()} "
+                               f"(task func id {target_task.info.func_id}).")
 
       # Task expected execution time
-      offset += 1
+      offset += self.num_task_types
       if rl_info.max_duration > 0:
           # Gets expected task duration time on the 0th device.
           # For RL, we assume that all devices require the same duration
@@ -120,15 +144,21 @@ class RLEnvironment(RLBaseEnvironment):
                   target_task,
                   target_task.info.runtime.locations[0])[0].scale_to("us"))
           current_state[offset] = task_duration / rl_info.max_duration
-          print(f"[{offset}]: duration: {task_duration}, max duration: {rl_info.max_duration}"
-                f" : {current_state[offset].item()}")
+          if logger.ENABLE_LOGGING:
+              logger.runtime.debug(f"RL state [{offset}]: "
+                                   f"{current_state[offset].item()} "
+                                   f"(duration {task_duration} "
+                                   f"max duration: {rl_info.max_duration}).")
       
       # Task depth
       offset += 1
       if rl_info.max_depth > 0:
           current_state[offset] = target_task.info.depth / rl_info.max_depth
-      print(f"[{offset}]: depth: {target_task.info.depth}, max depth: {rl_info.max_depth}"
-            f" : {current_state[offset].item()}")
+      if logger.ENABLE_LOGGING:
+          logger.runtime.debug(f"RL state [{offset}]: "
+                               f"{current_state[offset].item()} "
+                               f"(depth {target_task.info.depth} "
+                               f"max depth: {rl_info.max_depth}).")
 
       # Parent task distribution
       offset += 1
@@ -138,8 +168,24 @@ class RLEnvironment(RLBaseEnvironment):
           if isinstance(p, SimulatedComputeTask):
               p_dev_id = p.assigned_devices[0].device_id
               current_state[offset + p_dev_id] += 1 
-              print(f"[{offset + p_dev_id}]: device id: {p_dev_id}: "
-                    f"{current_state[offset + p_dev_id]}")
+              if logger.ENABLE_LOGGING:
+                  logger.runtime.debug(f"RL state [{offset + p_dev_id}]: "
+                                       f"{current_state[offset + p_dev_id].item()} "
+                                       f"(# parant tasks at device {p_dev_id}).")
+      # Normalization
+      devicemap = sched_state.objects.devicemap
+      for device in devicemap:
+          # Ignore CPU device
+          if device.architecture == Architecture.CPU:
+              continue
+
+          dev_id = device.device_id
+          current_state[offset + dev_id] = \
+              current_state[offset + dev_id].item() / len(target_task.dependencies)
+          if logger.ENABLE_LOGGING:
+              logger.runtime.debug(f"RL state [{offset + dev_id}]: "
+                                   f"{current_state[offset + dev_id].item()}.")
+
  
   def create_device_utilization_info(self, current_state, rl_info: RLInfo,
                                      sched_state: "SystemState"):
@@ -152,11 +198,15 @@ class RLEnvironment(RLBaseEnvironment):
       offset = self.device_utilization_state_offset
 
       # Resource usage
-      print(f"[{offset}] resource usage: {current_state[offset]}")
+      if logger.ENABLE_LOGGING:
+          logger.runtime.debug(f"RL state [{offset}]: "
+                               f"{current_state[offset].item()} (Resource usage).")
 
       # Num mapped tasks per device (normalized by the total number of active tasks)
       offset += self.num_devices
-      print(f"[{offset}] start workload")
+      if logger.ENABLE_LOGGING:
+          logger.runtime.debug(f"RL state [{offset}]: "
+                               f"{current_state[offset].item()} (Per-device workload).")
       devicemap = sched_state.objects.devicemap
       for device in devicemap:
           # Ignore CPU device
@@ -168,11 +218,17 @@ class RLEnvironment(RLBaseEnvironment):
           if rl_info.total_active_workload > 0:
               current_state[dev_id + offset] = \
                   current_state[dev_id + offset].item() / rl_info.total_active_workload
-          print(f"[{offset}] # tasks per device: {rl_info.perdev_active_workload[device]}"
-                f" total # tasks: {rl_info.total_active_workload}"
-                f" :{current_state[dev_id + offset - 1].item()}")
+          if logger.ENABLE_LOGGING:
+              logger.runtime.debug(f"RL state [{dev_id + offset}]: "
+                                   f"{current_state[dev_id + offset].item()} "
+                                   f"(# tasks on device {dev_id} "
+                                   f", total # active tasks: {rl_info.total_active_workload}).")
 
       # Relative per-device idle time so far
+      offset += self.num_devices
+      if logger.ENABLE_LOGGING:
+          logger.runtime.debug(f"RL state [{offset}]: "
+                               f"{current_state[offset].item()} (Per-device idle time).")
 
 
   def finalize_epoch(self, execution_time):
