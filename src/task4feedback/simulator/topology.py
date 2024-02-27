@@ -4,7 +4,7 @@ from .device import SimulatedDevice
 from .resourceset import ResourceSet, FasterResourceSet
 from dataclasses import dataclass, field, InitVar
 from .utility import parse_size
-
+import math
 import numpy as np
 from fractions import Fraction
 
@@ -487,3 +487,97 @@ def generate_ngpus_1cpu_toplogy(
     # topology.add_bandwidth(gpus[2], gpus[3], P2P_BW)
 
     return topology
+
+@TopologyManager.register_generator("mesh")
+def generate_mesh_toplogy(
+    config: Optional[Dict[str, int]] = None
+) -> SimulatedTopology:
+    """
+    This function creates n GPUs and 1 CPU architecture.
+
+    The topology looks like below:
+
+     -----------
+    |           |
+    -gpu0 --gpu1-
+     | \   / |
+     |  \ /  |
+     |  / \  |
+     | /   \ |
+    -gpu2 -- gpu3-
+    |           |
+     -----------
+   
+    gpu0-gpu1 and gpu2-gpu3 have bandwidth of 200 (we assume NVLinks),
+    and other connections have bandiwdth of 100.
+
+    All GPUs are connected to CPU by connections having bandwidth of 100.
+    Each GPU is equipped with 16GB DRAM, and CPU is equipped with 130GB.
+    """
+    n = 4
+    if config is not None:
+        P2P_BW = config["P2P_BW"]
+        H2D_BW = config["H2D_BW"]
+        D2H_BW = config["D2H_BW"]
+
+        GPU_MEM = config["GPU_MEM"]
+        CPU_MEM = config["CPU_MEM"]
+
+        GPU_COPY_ENGINES = config["GPU_COPY_ENGINES"]
+        CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
+    else:
+        # Default configuration for testing
+        P2P_BW = parse_size("9 GB")  # 9 GB/s
+        H2D_BW = parse_size("7 GB")  # 7 GB/s
+        D2H_BW = parse_size("7 GB")  # 7 GB/s
+
+        GPU_MEM = parse_size("2 KB")
+        CPU_MEM = parse_size("130 GB")
+
+        GPU_COPY_ENGINES = 3
+        CPU_COPY_ENGINES = 3
+
+    # Create devices
+    gpus = [
+        SimulatedDevice(
+            Device(Architecture.GPU, i), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
+        )
+        for i in range(n)
+    ]
+    cpus = [
+        SimulatedDevice(
+            Device(Architecture.CPU, 0), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
+        )
+    ]
+
+    # Create device topology
+    topology = SimulatedTopology(cpus + gpus, "Topology::4G-1C")
+
+    # add connections between all gpus and the cpu
+    for gpu in gpus:
+        # print(gpu)
+        topology.add_connection(gpu, cpus[0], bidirectional=True)
+        topology.add_bandwidth(gpu, cpus[0], D2H_BW)
+        topology.add_bandwidth(cpus[0], gpu, H2D_BW)
+
+    step = int(math.sqrt(n))
+
+    # add connections between cols
+    for i in range (step):
+        mod = step * (i + 1)
+        for j in range(step):
+            curr_device = i * step + j
+            next_device = (curr_device + 1) % mod
+            topology.add_connection(gpus[curr_device], gpus[next_device], bidirectional=True)
+            topology.add_bandwidth(gpus[curr_device], gpus[next_device], P2P_BW)
+
+    # add connection between rows
+    for j in range(step):
+        for i in range(step):
+            curr_device = j + i * step
+            next_device = (j + (i + 1) * step) % n
+            topology.add_connection(gpus[curr_device], gpus[next_device], bidirectional=True)
+            topology.add_bandwidth(gpus[curr_device], gpus[next_device], P2P_BW)
+
+    return topology
+

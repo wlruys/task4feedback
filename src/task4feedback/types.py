@@ -161,7 +161,8 @@ class Device:
     architecture: Architecture = Architecture.CPU
     # The id of the device (-1 for any)
     device_id: int = 0
-
+    energy: float = 1 # energy in pJ to communicate 1 byte
+    
     def __str__(self):
         return f"{self.architecture.name}[{self.device_id}]"
 
