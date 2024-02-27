@@ -212,7 +212,7 @@ class DataStatus:
         self.eviction_tasks.add(task)
 
     def remove_eviction_task(self, task: TaskID):
-        print(f"Removing eviction task {task} from {self.id}")
+        # print(f"Removing eviction task {task} from {self.id}")
         self.eviction_tasks.remove(task)
 
     def remove_task(self, device: Device, task: TaskID, use: DataUses):
@@ -271,8 +271,13 @@ class DataStatus:
         potential_targets: Sequence[Device],
         state: TaskState,
     ) -> Device:
+        print(
+            f"Getting eviction target for {self.id} from {source_device} to {potential_targets}"
+        )
         valid_copies = self.get_device_set_from_state(state, DataState.VALID)
         target_device = source_device
+
+        print("Valid Copies", valid_copies)
 
         current_state = self.get_data_state(source_device, state)
         assert (
@@ -281,6 +286,9 @@ class DataStatus:
 
         if len(valid_copies) == 1:
             target_device = potential_targets[0]
+
+        print("Target Device", target_device)
+        print("Source Device", source_device)
 
         return target_device
 
@@ -302,7 +310,7 @@ class DataStatus:
 
         if logger.ENABLE_LOGGING:
             logger.data.info(
-                f"Start eviction of {self.id} from device {source_device}.",
+                f"Start eviction of {self.id} from device {source_device} to {target_device}.",
                 extra=dict(
                     task=task,
                     data=self.id,
@@ -333,7 +341,7 @@ class DataStatus:
     ):
         if logger.ENABLE_LOGGING:
             logger.data.info(
-                f"Finish eviction of {self.id} from device {source_device}.",
+                f"Finish eviction of {self.id} from device {source_device} to {target_device}.",
                 extra=dict(
                     task=task,
                     data=self.id,

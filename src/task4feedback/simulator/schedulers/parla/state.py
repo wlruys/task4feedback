@@ -120,7 +120,7 @@ def _check_eviction(
         evictable_memory = state.objects.get_device(device).evictable_bytes
         if verbose:
             print(f"Evictable memory on {device}: {evictable_memory}")
-            print(f"Required Memory on {device}: {resources.memory}")
+            print(f"Missing Memory on {device}: {resources.memory}")
         if evictable_memory < resources.memory:
             return None
 
@@ -227,10 +227,10 @@ def _get_difference_reserved(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
     )
 
-    # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
-    # print(
-    #    f"Resources in use for task {task.name} in RESERVED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
-    # )
+    print(f"Resources required for task {task.name} in RESERVED state: {resources}")
+    print(
+        f"Resources in use in RESERVED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
+    )
 
     missing_resources = state.resource_pool.get_difference(
         devices=devices,
@@ -341,7 +341,9 @@ def _check_resources_launched(
     #    f"Current resources in use for task {task.name} in LAUNCHED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
     # )
 
-    if isinstance(task, SimulatedDataTask):
+    if isinstance(task, SimulatedDataTask) and not isinstance(
+        task, SimulatedEvictionTask
+    ):
         source_device = _check_nearest_source(state, task)
 
         if source_device is None:
@@ -724,6 +726,10 @@ def _start_evict(
 
     assert task.source is not None
 
+    print(
+        f"Starting eviction for task {task.name} on {devices[0]}, source {task.source}"
+    )
+
     for data_access in data_accesses:
         data_id = data_access.id
         device_idx = data_access.device
@@ -920,6 +926,9 @@ class ParlaState(SystemState):
                 self, phase, task.read_write_accesses, task, AccessType.READ_WRITE
             )
             _use_data(self, phase, task.write_accesses, task, AccessType.WRITE)
+        elif isinstance(task, SimulatedEvictionTask):
+            # All eviction tasks store data in "read access"
+            _start_evict(self, task.read_accesses, task, AccessType.EVICT)
         elif isinstance(task, SimulatedDataTask):
             # Data movement tasks only exist at launch time
             assert phase == TaskState.LAUNCHED
@@ -928,9 +937,6 @@ class ParlaState(SystemState):
             # They read from a single source device onto a single target device
             _move_data(self, task.read_accesses, task)
             _move_data(self, task.read_write_accesses, task)
-        elif isinstance(task, SimulatedEvictionTask):
-            # All eviction tasks store data in "read access"
-            _start_evict(self, task.read_accesses, task, AccessType.EVICT)
 
     def release_data(
         self,
