@@ -96,6 +96,8 @@ class SystemState:
     resource_pool: FasterResourcePool = field(init=False)
     objects: ObjectRegistry = field(init=False)
     time: Time = field(default_factory=Time)
+    num_mapped_tasks: int = 0
+    threshold: int = 4
 
     def __post_init__(self):
         assert self.topology is not None

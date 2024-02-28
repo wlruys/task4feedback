@@ -208,11 +208,11 @@ class DataStatus:
         self.device2uses[device].add_task(task, use)
 
     def add_eviction_task(self, task: TaskID):
-        print(f"Adding eviction task {task} to {self.id}")
+        # print(f"Adding eviction task {task} to {self.id}")
         self.eviction_tasks.add(task)
 
     def remove_eviction_task(self, task: TaskID):
-        print(f"Removing eviction task {task} from {self.id}")
+        # print(f"Removing eviction task {task} from {self.id}")
         self.eviction_tasks.remove(task)
 
     def remove_task(self, device: Device, task: TaskID, use: DataUses):
@@ -271,16 +271,30 @@ class DataStatus:
         potential_targets: Sequence[Device],
         state: TaskState,
     ) -> Device:
+        # print(
+        #     f"Getting eviction target for {self.id} from {source_device} to {potential_targets}"
+        # )
         valid_copies = self.get_device_set_from_state(state, DataState.VALID)
         target_device = source_device
 
+        # print("Valid Copies", valid_copies)
+        from rich import print
+
+        print(f"State of {self.id}.")
+
+        print(self.device2state)
+
         current_state = self.get_data_state(source_device, state)
+        print("Current State", current_state)
         assert (
             current_state == DataState.VALID
-        ), f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device}."
+        ), f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device} in phase {state}."
 
         if len(valid_copies) == 1:
             target_device = potential_targets[0]
+
+        # print("Target Device", target_device)
+        # print("Source Device", source_device)
 
         return target_device
 
@@ -302,7 +316,7 @@ class DataStatus:
 
         if logger.ENABLE_LOGGING:
             logger.data.info(
-                f"Start eviction of {self.id} from device {source_device}.",
+                f"Start eviction of {self.id} from device {source_device} to {target_device}.",
                 extra=dict(
                     task=task,
                     data=self.id,
@@ -333,7 +347,7 @@ class DataStatus:
     ):
         if logger.ENABLE_LOGGING:
             logger.data.info(
-                f"Finish eviction of {self.id} from device {source_device}.",
+                f"Finish eviction of {self.id} from device {source_device} to {target_device}.",
                 extra=dict(
                     task=task,
                     data=self.id,
@@ -441,6 +455,11 @@ class DataStatus:
                 if prev_state == DataState.VALID:
                     evicted_locations.append(device)
 
+        from rich import print
+
+        print(f"Write on {self.id} to {target_device}")
+        print(self.state2device)
+
         return old_state, evicted_locations
 
     def read(
@@ -492,7 +511,7 @@ class DataStatus:
     ) -> Tuple[Optional[DataState], List[Device]]:
         if logger.ENABLE_LOGGING:
             logger.data.debug(
-                f"Using data on device {target_device} from task {task}",
+                f"Using data on device {target_device} from task {task} in phase {state} with operation {operation}",
                 extra=dict(task=task, data=self.id, operation=operation, state=state),
             )
 
@@ -537,6 +556,9 @@ class DataStatus:
 
         self.add_task(target_device, task, TaskStateToUse[state])
 
+        for device in evicted_locations:
+            self.add_task(device, task, TaskStateToUse[state])
+
         return old_state, evicted_locations
 
     def finish_use(
@@ -550,7 +572,7 @@ class DataStatus:
     ):
         if logger.ENABLE_LOGGING:
             logger.data.debug(
-                f"Finished using data {self.id} on device {target_device} from task {task}",
+                f"Finished using data {self.id} on device {target_device} from task {task} in phase {state} with operation {operation}",
                 extra=dict(task=task, data=self.id, operation=operation, state=state),
             )
         self.remove_task(target_device, task, TaskStateToUse[state])

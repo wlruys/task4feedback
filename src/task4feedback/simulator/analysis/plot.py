@@ -14,6 +14,7 @@ def make_resource_plot(
     log_scale: bool = False,
     plot_compute_tasks: bool = False,
     plot_data_tasks: bool = False,
+    plot_events: bool = False,
 ):
     if phase == TaskState.LAUNCHED:
         try:
@@ -53,6 +54,14 @@ def make_resource_plot(
     else:
         data_task_recorder = None
 
+    if plot_events:
+        try:
+            event_recorder: Optional[EventRecorder] = recorder.get(EventRecorder)
+        except KeyError:
+            event_recorder = None
+    else:
+        event_recorder = None
+
     if resource_type == ResourceType.VCU:
         field = "vcu_usage"
         f2 = "vcus"
@@ -72,9 +81,11 @@ def make_resource_plot(
     if combine_devices:
         ax = plt.gca()
 
+    if not combine_devices:
+        fig, axs = plt.subplots(len(device), 1, sharex=True, sharey=True)
+
     for k, d in enumerate(device):
-        if not combine_devices:
-            ax = plt.gca()
+        ax = axs[k] if not combine_devices else ax
 
         device_data = data[d]
         time = list(device_data.keys())
@@ -91,13 +102,16 @@ def make_resource_plot(
 
         df = DataFrame({"time": time, "usage": usage})
 
+        if d == Device(Architecture.GPU, 2):
+            df.to_csv("gpu2.csv")
+
         ax.step(
             df["time"],
             df["usage"],
             label=f"{field} usage for {d}",
             linestyle="-",
             color=device_colors[d],
-            where="mid",
+            where="pre",
         )
         if plot_max:
             ax.axhline(
@@ -110,24 +124,40 @@ def make_resource_plot(
 
         if not combine_devices:
             plt.xlabel("Time")
-            plt.ylabel(f"{field} usage")
-            plt.title(f"{field} for {d} in {phase} phase")
+            ax.set_ylabel(f"{d}")
+            # plt.title(f"{field} for {d} in {phase} phase")
 
             if compute_task_recorder is not None:
                 _plot_compute_tasks(
-                    ax, compute_task_recorder, d, device_as_y=False, labels=False
+                    ax=ax,
+                    recorder=compute_task_recorder,
+                    data_id=None,
+                    device_id=d,
+                    device_as_y=False,
+                    labels=False,
                 )
 
             if data_task_recorder is not None:
                 _plot_data_tasks(
-                    ax, data_task_recorder, d, device_as_y=False, labels=False
+                    ax=ax,
+                    recorder=data_task_recorder,
+                    data_id=None,
+                    device_id=d,
+                    device_as_y=False,
+                    labels=False,
                 )
 
-            plt.show()
+            if event_recorder is not None:
+                _plot_events(
+                    ax=ax,
+                    recorder=event_recorder,
+                    labels=False,
+                )
 
         if log_scale:
             plt.yscale("log")
-    else:
+
+    if combine_devices:
         plt.xlabel("Time")
         plt.ylabel(f"{field} usage")
         plt.title(f"{field} in {phase} phase")
@@ -136,20 +166,59 @@ def make_resource_plot(
         if compute_task_recorder is not None:
             for d in device:
                 _plot_compute_tasks(
-                    ax, compute_task_recorder, d, device_as_y=False, labels=False
+                    ax=ax,
+                    recorder=compute_task_recorder,
+                    data_id=None,
+                    device_id=d,
+                    device_as_y=False,
+                    labels=False,
                 )
+        if data_task_recorder is not None:
             for d in device:
                 _plot_data_tasks(
-                    ax, data_task_recorder, d, device_as_y=False, labels=False
+                    ax=ax,
+                    recorder=data_task_recorder,
+                    data_id=None,
+                    device_id=d,
+                    device_as_y=False,
+                    labels=False,
                 )
 
-        plt.show()
+    plt.show()
+
+
+def _plot_events(
+    ax: plt.Axes,
+    recorder: EventRecorder,
+    labels: bool = False,
+):
+
+    for time, events in recorder.completed_events.items():
+        end_time = time.duration
+        for event in events:
+            ax.axvline(
+                end_time,
+                color="black",
+                linestyle="--",
+                linewidth=1,
+            )
+            if labels:
+                ax.text(
+                    end_time,
+                    0.5,
+                    str(event),
+                    fontsize=5,
+                    color="black",
+                    ha="left",
+                    va="bottom",
+                )
 
 
 def _plot_compute_tasks(
     ax: plt.Axes,
     recorder: ComputeTaskRecorder,
-    data_id: DataID,
+    data_id: Optional[DataID] = None,
+    device_id: Optional[Device] = None,
     device_as_y: bool = False,
     labels: bool = False,
 ):
@@ -159,8 +228,40 @@ def _plot_compute_tasks(
         AccessType.READ_WRITE: "yellow",
     }
 
+    # use default matplotlib color map for devices
+    device_color_map = plt.cm.tab20.colors
+
     for taskid, taskrecord in recorder.tasks.items():
-        if data_id in taskrecord.read_data:
+
+        active_read_data = data_id is not None and data_id in taskrecord.read_data
+        active_write_data = data_id is not None and data_id in taskrecord.write_data
+        active_read_write_data = data_id is not None and (
+            data_id in taskrecord.read_write_data
+        )
+        active_device = device_id is not None and (
+            device_id in _get_device_list(taskrecord)
+        )
+
+        if data_id is None and active_device:
+            ax.axvspan(
+                taskrecord.start_time.duration,
+                taskrecord.end_time.duration,
+                alpha=0.5,
+            )
+
+            if labels:
+                y_loc = str(taskrecord.devices[0]) if device_as_y else 0.5
+                ax.text(
+                    taskrecord.start_time.duration,
+                    y_loc,
+                    str(taskid),
+                    fontsize=5,
+                    color="black",
+                    ha="left",
+                    va="bottom",
+                )
+
+        if active_read_data:
             ax.axvline(
                 taskrecord.start_time.duration,
                 color=usage_color_map[AccessType.READ],
@@ -178,7 +279,7 @@ def _plot_compute_tasks(
                     ha="left",
                     va="bottom",
                 )
-        if data_id in taskrecord.write_data:
+        if active_write_data:
             ax.axvline(
                 taskrecord.start_time.duration,
                 color=usage_color_map[AccessType.WRITE],
@@ -197,7 +298,7 @@ def _plot_compute_tasks(
                     va="bottom",
                 )
 
-        if data_id in taskrecord.read_write_data:
+        if active_read_write_data:
             ax.axvline(
                 taskrecord.start_time.duration,
                 color=usage_color_map[AccessType.READ_WRITE],
@@ -217,10 +318,21 @@ def _plot_compute_tasks(
                 )
 
 
+def _get_device_list(taskrecord: DataTaskRecord | ComputeTaskRecord) -> List[Device]:
+    if taskrecord.devices is None:
+        return []
+    if isinstance(taskrecord.devices, tuple):
+        return list(taskrecord.devices)
+    if isinstance(taskrecord.devices, list):
+        return taskrecord.devices
+    return [taskrecord.devices]
+
+
 def _plot_data_tasks(
     ax: plt.Axes,
     recorder: DataTaskRecorder,
-    data_id: DataID,
+    data_id: Optional[DataID] = None,
+    device_id: Optional[Device] = None,
     device_as_y: bool = False,
     labels: bool = False,
 ):
@@ -228,14 +340,51 @@ def _plot_data_tasks(
         AccessType.READ: "purple",
     }
 
+    type_color_map = {TaskType.DATA: "purple", TaskType.EVICTION: "lightgreen"}
+
     for taskid, taskrecord in recorder.tasks.items():
-        if data_id in taskrecord.read_data:
-            ax.axvline(
+
+        active_data = data_id is not None and data_id in taskrecord.read_data
+        active_device = device_id is not None and (
+            device_id in _get_device_list(taskrecord)
+        )
+        active_source = device_id is not None and (device_id == taskrecord.source)
+
+        print(f"Task: {taskid}, Data: {data_id}, Device: {device_id}")
+
+        if active_data or active_device or active_source:
+            print(f"Active: {taskid}, color: {type_color_map[taskrecord.type]}")
+            print(f"Start: {taskrecord.start_time.duration}")
+            print(f"End: {taskrecord.end_time.duration}")
+
+            c = type_color_map[taskrecord.type]
+            if not active_data:
+                if active_source and not active_device:
+                    c = "black"
+
+                if active_device and not active_source:
+                    c = "orange"
+
+            ax.axvspan(
+                taskrecord.start_time.duration,
                 taskrecord.end_time.duration,
-                color=usage_color_map[AccessType.READ],
-                linestyle="--",
-                linewidth=1,
+                alpha=0.5,
+                color=c,
             )
+            # ax.axvline(
+            #     taskrecord.start_time.duration,
+            #     color=c,
+            #     linestyle="-",
+            #     linewidth=1,
+            # )
+
+            # ax.axvline(
+            #     taskrecord.end_time.duration,
+            #     color=c,
+            #     linestyle="--",
+            #     linewidth=1,
+            # )
+
             if labels:
                 y_loc = str(taskrecord.devices[0]) if device_as_y else 0.5
                 ax.text(
@@ -321,10 +470,10 @@ def make_data_plot(
             )
 
         if compute_task_recorder is not None:
-            _plot_compute_tasks(ax, compute_task_recorder, data_id)
+            _plot_compute_tasks(ax=ax, recorder=compute_task_recorder, data_id=data_id)
 
         if data_task_recorder is not None:
-            _plot_data_tasks(ax, data_task_recorder, data_id)
+            _plot_data_tasks(ax=ax, recorder=data_task_recorder, data_id=data_id)
 
         # Formatting the plot
         # ax.xaxis_date()

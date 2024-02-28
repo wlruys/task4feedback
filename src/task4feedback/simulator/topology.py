@@ -470,10 +470,9 @@ def generate_4gpus_1cpu_toplogy(
 
     return topology
 
+
 @TopologyManager.register_generator("mesh")
-def generate_mesh_toplogy(
-    config: Optional[Dict[str, int]] = None
-) -> SimulatedTopology:
+def generate_mesh_toplogy(config: Optional[Dict[str, int]] = None) -> SimulatedTopology:
     """
     This function creates n GPUs and 1 CPU architecture.
 
@@ -489,7 +488,7 @@ def generate_mesh_toplogy(
     -gpu2 -- gpu3-
     |           |
      -----------
-   
+
     gpu0-gpu1 and gpu2-gpu3 have bandwidth of 200 (we assume NVLinks),
     and other connections have bandiwdth of 100.
 
@@ -513,7 +512,7 @@ def generate_mesh_toplogy(
         H2D_BW = parse_size("7 GB")  # 7 GB/s
         D2H_BW = parse_size("7 GB")  # 7 GB/s
 
-        GPU_MEM = parse_size("2 KB")
+        GPU_MEM = parse_size("16 GB")
         CPU_MEM = parse_size("130 GB")
 
         GPU_COPY_ENGINES = 3
@@ -545,12 +544,14 @@ def generate_mesh_toplogy(
     step = int(math.sqrt(n))
 
     # add connections between cols
-    for i in range (step):
+    for i in range(step):
         mod = step * (i + 1)
         for j in range(step):
             curr_device = i * step + j
             next_device = (curr_device + 1) % mod
-            topology.add_connection(gpus[curr_device], gpus[next_device], bidirectional=True)
+            topology.add_connection(
+                gpus[curr_device], gpus[next_device], bidirectional=True
+            )
             topology.add_bandwidth(gpus[curr_device], gpus[next_device], P2P_BW)
 
     # add connection between rows
@@ -558,8 +559,9 @@ def generate_mesh_toplogy(
         for i in range(step):
             curr_device = j + i * step
             next_device = (j + (i + 1) * step) % n
-            topology.add_connection(gpus[curr_device], gpus[next_device], bidirectional=True)
+            topology.add_connection(
+                gpus[curr_device], gpus[next_device], bidirectional=True
+            )
             topology.add_bandwidth(gpus[curr_device], gpus[next_device], P2P_BW)
 
     return topology
-

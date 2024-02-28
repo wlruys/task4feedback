@@ -118,8 +118,12 @@ def eviction_init(
     data: SimulatedData,
 ) -> SimulatedEvictionTask:
 
+    print(
+        f"Task {parent_task} is requesting space. Removing data {data.name} from {device.name}"
+    )
+
     target_device_id = data.get_eviction_target(
-        device.name, device.eviction_targets, TaskState.RESERVED
+        device.name, device.eviction_targets, TaskState.LAUNCHED
     )
 
     target_device = state.objects.get_device(target_device_id)
