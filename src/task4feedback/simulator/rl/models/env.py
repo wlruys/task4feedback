@@ -84,7 +84,11 @@ class RLEnvironment(RLBaseEnvironment):
                          if rl_info.total_num_tasks > 0 else 0
 
       # Relative wall clock time
-      current_state[1] = convert_to_float(sched_state.time.scale_to("ms"))
+      target_exec_time = rl_info.target_exec_time
+      print("Current time:",convert_to_float(sched_state.time.scale_to("ms")))
+      print("Target time:", target_exec_time)
+      current_state[1] = convert_to_float(sched_state.time.scale_to("ms")) / (2 * target_exec_time) \
+                         if target_exec_time > 0 else 0
 
       if logger.ENABLE_LOGGING:
           logger.runtime.debug(f"RL state [0]: {current_state[0].item()} "
@@ -226,6 +230,7 @@ class RLEnvironment(RLBaseEnvironment):
 
       # Relative per-device idle time so far
       offset += self.num_devices
+      target_exec_time = rl_info.target_exec_time
 
       for device, device_instance in devicemap.items():
           # Ignore CPU device
@@ -234,7 +239,8 @@ class RLEnvironment(RLBaseEnvironment):
 
           dev_id = device.device_id
           current_state[dev_id + offset] = convert_to_float(
-              device_instance.stats.idle_time.scale_to("ms"))
+              device_instance.stats.idle_time.scale_to("ms")) / (2 * target_exec_time) if \
+              target_exec_time > 0 else 0
           if logger.ENABLE_LOGGING:
               logger.runtime.debug(f"RL state [{dev_id + offset}]: "
                                    f"{current_state[dev_id + offset].item()} "

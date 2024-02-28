@@ -87,7 +87,8 @@ def test_data():
     num_gpus = 4
     rl_env = RLEnvironment(num_gpus)
     rl_agent = A2CAgent(rl_env)
-    exec_mode = ExecutionMode.RL_TRAINING
+    # exec_mode = ExecutionMode.RL_TRAINING
+    exec_mode = ExecutionMode.RANDOM
 
     simulator_config = SimulatorConfig(
         topology=topology,

@@ -503,6 +503,10 @@ class ParlaArchitecture(SchedulerArchitecture):
             self.rl_info.max_depth = max(self.rl_info.max_depth, task.info.depth)
         self.rl_info.total_num_tasks = len(tasks)
 
+        # Ignore CPU
+        self.rl_info.target_exec_time = calculate_heft(
+            tasks, taskmap, len(scheduler_state.objects.devicemap) - 1, scheduler_state)
+
         print(f"max degree: {self.rl_info.max_outdegree}, "
               f"in-degree: {self.rl_info.max_indegree}"
               f" total tasks: {self.rl_info.total_num_tasks}, "

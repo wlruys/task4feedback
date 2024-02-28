@@ -624,6 +624,8 @@ class TaskInfo:
     # User-defined task integer ID; in general, it is decided based
     # on function (or kernel) that this task calls
     func_id: int = 0
+    heft_rank: int = -1
+    heft_makespan: float = 0
 
 
 # Graph Type Aliases
@@ -750,6 +752,8 @@ class RLInfo:
     total_num_tasks: int = 0
     # # of completed tasks
     total_num_completed_tasks: int = 0
+    # Target execution time (from heuristic)
+    target_exec_time: float = 0
 
 
 class ExecutionMode(IntEnum):

@@ -1,3 +1,8 @@
+from collections import namedtuple
+from functools import partial
+from itertools import chain
+
+from ..types import Device, Architecture
 
 units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12} 
 
@@ -18,3 +23,100 @@ def convert_to_float(frac_str):
             whole = 0
         frac = float(num) / float(denom)
         return whole - frac if whole < 0 else whole + frac
+
+
+def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state) -> float:
+    """
+    Calculate HEFT (Heterogeneous Earliest Finish Time) for each task.
+    This function assumes that the tasklist is already sorted by a topology.
+    The below is the equation:
+
+    HEFT_rank = task_duration + max(HEFT_rank(successors))
+    """
+
+    def get_heft_rank(task):
+        return task.info.heft_rank
+
+    # Calculate HEFT ranks from bottom to top
+    for task in reversed(tasklist):
+        max_dependent_rank = 0
+        # Get the max HEFT rank among dependent tasks
+        for dep in task.dependents:
+            dependent_instance = taskmap[dep]
+            max_dependent_rank = max(dependent_instance.info.heft_rank, max_dependent_rank) 
+
+        duration = convert_to_float(
+            scheduler_state.get_task_duration(task, task.info.runtime.locations[0])[0].
+            scale_to("ms"))
+
+        # Calculate the HEFT rank
+        task.info.heft_rank = duration + max_dependent_rank
+
+    # Sort task list by heft rank
+    heft_sorted_tasks = sorted(tasklist, key=get_heft_rank)
+    # print("heft sorted tasks:", heft_sorted_tasks)
+
+    agents = {agent: [] for agent in range(0, num_devices)}
+
+    HEFTEvent = namedtuple('HEFTEvent', 'task start end')
+    max_heft = -1
+    for task in reversed(heft_sorted_tasks):
+        duration = convert_to_float(
+            scheduler_state.get_task_duration(task, task.info.runtime.locations[0])[0].
+            scale_to("ms"))
+
+        # Find task's ready time (== maximum dependency's completion time)
+        ready_time = 0
+        if len(task.dependencies) > 0:
+            ready_time = max([taskmap[dep].info.heft_makespan for dep in task.dependencies])
+
+        # Check second last task's end time and last task's start time.
+        # If that gap fits to the target task's execution time, schedule it.
+        # If that gap doesn't fit, schedule it after the last task
+        earliest_start = -1.0 
+        earliest_start_agent = -1
+        for agent_id, agent in agents.items():
+
+            # TODO(hc): add communication time later
+
+            if len(agent) > 0:
+                candidate_earliest_start = 0
+                any_slack_found = False
+
+                # Get a gap between the second last task and the last task
+                # Check if that gap is sufficient to schedule the target task
+
+                a = chain([HEFTEvent(None, None, 0)], agent[:-1])
+                for e1, e2 in zip(a, agent):
+                    tmp_earliest_start = max(ready_time, e1.end)
+                    if e2.start - tmp_earliest_start > duration:
+                        # If the last and second lask tasks have enough slack,
+                        # schedule that task to the slack.
+                        candidate_earliest_start = tmp_earliest_start
+                        any_slack_found = True
+                        break 
+
+                if not any_slack_found:
+                    candidate_earliest_start = max(agent[-1].end, ready_time)
+            else:
+                # If this agent (device) does not have mapped tasks, the earliest start
+                # time is 0.
+                candidate_earliest_start = 0
+
+            if earliest_start == -1 or earliest_start > candidate_earliest_start:
+                earliest_start_agent = agent_id
+                earliest_start = candidate_earliest_start
+
+        agents[earliest_start_agent].append(
+            HEFTEvent(task, earliest_start, earliest_start + duration))
+        task.info.heft_makespan = earliest_start + duration
+        if task.info.heft_makespan > max_heft:
+            max_heft = task.info.heft_makespan
+
+    print("MAX HEFT--->", max_heft)
+    # for key, value in agents.items():
+    #    print("Key:", key)
+    #    for vvalue in value:
+    #        print("span:", vvalue.task.info.heft_makespan, ", ", vvalue)
+    return max_heft
+
