@@ -13,13 +13,8 @@ from .env import *
 
 import torchviz
 
-# TODO(hc): This is deprecated as the reward system becomes an immediate reward.
-A2CTransition = namedtuple("A2CTransition",
-                          ("state", "action", "next_state", "reward",
-                           # We may store information for a GCN layer too.
-                           # If any GCN layer is not used, these should be `None`.
-                           "gcn_state", "gcn_edgeindex", "next_gcn_state",
-                           "next_gcn_edgeindex"))
+MappingLogs = namedtuple("MappingLogs",
+                         ("state", "action", "next_state"))
 
 class A2CAgent(RLModel):
 
@@ -53,6 +48,11 @@ class A2CAgent(RLModel):
         self.values = []
         self.rewards = []
 
+        self.tmp_curr_state = None
+        self.tmp_next_state = None
+        self.tmp_action = None
+        self.logs: List[MappingLogs] = []
+
         if not self.is_training_mode():
             print("Load model..\n")
             if self.is_loaded_model_best == 1:
@@ -72,10 +72,8 @@ class A2CAgent(RLModel):
             returns.insert(0, R)
         return returns
 
-    def select_device(self, target_task: SimulatedTask, x: torch.tensor,
-                      gcn_x = None, gcn_edgeindex = None):
-        # Different from DQN, A2C requires gradient tracking.
-        model_input = NetworkInput(x, False, gcn_x, gcn_edgeindex)
+    def select_device(self, target_task: SimulatedTask, x: torch.tensor):
+        model_input = NetworkInput(x, False, None, None)
         # This gets two values:
         # 1) transition probability of all the actions from the current state
         # 2) state value that evaluates the actor's policy;
@@ -96,8 +94,6 @@ class A2CAgent(RLModel):
         print("action probs:", action_probabilities)
         print("select device:", target_task)
         print("model input:", model_input)
-        print("gcn input:", gcn_x)
-        print("gcn edgeindex:", gcn_edgeindex)
         print("value:", value)
         print("actions:", actions)
         print("entropy:", dist.entropy())
@@ -114,7 +110,6 @@ class A2CAgent(RLModel):
 
     def optimize_model(self, next_x, next_gcn_x, next_gcn_edgeindex):
         self.steps += 1
-#if self.episode == 1 or not self.is_training_mode():
         if not self.is_training_mode():
             # Reset the model states
             self.steps = 0
@@ -232,7 +227,6 @@ class A2CAgent(RLModel):
         else:
             self.load_model()
 
-
     def start_episode(self):
         """ Start a new episode, and update (or initialize) the current state.
         """
@@ -260,3 +254,33 @@ class A2CAgent(RLModel):
         with open("models/" + prefix + ".optimizer.str", "w") as fp:
             for key, param in self.optimizer.state_dict().items():
                 fp.write(key + " = " + str(param))
+
+    def log_state(self, state: torch.tensor):
+        """
+        Log a current state (S).
+        """
+        self.tmp_curr_state = state
+
+    def log_action(self, action: int):
+        """
+        Log a chosen action (A). 
+        """
+        self.tmp_action = action
+
+    def log_next_state(self, next_state: torch.tensor):
+        """
+        Log a next action (S').
+        """
+        self.tmp_next_state = next_state
+
+    def log_sans(self):
+        """
+        Buffer (S, A, S').
+        All the buffered logs share the same terminal reward.
+        """
+        print("S:", self.tmp_curr_state, " A:", self.tmp_action, " S':", self.tmp_next_state)
+        self.logs.append(MappingLogs(self.tmp_curr_state, self.tmp_action, self.tmp_next_state))
+        print("logs length:", len(self.logs))
+        self.tmp_curr_state = None
+        self.tmp_action = None
+        self.tmp_next_state = None

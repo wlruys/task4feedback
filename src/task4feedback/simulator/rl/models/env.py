@@ -30,7 +30,7 @@ class RLEnvironment(RLBaseEnvironment):
     *** RL state features ***
 
     1. Global information (2):
-      * Completed tasks / total tasks (TODO(hc))
+      * Completed tasks / total tasks
       * Relative current wall-clock time (TODO(hc))
 
     2. Task-specific information (4 + # types + # devices):
@@ -66,13 +66,13 @@ class RLEnvironment(RLBaseEnvironment):
 
   def create_state(self, target_task: SimulatedTask, rl_info: RLInfo, sched_state: "SystemState"):
       current_state = torch.zeros(self.state_dim, dtype=torch.float)
-      self.create_global_info(current_state, rl_info)
+      self.create_global_info(current_state, rl_info, sched_state)
       self.create_task_property_info(current_state, target_task, rl_info, sched_state)
       self.create_device_utilization_info(current_state, rl_info, sched_state)
       return current_state
 
 
-  def create_global_info(self, current_state, rl_info: RLInfo):
+  def create_global_info(self, current_state, rl_info: RLInfo, sched_state: "SystemState"):
       """
         ** Global information (2):
           * Completed tasks / total tasks (TODO(hc))
@@ -84,7 +84,7 @@ class RLEnvironment(RLBaseEnvironment):
                          if rl_info.total_num_tasks > 0 else 0
 
       # Relative wall clock time
-      current_state[1] = 0
+      current_state[1] = convert_to_float(sched_state.time.scale_to("ms"))
 
       if logger.ENABLE_LOGGING:
           logger.runtime.debug(f"RL state [0]: {current_state[0].item()} "
@@ -226,9 +226,19 @@ class RLEnvironment(RLBaseEnvironment):
 
       # Relative per-device idle time so far
       offset += self.num_devices
-      if logger.ENABLE_LOGGING:
-          logger.runtime.debug(f"RL state [{offset}]: "
-                               f"{current_state[offset].item()} (Per-device idle time).")
+
+      for device, device_instance in devicemap.items():
+          # Ignore CPU device
+          if device.architecture == Architecture.CPU:
+              continue
+
+          dev_id = device.device_id
+          current_state[dev_id + offset] = convert_to_float(
+              device_instance.stats.idle_time.scale_to("ms"))
+          if logger.ENABLE_LOGGING:
+              logger.runtime.debug(f"RL state [{dev_id + offset}]: "
+                                   f"{current_state[dev_id + offset].item()} "
+                                   f"(device {dev_id} idle time {device_instance.stats.idle_time}) ")
 
 
   def finalize_epoch(self, execution_time):

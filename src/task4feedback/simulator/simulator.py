@@ -12,7 +12,7 @@ from .rl.models.model import *
 from .rl.models.env import *
 
 from ..types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
-from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
 
 from typing import List, Dict, Set, Tuple, Optional, Callable
 from dataclasses import dataclass, InitVar
@@ -46,9 +46,10 @@ class SimulatedScheduler:
     ###########################
     # RL related fields
     ###########################
+
     rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
-
+    exec_mode: ExecutionMode = ExecutionMode.RANDOM
 
     def __post_init__(self, topology: SimulatedTopology, scheduler_type: str = "parla"):
         scheduler_arch = SchedulerOptions.get_architecture(scheduler_type)
@@ -60,7 +61,8 @@ class SimulatedScheduler:
         self.state = scheduler_state(topology=topology)
         self.mechanisms = scheduler_arch(topology=topology,
                                          rl_env=self.rl_env,
-                                         rl_mapper=self.rl_mapper)
+                                         rl_mapper=self.rl_mapper,
+                                         exec_mode=self.exec_mode)
 
     def __str__(self):
         return f"Scheduler {self.name} | Current Time: {self.time}"
