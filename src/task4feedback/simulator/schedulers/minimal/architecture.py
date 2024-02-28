@@ -268,6 +268,10 @@ def complete_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
         resources=task.resources,
     )
 
+    print(
+        f"Removed resources for task {task.name} completed at time {scheduler_state.time}."
+    )
+
     return True
 
 
@@ -360,7 +364,7 @@ class MinimalArchitecture(SchedulerArchitecture):
 
         next_events: Sequence[EventPair] = []
         if remaining_tasks := length(self.launchable_tasks):
-            mapping_pair = (current_time + 100, Mapper())
+            mapping_pair = (current_time + 20, Mapper())
             next_events.append(mapping_pair)
 
         # print(f"Remaining tasks: {remaining_tasks}")

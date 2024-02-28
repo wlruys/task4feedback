@@ -208,7 +208,7 @@ class DataStatus:
         self.device2uses[device].add_task(task, use)
 
     def add_eviction_task(self, task: TaskID):
-        print(f"Adding eviction task {task} to {self.id}")
+        # print(f"Adding eviction task {task} to {self.id}")
         self.eviction_tasks.add(task)
 
     def remove_eviction_task(self, task: TaskID):
@@ -271,13 +271,13 @@ class DataStatus:
         potential_targets: Sequence[Device],
         state: TaskState,
     ) -> Device:
-        print(
-            f"Getting eviction target for {self.id} from {source_device} to {potential_targets}"
-        )
+        # print(
+        #     f"Getting eviction target for {self.id} from {source_device} to {potential_targets}"
+        # )
         valid_copies = self.get_device_set_from_state(state, DataState.VALID)
         target_device = source_device
 
-        print("Valid Copies", valid_copies)
+        # print("Valid Copies", valid_copies)
 
         current_state = self.get_data_state(source_device, state)
         assert (
@@ -287,8 +287,8 @@ class DataStatus:
         if len(valid_copies) == 1:
             target_device = potential_targets[0]
 
-        print("Target Device", target_device)
-        print("Source Device", source_device)
+        # print("Target Device", target_device)
+        # print("Source Device", source_device)
 
         return target_device
 

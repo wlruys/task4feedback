@@ -20,7 +20,7 @@ import io
 
 
 def build_data_usage_networkx_graph(
-    tasks: SimulatedTaskMap,
+    tasks: SimulatedTaskMap, verbose: bool = False
 ) -> nx.DiGraph:
 
     G = nx.DiGraph()
@@ -40,7 +40,8 @@ def build_data_usage_networkx_graph(
     for name, info in tasks.items():
         color = task_color_map[info.type]
         name = str(name)
-        print(f"Adding node: {name} with color: {color}")
+        if verbose:
+            print(f"Adding node: {name} with color: {color}")
 
         if isinstance(info, SimulatedDataTask):
             shape = "rectangle"
@@ -55,7 +56,8 @@ def build_data_usage_networkx_graph(
 
         for dep_id in info.dependencies:
             dep = tasks[dep_id]
-            print(f"Dep: {dep}", type(dep))
+            if verbose:
+                print(f"Dep: {dep}", type(dep))
             if isinstance(dep, SimulatedDataTask):
                 data_id = dep.read_accesses[0].id
                 print(f"Data ID: {data_id} from {dep.name}")
@@ -215,16 +217,17 @@ def draw(G, filename="graph.html"):
         fig.export_jpg(filename)
 
 
-def draw_networkx(G: nx.DiGraph, labels: Dict[TaskID, str]):
+def draw_networkx(G: nx.DiGraph):
     pos = nx.spring_layout(G, seed=5)
     nx.draw_networkx_nodes(G, pos=pos, node_size=700)
     nx.draw_networkx_edges(G, pos=pos)
     nx.draw_networkx_labels(G, pos=pos, labels=labels)
     plt.tight_layout()
     plt.axis("off")
+    plt.show()
 
 
-def plot_pydot(G: nx.DiGraph):
+def draw_pydot(G: nx.DiGraph):
     pg = nx.drawing.nx_pydot.to_pydot(G)
     png_str = pg.create_png(prog="dot")
     pg.write_png("pydot_graph.png")

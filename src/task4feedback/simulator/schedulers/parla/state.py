@@ -110,7 +110,7 @@ def _check_eviction(
 
     # Only generate an eviction event if it would free enough resources to run the next task
     resource_differences = _get_difference_reserved(state, task, verbose=verbose)
-    verbose = True
+    # verbose = True
     # print("Time: ", state.time)
     if verbose:
         print(
@@ -227,10 +227,10 @@ def _get_difference_reserved(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
     )
 
-    print(f"Resources required for task {task.name} in RESERVED state: {resources}")
-    print(
-        f"Resources in use in RESERVED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
-    )
+    # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
+    # print(
+    #     f"Resources in use in RESERVED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
+    # )
 
     missing_resources = state.resource_pool.get_difference(
         devices=devices,
@@ -521,6 +521,10 @@ def _release_resources_completed(
                 ),
             )
 
+            # print(
+            #     f"Removed resources after completing task {task} on {device}, time: {state.time}"
+            # )
+
 
 def _use_data(
     state: SystemState,
@@ -594,6 +598,9 @@ def _use_data(
                         ResourceGroup.PERSISTENT,
                         FasterResourceSet(memory=data.size, vcus=0, copy=0),
                     )
+                # print(
+                #     f"Removed resources for {data.name} on {device} due to write invalidation. Time: {state.time}."
+                # )
                 # remove from eviction pools
                 state.objects.get_device(device).remove_evictable(data)
 
@@ -726,9 +733,9 @@ def _start_evict(
 
     assert task.source is not None
 
-    print(
-        f"Starting eviction for task {task.name} on {devices[0]}, source {task.source}"
-    )
+    # print(
+    #     f"Starting eviction for task {task.name} on {devices[0]}, source {task.source}"
+    # )
 
     for data_access in data_accesses:
         data_id = data_access.id
@@ -794,6 +801,9 @@ def _finish_evict(
                     ResourceGroup.PERSISTENT,
                     FasterResourceSet(memory=data.size, vcus=0, copy=0),
                 )
+            # print(
+            #     f"Removed resources for {data.name} on {device} due to eviction. Time: {state.time}."
+            # )
 
 
 def _compute_task_duration(
