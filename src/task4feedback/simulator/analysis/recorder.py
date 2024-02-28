@@ -370,8 +370,14 @@ class DataTaskRecorder(Recorder):
                     data = system_state.objects.get_data(data_id)
                     data_size = data.size
 
+                    if isinstance(task, SimulatedEvictionTask):
+                        type = TaskType.EVICTION
+                    else:
+                        type = TaskType.DATA
+
                     self.tasks[name] = DataTaskRecord(
                         name,
+                        type=type,
                         end_time=current_time,
                         devices=task.assigned_devices,
                         source=task.source,
@@ -393,8 +399,14 @@ class DataTaskRecorder(Recorder):
                         data = system_state.objects.get_data(data_id)
                         data_size = data.size
 
+                        if isinstance(task, SimulatedEvictionTask):
+                            type = TaskType.EVICTION
+                        else:
+                            type = TaskType.DATA
+
                         self.tasks[name] = DataTaskRecord(
                             name,
+                            type=type,
                             start_time=current_time,
                             devices=task.assigned_devices,
                             source=task.source,
