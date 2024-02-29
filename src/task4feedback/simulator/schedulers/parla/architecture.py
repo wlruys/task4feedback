@@ -70,19 +70,21 @@ def rl_map_task(
     current_time = scheduler_state.time
     assert current_time is not None
 
-    # Check if task is mappable
-    if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
-        curr_state = rl_env.create_state(task, rl_info, scheduler_state)
-        chosen_devices = rl_mapper.select_device(task, curr_state)
+    if scheduler_state.total_num_mapped_tasks < scheduler_state.mapper_threshold:
+        # Check if task is mappable
+        if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
+            curr_state = rl_env.create_state(task, rl_info, scheduler_state)
+            chosen_device_id = rl_mapper.select_device(task, curr_state).item()
+            chosen_device = (Device(Architecture.GPU, chosen_device_id),)
 
-        rl_mapper.log_state(curr_state)
-        rl_mapper.log_action(chosen_devices.item())
+            rl_mapper.log_state(curr_state)
+            rl_mapper.log_action(chosen_device_id)
 
-        task.assigned_devices = (Device(Architecture.GPU, chosen_devices.item()))
-        scheduler_state.acquire_resources(phase, task, verbose=verbose)
-        scheduler_state.use_data(phase, task, verbose=verbose)
+            task.assigned_devices = chosen_device
+            scheduler_state.acquire_resources(phase, task, verbose=verbose)
+            scheduler_state.use_data(phase, task, verbose=verbose)
 
-        return chosen_devices
+            return chosen_device
 
     if logger.ENABLE_LOGGING:
         logger.runtime.debug(

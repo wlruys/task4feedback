@@ -184,8 +184,9 @@ class RLEnvironment(RLBaseEnvironment):
               continue
 
           dev_id = device.device_id
-          current_state[offset + dev_id] = \
-              current_state[offset + dev_id].item() / len(target_task.dependencies)
+          if len(target_task.dependencies) > 0:
+              current_state[offset + dev_id] = \
+                  current_state[offset + dev_id].item() / len(target_task.dependencies)
           if logger.ENABLE_LOGGING:
               logger.runtime.debug(f"RL state [{offset + dev_id}]: "
                                    f"{current_state[offset + dev_id].item()}.")
