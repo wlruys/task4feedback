@@ -750,10 +750,10 @@ class RLInfo:
     perdev_active_workload: Dict[Device, int] = field(default_factory=dict)
     # # of total tasks
     total_num_tasks: int = 0
-    # # of completed tasks
-    total_num_completed_tasks: int = 0
     # Target execution time (from heuristic)
     target_exec_time: float = 0
+    # # of completed tasks
+    total_num_completed_tasks: int = 0
 
 
 class ExecutionMode(IntEnum):

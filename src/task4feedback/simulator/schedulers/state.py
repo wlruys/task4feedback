@@ -96,6 +96,10 @@ class SystemState:
     resource_pool: FasterResourcePool = field(init=False)
     objects: ObjectRegistry = field(init=False)
     time: Time = field(default_factory=Time)
+    # Threshold of the number of tasks that can be mapped per each mapper event
+    mapper_threshold:int = 0
+    # # of tasks in (mapped~launchable) states
+    total_num_mapped_tasks: int = 0
 
     def __post_init__(self):
         assert self.topology is not None
@@ -106,6 +110,7 @@ class SystemState:
             self.objects.add_device(device)
 
         self.resource_pool = FasterResourcePool(devices=self.topology.devices)
+        self.mapper_threshold = len(self.topology.devices) * 4
 
     def register_tasks(self, taskmap: SimulatedTaskMap, copy: bool = False):
         if copy:

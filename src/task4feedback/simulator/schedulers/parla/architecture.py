@@ -109,14 +109,16 @@ def random_map_task(
     assert current_time is not None
 
     # Check if task is mappable
-    if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
-        chosen_devices = chose_random_placement(task)
+    print("total num mapped tasks:", scheduler_state.total_num_mapped_tasks, ", threshold:",  scheduler_state.mapper_threshold, flush=True)
+    if scheduler_state.total_num_mapped_tasks < scheduler_state.mapper_threshold:
+        if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
+            chosen_devices = chose_random_placement(task)
 
-        task.assigned_devices = chosen_devices
-        scheduler_state.acquire_resources(phase, task, verbose=verbose)
-        scheduler_state.use_data(phase, task, verbose=verbose)
+            task.assigned_devices = chosen_devices
+            scheduler_state.acquire_resources(phase, task, verbose=verbose)
+            scheduler_state.use_data(phase, task, verbose=verbose)
 
-        return chosen_devices
+            return chosen_devices
 
     if logger.ENABLE_LOGGING:
         logger.runtime.debug(
@@ -386,7 +388,6 @@ class ParlaArchitecture(SchedulerArchitecture):
     rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
     exec_mode: ExecutionMode = ExecutionMode.RANDOM
-    max_completed_task_depth: int = 0
 
     def __post_init__(self, topology: SimulatedTopology):
         assert topology is not None
@@ -535,11 +536,6 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
-            if task.info.depth > self.max_completed_task_depth + 2:
-                next_tasks.fail()
-                # print(task.info.depth, " vs ", self.max_completed_task_depth)
-                continue
-
             if devices := map_task(task, scheduler_state, self.exec_mode,
                                    self.rl_mapper, self.rl_env, self.rl_info):
                 for device in devices:
@@ -552,13 +548,16 @@ class ParlaArchitecture(SchedulerArchitecture):
                         extra=dict(task=taskid, device=devices),
                     )
                 event.tasks.add(taskid)
+                # 
                 task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
 
                 # Assumes that a task is assigned to a single device 
-                self.rl_info.perdev_active_workload[task.assigned_devices[0]] += 1
-                self.rl_info.total_active_workload += 1
+                if isinstance(task, SimulatedComputeTask):
+                    self.rl_info.perdev_active_workload[task.assigned_devices[0]] += 1
+                    self.rl_info.total_active_workload += 1
+                    scheduler_state.total_num_mapped_tasks += 1
 
                 next_state = self.rl_env.create_state(task, self.rl_info, scheduler_state)
                 self.rl_mapper.log_next_state(next_state)
@@ -742,6 +741,9 @@ class ParlaArchitecture(SchedulerArchitecture):
                 device = task.assigned_devices[0]  # type: ignore
                 self.launched_tasks[device].put_id(taskid, completion_time)
 
+                if isinstance(task, SimulatedComputeTask):
+                    scheduler_state.total_num_mapped_tasks -= 1
+
                 if logger.ENABLE_LOGGING:
                     logger.runtime.info(
                         f"Task {taskid} launched successfully on {device}.",
@@ -838,10 +840,9 @@ class ParlaArchitecture(SchedulerArchitecture):
         task.notify_state(TaskState.COMPLETED, objects.taskmap, scheduler_state.time)
 
         if isinstance(task, SimulatedComputeTask):
+            self.rl_info.total_num_completed_tasks += 1
             self.rl_info.perdev_active_workload[task.assigned_devices[0]] -= 1
             self.rl_info.total_active_workload -= 1
-            self.rl_info.total_num_completed_tasks += 1
-            self.max_completed_task_depth = max(self.max_completed_task_depth, task.info.depth)
 
         return next_events
 
