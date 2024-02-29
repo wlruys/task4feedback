@@ -96,6 +96,7 @@ def test_data():
         tasks=tasks,
         data=data,
         scheduler_type="parla",
+        scheduler_state_type="rl",
         randomizer=Randomizer(),
         rl_env=rl_env,
         rl_mapper=rl_agent,

@@ -33,6 +33,7 @@ from enum import Enum
 class SimulatedScheduler:
     topology: InitVar[SimulatedTopology]
     scheduler_type: InitVar[str] = "parla"
+    scheduler_state_type: InitVar[str] = "parla"
     tasks: List[TaskID] = field(default_factory=list)
     name: str = "SimulatedScheduler"
     mechanisms: SchedulerArchitecture = field(init=False)
@@ -51,9 +52,10 @@ class SimulatedScheduler:
     rl_mapper: RLModel = None
     exec_mode: ExecutionMode = ExecutionMode.RANDOM
 
-    def __post_init__(self, topology: SimulatedTopology, scheduler_type: str = "parla"):
+    def __post_init__(self, topology: SimulatedTopology, scheduler_type: str = "parla",
+                      scheduler_state_type: str = "parla"):
         scheduler_arch = SchedulerOptions.get_architecture(scheduler_type)
-        scheduler_state = SchedulerOptions.get_state(scheduler_type)
+        scheduler_state = SchedulerOptions.get_state(scheduler_state_type)
 
         print(f"Scheduler Architecture: {scheduler_arch}")
         print(f"Scheduler State: {scheduler_state}")
