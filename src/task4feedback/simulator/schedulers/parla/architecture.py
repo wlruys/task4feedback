@@ -29,12 +29,13 @@ def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
     devices = task.info.runtime.locations
 
     # # random.shuffle(devices)
-    # device = devices[0]
+    device = devices[0]
 
-    # if not isinstance(device, Tuple):
-    #     device = (device,)
+    if not isinstance(device, Tuple):
+        device = (device,)
 
-    return (Device(Architecture.GPU, 3),)
+    return device
+    # return (Device(Architecture.GPU, 3),)
 
 
 def map_task(
@@ -54,6 +55,7 @@ def map_task(
             check_limiter := scheduler_state.num_mapped_tasks
             < scheduler_state.threshold
         ):
+            # task.assigned_devices = apply_mapping_function(task, scheduler_state)
             chosen_devices = chose_random_placement(task)
             task.assigned_devices = chosen_devices
             scheduler_state.acquire_resources(phase, task, verbose=verbose)
@@ -85,7 +87,7 @@ def run_device_eviction(
     device = objects.get_device(device_id)
     assert device is not None
 
-    eviction_pool = device.eviction_pool
+    eviction_pool = scheduler_state.data_pool.evictable[device_id]
     quota = requested_resources.memory
 
     new_eviction_tasks = []
@@ -99,6 +101,8 @@ def run_device_eviction(
         assert data is not None
 
         eviction_task = eviction_init(parent_task, scheduler_state, device, data)
+        assert eviction_task.assigned_devices is not None
+
         objects.add_task(eviction_task)
         new_eviction_tasks.append(
             (eviction_task.assigned_devices[0], eviction_task.name)
@@ -117,8 +121,9 @@ def run_device_eviction(
         # print(
         #    f"Created eviction task {eviction_task.name} for data {data.name} on device {device.name} with size {data.info.size}."
         # )
-        quota -= data.info.size
-        popped = eviction_pool.get()
+        size = data.info.size
+        quota -= size
+        popped = eviction_pool.remove(data_id, size)
 
     if quota > 0:
         raise RuntimeError(
@@ -347,7 +352,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                         )
 
                         # Default state is evictable
-                        scheduler_state.objects.get_device(device).add_evictable(data)
+                        data.set_evictable(device, scheduler_state.data_pool)
 
         # Initialize the event queue
         next_event = Mapper()
@@ -412,7 +417,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         for data_access in accesses:
             data = objects.get_data(data_access.id)
 
-            active_eviction_tasks = data.status.eviction_tasks
+            active_eviction_tasks = data.status.uses.eviction_tasks
             # print("Active eviction tasks: ", active_eviction_tasks)
             for eviction_task_id in active_eviction_tasks:
                 eviction_task = objects.get_task(eviction_task_id)
@@ -439,7 +444,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         if task.data_tasks is not None:
             for data_task_id in task.data_tasks:
-                data_task: SimulatedDataTask = objects.get_task(data_task_id)
+                data_task: SimulatedDataTask = objects.get_task(data_task_id)  # type: ignore
                 assert data_task is not None
 
                 if logger.ENABLE_LOGGING:

@@ -19,7 +19,6 @@ from typing import (
 from .queue import PriorityQueue
 from dataclasses import dataclass, field
 from .resourceset import ResourceSet, FasterResourceSet
-from .datapool import DataPool
 from ..logging import logger
 
 

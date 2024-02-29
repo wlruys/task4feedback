@@ -149,23 +149,6 @@ class FasterResourcePool:
     def get_evict_flag(self, device: Device) -> bool:
         return self.eviction_flag[device]
 
-    def should_evict_device(
-        self, device: Device, requested_difference: FasterResourceSet
-    ) -> bool:
-        sim_device = self.devicemap[device]
-        evictable_bytes = sim_device.evictable_bytes
-        if evictable_bytes >= requested_difference.memory:
-            return True
-        return False
-
-    def should_evict(
-        self, requested_difference: Dict[Device, FasterResourceSet]
-    ) -> bool:
-        return any(
-            self.should_evict_device(device, difference)
-            for device, difference in requested_difference.items()
-        )
-
     def check_device_resources(
         self,
         device: Device,
@@ -306,8 +289,8 @@ class ResourcePool:
 
         for resourcekey in types:
             if (
-                current_resources[resourcekey] + proposed_resources[resourcekey]
-                > max_resources[resourcekey]
+                current_resources[resourcekey] + proposed_resources[resourcekey]  # type: ignore
+                > max_resources[resourcekey]  # type: ignore
             ):
                 return False
         return True

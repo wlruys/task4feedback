@@ -40,14 +40,11 @@ class SimulatedDevice:
     name: Device
     resources: FasterResourceSet
     stats: DeviceStats = field(default_factory=DeviceStats)
-    datapool: DataPool = field(default_factory=DataPool)
     eviction_pool_type: Type[EvictionPool] = LRUEvictionPool
-    eviction_pool: EvictionPool = field(init=False)
     eviction_targets: List[Device] = field(default_factory=list)
     memory_space: Device = field(init=False)
 
     def __post_init__(self):
-        self.eviction_pool = self.eviction_pool_type()
         self.eviction_targets = [Device(Architecture.CPU, 0)]
         self.memory_space = self.name
 
@@ -66,26 +63,10 @@ class SimulatedDevice:
     def __lt__(self, other):
         return self.name < other.name
 
-    def __getitem__(self, key: ResourceType) -> Numeric:
+    def __getitem__(self, key: ResourceType) -> Numeric:  # type: ignore
         if key == ResourceType.VCU:
             return self.resources.vcus
         elif key == ResourceType.MEMORY:
             return self.resources.memory
         elif key == ResourceType.COPY:
             return self.resources.copy
-
-    def add_data(self, data: SimulatedData):
-        self.datapool.add(data)
-
-    def remove_data(self, data: SimulatedData):
-        self.datapool.remove(data)
-
-    def add_evictable(self, data: SimulatedData):
-        self.eviction_pool.add(data)
-
-    def remove_evictable(self, data: SimulatedData):
-        self.eviction_pool.remove(data)
-
-    @property
-    def evictable_bytes(self):
-        return self.eviction_pool.evictable_size

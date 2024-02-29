@@ -13,7 +13,7 @@ def _create_eviction_task(
 
     eviction_space = str(parent_task) + "_eviction"
     eviction_id = TaskID(taskspace=eviction_space, task_idx=data.name.idx)
-    eviction_dependencies = list(data.status.eviction_tasks)
+    eviction_dependencies = list(data.status.uses.eviction_tasks)
     data_dependencies = TaskDataInfo(read=[DataAccess(id=data.name, device=0)])
     eviction_runtime = TaskPlacementInfo()
     eviction_runtime.add(Device(Architecture.ANY, -1), TaskRuntimeInfo())
@@ -75,13 +75,6 @@ def _update_target_resources(
 
     state.resource_pool.add_device_resource(
         target_device.name,
-        TaskState.MAPPED,
-        ResourceGroup.ALL,
-        requested_resources,
-    )
-
-    state.resource_pool.add_device_resource(
-        target_device.name,
         TaskState.RESERVED,
         ResourceGroup.PERSISTENT,
         requested_resources,
@@ -98,16 +91,11 @@ def _update_data_state(
     data: SimulatedData,
 ) -> None:
     data.status.evict(
-        task.name,
-        source_device=source_device.name,
-        target_device=target_device.name,
-        state=TaskState.MAPPED,
-    )
-    data.status.evict(
-        task.name,
+        task=task.name,
         source_device=source_device.name,
         target_device=target_device.name,
         state=TaskState.RESERVED,
+        pools=state.data_pool,
     )
 
 
@@ -123,7 +111,7 @@ def eviction_init(
     )
 
     target_device_id = data.get_eviction_target(
-        device.name, device.eviction_targets, TaskState.LAUNCHED
+        device.name, device.eviction_targets, TaskState.RESERVED
     )
 
     target_device = state.objects.get_device(target_device_id)
