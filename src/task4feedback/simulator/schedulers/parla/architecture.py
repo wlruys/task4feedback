@@ -6,9 +6,11 @@ from ...events import *
 from ...resources import *
 from ...task import *
 from ...topology import *
+from ...utility import *
 
 from ....types import Architecture, Device, TaskID, TaskState, TaskType, Time
 from ....types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ....types import RLInfo, ExecutionMode
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Sequence
 from dataclasses import dataclass, InitVar
@@ -21,6 +23,9 @@ from ..architecture import SchedulerArchitecture, SchedulerOptions
 from ...eviction.usage import *
 
 from rich import print
+
+from ...rl.models.model import *
+from ...rl.models.env import *
 
 
 def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
@@ -35,8 +40,105 @@ def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
 
 
 def map_task(
-    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
-) -> Optional[Tuple[Device, ...]]:
+    task: SimulatedTask, scheduler_state: ParlaState, exec_mode: ExecutionMode,
+    rl_mapper: RLModel, rl_env: RLBaseEnvironment, rl_info: RLInfo,
+    verbose: bool = False) -> Optional[Tuple[Device, ...]]:
+    """
+    Invoke a specified task mapper
+    """
+    if exec_mode == ExecutionMode.RL_TRAINING or exec_mode == ExecutionMode.RL_TESTING or \
+       exec_mode == ExecutionMode.READYS_TRAINING or exec_mode == ExecutionMode.READYS_TRAINING:
+        print("Training/testing mode")
+        return rl_map_task(task, scheduler_state, exec_mode, rl_mapper, rl_env, rl_info, verbose)
+    elif exec_mode == ExecutionMode.RANDOM:
+        print("Random mode")
+        return random_map_task(task, scheduler_state, exec_mode, rl_mapper, rl_env, rl_info, verbose)
+    elif exec_mode == ExecutionMode.PARLA:
+        print("Parla mode")
+        return parla_map_task(task, scheduler_state, exec_mode, rl_mapper, rl_env, rl_info, verbose)
+
+
+def rl_map_task( 
+    task: SimulatedTask, scheduler_state: ParlaState, exec_mode: ExecutionMode,
+    rl_mapper: RLModel, rl_env: RLBaseEnvironment, rl_info: RLInfo,
+    verbose: bool = False) -> Optional[Tuple[Device, ...]]:
+
+    phase = TaskState.MAPPED
+    objects = scheduler_state.objects
+    assert objects is not None
+
+    current_time = scheduler_state.time
+    assert current_time is not None
+
+    if scheduler_state.total_num_mapped_tasks < scheduler_state.mapper_threshold:
+        # Check if task is mappable
+        if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
+            curr_state = rl_env.create_state(task, rl_info, scheduler_state)
+            chosen_device_id = rl_mapper.select_device(task, curr_state).item()
+            chosen_device = (Device(Architecture.GPU, chosen_device_id),)
+
+            rl_mapper.log_state(curr_state)
+            rl_mapper.log_action(chosen_device_id)
+
+            task.assigned_devices = chosen_device
+            scheduler_state.acquire_resources(phase, task, verbose=verbose)
+            scheduler_state.use_data(phase, task, verbose=verbose)
+
+            return chosen_device
+
+    if logger.ENABLE_LOGGING:
+        logger.runtime.debug(
+            f"Task {task.name} cannot be mapped: Invalid status.",
+            extra=dict(
+                task=task.name, phase=phase, counters=task.counters, status=task.status
+            ),
+        )
+    return None
+
+
+def random_map_task(
+    task: SimulatedTask, scheduler_state: ParlaState, exec_mode: ExecutionMode,
+    rl_mapper: RLModel, rl_env: RLBaseEnvironment, rl_info: RLInfo,
+    verbose: bool = False) -> Optional[Tuple[Device, ...]]:
+    """
+    Randomly assigns a device to a task.
+    """
+    phase = TaskState.MAPPED
+    objects = scheduler_state.objects
+    assert objects is not None
+
+    current_time = scheduler_state.time
+    assert current_time is not None
+
+    # Check if task is mappable
+    print("total num mapped tasks:", scheduler_state.total_num_mapped_tasks, ", threshold:",  scheduler_state.mapper_threshold, flush=True)
+    if scheduler_state.total_num_mapped_tasks < scheduler_state.mapper_threshold:
+        if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
+            chosen_devices = chose_random_placement(task)
+
+            task.assigned_devices = chosen_devices
+            scheduler_state.acquire_resources(phase, task, verbose=verbose)
+            scheduler_state.use_data(phase, task, verbose=verbose)
+
+            return chosen_devices
+
+    if logger.ENABLE_LOGGING:
+        logger.runtime.debug(
+            f"Task {task.name} cannot be mapped: Invalid status.",
+            extra=dict(
+                task=task.name, phase=phase, counters=task.counters, status=task.status
+            ),
+        )
+    return None
+
+
+def parla_map_task( 
+    task: SimulatedTask, scheduler_state: ParlaState, exec_mode: ExecutionMode,
+    rl_mapper: RLModel, rl_env: RLBaseEnvironment, rl_info: RLInfo,
+    verbose: bool = False) -> Optional[Tuple[Device, ...]]:
+    """
+    Assigns a device to a task based on Parla's load-balancing and locality-aware policy.
+    """
     phase = TaskState.MAPPED
     objects = scheduler_state.objects
     assert objects is not None
@@ -47,6 +149,7 @@ def map_task(
     # Check if task is mappable
     if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
         chosen_devices = chose_random_placement(task)
+
         task.assigned_devices = chosen_devices
         scheduler_state.acquire_resources(phase, task, verbose=verbose)
         scheduler_state.use_data(phase, task, verbose=verbose)
@@ -90,20 +193,7 @@ def run_device_eviction(
 
         eviction_task = eviction_init(parent_task, scheduler_state, device, data)
         objects.add_task(eviction_task)
-        new_eviction_tasks.append(
-            (eviction_task.assigned_devices[0], eviction_task.name)
-        )
-
-        if logger.ENABLE_LOGGING:
-            logger.runtime.info(
-                f"Created eviction task {eviction_task.name} for data {data.name} on device {device.name} with size {data.info.size}. Target: {eviction_task.assigned_devices} Source: {eviction_task.source}",
-                extra=dict(
-                    task=eviction_task.name,
-                    data=data.name,
-                    device=device.name,
-                    size=data.info.size,
-                ),
-            )
+        new_eviction_tasks.append((device_id, eviction_task.name))
         # print(
         #    f"Created eviction task {eviction_task.name} for data {data.name} on device {device.name} with size {data.info.size}."
         # )
@@ -184,44 +274,21 @@ def launch_task(
     phase = TaskState.LAUNCHED
 
     # print(f"Trying to launch task {task.name}.")
-    # if isinstance(task, SimulatedEvictionTask):
-    #     print(
-    #         f"Trying to launch eviction task {task.name}. Source Device: {task.source}. Target Device: {task.assigned_devices}."
-    #     )
-
-    # print(f"Trying to launch task {task.name}.")
     # print(f"Task status: {task.status}.")
     # print(f"Task counters: {task.counters}.")
 
     if check_status := scheduler_state.check_task_status(task, TaskStatus.LAUNCHABLE):
-        # if isinstance(task, SimulatedEvictionTask):
-        #     print(
-        #         f"Task {task.name} is launchable. Source Device: {task.source}. Target Device: {task.assigned_devices}."
-        #     )
         if can_fit := scheduler_state.check_resources(phase, task):
-            # if isinstance(task, SimulatedEvictionTask):
-            #     print(
-            #         f"Task {task.name} can fit. Source Device: {task.source}. Target Device: {task.assigned_devices}."
-            #     )
             if logger.ENABLE_LOGGING:
                 logger.runtime.critical(
                     f"Launching task {task.name} on devices {task.assigned_devices}",
                     extra=dict(task=task.name, devices=task.assigned_devices),
                 )
-
-            # if isinstance(task, SimulatedEvictionTask):
-            #     print(f"Task {task.name} before acquire_resources: {task.source}.")
             scheduler_state.acquire_resources(phase, task)
-            # if isinstance(task, SimulatedEvictionTask):
-            #     print(f"Task {task.name} before duration: {task.source}.")
             duration, completion_time = scheduler_state.get_task_duration(
                 task, task.assigned_devices, verbose=verbose
             )
-            # if isinstance(task, SimulatedEvictionTask):
-            #     print(f"Task {task.name} before use_data: {task.source}.")
             scheduler_state.use_data(phase, task, verbose=verbose)
-            # if isinstance(task, SimulatedEvictionTask):
-            #     print(f"Task {task.name} after use_data: {task.source}.")
             task.duration = duration
             task.completion_time = completion_time
             scheduler_state.launch_stats(task)
@@ -277,6 +344,17 @@ class ParlaArchitecture(SchedulerArchitecture):
     active_scheduler: int = 0
     eviction_occured: bool = False
 
+    ###########################
+    # RL related fields
+    ###########################
+
+    rl_info: RLInfo = field(default_factory=RLInfo)
+    # RL environment providing RL state and performing auxiliary operations
+    # This type is given by a script
+    rl_env: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
+    exec_mode: ExecutionMode = ExecutionMode.RANDOM
+
     def __post_init__(self, topology: SimulatedTopology):
         assert topology is not None
 
@@ -287,6 +365,8 @@ class ParlaArchitecture(SchedulerArchitecture):
             self.launchable_tasks[device.name][TaskType.DATA] = TaskQueue()
             self.launchable_tasks[device.name][TaskType.COMPUTE] = TaskQueue()
             self.launchable_tasks[device.name][TaskType.EVICTION] = TaskQueue()
+
+            self.rl_info.perdev_active_workload[device.name] = 0
 
             self.launched_tasks[device.name] = TaskQueue()
 
@@ -299,6 +379,13 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         # Initialize the set of visible tasks
         self.add_initial_tasks(task_objects, scheduler_state)
+
+        # Set an execution mode
+        if self.exec_mode == ExecutionMode.RL_TRAINING or \
+           self.exec_mode == ExecutionMode.READYS_TRAINING:
+            self.rl_mapper.set_training_mode()
+        elif self.exec_mode == ExecutionMode.RL_TESTING:
+            self.rl_mapper.set_test_mode()
 
         # Initialize memory for starting data blocks
         for data in objects.datamap.values():
@@ -338,6 +425,9 @@ class ParlaArchitecture(SchedulerArchitecture):
                         # Default state is evictable
                         scheduler_state.objects.get_device(device).add_evictable(data)
 
+        # Collect task graph information
+        self.collect_task_graph_info(task_objects, scheduler_state)
+
         # Initialize the event queue
         next_event = Mapper()
         next_time = Time(0)
@@ -353,6 +443,48 @@ class ParlaArchitecture(SchedulerArchitecture):
         """
         for task in tasks:
             self.spawned_tasks.put(task)
+
+    def collect_task_graph_info(
+        self, tasks: List[SimulatedTask], scheduler_state: SystemState
+    ):
+        """
+        Collect a task graph information before simulation starts.
+        """
+        taskmap = scheduler_state.objects.taskmap
+        for task in tasks:
+            self.rl_info.max_outdegree = max(self.rl_info.max_outdegree, len(task.dependents))
+            self.rl_info.max_indegree = max(self.rl_info.max_indegree, len(task.dependencies))
+            task_duration_float = convert_to_float(
+                scheduler_state.get_task_duration(task, task.info.runtime.locations[0])[0].
+                scale_to("us"))
+            self.rl_info.max_duration = max(self.rl_info.max_duration, task_duration_float)
+
+            # Propagate depth to its successors
+            for dep in task.dependencies:
+                task.info.depth = max(task.info.depth, taskmap[dep].info.depth + 1)
+
+            if task.info.depth == -1:
+                # If its depth is not initialized
+                task.info.depth = 0
+
+            self.rl_info.max_depth = max(self.rl_info.max_depth, task.info.depth)
+        self.rl_info.total_num_tasks = len(tasks)
+
+        # Ignore CPU
+        self.rl_info.target_exec_time = calculate_heft(
+            tasks, taskmap, len(scheduler_state.objects.devicemap) - 1, scheduler_state)
+
+        print(f"max degree: {self.rl_info.max_outdegree}, "
+              f"in-degree: {self.rl_info.max_indegree}"
+              f" total tasks: {self.rl_info.total_num_tasks}, "
+              f"max depth: {self.rl_info.max_depth} \n"
+              f"max execution time: {self.rl_info.max_duration}")
+        if logger.ENABLE_LOGGING:
+            logger.runtime.info(
+                f"Total tasks: {self.rl_info.total_num_tasks}\n"
+                f"Max out-degree: {self.rl_info.max_outdegree} "
+                f"and in-degree: {self.rl_info.max_indegree}."
+            )
 
     def mapper(self, scheduler_state: SystemState, event: Mapper) -> List[EventPair]:
         self.success_count = 0
@@ -370,7 +502,8 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
-            if devices := map_task(task, scheduler_state):
+            if devices := map_task(task, scheduler_state, self.exec_mode,
+                                   self.rl_mapper, self.rl_env, self.rl_info):
                 for device in devices:
                     self.reservable_tasks[device].put_id(
                         task_id=taskid, priority=priority
@@ -381,14 +514,25 @@ class ParlaArchitecture(SchedulerArchitecture):
                         extra=dict(task=taskid, device=devices),
                     )
                 event.tasks.add(taskid)
+                # 
                 task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
+
+                # Assumes that a task is assigned to a single device 
+                if isinstance(task, SimulatedComputeTask):
+                    self.rl_info.perdev_active_workload[task.assigned_devices[0]] += 1
+                    self.rl_info.total_active_workload += 1
+                    scheduler_state.total_num_mapped_tasks += 1
+
+                next_state = self.rl_env.create_state(task, self.rl_info, scheduler_state)
+                self.rl_mapper.log_next_state(next_state)
+                self.rl_mapper.log_sans()
             else:
                 next_tasks.fail()
                 continue
 
-        reserver_pair = (current_time + Time(10), Reserver())
+        reserver_pair = (current_time, Reserver())
         return [reserver_pair]
 
     def _add_eviction_dependencies_from_access(
@@ -467,8 +611,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                 extra=dict(time=current_time, phase=TaskState.RESERVED),
             )
 
-        # print(f"Reserving tasks")
-
         next_tasks = MultiTaskIterator(self.reservable_tasks)
         for priority, taskid in next_tasks:
             task = objects.get_task(taskid)
@@ -508,7 +650,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 next_tasks.fail()
                 continue
 
-        launcher_pair = (current_time + Time(10), Launcher())
+        launcher_pair = (current_time, Launcher())
         return [launcher_pair]
 
     def eviction(
@@ -528,14 +670,11 @@ class ParlaArchitecture(SchedulerArchitecture):
         # print("Evicting data.")
         eviction_tasks = run_eviction(scheduler_state, event)
         for device, eviction_task in eviction_tasks:
-            # print(device, eviction_task)
-            task_i = objects.get_task(eviction_task)
-
             self.launchable_tasks[device][TaskType.EVICTION].put_id(
                 task_id=eviction_task, priority=0
             )
 
-        reserver_pair = (current_time + Time(10), Launcher())
+        reserver_pair = (current_time, Launcher())
         return [reserver_pair]
 
     def launcher(
@@ -565,9 +704,12 @@ class ParlaArchitecture(SchedulerArchitecture):
                 device = task.assigned_devices[0]  # type: ignore
                 self.launched_tasks[device].put_id(taskid, completion_time)
 
+                if isinstance(task, SimulatedComputeTask):
+                    scheduler_state.total_num_mapped_tasks -= 1
+
                 if logger.ENABLE_LOGGING:
                     logger.runtime.info(
-                        f"Task {taskid} launched successfully on {device}.",
+                        f"Task {taskid} launched successfully.",
                         extra=dict(
                             task=taskid,
                             device=device,
@@ -575,9 +717,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                             completion_time=completion_time,
                         ),
                     )
-                    # if isinstance(task, SimulatedEvictionTask):
-                    #     print("Source Device: ", task.source)
-
                 event.tasks.add(taskid)
 
                 # Create completion event
@@ -633,8 +772,16 @@ class ParlaArchitecture(SchedulerArchitecture):
         self, scheduler_state: SystemState, event: TaskCompleted
     ) -> List[EventPair]:
         objects = scheduler_state.objects
+
         task = objects.get_task(event.task)
         current_time = scheduler_state.time
+
+        next_events: List[EventPair] = []
+        self.success_count += 1
+        if self.active_scheduler == 0:
+            mapping_pair = (current_time, Mapper())
+            next_events.append(mapping_pair)
+            self.active_scheduler += 1
 
         if logger.ENABLE_LOGGING:
             # print(f"Completing task {event.task}")
@@ -645,7 +792,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                 ),
             )
 
-        next_events: List[EventPair] = []
 
         self._verify_correct_task_completed(task, scheduler_state)
         complete_task(task, scheduler_state)
@@ -653,11 +799,10 @@ class ParlaArchitecture(SchedulerArchitecture):
         # Update status of dependencies
         task.notify_state(TaskState.COMPLETED, objects.taskmap, scheduler_state.time)
 
-        self.success_count += 1
-        if self.active_scheduler == 0:
-            mapping_pair = (current_time, Mapper())
-            next_events.append(mapping_pair)
-            self.active_scheduler += 1
+        if isinstance(task, SimulatedComputeTask):
+            self.rl_info.total_num_completed_tasks += 1
+            self.rl_info.perdev_active_workload[task.assigned_devices[0]] -= 1
+            self.rl_info.total_active_workload -= 1
 
         return next_events
 
