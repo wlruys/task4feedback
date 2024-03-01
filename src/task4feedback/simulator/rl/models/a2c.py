@@ -88,9 +88,9 @@ class A2CAgent(RLModel):
         self.entropy_sum += dist.entropy().mean()
         self.log_probs.append(log_prob)
         self.values.append(value)
+        """
         print("Target task:", target_task)
         print("action:", action)
-        """
         print("action probs:", action_probabilities)
         print("select device:", target_task)
         print("model input:", model_input)
@@ -278,9 +278,10 @@ class A2CAgent(RLModel):
         Buffer (S, A, S').
         All the buffered logs share the same terminal reward.
         """
-        print("S:", self.tmp_curr_state, " A:", self.tmp_action, " S':", self.tmp_next_state)
+
+        # print("S:", self.tmp_curr_state, " A:", self.tmp_action, " S':", self.tmp_next_state)
         self.logs.append(MappingLogs(self.tmp_curr_state, self.tmp_action, self.tmp_next_state))
-        print("logs length:", len(self.logs))
+        # print("logs length:", len(self.logs))
         self.tmp_curr_state = None
         self.tmp_action = None
         self.tmp_next_state = None

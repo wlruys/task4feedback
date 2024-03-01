@@ -1117,7 +1117,6 @@ class RLState(SystemState):
     def check_resources(
         self, phase: TaskState, task: SimulatedTask, verbose: bool = False
     ) -> bool:
-        print("RL state checking resources")
         if phase == TaskState.MAPPED:
             return True
         elif phase == TaskState.RESERVED:

@@ -33,7 +33,6 @@ class A2CNetworkNoGCN(torch.nn.Module):
 
     def forward(self, model_input):
         x = model_input.x.to(self.device)
-        print("x:", x)
         # Actor forward
         a = F.leaky_relu(self.actor_fcn1(x))
         a = F.leaky_relu(self.actor_fcn2(a))

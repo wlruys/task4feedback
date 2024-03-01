@@ -85,8 +85,8 @@ class RLEnvironment(RLBaseEnvironment):
 
       # Relative wall clock time
       target_exec_time = sched_state.target_exec_time
-      print("Current time:",convert_to_float(sched_state.time.scale_to("ms")))
-      print("Target time:", target_exec_time)
+      # print("Current time:",convert_to_float(sched_state.time.scale_to("ms")))
+      # print("Target time:", target_exec_time)
       current_state[1] = convert_to_float(sched_state.time.scale_to("ms")) / (2 * target_exec_time) \
                          if target_exec_time > 0 else 0
 

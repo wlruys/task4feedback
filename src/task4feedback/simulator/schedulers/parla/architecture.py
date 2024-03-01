@@ -53,10 +53,10 @@ def map_task(
         return rl_map_task(task, scheduler_state, rl_mapper, rl_env, verbose)
     elif exec_mode == ExecutionMode.RANDOM:
         print("Random mode")
-        return random_map_task(task, scheduler_state, rl_mapper, rl_env, verbose)
+        return random_map_task(task, scheduler_state, verbose)
     elif exec_mode == ExecutionMode.PARLA:
         print("Parla mode")
-        return parla_map_task(task, scheduler_state, rl_mapper, rl_env, verbose)
+        return parla_map_task(task, scheduler_state, verbose)
 
 
 def rl_map_task( 
@@ -85,6 +85,16 @@ def rl_map_task(
             scheduler_state.acquire_resources(phase, task, verbose=verbose)
             scheduler_state.use_data(phase, task, verbose=verbose)
 
+            # Assumes that a task is assigned to a single device 
+            scheduler_state.perdev_active_workload[
+                task.assigned_devices[0]] += 1
+            scheduler_state.total_active_workload += 1
+            scheduler_state.total_num_mapped_tasks += 1
+
+            next_state = rl_env.create_state(task, scheduler_state)
+            rl_mapper.log_next_state(next_state)
+            rl_mapper.log_sans()
+
             return chosen_device
 
     if logger.ENABLE_LOGGING:
@@ -98,8 +108,7 @@ def rl_map_task(
 
 
 def random_map_task(
-    task: SimulatedTask, scheduler_state: ParlaState,
-    rl_mapper: RLModel, rl_env: RLBaseEnvironment, verbose: bool = False
+    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
 ) -> Optional[Tuple[Device, ...]]:
     """
     Randomly assigns a device to a task.
@@ -134,8 +143,7 @@ def random_map_task(
 
 
 def parla_map_task( 
-    task: SimulatedTask, scheduler_state: ParlaState,
-    rl_mapper: RLModel, rl_env: RLBaseEnvironment, verbose: bool = False
+    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
 ) -> Optional[Tuple[Device, ...]]:
     """
     Assigns a device to a task based on Parla's load-balancing and locality-aware policy.
@@ -522,15 +530,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                 next_tasks.success()
                 self.success_count += 1
 
-                # Assumes that a task is assigned to a single device 
-                if isinstance(task, SimulatedComputeTask):
-                    scheduler_state.perdev_active_workload[task.assigned_devices[0]] += 1
-                    scheduler_state.total_active_workload += 1
-                    scheduler_state.total_num_mapped_tasks += 1
-
-                next_state = self.rl_env.create_state(task, scheduler_state)
-                self.rl_mapper.log_next_state(next_state)
-                self.rl_mapper.log_sans()
             else:
                 next_tasks.fail()
                 continue
