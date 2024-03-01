@@ -731,31 +731,6 @@ class RunConfig:
     num_gpus: int = 4
 
 
-#########################################
-# RL related information
-#########################################
-
-@dataclass(slots=True)
-class RLInfo:
-    # Max out/indegree
-    max_outdegree: int = 0
-    max_indegree: int = 0
-    # Max expected execution time
-    max_duration: float = 0
-    # Depth from a root task
-    max_depth: int = 0
-    # Total workload planned across devices
-    total_active_workload: float = 0
-    # Workload per device
-    perdev_active_workload: Dict[Device, int] = field(default_factory=dict)
-    # # of total tasks
-    total_num_tasks: int = 0
-    # Target execution time (from heuristic)
-    target_exec_time: float = 0
-    # # of completed tasks
-    total_num_completed_tasks: int = 0
-
-
 class ExecutionMode(IntEnum):
     """
     Specify the current execution mode

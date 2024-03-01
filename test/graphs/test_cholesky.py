@@ -59,8 +59,8 @@ def test_data():
         return func_id
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
-        # device_tuple = Device(Architecture.GPU, task_id.task_idx[0] % 4)
-        device_tuple = Device(Architecture.GPU, -1)
+        device_tuple = Device(Architecture.GPU, task_id.task_idx[0] % 4)
+        # device_tuple = Device(Architecture.GPU, -1)
 
         runtime_info = TaskRuntimeInfo(
             task_time=task_duration_per_func(task_id), device_fraction=1,
@@ -88,8 +88,7 @@ def test_data():
     num_gpus = 4
     rl_env = RLEnvironment(num_gpus)
     rl_agent = A2CAgent(rl_env)
-    exec_mode = ExecutionMode.RL_TRAINING
-    # exec_mode = ExecutionMode.RANDOM
+    exec_mode = ExecutionMode.RANDOM
 
     simulator_config = SimulatorConfig(
         topology=topology,

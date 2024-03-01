@@ -8,7 +8,7 @@ from ..task import *
 from ..topology import *
 
 from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
-from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
 from dataclasses import dataclass, InitVar
@@ -92,6 +92,7 @@ class ObjectRegistry:
 @dataclass(slots=True)
 class SystemState:
     topology: SimulatedTopology
+    exec_mode: ExecutionMode = ExecutionMode.RL_TRAINING
     data_pool: DataPool = field(init=False)
     resource_pool: FasterResourcePool = field(init=False)
     objects: ObjectRegistry = field(init=False)

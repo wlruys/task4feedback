@@ -60,11 +60,10 @@ class SimulatedScheduler:
         print(f"Scheduler Architecture: {scheduler_arch}")
         print(f"Scheduler State: {scheduler_state}")
 
-        self.state = scheduler_state(topology=topology)
+        self.state = scheduler_state(topology=topology, exec_mode=self.exec_mode)
         self.mechanisms = scheduler_arch(topology=topology,
                                          rl_env=self.rl_env,
-                                         rl_mapper=self.rl_mapper,
-                                         exec_mode=self.exec_mode)
+                                         rl_mapper=self.rl_mapper)
 
     def __str__(self):
         return f"Scheduler {self.name} | Current Time: {self.time}"
