@@ -29,8 +29,6 @@ class SimpleAgent(RLModel):
         self.execution_mode = execution_mode
         self.is_loaded_model_best = load_best_model
         self.fastest_execution_time = float("inf")
-        # Interval to update the actor network parameter
-        self.step_for_optim = 10
         self.lr = lr
         self.episode = 0
         self.a2cnet_fname = "a2c_network.pt"
@@ -38,12 +36,12 @@ class SimpleAgent(RLModel):
         self.best_a2cnet_fname = "best_a2c_network.pt"
         self.best_optimizer_fname = "best_optimizer.pt"
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.task_mapping_decision = dict()
         # Accumulated reward 
         self.accumulated_reward = 0
 
         # pi(state) -> action probabilities
         self.pi = {}
+        # lambda to update a target policy
         self.ld = 0.5
 
         # Buffer (S, A, S') until the terminal state
@@ -59,8 +57,7 @@ class SimpleAgent(RLModel):
             else:
                 self.load_model()
 
-
-    def select_device(self, state: torch.tensor):
+    def select_device(self, state: torch.tensor, oracle):
         """
         Select a device from pi.
         If a specified state has not been visited, select a device from a neural
@@ -82,27 +79,25 @@ class SimpleAgent(RLModel):
                 action = dist.sample()
                 print("action: ", action)
             if self.is_training_mode():
-                self.update_pi(state, state_tuple)
+                self.update_pi(state, state_tuple, oracle)
         return action
 
-
-    def update_pi(self, state: torch.tensor, state_tuple: Tuple[float]):
+    def update_pi(self, state: torch.tensor, state_tuple: Tuple[float], oracle):
         """ Update target policy, pi.
         """
 
         # Buffer probabilities from network
         actions, v = self.network(NetworkInput(state, False, None, None))
         actions = F.softmax(actions, dim=0)
+        print("oracle:", oracle, " softmax dnn:", actions)
         # Calculate loss
-        self.pi[state_tuple] = (1 - self.ld) * F.softmax(actions, dim=0) + self.ld * self.pi[state_tuple]
-
+        self.pi[state_tuple] = (1 - self.ld) * actions + self.ld * oracle.to(self.device)
 
     def add_reward(self, reward):
         """
         Add a reward to the list.
         """
         self.accumulated_reward += reward.item()
-
 
     def optimize_model(self, reward: float):
         """
@@ -112,6 +107,7 @@ class SimpleAgent(RLModel):
         prob_loss = 0
         value_loss = 0
         num_computes = 0
+        entropy_sum = 0
         plist = []
         vlist = []
         pilist = []
@@ -140,7 +136,9 @@ class SimpleAgent(RLModel):
         # print("concat pi:", concat_pi)
         # print("concat z:", concat_z)
 
-        loss = self.ld * (concat_p - concat_pi).mean() + (1 - self.ld) * F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1))
+        loss = -F.cross_entropy(concat_p.unsqueeze(-1), concat_pi.unsqueeze(-1)).mean() + \
+               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1))
+
         print("Loss:", loss)
         self.optimizer.zero_grad()
         loss.backward()
@@ -151,7 +149,6 @@ class SimpleAgent(RLModel):
         self.tmp_curr_state = None
         self.tmp_action = None
         self.tmp_next_state = None
-
 
     def load_model(self):
         """ Load a2c model and optimizer parameters from files;
@@ -170,7 +167,6 @@ class SimpleAgent(RLModel):
             self.optimizer.load_state_dict(loaded_optimizer.state_dict())
         else:
             print("Optimizer  does not exist, and so, not loaded", flush=True)
-
 
     def save_model(self):
         """ Save a2c model and optimizer parameters to files. """
@@ -205,27 +201,16 @@ class SimpleAgent(RLModel):
         torch.save(self.network, self.best_a2cnet_fname)
         torch.save(self.optimizer, self.best_optimizer_fname)
 
-    def is_training_mode(self):
-        return "training" in self.execution_mode
-
-    def set_training_mode(self):
-        self.execution_mode = "training"
-
-    def set_test_mode(self):
-        self.execution_mode = "test"
-        if self.is_loaded_model_best == 1:
-            self.load_best_model()
-        else:
-            self.load_model()
-
     def start_episode(self):
-        """ Start a new episode, and update (or initialize) the current state.
+        """
+        Start a new episode, and update (or initialize) the current state.
         """
         self.episode += 1
         #self.print_model("started")
 
     def finalize_episode(self, execution_time):
-        """ Finalize the current episode.
+        """
+        Finalize the current episode.
         """
         #self.print_model("finished")
         print("Episode total reward:", self.episode, ", ", self.accumulated_reward)
@@ -239,6 +224,9 @@ class SimpleAgent(RLModel):
             self.accumulated_reward = 0
 
     def print_model(self, prefix: str):
+        """
+        Print model parameters to file.
+        """
         with open("models/" + prefix + ".a2c_network.str", "w") as fp:
             for key, param in self.network.named_parameters():
                 fp.write(key + " = " + str(param))
@@ -276,3 +264,17 @@ class SimpleAgent(RLModel):
         self.tmp_curr_state = None
         self.tmp_action = None
         self.tmp_next_state = None
+
+    def set_training_mode(self):
+        self.execution_mode = "training"
+
+    def set_test_mode(self):
+        self.execution_mode = "test"
+        if self.is_loaded_model_best == 1:
+            self.load_best_model()
+        else:
+            self.load_model()
+
+    def is_training_mode(self):
+        return "training" in self.execution_mode
+

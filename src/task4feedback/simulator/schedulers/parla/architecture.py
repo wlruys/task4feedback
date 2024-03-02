@@ -27,6 +27,7 @@ from rich import print
 from ...rl.models.model import *
 from ...rl.models.simple import *
 from ...rl.models.env import *
+from ...rl.models.oracles import *
 
 
 def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
@@ -42,7 +43,8 @@ def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
 
 def map_task(
     task: SimulatedTask, scheduler_state: ParlaState,
-    rl_mapper: RLModel, rl_env: RLBaseEnvironment, verbose: bool = False
+    rl_mapper: RLModel, rl_env: RLBaseEnvironment, oracle: LoadbalancingPolicy,
+    verbose: bool = False
 ) -> Optional[Tuple[Device, ...]]:
     """
     Invoke a specified task mapper
@@ -51,7 +53,7 @@ def map_task(
     if exec_mode == ExecutionMode.RL_TRAINING or exec_mode == ExecutionMode.RL_TESTING or \
        exec_mode == ExecutionMode.READYS_TRAINING or exec_mode == ExecutionMode.READYS_TRAINING:
         # print("Training/testing mode")
-        return rl_map_task(task, scheduler_state, rl_mapper, rl_env, verbose)
+        return rl_map_task(task, scheduler_state, rl_mapper, rl_env, oracle, verbose)
     elif exec_mode == ExecutionMode.RANDOM:
         # print("Random mode")
         return random_map_task(task, scheduler_state, verbose)
@@ -62,7 +64,8 @@ def map_task(
 
 def rl_map_task( 
     task: SimulatedTask, scheduler_state: ParlaState,
-    rl_mapper: RLModel, rl_env: RLBaseEnvironment, verbose: bool = False
+    rl_mapper: RLModel, rl_env: RLBaseEnvironment, oracle: LoadbalancingPolicy,
+    verbose: bool = False
 ) -> Optional[Tuple[Device, ...]]:
 
     phase = TaskState.MAPPED
@@ -76,7 +79,8 @@ def rl_map_task(
         # Check if task is mappable
         if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
             curr_state = rl_env.create_state(task, scheduler_state)
-            chosen_device_id = rl_mapper.select_device(curr_state).item()
+            o_action_probs = oracle.get_action(scheduler_state)
+            chosen_device_id = rl_mapper.select_device(curr_state, o_action_probs).item()
             chosen_device = (Device(Architecture.GPU, chosen_device_id),)
 
             rl_mapper.log_state(curr_state)
@@ -361,6 +365,7 @@ class ParlaArchitecture(SchedulerArchitecture):
     # RL environment providing RL state and performing auxiliary operations
     rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
+    oracle: LoadbalancingPolicy = LoadbalancingPolicy()
 
     use_rl: bool = False
 
@@ -515,7 +520,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             assert task is not None
 
             if devices := map_task(task, scheduler_state, self.rl_mapper,
-                                   self.rl_env, scheduler_state):
+                                   self.rl_env, self.oracle, scheduler_state):
                 for device in devices:
                     self.reservable_tasks[device].put_id(
                         task_id=taskid, priority=priority
