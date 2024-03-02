@@ -25,6 +25,7 @@ from ...eviction.usage import *
 from rich import print
 
 from ...rl.models.model import *
+from ...rl.models.simple import *
 from ...rl.models.env import *
 
 
@@ -49,13 +50,13 @@ def map_task(
     exec_mode = scheduler_state.exec_mode
     if exec_mode == ExecutionMode.RL_TRAINING or exec_mode == ExecutionMode.RL_TESTING or \
        exec_mode == ExecutionMode.READYS_TRAINING or exec_mode == ExecutionMode.READYS_TRAINING:
-        print("Training/testing mode")
+        # print("Training/testing mode")
         return rl_map_task(task, scheduler_state, rl_mapper, rl_env, verbose)
     elif exec_mode == ExecutionMode.RANDOM:
-        print("Random mode")
+        # print("Random mode")
         return random_map_task(task, scheduler_state, verbose)
     elif exec_mode == ExecutionMode.PARLA:
-        print("Parla mode")
+        # print("Parla mode")
         return parla_map_task(task, scheduler_state, verbose)
 
 
@@ -75,7 +76,7 @@ def rl_map_task(
         # Check if task is mappable
         if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
             curr_state = rl_env.create_state(task, scheduler_state)
-            chosen_device_id = rl_mapper.select_device(task, curr_state).item()
+            chosen_device_id = rl_mapper.select_device(curr_state).item()
             chosen_device = (Device(Architecture.GPU, chosen_device_id),)
 
             rl_mapper.log_state(curr_state)
@@ -121,7 +122,7 @@ def random_map_task(
     assert current_time is not None
 
     # Check if task is mappable
-    print("total num mapped tasks:", scheduler_state.total_num_mapped_tasks, ", threshold:",  scheduler_state.mapper_threshold, flush=True)
+    # print("total num mapped tasks:", scheduler_state.total_num_mapped_tasks, ", threshold:",  scheduler_state.mapper_threshold, flush=True)
     if scheduler_state.total_num_mapped_tasks < scheduler_state.mapper_threshold:
         if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
             chosen_devices = chose_random_placement(task)
@@ -817,5 +818,10 @@ class ParlaArchitecture(SchedulerArchitecture):
                 complete_flag = (
                     complete_flag and self.launchable_tasks[device][task_type].empty()
                 )
+
+        reward = scheduler_state.target_exec_time / convert_to_float(
+            scheduler_state.time.scale_to("ms"))
+        print("Total execution time:", scheduler_state.time, " reward:", reward)
+        self.rl_mapper.optimize_model(reward)
 
         return complete_flag
