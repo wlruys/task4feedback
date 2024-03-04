@@ -71,13 +71,13 @@ class SimpleAgent(RLModel):
                 # the stored action probabilities
                 dist = Categorical(self.pi[state_tuple])
                 action = dist.sample()
-                print("State existed: ", action)
+                # print("State existed: ", action)
             else:
                 actions, v = self.network(NetworkInput(state, False, None, None))
                 self.pi[state_tuple] = F.softmax(actions, dim=0)
                 dist = Categorical(self.pi[state_tuple])
                 action = dist.sample()
-                print("action: ", action)
+                # print("action: ", action, " pi:", self.pi[state_tuple])
             if self.is_training_mode():
                 self.update_pi(state, state_tuple, oracle)
         return action
@@ -89,7 +89,7 @@ class SimpleAgent(RLModel):
         # Buffer probabilities from network
         actions, v = self.network(NetworkInput(state, False, None, None))
         actions = F.softmax(actions, dim=0)
-        print("oracle:", oracle, " softmax dnn:", actions)
+        # print("oracle:", oracle, " softmax dnn:", actions)
         # Calculate loss
         self.pi[state_tuple] = (1 - self.ld) * actions + self.ld * oracle.to(self.device)
 
@@ -118,27 +118,42 @@ class SimpleAgent(RLModel):
             p, v = self.network(NetworkInput(state, False, None, None))
             p = F.softmax(p, dim=0)
             pis = self.pi[state_tuple]
-            
+            # print("p:", p, " pis:", pis)
             plist.append(p)
             vlist.append(v)
-            pilist.append(torch.tensor([pi for pi in pis]))
+            pilist.append(pis)
             zlist.append(torch.tensor([reward], dtype=torch.float))
 
         concat_p = torch.cat(
             [p.unsqueeze(0) for p in plist])
+        # concat_p = torch.FloatTensor(plist)
         concat_v = torch.cat(vlist).to(self.device)
         # Pi is not updated through this
         concat_pi = torch.cat(
             [pi.unsqueeze(0) for pi in pilist]).to(self.device).detach()
+        # concat_pi = torch.FloatTensor(pilist)
         concat_z = torch.cat(zlist).to(self.device)
-        # print("concat p:", concat_p)
-        # print("concat v:", concat_v)
-        # print("concat pi:", concat_pi)
-        # print("concat z:", concat_z)
+        # print("plist:", plist, " pilist:", pilist)
+        """
+        print("concat p:", concat_p)
+        print("concat v:", concat_v)
+        print("concat pi:", concat_pi)
+        print("concat z:", concat_z)
 
-        loss = -F.cross_entropy(concat_p.unsqueeze(-1), concat_pi.unsqueeze(-1)).mean() + \
-               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1))
+        # print("usq concat p:", concat_p.unsqueeze(-1))
+        print("usq concat v:", concat_v.unsqueeze(-1))
+        # print("usq concat pi:", concat_pi.unsqueeze(-1))
+        print("usq concat z:", concat_z.unsqueeze(-1))
+        with torch.no_grad():
+            print("crossentropy:", F.cross_entropy(concat_p, concat_pi))
+            print("crossentropy mean:", F.cross_entropy(concat_p, concat_pi).mean())
+            # print("usq crossentropy:", F.cross_entropy(concat_p.unsqueeze(-1), concat_pi.unsqueeze(-1)))
+            print("usq mse loss:", F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1)))
+            print("mse loss:", F.mse_loss(concat_v, concat_z))
+        """
 
+        loss = -F.cross_entropy(concat_p, concat_pi, reduction='sum') + \
+               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='sum')
         print("Loss:", loss)
         self.optimizer.zero_grad()
         loss.backward()

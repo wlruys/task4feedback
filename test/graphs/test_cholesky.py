@@ -18,14 +18,12 @@ from task4feedback.simulator.verify import *
 
 from task4feedback.simulator.rl.models.a2c import *
 from task4feedback.simulator.rl.models.env import *
+from task4feedback.simulator.rl.models.simple import *
 
 from time import perf_counter as clock
 
 
 def test_data():
-    cpu = Device(Architecture.CPU, 0)
-    gpu0 = Device(Architecture.GPU, 0)
-    gpu1 = Device(Architecture.GPU, 1)
 
     def initial_data_placement(data_id: DataID) -> Devices:
         return Device(Architecture.CPU, 0)
@@ -74,11 +72,9 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = CholeskyConfig(blocks=10, task_config=task_placement,
+    config = CholeskyConfig(blocks=6, task_config=task_placement,
                             func_id=func_type_id)
     tasks, data = make_graph(config, data_config=data_config)
-
-    topology = TopologyManager().generate("frontera", config=None)
 
     # Execution mode configuration
     # TODO(hc): Readys testing/training
@@ -86,28 +82,36 @@ def test_data():
     #           RL testing/training
     num_gpus = 4
     rl_env = RLEnvironment(num_gpus)
-    rl_agent = A2CAgent(rl_env)
-    exec_mode = ExecutionMode.RL_TESTING
+    rl_agent = SimpleAgent(rl_env)
+    exec_mode = ExecutionMode.RL_TRAINING
 
-    simulator_config = SimulatorConfig(
-        topology=topology,
-        tasks=tasks,
-        data=data,
-        scheduler_type="parla",
-        scheduler_state_type="rl",
-        randomizer=Randomizer(),
-        rl_env=rl_env,
-        rl_mapper=rl_agent,
-        exec_mode=exec_mode
-    )
-    simulator = create_simulator(config=simulator_config)
+    for i in range(0, 5000):
+        cpu = Device(Architecture.CPU, 0)
+        gpu0 = Device(Architecture.GPU, 0)
+        gpu1 = Device(Architecture.GPU, 1)
 
-    start_t = clock()
-    simulated_time = simulator.run()
-    end_t = clock()
+        topology = TopologyManager().generate("frontera", config=None)
 
-    print(f"Time to Simulate: {end_t - start_t}")
-    print(f"Simulated Time: {simulated_time}")
+        simulator_config = SimulatorConfig(
+            topology=topology,
+            tasks=tasks,
+            data=data,
+            scheduler_type="parla",
+            scheduler_state_type="rl",
+            randomizer=Randomizer(),
+            rl_env=rl_env,
+            rl_mapper=rl_agent,
+            exec_mode=exec_mode
+        )
+        simulator = create_simulator(config=simulator_config)
+
+        start_t = clock()
+        print("Epoch:", i)
+        simulated_time = simulator.run()
+        end_t = clock()
+
+        print(f"Time to Simulate: {end_t - start_t}")
+        print(f"Simulated Time: {simulated_time}")
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[
