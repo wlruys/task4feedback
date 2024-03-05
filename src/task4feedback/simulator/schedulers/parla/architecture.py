@@ -79,12 +79,13 @@ def rl_map_task(
         # Check if task is mappable
         if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
             curr_state = rl_env.create_state(task, scheduler_state)
-            o_action_probs = oracle.get_action(scheduler_state)
-            chosen_device_id = rl_mapper.select_device(curr_state, o_action_probs).item()
+            oracle = oracle.get_action(scheduler_state)
+            chosen_device_id, pi = rl_mapper.select_device(curr_state, oracle)
             chosen_device = (Device(Architecture.GPU, chosen_device_id),)
 
             rl_mapper.log_state(curr_state)
             rl_mapper.log_action(chosen_device_id)
+            rl_mapper.log_pi(pi)
 
             task.assigned_devices = chosen_device
             scheduler_state.acquire_resources(phase, task, verbose=verbose)
