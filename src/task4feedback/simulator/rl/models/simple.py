@@ -40,11 +40,6 @@ class SimpleAgent(RLModel):
         # Accumulated reward 
         self.accumulated_reward = 0
 
-        # pi(state) -> action probabilities
-        self.pi = {}
-        # lambda to update a target policy
-        self.ld = 0.5
-
         # Buffer (S, P, V, PI) until the terminal state
         self.logs: List[MappingLogs] = []
 
