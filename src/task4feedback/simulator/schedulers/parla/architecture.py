@@ -827,6 +827,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         reward = scheduler_state.target_exec_time / convert_to_float(
             scheduler_state.time.scale_to("ms"))
+        # reward = -(1-reward) if reward < 0.6 else reward
         print("Total execution time:", scheduler_state.time, " reward:", reward)
         self.rl_mapper.optimize_model(reward)
 

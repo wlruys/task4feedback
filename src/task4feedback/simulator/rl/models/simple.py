@@ -25,7 +25,7 @@ class SimpleAgent(RLModel):
         # S, (S, A) value networks
         self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
         self.optimizer = optim.RMSprop(self.network.parameters(),
-                                       lr=0.0001)#, weight_decay=0.05)
+                                       lr=0.0001)#, weight_decay=0.5)
                                        #lr=0.0005)
         self.execution_mode = execution_mode
         self.is_loaded_model_best = load_best_model
@@ -70,8 +70,10 @@ class SimpleAgent(RLModel):
         # with torch.no_grad():
         actions, v = self.network(NetworkInput(state, False, None, None))
         f_action_probs = F.softmax(actions, dim=0)
-        rnd_ld = random.choice([1, 0])
-        print("rnd ld:", rnd_ld)
+        # rnd_ld = random.choice([1, 0])
+        # rnd_ld = 1
+        rnd_ld = random.uniform(0, 1)
+        print("rnd ld:", rnd_ld, " f:", f_action_probs, " o:", oracle)
         # action_probs = (1 - self.ld)  * f_action_probs +self.ld * oracle.to(self.device)
         action_probs = (1 - rnd_ld)  * f_action_probs + rnd_ld * oracle.to(self.device)
         """
@@ -132,16 +134,16 @@ class SimpleAgent(RLModel):
         print("usq concat v:", concat_v.unsqueeze(-1))
         # print("usq concat pi:", concat_pi.unsqueeze(-1))
         print("usq concat z:", concat_z.unsqueeze(-1))
-        """
         with torch.no_grad():
             print("crossentropy:", F.cross_entropy(concat_p, concat_pi))
             print("crossentropy mean:", F.cross_entropy(concat_p, concat_pi).mean())
             # print("usq crossentropy:", F.cross_entropy(concat_p.unsqueeze(-1), concat_pi.unsqueeze(-1)))
             print("usq mse loss:", F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1)))
             print("mse loss:", F.mse_loss(concat_v, concat_z))
+        """
 
-        loss = -F.cross_entropy(concat_p, concat_pi, reduction='sum') + \
-               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='sum')
+        loss = -F.cross_entropy(concat_p, concat_pi, reduction='mean') + \
+               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='mean')
         print("Loss:", loss)
         self.optimizer.zero_grad()
         loss.backward()
