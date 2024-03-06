@@ -23,7 +23,6 @@ class LoadbalancingPolicy(ABC):
 
       action_probs = torch.zeros(len(devicemap) - 1)
       total_workload: float = 0
-      max_worload: float = -1
       with torch.no_grad():
           for device in devicemap:
               # Ignore CPU device
@@ -31,16 +30,7 @@ class LoadbalancingPolicy(ABC):
                   continue
 
               workload = system_state.perdev_active_workload[device]
-              max_worload = max(max_worload, workload)
-
-          for device in devicemap:
-              # Ignore CPU device
-              if device.architecture == Architecture.CPU:
-                  continue
-
-              business = max_worload - system_state.perdev_active_workload[device]
-              total_workload += business
-              action_probs[device.device_id] = business
+              total_workload += workload
           
           for device in devicemap:
               if device.architecture == Architecture.CPU:
@@ -48,5 +38,7 @@ class LoadbalancingPolicy(ABC):
 
               if total_workload > 0:
                   action_probs[device.device_id] = action_probs[device.device_id].item() / total_workload
+              else:
+                  action_probs[device.device_id] = 1 / (len(devicemap) - 1)
 
       return action_probs
