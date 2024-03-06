@@ -83,10 +83,6 @@ def rl_map_task(
             chosen_device_id, pi = rl_mapper.select_device(curr_state, oracle)
             chosen_device = (Device(Architecture.GPU, chosen_device_id),)
 
-            rl_mapper.log_state(curr_state)
-            rl_mapper.log_action(chosen_device_id)
-            rl_mapper.log_pi(pi)
-
             task.assigned_devices = chosen_device
             scheduler_state.acquire_resources(phase, task, verbose=verbose)
             scheduler_state.use_data(phase, task, verbose=verbose)
@@ -97,9 +93,7 @@ def rl_map_task(
             scheduler_state.total_active_workload += 1
             scheduler_state.total_num_mapped_tasks += 1
 
-            next_state = rl_env.create_state(task, scheduler_state)
-            rl_mapper.log_next_state(next_state)
-            rl_mapper.log_sans()
+            # next_state = rl_env.create_state(task, scheduler_state)
 
             return chosen_device
 

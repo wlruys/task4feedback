@@ -15,7 +15,7 @@ import math
 import random
 
 MappingLogs = namedtuple("MappingLogs",
-                         ("state", "pi", "next_state"))
+                         ("state", "p", "v", "pi"))
 
 class SimpleAgent(RLModel):
 
@@ -45,11 +45,7 @@ class SimpleAgent(RLModel):
         # lambda to update a target policy
         self.ld = 0.5
 
-        # Buffer (S, A, S') until the terminal state
-        self.tmp_curr_state = None
-        self.tmp_pi = None
-        self.tmp_next_state = None
-        self.tmp_action = None
+        # Buffer (S, P, V, PI) until the terminal state
         self.logs: List[MappingLogs] = []
 
         if not self.is_training_mode():
@@ -67,19 +63,20 @@ class SimpleAgent(RLModel):
         """
 
         state_tuple = tuple(state.tolist())
-        # with torch.no_grad():
         actions, v = self.network(NetworkInput(state, False, None, None))
         f_action_probs = F.softmax(actions, dim=0)
         # rnd_ld = random.choice([1, 0])
         # rnd_ld = 1
         rnd_ld = random.uniform(0, 1)
-        print("rnd ld:", rnd_ld, " f:", f_action_probs, " o:", oracle)
+        # print("rnd ld:", rnd_ld, " f:", f_action_probs, " o:", oracle)
         # action_probs = (1 - self.ld)  * f_action_probs +self.ld * oracle.to(self.device)
         action_probs = (1 - rnd_ld)  * f_action_probs + rnd_ld * oracle.to(self.device)
         """
         dist = Categorical(action_probs)
         action = dist.sample()
         """
+        self.logs.append(MappingLogs(
+              state, f_action_probs, v, oracle.to(self.device)))
         action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
         print("action:", action)
         return action.item(), action_probs
@@ -99,16 +96,14 @@ class SimpleAgent(RLModel):
         value_loss = 0
         num_computes = 0
         entropy_sum = 0
+
         plist = []
         vlist = []
         pilist = []
         zlist = []
+
         for log in self.logs:
-            state, pi, next_state = log
-            state_tuple = tuple(state.tolist())
-            p, v = self.network(NetworkInput(state, False, None, None))
-            p = F.softmax(p, dim=0)
-            # print("p:", p, " pis:", pis)
+            state, p, v, pi = log
             plist.append(p)
             vlist.append(v)
             pilist.append(pi)
@@ -152,10 +147,6 @@ class SimpleAgent(RLModel):
         self.optimizer.step()
         # print("loss:", loss)
         self.logs = []
-        self.tmp_curr_state = None
-        self.tmp_action = None
-        self.tmp_pi = None
-        self.tmp_next_state = None
 
     def load_model(self):
         """ Load a2c model and optimizer parameters from files;
@@ -240,45 +231,6 @@ class SimpleAgent(RLModel):
         with open("models/" + prefix + ".optimizer.str", "w") as fp:
             for key, param in self.optimizer.state_dict().items():
                 fp.write(key + " = " + str(param))
-
-    def log_state(self, state: torch.tensor):
-        """
-        Log a current state (S).
-        """
-        self.tmp_curr_state = state
-
-    def log_action(self, action: int):
-        """
-        Log a chosen action (A). 
-        """
-        self.tmp_action = action
-
-    def log_pi(self, pi: List[float]):
-        """
-        Log action probabilities from an oracle poliy.
-        """
-        self.tmp_pi = pi
-
-    def log_next_state(self, next_state: torch.tensor):
-        """
-        Log a next action (S').
-        """
-        self.tmp_next_state = next_state
-
-    def log_sans(self):
-        """
-        Buffer (S, A, S').
-        All the buffered logs share the same terminal reward.
-        """
-
-        # print("S:", self.tmp_curr_state, " A:", self.tmp_action, " S':", self.tmp_next_state)
-        self.logs.append(MappingLogs(
-              self.tmp_curr_state, self.tmp_pi, self.tmp_next_state))
-        # print("logs length:", len(self.logs))
-        self.tmp_curr_state = None
-        self.tmp_action = None
-        self.tmp_pi = None
-        self.tmp_next_state = None
 
     def set_training_mode(self):
         self.execution_mode = "training"
