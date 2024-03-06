@@ -38,7 +38,9 @@ class LoadbalancingPolicy(ABC):
                   continue;
 
               if total_workload > 0:
-                  action_probs[device.device_id] = action_probs[device.device_id].item() / total_workload
+                  action_probs[device.device_id] = (
+                      1 - action_probs[device.device_id].item() / total_workload) / (
+                      len(devicemap) - 2)
               else:
                   action_probs[device.device_id] = 1 / (len(devicemap) - 1)
 
