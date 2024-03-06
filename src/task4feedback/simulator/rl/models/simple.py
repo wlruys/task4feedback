@@ -25,7 +25,7 @@ class SimpleAgent(RLModel):
         # S, (S, A) value networks
         self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
         self.optimizer = optim.RMSprop(self.network.parameters(),
-                                       lr=0.0001)#, weight_decay=0.5)
+                                       lr=0.0001, weight_decay=0.5)
                                        #lr=0.0005)
         self.execution_mode = execution_mode
         self.is_loaded_model_best = load_best_model
@@ -39,6 +39,8 @@ class SimpleAgent(RLModel):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # Accumulated reward 
         self.accumulated_reward = 0
+
+        self.entropy_sum = 0
 
         # Buffer (S, P, V, PI) until the terminal state
         self.logs: List[MappingLogs] = []
@@ -57,23 +59,23 @@ class SimpleAgent(RLModel):
         network.
         """
 
-        state_tuple = tuple(state.tolist())
         actions, v = self.network(NetworkInput(state, False, None, None))
         f_action_probs = F.softmax(actions, dim=0)
         # rnd_ld = random.choice([1, 0])
+        rnd_ld = random.uniform(0.7, 1)
+        # rnd_ld = 0.5
         # rnd_ld = 1
-        rnd_ld = random.uniform(0, 1)
         # print("rnd ld:", rnd_ld, " f:", f_action_probs, " o:", oracle)
         # action_probs = (1 - self.ld)  * f_action_probs +self.ld * oracle.to(self.device)
         action_probs = (1 - rnd_ld)  * f_action_probs + rnd_ld * oracle.to(self.device)
-        """
-        dist = Categorical(action_probs)
-        action = dist.sample()
-        """
+        # dist = Categorical(action_probs)
+        # action = dist.sample()
+        # self.entropy_sum += dist.entropy().mean()
         self.logs.append(MappingLogs(
               state, f_action_probs, v, oracle.to(self.device)))
         action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
-        print("action:", action)
+        # print("oracle:", oracle)
+        # print("action:", action)
         return action.item(), action_probs
 
     def add_reward(self, reward):
@@ -102,6 +104,7 @@ class SimpleAgent(RLModel):
             plist.append(p)
             vlist.append(v)
             pilist.append(pi)
+            # zlist.append(torch.tensor([reward*len(self.logs)], dtype=torch.float))
             zlist.append(torch.tensor([reward], dtype=torch.float))
 
         concat_p = torch.cat(
@@ -114,18 +117,18 @@ class SimpleAgent(RLModel):
         # concat_pi = torch.FloatTensor(pilist)
         concat_z = torch.cat(zlist).to(self.device)
         # print("plist:", plist, " pilist:", pilist)
+        """
         print("concat p:", concat_p)
         print("concat v:", concat_v)
         print("concat pi:", concat_pi)
         print("concat z:", concat_z)
 
-        """
         # print("usq concat p:", concat_p.unsqueeze(-1))
-        print("usq concat v:", concat_v.unsqueeze(-1))
+        print("usq concat v:", concat_v.squeeze(-1))
         # print("usq concat pi:", concat_pi.unsqueeze(-1))
-        print("usq concat z:", concat_z.unsqueeze(-1))
+        print("usq concat z:", concat_z.squeeze(-1))
         with torch.no_grad():
-            print("crossentropy:", F.cross_entropy(concat_p, concat_pi))
+            print("crossentropy:", F.cross_entropy(concat_p.squeeze(-1), concat_pi.squeeze(-1)))
             print("crossentropy mean:", F.cross_entropy(concat_p, concat_pi).mean())
             # print("usq crossentropy:", F.cross_entropy(concat_p.unsqueeze(-1), concat_pi.unsqueeze(-1)))
             print("usq mse loss:", F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1)))
@@ -133,15 +136,16 @@ class SimpleAgent(RLModel):
         """
 
         loss = -F.cross_entropy(concat_p, concat_pi, reduction='mean') + \
-               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='mean')
+               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='mean') - \
+               self.entropy_sum * 0.001
         print("Loss:", loss)
         self.optimizer.zero_grad()
         loss.backward()
         for param in self.network.parameters():
             param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
-        # print("loss:", loss)
         self.logs = []
+        self.entropy_sum = 0
 
     def load_model(self):
         """ Load a2c model and optimizer parameters from files;
