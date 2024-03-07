@@ -80,7 +80,7 @@ def rl_map_task(
         if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
             curr_state = rl_env.create_state(task, scheduler_state)
             oracle = oracle.get_action(scheduler_state)
-            chosen_device_id, pi = rl_mapper.select_device(curr_state, oracle)
+            chosen_device_id = rl_mapper.select_device(curr_state, oracle)
             chosen_device = (Device(Architecture.GPU, chosen_device_id),)
 
             task.assigned_devices = chosen_device
@@ -821,8 +821,8 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         reward = scheduler_state.target_exec_time / convert_to_float(
             scheduler_state.time.scale_to("ms"))
-        # reward = -(1-reward) if reward < 0.6 else reward
-        print("Total execution time:", scheduler_state.time, " reward:", reward)
+        reward = -(1-reward) if reward < 0.8 else reward
+        print("Total execution time:", convert_to_float(scheduler_state.time.scale_to("ms")), " reward:", reward)
         self.rl_mapper.optimize_model(reward)
 
         return complete_flag

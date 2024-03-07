@@ -20,7 +20,8 @@ MappingLogs = namedtuple("MappingLogs",
 class SimpleAgent(RLModel):
 
     def __init__(self, rl_env: RLBaseEnvironment, load_best_model: int = 0,
-                 execution_mode: str = "testing", lr: float = 0.999):
+                 execution_mode: str = "testing", lr: float = 0.999,
+                 eps_start = 0.9, eps_end = 0.03, eps_decay = 1000):
         self.num_actions = rl_env.get_out_dim()
         # S, (S, A) value networks
         self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
@@ -30,7 +31,6 @@ class SimpleAgent(RLModel):
         self.execution_mode = execution_mode
         self.is_loaded_model_best = load_best_model
         self.fastest_execution_time = float("inf")
-        self.lr = lr
         self.episode = 0
         self.a2cnet_fname = "a2c_network.pt"
         self.optimizer_fname = "optimizer.pt"
@@ -40,7 +40,13 @@ class SimpleAgent(RLModel):
         # Accumulated reward 
         self.accumulated_reward = 0
 
+        # Model parameters
+        self.lr = lr
         self.entropy_sum = 0
+        self.steps = 1
+        self.eps_start = eps_start
+        self.eps_end = eps_end
+        self.eps_decay = eps_decay
 
         # Buffer (S, P, V, PI) until the terminal state
         self.logs: List[MappingLogs] = []
@@ -58,16 +64,20 @@ class SimpleAgent(RLModel):
         If a specified state has not been visited, select a device from a neural
         network.
         """
-
         actions, v = self.network(NetworkInput(state, False, None, None))
         f_action_probs = F.softmax(actions, dim=0)
         # rnd_ld = random.choice([1, 0])
-        rnd_ld = random.uniform(0.7, 1)
+        # rnd_ld = random.uniform(0.7, 1)
         # rnd_ld = 0.5
         # rnd_ld = 1
-        # print("rnd ld:", rnd_ld, " f:", f_action_probs, " o:", oracle)
         # action_probs = (1 - self.ld)  * f_action_probs +self.ld * oracle.to(self.device)
-        action_probs = (1 - rnd_ld)  * f_action_probs + rnd_ld * oracle.to(self.device)
+        # ld = (1 - 1 / math.sqrt(self.ld))
+        decay_value = self.eps_end + (
+                      self.eps_start - self.eps_end) * math.exp(
+                      -1. * self.steps / self.eps_decay)
+        ld = 1 if self.steps == 1 else 0 if decay_value < 0 else decay_value
+        print("ld:", ld, " f:", f_action_probs, " o:", oracle)
+        action_probs = (1 - ld) * f_action_probs + ld * oracle.to(self.device)
         # dist = Categorical(action_probs)
         # action = dist.sample()
         # self.entropy_sum += dist.entropy().mean()
@@ -76,7 +86,7 @@ class SimpleAgent(RLModel):
         action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
         # print("oracle:", oracle)
         # print("action:", action)
-        return action.item(), action_probs
+        return action.item()
 
     def add_reward(self, reward):
         """
@@ -89,10 +99,8 @@ class SimpleAgent(RLModel):
         Optimize a model.
         """
         print("Model optimization starts..")
-        prob_loss = 0
-        value_loss = 0
-        num_computes = 0
-        entropy_sum = 0
+
+        self.steps += 1
 
         plist = []
         vlist = []

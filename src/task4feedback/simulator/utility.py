@@ -112,8 +112,6 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state) -> floa
         task.info.heft_makespan = earliest_start + duration
         if task.info.heft_makespan > max_heft:
             max_heft = task.info.heft_makespan
-
-    print("MAX HEFT--->", max_heft)
     # for key, value in agents.items():
     #    print("Key:", key)
     #    for vvalue in value:
