@@ -233,7 +233,7 @@ class A2CAgent(RLModel):
         self.episode += 1
         #self.print_model("started")
 
-    def finalize_episode(self, execution_time):
+    def complete_episode(self, execution_time):
         """ Finalize the current episode.
         """
         #self.print_model("finished")

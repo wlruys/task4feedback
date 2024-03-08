@@ -31,7 +31,7 @@ class RLModel(ABC):
       NotImplementedError()
 
   @abstractmethod
-  def finalize_episode(self):
+  def complete_episode(self):
       NotImplementedError()
 
   @abstractmethod

@@ -32,9 +32,9 @@ class SimpleAgent(RLModel):
         self.is_loaded_model_best = load_best_model
         self.fastest_execution_time = float("inf")
         self.episode = 0
-        self.net_fname = "a2c_network.pt"
+        self.net_fname = "network.pt"
         self.optimizer_fname = "optimizer.pt"
-        self.best_net_fname = "best_a2c_network.pt"
+        self.best_net_fname = "best_network.pt"
         self.best_optimizer_fname = "best_optimizer.pt"
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # Accumulated reward 
@@ -73,7 +73,8 @@ class SimpleAgent(RLModel):
         decay_value = self.eps_end + (
                       self.eps_start - self.eps_end) * math.exp(
                       -1. * self.steps / self.eps_decay)
-        ld = 1 if self.steps == 1 else 0 if decay_value < 0 else decay_value
+        # ld = 1 if self.steps == 1 else 0 if decay_value < 0 else decay_value
+        ld =  1 / (self.steps) ** (1/4)
         print("ld:", ld, " f:", f_action_probs, " o:", oracle)
         action_probs = (1 - ld) * f_action_probs + ld * oracle.to(self.device)
         # dist = Categorical(action_probs)
@@ -90,7 +91,7 @@ class SimpleAgent(RLModel):
         """
         Add a reward to the list.
         """
-        self.accumulated_reward += reward.item()
+        self.accumulated_reward += reward
 
     def optimize_model(self, reward: float):
         """
@@ -147,6 +148,7 @@ class SimpleAgent(RLModel):
             param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
         self.logs = []
+        self.add_reward(reward)
 
     def load_model(self):
         """ Load a2c model and optimizer parameters from files;
@@ -165,7 +167,6 @@ class SimpleAgent(RLModel):
             self.optimizer.load_state_dict(loaded_optimizer.state_dict())
         else:
             print("Optimizer  does not exist, and so, not loaded", flush=True)
-        self.add_reward(reward)
 
     def save_model(self):
         """ Save a2c model and optimizer parameters to files. """

@@ -1186,17 +1186,20 @@ class RLState(ParlaState):
         self.collect_task_graph_info(task_objects, self)
 
         if self.exec_mode == ExecutionMode.TRAINING:
+            print("training mode starts..")
             self.rl_mapper.set_training_mode()
         else:
+            print("testing  mode starts..")
             self.rl_mapper.set_test_mode()
         
     def complete(self):
         total_exec_time = convert_to_float(self.time.scale_to("ms"))
-        reward = 0 if total_exec_time == 0 else self.target_exec_time / total_exec_time
-        reward = -(1-reward) if reward < 0.8 else reward
-        print("Total execution time:", total_exec_time, " reward:", reward)
-        self.rl_mapper.optimize_model(reward)
-        self.rl_mapper.complete_episode(total_exec_time)
+        if self.rl_mapper.is_training_mode():
+            reward = 0 if total_exec_time == 0 else self.target_exec_time / total_exec_time
+            reward = -(1-reward) if reward < 0.8 else reward
+            print("Total execution time:", total_exec_time, " reward:", reward)
+            self.rl_mapper.optimize_model(reward)
+            self.rl_mapper.complete_episode(total_exec_time)
         
     def map_task(self, task: SimulatedTask, verbose: bool = False
     ) -> Optional[Tuple[Device, ...]]:
@@ -1211,6 +1214,7 @@ class RLState(ParlaState):
         # Check if task is mappable
         if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
             curr_state = self.rl_env.create_state(task, self)
+            print("current state:", curr_state)
             oracle = self.oracle.get_action(self)
             chosen_device_id = self.rl_mapper.select_device(curr_state, oracle)
             chosen_device = (Device(Architecture.GPU, chosen_device_id),)
