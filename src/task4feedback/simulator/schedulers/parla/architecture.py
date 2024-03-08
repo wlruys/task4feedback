@@ -6,7 +6,6 @@ from ...events import *
 from ...resources import *
 from ...task import *
 from ...topology import *
-from ...utility import *
 
 from ....types import Architecture, Device, TaskID, TaskState, TaskType, Time
 from ....types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
@@ -219,11 +218,12 @@ class ParlaArchitecture(SchedulerArchitecture):
         self, tasks: List[TaskID], scheduler_state: SystemState
     ) -> List[EventPair]:
 
-        scheduler_state.initialize()
         objects = scheduler_state.objects
 
         task_objects = [objects.get_task(task) for task in tasks]
 
+        # Initialize a scheduler state
+        scheduler_state.initialize(task_objects)
         # Initialize the set of visible tasks
         self.add_initial_tasks(task_objects, scheduler_state)
 
@@ -265,9 +265,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                         # Default state is evictable
                         scheduler_state.objects.get_device(device).add_evictable(data)
 
-        # Collect task graph information
-        self.collect_task_graph_info(task_objects, scheduler_state)
-
         # Initialize the event queue
         next_event = Mapper()
         next_time = Time(0)
@@ -284,48 +281,6 @@ class ParlaArchitecture(SchedulerArchitecture):
         for task in tasks:
             self.spawned_tasks.put(task)
 
-    def collect_task_graph_info(
-        self, tasks: List[SimulatedTask], scheduler_state: SystemState
-    ):
-        """
-        Collect a task graph information before simulation starts.
-        """
-        taskmap = scheduler_state.objects.taskmap
-        for task in tasks:
-            scheduler_state.max_outdegree = max(scheduler_state.max_outdegree, len(task.dependents))
-            scheduler_state.max_indegree = max(scheduler_state.max_indegree, len(task.dependencies))
-            task_duration_float = convert_to_float(
-                scheduler_state.get_task_duration(task, task.info.runtime.locations[0])[0].
-                scale_to("us"))
-            scheduler_state.max_duration = max(scheduler_state.max_duration, task_duration_float)
-
-            # Propagate depth to its successors
-            for dep in task.dependencies:
-                task.info.depth = max(task.info.depth, taskmap[dep].info.depth + 1)
-
-            if task.info.depth == -1:
-                # If its depth is not initialized
-                task.info.depth = 0
-
-            scheduler_state.max_depth = max(scheduler_state.max_depth, task.info.depth)
-        scheduler_state.total_num_tasks = len(tasks)
-
-        # Ignore CPU
-        scheduler_state.target_exec_time = calculate_heft(
-            tasks, taskmap, len(scheduler_state.objects.devicemap) - 1, scheduler_state)
-
-        print(f"max degree: {scheduler_state.max_outdegree}, "
-              f"in-degree: {scheduler_state.max_indegree}"
-              f" total tasks: {scheduler_state.total_num_tasks}, "
-              f"max depth: {scheduler_state.max_depth} \n"
-              f"max execution time: {scheduler_state.max_duration}")
-        if logger.ENABLE_LOGGING:
-            logger.runtime.info(
-                f"Total tasks: {scheduler_state.total_num_tasks}\n"
-                f"Max out-degree: {scheduler_state.max_outdegree} "
-                f"and in-degree: {scheduler_state.max_indegree}."
-            )
-
     def mapper(self, scheduler_state: SystemState, event: Mapper) -> List[EventPair]:
         self.success_count = 0
         next_tasks = TaskIterator(self.spawned_tasks)
@@ -341,6 +296,9 @@ class ParlaArchitecture(SchedulerArchitecture):
         for priority, taskid in next_tasks:
             task = objects.get_task(taskid)
             assert task is not None
+
+            if scheduler_state.total_num_mapped_tasks >= scheduler_state.mapper_threshold:
+                break
 
             if devices := scheduler_state.map_task(task):
                 for device in devices:

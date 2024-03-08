@@ -43,6 +43,9 @@ def test_data():
             duration = 3000
         return duration
 
+    def homog_task_duration():
+        return 8000000
+
     def func_type_id(task_id: TaskID):
         func_id = 0
         if task_id.taskspace == "POTRF":
@@ -60,7 +63,8 @@ def test_data():
         device_tuple = Device(Architecture.GPU, -1)
 
         runtime_info = TaskRuntimeInfo(
-            task_time=task_duration_per_func(task_id), device_fraction=1,
+            # task_time=task_duration_per_func(task_id), device_fraction=1,
+            task_time=homog_task_duration(), device_fraction=1,
             memory=int(0))
         placement_info = TaskPlacementInfo()
         placement_info.add(device_tuple, runtime_info)
@@ -72,7 +76,7 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = CholeskyConfig(blocks=6, task_config=task_placement,
+    config = CholeskyConfig(blocks=10, task_config=task_placement,
                             func_id=func_type_id)
     tasks, data = make_graph(config, data_config=data_config)
 
@@ -83,9 +87,11 @@ def test_data():
     num_gpus = 4
     rl_env = RLEnvironment(num_gpus)
     rl_agent = SimpleAgent(rl_env)
-    exec_mode = ExecutionMode.RL_TRAINING
+    exec_mode = ExecutionMode.TRAINING
 
-    for i in range(0, 5000):
+    i = 0
+    #for i in range(0, 5000):
+    while True:
         cpu = Device(Architecture.CPU, 0)
         gpu0 = Device(Architecture.GPU, 0)
         gpu1 = Device(Architecture.GPU, 1)
@@ -112,6 +118,7 @@ def test_data():
 
         print(f"Time to Simulate: {end_t - start_t}")
         print(f"Simulated Time: {simulated_time}")
+        i += 1
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[

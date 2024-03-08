@@ -1,7 +1,7 @@
 from ....types import *
 from ...data import *
 from ...device import *
-from ...utility import chose_random_placement
+from ...utility import *
 
 from ..state import *
 from ..architecture import *
@@ -882,6 +882,17 @@ def _eviction_task_duration(
 @SchedulerOptions.register_state("parla")
 @dataclass(slots=True)
 class ParlaState(SystemState):
+    # Total workload planned across devices
+    total_active_workload: float = 0
+    # Workload per device
+    perdev_active_workload: Dict[Device, int] = field(default_factory=dict)
+    # # of completed tasks
+    total_num_completed_tasks: int = 0
+    # Threshold of the number of tasks that can be mapped per each mapper event
+    mapper_threshold:int = 0
+    # # of tasks in (mapped~launchable) states
+    total_num_mapped_tasks: int = 0
+
     def check_resources(
         self, phase: TaskState, task: SimulatedTask, verbose: bool = False
     ) -> bool:
@@ -1012,6 +1023,9 @@ class ParlaState(SystemState):
         devices = task.assigned_devices
         assert devices is not None
 
+        if isinstance(task, SimulatedComputeTask):
+            self.total_num_mapped_tasks -= 1
+
         for device_id in devices:
             device = self.objects.get_device(device_id)
             assert device is not None
@@ -1059,6 +1073,12 @@ class ParlaState(SystemState):
                 device.stats.active_movement += 1
 
     def completion_stats(self, task: SimulatedTask):
+        if isinstance(task, SimulatedComputeTask):
+            self.total_num_completed_tasks += 1
+            self.total_active_workload -= 1
+            for dev in task.assigned_devices:
+                self.perdev_active_workload[dev] -= 1
+
         devices = task.assigned_devices
         assert devices is not None
 
@@ -1093,8 +1113,10 @@ class ParlaState(SystemState):
                 data.stats.move_time += task.duration
                 data.stats.move_count += 1
 
-    def initialize(self):
-        pass
+    def initialize(self, task_objects: List[SimulatedTask]):
+        self.mapper_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
 
     def complete(self):
         pass
@@ -1119,6 +1141,12 @@ class ParlaState(SystemState):
             self.acquire_resources(phase, task, verbose=verbose)
             self.use_data(phase, task, verbose=verbose)
 
+            # Assumes that a task is assigned to a single device 
+            for dev in task.assigned_devices:
+                self.perdev_active_workload[dev] += 1
+            self.total_active_workload += 1
+            self.total_num_mapped_tasks += 1
+
             return chosen_devices
 
         if logger.ENABLE_LOGGING:
@@ -1141,30 +1169,26 @@ class RLState(ParlaState):
     max_duration: float = 0
     # Depth from a root task
     max_depth: int = 0
-    # Total workload planned across devices
-    total_active_workload: float = 0
-    # Workload per device
-    perdev_active_workload: Dict[Device, int] = field(default_factory=dict)
     # # of total tasks
     total_num_tasks: int = 0
     # Target execution time (from heuristic)
     target_exec_time: float = 0
-    # # of completed tasks
-    total_num_completed_tasks: int = 0
 
     # RL environment providing RL state and performing auxiliary operations
     rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
     oracle: LoadbalancingPolicy = LoadbalancingPolicy()
 
-    def initialize(self):
+    def initialize(self, task_objects: List[SimulatedTask]):
+        super(RLState, self).initialize(task_objects)
+
+        # Collect task graph information
+        self.collect_task_graph_info(task_objects, self)
+
         if self.exec_mode == ExecutionMode.TRAINING:
             self.rl_mapper.set_training_mode()
         else:
             self.rl_mapper.set_test_mode()
-
-        for device in self.objects.devicemap:
-            self.perdev_active_workload[device] = 0
         
     def complete(self):
         reward = self.target_exec_time / convert_to_float(self.time.scale_to("ms"))
@@ -1182,24 +1206,25 @@ class RLState(ParlaState):
         current_time = self.time
         assert current_time is not None
 
-        if self.total_num_mapped_tasks < self.mapper_threshold:
-            # Check if task is mappable
-            if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
-                curr_state = self.rl_env.create_state(task, self)
-                oracle = self.oracle.get_action(self)
-                chosen_device_id = self.rl_mapper.select_device(curr_state, oracle)
-                chosen_device = (Device(Architecture.GPU, chosen_device_id),)
+        # Check if task is mappable
+        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
+            curr_state = self.rl_env.create_state(task, self)
+            oracle = self.oracle.get_action(self)
+            chosen_device_id = self.rl_mapper.select_device(curr_state, oracle)
+            chosen_device = (Device(Architecture.GPU, chosen_device_id),)
 
-                task.assigned_devices = chosen_device
-                self.acquire_resources(phase, task, verbose=verbose)
-                self.use_data(phase, task, verbose=verbose)
+            task.assigned_devices = chosen_device
+            self.acquire_resources(phase, task, verbose=verbose)
+            self.use_data(phase, task, verbose=verbose)
 
-                # Assumes that a task is assigned to a single device 
-                self.perdev_active_workload[task.assigned_devices[0]] += 1
-                self.total_active_workload += 1
-                self.total_num_mapped_tasks += 1
+            for dev in task.assigned_devices: 
+                self.perdev_active_workload[dev] += 1
+            self.total_active_workload += 1
+            self.total_num_mapped_tasks += 1
 
-                return chosen_device
+            print("chosen device:", chosen_device)
+
+            return chosen_device
 
         if logger.ENABLE_LOGGING:
             logger.runtime.debug(
@@ -1210,95 +1235,45 @@ class RLState(ParlaState):
             )
         return None
 
-    def completion_stats(self, task: SimulatedTask):
-        devices = task.assigned_devices
-        assert devices is not None
 
-        if isinstance(task, SimulatedComputeTask):
-            self.total_num_completed_tasks += 1
-            self.perdev_active_workload[task.assigned_devices[0]] -= 1
-            self.total_active_workload -= 1
+    def collect_task_graph_info(
+        self, tasks: List[SimulatedTask], scheduler_state: SystemState
+    ):
+        """
+        Collect a task graph information before simulation starts.
+        """
+        taskmap = scheduler_state.objects.taskmap
+        for task in tasks:
+            scheduler_state.max_outdegree = max(scheduler_state.max_outdegree, len(task.dependents))
+            scheduler_state.max_indegree = max(scheduler_state.max_indegree, len(task.dependencies))
+            task_duration_float = convert_to_float(
+                scheduler_state.get_task_duration(task, task.info.runtime.locations[0])[0].
+                scale_to("us"))
+            scheduler_state.max_duration = max(scheduler_state.max_duration, task_duration_float)
 
-        for device_id in devices:
-            device = self.objects.get_device(device_id)
-            assert device is not None
+            # Propagate depth to its successors
+            for dep in task.dependencies:
+                task.info.depth = max(task.info.depth, taskmap[dep].info.depth + 1)
 
-            if isinstance(task, SimulatedComputeTask):
-                device.stats.active_compute -= 1
+            if task.info.depth == -1:
+                # If its depth is not initialized
+                task.info.depth = 0
 
-                if device.stats.active_compute == 0:
-                    if logger.ENABLE_LOGGING:
-                        logger.stats.debug(
-                            f"Device {device_id} is now compute idle. Time: {self.time}",
-                            extra=dict(device=device_id),
-                        )
+            scheduler_state.max_depth = max(scheduler_state.max_depth, task.info.depth)
+        scheduler_state.total_num_tasks = len(tasks)
 
-            elif isinstance(task, SimulatedDataTask) and task.real:
-                device.stats.active_movement -= 1
+        # Ignore CPU
+        scheduler_state.target_exec_time = calculate_heft(
+            tasks, taskmap, len(scheduler_state.objects.devicemap) - 1, scheduler_state)
 
-                if device.stats.active_movement == 0:
-                    if logger.ENABLE_LOGGING:
-                        logger.stats.debug(
-                            f"Device {device_id} is now movement idle. Time: {self.time}",
-                            extra=dict(device=device_id),
-                        )
-
-                data_id = task.read_accesses[0].id
-                data = self.objects.get_data(data_id)
-                assert data is not None
-
-                data.stats.move_time += task.duration
-                data.stats.move_count += 1
-
-    def launch_stats(self, task: SimulatedTask):
-        devices = task.assigned_devices
-        assert devices is not None
-
-        if isinstance(task, SimulatedComputeTask):
-            self.total_num_mapped_tasks-= 1
-
-        for device_id in devices:
-            device = self.objects.get_device(device_id)
-            assert device is not None
-
-            if device.stats.active_compute == 0 and device.stats.active_movement == 0:
-                last_active = max(
-                    device.stats.last_active_compute, device.stats.last_active_movement
-                )
-                duration = self.time - last_active
-                device.stats.idle_time += duration
-
-                if logger.ENABLE_LOGGING:
-                    logger.stats.debug(
-                        f"Device {device_id} was idle. Duration: {duration}, Last Active: {last_active}",
-                        extra=dict(device=device_id),
-                    )
-
-            if isinstance(task, SimulatedComputeTask):
-                if device.stats.active_compute == 0:
-                    duration = self.time - device.stats.last_active_compute
-                    device.stats.idle_time_compute += duration
-
-                    if logger.ENABLE_LOGGING:
-                        logger.stats.debug(
-                            f"Device {device_id} was compute idle. Duration: {duration}, Last Active: {device.stats.last_active_compute}",
-                            extra=dict(device=device_id),
-                        )
-
-            elif isinstance(task, SimulatedDataTask) and task.real:
-                if device.stats.active_movement == 0:
-                    duration = self.time - device.stats.last_active_movement
-                    device.stats.idle_time_movement += duration
-
-                    if logger.ENABLE_LOGGING:
-                        logger.stats.debug(
-                            f"Device {device_id} was movement idle. Duration: {duration}, Last Active: {device.stats.last_active_movement}",
-                            extra=dict(device=device_id),
-                        )
-
-            if isinstance(task, SimulatedComputeTask):
-                device.stats.last_active_compute = task.completion_time
-                device.stats.active_compute += 1
-            elif isinstance(task, SimulatedDataTask) and task.real:
-                device.stats.last_active_movement = task.completion_time
-                device.stats.active_movement += 1
+        print(f"max degree: {scheduler_state.max_outdegree}, "
+              f"in-degree: {scheduler_state.max_indegree}"
+              f" total tasks: {scheduler_state.total_num_tasks}, "
+              f"max depth: {scheduler_state.max_depth} \n"
+              f"max execution time: {scheduler_state.max_duration}")
+        if logger.ENABLE_LOGGING:
+            logger.runtime.info(
+                f"Total tasks: {scheduler_state.total_num_tasks}\n"
+                f"Max out-degree: {scheduler_state.max_outdegree} "
+                f"and in-degree: {scheduler_state.max_indegree}."
+            )
