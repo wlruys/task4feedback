@@ -165,6 +165,7 @@ class SimpleAgent(RLModel):
             self.optimizer.load_state_dict(loaded_optimizer.state_dict())
         else:
             print("Optimizer  does not exist, and so, not loaded", flush=True)
+        self.add_reward(reward)
 
     def save_model(self):
         """ Save a2c model and optimizer parameters to files. """
@@ -206,7 +207,7 @@ class SimpleAgent(RLModel):
         self.episode += 1
         #self.print_model("started")
 
-    def finalize_episode(self, execution_time):
+    def complete_episode(self, execution_time):
         """
         Finalize the current episode.
         """

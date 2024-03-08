@@ -1191,10 +1191,12 @@ class RLState(ParlaState):
             self.rl_mapper.set_test_mode()
         
     def complete(self):
-        reward = self.target_exec_time / convert_to_float(self.time.scale_to("ms"))
+        total_exec_time = convert_to_float(self.time.scale_to("ms"))
+        reward = 0 if total_exec_time == 0 else self.target_exec_time / total_exec_time
         reward = -(1-reward) if reward < 0.8 else reward
-        print("Total execution time:", convert_to_float(self.time.scale_to("ms")), " reward:", reward)
+        print("Total execution time:", total_exec_time, " reward:", reward)
         self.rl_mapper.optimize_model(reward)
+        self.rl_mapper.complete_episode(total_exec_time)
         
     def map_task(self, task: SimulatedTask, verbose: bool = False
     ) -> Optional[Tuple[Device, ...]]:
