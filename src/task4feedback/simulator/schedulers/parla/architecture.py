@@ -10,7 +10,6 @@ from ...utility import *
 
 from ....types import Architecture, Device, TaskID, TaskState, TaskType, Time
 from ....types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
-from ....types import ExecutionMode
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Sequence
 from dataclasses import dataclass, InitVar
@@ -23,156 +22,6 @@ from ..architecture import SchedulerArchitecture, SchedulerOptions
 from ...eviction.usage import *
 
 from rich import print
-
-from ...rl.models.model import *
-from ...rl.models.simple import *
-from ...rl.models.env import *
-from ...rl.models.oracles import *
-
-
-def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
-    devices = task.info.runtime.locations
-    # random.shuffle(devices)
-    device = devices[0]
-
-    if not isinstance(device, Tuple):
-        device = (device,)
-
-    return device
-
-
-def map_task(
-    task: SimulatedTask, scheduler_state: ParlaState,
-    rl_mapper: RLModel, rl_env: RLBaseEnvironment, oracle: LoadbalancingPolicy,
-    verbose: bool = False
-) -> Optional[Tuple[Device, ...]]:
-    """
-    Invoke a specified task mapper
-    """
-    exec_mode = scheduler_state.exec_mode
-    if exec_mode == ExecutionMode.RL_TRAINING or exec_mode == ExecutionMode.RL_TESTING or \
-       exec_mode == ExecutionMode.READYS_TRAINING or exec_mode == ExecutionMode.READYS_TRAINING:
-        # print("Training/testing mode")
-        return rl_map_task(task, scheduler_state, rl_mapper, rl_env, oracle, verbose)
-    elif exec_mode == ExecutionMode.RANDOM:
-        # print("Random mode")
-        return random_map_task(task, scheduler_state, verbose)
-    elif exec_mode == ExecutionMode.PARLA:
-        # print("Parla mode")
-        return parla_map_task(task, scheduler_state, verbose)
-
-
-def rl_map_task( 
-    task: SimulatedTask, scheduler_state: ParlaState,
-    rl_mapper: RLModel, rl_env: RLBaseEnvironment, oracle: LoadbalancingPolicy,
-    verbose: bool = False
-) -> Optional[Tuple[Device, ...]]:
-
-    phase = TaskState.MAPPED
-    objects = scheduler_state.objects
-    assert objects is not None
-
-    current_time = scheduler_state.time
-    assert current_time is not None
-
-    if scheduler_state.total_num_mapped_tasks < scheduler_state.mapper_threshold:
-        # Check if task is mappable
-        if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
-            curr_state = rl_env.create_state(task, scheduler_state)
-            oracle = oracle.get_action(scheduler_state)
-            chosen_device_id = rl_mapper.select_device(curr_state, oracle)
-            chosen_device = (Device(Architecture.GPU, chosen_device_id),)
-
-            task.assigned_devices = chosen_device
-            scheduler_state.acquire_resources(phase, task, verbose=verbose)
-            scheduler_state.use_data(phase, task, verbose=verbose)
-
-            # Assumes that a task is assigned to a single device 
-            scheduler_state.perdev_active_workload[
-                task.assigned_devices[0]] += 1
-            scheduler_state.total_active_workload += 1
-            scheduler_state.total_num_mapped_tasks += 1
-
-            # next_state = rl_env.create_state(task, scheduler_state)
-
-            return chosen_device
-
-    if logger.ENABLE_LOGGING:
-        logger.runtime.debug(
-            f"Task {task.name} cannot be mapped: Invalid status.",
-            extra=dict(
-                task=task.name, phase=phase, counters=task.counters, status=task.status
-            ),
-        )
-    return None
-
-
-def random_map_task(
-    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
-) -> Optional[Tuple[Device, ...]]:
-    """
-    Randomly assigns a device to a task.
-    """
-    phase = TaskState.MAPPED
-    objects = scheduler_state.objects
-    assert objects is not None
-
-    current_time = scheduler_state.time
-    assert current_time is not None
-
-    # Check if task is mappable
-    # print("total num mapped tasks:", scheduler_state.total_num_mapped_tasks, ", threshold:",  scheduler_state.mapper_threshold, flush=True)
-    if scheduler_state.total_num_mapped_tasks < scheduler_state.mapper_threshold:
-        if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
-            chosen_devices = chose_random_placement(task)
-
-            task.assigned_devices = chosen_devices
-            scheduler_state.acquire_resources(phase, task, verbose=verbose)
-            scheduler_state.use_data(phase, task, verbose=verbose)
-
-            return chosen_devices
-
-    if logger.ENABLE_LOGGING:
-        logger.runtime.debug(
-            f"Task {task.name} cannot be mapped: Invalid status.",
-            extra=dict(
-                task=task.name, phase=phase, counters=task.counters, status=task.status
-            ),
-        )
-    return None
-
-
-def parla_map_task( 
-    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
-) -> Optional[Tuple[Device, ...]]:
-    """
-    Assigns a device to a task based on Parla's load-balancing and locality-aware policy.
-    """
-    phase = TaskState.MAPPED
-    objects = scheduler_state.objects
-    assert objects is not None
-
-    current_time = scheduler_state.time
-    assert current_time is not None
-
-    # Check if task is mappable
-    if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
-        chosen_devices = chose_random_placement(task)
-
-        task.assigned_devices = chosen_devices
-        scheduler_state.acquire_resources(phase, task, verbose=verbose)
-        scheduler_state.use_data(phase, task, verbose=verbose)
-
-        return chosen_devices
-
-    if logger.ENABLE_LOGGING:
-        logger.runtime.debug(
-            f"Task {task.name} cannot be mapped: Invalid status.",
-            extra=dict(
-                task=task.name, phase=phase, counters=task.counters, status=task.status
-            ),
-        )
-    return None
 
 
 def run_device_eviction(
@@ -353,17 +202,6 @@ class ParlaArchitecture(SchedulerArchitecture):
     active_scheduler: int = 0
     eviction_occured: bool = False
 
-    ###########################
-    # RL related fields
-    ###########################
-
-    # RL environment providing RL state and performing auxiliary operations
-    rl_env: RLBaseEnvironment = None
-    rl_mapper: RLModel = None
-    oracle: LoadbalancingPolicy = LoadbalancingPolicy()
-
-    use_rl: bool = False
-
     def __post_init__(self, topology: SimulatedTopology):
         assert topology is not None
 
@@ -380,6 +218,8 @@ class ParlaArchitecture(SchedulerArchitecture):
     def initialize(
         self, tasks: List[TaskID], scheduler_state: SystemState
     ) -> List[EventPair]:
+
+        scheduler_state.initialize()
         objects = scheduler_state.objects
 
         task_objects = [objects.get_task(task) for task in tasks]
@@ -425,20 +265,8 @@ class ParlaArchitecture(SchedulerArchitecture):
                         # Default state is evictable
                         scheduler_state.objects.get_device(device).add_evictable(data)
 
-
-        self.use_rl = isinstance(scheduler_state, RLState)
-        if self.use_rl:
-            # Set an execution mode
-            if scheduler_state.exec_mode == ExecutionMode.RL_TRAINING or \
-               scheduler_state.exec_mode == ExecutionMode.READYS_TRAINING:
-                self.rl_mapper.set_training_mode()
-            elif scheduler_state.exec_mode == ExecutionMode.RL_TESTING:
-                self.rl_mapper.set_test_mode()
-
-            for device in scheduler_state.objects.devicemap:
-                scheduler_state.perdev_active_workload[device] = 0
-            # Collect task graph information
-            self.collect_task_graph_info(task_objects, scheduler_state)
+        # Collect task graph information
+        self.collect_task_graph_info(task_objects, scheduler_state)
 
         # Initialize the event queue
         next_event = Mapper()
@@ -514,8 +342,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
-            if devices := map_task(task, scheduler_state, self.rl_mapper,
-                                   self.rl_env, self.oracle, scheduler_state):
+            if devices := scheduler_state.map_task(task):
                 for device in devices:
                     self.reservable_tasks[device].put_id(
                         task_id=taskid, priority=priority
@@ -707,9 +534,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                 device = task.assigned_devices[0]  # type: ignore
                 self.launched_tasks[device].put_id(taskid, completion_time)
 
-                if isinstance(task, SimulatedComputeTask):
-                    scheduler_state.total_num_mapped_tasks -= 1
-
                 if logger.ENABLE_LOGGING:
                     logger.runtime.info(
                         f"Task {taskid} launched successfully.",
@@ -802,11 +626,6 @@ class ParlaArchitecture(SchedulerArchitecture):
         # Update status of dependencies
         task.notify_state(TaskState.COMPLETED, objects.taskmap, scheduler_state.time)
 
-        if isinstance(task, SimulatedComputeTask):
-            scheduler_state.total_num_completed_tasks += 1
-            scheduler_state.perdev_active_workload[task.assigned_devices[0]] -= 1
-            scheduler_state.total_active_workload -= 1
-
         return next_events
 
     def complete(self, scheduler_state: SystemState) -> bool:
@@ -818,11 +637,5 @@ class ParlaArchitecture(SchedulerArchitecture):
                 complete_flag = (
                     complete_flag and self.launchable_tasks[device][task_type].empty()
                 )
-
-        reward = scheduler_state.target_exec_time / convert_to_float(
-            scheduler_state.time.scale_to("ms"))
-        reward = -(1-reward) if reward < 0.8 else reward
-        print("Total execution time:", convert_to_float(scheduler_state.time.scale_to("ms")), " reward:", reward)
-        self.rl_mapper.optimize_model(reward)
-
+        scheduler_state.complete()
         return complete_flag

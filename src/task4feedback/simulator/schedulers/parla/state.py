@@ -1,6 +1,7 @@
 from ....types import *
 from ...data import *
 from ...device import *
+from ...utility import chose_random_placement
 
 from ..state import *
 from ..architecture import *
@@ -1092,6 +1093,43 @@ class ParlaState(SystemState):
                 data.stats.move_time += task.duration
                 data.stats.move_count += 1
 
+    def initialize(self):
+        pass
+
+    def complete(self):
+        pass
+
+    def map_task(task: SimulatedTask, verbose: bool = False
+    ) -> Optional[Tuple[Device, ...]]:
+        """
+        Assigns a device to a task based on Parla's load-balancing and locality-aware policy.
+        """
+        phase = TaskState.MAPPED
+        objects = self.objects
+        assert objects is not None
+
+        current_time = self.time
+        assert current_time is not None
+
+        # Check if task is mappable
+        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
+            chosen_devices = chose_random_placement(task)
+
+            task.assigned_devices = chosen_devices
+            self.acquire_resources(phase, task, verbose=verbose)
+            self.use_data(phase, task, verbose=verbose)
+
+            return chosen_devices
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be mapped: Invalid status.",
+                extra=dict(
+                    task=task.name, phase=phase, counters=task.counters, status=task.status
+                ),
+            )
+        return None
+
 
 @SchedulerOptions.register_state("rl")
 @dataclass(slots=True)
@@ -1113,3 +1151,154 @@ class RLState(ParlaState):
     target_exec_time: float = 0
     # # of completed tasks
     total_num_completed_tasks: int = 0
+
+    # RL environment providing RL state and performing auxiliary operations
+    rl_env: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
+    oracle: LoadbalancingPolicy = LoadbalancingPolicy()
+
+    def initialize(self):
+        if self.exec_mode == ExecutionMode.TRAINING:
+            self.rl_mapper.set_training_mode()
+        else:
+            self.rl_mapper.set_test_mode()
+
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+        
+    def complete(self):
+        reward = self.target_exec_time / convert_to_float(self.time.scale_to("ms"))
+        reward = -(1-reward) if reward < 0.8 else reward
+        print("Total execution time:", convert_to_float(self.time.scale_to("ms")), " reward:", reward)
+        self.rl_mapper.optimize_model(reward)
+        
+    def map_task(self, task: SimulatedTask, verbose: bool = False
+    ) -> Optional[Tuple[Device, ...]]:
+
+        phase = TaskState.MAPPED
+        objects = self.objects
+        assert objects is not None
+
+        current_time = self.time
+        assert current_time is not None
+
+        if self.total_num_mapped_tasks < self.mapper_threshold:
+            # Check if task is mappable
+            if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
+                curr_state = self.rl_env.create_state(task, self)
+                oracle = self.oracle.get_action(self)
+                chosen_device_id = self.rl_mapper.select_device(curr_state, oracle)
+                chosen_device = (Device(Architecture.GPU, chosen_device_id),)
+
+                task.assigned_devices = chosen_device
+                self.acquire_resources(phase, task, verbose=verbose)
+                self.use_data(phase, task, verbose=verbose)
+
+                # Assumes that a task is assigned to a single device 
+                self.perdev_active_workload[task.assigned_devices[0]] += 1
+                self.total_active_workload += 1
+                self.total_num_mapped_tasks += 1
+
+                return chosen_device
+
+        if logger.ENABLE_LOGGING:
+            logger.runtime.debug(
+                f"Task {task.name} cannot be mapped: Invalid status.",
+                extra=dict(
+                    task=task.name, phase=phase, counters=task.counters, status=task.status
+                ),
+            )
+        return None
+
+    def completion_stats(self, task: SimulatedTask):
+        devices = task.assigned_devices
+        assert devices is not None
+
+        if isinstance(task, SimulatedComputeTask):
+            self.total_num_completed_tasks += 1
+            self.perdev_active_workload[task.assigned_devices[0]] -= 1
+            self.total_active_workload -= 1
+
+        for device_id in devices:
+            device = self.objects.get_device(device_id)
+            assert device is not None
+
+            if isinstance(task, SimulatedComputeTask):
+                device.stats.active_compute -= 1
+
+                if device.stats.active_compute == 0:
+                    if logger.ENABLE_LOGGING:
+                        logger.stats.debug(
+                            f"Device {device_id} is now compute idle. Time: {self.time}",
+                            extra=dict(device=device_id),
+                        )
+
+            elif isinstance(task, SimulatedDataTask) and task.real:
+                device.stats.active_movement -= 1
+
+                if device.stats.active_movement == 0:
+                    if logger.ENABLE_LOGGING:
+                        logger.stats.debug(
+                            f"Device {device_id} is now movement idle. Time: {self.time}",
+                            extra=dict(device=device_id),
+                        )
+
+                data_id = task.read_accesses[0].id
+                data = self.objects.get_data(data_id)
+                assert data is not None
+
+                data.stats.move_time += task.duration
+                data.stats.move_count += 1
+
+    def launch_stats(self, task: SimulatedTask):
+        devices = task.assigned_devices
+        assert devices is not None
+
+        if isinstance(task, SimulatedComputeTask):
+            self.total_num_mapped_tasks-= 1
+
+        for device_id in devices:
+            device = self.objects.get_device(device_id)
+            assert device is not None
+
+            if device.stats.active_compute == 0 and device.stats.active_movement == 0:
+                last_active = max(
+                    device.stats.last_active_compute, device.stats.last_active_movement
+                )
+                duration = self.time - last_active
+                device.stats.idle_time += duration
+
+                if logger.ENABLE_LOGGING:
+                    logger.stats.debug(
+                        f"Device {device_id} was idle. Duration: {duration}, Last Active: {last_active}",
+                        extra=dict(device=device_id),
+                    )
+
+            if isinstance(task, SimulatedComputeTask):
+                if device.stats.active_compute == 0:
+                    duration = self.time - device.stats.last_active_compute
+                    device.stats.idle_time_compute += duration
+
+                    if logger.ENABLE_LOGGING:
+                        logger.stats.debug(
+                            f"Device {device_id} was compute idle. Duration: {duration}, Last Active: {device.stats.last_active_compute}",
+                            extra=dict(device=device_id),
+                        )
+
+            elif isinstance(task, SimulatedDataTask) and task.real:
+                if device.stats.active_movement == 0:
+                    duration = self.time - device.stats.last_active_movement
+                    device.stats.idle_time_movement += duration
+
+                    if logger.ENABLE_LOGGING:
+                        logger.stats.debug(
+                            f"Device {device_id} was movement idle. Duration: {duration}, Last Active: {device.stats.last_active_movement}",
+                            extra=dict(device=device_id),
+                        )
+
+            if isinstance(task, SimulatedComputeTask):
+                device.stats.last_active_compute = task.completion_time
+                device.stats.active_compute += 1
+            elif isinstance(task, SimulatedDataTask) and task.real:
+                device.stats.last_active_movement = task.completion_time
+                device.stats.active_movement += 1

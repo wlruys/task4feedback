@@ -30,7 +30,7 @@ class SimulatorConfig:
     ###########################
     rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
-    exec_mode: ExecutionMode = ExecutionMode.RANDOM
+    exec_mode: ExecutionMode = ExecutionMode.TESTING
 
 
 def create_simulator(config: SimulatorConfig):

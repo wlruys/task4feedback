@@ -10,6 +10,11 @@ from ..topology import *
 from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
 from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
 
+from ..rl.models.model import *
+from ..rl.models.simple import *
+from ..rl.models.env import *
+from ..rl.models.oracles import *
+
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
 from dataclasses import dataclass, InitVar
 from collections import defaultdict as DefaultDict
@@ -92,7 +97,7 @@ class ObjectRegistry:
 @dataclass(slots=True)
 class SystemState:
     topology: SimulatedTopology
-    exec_mode: ExecutionMode = ExecutionMode.RL_TRAINING
+    exec_mode: ExecutionMode = ExecutionMode.TRAINING
     data_pool: DataPool = field(init=False)
     resource_pool: FasterResourcePool = field(init=False)
     objects: ObjectRegistry = field(init=False)
@@ -178,4 +183,10 @@ class SystemState:
         raise NotImplementedError()
 
     def completion_stats(self, task: SimulatedTask):
+        raise NotImplementedError()
+
+    def initialize(self):
+        raise NotImplementedError()
+
+    def complete(self):
         raise NotImplementedError()

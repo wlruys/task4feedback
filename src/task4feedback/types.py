@@ -735,12 +735,8 @@ class ExecutionMode(IntEnum):
     """
     Specify the current execution mode
     """
-    RL_TRAINING     = 0
-    RL_TESTING      = 1
-    READYS_TRAINING = 2
-    READYS_TESTING  = 3
-    RANDOM          = 4
-    PARLA           = 5
+    TRAINING     = 0
+    TESTING      = 1
 
     def __str__(self):
         return self.name

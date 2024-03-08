@@ -50,7 +50,7 @@ class SimulatedScheduler:
 
     rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
-    exec_mode: ExecutionMode = ExecutionMode.RANDOM
+    exec_mode: ExecutionMode = ExecutionMode.TESTING
 
     def __post_init__(self, topology: SimulatedTopology, scheduler_type: str = "parla",
                       scheduler_state_type: str = "parla"):
@@ -60,10 +60,9 @@ class SimulatedScheduler:
         print(f"Scheduler Architecture: {scheduler_arch}")
         print(f"Scheduler State: {scheduler_state}")
 
-        self.state = scheduler_state(topology=topology, exec_mode=self.exec_mode)
-        self.mechanisms = scheduler_arch(topology=topology,
-                                         rl_env=self.rl_env,
-                                         rl_mapper=self.rl_mapper)
+        self.state = scheduler_state(topology=topology, exec_mode=self.exec_mode,
+                                     rl_env=self.rl_env, rl_mapper=self.rl_mapper)
+        self.mechanisms = scheduler_arch(topology=topology)
 
     def __str__(self):
         return f"Scheduler {self.name} | Current Time: {self.time}"

@@ -1,6 +1,7 @@
 from collections import namedtuple
 from functools import partial
 from itertools import chain
+from typing import Tuple
 
 from ..types import Device, Architecture
 
@@ -118,3 +119,13 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state) -> floa
     #        print("span:", vvalue.task.info.heft_makespan, ", ", vvalue)
     return max_heft
 
+
+def chose_random_placement(task: "SimulatedTask") -> Tuple[Device, ...]:
+    devices = task.info.runtime.locations
+    # random.shuffle(devices)
+    device = devices[0]
+
+    if not isinstance(device, Tuple):
+        device = (device,)
+
+    return device
