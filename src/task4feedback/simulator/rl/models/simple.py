@@ -32,17 +32,15 @@ class SimpleAgent(RLModel):
         self.is_loaded_model_best = load_best_model
         self.fastest_execution_time = float("inf")
         self.episode = 0
-        self.a2cnet_fname = "a2c_network.pt"
+        self.net_fname = "a2c_network.pt"
         self.optimizer_fname = "optimizer.pt"
-        self.best_a2cnet_fname = "best_a2c_network.pt"
+        self.best_net_fname = "best_a2c_network.pt"
         self.best_optimizer_fname = "best_optimizer.pt"
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # Accumulated reward 
         self.accumulated_reward = 0
 
         # Model parameters
-        self.lr = lr
-        self.entropy_sum = 0
         self.steps = 1
         self.eps_start = eps_start
         self.eps_end = eps_end
@@ -52,7 +50,7 @@ class SimpleAgent(RLModel):
         self.logs: List[MappingLogs] = []
 
         if not self.is_training_mode():
-            print("Load model..\n")
+            print("[Training mode] Load model..\n")
             if self.is_loaded_model_best == 1:
                 self.load_best_model()
             else:
@@ -112,19 +110,16 @@ class SimpleAgent(RLModel):
             plist.append(p)
             vlist.append(v)
             pilist.append(pi)
-            # zlist.append(torch.tensor([reward*len(self.logs)], dtype=torch.float))
-            zlist.append(torch.tensor([reward], dtype=torch.float))
+            zlist.append(torch.tensor([reward*len(self.logs)], dtype=torch.float))
+            # zlist.append(torch.tensor([reward], dtype=torch.float))
 
         concat_p = torch.cat(
             [p.unsqueeze(0) for p in plist])
-        # concat_p = torch.FloatTensor(plist)
         concat_v = torch.cat(vlist).to(self.device)
         # Pi is not updated through this
         concat_pi = torch.cat(
             [pi.unsqueeze(0) for pi in pilist]).to(self.device).detach()
-        # concat_pi = torch.FloatTensor(pilist)
         concat_z = torch.cat(zlist).to(self.device)
-        # print("plist:", plist, " pilist:", pilist)
         """
         print("concat p:", concat_p)
         print("concat v:", concat_v)
@@ -144,8 +139,7 @@ class SimpleAgent(RLModel):
         """
 
         loss = -F.cross_entropy(concat_p, concat_pi, reduction='mean') + \
-               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='mean') - \
-               self.entropy_sum * 0.001
+               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='mean')
         print("Loss:", loss)
         self.optimizer.zero_grad()
         loss.backward()
@@ -153,15 +147,14 @@ class SimpleAgent(RLModel):
             param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
         self.logs = []
-        self.entropy_sum = 0
 
     def load_model(self):
         """ Load a2c model and optimizer parameters from files;
             if a file doesn't exist, skip reading and use default parameters.
         """
         print("Load models..", flush=True)
-        if os.path.exists(self.a2cnet_fname):
-            self.network = torch.load(self.a2cnet_fname)
+        if os.path.exists(self.net_fname):
+            self.network = torch.load(self.net_fname)
         else:
             print("A2C network does not exist, and so, not loaded",
                   flush=True)
@@ -178,13 +171,13 @@ class SimpleAgent(RLModel):
         if not self.is_training_mode():
             return
         print("Save models..", flush=True)
-        torch.save(self.network, self.a2cnet_fname)
+        torch.save(self.network, self.net_fname)
         torch.save(self.optimizer, self.optimizer_fname)
 
     def load_best_model(self):
         print("Load best models..", flush=True)
-        if os.path.exists(self.best_a2cnet_fname):
-            self.network = torch.load(self.best_a2cnet_fname)
+        if os.path.exists(self.best_net_fname):
+            self.network = torch.load(self.best_net_fname)
         else:
             print("A2C network does not exist", flush=True)
             print("Load normal model if it exists", flush=True)
@@ -203,7 +196,7 @@ class SimpleAgent(RLModel):
         if not self.is_training_mode():
             return
         print("Save best model:", self.fastest_execution_time, flush=True)
-        torch.save(self.network, self.best_a2cnet_fname)
+        torch.save(self.network, self.best_net_fname)
         torch.save(self.optimizer, self.best_optimizer_fname)
 
     def start_episode(self):
@@ -251,4 +244,3 @@ class SimpleAgent(RLModel):
 
     def is_training_mode(self):
         return "training" in self.execution_mode
-
