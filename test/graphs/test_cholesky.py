@@ -1,3 +1,5 @@
+import argparse
+
 from task4feedback.graphs import *
 from task4feedback.load import *
 
@@ -22,6 +24,17 @@ from task4feedback.simulator.rl.models.simple import *
 
 from time import perf_counter as clock
 
+
+parser = argparse.ArgumentParser(prog="Cholesky")
+
+parser.add_argument("-m", "--mode",
+                    type=str,
+                    help="testing, training, parla, readys_training, readys_testing")
+parser.add_argument("-e", "--episode",
+                    type=int,
+                    help="the number of episodes (-1 for inifite loop)", default=-1)
+
+args = parser.parse_args()
 
 def test_data():
 
@@ -87,11 +100,12 @@ def test_data():
     num_gpus = 4
     rl_env = RLEnvironment(num_gpus)
     rl_agent = SimpleAgent(rl_env)
-    exec_mode = ExecutionMode.TRAINING
+    exec_mode = ExecutionMode.TESTING if args.mode == "testing" else ExecutionMode.TRAINING
 
-    i = 0
-    #for i in range(0, 5000):
+    episode = 0
     while True:
+        if episode > args.episode and args.episode != -1:
+            break
         cpu = Device(Architecture.CPU, 0)
         gpu0 = Device(Architecture.GPU, 0)
         gpu1 = Device(Architecture.GPU, 1)
@@ -112,13 +126,13 @@ def test_data():
         simulator = create_simulator(config=simulator_config)
 
         start_t = clock()
-        print("Epoch:", i)
+        print("Episode:", episode)
+        episode += 1
         simulated_time = simulator.run()
         end_t = clock()
 
         print(f"Time to Simulate: {end_t - start_t}")
         print(f"Simulated Time: {simulated_time}")
-        i += 1
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[

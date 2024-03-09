@@ -26,7 +26,7 @@ class SimpleAgent(RLModel):
         # S, (S, A) value networks
         self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
         self.optimizer = optim.RMSprop(self.network.parameters(),
-                                       lr=0.0001, weight_decay=0.5)
+                                       lr=0.001, weight_decay=0.5)
                                        #lr=0.0005)
         self.execution_mode = execution_mode
         self.is_loaded_model_best = load_best_model
@@ -41,6 +41,7 @@ class SimpleAgent(RLModel):
         self.accumulated_reward = 0
 
         # Model parameters
+        self.action_steps = 1
         self.steps = 1
         self.eps_start = eps_start
         self.eps_end = eps_end
@@ -49,8 +50,11 @@ class SimpleAgent(RLModel):
         # Buffer (S, P, V, PI) until the terminal state
         self.logs: List[MappingLogs] = []
 
+        self.num_consensus = 0
+        self.num_selection = 0
+
         if not self.is_training_mode():
-            print("[Training mode] Load model..\n")
+            print("[Testing mode] Load model..\n")
             if self.is_loaded_model_best == 1:
                 self.load_best_model()
             else:
@@ -62,29 +66,40 @@ class SimpleAgent(RLModel):
         If a specified state has not been visited, select a device from a neural
         network.
         """
-        actions, v = self.network(NetworkInput(state, False, None, None))
+        actions, v = self.network(state)
         f_action_probs = F.softmax(actions, dim=0)
         # rnd_ld = random.choice([1, 0])
         # rnd_ld = random.uniform(0.7, 1)
-        # rnd_ld = 0.5
-        # rnd_ld = 1
         # action_probs = (1 - self.ld)  * f_action_probs +self.ld * oracle.to(self.device)
         # ld = (1 - 1 / math.sqrt(self.ld))
-        decay_value = self.eps_end + (
-                      self.eps_start - self.eps_end) * math.exp(
-                      -1. * self.steps / self.eps_decay)
-        # ld = 1 if self.steps == 1 else 0 if decay_value < 0 else decay_value
-        ld =  1 / (self.steps) ** (1/4)
-        print("ld:", ld, " f:", f_action_probs, " o:", oracle)
-        action_probs = (1 - ld) * f_action_probs + ld * oracle.to(self.device)
-        # dist = Categorical(action_probs)
-        # action = dist.sample()
-        # self.entropy_sum += dist.entropy().mean()
-        self.logs.append(MappingLogs(
-              state, f_action_probs, v, oracle.to(self.device)))
-        action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
+        eps_threshold = self.eps_end + (
+                        self.eps_start - self.eps_end) * math.exp(
+                        -1. * self.action_steps / self.eps_decay)
+        sample = random.random()
+        self.action_steps += 1
+        # print("threshold:", eps_threshold, " sample:", sample)
+        decayed_ld = 1 / ((self.steps)**(1/3))
+        ld = 0 if not self.is_training_mode() else decayed_ld if decayed_ld > 0.2 else 0
+
+        if (not self.is_training_mode()) or (self.steps >= 500 and sample > eps_threshold) or (self.steps < 500):
+            print("ld:", ld, " f:", f_action_probs, " o:", oracle)
+            action_probs = (1 - ld) * f_action_probs + ld * oracle.to(self.device)
+            self.logs.append(MappingLogs(
+                  state, f_action_probs, v, oracle.to(self.device)))
+            oracle_action = max(enumerate(oracle.tolist()), key=lambda x: x[1])[0]
+            f_action = max(enumerate(f_action_probs), key=lambda x: x[1])[0]
+            self.num_selection += 1
+            self.num_consensus += 1 if oracle_action == f_action else 0
+            print("oracle action:", oracle_action, " f action:", f_action)
+            action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
+        else:
+            print("Random chosen")
+            random.seed()
+            action = torch.tensor(
+                     random.choice([d for d in range(self.num_actions)]),
+                     dtype=int)
         # print("oracle:", oracle)
-        # print("action:", action)
+        print("action:", action)
         return action.item()
 
     def add_reward(self, reward):
@@ -99,20 +114,20 @@ class SimpleAgent(RLModel):
         """
         print("Model optimization starts..")
 
-        self.steps += 1
-
         plist = []
         vlist = []
         pilist = []
         zlist = []
+
+        self.steps += 1
 
         for log in self.logs:
             state, p, v, pi = log
             plist.append(p)
             vlist.append(v)
             pilist.append(pi)
-            zlist.append(torch.tensor([reward*len(self.logs)], dtype=torch.float))
-            # zlist.append(torch.tensor([reward], dtype=torch.float))
+            # zlist.append(torch.tensor([reward*len(self.logs)], dtype=torch.float))
+            zlist.append(torch.tensor([reward], dtype=torch.float))
 
         concat_p = torch.cat(
             [p.unsqueeze(0) for p in plist])
@@ -121,32 +136,45 @@ class SimpleAgent(RLModel):
         concat_pi = torch.cat(
             [pi.unsqueeze(0) for pi in pilist]).to(self.device).detach()
         concat_z = torch.cat(zlist).to(self.device)
-        """
         print("concat p:", concat_p)
-        print("concat v:", concat_v)
+        # print("concat v:", concat_v)
         print("concat pi:", concat_pi)
-        print("concat z:", concat_z)
 
+        # print("concat z:", concat_z)
+
+        """
         # print("usq concat p:", concat_p.unsqueeze(-1))
         print("usq concat v:", concat_v.squeeze(-1))
         # print("usq concat pi:", concat_pi.unsqueeze(-1))
         print("usq concat z:", concat_z.squeeze(-1))
         with torch.no_grad():
             print("crossentropy:", F.cross_entropy(concat_p.squeeze(-1), concat_pi.squeeze(-1)))
-            print("crossentropy mean:", F.cross_entropy(concat_p, concat_pi).mean())
+            print("smooth:", torch.nn.SmoothL1Loss()(concat_p, concat_pi))
             # print("usq crossentropy:", F.cross_entropy(concat_p.unsqueeze(-1), concat_pi.unsqueeze(-1)))
             print("usq mse loss:", F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1)))
             print("mse loss:", F.mse_loss(concat_v, concat_z))
         """
 
-        loss = -F.cross_entropy(concat_p, concat_pi, reduction='mean') + \
-               F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='mean')
+        # loss = -F.cross_entropy(concat_p, concat_pi, reduction='mean')# + \
+               # F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='sum')
+        # loss = torch.nn.SmoothL1Loss()(concat_p, concat_pi)
+
+        # print("concat p log:", concat_p.log(), " sum -1:", (concat_p.log()).sum(-1))
+        # print("loss fun:", (concat_p.log()) * concat_pi)
+        loss = -((concat_p.log()) * concat_pi).mean() + F.mse_loss(
+               concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='mean')
+
         print("Loss:", loss)
+        print("# consensus:", self.num_consensus, " total #:", self.num_selection)
         self.optimizer.zero_grad()
         loss.backward()
+        # Note that gradients are generally (-1, 1) and so this operation is no-op.
+        # But just in case, it is added.
         for param in self.network.parameters():
             param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
+        self.num_consensus = 0
+        self.num_selection = 0
         self.logs = []
         self.add_reward(reward)
 

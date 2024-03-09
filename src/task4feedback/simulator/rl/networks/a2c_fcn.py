@@ -31,8 +31,8 @@ class A2CNetworkNoGCN(torch.nn.Module):
         self.critic_out = Linear(self.fcn2_outdim, self.critic_outdim,
                                  device=self.device)
 
-    def forward(self, model_input):
-        x = model_input.x.to(self.device)
+    def forward(self, x):
+        x = x.to(self.device)
         # Actor forward
         a = F.leaky_relu(self.actor_fcn1(x))
         a = F.leaky_relu(self.actor_fcn2(a))
