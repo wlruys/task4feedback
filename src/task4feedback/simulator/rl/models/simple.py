@@ -26,7 +26,7 @@ class SimpleAgent(RLModel):
         # S, (S, A) value networks
         self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
         self.optimizer = optim.RMSprop(self.network.parameters(),
-                                       lr=0.001, weight_decay=0.5)
+                                       lr=0.0001)#, weight_decay=0.5)
                                        #lr=0.0005)
         self.execution_mode = execution_mode
         self.is_loaded_model_best = load_best_model
@@ -46,6 +46,10 @@ class SimpleAgent(RLModel):
         self.eps_start = eps_start
         self.eps_end = eps_end
         self.eps_decay = eps_decay
+        self.sim_g_f = 0
+        self.sim_g_f_freq_threshold = 10
+        self.sim_g_f_threshold = 0.85
+        self.random_enabled = False
 
         # Buffer (S, P, V, PI) until the terminal state
         self.logs: List[MappingLogs] = []
@@ -66,38 +70,55 @@ class SimpleAgent(RLModel):
         If a specified state has not been visited, select a device from a neural
         network.
         """
+        # return max(enumerate(oracle.tolist()), key=lambda x: x[1])[0]
         actions, v = self.network(state)
         f_action_probs = F.softmax(actions, dim=0)
         # rnd_ld = random.choice([1, 0])
         # rnd_ld = random.uniform(0.7, 1)
         # action_probs = (1 - self.ld)  * f_action_probs +self.ld * oracle.to(self.device)
         # ld = (1 - 1 / math.sqrt(self.ld))
-        eps_threshold = self.eps_end + (
-                        self.eps_start - self.eps_end) * math.exp(
-                        -1. * self.action_steps / self.eps_decay)
-        sample = random.random()
-        self.action_steps += 1
-        # print("threshold:", eps_threshold, " sample:", sample)
-        decayed_ld = 1 / ((self.steps)**(1/3))
-        ld = 0 if not self.is_training_mode() else decayed_ld if decayed_ld > 0.2 else 0
 
-        if (not self.is_training_mode()) or (self.steps >= 500 and sample > eps_threshold) or (self.steps < 500):
-            print("ld:", ld, " f:", f_action_probs, " o:", oracle)
-            action_probs = (1 - ld) * f_action_probs + ld * oracle.to(self.device)
-            self.logs.append(MappingLogs(
-                  state, f_action_probs, v, oracle.to(self.device)))
+        if not self.is_training_mode():
+            # Always uses a function approximator
+            action = torch.tensor(max(enumerate(f_action_probs), key=lambda x: x[1])[0])
             oracle_action = max(enumerate(oracle.tolist()), key=lambda x: x[1])[0]
-            f_action = max(enumerate(f_action_probs), key=lambda x: x[1])[0]
             self.num_selection += 1
-            self.num_consensus += 1 if oracle_action == f_action else 0
-            print("oracle action:", oracle_action, " f action:", f_action)
-            action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
+            self.num_consensus += 1 if oracle_action == action else \
+                                  1 if oracle[oracle_action] == oracle[action] \
+                                  else 0
+            # print("oracle action probs:", oracle, " f action probs:", f_action_probs)
+            # print("oracle action:", oracle_action, " f action:", action)
         else:
-            print("Random chosen")
-            random.seed()
-            action = torch.tensor(
-                     random.choice([d for d in range(self.num_actions)]),
-                     dtype=int)
+            # print("threshold:", eps_threshold, " sample:", sample)
+            decayed_ld = 1 / ((self.steps)**(1/3))
+            ld = 0 if not self.is_training_mode() else decayed_ld if decayed_ld > 0.2 else 0
+
+            if self.random_enabled:
+                eps_threshold = self.eps_end + (
+                                self.eps_start - self.eps_end) * math.exp(
+                                -1. * self.action_steps / self.eps_decay)
+                sample = random.random()
+                self.action_steps += 1
+
+            if not self.random_enabled or (self.random_enabled and sample > eps_threshold):
+                print("ld:", ld, " f:", f_action_probs, " o:", oracle)
+                action_probs = (1 - ld) * f_action_probs + ld * oracle.to(self.device)
+                oracle_action = max(enumerate(oracle.tolist()), key=lambda x: x[1])[0]
+                f_action = max(enumerate(f_action_probs), key=lambda x: x[1])[0]
+                self.num_selection += 1
+                self.num_consensus += 1 if oracle_action == f_action else \
+                                      1 if oracle[oracle_action] == oracle[f_action] \
+                                      else 0
+                print("oracle action:", oracle_action, " f action:", f_action)
+                action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
+                self.logs.append(MappingLogs(
+                      state, f_action_probs, v, oracle.to(self.device)))
+            else:
+                print("Random chosen")
+                random.seed()
+                action = torch.tensor(
+                         random.choice([d for d in range(self.num_actions)]),
+                         dtype=int)
         # print("oracle:", oracle)
         print("action:", action)
         return action.item()
@@ -128,6 +149,7 @@ class SimpleAgent(RLModel):
             pilist.append(pi)
             # zlist.append(torch.tensor([reward*len(self.logs)], dtype=torch.float))
             zlist.append(torch.tensor([reward], dtype=torch.float))
+            print("P:", p)
 
         concat_p = torch.cat(
             [p.unsqueeze(0) for p in plist])
@@ -136,10 +158,9 @@ class SimpleAgent(RLModel):
         concat_pi = torch.cat(
             [pi.unsqueeze(0) for pi in pilist]).to(self.device).detach()
         concat_z = torch.cat(zlist).to(self.device)
-        print("concat p:", concat_p)
+        # print("concat p:", concat_p)
         # print("concat v:", concat_v)
-        print("concat pi:", concat_pi)
-
+        # print("concat pi:", concat_pi)
         # print("concat z:", concat_z)
 
         """
@@ -147,34 +168,39 @@ class SimpleAgent(RLModel):
         print("usq concat v:", concat_v.squeeze(-1))
         # print("usq concat pi:", concat_pi.unsqueeze(-1))
         print("usq concat z:", concat_z.squeeze(-1))
-        with torch.no_grad():
-            print("crossentropy:", F.cross_entropy(concat_p.squeeze(-1), concat_pi.squeeze(-1)))
-            print("smooth:", torch.nn.SmoothL1Loss()(concat_p, concat_pi))
-            # print("usq crossentropy:", F.cross_entropy(concat_p.unsqueeze(-1), concat_pi.unsqueeze(-1)))
-            print("usq mse loss:", F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1)))
-            print("mse loss:", F.mse_loss(concat_v, concat_z))
         """
+        # with torch.no_grad():
+            # print("crossentropy:", F.cross_entropy(concat_p.squeeze(-1), concat_pi.squeeze(-1)))
+            # print("smooth:", torch.nn.SmoothL1Loss()(concat_p, concat_pi))
+            # print("usq crossentropy:", F.cross_entropy(concat_p.unsqueeze(-1), concat_pi.unsqueeze(-1)))
+            # print("usq mse loss:", F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1)))
+            # print("prob:", -(concat_p.log() * concat_pi))
+            # print("mse loss:", F.mse_loss(concat_v, concat_z))
 
         # loss = -F.cross_entropy(concat_p, concat_pi, reduction='mean')# + \
                # F.mse_loss(concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='sum')
         # loss = torch.nn.SmoothL1Loss()(concat_p, concat_pi)
 
-        # print("concat p log:", concat_p.log(), " sum -1:", (concat_p.log()).sum(-1))
         # print("loss fun:", (concat_p.log()) * concat_pi)
-        loss = -((concat_p.log()) * concat_pi).mean() + F.mse_loss(
-               concat_v.unsqueeze(-1), concat_z.unsqueeze(-1), reduction='mean')
+        loss = -(concat_p.log() * concat_pi).mean() + F.mse_loss(
+               concat_v.unsqueeze(-1), concat_z.unsqueeze(-1))
 
         print("Loss:", loss)
-        print("# consensus:", self.num_consensus, " total #:", self.num_selection)
+        if self.random_enabled == False:
+            if self.num_consensus / float(self.num_selection) > self.sim_g_f_threshold:
+                self.sim_g_f += 1
+                if self.sim_g_f_freq_threshold <= self.sim_g_f:
+                    self.random_enabled = True
+            else:
+                self.sim_g_f = 0
+
         self.optimizer.zero_grad()
         loss.backward()
         # Note that gradients are generally (-1, 1) and so this operation is no-op.
         # But just in case, it is added.
-        for param in self.network.parameters():
-            param.grad.data.clamp_(-1, 1)
+        # for param in self.network.parameters():
+        #     param.grad.data.clamp_(-1, 1)
         self.optimizer.step()
-        self.num_consensus = 0
-        self.num_selection = 0
         self.logs = []
         self.add_reward(reward)
 
@@ -244,6 +270,12 @@ class SimpleAgent(RLModel):
         print("Episode total reward:", self.episode, ", ", self.accumulated_reward)
         with open("log.out", "a") as fp:
             fp.write(str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n")
+
+        print("consensus,", self.steps, ",", self.num_consensus, ",", self.num_selection)
+
+        self.num_consensus = 0
+        self.num_selection = 0
+
         if self.is_training_mode():
             self.save_model()
             if execution_time < self.fastest_execution_time:

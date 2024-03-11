@@ -12,8 +12,10 @@ class A2CNetworkNoGCN(torch.nn.Module):
         self.device = torch.device("cuda" if torch.cuda.is_available()
                                    else "cpu")
         self.fcn1_indim = in_dim
-        self.fcn1_outdim = max(128, in_dim * 4)
-        self.fcn2_outdim = max(256, in_dim * 8)
+        # self.fcn1_outdim = max(128, in_dim * 4)
+        # self.fcn2_outdim = max(256, in_dim * 8)
+        self.fcn1_outdim = max(64, in_dim * 2)
+        self.fcn2_outdim = max(128, in_dim * 4)
         self.actor_outdim = out_dim
         self.critic_outdim = 1
         # Actor configuration
@@ -34,12 +36,15 @@ class A2CNetworkNoGCN(torch.nn.Module):
     def forward(self, x):
         x = x.to(self.device)
         # Actor forward
-        a = F.leaky_relu(self.actor_fcn1(x))
+        a = self.actor_fcn1(x)
+        # a = F.leaky_relu(a)
+        # a = F.leaky_relu(self.actor_fcn2(a))
         a = F.leaky_relu(self.actor_fcn2(a))
         a = self.actor_out(a)
 
         # Critic forward
-        c = F.leaky_relu(self.critic_fcn1(x))
+        # c = F.leaky_relu(self.critic_fcn1(x))
+        c = self.critic_fcn1(x)
         c = F.leaky_relu(self.critic_fcn2(c))
         c = self.critic_out(c)
         return a,c
