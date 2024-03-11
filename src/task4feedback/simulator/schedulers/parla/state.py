@@ -1195,11 +1195,11 @@ class RLState(ParlaState):
     def complete(self):
         total_exec_time = convert_to_float(self.time.scale_to("ms"))
         if self.rl_mapper.is_training_mode():
-            reward = 0 if total_exec_time == 0 else (self.target_exec_time - total_exec_time) / total_exec_time
+            reward = 0 if total_exec_time == 0 else (self.target_exec_time - total_exec_time) / self.target_exec_time
             # reward = -(1-reward) if reward < 0.8 else reward
             print("Total execution time:", total_exec_time, " reward:", reward)
             self.rl_mapper.optimize_model(reward)
-            self.rl_mapper.complete_episode(total_exec_time)
+        self.rl_mapper.complete_episode(total_exec_time)
         
     def map_task(self, task: SimulatedTask, verbose: bool = False
     ) -> Optional[Tuple[Device, ...]]:
