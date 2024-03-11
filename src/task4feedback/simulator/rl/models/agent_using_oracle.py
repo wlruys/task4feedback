@@ -9,6 +9,7 @@ from ....types import TaskState, TaskType
 from .globals import *
 from .model import *
 from .env import *
+from .oracles import *
 
 import torchviz
 import math
@@ -21,8 +22,10 @@ class SimpleAgent(RLModel):
 
     def __init__(self, rl_env: RLBaseEnvironment, load_best_model: int = 0,
                  execution_mode: str = "testing", lr: float = 0.999,
-                 eps_start = 0.9, eps_end = 0.03, eps_decay = 1000):
+                 eps_start = 0.9, eps_end = 0.03, eps_decay = 1000,
+                 oracle_function: OraclePolicy = None):
         self.num_actions = rl_env.get_out_dim()
+        self.oracle_function = oracle_function
         # S, (S, A) value networks
         self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
         self.optimizer = optim.RMSprop(self.network.parameters(),
@@ -64,7 +67,7 @@ class SimpleAgent(RLModel):
             else:
                 self.load_model()
 
-    def select_device(self, state: torch.tensor, oracle):
+    def select_device(self, task:SimulatedTask, state: torch.tensor, sched_state: "SystemState"):
         """
         Select a device from pi.
         If a specified state has not been visited, select a device from a neural
@@ -73,6 +76,7 @@ class SimpleAgent(RLModel):
         # return max(enumerate(oracle.tolist()), key=lambda x: x[1])[0]
         actions, v = self.network(state)
         f_action_probs = F.softmax(actions, dim=0)
+        o_action_probs = self.oracle_function.get_action(sched_state)
         # rnd_ld = random.choice([1, 0])
         # rnd_ld = random.uniform(0.7, 1)
         # action_probs = (1 - self.ld)  * f_action_probs +self.ld * oracle.to(self.device)
@@ -81,13 +85,13 @@ class SimpleAgent(RLModel):
         if not self.is_training_mode():
             # Always uses a function approximator
             action = torch.tensor(max(enumerate(f_action_probs), key=lambda x: x[1])[0])
-            oracle_action = max(enumerate(oracle.tolist()), key=lambda x: x[1])[0]
+            o_action = max(enumerate(o_action_probs), key=lambda x: x[1])[0]
             self.num_selection += 1
-            self.num_consensus += 1 if oracle_action == action else \
-                                  1 if oracle[oracle_action] == oracle[action] \
+            self.num_consensus += 1 if o_action == action else \
+                                  1 if o_action_probs[o_action] == o_action_probs[action] \
                                   else 0
-            # print("oracle action probs:", oracle, " f action probs:", f_action_probs)
-            # print("oracle action:", oracle_action, " f action:", action)
+            # print("o_action_probs action probs:", o_action_probs, " f action probs:", f_action_probs)
+            # print("o_action_probs action:", o_action, " f action:", action)
         else:
             # print("threshold:", eps_threshold, " sample:", sample)
             decayed_ld = 1 / ((self.steps)**(1/3))
@@ -101,25 +105,25 @@ class SimpleAgent(RLModel):
                 self.action_steps += 1
 
             if not self.random_enabled or (self.random_enabled and sample > eps_threshold):
-                print("ld:", ld, " f:", f_action_probs, " o:", oracle)
-                action_probs = (1 - ld) * f_action_probs + ld * oracle.to(self.device)
-                oracle_action = max(enumerate(oracle.tolist()), key=lambda x: x[1])[0]
+                print("ld:", ld, " f:", f_action_probs, " o:", o_action_probs)
+                action_probs = (1 - ld) * f_action_probs + ld * o_action_probs.to(self.device)
+                o_action = max(enumerate(o_action_probs), key=lambda x: x[1])[0]
                 f_action = max(enumerate(f_action_probs), key=lambda x: x[1])[0]
                 self.num_selection += 1
-                self.num_consensus += 1 if oracle_action == f_action else \
-                                      1 if oracle[oracle_action] == oracle[f_action] \
+                self.num_consensus += 1 if o_action == f_action else \
+                                      1 if o_action_probs[o_action] == o_action_probs[f_action] \
                                       else 0
-                print("oracle action:", oracle_action, " f action:", f_action)
+                print("o_action_probs action:", o_action, " f action:", f_action)
                 action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
                 self.logs.append(MappingLogs(
-                      state, f_action_probs, v, oracle.to(self.device)))
+                      state, f_action_probs, v, o_action_probs.to(self.device)))
             else:
                 print("Random chosen")
                 random.seed()
                 action = torch.tensor(
                          random.choice([d for d in range(self.num_actions)]),
                          dtype=int)
-        # print("oracle:", oracle)
+        # print("o_action_probs:", o_action_probs)
         print("action:", action)
         return action.item()
 
@@ -129,7 +133,7 @@ class SimpleAgent(RLModel):
         """
         self.accumulated_reward += reward
 
-    def optimize_model(self, reward: float):
+    def optimize_model(self, reward: float, sched_state: "SystemState"):
         """
         Optimize a model.
         """

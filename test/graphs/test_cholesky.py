@@ -20,7 +20,9 @@ from task4feedback.simulator.verify import *
 
 from task4feedback.simulator.rl.models.a2c import *
 from task4feedback.simulator.rl.models.env import *
-from task4feedback.simulator.rl.models.simple import *
+from task4feedback.simulator.rl.models.oracles import *
+from task4feedback.simulator.rl.models.agent_using_oracle import *
+from task4feedback.simulator.rl.models.agent_a2c import *
 
 from time import perf_counter as clock
 
@@ -99,7 +101,8 @@ def test_data():
     #           RL testing/training
     num_gpus = 4
     rl_env = RLEnvironment(num_gpus)
-    rl_agent = SimpleAgent(rl_env)
+    # rl_agent = SimpleAgent(rl_env, oracle_function=LoadbalancingPolicy())
+    rl_agent = A2CAgent(rl_env)
     exec_mode = ExecutionMode.TESTING if args.mode == "testing" else ExecutionMode.TRAINING
 
     episode = 0

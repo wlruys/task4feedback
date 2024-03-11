@@ -11,7 +11,7 @@ import os
 class RLModel(ABC):
 
   @abstractmethod
-  def select_device(self, target_task, x, gcn_x, gcn_edgeindex):
+  def select_device(self, target_task, x, sched_state):
       NotImplementedError()
 
   @abstractmethod

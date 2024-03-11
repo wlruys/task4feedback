@@ -32,7 +32,7 @@ class LoadbalancingPolicy(ABC):
               workload = system_state.perdev_active_workload[device]
               action_probs[device.device_id] = workload
               total_workload += workload
-          
+
           for device in devicemap:
               if device.architecture == Architecture.CPU:
                   continue;
