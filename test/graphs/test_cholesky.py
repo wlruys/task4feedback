@@ -71,7 +71,6 @@ def test_data():
             func_id = 2
         elif task_id.taskspace == "GEMM":
             func_id = 3
-        print(task_id.taskspace, " type id ", func_id)
         return func_id
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
@@ -101,8 +100,8 @@ def test_data():
     #           RL testing/training
     num_gpus = 4
     rl_env = RLEnvironment(num_gpus)
-    # rl_agent = SimpleAgent(rl_env, oracle_function=LoadbalancingPolicy())
-    rl_agent = A2CAgent(rl_env)
+    rl_agent = SimpleAgent(rl_env, oracle_function=LoadbalancingPolicy())
+    # rl_agent = A2CAgent(rl_env)
     exec_mode = ExecutionMode.TESTING if args.mode == "testing" else ExecutionMode.TRAINING
 
     episode = 0
@@ -129,13 +128,12 @@ def test_data():
         simulator = create_simulator(config=simulator_config)
 
         start_t = clock()
-        print("Episode:", episode)
         episode += 1
         simulated_time = simulator.run()
         end_t = clock()
-
-        print(f"Time to Simulate: {end_t - start_t}")
-        print(f"Simulated Time: {simulated_time}")
+        simtime = simulated_time.scale_to("s")
+        print("Wallclock,",episode,",",end_t-start_t)
+        print("SimulatedTime,",episode,",",simtime)
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[

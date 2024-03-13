@@ -107,7 +107,7 @@ class SimpleAgent(RLModel):
                 self.action_steps += 1
 
             if not self.random_enabled or (self.random_enabled and sample > eps_threshold):
-                print("ld:", ld, " f:", f_action_probs, " o:", o_action_probs)
+                # print("ld:", ld, " f:", f_action_probs, " o:", o_action_probs)
                 action_probs = (1 - ld) * f_action_probs + ld * o_action_probs.to(self.device)
                 o_action = max(enumerate(o_action_probs), key=lambda x: x[1])[0]
                 f_action = max(enumerate(f_action_probs), key=lambda x: x[1])[0]
@@ -115,18 +115,18 @@ class SimpleAgent(RLModel):
                 self.num_consensus += 1 if o_action == f_action else \
                                       1 if o_action_probs[o_action] == o_action_probs[f_action] \
                                       else 0
-                print("o_action_probs action:", o_action, " f action:", f_action)
+                # print("o_action_probs action:", o_action, " f action:", f_action)
                 action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
                 self.logs.append(MappingLogs(
                       state, f_action_probs, v, o_action_probs.to(self.device)))
             else:
-                print("Random chosen")
+                # print("Random chosen")
                 random.seed()
                 action = torch.tensor(
                          random.choice([d for d in range(self.num_actions)]),
                          dtype=int)
         # print("o_action_probs:", o_action_probs)
-        print("action:", action)
+        # print("action:", action)
         return action.item()
 
     def add_reward(self, reward):
@@ -139,7 +139,7 @@ class SimpleAgent(RLModel):
         """
         Optimize a model.
         """
-        print("Model optimization starts..")
+        # print("Model optimization starts..")
 
         plist = []
         vlist = []
@@ -155,7 +155,7 @@ class SimpleAgent(RLModel):
             pilist.append(pi)
             # zlist.append(torch.tensor([reward*len(self.logs)], dtype=torch.float))
             zlist.append(torch.tensor([reward], dtype=torch.float))
-            print("P:", p)
+            # print("P:", p)
 
         concat_p = torch.cat(
             [p.unsqueeze(0) for p in plist])
@@ -191,7 +191,7 @@ class SimpleAgent(RLModel):
         loss = -(concat_p.log() * concat_pi).mean() + F.mse_loss(
                concat_v.unsqueeze(-1), concat_z.unsqueeze(-1))
 
-        print("Loss:", loss)
+        print("Loss,", self.steps-1, ",", loss.item())
         if self.random_enabled == False:
             if self.num_consensus / float(self.num_selection) > self.sim_g_f_threshold:
                 self.sim_g_f += 1
@@ -273,11 +273,11 @@ class SimpleAgent(RLModel):
         Finalize the current episode.
         """
         #self.print_model("finished")
-        print("Episode total reward:", self.episode, ", ", self.accumulated_reward)
-        with open("log.out", "a") as fp:
-            fp.write(str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n")
+        # with open("log.out", "a") as fp:
+        #     fp.write(str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n")
 
-        print("consensus,", self.steps, ",", self.num_consensus, ",", self.num_selection)
+        print("reward,",self.steps-1, ",", self.accumulated_reward)
+        print("consensus,", self.steps-1, ",", self.num_consensus, ",", self.num_selection)
 
         self.num_consensus = 0
         self.num_selection = 0
