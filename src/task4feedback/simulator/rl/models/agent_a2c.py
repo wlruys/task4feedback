@@ -95,7 +95,6 @@ class A2CAgent(RLModel):
             self.values.append(v)
             self.terminal_task = task
 
-        print("action:", action)
         return action.item()
 
     def add_reward(self, reward):
@@ -108,8 +107,6 @@ class A2CAgent(RLModel):
         """
         Optimize a model.
         """
-        print("Model optimization starts..")
-
         self.steps += 1
 
         next_state = self.rl_env.create_state(self.terminal_task, sched_state)
@@ -125,7 +122,7 @@ class A2CAgent(RLModel):
         actor_loss = -(cat_log_probs * advantage.detach()).mean()
         critic_loss = F.mse_loss(cat_values.unsqueeze(-1), returns.unsqueeze(-1))
         loss = actor_loss + 0.5 * critic_loss - 0.001 * self.entropy_sum
-        print("Loss:", loss)
+        print("Loss,", self.steps-1, ",", loss.item())
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -202,7 +199,8 @@ class A2CAgent(RLModel):
         Finalize the current episode.
         """
         #self.print_model("finished")
-        print("Episode total reward:", self.episode, ", ", self.accumulated_reward)
+
+        print("reward,",self.steps-1, ",", self.accumulated_reward)
         with open("log.out", "a") as fp:
             fp.write(str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n")
 
