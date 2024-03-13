@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple
 from collections import namedtuple
 
 from ..networks.a2c_fcn import *
+from ..networks.pv_fcn import *
 from ...task import SimulatedTask
 from ....types import TaskState, TaskType
 from .globals import *
@@ -27,7 +28,8 @@ class SimpleAgent(RLModel):
         self.num_actions = rl_env.get_out_dim()
         self.oracle_function = oracle_function
         # S, (S, A) value networks
-        self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
+        self.network = PVFCN(rl_env.get_state_dim(), rl_env.get_out_dim())
+        # self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
         self.optimizer = optim.RMSprop(self.network.parameters(),
                                        lr=0.0001)#, weight_decay=0.5)
                                        #lr=0.0005)
