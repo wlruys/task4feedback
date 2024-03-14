@@ -122,6 +122,7 @@ class DataUse:
             print(
                 f"Removing {self.name} from eviction pool on device {device}. Last usage was {task} with use {use}."
             )
+            print("Pool has ")
             pools.remove_evictable(device, self.name, self.size)
 
     def remove_task_use_from_device(

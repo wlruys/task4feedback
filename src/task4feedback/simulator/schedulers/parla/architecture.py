@@ -21,14 +21,14 @@ from ..architecture import SchedulerArchitecture, SchedulerOptions
 from ...eviction.usage import *
 
 from rich import print
+import random
 
 
 def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
-
     # This contains any
     devices = task.info.runtime.locations
 
-    # # random.shuffle(devices)
+    random.shuffle(devices)
     device = devices[0]
 
     if not isinstance(device, Tuple):
@@ -50,7 +50,6 @@ def map_task(
 
     # Check if task is mappable
     if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
-
         if (
             check_limiter := scheduler_state.num_mapped_tasks
             < scheduler_state.threshold
@@ -82,7 +81,6 @@ def run_device_eviction(
     scheduler_state: ParlaState,
     verbose: bool = False,
 ) -> List[Tuple[Device, TaskID]]:
-
     objects = scheduler_state.objects
     device = objects.get_device(device_id)
     assert device is not None
@@ -136,7 +134,6 @@ def run_device_eviction(
 def run_eviction(
     scheduler_state: ParlaState, event: Eviction, verbose: bool = False
 ) -> List[Tuple[Device, TaskID]]:
-
     # print(f"Running eviction requested by {event.parent_task}.")
 
     eviction_tasks = []
@@ -530,7 +527,6 @@ class ParlaArchitecture(SchedulerArchitecture):
     def eviction(
         self, scheduler_state: SystemState, event: Eviction
     ) -> List[EventPair]:
-
         self.eviction_occured = True
 
         objects = scheduler_state.objects
