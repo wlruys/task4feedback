@@ -1183,13 +1183,6 @@ class RLState(ParlaState):
 
         # Collect task graph information
         self.collect_task_graph_info(task_objects, self)
-
-        if self.exec_mode == ExecutionMode.TRAINING:
-            print("training mode starts..")
-            self.rl_mapper.set_training_mode()
-        else:
-            print("testing  mode starts..")
-            self.rl_mapper.set_test_mode()
         
     def complete(self):
         total_exec_time = convert_to_float(self.time.scale_to("ms"))

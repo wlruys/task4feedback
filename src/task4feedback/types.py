@@ -737,6 +737,7 @@ class ExecutionMode(IntEnum):
     """
     TRAINING     = 0
     TESTING      = 1
+    EVALUATION   = 2
 
     def __str__(self):
         return self.name

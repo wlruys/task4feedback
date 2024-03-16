@@ -6,7 +6,7 @@ from collections import namedtuple
 from ..networks.a2c_fcn import *
 from ..networks.pv_fcn import *
 from ...task import SimulatedTask
-from ....types import TaskState, TaskType
+from ....types import TaskState, TaskType, ExecutionMode
 from .globals import *
 from .model import *
 from .env import *
@@ -21,8 +21,8 @@ MappingLogs = namedtuple("MappingLogs",
 
 class SimpleAgent(RLModel):
 
-    def __init__(self, rl_env: RLBaseEnvironment, load_best_model: int = 0,
-                 execution_mode: str = "testing", lr: float = 0.999,
+    def __init__(self, rl_env: RLBaseEnvironment, load_best_model: int = 1,
+                 exec_mode: ExecutionMode = ExecutionMode.TESTING, lr: float = 0.999,
                  eps_start = 0.9, eps_end = 0.03, eps_decay = 1000,
                  oracle_function: OraclePolicy = None):
         self.num_actions = rl_env.get_out_dim()
@@ -33,7 +33,7 @@ class SimpleAgent(RLModel):
         self.optimizer = optim.RMSprop(self.network.parameters(),
                                        lr=0.0001)#, weight_decay=0.5)
                                        #lr=0.0005)
-        self.execution_mode = execution_mode
+        self.exec_mode = exec_mode
         self.is_loaded_model_best = load_best_model
         self.fastest_execution_time = float("inf")
         self.episode = 0
@@ -69,64 +69,61 @@ class SimpleAgent(RLModel):
             else:
                 self.load_model()
 
+    def select_device_using_p(self, f_action_probs, o_action_probs):
+        action = torch.tensor(max(enumerate(f_action_probs), key=lambda x: x[1])[0])
+        o_action = max(enumerate(o_action_probs), key=lambda x: x[1])[0]
+        self.num_selection += 1
+        self.num_consensus += 1 if o_action == action else \
+                              1 if o_action_probs[o_action] == o_action_probs[action] \
+                              else 0
+        return action
+
+    def select_device_using_pqr(self, state, v, f_action_probs, o_action_probs):
+        decayed_ld = 1 / ((self.steps)**(1/3))
+        ld = 0 if not self.is_training_mode() else decayed_ld if decayed_ld > 0.2 else 0
+
+        if self.random_enabled:
+            eps_threshold = self.eps_end + (
+                            self.eps_start - self.eps_end) * math.exp(
+                            -1. * self.action_steps / self.eps_decay)
+            sample = random.random()
+            self.action_steps += 1
+
+        if not self.random_enabled or (self.random_enabled and sample > eps_threshold):
+            action_probs = (1 - ld) * f_action_probs + ld * o_action_probs.to(self.device)
+            o_action = max(enumerate(o_action_probs), key=lambda x: x[1])[0]
+            f_action = max(enumerate(f_action_probs), key=lambda x: x[1])[0]
+            self.num_selection += 1
+            self.num_consensus += 1 if o_action == f_action else \
+                                  1 if o_action_probs[o_action] == o_action_probs[f_action] \
+                                  else 0
+            # print("o_action_probs action:", o_action, " f action:", f_action)
+            action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
+            self.logs.append(MappingLogs(
+                  state, f_action_probs, v, o_action_probs.to(self.device)))
+        else:
+            # print("Random chosen")
+            random.seed()
+            action = torch.tensor(
+                     random.choice([d for d in range(self.num_actions)]),
+                     dtype=int)
+        return action
+
     def select_device(self, task:SimulatedTask, state: torch.tensor, sched_state: "SystemState"):
         """
         Select a device from pi.
         If a specified state has not been visited, select a device from a neural
         network.
         """
-        # return max(enumerate(oracle.tolist()), key=lambda x: x[1])[0]
         actions, v = self.network(state)
         f_action_probs = F.softmax(actions, dim=0)
         o_action_probs = self.oracle_function.get_action(sched_state)
-        # rnd_ld = random.choice([1, 0])
-        # rnd_ld = random.uniform(0.7, 1)
-        # action_probs = (1 - self.ld)  * f_action_probs +self.ld * oracle.to(self.device)
-        # ld = (1 - 1 / math.sqrt(self.ld))
 
         if not self.is_training_mode():
             # Always uses a function approximator
-            action = torch.tensor(max(enumerate(f_action_probs), key=lambda x: x[1])[0])
-            o_action = max(enumerate(o_action_probs), key=lambda x: x[1])[0]
-            self.num_selection += 1
-            self.num_consensus += 1 if o_action == action else \
-                                  1 if o_action_probs[o_action] == o_action_probs[action] \
-                                  else 0
-            # print("o_action_probs action probs:", o_action_probs, " f action probs:", f_action_probs)
-            # print("o_action_probs action:", o_action, " f action:", action)
+            action = self.select_device_using_p(f_action_probs, o_action_probs)
         else:
-            # print("threshold:", eps_threshold, " sample:", sample)
-            decayed_ld = 1 / ((self.steps)**(1/3))
-            ld = 0 if not self.is_training_mode() else decayed_ld if decayed_ld > 0.2 else 0
-
-            if self.random_enabled:
-                eps_threshold = self.eps_end + (
-                                self.eps_start - self.eps_end) * math.exp(
-                                -1. * self.action_steps / self.eps_decay)
-                sample = random.random()
-                self.action_steps += 1
-
-            if not self.random_enabled or (self.random_enabled and sample > eps_threshold):
-                # print("ld:", ld, " f:", f_action_probs, " o:", o_action_probs)
-                action_probs = (1 - ld) * f_action_probs + ld * o_action_probs.to(self.device)
-                o_action = max(enumerate(o_action_probs), key=lambda x: x[1])[0]
-                f_action = max(enumerate(f_action_probs), key=lambda x: x[1])[0]
-                self.num_selection += 1
-                self.num_consensus += 1 if o_action == f_action else \
-                                      1 if o_action_probs[o_action] == o_action_probs[f_action] \
-                                      else 0
-                # print("o_action_probs action:", o_action, " f action:", f_action)
-                action = torch.tensor(max(enumerate(action_probs), key=lambda x: x[1])[0])
-                self.logs.append(MappingLogs(
-                      state, f_action_probs, v, o_action_probs.to(self.device)))
-            else:
-                # print("Random chosen")
-                random.seed()
-                action = torch.tensor(
-                         random.choice([d for d in range(self.num_actions)]),
-                         dtype=int)
-        # print("o_action_probs:", o_action_probs)
-        # print("action:", action)
+            action = self.select_device_using_pqr(state, v, f_action_probs, o_action_probs)
         return action.item()
 
     def add_reward(self, reward):
@@ -139,7 +136,7 @@ class SimpleAgent(RLModel):
         """
         Optimize a model.
         """
-        # print("Model optimization starts..")
+        print("Model optimization starts..")
 
         plist = []
         vlist = []
@@ -191,7 +188,8 @@ class SimpleAgent(RLModel):
         loss = -(concat_p.log() * concat_pi).mean() + F.mse_loss(
                concat_v.unsqueeze(-1), concat_z.unsqueeze(-1))
 
-        print("Loss,", self.steps-1, ",", loss.item())
+        if self.is_evaluating_mode():
+            print("Loss,", self.steps-1, ",", loss.item())
         if self.random_enabled == False:
             if self.num_consensus / float(self.num_selection) > self.sim_g_f_threshold:
                 self.sim_g_f += 1
@@ -276,8 +274,9 @@ class SimpleAgent(RLModel):
         # with open("log.out", "a") as fp:
         #     fp.write(str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n")
 
-        print("reward,",self.steps-1, ",", self.accumulated_reward)
-        print("consensus,", self.steps-1, ",", self.num_consensus, ",", self.num_selection)
+        if self.is_evaluating_mode():
+            print("reward,",self.steps-1, ",", self.accumulated_reward)
+            print("consensus,", self.steps-1, ",", self.num_consensus, ",", self.num_selection)
 
         self.num_consensus = 0
         self.num_selection = 0
@@ -288,6 +287,10 @@ class SimpleAgent(RLModel):
                 self.fastest_execution_time = execution_time
                 self.save_best_network()
             self.accumulated_reward = 0
+            # Enable an evaluation mode after for each training mode
+            self.set_eval_mode()
+        elif self.is_evaluating_mode():
+            self.set_training_mode()
 
     def print_model(self, prefix: str):
         """
@@ -300,15 +303,23 @@ class SimpleAgent(RLModel):
             for key, param in self.optimizer.state_dict().items():
                 fp.write(key + " = " + str(param))
 
+    def set_eval_mode(self):
+        print("set evaluating mode")
+        self.exec_mode = ExecutionMode.EVALUATION
+
     def set_training_mode(self):
-        self.execution_mode = "training"
+        print("set training mode")
+        self.exec_mode = ExecutionMode.TRAINING
 
     def set_test_mode(self):
-        self.execution_mode = "test"
+        self.exec_mode = ExecutionMode.TESTING
         if self.is_loaded_model_best == 1:
             self.load_best_model()
         else:
             self.load_model()
 
     def is_training_mode(self):
-        return "training" in self.execution_mode
+        return self.exec_mode == ExecutionMode.TRAINING
+
+    def is_evaluating_mode(self):
+        return self.exec_mode == ExecutionMode.EVALUATION

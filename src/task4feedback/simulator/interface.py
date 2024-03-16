@@ -30,7 +30,6 @@ class SimulatorConfig:
     ###########################
     rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
-    exec_mode: ExecutionMode = ExecutionMode.TESTING
 
 
 def create_simulator(config: SimulatorConfig):
@@ -45,7 +44,6 @@ def create_simulator(config: SimulatorConfig):
         randomizer=config.randomizer,
         rl_env=config.rl_env,
         rl_mapper=config.rl_mapper,
-        exec_mode=config.exec_mode
     )
 
     tasklist, simulated_tasks = create_sim_graph(

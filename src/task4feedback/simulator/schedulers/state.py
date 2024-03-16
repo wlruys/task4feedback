@@ -96,7 +96,6 @@ class ObjectRegistry:
 @dataclass(slots=True)
 class SystemState:
     topology: SimulatedTopology
-    exec_mode: ExecutionMode = ExecutionMode.TRAINING
     data_pool: DataPool = field(init=False)
     resource_pool: FasterResourcePool = field(init=False)
     objects: ObjectRegistry = field(init=False)
