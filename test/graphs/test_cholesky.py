@@ -99,10 +99,10 @@ def test_data():
     #           Parla testing
     #           RL testing/training
     num_gpus = 4
-    rl_env = RLEnvironment(num_gpus)
-    rl_agent = SimpleAgent(rl_env, oracle_function=LoadbalancingPolicy())
-    # rl_agent = A2CAgent(rl_env)
     exec_mode = ExecutionMode.TESTING if args.mode == "testing" else ExecutionMode.TRAINING
+    rl_env = RLEnvironment(num_gpus)
+    rl_agent = SimpleAgent(rl_env, oracle_function=LoadbalancingPolicy(), exec_mode=exec_mode)
+    #rl_agent = A2CAgent(rl_env)
 
     episode = 0
     while True:
@@ -123,7 +123,6 @@ def test_data():
             randomizer=Randomizer(),
             rl_env=rl_env,
             rl_mapper=rl_agent,
-            exec_mode=exec_mode
         )
         simulator = create_simulator(config=simulator_config)
 
@@ -132,8 +131,8 @@ def test_data():
         simulated_time = simulator.run()
         end_t = clock()
         simtime = simulated_time.scale_to("s")
-        print("Wallclock,",episode,",",end_t-start_t)
-        print("SimulatedTime,",episode,",",simtime)
+        if not rl_agent.is_training_mode():
+            print("Wallclock,",episode,",",end_t-start_t)
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[

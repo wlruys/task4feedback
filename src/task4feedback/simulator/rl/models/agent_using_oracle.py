@@ -1,5 +1,6 @@
 from torch.distributions import Categorical
 
+from time import perf_counter as clock
 from typing import Dict, List, Tuple
 from collections import namedtuple
 
@@ -31,7 +32,7 @@ class SimpleAgent(RLModel):
         self.network = PVFCN(rl_env.get_state_dim(), rl_env.get_out_dim())
         # self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
         self.optimizer = optim.RMSprop(self.network.parameters(),
-                                       lr=0.0001)#, weight_decay=0.5)
+                                       lr=0.00005)#, weight_decay=0.5)
                                        #lr=0.0005)
         self.exec_mode = exec_mode
         self.is_loaded_model_best = load_best_model
@@ -264,7 +265,6 @@ class SimpleAgent(RLModel):
         Start a new episode, and update (or initialize) the current state.
         """
         self.episode += 1
-        #self.print_model("started")
 
     def complete_episode(self, execution_time):
         """
@@ -274,9 +274,10 @@ class SimpleAgent(RLModel):
         # with open("log.out", "a") as fp:
         #     fp.write(str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n")
 
-        if self.is_evaluating_mode():
+        if not self.is_training_mode():
             print("reward,",self.steps-1, ",", self.accumulated_reward)
             print("consensus,", self.steps-1, ",", self.num_consensus, ",", self.num_selection)
+            print("simtime,",self.steps-1, ",", execution_time)
 
         self.num_consensus = 0
         self.num_selection = 0
