@@ -26,7 +26,7 @@ def convert_to_float(frac_str):
         return whole - frac if whole < 0 else whole + frac
 
 
-def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state) -> float:
+def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_place_update: bool = False) -> float:
     """
     Calculate HEFT (Heterogeneous Earliest Finish Time) for each task.
     This function assumes that the tasklist is already sorted by a topology.
@@ -54,14 +54,20 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state) -> floa
         task.info.heft_rank = duration + max_dependent_rank
 
     # Sort task list by heft rank
-    heft_sorted_tasks = sorted(tasklist, key=get_heft_rank)
-    # print("heft sorted tasks:", heft_sorted_tasks)
+    heft_sorted_tasks = reversed(sorted(tasklist, key=get_heft_rank))
 
     agents = {agent: [] for agent in range(0, num_devices)}
 
     HEFTEvent = namedtuple('HEFTEvent', 'task start end')
+
+    def get_start_time(heft_event):
+        return heft_event.start
+
     max_heft = -1
-    for task in reversed(heft_sorted_tasks):
+    if in_place_update:
+        tasklist[:] = []
+        heft_events = []
+    for task in heft_sorted_tasks:
         duration = convert_to_float(
             scheduler_state.get_task_duration(task, task.info.runtime.locations[0])[0].
             scale_to("ms"))
@@ -108,11 +114,19 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state) -> floa
                 earliest_start_agent = agent_id
                 earliest_start = candidate_earliest_start
 
-        agents[earliest_start_agent].append(
-            HEFTEvent(task, earliest_start, earliest_start + duration))
+        heft_event = HEFTEvent(task, earliest_start, earliest_start + duration)
+        if in_place_update:
+            heft_events.append(heft_event)
+        agents[earliest_start_agent].append(heft_event)
         task.info.heft_makespan = earliest_start + duration
         if task.info.heft_makespan > max_heft:
             max_heft = task.info.heft_makespan
+
+    if in_place_update:
+        heft_events = sorted(heft_events, key=get_start_time)
+        tasklist[:] = [he.task for he in heft_events]
+    print("HEFT time:", max_heft)
+
     # for key, value in agents.items():
     #    print("Key:", key)
     #    for vvalue in value:

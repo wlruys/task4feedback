@@ -1257,7 +1257,7 @@ class RLState(ParlaState):
 
         # Ignore CPU
         scheduler_state.target_exec_time = calculate_heft(
-            tasks, taskmap, len(scheduler_state.objects.devicemap) - 1, scheduler_state)
+            tasks, taskmap, len(scheduler_state.objects.devicemap) - 1, scheduler_state, True)
 
         print(f"max degree: {scheduler_state.max_outdegree}, "
               f"in-degree: {scheduler_state.max_indegree}"
