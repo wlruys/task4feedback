@@ -22,7 +22,7 @@ MappingLogs = namedtuple("MappingLogs",
 
 class SimpleAgent(RLModel):
 
-    def __init__(self, rl_env: RLBaseEnvironment, load_best_model: int = 1,
+    def __init__(self, rl_env: RLBaseEnvironment, load_best_model: int = 0,
                  exec_mode: ExecutionMode = ExecutionMode.TESTING, lr: float = 0.999,
                  eps_start = 0.9, eps_end = 0.03, eps_decay = 1000,
                  oracle_function: OraclePolicy = None):
@@ -186,6 +186,8 @@ class SimpleAgent(RLModel):
         # loss = torch.nn.SmoothL1Loss()(concat_p, concat_pi)
 
         # print("loss fun:", (concat_p.log()) * concat_pi)
+        pc = 1 - 1/(math.exp(500/self.steps))
+        print("Pc:", pc)
         loss = -(concat_p.log() * concat_pi).mean() + F.mse_loss(
                concat_v.unsqueeze(-1), concat_z.unsqueeze(-1))
 
