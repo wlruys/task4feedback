@@ -125,6 +125,10 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_plac
     if in_place_update:
         heft_events = sorted(heft_events, key=get_start_time)
         tasklist[:] = [he.task for he in heft_events]
+        order = 0
+        for task in tasklist:
+            task.info.order = order
+            order += 1
     print("HEFT time:", max_heft)
 
     # for key, value in agents.items():
