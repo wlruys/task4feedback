@@ -188,11 +188,10 @@ class SimpleAgent(RLModel):
         # print("loss fun:", (concat_p.log()) * concat_pi)
         pc = 1 - 1/(math.exp(500/self.steps))
         print("Pc:", pc)
-        loss = -(concat_p.log() * concat_pi).mean() + F.mse_loss(
+        loss = -(concat_p.log() * concat_pi).mean() * pc + F.mse_loss(
                concat_v.unsqueeze(-1), concat_z.unsqueeze(-1))
 
-        if self.is_evaluating_mode():
-            print("Loss,", self.steps-1, ",", loss.item())
+        print("Loss,", self.steps-1, ",", loss.item())
         if self.random_enabled == False:
             if self.num_consensus / float(self.num_selection) > self.sim_g_f_threshold:
                 self.sim_g_f += 1
