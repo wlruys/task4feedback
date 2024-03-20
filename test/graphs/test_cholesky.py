@@ -105,6 +105,7 @@ def test_data():
     #rl_agent = A2CAgent(rl_env)
 
     episode = 0
+    cum_wallclock_t = 0
     while True:
         if episode > args.episode and args.episode != -1:
             break
@@ -132,7 +133,8 @@ def test_data():
         end_t = clock()
         simtime = simulated_time.scale_to("s")
         if not rl_agent.is_training_mode():
-            print("Wallclock,",episode,",",end_t-start_t)
+            cum_wallclock_t += end_t - start_t
+            print("Wallclock,",episode,",",cum_wallclock_t)
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[
