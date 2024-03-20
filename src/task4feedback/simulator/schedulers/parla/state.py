@@ -1077,7 +1077,10 @@ class ParlaState(SystemState):
             self.total_num_completed_tasks += 1
             self.total_active_workload -= 1
             for dev in task.assigned_devices:
-                self.perdev_active_workload[dev] -= 1
+                self.perdev_active_workload[dev] -= convert_to_float(
+                self.get_task_duration(task, task.info.runtime.locations[0])[0].
+                scale_to("ms"))
+                print("removed workload ", dev, " = ", self.perdev_active_workload[dev])
 
         devices = task.assigned_devices
         assert devices is not None
@@ -1213,7 +1216,11 @@ class RLState(ParlaState):
             self.use_data(phase, task, verbose=verbose)
 
             for dev in task.assigned_devices: 
-                self.perdev_active_workload[dev] += 1
+                self.perdev_active_workload[dev] += convert_to_float(
+                self.get_task_duration(task, task.info.runtime.locations[0])[0].
+                scale_to("ms"))
+                print("workload ", dev, " = ", self.perdev_active_workload[dev])
+
             self.total_active_workload += 1
             self.total_num_mapped_tasks += 1
 

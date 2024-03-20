@@ -47,15 +47,15 @@ def test_data():
         return 32 * 1024 * 1024  # 1 GB
 
     def task_duration_per_func(task_id: TaskID):
-        duration = 4000
+        duration = 4000000
         if task_id.taskspace == "POTRF":
-            duration = 8000
+            duration = 8000000
         elif task_id.taskspace == "SYRK":
-            duration = 5000
+            duration = 5000000
         elif task_id.taskspace == "SOLVE":
-            duration = 3000
+            duration = 3000000
         elif task_id.taskspace == "GEMM":
-            duration = 3000
+            duration = 2000000
         return duration
 
     def homog_task_duration():
@@ -77,8 +77,8 @@ def test_data():
         device_tuple = Device(Architecture.GPU, -1)
 
         runtime_info = TaskRuntimeInfo(
-            # task_time=task_duration_per_func(task_id), device_fraction=1,
-            task_time=homog_task_duration(), device_fraction=1,
+            task_time=task_duration_per_func(task_id), device_fraction=1,
+            # task_time=homog_task_duration(), device_fraction=1,
             memory=int(0))
         placement_info = TaskPlacementInfo()
         placement_info.add(device_tuple, runtime_info)
