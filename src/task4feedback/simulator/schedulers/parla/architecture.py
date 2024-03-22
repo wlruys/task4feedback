@@ -50,7 +50,9 @@ def run_device_eviction(
 
         eviction_task = eviction_init(parent_task, scheduler_state, device, data)
         objects.add_task(eviction_task)
-        new_eviction_tasks.append((device_id, eviction_task.name))
+        new_eviction_tasks.append(
+            (eviction_task.assigned_devices[0], eviction_task.name)
+        )
         # print(
         #    f"Created eviction task {eviction_task.name} for data {data.name} on device {device.name} with size {data.info.size}."
         # )
@@ -145,6 +147,7 @@ def launch_task(
             duration, completion_time = scheduler_state.get_task_duration(
                 task, task.assigned_devices, verbose=verbose
             )
+            print("task:", task, " duration:", duration)
             scheduler_state.use_data(phase, task, verbose=verbose)
             task.duration = duration
             task.completion_time = completion_time
@@ -374,6 +377,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                     )
 
                 device = task.assigned_devices[data_task.local_index]
+                data_task.info.order = task.info.order
                 data_task.assigned_devices = (device,)
                 data_task.set_state(
                     TaskState.RESERVED, scheduler_state.time, verify=False
@@ -561,13 +565,6 @@ class ParlaArchitecture(SchedulerArchitecture):
         task = objects.get_task(event.task)
         current_time = scheduler_state.time
 
-        next_events: List[EventPair] = []
-        self.success_count += 1
-        if self.active_scheduler == 0:
-            mapping_pair = (current_time, Mapper())
-            next_events.append(mapping_pair)
-            self.active_scheduler += 1
-
         if logger.ENABLE_LOGGING:
             # print(f"Completing task {event.task}")
             logger.runtime.critical(
@@ -577,12 +574,19 @@ class ParlaArchitecture(SchedulerArchitecture):
                 ),
             )
 
+        next_events: List[EventPair] = []
 
         self._verify_correct_task_completed(task, scheduler_state)
         complete_task(task, scheduler_state)
 
         # Update status of dependencies
         task.notify_state(TaskState.COMPLETED, objects.taskmap, scheduler_state.time)
+
+        self.success_count += 1
+        if self.active_scheduler == 0:
+            mapping_pair = (current_time, Mapper())
+            next_events.append(mapping_pair)
+            self.active_scheduler += 1
 
         return next_events
 
