@@ -11,7 +11,6 @@ from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
 from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
 
 from ..rl.models.model import *
-from ..rl.models.simple import *
 from ..rl.models.env import *
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
