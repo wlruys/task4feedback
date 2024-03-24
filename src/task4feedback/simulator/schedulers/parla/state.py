@@ -1208,6 +1208,7 @@ class RLState(ParlaState):
         # Check if task is mappable
         if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
             curr_state = self.rl_env.create_state(task, self)
+            parla_mapping(task, self)
             chosen_device_id = self.rl_mapper.select_device(task, curr_state, self)
             chosen_device = (Device(Architecture.GPU, chosen_device_id),)
 

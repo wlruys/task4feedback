@@ -8,8 +8,7 @@ class CholeskyDataGraphConfig(DataGraphConfig):
     Defines a data graph pattern for a Block Cholesky factorization.
     """
 
-    data_size: int = 32 * 1024 * 1024  # 32 MB
-    n_devices = 1
+    data_size: int = 1024 * 1024 * 1024  # 1 GB
 
     def __post_init__(self):
         self.initial_placement = lambda x: Device(Architecture.CPU, 0)

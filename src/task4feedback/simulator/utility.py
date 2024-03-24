@@ -140,10 +140,25 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_plac
 
 def chose_random_placement(task: "SimulatedTask") -> Tuple[Device, ...]:
     devices = task.info.runtime.locations
-    # random.shuffle(devices)
+    random.shuffle(devices)
     device = devices[0]
 
     if not isinstance(device, Tuple):
         device = (device,)
 
     return device
+
+
+def parla_mapping(task: "SimulatedTask", sched_state) -> Tuple[Device, ...]:
+    devices = task.info.runtime.locations
+    taskmap = sched_state.objects.taskmap
+    datamap = sched_state.objects.datamap
+    for dtask_id in task.data_tasks:
+        print("task ", task, " did:", dtask_id)
+        dtask = taskmap[dtask_id]
+        print("dtask:", dtask)
+        for data_id in dtask.info.data_dependencies.all_ids():
+            data = datamap[data_id]
+            print("data:", type(data))
+            states = data.status.get_data_state()
+            print("states:", states)

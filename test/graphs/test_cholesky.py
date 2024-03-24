@@ -44,7 +44,7 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 32 * 1024 * 1024  # 1 GB
+        return 5 * 1024 * 1024 * 1024  # 1 GB
 
     def task_duration_per_func(task_id: TaskID):
         duration = 4000000
@@ -85,8 +85,8 @@ def test_data():
 
         return placement_info
 
-    # data_config = CholeskyDataGraphConfig()
-    data_config = NoDataGraphConfig()
+    data_config = CholeskyDataGraphConfig()
+    # data_config = NoDataGraphConfig()
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
@@ -135,6 +135,7 @@ def test_data():
         if not rl_agent.is_training_mode():
             cum_wallclock_t += end_t - start_t
             print("Wallclock,",episode,",",cum_wallclock_t)
+        break
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[
