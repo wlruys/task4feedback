@@ -39,6 +39,9 @@ def create_simulator(config: SimulatorConfig):
         config.tasks, config.data, use_data=config.use_data
     )
 
+    for task in simulated_tasks.values():
+        print(task.name, task.dependencies)
+
     config.simulated_tasks = simulated_tasks
     config.simulated_data = simulated_data
 
@@ -46,5 +49,9 @@ def create_simulator(config: SimulatorConfig):
     scheduler.register_taskmap(simulated_tasks)
 
     scheduler.add_initial_tasks(tasklist, apply_sort=True)
+
+    print("-----")
+    for task in scheduler.state.objects.taskmap.values():
+        print(task.name, task.dependencies)
 
     return scheduler

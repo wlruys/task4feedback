@@ -135,6 +135,7 @@ class SimulatedTask:
     status: Set[TaskStatus] = field(default_factory=set)
     # times: TaskTimes = field(default_factory=TaskTimes)
     counters: TaskCounters | None = None
+    dependencies: List[TaskID] = field(default_factory=list)
     dependents: List[TaskID] = field(default_factory=list)
     resources: List[FasterResourceSet] = field(default_factory=list)
     depth: int = 0
@@ -146,10 +147,13 @@ class SimulatedTask:
     eviction_requested: bool = False
     duration: Time = field(default_factory=Time)
     completion_time: Time = field(default_factory=Time)
+    init: bool = True
 
     def __post_init__(self):
-        if self.counters is None:
+        if self.init:
+            self.dependencies = [d for d in self.info.dependencies]
             self.counters = TaskCounters(len(self.info.dependencies))
+            self.init = False
 
     def __deepcopy__(self, memo):
 
@@ -170,7 +174,8 @@ class SimulatedTask:
             status=status,
             # times=times,
             counters=counters,
-            dependents=self.dependents,
+            dependencies=[d for d in self.dependencies],
+            dependents=[d for d in self.dependents],
             resources=resources,
             depth=self.depth,
             type=self.type,
@@ -179,6 +184,7 @@ class SimulatedTask:
             # eviction_tasks=eviction_tasks,
             spawn_tasks=self.spawn_tasks,
             eviction_requested=eviction_requested,
+            init=self.init,
         )
 
     def set_status(self, new_status: TaskStatus, time: Time, verify: bool = True):
@@ -229,14 +235,6 @@ class SimulatedTask:
     #     self.times.completion_time = time
 
     @property
-    def dependencies(self) -> List[TaskID]:
-        return self.info.dependencies
-
-    @dependencies.setter
-    def dependencies(self, deps: List[TaskID]):
-        self.info.dependencies = deps
-
-    @property
     def assigned_devices(self) -> Optional[Tuple[Device, ...]]:
         if isinstance(self.info.mapping, Device):
             return (self.info.mapping,)
@@ -261,7 +259,7 @@ class SimulatedTask:
         states: List[TaskState] = [],
         statuses: List[TaskStatus] = [],
     ):
-        self.info.dependencies.append(task)
+        self.dependencies.append(task)
         for state in states:
             self.counters.remaining_deps_states[state] += 1
         for status in statuses:
@@ -391,6 +389,7 @@ class SimulatedComputeTask(SimulatedTask):
             status={s for s in self.status},
             # times=deepcopy(self.times),
             counters=deepcopy(self.counters),
+            dependencies=[t for t in self.dependencies],
             dependents=[t for t in self.dependents],
             resources=[deepcopy(r) for r in self.resources],
             depth=self.depth,
@@ -400,6 +399,7 @@ class SimulatedComputeTask(SimulatedTask):
             # eviction_tasks=deepcopy(self.eviction_tasks),
             spawn_tasks=self.spawn_tasks,
             eviction_requested=deepcopy(self.eviction_requested),
+            init=self.init,
         )
 
 
@@ -424,6 +424,7 @@ class SimulatedDataTask(SimulatedTask):
             real=self.real,
             # times=deepcopy(self.times),
             counters=deepcopy(self.counters),
+            dependencies=[t for t in self.dependencies],
             dependents=[t for t in self.dependents],
             resources=[deepcopy(r) for r in self.resources],
             depth=self.depth,
@@ -433,6 +434,7 @@ class SimulatedDataTask(SimulatedTask):
             # eviction_tasks=deepcopy(self.eviction_tasks),
             spawn_tasks=self.spawn_tasks,
             eviction_requested=deepcopy(self.eviction_requested),
+            init=self.init,
         )
 
 
@@ -451,6 +453,7 @@ class SimulatedEvictionTask(SimulatedDataTask):
             status={s for s in self.status},
             # times=deepcopy(self.times),
             counters=deepcopy(self.counters),
+            dependencies=[t for t in self.dependencies],
             dependents=[t for t in self.dependents],
             resources=[deepcopy(r) for r in self.resources],
             depth=self.depth,
@@ -459,6 +462,7 @@ class SimulatedEvictionTask(SimulatedDataTask):
             data_tasks=self.data_tasks,
             spawn_tasks=self.spawn_tasks,
             eviction_requested=self.eviction_requested,
+            init=self.init,
         )
 
 
