@@ -79,6 +79,8 @@ NonEvictableUses = [
     DataUses.USED,
 ]
 
+from copy import deepcopy
+
 
 @dataclass(slots=True)
 class DataStats:
@@ -87,11 +89,25 @@ class DataStats:
     move_count: int = 0
     move_time: Time = field(default_factory=Time)
 
+    def __deepcopy__(self, memo):
+        return DataStats(
+            read_count=self.read_count,
+            write_count=self.write_count,
+            move_count=self.move_count,
+            move_time=self.move_time,
+        )
+
 
 @dataclass(slots=True)
 class DataUse:
     tasks: Dict[DataUses, Set[TaskID]] = field(default_factory=dict)
     counters: Dict[DataUses, int] = field(default_factory=dict)
+
+    def __deepcopy__(self, memo):
+        return DataUse(
+            tasks={k: {l for l in v} for k, v in self.tasks.items()},
+            counters={k: v for k, v in self.counters.items()},
+        )
 
     def __post_init__(self):
         for use in DataUses:
@@ -125,27 +141,52 @@ class DataUse:
 @dataclass(slots=True)
 class DataStatus:
     id: DataID
-    devices: InitVar[Sequence[Device]]
+    devices: Sequence[Device]
     device2state: Dict[TaskState, Dict[Device, DataState]] = field(default_factory=dict)
     state2device: Dict[TaskState, Dict[DataState, Set[Device]]] = field(
         default_factory=dict
     )
     device2uses: Dict[Device, DataUse] = field(default_factory=dict)
     eviction_tasks: Set[TaskID] = field(default_factory=set)
+    init: bool = True
 
-    def __post_init__(self, devices: Sequence[Device]):
-        for state in TaskState:
-            self.device2state[state] = {}
-            self.state2device[state] = {}
+    def __deepcopy__(self, memo):
+
+        device2state = {
+            k: {d: v for d, v in v2.items()} for k, v2 in self.device2state.items()
+        }
+        state2device = {
+            k: {d: {v for v in v2} for d, v2 in v3.items()}
+            for k, v3 in self.state2device.items()
+        }
+        device2uses = {k: deepcopy(v) for k, v in self.device2uses.items()}
+
+        return DataStatus(
+            id=self.id,
+            devices=self.devices,
+            device2state=device2state,
+            state2device=state2device,
+            device2uses=device2uses,
+            eviction_tasks={t for t in self.eviction_tasks},
+            init=self.init,
+        )
+
+    def __post_init__(self):
+        devices = self.devices
+        if self.init:
+            for state in TaskState:
+                self.device2state[state] = {}
+                self.state2device[state] = {}
+
+                for device in devices:
+                    self.device2state[state][device] = DataState.NONE
+
+                for data_state in DataState:
+                    self.state2device[state][data_state] = set()
 
             for device in devices:
-                self.device2state[state][device] = DataState.NONE
-
-            for data_state in DataState:
-                self.state2device[state][data_state] = set()
-
-        for device in devices:
-            self.device2uses[device] = DataUse()
+                self.device2uses[device] = DataUse()
+            self.init = False
 
     def set_data_state(
         self, device: Device, state: TaskState, data_state: DataState, initial=False
@@ -603,7 +644,7 @@ class DataStatus:
         target_device: Device,
         verbose: bool = False,
     ) -> DataState:
-        from rich import print
+        # from rich import print
 
         if logger.ENABLE_LOGGING:
             logger.data.info(
@@ -645,30 +686,42 @@ class DataStatus:
 
 @dataclass(slots=True)
 class SimulatedData:
-    system_devices: InitVar[Sequence[Device]]
-    info: DataInfo
-    status: DataStatus = field(init=False)
-    stats: DataStats = field(default_factory=DataStats)
+    system_devices: Sequence[Device] = None
+    info: DataInfo = None
+    status: DataStatus = None
+    init: bool = True
+    # stats: DataStats = field(default_factory=DataStats)
 
-    def __post_init__(self, system_devices: Sequence[Device]):
-        self.status = DataStatus(id=self.info.id, devices=system_devices)
+    def __deepcopy__(self, memo):
+        return SimulatedData(
+            system_devices=self.system_devices,
+            info=self.info,
+            status=deepcopy(self.status),
+            init=self.init,
+        )
 
-        starting_devices = self.info.location
-        assert starting_devices is not None
+    def __post_init__(self):
+        system_devices = self.system_devices
+        if self.init:
+            self.status = DataStatus(id=self.info.id, devices=system_devices)
 
-        if isinstance(starting_devices, Device):
-            starting_devices = (starting_devices,)
+            starting_devices = self.info.location
+            assert starting_devices is not None
 
-        for device in system_devices:
-            for state in TaskState:
-                if device not in starting_devices:
-                    self.status.set_data_state(
-                        device, state, DataState.NONE, initial=True
-                    )
-                else:
-                    self.status.set_data_state(
-                        device, state, DataState.VALID, initial=True
-                    )
+            if isinstance(starting_devices, Device):
+                starting_devices = (starting_devices,)
+
+            for device in system_devices:
+                for state in TaskState:
+                    if device not in starting_devices:
+                        self.status.set_data_state(
+                            device, state, DataState.NONE, initial=True
+                        )
+                    else:
+                        self.status.set_data_state(
+                            device, state, DataState.VALID, initial=True
+                        )
+            self.init = False
 
     @property
     def name(self) -> DataID:
@@ -780,4 +833,4 @@ class SimulatedData:
         return self.status.get_eviction_target(source_device, potential_targets, state)
 
 
-type SimulatedDataMap = Dict[DataID, SimulatedData]
+SimulatedDataMap = Dict[DataID, SimulatedData]

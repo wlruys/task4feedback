@@ -15,7 +15,7 @@ from dataclasses import dataclass, InitVar
 from collections import defaultdict as DefaultDict
 from copy import copy, deepcopy
 
-from rich import print
+# from rich import print
 
 
 @dataclass(slots=True)
@@ -24,6 +24,20 @@ class ObjectRegistry:
     devicemap: Dict[Device, SimulatedDevice] = field(default_factory=dict)
     taskmap: SimulatedTaskMap = field(default_factory=dict)
     datamap: Dict[DataID, SimulatedData] = field(default_factory=dict)
+
+    def __deepcopy__(self, memo):
+        s = clock()
+        devicemap = {k: deepcopy(v) for k, v in self.devicemap.items()}
+        # print(f"Time to deepcopy devicemap: {clock() - s}")
+
+        s = clock()
+        taskmap = {k: deepcopy(v) for k, v in self.taskmap.items()}
+        # print(f"Time to deepcopy taskmap: {clock() - s}")
+
+        s = clock()
+        datamap = {k: deepcopy(v) for k, v in self.datamap.items()}
+        # print(f"Time to deepcopy datamap: {clock() - s}")
+        return ObjectRegistry(devicemap=devicemap, taskmap=taskmap, datamap=datamap)
 
     def add_task(self, task: SimulatedTask):
         self.taskmap[task.name] = task
@@ -89,23 +103,61 @@ class ObjectRegistry:
         return device
 
 
+from time import perf_counter as clock
+
+
 @dataclass(slots=True)
 class SystemState:
     topology: SimulatedTopology
-    data_pool: DataPool = field(init=False)
-    resource_pool: FasterResourcePool = field(init=False)
-    objects: ObjectRegistry = field(init=False)
+    data_pool: DataPool | None = None
+    resource_pool: FasterResourcePool | None = None
+    objects: ObjectRegistry | None = None
     time: Time = field(default_factory=Time)
+    init: bool = True
+
+    def __deepcopy__(self, memo):
+        s = clock()
+        topology = deepcopy(self.topology)
+        # print(f"Time to deepcopy topology: {clock() - s}")
+
+        s = clock()
+        data_pool = deepcopy(self.data_pool)
+        # print(f"Time to deepcopy data_pool: {clock() - s}")
+
+        s = clock()
+        resource_pool = deepcopy(self.resource_pool)
+        # print(f"Time to deepcopy resource_pool: {clock() - s}")
+
+        s = clock()
+        objects = deepcopy(self.objects)
+        # print(f"Time to deepcopy objects: {clock() - s}")
+
+        s = clock()
+        time = deepcopy(self.time)
+        # print(f"Time to deepcopy time: {clock() - s}")
+
+        return SystemState(
+            topology=topology,
+            data_pool=data_pool,
+            resource_pool=resource_pool,
+            objects=objects,
+            time=time,
+            init=self.init,
+        )
 
     def __post_init__(self):
         assert self.topology is not None
 
-        self.objects = ObjectRegistry()
+        if self.init:
+            if self.objects is None:
+                self.objects = ObjectRegistry()
 
-        for device in self.topology.devices:
-            self.objects.add_device(device)
+                for device in self.topology.devices:
+                    self.objects.add_device(device)
 
-        self.resource_pool = FasterResourcePool(devices=self.topology.devices)
+            if self.resource_pool is None:
+                self.resource_pool = FasterResourcePool(devices=self.topology.devices)
+            self.init = False
 
     def register_tasks(self, taskmap: SimulatedTaskMap, copy: bool = False):
         if copy:

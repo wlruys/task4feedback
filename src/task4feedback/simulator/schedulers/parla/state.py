@@ -572,14 +572,6 @@ def _use_data(
             # Compute tasks only verify and evict
             update_state = False
 
-            if access_type == AccessType.READ:
-                data.stats.read_count += 1
-            elif access_type == AccessType.WRITE:
-                data.stats.write_count += 1
-            elif access_type == AccessType.READ_WRITE:
-                data.stats.read_count += 1
-                data.stats.write_count += 1
-
         old_state, evicted_locations = data.start_use(
             task.name,
             device_id,
@@ -613,7 +605,7 @@ def _release_data(
     access_type: AccessType,
     verbose: bool = False,
 ):
-    from rich import print
+    # from rich import print
 
     if len(data_accesses) == 0:
         return
@@ -881,6 +873,37 @@ def _eviction_task_duration(
 @SchedulerOptions.register_state("parla")
 @dataclass(slots=True)
 class ParlaState(SystemState):
+
+    def __deepcopy__(self, memo):
+        s = clock()
+        topology = deepcopy(self.topology)
+        # print(f"Time to deepcopy topology: {clock() - s}")
+
+        s = clock()
+        data_pool = deepcopy(self.data_pool)
+        # print(f"Time to deepcopy data_pool: {clock() - s}")
+
+        s = clock()
+        resource_pool = deepcopy(self.resource_pool)
+        # print(f"Time to deepcopy resource_pool: {clock() - s}")
+
+        s = clock()
+        objects = deepcopy(self.objects)
+        # print(f"Time to deepcopy objects: {clock() - s}")
+
+        s = clock()
+        time = deepcopy(self.time)
+        # print(f"Time to deepcopy time: {clock() - s}")
+
+        return ParlaState(
+            topology=topology,
+            data_pool=data_pool,
+            resource_pool=resource_pool,
+            objects=objects,
+            time=time,
+            init=self.init,
+        )
+
     def check_resources(
         self, phase: TaskState, task: SimulatedTask, verbose: bool = False
     ) -> bool:
@@ -991,103 +1014,3 @@ class ParlaState(SystemState):
         self, task: SimulatedTask, verbose: bool = False
     ) -> Optional[Eviction]:
         return _check_eviction(self, task, verbose=verbose)
-
-    def finalize_stats(self):
-        for device in self.topology.devices:
-            last_active = max(
-                device.stats.last_active_compute, device.stats.last_active_movement
-            )
-
-            device.stats.idle_time += self.time - last_active
-
-            device.stats.idle_time_compute += (
-                self.time - device.stats.last_active_compute
-            )
-            device.stats.idle_time_movement += (
-                self.time - device.stats.last_active_movement
-            )
-
-    def launch_stats(self, task: SimulatedTask):
-        devices = task.assigned_devices
-        assert devices is not None
-
-        for device_id in devices:
-            device = self.objects.get_device(device_id)
-            assert device is not None
-
-            if device.stats.active_compute == 0 and device.stats.active_movement == 0:
-                last_active = max(
-                    device.stats.last_active_compute, device.stats.last_active_movement
-                )
-                duration = self.time - last_active
-                device.stats.idle_time += duration
-
-                if logger.ENABLE_LOGGING:
-                    logger.stats.debug(
-                        f"Device {device_id} was idle. Duration: {duration}, Last Active: {last_active}",
-                        extra=dict(device=device_id),
-                    )
-
-            if isinstance(task, SimulatedComputeTask):
-                if device.stats.active_compute == 0:
-                    duration = self.time - device.stats.last_active_compute
-                    device.stats.idle_time_compute += duration
-
-                    if logger.ENABLE_LOGGING:
-                        logger.stats.debug(
-                            f"Device {device_id} was compute idle. Duration: {duration}, Last Active: {device.stats.last_active_compute}",
-                            extra=dict(device=device_id),
-                        )
-
-            elif isinstance(task, SimulatedDataTask) and task.real:
-                if device.stats.active_movement == 0:
-                    duration = self.time - device.stats.last_active_movement
-                    device.stats.idle_time_movement += duration
-
-                    if logger.ENABLE_LOGGING:
-                        logger.stats.debug(
-                            f"Device {device_id} was movement idle. Duration: {duration}, Last Active: {device.stats.last_active_movement}",
-                            extra=dict(device=device_id),
-                        )
-
-            if isinstance(task, SimulatedComputeTask):
-                device.stats.last_active_compute = task.completion_time
-                device.stats.active_compute += 1
-            elif isinstance(task, SimulatedDataTask) and task.real:
-                device.stats.last_active_movement = task.completion_time
-                device.stats.active_movement += 1
-
-    def completion_stats(self, task: SimulatedTask):
-        devices = task.assigned_devices
-        assert devices is not None
-
-        for device_id in devices:
-            device = self.objects.get_device(device_id)
-            assert device is not None
-
-            if isinstance(task, SimulatedComputeTask):
-                device.stats.active_compute -= 1
-
-                if device.stats.active_compute == 0:
-                    if logger.ENABLE_LOGGING:
-                        logger.stats.debug(
-                            f"Device {device_id} is now compute idle. Time: {self.time}",
-                            extra=dict(device=device_id),
-                        )
-
-            elif isinstance(task, SimulatedDataTask) and task.real:
-                device.stats.active_movement -= 1
-
-                if device.stats.active_movement == 0:
-                    if logger.ENABLE_LOGGING:
-                        logger.stats.debug(
-                            f"Device {device_id} is now movement idle. Time: {self.time}",
-                            extra=dict(device=device_id),
-                        )
-
-                data_id = task.read_accesses[0].id
-                data = self.objects.get_data(data_id)
-                assert data is not None
-
-                data.stats.move_time += task.duration
-                data.stats.move_count += 1

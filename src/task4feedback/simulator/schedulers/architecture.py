@@ -17,16 +17,22 @@ from dataclasses import dataclass, InitVar
 from collections import defaultdict as DefaultDict
 from copy import copy, deepcopy
 
-from rich import print
+# from rich import print
 
 
 @dataclass(slots=True)
 class SchedulerArchitecture:
-    topology: InitVar[SimulatedTopology]
+    topology: SimulatedTopology
     completed_tasks: List[TaskID] = field(default_factory=list)
 
-    def __post_init__(self, topology: SimulatedTopology):
-        assert topology is not None
+    def __deepcopy__(self, memo):
+        return SchedulerArchitecture(
+            topology=self.topology,
+            completed_tasks=[t for t in self.completed_tasks],
+        )
+
+    def __post_init__(self):
+        assert self.topology is not None
 
     def __getitem__(self, event: Event) -> Callable[[SystemState], List[EventPair]]:
         try:

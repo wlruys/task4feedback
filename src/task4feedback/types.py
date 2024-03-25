@@ -5,7 +5,6 @@ from typing import (
     Union,
     Optional,
     Callable,
-    Self,
     Set,
     Type,
     Mapping,
@@ -29,7 +28,7 @@ import numpy as np
 #########################################
 
 time_units: List[str] = ["ns", "us", "ms", "s", "m", "h", "d"]
-time_scale: List[int | Fraction] = [
+time_scale: List = [
     1_000_000_000,
     1_000_000,
     1_000,
@@ -170,7 +169,7 @@ class Device:
         return str(self)
 
 
-type Devices = Device | Tuple[Device, ...]
+Devices = Device | Tuple[Device, ...]
 
 #########################################
 # Data Information
@@ -206,10 +205,10 @@ class DataID:
     def __hash__(self) -> int:
         return hash(self.idx)
 
-    def __eq__(self, other: Self) -> bool:
+    def __eq__(self, other) -> bool:
         return self.idx == other.idx
 
-    def __lt__(self, other: Self) -> bool:
+    def __lt__(self, other) -> bool:
         return self.idx < other.idx
 
 
@@ -450,10 +449,10 @@ class TaskRuntimeInfo:
     memory: int = 0
 
 
-type TaskRuntimeSpec = TaskRuntimeInfo | Mapping[Device, TaskRuntimeInfo] | List[
+TaskRuntimeSpec = TaskRuntimeInfo | Mapping[Device, TaskRuntimeInfo] | List[
     TaskRuntimeInfo
 ]
-type TaskRuntimeMap = MutableMapping[Devices, TaskRuntimeSpec]
+TaskRuntimeMap = MutableMapping[Devices, TaskRuntimeSpec]
 
 
 @dataclass(slots=True)
@@ -620,7 +619,7 @@ class TaskInfo:
 
 
 # Graph Type Aliases
-type TaskMap = Mapping[TaskID, TaskInfo]
+TaskMap = Mapping[TaskID, TaskInfo]
 
 #########################################
 # Execution Records
