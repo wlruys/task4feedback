@@ -3,7 +3,7 @@ from functools import partial
 from itertools import chain
 from typing import Tuple
 
-from ..types import Device, Architecture
+from ..types import Device, Architecture, TaskState
 
 units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12} 
 
@@ -150,7 +150,8 @@ def chose_random_placement(task: "SimulatedTask") -> Tuple[Device, ...]:
 
 
 def parla_mapping(task: "SimulatedTask", sched_state) -> Tuple[Device, ...]:
-    devices = task.info.runtime.locations
+    data_states = ( TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED, TaskState.COMPLETED ) 
+    devices = sched_state.topology.devices
     taskmap = sched_state.objects.taskmap
     datamap = sched_state.objects.datamap
     for dtask_id in task.data_tasks:
@@ -160,5 +161,7 @@ def parla_mapping(task: "SimulatedTask", sched_state) -> Tuple[Device, ...]:
         for data_id in dtask.info.data_dependencies.all_ids():
             data = datamap[data_id]
             print("data:", type(data))
-            states = data.status.get_data_state()
-            print("states:", states)
+            for device in devices:
+                for state in data_states:
+                    states = data.status.get_data_state(device.name, state)
+                    print("states:", states)
