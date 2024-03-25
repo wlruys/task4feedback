@@ -81,7 +81,7 @@ def find_writer_bfs(
     return found
 
 
-DataWriter = Dict[DataID, TaskID | DataID]
+DataWriter = Dict[DataID, List[TaskID | DataID]]
 DataWriters = Dict[TaskID, DataWriter]
 
 
