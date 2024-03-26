@@ -154,14 +154,46 @@ def parla_mapping(task: "SimulatedTask", sched_state) -> Tuple[Device, ...]:
     devices = sched_state.topology.devices
     taskmap = sched_state.objects.taskmap
     datamap = sched_state.objects.datamap
-    for dtask_id in task.data_tasks:
-        print("task ", task, " did:", dtask_id)
-        dtask = taskmap[dtask_id]
-        print("dtask:", dtask)
-        for data_id in dtask.info.data_dependencies.all_ids():
-            data = datamap[data_id]
-            print("data:", type(data))
-            for device in devices:
-                for state in data_states:
-                    states = data.status.get_data_state(device.name, state)
-                    print("states:", states)
+    best_score = -1
+    best_device = -1
+    total_workload = 0
+    for device in devices:
+        workload = sched_state.perdev_active_workload[device.name]
+        total_workload += workload
+
+    for device in devices:
+        if device.name.architecture == Architecture.CPU:
+            continue
+
+        workload = sched_state.perdev_active_workload[device.name]
+        norm_workload = (workload / total_workload
+                         if total_workload != 0 else workload)
+
+        local_data = 0
+        unlocal_data = 0
+        total_data = 0
+        if task.data_tasks is not None:
+            for dtask_id in task.data_tasks:
+                print("task ", task, " did:", dtask_id)
+                dtask = taskmap[dtask_id]
+                print("dtask:", dtask)
+                for data_id in dtask.info.data_dependencies.all_ids():
+                    valid = False
+                    data = datamap[data_id]
+                    print("data:", type(data))
+                    for state in data_states:
+                        valid |= data.is_valid(device.name, state)
+                    local_data += data.size if valid else 0
+                    unlocal_data += data.size if not valid else 0
+                    total_data += data.size
+                print("device:", device.name, ", validity:", valid, " local size:", local_data,
+                      " unlocal data:", unlocal_data)
+        local_data = local_data / total_data if total_data > 0 else local_data
+        unlocal_data = unlocal_data / total_data if total_data > 0 else unlocal_data
+        score = 50 + (30 * local_data - 30 * unlocal_data - 10 * norm_workload)
+        if score > best_score:
+            best_score = score
+            best_device = device
+        print("device:", device, " score:", score)
+    print("best device:", best_device)
+    return (best_device.name,)
