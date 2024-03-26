@@ -690,7 +690,7 @@ class SimulatedData:
     info: DataInfo = None
     status: DataStatus = None
     init: bool = True
-    # stats: DataStats = field(default_factory=DataStats)
+    stats: DataStats = field(default_factory=DataStats)
 
     def __deepcopy__(self, memo):
         return SimulatedData(

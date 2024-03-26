@@ -15,8 +15,10 @@ from ..types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, 
 from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
 
 from typing import List, Dict, Set, Tuple, Optional, Callable
-from dataclasses import dataclass, InitVar
+from dataclasses import dataclass
 from collections import defaultdict as DefaultDict
+
+from .schedulers.parla.state import RLState
 
 from .schedulers import *
 
@@ -32,8 +34,8 @@ from enum import Enum
 @dataclass(slots=True)
 class SimulatedScheduler:
     topology: SimulatedTopology | None = None
-    scheduler_type: InitVar[str] = "parla"
-    scheduler_state_type: InitVar[str] = "parla"
+    scheduler_type: str = "parla"
+    scheduler_state_type: str = "parla"
     tasks: List[TaskID] = field(default_factory=list)
     name: str = "SimulatedScheduler"
     mechanisms: SchedulerArchitecture | None = None
@@ -53,10 +55,9 @@ class SimulatedScheduler:
     rl_env: RLBaseEnvironment = None
     rl_mapper: RLModel = None
 
-    def __post_init__(self, topology: SimulatedTopology, scheduler_type: str = "parla",
-                      scheduler_state_type: str = "parla"):
+    def __post_init__(self):
         if self.state is None:
-            scheduler_state = SchedulerOptions.get_state(self.scheduler_type)
+            scheduler_state = SchedulerOptions.get_state(self.scheduler_state_type)
             self.state = scheduler_state(topology=self.topology,
                                          rl_env=self.rl_env,
                                          rl_mapper=self.rl_mapper)
@@ -192,6 +193,7 @@ class SimulatedScheduler:
                 if not watcher_status:
                     break
 
+        self.state.finalize_stats()
         self.recorders.finalize(self.time, self.mechanisms, self.state)
 
         # print(f"Event Count: {self.event_count}")

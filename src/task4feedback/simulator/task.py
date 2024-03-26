@@ -137,6 +137,7 @@ class SimulatedTask:
     dependencies: List[TaskID] = field(default_factory=list)
     dependents: List[TaskID] = field(default_factory=list)
     resources: List[FasterResourceSet] = field(default_factory=list)
+    depth: int = 0
     type: TaskType = TaskType.BASE
     parent: Optional[TaskID] = None
     data_tasks: Optional[List[TaskID]] = None
