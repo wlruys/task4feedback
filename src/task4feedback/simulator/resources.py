@@ -12,7 +12,7 @@ from enum import IntEnum
 from .resourceset import FasterResourceSet, ResourceSet
 from .device import SimulatedDevice
 from dataclasses import dataclass, InitVar, field
-
+from copy import deepcopy
 import numpy as np
 
 NamedDevice = Device | SimulatedDevice
@@ -26,23 +26,36 @@ class ResourceGroup(IntEnum):
 
 @dataclass(slots=True)
 class FasterResourcePool:
-    devices: InitVar[Sequence[SimulatedDevice]]
-    devicemap: Dict[Device, SimulatedDevice] = field(init=False)
-    pool: Dict[Device, Dict[TaskState, FasterResourceSet]] = field(init=False)
-    eviction_flag: Dict[Device, bool] = field(init=False)
+    devices: Sequence[SimulatedDevice] = None
+    devicemap: Dict[Device, SimulatedDevice] = None
+    pool: Dict[Device, Dict[TaskState, FasterResourceSet]] = None
+    init: bool = True
 
-    def __post_init__(self, devices: Sequence[SimulatedDevice]):
-        self.pool = {}
-        self.devicemap = {}
-        self.eviction_flag = {}
-        for device in devices:
-            self.pool[device.name] = {
-                TaskState.MAPPED: FasterResourceSet(vcus=0, memory=0, copy=0),
-                TaskState.RESERVED: FasterResourceSet(vcus=0, memory=0, copy=0),
-                TaskState.LAUNCHED: FasterResourceSet(vcus=0, memory=0, copy=0),
-            }
-            self.devicemap[device.name] = device
-            self.eviction_flag[device.name] = False
+    def __deepcopy__(self, memo):
+
+        devicemap = {k: v for k, v in self.devicemap.items()}
+        pool = {
+            k: {state: deepcopy(v) for state, v in v.items()}
+            for k, v in self.pool.items()
+        }
+
+        return FasterResourcePool(
+            devices=None, devicemap=devicemap, pool=pool, init=False
+        )
+
+    def __post_init__(self):
+        if self.init:
+            print("Initializing FasterResourcePool")
+            self.pool = {}
+            self.devicemap = {}
+
+            for device in self.devices:
+                self.pool[device.name] = {
+                    TaskState.MAPPED: FasterResourceSet(vcus=0, memory=0, copy=0),
+                    TaskState.RESERVED: FasterResourceSet(vcus=0, memory=0, copy=0),
+                    TaskState.LAUNCHED: FasterResourceSet(vcus=0, memory=0, copy=0),
+                }
+                self.devicemap[device.name] = device
 
     def _build_set(
         self, type: ResourceGroup, resources: FasterResourceSet
@@ -138,16 +151,6 @@ class FasterResourcePool:
             device: self.get_difference_device(device, state, type, resource)
             for device, resource in zip(devices, resources)
         }
-
-    def set_evict_flags(self, devices: Sequence[Device], flag: bool = True):
-        for device in devices:
-            self.set_evict_flag(device, flag)
-
-    def set_evict_flag(self, device: Device, flag: bool = True):
-        self.eviction_flag[device] = flag
-
-    def get_evict_flag(self, device: Device) -> bool:
-        return self.eviction_flag[device]
 
     def should_evict_device(
         self, device: Device, requested_difference: FasterResourceSet

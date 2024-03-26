@@ -24,6 +24,7 @@ class SimulatorConfig:
     simulated_data: SimulatedDataMap = field(init=False)
     use_data: bool = True
     randomizer: Randomizer = field(default_factory=Randomizer)
+    watcher: Watcher = field(default_factory=Watcher)
 
     ###########################
     # RL related fields
@@ -44,11 +45,15 @@ def create_simulator(config: SimulatorConfig):
         randomizer=config.randomizer,
         rl_env=config.rl_env,
         rl_mapper=config.rl_mapper,
+        watcher=config.watcher,
     )
 
     tasklist, simulated_tasks = create_sim_graph(
         config.tasks, config.data, use_data=config.use_data
     )
+
+    for task in simulated_tasks.values():
+        print(task.name, task.dependencies)
 
     config.simulated_tasks = simulated_tasks
     config.simulated_data = simulated_data
@@ -57,5 +62,9 @@ def create_simulator(config: SimulatorConfig):
     scheduler.register_taskmap(simulated_tasks)
 
     scheduler.add_initial_tasks(tasklist, apply_sort=True)
+
+    print("-----")
+    for task in scheduler.state.objects.taskmap.values():
+        print(task.name, task.dependencies)
 
     return scheduler

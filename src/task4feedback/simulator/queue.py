@@ -3,7 +3,8 @@ from __future__ import annotations
 import heapq
 from ..types import TaskID, Time
 from .events import Event
-from typing import Tuple, TypeVar, Optional, Self, Dict, Iterable
+from typing import Tuple, TypeVar, Optional, Dict, Iterable
+from copy import deepcopy
 
 # (completion_time, event)
 EventPair = Tuple[Time, Event]
@@ -24,9 +25,13 @@ def length(q: Iterable | PriorityQueue) -> int:
 
 
 class PriorityQueue:
-    def __init__(self):
-        self.queue = []
-        self.tiebreaker = 0
+    def __init__(self, queue=None, tiebreaker: int = 0):
+        if queue is None:
+            self.queue = []
+        else:
+            self.queue = queue
+
+        self.tiebreaker = tiebreaker
 
     def put(self, item):
         self.tiebreaker += 1
@@ -56,6 +61,9 @@ class PriorityQueue:
 
     def empty(self):
         return len(self.queue) == 0
+
+    def __deepcopy__(self, memo):
+        return PriorityQueue(queue=deepcopy(self.queue), tiebreaker=self.tiebreaker)
 
 
 class QueueIterator(object):
@@ -208,6 +216,7 @@ class MultiQueueIterator(object):
 
 class TaskQueue(PriorityQueue):
     def put(self, task: "SimulatedTask"):
+        # print(f"Putting task {task.name} with order {task.info.order}")
         super().put((task.info.order, task.name))
 
     def put_id(self, task_id: TaskID, priority: int | Time):
@@ -224,12 +233,15 @@ class TaskQueue(PriorityQueue):
     def __str__(self):
         return f"TaskQueue({self.queue})"
 
+    def __deepcopy__(self, memo):
+        return TaskQueue(queue=deepcopy(self.queue), tiebreaker=self.tiebreaker)
+
 
 class TaskIterator(QueueIterator):
     def __init__(self, q: TaskQueue, maxiter: int = -1, peek: bool = True):
         super().__init__(q, maxiter, peek)
 
-    def __iter__(self) -> Self:
+    def __iter__(self):
         return super().__iter__()
 
     def __next__(self) -> TaskPair:
@@ -249,7 +261,7 @@ class MultiTaskIterator(MultiQueueIterator):
     def __init__(self, queues: Dict, maxiter: int = -1, peek: bool = True):
         super().__init__(queues, maxiter, peek)
 
-    def __iter__(self) -> Self:
+    def __iter__(self):
         return super().__iter__()
 
     def __next__(self) -> TaskPair:
@@ -282,12 +294,15 @@ class EventQueue(PriorityQueue):
     def __str__(self):
         return f"EventQueue({self.queue})"
 
+    def __deepcopy__(self, memo):
+        return EventQueue(queue=deepcopy(self.queue), tiebreaker=self.tiebreaker)
+
 
 class EventIterator(QueueIterator):
     def __init__(self, q: EventQueue, maxiter: int = -1, peek: bool = True):
         super().__init__(q, maxiter, peek)
 
-    def __iter__(self) -> Self:
+    def __iter__(self):
         return super().__iter__()
 
     def __next__(self) -> EventPair:

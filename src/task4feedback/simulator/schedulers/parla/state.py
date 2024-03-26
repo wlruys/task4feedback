@@ -573,14 +573,6 @@ def _use_data(
             # Compute tasks only verify and evict
             update_state = False
 
-            if access_type == AccessType.READ:
-                data.stats.read_count += 1
-            elif access_type == AccessType.WRITE:
-                data.stats.write_count += 1
-            elif access_type == AccessType.READ_WRITE:
-                data.stats.read_count += 1
-                data.stats.write_count += 1
-
         old_state, evicted_locations = data.start_use(
             task.name,
             device_id,
@@ -614,7 +606,7 @@ def _release_data(
     access_type: AccessType,
     verbose: bool = False,
 ):
-    from rich import print
+    # from rich import print
 
     if len(data_accesses) == 0:
         return
@@ -892,6 +884,36 @@ class ParlaState(SystemState):
     mapper_threshold:int = 0
     # # of tasks in (mapped~launchable) states
     total_num_mapped_tasks: int = 0
+
+    def __deepcopy__(self, memo):
+        s = clock()
+        topology = deepcopy(self.topology)
+        # print(f"Time to deepcopy topology: {clock() - s}")
+
+        s = clock()
+        data_pool = deepcopy(self.data_pool)
+        # print(f"Time to deepcopy data_pool: {clock() - s}")
+
+        s = clock()
+        resource_pool = deepcopy(self.resource_pool)
+        # print(f"Time to deepcopy resource_pool: {clock() - s}")
+
+        s = clock()
+        objects = deepcopy(self.objects)
+        # print(f"Time to deepcopy objects: {clock() - s}")
+
+        s = clock()
+        time = deepcopy(self.time)
+        # print(f"Time to deepcopy time: {clock() - s}")
+
+        return ParlaState(
+            topology=topology,
+            data_pool=data_pool,
+            resource_pool=resource_pool,
+            objects=objects,
+            time=time,
+            init=self.init,
+        )
 
     def check_resources(
         self, phase: TaskState, task: SimulatedTask, verbose: bool = False

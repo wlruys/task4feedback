@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field, InitVar
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Self, Type
+from typing import Dict, List, Optional, Sequence, Set, Tuple, Type
 from fractions import Fraction
 
 from ..events import *
