@@ -3,7 +3,10 @@ from functools import partial
 from itertools import chain
 from typing import Tuple
 
-from ..types import Device, Architecture, TaskState
+from .task import SimulatedDataTask
+from ..types import Device, Architecture, TaskState, AccessType
+
+import bisect
 
 units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12} 
 
@@ -41,11 +44,66 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_plac
     # Calculate HEFT ranks from bottom to top
     for task in reversed(tasklist):
         max_dependent_rank = 0
-        # Get the max HEFT rank among dependent tasks
+
+        # Do not calculate data move task's HEFT rank, but
+        # calculate only compute task's HEFT rank.
+        # Compute task's HEFT rank considers data transfer
+        # overhead.
+        if isinstance(task, SimulatedDataTask):
+            continue
+
+        # Get task's data with write and rw permission
+        if task.info.data_dependencies is not None:
+            write = task.info.data_dependencies[AccessType.WRITE]
+            rw = task.info.data_dependencies[AccessType.READ_WRITE]
+            src_data = write + rw
+
+        # Get dependents' data and dependencies between them and the task
+        # being mapped. Note that the dependencies are only between
+        # write/rw permission data of the task and data of the dependents.
         for dep in task.dependents:
             dependent_instance = taskmap[dep]
-            max_dependent_rank = max(dependent_instance.info.heft_rank, max_dependent_rank) 
 
+            if isinstance(dependent_instance, SimulatedDataTask):
+                continue
+
+            # Compute communication overhead
+            all_dep_data = dependent_instance.info.data_dependencies.all_ids()
+            # intersected_data = []
+            intersected_data_size = 0
+            for sd in src_data:
+                for dd in all_dep_data:
+                    if sd.id == dd:
+                        # intersected_data.append(sd)
+                        intersected_data_size += scheduler_state.objects.datamap[sd.id].size 
+
+            # Change it to gb
+            average_comm_time : float = 0
+            num_pairs: float = 0
+            for d1 in range(len(scheduler_state.topology.devices)):
+                for d2 in range(len(scheduler_state.topology.devices)):
+                    if d1 == d2:
+                        continue
+                    bandwidth = scheduler_state.topology.connection_pool.bandwidth[d1, d2]
+                    # TODO(hc): I assume that all GPUs have HW connections through either
+                    # NVLink or P2P. But we can still use HW topo that might not have connections 
+                    # between some GPUs, and in this case, we need to move data through host.
+                    # But for now, I am not considering that case yet.
+                    if bandwidth > 0:
+                        # Change the unit to ms
+                        curr_average_comm_time = (intersected_data_size / bandwidth) * 1000
+                        average_comm_time += curr_average_comm_time
+                        num_pairs += 1
+            average_comm_time /= num_pairs
+
+            # print(task, " vs ", dependent_instance, " src data:", src_data, " all data:", all_dep_data)
+            # print(">> size:", intersected_data_size, " average comm time:",
+                  average_comm_time)
+
+            # Upward calculation
+            max_dependent_rank = max(dependent_instance.info.heft_rank + average_comm_time,
+                                     max_dependent_rank) 
+               
         duration = convert_to_float(
             scheduler_state.get_task_duration(task, task.info.runtime.locations[0])[0].
             scale_to("ms"))
@@ -57,6 +115,7 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_plac
     heft_sorted_tasks = reversed(sorted(tasklist, key=get_heft_rank))
 
     agents = {agent: [] for agent in range(0, num_devices)}
+    task_to_agents = dict()
 
     HEFTEvent = namedtuple('HEFTEvent', 'task start end')
 
@@ -67,32 +126,56 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_plac
     if in_place_update:
         tasklist[:] = []
         heft_events = []
+    # Forward phase to allocate each task to each device
     for task in heft_sorted_tasks:
         duration = convert_to_float(
             scheduler_state.get_task_duration(task, task.info.runtime.locations[0])[0].
             scale_to("ms"))
 
-        # Find task's ready time (== maximum dependency's completion time)
         ready_time = 0
-        if len(task.dependencies) > 0:
-            ready_time = max([taskmap[dep].info.heft_makespan for dep in task.dependencies])
-
-        # Check second last task's end time and last task's start time.
-        # If that gap fits to the target task's execution time, schedule it.
-        # If that gap doesn't fit, schedule it after the last task
         earliest_start = -1.0 
         earliest_start_agent = -1
+        # Try to insert each task to each agent (device)
         for agent_id, agent in agents.items():
 
-            # TODO(hc): add communication time later
+            # Iterate all dependencies and check rank + communication overhead
+            # and find task's ready time when the task is assigned to the current
+            # agent
+            for dep in task.dependencies:
+                dependent_instance = taskmap[dep]
 
+                if isinstance(dependent_instance, SimulatedDataTask):
+                    continue
+
+                # TODO(hc): We can reuse this information collected in the above later
+                # Compute communication overhead
+                all_dep_data = dependent_instance.info.data_dependencies.all_ids()
+                intersected_data = []
+                intersected_data_size = 0
+                for sd in src_data: # SimulatedData
+                    for dd in all_dep_data: # DataID
+                        if sd.id == dd:
+                            intersected_data.append(sd)
+                            intersected_data_size += scheduler_state.objects.datamap[sd.id].size 
+
+                assigned_agent_id = task_to_agents[dep]
+
+                # Calculate data transfer time from the dependency's device to
+                # the current device
+                bandwidth = scheduler_state.topology.connection_pool.bandwidth[assigned_agent_id, agent_id]
+                # milliseconds! 
+                comm_time : float = (intersected_data_size / bandwidth) * 1000 if bandwidth > 0 else 0
+                ready_time = max(taskmap[dep].info.heft_makespan + comm_time,
+                                 ready_time)
+
+            # Find the earliest start time on this agent
             if len(agent) > 0:
                 candidate_earliest_start = 0
                 any_slack_found = False
 
-                # Get a gap between the second last task and the last task
-                # Check if that gap is sufficient to schedule the target task
-
+                # Check second last task's end time and last task's start time.
+                # If that gap fits to the target task's execution time + communication time, schedule it.
+                # If that gap doesn't fit, schedule it after the last task
                 a = chain([HEFTEvent(None, None, 0)], agent[:-1])
                 for e1, e2 in zip(a, agent):
                     tmp_earliest_start = max(ready_time, e1.end)
@@ -101,10 +184,13 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_plac
                         # schedule that task to the slack.
                         candidate_earliest_start = tmp_earliest_start
                         any_slack_found = True
+                        # print(task.info.id, " earliest start:", tmp_earliest_start, " e2 start:",
+                        #     e2.start, " duration: ", duration, " on device", agent_id)
                         break 
 
                 if not any_slack_found:
                     candidate_earliest_start = max(agent[-1].end, ready_time)
+                    # print(task.info.id, " earlist estart:", candidate_earliest_start)
             else:
                 # If this agent (device) does not have mapped tasks, the earliest start
                 # time is 0.
@@ -117,10 +203,22 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_plac
         heft_event = HEFTEvent(task, earliest_start, earliest_start + duration)
         if in_place_update:
             heft_events.append(heft_event)
-        agents[earliest_start_agent].append(heft_event)
+        bisect.insort(agents[earliest_start_agent], heft_event, key=lambda x: x.start)
+        # agents[earliest_start_agent].append(heft_event)
+        # TODO(hc): make this insertion sorting
+        # agents[earliest_start_agent] = sorted(agents[earliest_start_agent], key=lambda x: x.start)
+        task_to_agents[heft_event.task.info.id] = agent_id
         task.info.heft_makespan = earliest_start + duration
         if task.info.heft_makespan > max_heft:
             max_heft = task.info.heft_makespan
+
+    """
+    for key, value in agents.items():
+        test = sorted(value, key=lambda x: x.start)
+        print("Key:", key)
+        for t in test:
+          print(t.task.info.id, " :: ", t.start, " = ", t.end)
+    """
 
     if in_place_update:
         heft_events = sorted(heft_events, key=get_start_time)
@@ -131,10 +229,14 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_plac
             order += 1
     print("HEFT time:", max_heft)
 
-    # for key, value in agents.items():
-    #    print("Key:", key)
-    #    for vvalue in value:
-    #        print("span:", vvalue.task.info.heft_makespan, ", ", vvalue)
+    """
+    for key, value in agents.items():
+       print("Key:", key)
+       for vvalue in value:
+           print("span:", vvalue.task.info.id, ", ", vvalue.start, " ~ ", vvalue.end)
+    for t in tasklist:
+        print(t.info.id, "...")
+    """
     return max_heft
 
 
@@ -150,7 +252,6 @@ def chose_random_placement(task: "SimulatedTask") -> Tuple[Device, ...]:
 
 
 def parla_mapping(task: "SimulatedTask", sched_state) -> Tuple[Device, ...]:
-    data_states = ( TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED, TaskState.COMPLETED ) 
     devices = sched_state.topology.devices
     taskmap = sched_state.objects.taskmap
     datamap = sched_state.objects.datamap
@@ -170,7 +271,7 @@ def parla_mapping(task: "SimulatedTask", sched_state) -> Tuple[Device, ...]:
                          if total_workload != 0 else workload)
 
         local_data = 0
-        unlocal_data = 0
+        nonlocal_data = 0
         total_data = 0
         if task.data_tasks is not None:
             for dtask_id in task.data_tasks:
@@ -178,19 +279,17 @@ def parla_mapping(task: "SimulatedTask", sched_state) -> Tuple[Device, ...]:
                 dtask = taskmap[dtask_id]
                 print("dtask:", dtask)
                 for data_id in dtask.info.data_dependencies.all_ids():
-                    valid = False
                     data = datamap[data_id]
                     print("data:", type(data))
-                    for state in data_states:
-                        valid |= data.is_valid(device.name, state)
+                    valid = data.is_valid(device.name, TaskState.MAPPED)
                     local_data += data.size if valid else 0
-                    unlocal_data += data.size if not valid else 0
+                    nonlocal_data += data.size if not valid else 0
                     total_data += data.size
                 print("device:", device.name, ", validity:", valid, " local size:", local_data,
-                      " unlocal data:", unlocal_data)
+                      " unlocal data:", nonlocal_data)
         local_data = local_data / total_data if total_data > 0 else local_data
-        unlocal_data = unlocal_data / total_data if total_data > 0 else unlocal_data
-        score = 50 + (30 * local_data - 30 * unlocal_data - 10 * norm_workload)
+        nonlocal_data = nonlocal_data / total_data if total_data > 0 else nonlocal_data
+        score = 50 + (30 * local_data - 30 * nonlocal_data - 10 * norm_workload)
         if score > best_score:
             best_score = score
             best_device = device
