@@ -102,17 +102,21 @@ class DataStats:
 class DataUse:
     tasks: Dict[DataUses, Set[TaskID]] = field(default_factory=dict)
     counters: Dict[DataUses, int] = field(default_factory=dict)
+    init: bool = True
 
     def __deepcopy__(self, memo):
-        return DataUse(
-            tasks={k: {l for l in v} for k, v in self.tasks.items()},
-            counters={k: v for k, v in self.counters.items()},
-        )
+        # print("Deepcopying DataUse")
+        tasks = {k: {t for t in v} for k, v in self.tasks.items()}
+        counters = {k: v for k, v in self.counters.items()}
+
+        return DataUse(tasks=tasks, counters=counters, init=self.init)
 
     def __post_init__(self):
-        for use in DataUses:
-            self.tasks[use] = set()
-            self.counters[use] = 0
+        if self.init:
+            for use in DataUses:
+                self.tasks[use] = set()
+                self.counters[use] = 0
+            self.init = False
 
     def is_evictable(self):
         for use in NonEvictableUses:
@@ -127,12 +131,16 @@ class DataUse:
         return self.counters[use]
 
     def add_task(self, task: TaskID, use: DataUses):
+        # print(f"Adding task {task} to {use}")
         self.tasks[use].add(task)
         self.counters[use] += 1
+        # print(f"Tasks: {self.tasks}")
 
     def remove_task(self, task: TaskID, use: DataUses):
+        # print(f"Removing task {task} from {use}", self)
         self.tasks[use].remove(task)
         self.counters[use] -= 1
+        # print(f"Tasks: {self.tasks}")
 
     def __rich_repr__(self):
         yield "tasks", self.tasks

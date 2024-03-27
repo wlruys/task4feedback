@@ -35,9 +35,16 @@ def chose_random_placement(task: SimulatedTask) -> Tuple[Device, ...]:
 
 
 def map_task(
-    task: SimulatedTask, scheduler_state: ParlaState, verbose: bool = False
+    simulator,
+    task: SimulatedTask,
+    verbose: bool = False,
 ) -> Optional[Tuple[Device, ...]]:
     phase = TaskState.MAPPED
+
+    scheduler_state: ParlaState = simulator.state
+    scheduler_arch: SchedulerArchitecture = simulator.mechanisms
+    mapper = simulator.mapper
+
     objects = scheduler_state.objects
     assert objects is not None
 
@@ -46,7 +53,7 @@ def map_task(
 
     # Check if task is mappable
     if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
-        chosen_devices = chose_random_placement(task)
+        chosen_devices = mapper.map_task(task, simulator)
         task.assigned_devices = chosen_devices
         scheduler_state.acquire_resources(phase, task, verbose=verbose)
         scheduler_state.use_data(phase, task, verbose=verbose)
@@ -313,7 +320,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 self.launched_tasks[device.name] = TaskQueue()
 
     def initialize(
-        self, tasks: List[TaskID], scheduler_state: SystemState
+        self, tasks: List[TaskID], scheduler_state: SystemState, **kwargs
     ) -> List[EventPair]:
         objects = scheduler_state.objects
 
@@ -376,9 +383,14 @@ class ParlaArchitecture(SchedulerArchitecture):
         for task in tasks:
             self.spawned_tasks.put(task)
 
-    def mapper(self, scheduler_state: SystemState, event: Mapper) -> List[EventPair]:
+    def mapper(
+        self, scheduler_state: SystemState, event: Mapper, **kwargs
+    ) -> List[EventPair]:
         self.success_count = 0
         next_tasks = TaskIterator(self.spawned_tasks)
+
+        task_mapper = kwargs["mapper"]
+        simulator = kwargs["simulator"]
 
         current_time = scheduler_state.time
         objects = scheduler_state.objects
@@ -392,7 +404,12 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
-            if devices := map_task(task, scheduler_state):
+            if not task_mapper.check_allowed(task):
+                # print(f"Task {task.name} not allowed. Draining task.")
+                task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
+                next_tasks.success()
+                self.success_count += 1
+            elif devices := map_task(simulator, task):
                 for device in devices:
                     self.reservable_tasks[device].put_id(
                         task_id=taskid, priority=priority
@@ -478,7 +495,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 )
 
     def reserver(
-        self, scheduler_state: SystemState, event: Reserver
+        self, scheduler_state: SystemState, event: Reserver, **kwargs
     ) -> List[EventPair]:
         objects = scheduler_state.objects
         current_time = scheduler_state.time
@@ -534,7 +551,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         return [launcher_pair]
 
     def eviction(
-        self, scheduler_state: SystemState, event: Eviction
+        self, scheduler_state: SystemState, event: Eviction, **kwargs
     ) -> List[EventPair]:
 
         self.eviction_occured = True
@@ -561,7 +578,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         return [reserver_pair]
 
     def launcher(
-        self, scheduler_state: SystemState, event: Launcher
+        self, scheduler_state: SystemState, event: Launcher, **kwargs
     ) -> List[EventPair]:
         objects = scheduler_state.objects
         current_time = scheduler_state.time
@@ -624,7 +641,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         return next_events
 
     def _verify_correct_task_completed(
-        self, task: SimulatedTask, scheduler_state: SystemState
+        self, task: SimulatedTask, scheduler_state: SystemState, **kwargs
     ):
         taskid = task.name
         # Remove task from launched queues
@@ -652,7 +669,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             )
 
     def complete_task(
-        self, scheduler_state: SystemState, event: TaskCompleted
+        self, scheduler_state: SystemState, event: TaskCompleted, **kwargs
     ) -> List[EventPair]:
         objects = scheduler_state.objects
         task = objects.get_task(event.task)
@@ -683,7 +700,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         return next_events
 
-    def complete(self, scheduler_state: SystemState) -> bool:
+    def complete(self, scheduler_state: SystemState, **kwargs) -> bool:
         complete_flag = self.spawned_tasks.empty()
         for device in self.reservable_tasks:
             complete_flag = complete_flag and self.reservable_tasks[device].empty()

@@ -25,7 +25,7 @@ class Watcher:
 def check_for_task_completion(
     state: SystemState, arch: SchedulerArchitecture, event: Event, tasks: Set[TaskID]
 ):
-    print("Checking for task completion", event, tasks)
+    # print("Checking for task completion", event, tasks)
     if isinstance(event, TaskCompleted):
         if event.task in tasks:
             return False

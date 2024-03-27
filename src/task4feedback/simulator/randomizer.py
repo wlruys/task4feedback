@@ -14,7 +14,7 @@ def _random_set_pop(s: Set):
 
 
 def _random_pop(s: Dict):
-    index = random.randrange(0, len(s))
+    index = np.random.randint(0, len(s))
     element = list(s)[index]
     s.pop(element)
     return element
@@ -47,8 +47,8 @@ def random_topological_sort(
     taskmapcopy = deepcopy(taskmap)
     i = 0
     while S:
-        n = _random_pop(S)
-        # n = _determinisitc_pop(S)
+        # n = _random_pop(S)
+        n = _determinisitc_pop(S)
         L.append(n)
 
         if verbose:
@@ -74,7 +74,32 @@ class Randomizer:
     task_order: Callable[[List[TaskID], SimulatedTaskMap], List[TaskID]] = (
         random_topological_sort
     )
+    state: Optional[np.random.RandomState] = None
+    init: bool = True
+
+    def set_seed(self, seed: int):
+        self.seed = seed
+        np.random.seed(seed)
+        random.seed(seed)
+
+    def backup_state(self):
+        self.state = np.random.get_state()
+
+    def restore_state(self):
+        np.random.set_state(self.state)
 
     def __post_init__(self):
-        np.random.seed(self.seed)
-        random.seed(self.seed)
+        if self.init:
+            np.random.seed(self.seed)
+            random.seed(self.seed)
+            self.backup_state()
+            self.init = False
+
+    def __deepcopy__(self, memo):
+        return Randomizer(
+            seed=self.seed,
+            task_noise=self.task_noise,
+            task_order=self.task_order,
+            state=self.state,
+            init=self.init,
+        )

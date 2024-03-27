@@ -22,6 +22,7 @@ from .schedulers import *
 from .analysis.recorder import RecorderList, Recorder
 from .randomizer import Randomizer
 from .watcher import Watcher
+from .mapper import *
 
 from enum import Enum
 
@@ -38,6 +39,8 @@ class SimulatedScheduler:
     recorders: RecorderList = field(default_factory=RecorderList)
     randomizer: Randomizer = field(default_factory=Randomizer)
     watcher: Watcher = field(default_factory=Watcher)
+    mapper: TaskMapper = field(default_factory=TaskMapper)
+    current_event: Event | None = None
 
     events: EventQueue = EventQueue()
     event_count: int = 0
@@ -81,6 +84,8 @@ class SimulatedScheduler:
             events=events,
             event_count=self.event_count,
             init=self.init,
+            randomizer=deepcopy(self.randomizer),
+            current_event=deepcopy(self.current_event),
         )
 
     def __str__(self):
@@ -99,6 +104,12 @@ class SimulatedScheduler:
 
     def register_datamap(self, datamap: SimulatedDataMap):
         self.state.register_data(datamap)
+
+    def set_mapper(self, mapper: TaskMapper):
+        self.mapper = mapper
+
+    def set_randomizer(self, randomizer: Randomizer):
+        self.randomizer = randomizer
 
     @property
     def taskmap(self):
@@ -136,8 +147,14 @@ class SimulatedScheduler:
         self.recorders.save(self.time, self.mechanisms, self.state, event, new_events)
 
     def process_event(self, event: Event) -> List[EventPair]:
+        assert self.mechanisms is not None
+
+        self.current_event = event
+
         # New events are created from the current event.
-        new_event_pairs = self.mechanisms[event](self.state)
+        new_event_pairs = self.mechanisms[event](
+            self.state, simulator=self, mapper=self.mapper
+        )
 
         # Append new events and their completion times to the event queue
         for completion_time, new_event in new_event_pairs:
@@ -158,7 +175,7 @@ class SimulatedScheduler:
         from copy import deepcopy
         from time import perf_counter as clock
 
-        next_events = EventIterator(self.events, peek=False)
+        next_events = EventIterator(self.events, peek=True)
         for event_pair in next_events:
             if event_pair:
                 self.event_count += 1
@@ -180,6 +197,8 @@ class SimulatedScheduler:
 
                 if not watcher_status:
                     break
+
+                next_events.success()
 
         self.recorders.finalize(self.time, self.mechanisms, self.state)
 
