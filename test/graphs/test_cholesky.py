@@ -49,13 +49,13 @@ def test_data():
     def task_duration_per_func(task_id: TaskID):
         duration = 40000
         if task_id.taskspace == "POTRF":
-            duration = 80000
+            duration = 60000
         elif task_id.taskspace == "SYRK":
-            duration = 50000
+            duration = 40000
         elif task_id.taskspace == "SOLVE":
             duration = 30000
         elif task_id.taskspace == "GEMM":
-            duration = 20000
+            duration = 40000
         return duration
 
     def homog_task_duration():
@@ -90,7 +90,7 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = CholeskyConfig(blocks=10, task_config=task_placement,
+    config = CholeskyConfig(blocks=20, task_config=task_placement,
                             func_id=func_type_id)
     tasks, data = make_graph(config, data_config=data_config)
 
@@ -99,10 +99,11 @@ def test_data():
     #           Parla testing
     #           RL testing/training
     num_gpus = 4
-    exec_mode = ExecutionMode.TESTING if args.mode == "testing" else ExecutionMode.TRAINING
-    rl_env = RLEnvironment(num_gpus)
-    rl_agent = SimpleAgent(rl_env, oracle_function=LoadbalancingPolicy(), exec_mode=exec_mode)
-    #rl_agent = A2CAgent(rl_env)
+    if args.mode != "parla":
+        exec_mode = ExecutionMode.TESTING if args.mode == "testing" else ExecutionMode.TRAINING
+        rl_env = RLEnvironment(num_gpus)
+        rl_agent = SimpleAgent(rl_env, oracle_function=LoadbalancingPolicy(), exec_mode=exec_mode)
+        #rl_agent = A2CAgent(rl_env)
 
     episode = 0
     cum_wallclock_t = 0
@@ -115,25 +116,35 @@ def test_data():
 
         topology = TopologyManager().generate("frontera", config=None)
 
-        simulator_config = SimulatorConfig(
-            topology=topology,
-            tasks=tasks,
-            data=data,
-            scheduler_type="parla",
-            scheduler_state_type="rl",
-            randomizer=Randomizer(),
-            # rl_env=rl_env,
-            # rl_mapper=rl_agent,
-        )
+        if args.mode == "parla":
+            simulator_config = SimulatorConfig(
+                topology=topology,
+                tasks=tasks,
+                data=data,
+                scheduler_type="parla",
+                scheduler_state_type="parla",
+                randomizer=Randomizer(),
+            )
+        else:
+            simulator_config = SimulatorConfig(
+                topology=topology,
+                tasks=tasks,
+                data=data,
+                scheduler_type="parla",
+                scheduler_state_type="rl",
+                randomizer=Randomizer(),
+                rl_env=rl_env,
+                rl_mapper=rl_agent,
+            )
         simulator = create_simulator(config=simulator_config)
 
         start_t = clock()
         episode += 1
         simulated_time = simulator.run()
         end_t = clock()
-        if not rl_agent.is_training_mode():
-            cum_wallclock_t += end_t - start_t
-            print("Wallclock,",episode,",",cum_wallclock_t)
+        # if not rl_agent.is_training_mode():
+        cum_wallclock_t += end_t - start_t
+        print("Wallclock,",episode,",",cum_wallclock_t)
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[

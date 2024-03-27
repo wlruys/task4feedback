@@ -1102,12 +1102,13 @@ class ParlaState(SystemState):
     def completion_stats(self, task: SimulatedTask):
         if isinstance(task, SimulatedComputeTask):
             self.total_num_completed_tasks += 1
-            self.total_active_workload -= 1
             for dev in task.assigned_devices:
-                self.perdev_active_workload[dev] -= convert_to_float(
+                workload = convert_to_float(
                 self.get_task_duration(task, task.info.runtime.locations[0])[0].
                 scale_to("ms"))
-                print("removed workload ", dev, " = ", self.perdev_active_workload[dev])
+                self.perdev_active_workload[dev] -= workload
+                self.total_active_workload -= workload
+                # print("removed workload ", dev, " = ", self.perdev_active_workload[dev])
 
         devices = task.assigned_devices
         assert devices is not None
@@ -1174,8 +1175,11 @@ class ParlaState(SystemState):
 
             # Assumes that a task is assigned to a single device 
             for dev in task.assigned_devices:
-                self.perdev_active_workload[dev] += 1
-            self.total_active_workload += 1
+                workload = convert_to_float(
+                self.get_task_duration(task, task.info.runtime.locations[0])[0].
+                scale_to("ms"))
+                self.perdev_active_workload[dev] += workload
+                self.total_active_workload += workload
             self.total_num_mapped_tasks += 1
 
             return chosen_devices
@@ -1244,12 +1248,12 @@ class RLState(ParlaState):
             self.use_data(phase, task, verbose=verbose)
 
             for dev in task.assigned_devices: 
-                self.perdev_active_workload[dev] += convert_to_float(
+                workload = convert_to_float(
                 self.get_task_duration(task, task.info.runtime.locations[0])[0].
                 scale_to("ms"))
-                print("workload ", dev, " = ", self.perdev_active_workload[dev])
-
-            self.total_active_workload += 1
+                # print("workload ", dev, " = ", self.perdev_active_workload[dev])
+                self.perdev_active_workload[dev] += workload
+                self.total_active_workload += workload
             self.total_num_mapped_tasks += 1
 
             return chosen_device
