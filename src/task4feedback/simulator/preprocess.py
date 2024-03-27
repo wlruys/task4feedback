@@ -38,7 +38,7 @@ def data_from_task(task: TaskInfo, access: AccessType) -> List[DataID]:
 
 
 def find_writer_bfs(
-    graph: TaskMap, node: TaskID, target: DataID, verbose: bool = True
+    graph: TaskMap, node: TaskID, target: DataID, verbose: bool = False
 ) -> List[TaskID | DataID]:
     """
     Return last task to touch the data.
@@ -216,7 +216,7 @@ def create_task_graph(graph: TaskMap) -> SimulatedComputeTaskMap:
 def create_data_task_graph(
     graph: TaskMap, compute_tasks: SimulatedComputeTaskMap, verbose: bool = False
 ) -> SimulatedDataTaskMap:
-    recent_writers = find_recent_writers(graph, verbose=True)
+    recent_writers = find_recent_writers(graph, verbose=False)
     data_tasks = create_data_tasks(compute_tasks, recent_writers)
     return data_tasks
 

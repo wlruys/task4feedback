@@ -885,6 +885,11 @@ class ParlaState(SystemState):
     # # of tasks in (mapped~launchable) states
     total_num_mapped_tasks: int = 0
 
+    # RL environment providing RL state and performing auxiliary operations
+    rl_env: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
+
+
     def __deepcopy__(self, memo):
         s = clock()
         topology = deepcopy(self.topology)
@@ -1146,7 +1151,7 @@ class ParlaState(SystemState):
     def complete(self):
         pass
 
-    def map_task(task: SimulatedTask, verbose: bool = False
+    def map_task(self, task: SimulatedTask, verbose: bool = False
     ) -> Optional[Tuple[Device, ...]]:
         """
         Assigns a device to a task based on Parla's load-balancing and locality-aware policy.
@@ -1160,7 +1165,8 @@ class ParlaState(SystemState):
 
         # Check if task is mappable
         if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
-            chosen_devices = chose_random_placement(task)
+            # chosen_devices = chose_random_placement(task)
+            chosen_devices = parla_mapping(task, self)
 
             task.assigned_devices = chosen_devices
             self.acquire_resources(phase, task, verbose=verbose)
@@ -1230,7 +1236,6 @@ class RLState(ParlaState):
         # Check if task is mappable
         if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
             curr_state = self.rl_env.create_state(task, self)
-            parla_mapping(task, self)
             chosen_device_id = self.rl_mapper.select_device(task, curr_state, self)
             chosen_device = (Device(Architecture.GPU, chosen_device_id),)
 

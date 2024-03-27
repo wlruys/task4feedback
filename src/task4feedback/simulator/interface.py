@@ -37,6 +37,8 @@ def create_simulator(config: SimulatorConfig):
     simulated_data = create_data_objects(config.data, topology=config.topology)
     recorders = RecorderList(recorder_types=config.recorders)
 
+    # print("state config:", config.scheduler_state_type)
+
     scheduler = SimulatedScheduler(
         topology=config.topology,
         scheduler_type=config.scheduler_type,
@@ -52,8 +54,8 @@ def create_simulator(config: SimulatorConfig):
         config.tasks, config.data, use_data=config.use_data
     )
 
-    for task in simulated_tasks.values():
-        print(task.name, task.dependencies)
+    # for task in simulated_tasks.values():
+    #     print(task.name, task.dependencies)
 
     config.simulated_tasks = simulated_tasks
     config.simulated_data = simulated_data
@@ -63,8 +65,8 @@ def create_simulator(config: SimulatorConfig):
 
     scheduler.add_initial_tasks(tasklist, apply_sort=True)
 
-    print("-----")
-    for task in scheduler.state.objects.taskmap.values():
-        print(task.name, task.dependencies)
+    # print("-----")
+    # for task in scheduler.state.objects.taskmap.values():
+    #     print(task.name, task.dependencies)
 
     return scheduler

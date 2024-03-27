@@ -98,7 +98,7 @@ def calculate_heft(tasklist, taskmap, num_devices: int, scheduler_state, in_plac
 
             # print(task, " vs ", dependent_instance, " src data:", src_data, " all data:", all_dep_data)
             # print(">> size:", intersected_data_size, " average comm time:",
-                  average_comm_time)
+            #      average_comm_time)
 
             # Upward calculation
             max_dependent_rank = max(dependent_instance.info.heft_rank + average_comm_time,

@@ -44,22 +44,22 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 5 * 1024 * 1024 * 1024  # 1 GB
+        return 1 * 1024 * 1024 * 1024  # 1 GB
 
     def task_duration_per_func(task_id: TaskID):
-        duration = 4000000
+        duration = 40000
         if task_id.taskspace == "POTRF":
-            duration = 8000000
+            duration = 80000
         elif task_id.taskspace == "SYRK":
-            duration = 5000000
+            duration = 50000
         elif task_id.taskspace == "SOLVE":
-            duration = 3000000
+            duration = 30000
         elif task_id.taskspace == "GEMM":
-            duration = 2000000
+            duration = 20000
         return duration
 
     def homog_task_duration():
-        return 8000000
+        return 80000
 
     def func_type_id(task_id: TaskID):
         func_id = 0
@@ -122,8 +122,8 @@ def test_data():
             scheduler_type="parla",
             scheduler_state_type="rl",
             randomizer=Randomizer(),
-            rl_env=rl_env,
-            rl_mapper=rl_agent,
+            # rl_env=rl_env,
+            # rl_mapper=rl_agent,
         )
         simulator = create_simulator(config=simulator_config)
 
@@ -131,11 +131,9 @@ def test_data():
         episode += 1
         simulated_time = simulator.run()
         end_t = clock()
-        simtime = simulated_time.scale_to("s")
         if not rl_agent.is_training_mode():
             cum_wallclock_t += end_t - start_t
             print("Wallclock,",episode,",",cum_wallclock_t)
-        break
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[

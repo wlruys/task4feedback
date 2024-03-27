@@ -420,6 +420,7 @@ def generate_4gpus_1cpu_toplogy(
     """
 
     if config is not None:
+        NVL_BW = config["NVN_BW"] 
         P2P_BW = config["P2P_BW"]
         H2D_BW = config["H2D_BW"]
         D2H_BW = config["D2H_BW"]
@@ -431,11 +432,12 @@ def generate_4gpus_1cpu_toplogy(
         CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
     else:
         # Default configuration for testing
+        NVL_BW = parse_size("18 GB")
         P2P_BW = parse_size("9 GB")  # 9 GB/s
         H2D_BW = parse_size("7 GB")  # 7 GB/s
         D2H_BW = parse_size("7 GB")  # 7 GB/s
 
-        GPU_MEM = parse_size("16 GB")
+        GPU_MEM = parse_size("130 GB")
         CPU_MEM = parse_size("130 GB")
 
         GPU_COPY_ENGINES = 3
@@ -462,10 +464,21 @@ def generate_4gpus_1cpu_toplogy(
         topology.add_bandwidth(gpu, cpus[0], D2H_BW)
         topology.add_bandwidth(cpus[0], gpu, H2D_BW)
 
+    # NVLink
     topology.add_connection(gpus[0], gpus[1], bidirectional=True)
-    topology.add_bandwidth(gpus[0], gpus[1], P2P_BW)
+    topology.add_bandwidth(gpus[0], gpus[1], NVL_BW)
 
     topology.add_connection(gpus[2], gpus[3], bidirectional=True)
-    topology.add_bandwidth(gpus[2], gpus[3], P2P_BW)
+    topology.add_bandwidth(gpus[2], gpus[3], NVL_BW)
+
+    # P2P
+    topology.add_connection(gpus[0], gpus[2], bidirectional=True)
+    topology.add_bandwidth(gpus[0], gpus[2], P2P_BW)
+    topology.add_connection(gpus[0], gpus[3], bidirectional=True)
+    topology.add_bandwidth(gpus[0], gpus[3], P2P_BW)
+    topology.add_connection(gpus[1], gpus[2], bidirectional=True)
+    topology.add_bandwidth(gpus[1], gpus[2], P2P_BW)
+    topology.add_connection(gpus[1], gpus[3], bidirectional=True)
+    topology.add_bandwidth(gpus[1], gpus[3], P2P_BW)
 
     return topology
