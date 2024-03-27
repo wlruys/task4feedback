@@ -171,6 +171,7 @@ class Device:
 
 Devices = Device | Tuple[Device, ...]
 
+
 #########################################
 # Data Information
 #########################################
@@ -315,6 +316,7 @@ class TaskDataInfo:
 
 
 DataMap = Dict[DataID, DataInfo]
+
 
 #########################################
 # Task Graph Information
@@ -616,6 +618,13 @@ class TaskInfo:
     data_dependencies: TaskDataInfo
     mapping: Device | Tuple[Device, ...] | None = None
     order: int = 0
+    # Longest depth from root tasks
+    depth: int = -1
+    # User-defined task integer ID; in general, it is decided based
+    # on function (or kernel) that this task calls
+    func_id: int = 0
+    heft_rank: int = -1
+    heft_makespan: float = 0
 
 
 # Graph Type Aliases
@@ -719,6 +728,18 @@ class RunConfig:
     logfile: str = "testing.blog"
     do_check: bool = False
     num_gpus: int = 4
+
+
+class ExecutionMode(IntEnum):
+    """
+    Specify the current execution mode
+    """
+    TRAINING     = 0
+    TESTING      = 1
+    EVALUATION   = 2
+
+    def __str__(self):
+        return self.name
 
 
 #########################################

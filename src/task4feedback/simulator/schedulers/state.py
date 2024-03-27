@@ -8,7 +8,10 @@ from ..task import *
 from ..topology import *
 
 from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
-from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
+
+from ..rl.models.model import *
+from ..rl.models.env import *
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
 from dataclasses import dataclass, InitVar
@@ -224,4 +227,10 @@ class SystemState:
         raise NotImplementedError()
 
     def completion_stats(self, task: SimulatedTask):
+        raise NotImplementedError()
+
+    def initialize(self, task_objects: List[SimulatedTask]):
+        raise NotImplementedError()
+
+    def complete(self):
         raise NotImplementedError()

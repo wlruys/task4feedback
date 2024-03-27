@@ -8,12 +8,17 @@ from .resources import *
 from .task import *
 from .topology import *
 
+from .rl.models.model import *
+from .rl.models.env import *
+
 from ..types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
-from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
 
 from typing import List, Dict, Set, Tuple, Optional, Callable
-from dataclasses import dataclass, InitVar
+from dataclasses import dataclass
 from collections import defaultdict as DefaultDict
+
+from .schedulers.parla.state import RLState
 
 from .schedulers import *
 
@@ -30,6 +35,7 @@ from enum import Enum
 class SimulatedScheduler:
     topology: SimulatedTopology | None = None
     scheduler_type: str = "parla"
+    scheduler_state_type: str = "parla"
     tasks: List[TaskID] = field(default_factory=list)
     name: str = "SimulatedScheduler"
     mechanisms: SchedulerArchitecture | None = None
@@ -38,17 +44,23 @@ class SimulatedScheduler:
     recorders: RecorderList = field(default_factory=RecorderList)
     randomizer: Randomizer = field(default_factory=Randomizer)
     watcher: Watcher = field(default_factory=Watcher)
-
     events: EventQueue = EventQueue()
     event_count: int = 0
     init: bool = True
 
-    def __post_init__(
-        self,
-    ):
+    ###########################
+    # RL related fields
+    ###########################
+
+    rl_env: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
+
+    def __post_init__(self):
         if self.state is None:
-            scheduler_state = SchedulerOptions.get_state(self.scheduler_type)
-            self.state = scheduler_state(topology=self.topology)
+            scheduler_state = SchedulerOptions.get_state(self.scheduler_state_type)
+            self.state = scheduler_state(topology=self.topology,
+                                         rl_env=self.rl_env,
+                                         rl_mapper=self.rl_mapper)
         if self.mechanisms is None:
             scheduler_arch = SchedulerOptions.get_architecture(self.scheduler_type)
             self.mechanisms = scheduler_arch(topology=self.topology)
@@ -181,6 +193,7 @@ class SimulatedScheduler:
                 if not watcher_status:
                     break
 
+        self.state.finalize_stats()
         self.recorders.finalize(self.time, self.mechanisms, self.state)
 
         # print(f"Event Count: {self.event_count}")

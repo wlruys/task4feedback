@@ -1,3 +1,5 @@
+import argparse
+
 from task4feedback.graphs import *
 from task4feedback.load import *
 
@@ -16,24 +18,68 @@ from task4feedback.simulator.analysis.export import *
 from task4feedback.simulator.interface import *
 from task4feedback.simulator.verify import *
 
+from task4feedback.simulator.rl.models.a2c import *
+from task4feedback.simulator.rl.models.env import *
+from task4feedback.simulator.rl.models.oracles import *
+from task4feedback.simulator.rl.models.agent_using_oracle import *
+from task4feedback.simulator.rl.models.agent_a2c import *
+
 from time import perf_counter as clock
 
 
+parser = argparse.ArgumentParser(prog="Cholesky")
+
+parser.add_argument("-m", "--mode",
+                    type=str,
+                    help="testing, training, parla, readys_training, readys_testing")
+parser.add_argument("-e", "--episode",
+                    type=int,
+                    help="the number of episodes (-1 for inifite loop)", default=-1)
+
+args = parser.parse_args()
+
 def test_data():
-    cpu = Device(Architecture.CPU, 0)
-    gpu0 = Device(Architecture.GPU, 0)
-    gpu1 = Device(Architecture.GPU, 1)
 
     def initial_data_placement(data_id: DataID) -> Devices:
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 32 * 1024 * 1024  # 1 GB
+        return 5 * 1024 * 1024 * 1024  # 1 GB
+
+    def task_duration_per_func(task_id: TaskID):
+        duration = 4000000
+        if task_id.taskspace == "POTRF":
+            duration = 8000000
+        elif task_id.taskspace == "SYRK":
+            duration = 5000000
+        elif task_id.taskspace == "SOLVE":
+            duration = 3000000
+        elif task_id.taskspace == "GEMM":
+            duration = 2000000
+        return duration
+
+    def homog_task_duration():
+        return 8000000
+
+    def func_type_id(task_id: TaskID):
+        func_id = 0
+        if task_id.taskspace == "POTRF":
+            func_id = 0
+        elif task_id.taskspace == "SYRK":
+            func_id = 1
+        elif task_id.taskspace == "SOLVE":
+            func_id = 2
+        elif task_id.taskspace == "GEMM":
+            func_id = 3
+        return func_id
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
-        device_tuple = Device(Architecture.GPU, task_id.task_idx[0] % 4)
+        device_tuple = Device(Architecture.GPU, -1)
 
-        runtime_info = TaskRuntimeInfo(task_time=4000, device_fraction=1, memory=int(0))
+        runtime_info = TaskRuntimeInfo(
+            task_time=task_duration_per_func(task_id), device_fraction=1,
+            # task_time=homog_task_duration(), device_fraction=1,
+            memory=int(0))
         placement_info = TaskPlacementInfo()
         placement_info.add(device_tuple, runtime_info)
 
@@ -44,26 +90,52 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = CholeskyConfig(blocks=10, task_config=task_placement)
+    config = CholeskyConfig(blocks=10, task_config=task_placement,
+                            func_id=func_type_id)
     tasks, data = make_graph(config, data_config=data_config)
 
-    topology = TopologyManager().generate("frontera", config=None)
+    # Execution mode configuration
+    # TODO(hc): Readys testing/training
+    #           Parla testing
+    #           RL testing/training
+    num_gpus = 4
+    exec_mode = ExecutionMode.TESTING if args.mode == "testing" else ExecutionMode.TRAINING
+    rl_env = RLEnvironment(num_gpus)
+    rl_agent = SimpleAgent(rl_env, oracle_function=LoadbalancingPolicy(), exec_mode=exec_mode)
+    #rl_agent = A2CAgent(rl_env)
 
-    simulator_config = SimulatorConfig(
-        topology=topology,
-        tasks=tasks,
-        data=data,
-        scheduler_type="parla",
-        randomizer=Randomizer(),
-    )
-    simulator = create_simulator(config=simulator_config)
+    episode = 0
+    cum_wallclock_t = 0
+    while True:
+        if episode > args.episode and args.episode != -1:
+            break
+        cpu = Device(Architecture.CPU, 0)
+        gpu0 = Device(Architecture.GPU, 0)
+        gpu1 = Device(Architecture.GPU, 1)
 
-    start_t = clock()
-    simulated_time = simulator.run()
-    end_t = clock()
+        topology = TopologyManager().generate("frontera", config=None)
 
-    print(f"Time to Simulate: {end_t - start_t}")
-    print(f"Simulated Time: {simulated_time}")
+        simulator_config = SimulatorConfig(
+            topology=topology,
+            tasks=tasks,
+            data=data,
+            scheduler_type="parla",
+            scheduler_state_type="rl",
+            randomizer=Randomizer(),
+            rl_env=rl_env,
+            rl_mapper=rl_agent,
+        )
+        simulator = create_simulator(config=simulator_config)
+
+        start_t = clock()
+        episode += 1
+        simulated_time = simulator.run()
+        end_t = clock()
+        simtime = simulated_time.scale_to("s")
+        if not rl_agent.is_training_mode():
+            cum_wallclock_t += end_t - start_t
+            print("Wallclock,",episode,",",cum_wallclock_t)
+        break
 
     # print(
     #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[

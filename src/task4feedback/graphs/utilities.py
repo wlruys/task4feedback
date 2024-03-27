@@ -45,6 +45,16 @@ def default_task_config(task_id: TaskID) -> TaskPlacementInfo:
     return placement
 
 
+def default_func_id(task_id: TaskID) -> int:
+    """
+    Default user-defined ID that represents a function type
+    that the task mainly calls.
+    As a user-defined parameter, this does not have a strict standard.
+    This is used in RL to give task type information to the agent.
+    """
+    return 0
+
+
 @dataclass(slots=True)
 class GraphConfig:
     """
@@ -58,6 +68,7 @@ class GraphConfig:
     n_devices: int = 4
     task_mapping: Callable[[TaskID], Devices] = default_task_mapping
     task_config: Callable[[TaskID], TaskPlacementInfo] = default_task_config
+    func_id: Callable[[TaskID], int] = default_func_id
 
 
 def default_data_initial_placement(data_id: DataID) -> Devices:
