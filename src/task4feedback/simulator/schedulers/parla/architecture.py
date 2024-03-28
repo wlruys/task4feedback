@@ -305,6 +305,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         a spawned task queue.
         """
         for task in tasks:
+            print("Spawning ", task)
             self.spawned_tasks.put(task)
 
     def mapper(self, scheduler_state: SystemState, event: Mapper) -> List[EventPair]:
@@ -323,8 +324,11 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
+            print(task, " mapped ", task.dependencies)
+
             if scheduler_state.total_num_mapped_tasks >= scheduler_state.mapper_threshold:
                 break
+            print(task, " mapped [succ]")
 
             if devices := scheduler_state.map_task(task):
                 for device in devices:
@@ -386,6 +390,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         if task.data_tasks is not None:
             for data_task_id in task.data_tasks:
+                print("Spawning data:", data_task_id)
                 data_task: SimulatedDataTask = objects.get_task(data_task_id)
                 assert data_task is not None
 
@@ -431,11 +436,13 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
+            print(task, " reserved")
             # print(f"Atempting to reserve task {taskid}.")
 
             reserve_success, eviction_event = reserve_task(task, scheduler_state)
 
             if reserve_success is True:
+                print(task, " reserved [done]")
                 devices = task.assigned_devices
                 assert devices is not None
                 device = devices[0]
@@ -472,23 +479,25 @@ class ParlaArchitecture(SchedulerArchitecture):
         self, scheduler_state: SystemState, event: Eviction
     ) -> List[EventPair]:
 
+        """
         self.eviction_occured = True
 
         objects = scheduler_state.objects
-        current_time = scheduler_state.time
 
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
                 "Evicting data.",
                 extra=dict(time=current_time),
             )
-        # print("Evicting data.")
+        print("Evicting data.")
         eviction_tasks = run_eviction(scheduler_state, event)
         for device, eviction_task in eviction_tasks:
             self.launchable_tasks[device][TaskType.EVICTION].put_id(
                 task_id=eviction_task, priority=0
             )
 
+        """
+        current_time = scheduler_state.time
         reserver_pair = (current_time, Launcher())
         return [reserver_pair]
 
@@ -511,11 +520,13 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
+            print(task, " launched")
             # Process LAUNCHABLE state
             if launch_success := launch_task(task, scheduler_state):
                 task.notify_state(TaskState.LAUNCHED, objects.taskmap, current_time)
                 completion_time = task.completion_time
 
+                print(task, " launched [done]")
                 device = task.assigned_devices[0]  # type: ignore
                 self.launched_tasks[device].put_id(taskid, completion_time)
 
@@ -615,15 +626,18 @@ class ParlaArchitecture(SchedulerArchitecture):
 
     def complete(self, scheduler_state: SystemState) -> bool:
         complete_flag = self.spawned_tasks.empty()
+        print("spawned tasks:", self.spawned_tasks)
         for device in self.reservable_tasks:
             complete_flag = complete_flag and self.reservable_tasks[device].empty()
+            print("reservable tasks on ", device, ", ", self.reservable_tasks[device])
         for device in self.launchable_tasks:
             for task_type in self.launchable_tasks[device]:
                 complete_flag = (
                     complete_flag and self.launchable_tasks[device][task_type].empty()
                 )
+                print("launchable tasks on ", device, ", ", self.launchable_tasks[device][task_type])
         scheduler_state.complete()
         for device in self.launched_tasks:
             complete_flag = complete_flag and self.launched_tasks[device].empty()
-
+            print("launched tasks on ",device, ", ", self.launched_tasks[device])
         return complete_flag

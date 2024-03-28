@@ -35,6 +35,10 @@ parser.add_argument("-m", "--mode",
 parser.add_argument("-e", "--episode",
                     type=int,
                     help="the number of episodes (-1 for inifite loop)", default=-1)
+parser.add_argument("-b", "--block",
+                    type=int,
+                    help="bxb blocks")
+
 
 args = parser.parse_args()
 
@@ -90,7 +94,7 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = CholeskyConfig(blocks=20, task_config=task_placement,
+    config = CholeskyConfig(blocks=args.block, task_config=task_placement,
                             func_id=func_type_id)
     tasks, data = make_graph(config, data_config=data_config)
 

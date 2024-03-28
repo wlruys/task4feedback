@@ -432,8 +432,8 @@ def generate_4gpus_1cpu_toplogy(
         CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
     else:
         # Default configuration for testing
-        NVL_BW = parse_size("18 GB")
-        P2P_BW = parse_size("9 GB")  # 9 GB/s
+        NVL_BW = parse_size("16 GB")
+        P2P_BW = parse_size("8 GB")  # 9 GB/s
         H2D_BW = parse_size("7 GB")  # 7 GB/s
         D2H_BW = parse_size("7 GB")  # 7 GB/s
 
@@ -480,5 +480,144 @@ def generate_4gpus_1cpu_toplogy(
     topology.add_bandwidth(gpus[1], gpus[2], P2P_BW)
     topology.add_connection(gpus[1], gpus[3], bidirectional=True)
     topology.add_bandwidth(gpus[1], gpus[3], P2P_BW)
+
+    return topology
+
+
+@TopologyManager.register_generator("frontera8g")
+def generate_8gpus_1cpu_toplogy(
+    config: Optional[Dict[str, int]] = None
+) -> SimulatedTopology:
+    """
+    This function creates 8 GPUs and 1 CPU architecture.
+
+    The topology looks like below:
+
+    gpu0 - gpu1  - gpu4  - gpu5
+     | \   / | \   / | \   / |
+     |  \ /  |  \ /  |  \ /  |
+     |  / \  |  / \  |  / \  |
+     | /   \ | /   \ | /   \ |
+    gpu2 - gpu3  - gpu6  -  gpu7
+
+    gpu0-gpu1 and gpu2-gpu3 have bandwidth of 200 (we assume NVLinks),
+    and other connections have bandiwdth of 100.
+
+    All GPUs are connected to CPU by connections having bandwidth of 100.
+    Each GPU is equipped with 16GB DRAM, and CPU is equipped with 130GB.
+    """
+
+    if config is not None:
+        NVL_BW = config["NVN_BW"] 
+        P2P_BW = config["P2P_BW"]
+        H2D_BW = config["H2D_BW"]
+        D2H_BW = config["D2H_BW"]
+
+        GPU_MEM = config["GPU_MEM"]
+        CPU_MEM = config["CPU_MEM"]
+
+        GPU_COPY_ENGINES = config["GPU_COPY_ENGINES"]
+        CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
+    else:
+        # Default configuration for testing
+        NVL_BW = parse_size("4 GB")
+        P2P_BW = parse_size("2 GB")  # 9 GB/s
+        H2D_BW = parse_size("7 GB")  # 7 GB/s
+        D2H_BW = parse_size("7 GB")  # 7 GB/s
+
+        GPU_MEM = parse_size("10000 GB")
+        CPU_MEM = parse_size("10000 GB")
+
+        GPU_COPY_ENGINES = 3
+        CPU_COPY_ENGINES = 3
+
+    # Create devices
+    gpus = [
+        SimulatedDevice(
+            Device(Architecture.GPU, i), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
+        )
+        for i in range(8)
+    ]
+    cpus = [
+        SimulatedDevice(
+            Device(Architecture.CPU, 0), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
+        )
+    ]
+
+    # Create device topology
+    topology = SimulatedTopology(cpus + gpus, "Topology::4G-1C")
+
+    for gpu in gpus:
+        topology.add_connection(gpu, cpus[0], bidirectional=True)
+        topology.add_bandwidth(gpu, cpus[0], D2H_BW)
+        topology.add_bandwidth(cpus[0], gpu, H2D_BW)
+
+    # NVLink
+    topology.add_connection(gpus[0], gpus[1], bidirectional=True)
+    topology.add_bandwidth(gpus[0], gpus[1], NVL_BW)
+
+    topology.add_connection(gpus[2], gpus[3], bidirectional=True)
+    topology.add_bandwidth(gpus[2], gpus[3], NVL_BW)
+
+    topology.add_connection(gpus[4], gpus[5], bidirectional=True)
+    topology.add_bandwidth(gpus[4], gpus[5], NVL_BW)
+
+    topology.add_connection(gpus[6], gpus[7], bidirectional=True)
+    topology.add_bandwidth(gpus[6], gpus[7], NVL_BW)
+
+    # P2P
+    topology.add_connection(gpus[0], gpus[2], bidirectional=True)
+    topology.add_bandwidth(gpus[0], gpus[2], P2P_BW)
+    topology.add_connection(gpus[0], gpus[3], bidirectional=True)
+    topology.add_bandwidth(gpus[0], gpus[3], P2P_BW)
+    topology.add_connection(gpus[0], gpus[4], bidirectional=True)
+    topology.add_bandwidth(gpus[0], gpus[4], P2P_BW)
+    topology.add_connection(gpus[0], gpus[5], bidirectional=True)
+    topology.add_bandwidth(gpus[0], gpus[5], P2P_BW)
+    topology.add_connection(gpus[0], gpus[6], bidirectional=True)
+    topology.add_bandwidth(gpus[0], gpus[6], P2P_BW)
+    topology.add_connection(gpus[0], gpus[7], bidirectional=True)
+    topology.add_bandwidth(gpus[0], gpus[7], P2P_BW)
+
+    topology.add_connection(gpus[1], gpus[2], bidirectional=True)
+    topology.add_bandwidth(gpus[1], gpus[2], P2P_BW)
+    topology.add_connection(gpus[1], gpus[3], bidirectional=True)
+    topology.add_bandwidth(gpus[1], gpus[3], P2P_BW)
+    topology.add_connection(gpus[1], gpus[4], bidirectional=True)
+    topology.add_bandwidth(gpus[1], gpus[4], P2P_BW)
+    topology.add_connection(gpus[1], gpus[5], bidirectional=True)
+    topology.add_bandwidth(gpus[1], gpus[5], P2P_BW)
+    topology.add_connection(gpus[1], gpus[6], bidirectional=True)
+    topology.add_bandwidth(gpus[1], gpus[6], P2P_BW)
+    topology.add_connection(gpus[1], gpus[7], bidirectional=True)
+    topology.add_bandwidth(gpus[1], gpus[7], P2P_BW)
+
+    topology.add_connection(gpus[2], gpus[4], bidirectional=True)
+    topology.add_bandwidth(gpus[2], gpus[4], P2P_BW)
+    topology.add_connection(gpus[2], gpus[5], bidirectional=True)
+    topology.add_bandwidth(gpus[2], gpus[5], P2P_BW)
+    topology.add_connection(gpus[2], gpus[6], bidirectional=True)
+    topology.add_bandwidth(gpus[2], gpus[6], P2P_BW)
+    topology.add_connection(gpus[2], gpus[7], bidirectional=True)
+    topology.add_bandwidth(gpus[2], gpus[7], P2P_BW)
+
+    topology.add_connection(gpus[3], gpus[4], bidirectional=True)
+    topology.add_bandwidth(gpus[3], gpus[4], P2P_BW)
+    topology.add_connection(gpus[3], gpus[5], bidirectional=True)
+    topology.add_bandwidth(gpus[3], gpus[5], P2P_BW)
+    topology.add_connection(gpus[3], gpus[6], bidirectional=True)
+    topology.add_bandwidth(gpus[3], gpus[6], P2P_BW)
+    topology.add_connection(gpus[3], gpus[7], bidirectional=True)
+    topology.add_bandwidth(gpus[3], gpus[7], P2P_BW)
+
+    topology.add_connection(gpus[4], gpus[6], bidirectional=True)
+    topology.add_bandwidth(gpus[4], gpus[6], P2P_BW)
+    topology.add_connection(gpus[4], gpus[7], bidirectional=True)
+    topology.add_bandwidth(gpus[4], gpus[7], P2P_BW)
+
+    topology.add_connection(gpus[5], gpus[6], bidirectional=True)
+    topology.add_bandwidth(gpus[5], gpus[6], P2P_BW)
+    topology.add_connection(gpus[5], gpus[7], bidirectional=True)
+    topology.add_bandwidth(gpus[5], gpus[7], P2P_BW)
 
     return topology
