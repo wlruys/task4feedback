@@ -159,7 +159,6 @@ class DataStatus:
     init: bool = True
 
     def __deepcopy__(self, memo):
-
         device2state = {
             k: {d: v for d, v in v2.items()} for k, v2 in self.device2state.items()
         }
@@ -303,7 +302,7 @@ class DataStatus:
         for device in status.keys():
             if status[device] == DataState.MOVING:
                 raise RuntimeError(
-                    f"Cannot write while device {device} is moving data {self}. Status: {status}"
+                    f"Cannot write while device {device} is moving data {self.id}. Status: {status}"
                 )
 
         # Ensure no device is using the data if check_use is True
@@ -311,7 +310,7 @@ class DataStatus:
             for device in status.keys():
                 if self.is_used(device=device, use=DataUses.USED):
                     raise RuntimeError(
-                        f"Cannot write while a device {device} that is using that data. Status: {status}"
+                        f"Cannot write while a device {device} that is using that data {self.id}. Status: {status}"
                     )
 
     def get_eviction_target(
@@ -356,7 +355,6 @@ class DataStatus:
         verify: bool = False,
         verbose: bool = False,
     ) -> Tuple[DataState, List[Device]]:
-
         if logger.ENABLE_LOGGING:
             logger.data.info(
                 f"Start eviction of {self.id} from device {source_device} to {target_device}.",
@@ -487,7 +485,7 @@ class DataStatus:
                 else:
                     if not self.check_data_state(device, state, DataState.VALID):
                         raise RuntimeError(
-                            f"Task {task} cannot write to data that is not valid on device {device}. Status: {status}"
+                            f"Task {task} cannot write to data {self.id} that is not valid on device {device}. Status: {status}"
                         )
             else:
                 assert (
@@ -530,7 +528,7 @@ class DataStatus:
         else:
             if not self.check_data_state(target_device, state, DataState.VALID):
                 raise RuntimeError(
-                    f"Task {task} cannot read from data that is not valid on device {target_device}. Status: {status}"
+                    f"Task {task} cannot read from data {self.id} that is not valid on device {target_device}. Status: {status}"
                 )
                 prior_state = None
             prior_state = self.get_data_state(target_device, state)
@@ -631,7 +629,7 @@ class DataStatus:
             source_device, TaskState.LAUNCHED, DataState.VALID
         ):
             raise RuntimeError(
-                f"Task {task} cannot move data from a device that is not valid."
+                f"Task {task} cannot move data {self.id} from a device that is not valid."
             )
 
         prior_target_state = self.get_data_state(target_device, TaskState.LAUNCHED)
@@ -666,7 +664,7 @@ class DataStatus:
             source_device, TaskState.LAUNCHED, DataState.VALID
         ):
             raise RuntimeError(
-                f"Task {task} cannot move data from a device that is not valid."
+                f"Task {task} cannot move data {self.id} from a device that is not valid."
             )
 
         prior_target_state = self.get_data_state(target_device, TaskState.LAUNCHED)
@@ -677,7 +675,7 @@ class DataStatus:
             self.set_data_state(target_device, TaskState.LAUNCHED, DataState.VALID)
         else:
             raise RuntimeError(
-                f"Task {task} cannot finish moving data to a device that is not valid or moving."
+                f"Task {task} cannot finish moving data {self.id} to a device that is not valid or moving."
             )
 
         if source_device != target_device:

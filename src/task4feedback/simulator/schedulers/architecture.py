@@ -24,6 +24,7 @@ from copy import copy, deepcopy
 class SchedulerArchitecture:
     topology: SimulatedTopology
     completed_tasks: List[TaskID] = field(default_factory=list)
+    use_eviction: bool = True
 
     def __deepcopy__(self, memo):
         return SchedulerArchitecture(

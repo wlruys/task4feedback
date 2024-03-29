@@ -57,6 +57,7 @@ def map_task(
         task.assigned_devices = chosen_devices
         scheduler_state.acquire_resources(phase, task, verbose=verbose)
         scheduler_state.use_data(phase, task, verbose=verbose)
+        scheduler_state.mapped_active_tasks += 1
 
         return chosen_devices
 
@@ -159,6 +160,7 @@ def reserve_task(
         if can_fit := scheduler_state.check_resources(phase, task, verbose=verbose):
             scheduler_state.acquire_resources(phase, task, verbose=verbose)
             scheduler_state.use_data(phase, task, verbose=verbose)
+            scheduler_state.reserved_active_tasks += 1
             return True, None
 
         else:
@@ -169,7 +171,9 @@ def reserve_task(
                 )
             # print(f"Task {task.name} cannot be reserved: Insufficient resources.")
 
-            return False, scheduler_state.check_eviction(task)
+            eviction_event = scheduler_state.check_eviction(task)
+
+            return False, eviction_event
     else:
         if logger.ENABLE_LOGGING:
             logger.runtime.debug(
@@ -231,6 +235,8 @@ def launch_task(
             #     print(f"Task {task.name} after use_data: {task.source}.")
             task.duration = duration
             task.completion_time = completion_time
+            scheduler_state.launched_active_tasks += 1
+
             return True
         else:
             if logger.ENABLE_LOGGING:
@@ -260,6 +266,10 @@ def complete_task(
     phase = TaskState.COMPLETED
     scheduler_state.release_data(phase, task, verbose=verbose)
     scheduler_state.release_resources(phase, task, verbose=verbose)
+    scheduler_state.mapped_active_tasks -= 1
+    scheduler_state.reserved_active_tasks -= 1
+    scheduler_state.launched_active_tasks -= 1
+
     # scheduler_state.completion_stats(task)
 
     return True
@@ -493,6 +503,9 @@ class ParlaArchitecture(SchedulerArchitecture):
                 self.launchable_tasks[device][TaskType.DATA].put_id(
                     task_id=data_task_id, priority=data_task.priority
                 )
+
+                scheduler_state.reserved_active_tasks += 1
+                scheduler_state.mapped_active_tasks += 1
 
     def reserver(
         self, scheduler_state: SystemState, event: Reserver, **kwargs

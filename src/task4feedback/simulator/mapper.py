@@ -14,7 +14,6 @@ MappingFunction = Callable[
 
 
 def default_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
-
     scheduler_state: SystemState = simulator.state
     scheduler_arch: SchedulerArchitecture = simulator.mechanisms
 
@@ -32,8 +31,22 @@ def default_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
     return (potential_device,)
 
 
-def earliest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
+def random_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
+    scheduler_state: SystemState = simulator.state
+    scheduler_arch: SchedulerArchitecture = simulator.mechanisms
 
+    potential_devices = task.info.runtime.locations
+    index = np.random.randint(0, len(potential_devices))
+
+    potential_device = potential_devices[index]
+
+    if isinstance(potential_device, Tuple):
+        potential_device = potential_device[0]
+
+    return (potential_device,)
+
+
+def earliest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
     min_time = Time(9999999999999999999)
     chosen_device = None
 
@@ -50,20 +63,19 @@ def earliest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
         simulator_copy.add_stop_condition(task_completion_check)
 
         simulator_copy.run()
-        print(f"EFT of {task.name} on device {devices} is {simulator_copy.time}")
+        # print(f"EFT of {task.name} on device {devices} is {simulator_copy.time}")
 
         if simulator_copy.time < min_time:
             min_time = simulator_copy.time
             chosen_device = devices
 
-    print("----")
+    # print("----")
     # print(simulator_copy.current_event)
 
     return chosen_device  # default_mapping_policy(task, simulator)
 
 
 def latest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
-
     max_time = Time(0)
     chosen_device = None
 
@@ -80,13 +92,13 @@ def latest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
         simulator_copy.add_stop_condition(task_completion_check)
 
         simulator_copy.run()
-        print(f"EFT of {task.name} on device {devices} is {simulator_copy.time}")
+        # print(f"EFT of {task.name} on device {devices} is {simulator_copy.time}")
 
         if simulator_copy.time > max_time:
             max_time = simulator_copy.time
             chosen_device = devices
 
-    print("----")
+    # print("----")
     # print(simulator_copy.current_event)
 
     return chosen_device  # default_mapping_policy(task, simulator)
@@ -97,18 +109,19 @@ class TaskMapper:
     restrict_tasks: bool = False
     allowed_set: Set[TaskID] = field(default_factory=set)
     assignments: Dict[TaskID, Devices] = field(default_factory=dict)
-    mapping_function: MappingFunction = latest_finish_time
+    mapping_function: MappingFunction = random_mapping_policy
 
     def map_task(self, task: SimulatedTask, simulator) -> Optional[Devices]:
-
         if self.check_allowed(task) is False:
             return None
 
         if task.name in self.assignments:
-            # print(f"Task {task.name} mapped to {self.assignments[task.name]}.")
-            return self.assignments[task.name]
+            assigned_device = self.assignments[task.name]
+        else:
+            assigned_device = self.mapping_function(task, simulator)
 
-        return self.mapping_function(task, simulator)
+        # print(f"Task {task.name} mapped to {assigned_device}.")
+        return assigned_device
 
     def set_assignments(self, assignments: Dict[TaskID, Devices]):
         self.assignments = assignments

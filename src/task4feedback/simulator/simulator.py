@@ -45,13 +45,16 @@ class SimulatedScheduler:
     events: EventQueue = EventQueue()
     event_count: int = 0
     init: bool = True
+    use_eviction: bool = True
 
     def __post_init__(
         self,
     ):
         if self.state is None:
             scheduler_state = SchedulerOptions.get_state(self.scheduler_type)
-            self.state = scheduler_state(topology=self.topology)
+            self.state = scheduler_state(
+                topology=self.topology, use_eviction=self.use_eviction
+            )
         if self.mechanisms is None:
             scheduler_arch = SchedulerOptions.get_architecture(self.scheduler_type)
             self.mechanisms = scheduler_arch(topology=self.topology)
@@ -86,6 +89,7 @@ class SimulatedScheduler:
             init=self.init,
             randomizer=deepcopy(self.randomizer),
             current_event=deepcopy(self.current_event),
+            use_eviction=self.use_eviction,
         )
 
     def __str__(self):

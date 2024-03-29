@@ -45,7 +45,7 @@ class FasterResourcePool:
 
     def __post_init__(self):
         if self.init:
-            print("Initializing FasterResourcePool")
+            # print("Initializing FasterResourcePool")
             self.pool = {}
             self.devicemap = {}
 
@@ -200,7 +200,8 @@ class FasterResourcePool:
         resources: Sequence[FasterResourceSet],
     ) -> bool:
         for device, resource in zip(devices, resources):
-            if not self.check_device_resources(device, state, type, resource):
+            check = self.check_device_resources(device, state, type, resource)
+            if not check:
                 return False
         return True
 

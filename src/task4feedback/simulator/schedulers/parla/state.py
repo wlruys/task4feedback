@@ -242,6 +242,175 @@ def _get_difference_reserved(
     return missing_resources
 
 
+def task_data_print(
+    state: SystemState, task: SimulatedTask, devices: Devices, phase: TaskState
+):
+    from rich import print
+    from rich.console import Console
+    from rich.table import Table
+
+    if isinstance(devices, Device):
+        devices = (devices,)
+
+    table_task = Table(
+        title=f"Task {task.name} on {devices[0]}",
+        show_header=True,
+        header_style="bold",
+    )
+
+    table_task.add_column("Device", justify="right", style="cyan", no_wrap=True)
+    table_task.add_column("Resource Type", style="magenta")
+    table_task.add_column("Requested", justify="right", style="yellow")
+
+    resources = task.get_resources(devices)
+
+    for resource in resources:
+        table_task.add_row(str(devices[0]), "VCUs", str(resource.vcus))
+        table_task.add_row(str(devices[0]), "Memory", str(resource.memory))
+        table_task.add_row(str(devices[0]), "Copy Engines", str(resource.copy))
+
+    table_data = Table(
+        title=f"Data Accesses for Task {task.name}",
+        show_header=True,
+        header_style="bold",
+    )
+
+    table_data.add_column("Device", justify="right", style="cyan", no_wrap=True)
+    table_data.add_column("Data ID", style="magenta")
+    table_data.add_column("Access Type", style="yellow")
+    table_data.add_column("Data Size", justify="right", style="green")
+    table_data.add_column("Local?", justify="right", style="blue")
+
+    for data_access in task.read_accesses:
+        data_id = data_access.id
+        device_idx = data_access.device
+        device_id = devices[device_idx]
+
+        data = state.objects.get_data(data_id)
+        assert data is not None
+
+        is_local = data.is_valid(device_id, phase)
+
+        is_local_text = Text("Yes" if is_local else "No")
+        if is_local:
+            is_local_text.stylize("bold green", 0, 6)
+        else:
+            is_local_text.stylize("bold red", 0, 6)
+
+        table_data.add_row(
+            str(device_id),
+            str(data.name),
+            "READ",
+            str(data.size),
+            is_local_text,
+        )
+
+    for data_access in task.read_write_accesses:
+        data_id = data_access.id
+        device_idx = data_access.device
+        device_id = devices[device_idx]
+
+        data = state.objects.get_data(data_id)
+        assert data is not None
+
+        is_local = data.is_valid(device_id, phase)
+
+        is_local_text = Text("Yes" if is_local else "No")
+        if is_local:
+            is_local_text.stylize("bold green", 0, 6)
+        else:
+            is_local_text.stylize("bold red", 0, 6)
+
+        table_data.add_row(
+            str(device_id), str(data.name), "READ_WRITE", str(data.size), is_local_text
+        )
+
+    for data_access in task.write_accesses:
+        data_id = data_access.id
+        device_idx = data_access.device
+        device_id = devices[device_idx]
+
+        data = state.objects.get_data(data_id)
+        assert data is not None
+
+        is_local = data.is_valid(device_id, phase)
+
+        is_local_text = Text("Yes" if is_local else "No")
+        if is_local:
+            is_local_text.stylize("bold green", 0, 6)
+        else:
+            is_local_text.stylize("bold red", 0, 6)
+
+        table_data.add_row(
+            str(device_id), str(data.name), "WRITE", str(data.size), is_local_text
+        )
+
+    console = Console()
+    console.print(table_task)
+    console.print(table_data)
+
+
+def resource_error_print(
+    state: SystemState,
+    task: SimulatedTask,
+    devices: Devices,
+    requested_resources: List[FasterResourceSet],
+    resource_types: List[ResourceType] = ["vcus", "memory", "copy"],
+):
+    from rich import print
+    from rich.console import Console
+    from rich.table import Table
+
+    if isinstance(devices, Device):
+        devices = (devices,)
+
+    table_resources = Table(
+        title=f"Resources Requested for Task {task.name}",
+        show_header=True,
+        header_style="bold",
+    )
+
+    table_resources.add_column("Device", justify="right", style="cyan", no_wrap=True)
+    table_resources.add_column("Resource", style="magenta")
+    table_resources.add_column("Maximum", justify="right", style="yellow")
+    table_resources.add_column("Requested", justify="right", style="green")
+    table_resources.add_column("Available", justify="right", style="blue")
+    table_resources.add_column("Difference", justify="right", style="red")
+
+    for device, resources in zip(devices, requested_resources):
+
+        used_resources = state.resource_pool.pool[device][TaskState.RESERVED]
+        max_resources = state.objects.devicemap[device].resources
+        available_resources = max_resources - used_resources
+
+        for resource in resource_types:
+            used_of_resource_type = getattr(used_resources, resource)
+            max_of_resource_type = getattr(max_resources, resource)
+            requested_of_resource_type = getattr(resources, resource)
+            available_of_resource_type = getattr(available_resources, resource)
+            difference_of_resource_type = (
+                available_of_resource_type - requested_of_resource_type
+            )
+
+            difference_text = Text(str(difference_of_resource_type))
+
+            if difference_of_resource_type < 0:
+                difference_text.stylize("bold red", 0, len(difference_text))
+            else:
+                difference_text.stylize("bold green", 0, len(difference_text))
+
+            table_resources.add_row(
+                str(device),
+                str(resource),
+                str(max_of_resource_type),
+                str(requested_of_resource_type),
+                str(available_of_resource_type),
+                difference_text,
+            )
+    console = Console()
+    console.print(table_resources)
+
+
 def _check_resources_reserved(
     state: SystemState, task: SimulatedTask, verbose: bool = False
 ) -> bool:
@@ -266,6 +435,11 @@ def _check_resources_reserved(
         type=ResourceGroup.PERSISTENT,
         resources=resources,
     )
+
+    if not can_fit and state.reserved_active_tasks == 0:
+        task_data_print(state, task, devices, TaskState.RESERVED)
+        resource_error_print(state, task, devices, resources, resource_types=["memory"])
+        raise RuntimeError(f"Failure to acquire resources for task {task.name}.")
 
     # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
     # print(
@@ -336,10 +510,13 @@ def _check_resources_launched(
         type=ResourceGroup.NONPERSISTENT,
         resources=resources,
     )
-    # print(f"Resources required for task {task.name} in LAUNCHED state: {resources}")
-    # print(
-    #    f"Current resources in use for task {task.name} in LAUNCHED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
-    # )
+
+    if not can_fit and state.launched_active_tasks == 0:
+        task_data_print(state, task, devices, TaskState.LAUNCHED)
+        resource_error_print(
+            state, task, devices, resources, resource_types=["vcus", "copy"]
+        )
+        raise RuntimeError(f"Failure to acquire resources for task {task.name}.")
 
     if isinstance(task, SimulatedDataTask) and not isinstance(
         task, SimulatedEvictionTask
@@ -850,6 +1027,7 @@ def _data_task_duration(
         duration = state.topology.get_transfer_time(task.source, target, data.size)
         completion_time = state.time + duration
 
+    # print(f"Data task {task.name} duration: {duration}, size: {data.size}")
     return duration, completion_time
 
 
@@ -873,6 +1051,9 @@ def _eviction_task_duration(
 @SchedulerOptions.register_state("parla")
 @dataclass(slots=True)
 class ParlaState(SystemState):
+    mapped_active_tasks: int = 0
+    reserved_active_tasks: int = 0
+    launched_active_tasks: int = 0
 
     def __deepcopy__(self, memo):
         s = clock()
@@ -902,6 +1083,7 @@ class ParlaState(SystemState):
             objects=objects,
             time=time,
             init=self.init,
+            use_eviction=self.use_eviction,
         )
 
     def check_resources(
@@ -1013,4 +1195,7 @@ class ParlaState(SystemState):
     def check_eviction(
         self, task: SimulatedTask, verbose: bool = False
     ) -> Optional[Eviction]:
-        return _check_eviction(self, task, verbose=verbose)
+        if self.use_eviction:
+            return _check_eviction(self, task, verbose=verbose)
+        else:
+            return None

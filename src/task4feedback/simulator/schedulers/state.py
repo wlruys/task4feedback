@@ -114,6 +114,7 @@ class SystemState:
     objects: ObjectRegistry | None = None
     time: Time = field(default_factory=Time)
     init: bool = True
+    use_eviction: bool = True
 
     def __deepcopy__(self, memo):
         s = clock()
@@ -143,6 +144,7 @@ class SystemState:
             objects=objects,
             time=time,
             init=self.init,
+            use_eviction=self.use_eviction,
         )
 
     def __post_init__(self):

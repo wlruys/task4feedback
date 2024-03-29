@@ -1,6 +1,8 @@
 from .utilities import *
 from ..types import *
 
+from rich import print
+
 
 @dataclass(slots=True)
 class StencilDataGraphConfig(DataGraphConfig):
@@ -18,36 +20,66 @@ class StencilDataGraphConfig(DataGraphConfig):
     def __post_init__(self):
         self.initial_placement = lambda x: Device(Architecture.CPU, 0)
 
-        self.initial_sizes = (
-            lambda x: self.large_size if x.idx[0] == 0 else self.small_size
+        self.initial_sizes = lambda x: (
+            self.large_size if x.idx[0] == 0 else self.small_size
         )
 
         def edges(task_id: TaskID):
+            """
+            Returns the data edges for a given stencil task.
+
+            TaskID is of the form:
+            (timestep, index)
+            index is n-dimensional, where n is the number of dimensions in the stencil
+
+            DataIDs are tuples of the form:
+            (timestep%2, is_boundary, boundary_idx, index)
+            index is n-dimensional, where n is the number of dimensions in the stencil
+
+            Each task reads its interior domain and its boundaries from the previous timestep
+            Each task writes to its interior domain and its boundaries at the current timestep
+            Each task reads from its neighbors' boundaries from the previous timestep
+            """
+
             data_info = TaskDataInfo()
 
             timestep_idx = task_id.task_idx[0]
             task_idx = task_id.task_idx[1:]
 
-            # A task reads/writes to an interior domain (unique for each region, shared between timesteps)
-            # The first index of the taskid is the timestep number
-            data_info.read_write.append(DataAccess(DataID((0,) + task_idx), device=0))
+            self.dimensions = len(task_idx)
 
-            # A task reads/writes to each of its boundaries
+            old_timestep_flag = (timestep_idx - 1) % 2
+            timestep_flag = timestep_idx % 2
+
+            # A task reads its interior domain from the previous timestep
+            old_interior_id = (old_timestep_flag,) + (0,) + (0,) + task_idx
+            data_info.read.append(DataAccess(DataID(old_interior_id), device=0))
+
+            # A task (read) writes to its interior domain at the current timestep
+            interior_id = (timestep_flag,) + (0,) + (0,) + task_idx
+            data_info.read_write.append(DataAccess(DataID(interior_id), device=0))
+
             n_boundaries = 2 * (self.dimensions)
 
+            # A task reads its boundaries from the previous timestep
             for i in range(n_boundaries):
-                data_info.read_write.append(
-                    DataAccess(DataID((1,) + task_idx + (i,)), device=0)
-                )
+                old_boundary_id = (old_timestep_flag,) + (1,) + (i,) + task_idx
+                data_info.read.append(DataAccess(DataID(old_boundary_id), device=0))
 
-            # A task reads the small communication buffers from its neighbors (dependencies)
+            # A task writes to its boundaries at the current timestep
+            for i in range(n_boundaries):
+                boundary_id = (timestep_flag,) + (1,) + (i,) + task_idx
+                data_info.read_write.append(DataAccess(DataID(boundary_id), device=0))
+
+            # A task reads the boundaries of its neighbors from the previous timestep
             if timestep_idx > 0:
-                # Read boundaries of neighbors from the previous timestep
                 neighbor_generator = tuple(
                     self.neighbor_distance * 2 + 1 for _ in range(self.dimensions)
                 )
                 stencil_generator = np.ndindex(neighbor_generator)
-                count = 0
+
+                neighbor_counter = 0  # Used to order the boundary accesses
+
                 for stencil_tuple in stencil_generator:
                     stencil_tuple = np.subtract(stencil_tuple, self.neighbor_distance)
                     if np.count_nonzero(stencil_tuple) == 1:
@@ -57,9 +89,16 @@ class StencilDataGraphConfig(DataGraphConfig):
                             for element in dependency_grid
                         )
                         if not out_of_bounds:
-                            neighbor_data = DataID((1,) + dependency_grid + (count,))
+                            old_neighbor_boundary = (
+                                (old_timestep_flag,)
+                                + (1,)
+                                + (neighbor_counter,)
+                                + dependency_grid
+                            )
+                            neighbor_data = DataID(old_neighbor_boundary)
+
                             data_info.read.append(DataAccess(neighbor_data, device=0))
-                        count += 1
+                        neighbor_counter += 1
 
             return data_info
 
