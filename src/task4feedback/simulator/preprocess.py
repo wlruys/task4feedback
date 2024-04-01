@@ -38,8 +38,8 @@ def data_from_task(task: TaskInfo, access: AccessType) -> List[DataID]:
 
 
 def find_writer_bfs(
-    graph: TaskMap, node: TaskID, target: DataID, verbose: bool = False
-) -> TaskID | DataID:
+    graph: TaskMap, node: TaskID, target: DataID, verbose: bool = True
+) -> List[TaskID | DataID]:
     """
     Return last task to touch the data.
     @param graph: TaskMap (TaskID -> TaskInfo)
@@ -51,6 +51,7 @@ def find_writer_bfs(
     visited = []
     visited.append(node)
     queue.append(node)
+    found = []
 
     while queue:
         s = queue.pop(0)
@@ -69,18 +70,18 @@ def find_writer_bfs(
             if target in writes_to:
                 if verbose:
                     print(f"Found writer {neighbor_id} to {target}")
-                return neighbor_id if neighbor_id != node else target
+                found.append(neighbor_id if neighbor_id != node else target)
 
-            if neighbor_id not in visited:
+            if neighbor_id not in visited and len(found) == 0:
                 visited.append(neighbor.id)
                 queue.append(neighbor.id)
 
-    if verbose:
+    if verbose and len(found) == 0:
         print(f"Could not find writer to {target} from {node}.")
-    return target
+    return found
 
 
-DataWriter = Dict[DataID, TaskID | DataID]
+DataWriter = Dict[DataID, List[TaskID | DataID]]
 DataWriters = Dict[TaskID, DataWriter]
 
 
@@ -153,8 +154,9 @@ def create_data_tasks(
     for task in graph.values():
         task_info = task.info
         recent_writer = recent_writers[task_info.id]
-        for i, (data, writer) in enumerate(recent_writer.items()):
-            dependencies = [writer] if isinstance(writer, TaskID) else []
+        for i, (data, writer_list) in enumerate(recent_writer.items()):
+            # print(f"Creating data task for {data} from {writer}")
+            dependencies = writer_list
 
             data_task_id = TaskID(taskspace=f"{task_info.id}.data", task_idx=data.idx)
 

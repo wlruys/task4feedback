@@ -34,6 +34,7 @@ src/task4feedback/simulator/datapool.py
 src/task4feedback/simulator/device.py
 src/task4feedback/simulator/events.py
 src/task4feedback/simulator/interface.py
+src/task4feedback/simulator/mapper.py
 src/task4feedback/simulator/preprocess.py
 src/task4feedback/simulator/queue.py
 src/task4feedback/simulator/randomizer.py

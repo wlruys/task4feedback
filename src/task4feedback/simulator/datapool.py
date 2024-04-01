@@ -1,26 +1,28 @@
 from ..types import Device, DataID
-from typing import Dict, Set, Sequence
-from dataclasses import dataclass, field, InitVar
-
+from typing import Dict, Sequence
+from dataclasses import dataclass
 from .eviction.base import DataPool
 from .eviction.base import EvictionPool
 from .device import SimulatedDevice
-from .topology import SimulatedTopology
+from copy import deepcopy
 
 
 @dataclass(slots=True)
 class DeviceDataPools:
-    devices: InitVar[Sequence[SimulatedDevice]]
-    device_datapool: Dict[Device, DataPool] = field(init=False)
-    device_evictionpool: Dict[Device, EvictionPool] = field(init=False)
+    devices: Sequence[SimulatedDevice] = None
+    device_datapool: Dict[Device, DataPool] = None
+    device_evictionpool: Dict[Device, EvictionPool] = None
+    init: bool = True
 
-    def __post_init__(self, devices: Sequence[SimulatedDevice]):
-        self.device_datapool = {}
-        self.device_evictionpool = {}
+    def __post_init__(self):
+        if self.init:
+            self.device_datapool = {}
+            self.device_evictionpool = {}
 
-        for device in devices:
-            self.device_datapool[device.name] = DataPool()
-            self.device_evictionpool[device.name] = device.eviction_pool_type()
+            for device in self.devices:
+                self.device_datapool[device.name] = DataPool()
+                self.device_evictionpool[device.name] = device.eviction_pool_type()
+            self.init = False
 
     def add(self, device: Device, data: DataID):
         self.device_datapool[device].add(data)
@@ -41,3 +43,12 @@ class DeviceDataPools:
     @property
     def evictable(self) -> Dict[Device, EvictionPool]:
         return self.device_evictionpool
+
+    def __deepcopy__(self, memo):
+        device_datapool = deepcopy(self.device_datapool)
+        device_evictionpool = deepcopy(self.device_evictionpool)
+        return DeviceDataPools(
+            devices=self.devices,
+            device_datapool=device_datapool,
+            device_evictionpool=device_evictionpool,
+        )

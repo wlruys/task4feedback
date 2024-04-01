@@ -268,10 +268,6 @@ def complete_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
         resources=task.resources,
     )
 
-    # print(
-    #     f"Removed resources for task {task.name} completed at time {scheduler_state.time}."
-    # )
-
     return True
 
 

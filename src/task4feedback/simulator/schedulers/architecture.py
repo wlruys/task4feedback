@@ -17,18 +17,28 @@ from dataclasses import dataclass, InitVar
 from collections import defaultdict as DefaultDict
 from copy import copy, deepcopy
 
-from rich import print
+# from rich import print
 
 
 @dataclass(slots=True)
 class SchedulerArchitecture:
-    topology: InitVar[SimulatedTopology]
+    topology: SimulatedTopology
     completed_tasks: List[TaskID] = field(default_factory=list)
+    use_eviction: bool = True
 
-    def __post_init__(self, topology: SimulatedTopology):
-        assert topology is not None
+    def __deepcopy__(self, memo):
+        return SchedulerArchitecture(
+            topology=self.topology,
+            completed_tasks=[t for t in self.completed_tasks],
+        )
 
-    def __getitem__(self, event: Event) -> Callable[[SystemState], List[EventPair]]:
+    def __post_init__(self):
+        assert self.topology is not None
+
+    def __getitem__(
+        self,
+        event: Event,
+    ) -> Callable[[SystemState], List[EventPair]]:
         try:
             # print(f"Getting function for event {event.func}")
             function = getattr(self, event.func)
@@ -37,13 +47,13 @@ class SchedulerArchitecture:
                 f"SchedulerArchitecture does not implement function {event.func} for event {event}."
             )
 
-        def wrapper(scheduler_state: SystemState) -> List[EventPair]:
-            return function(scheduler_state, event)
+        def wrapper(scheduler_state: SystemState, **kwargs) -> List[EventPair]:
+            return function(scheduler_state, event, **kwargs)
 
         return wrapper
 
     def initialize(
-        self, tasks: List[TaskID], scheduler_state: SystemState
+        self, tasks: List[TaskID], scheduler_state: SystemState, **kwargs
     ) -> List[EventPair]:
         raise NotImplementedError()
         return []
@@ -51,24 +61,32 @@ class SchedulerArchitecture:
     def add_initial_tasks(self, task: SimulatedTask):
         pass
 
-    def mapper(self, scheduler_state: SystemState, event: Event) -> List[EventPair]:
+    def mapper(
+        self, scheduler_state: SystemState, event: Event, **kwargs
+    ) -> List[EventPair]:
         raise NotImplementedError()
         return []
 
-    def reserver(self, scheduler_state: SystemState, event: Event) -> List[EventPair]:
+    def reserver(
+        self, scheduler_state: SystemState, event: Event, **kwargs
+    ) -> List[EventPair]:
         raise NotImplementedError()
         return []
 
-    def eviction(self, scheduler_state: SystemState, event: Event) -> List[EventPair]:
+    def eviction(
+        self, scheduler_state: SystemState, event: Event, **kwargs
+    ) -> List[EventPair]:
         raise NotImplementedError()
         return []
 
-    def launcher(self, scheduler_state: SystemState, event: Event) -> List[EventPair]:
+    def launcher(
+        self, scheduler_state: SystemState, event: Event, **kwargs
+    ) -> List[EventPair]:
         raise NotImplementedError()
         return []
 
     def complete_task(
-        self, scheduler_state: SystemState, event: Event
+        self, scheduler_state: SystemState, event: Event, **kwargs
     ) -> List[EventPair]:
         return []
 
@@ -78,7 +96,7 @@ class SchedulerArchitecture:
     def __repr__(self):
         self.__str__()
 
-    def complete(self, scheduler_state: SystemState) -> bool:
+    def complete(self, scheduler_state: SystemState, **kwargs) -> bool:
         raise NotImplementedError()
 
 

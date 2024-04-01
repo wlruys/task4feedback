@@ -20,6 +20,9 @@ class SimulatorConfig:
     simulated_data: SimulatedDataMap = field(init=False)
     use_data: bool = True
     randomizer: Randomizer = field(default_factory=Randomizer)
+    watcher: Watcher = field(default_factory=Watcher)
+    mapper: TaskMapper = field(default_factory=TaskMapper)
+    use_eviction: bool = True
 
 
 def create_simulator(config: SimulatorConfig):
@@ -31,6 +34,9 @@ def create_simulator(config: SimulatorConfig):
         scheduler_type=config.scheduler_type,
         recorders=recorders,
         randomizer=config.randomizer,
+        watcher=config.watcher,
+        mapper=config.mapper,
+        use_eviction=config.use_eviction,
     )
 
     tasklist, simulated_tasks = create_sim_graph(

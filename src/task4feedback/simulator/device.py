@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from .queue import *
 from .datapool import *
 from enum import IntEnum
-from typing import List, Dict, Set, Tuple, Optional, Self, Type
+from typing import List, Dict, Set, Tuple, Optional, Type
 from fractions import Fraction
 from decimal import Decimal
 from collections import defaultdict as DefaultDict
@@ -11,6 +11,7 @@ from collections import defaultdict as DefaultDict
 from .eviction.base import EvictionPool
 from .eviction.lru import LRUEvictionPool
 from .resourceset import FasterResourceSet, Numeric
+from copy import deepcopy
 
 
 @dataclass(slots=True)
@@ -43,10 +44,13 @@ class SimulatedDevice:
     eviction_pool_type: Type[EvictionPool] = LRUEvictionPool
     eviction_targets: List[Device] = field(default_factory=list)
     memory_space: Device = field(init=False)
+    init: bool = True
 
     def __post_init__(self):
-        self.eviction_targets = [Device(Architecture.CPU, 0)]
-        self.memory_space = self.name
+        if self.init:
+            self.eviction_targets = [Device(Architecture.CPU, 0)]
+            self.memory_space = self.name
+            self.init = False
 
     def __str__(self) -> str:
         return f"Device({self.name})"
@@ -70,3 +74,12 @@ class SimulatedDevice:
             return self.resources.memory
         elif key == ResourceType.COPY:
             return self.resources.copy
+
+    def __deepcopy__(self, memo):
+        return SimulatedDevice(
+            name=self.name,
+            resources=deepcopy(self.resources),
+            stats=deepcopy(self.stats),
+            eviction_pool_type=self.eviction_pool_type,
+            eviction_targets=deepcopy(self.eviction_targets),
+        )

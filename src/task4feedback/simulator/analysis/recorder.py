@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field, InitVar
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Self, Type
+from typing import Dict, List, Optional, Sequence, Set, Tuple, Type
 from fractions import Fraction
 
 from ..events import *
@@ -385,6 +385,11 @@ class DataTaskRecorder(Recorder):
                     else:
                         type = TaskType.DATA
 
+                    if isinstance(task, SimulatedEvictionTask):
+                        type = TaskType.EVICTION
+                    else:
+                        type = TaskType.DATA
+
                     self.tasks[name] = DataTaskRecord(
                         name,
                         type=type,
@@ -418,6 +423,11 @@ class DataTaskRecorder(Recorder):
                             for device in devices:
                                 communication_energy += device.energy * data_size
                                 print(communication_energy)
+
+                        if isinstance(task, SimulatedEvictionTask):
+                            type = TaskType.EVICTION
+                        else:
+                            type = TaskType.DATA
 
                         if isinstance(task, SimulatedEvictionTask):
                             type = TaskType.EVICTION
