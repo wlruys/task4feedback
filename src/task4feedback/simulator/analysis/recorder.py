@@ -409,9 +409,9 @@ class DataTaskRecorder(Recorder):
                         data_size = data.size
                         devices = task.assigned_devices
                         communication_energy = 0
-                        print("In recorder")
+                        #print("In recorder")
                         if(task.real): # check if there is any data movement
-                            print("In if")
+                            #print("In if")
                             for device in devices:
                                 communication_energy += device.energy * data_size
                                 print(communication_energy)
