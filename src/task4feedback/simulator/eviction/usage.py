@@ -10,9 +10,11 @@ def _create_eviction_task(
 ) -> SimulatedEvictionTask:
 
     # Assume each parent task only requests one eviction task for each of its data dependencies
+    data.eviction_count += 1
 
-    eviction_space = str(parent_task) + "_eviction"
-    eviction_id = TaskID(taskspace=eviction_space, task_idx=data.name.idx)
+    eviction_space = str(parent_task) + "_eviction_" + str(data.eviction_count)
+    data_idx = data.name.idx
+    eviction_id = TaskID(taskspace=eviction_space, task_idx=data_idx)
     eviction_dependencies = list(data.status.uses.eviction_tasks)
     data_dependencies = TaskDataInfo(read=[DataAccess(id=data.name, device=0)])
     eviction_runtime = TaskPlacementInfo()
@@ -75,6 +77,13 @@ def _update_target_resources(
 
     state.resource_pool.add_device_resource(
         target_device.name,
+        TaskState.MAPPED,
+        ResourceGroup.PERSISTENT,
+        requested_resources,
+    )
+
+    state.resource_pool.add_device_resource(
+        target_device.name,
         TaskState.RESERVED,
         ResourceGroup.PERSISTENT,
         requested_resources,
@@ -107,7 +116,7 @@ def eviction_init(
 ) -> SimulatedEvictionTask:
 
     print(
-        f"Task {parent_task} is requesting space. Removing data {data.name} from {device.name}"
+        f"Task {parent_task} is requesting space. Generating eviction task to remove data {data.name} from {device.name}"
     )
 
     target_device_id = data.get_eviction_target(
@@ -125,6 +134,12 @@ def eviction_init(
         target_device=target_device.name,
     )
 
+    # Update metadata on parent task
+    eviction_task.parent = parent_task
+    simulated_parent_task = state.objects.get_task(parent_task)
+    simulated_parent_task.add_eviction_dependency(eviction_task)
+    simulated_parent_task.requested_eviction_bytes[device.name] += data.size
+
     _update_target_resources(
         state=state, source_device=device, target_device=target_device, data=data
     )
@@ -136,6 +151,6 @@ def eviction_init(
         data=data,
     )
 
-    data.status.add_eviction_task(eviction_task.name)
+    data.status.add_eviction_task(eviction_task.name, device, state.data_pool)
 
     return eviction_task

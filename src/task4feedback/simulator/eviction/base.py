@@ -28,7 +28,7 @@ class EvictionPool:
     def add(self, data: DataID, size: int):
         raise NotImplementedError
 
-    def remove(self, data: DataID, size: int):
+    def remove(self, data: DataID, size: int) -> bool:
         raise NotImplementedError
 
     def peek(self) -> DataID:

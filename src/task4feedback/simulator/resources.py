@@ -81,7 +81,7 @@ class FasterResourcePool:
         resources = self._build_set(type, resources)
 
         resource_set += resources
-        resource_set.verify()
+        resource_set.verify(device, pool_state)
 
     def remove_device_resources(
         self,
@@ -94,7 +94,7 @@ class FasterResourcePool:
         resources = self._build_set(type, resources)
 
         resource_set -= resources
-        resource_set.verify()
+        resource_set.verify(device, pool_state)
 
     def add_resources(
         self,
@@ -239,7 +239,7 @@ class ResourcePool:
     ):
         resource_set = self.pool[device][pool_state]
         resource_set.add_types(resources, types)
-        resource_set.verify()
+        resource_set.verify(device, pool_state)
 
     def remove_device_resources(
         self,
@@ -250,7 +250,7 @@ class ResourcePool:
     ):
         resource_set = self.pool[device][pool_state]
         resource_set.subtract_types(resources, types)
-        resource_set.verify()
+        resource_set.verify(device, pool_state)
 
     def add_resources(
         self,

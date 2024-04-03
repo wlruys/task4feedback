@@ -90,13 +90,14 @@ class LRUEvictionPool(EvictionPool):
             # print("Adding {data.info} to eviction pool: {data.size}, {self.evictable_size}")
             self.evictable_size += size
 
-    def remove(self, data: DataID, size: int):
-        if self.datalist.remove(data):
+    def remove(self, data: DataID, size: int) -> bool:
+        if status := self.datalist.remove(data):
             # print(f"Removing {data.info} from eviction pool: {data.size}")
             self.evictable_size -= size
             assert (
                 self.evictable_size >= 0
             ), f"Evictable size is negative: {self.evictable_size}"
+        return status
 
     def peek(self) -> DataID:
         assert self.datalist.head.next is not None

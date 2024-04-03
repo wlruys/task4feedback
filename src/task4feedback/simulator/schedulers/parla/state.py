@@ -102,29 +102,50 @@ def _check_eviction(
     task: SimulatedTask,
     verbose: bool = False,
 ) -> Optional[Eviction]:
+    from rich import print
+
     # print("Checking eviction for task: ", task.name)
 
-    if task.eviction_requested:
-        # print(f"Eviction already requested for task {task.name}")
-        return None
+    # if this is the last task and
 
     # Only generate an eviction event if it would free enough resources to run the next task
     resource_differences = _get_difference_reserved(state, task, verbose=verbose)
+
     # verbose = True
     # print("Time: ", state.time)
     if verbose:
         print(
             f"Cannot allocate memory for task {task.name}. Requires {resource_differences} more memory."
         )
+
     for device, resources in resource_differences.items():
         evictable_memory = state.data_pool.evictable[device].evictable_size
+        unresolved_requests = task.requested_eviction_bytes[device]
+
+        print(f"Evictable memory on {device}: {evictable_memory}")
+        print(f"Incomplete eviction requests on {device}: {unresolved_requests}")
+
+        resources.memory -= unresolved_requests
+
+        print(f"Missing Memory on {device}: {resources.memory}")
+
+        print(f"Data on {device}:)")
+        for data in state.objects.datamap.values():
+            if data.is_valid(device, TaskState.RESERVED):
+                print(f"{data.name} is valid on {device}")
+                print(data.status.uses)
+
+        print(f"Eviction pool on Device {device}")
+        print(state.data_pool.evictable[device])
+
         if verbose:
             print(f"Evictable memory on {device}: {evictable_memory}")
             print(f"Missing Memory on {device}: {resources.memory}")
-        if evictable_memory < resources.memory:
-            return None
 
-    task.eviction_requested = True
+        if resources.memory > evictable_memory or resources.memory < 0:
+            # if : request is too big and not satisfiable by eviction, do not run eviction
+            # if : request is already satisfied by previously enqueued (but not complete) eviction, do not run eviction
+            return None
 
     return Eviction(parent_task=task.name, requested_resources=resource_differences)
 
@@ -155,6 +176,15 @@ def _check_nearest_source(
     source_device = state.topology.nearest_valid_connection(
         device, valid_sources, require_copy_engines=True, require_symmetric=True
     )
+
+    for eviction_task in data.status.uses.eviction_tasks:
+        eviction_task = state.objects.get_task(eviction_task)
+        assert isinstance(eviction_task, SimulatedEvictionTask)
+        if eviction_task.assigned_devices[0] == source_device:
+            eviction_task.add_dependency(
+                task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED]
+            )
+            task.add_dependent(eviction_task.name)
 
     if logger.ENABLE_LOGGING:
         logger.data.debug(
@@ -226,6 +256,10 @@ def _get_difference_reserved(
     resources = get_required_resources(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
     )
+
+    print(f"Resources at time of eviction request")
+    task_data_print(state, task, devices, TaskState.RESERVED)
+    resource_error_print(state, task, task.assigned_devices, resources)
 
     # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
     # print(
@@ -410,6 +444,18 @@ def resource_error_print(
     console.print(table_resources)
 
 
+def _check_eviction_status(state, task, check_complete=True):
+    if not state.use_eviction:
+        return True
+    if check_complete:
+        # if: there are any outstanding eviction requests, don't throw an error yet
+        if any([d > 0 for d in task.requested_eviction_bytes.values()]):
+            return False
+        return True
+    else:
+        return False
+
+
 def _check_resources_reserved(
     state: SystemState, task: SimulatedTask, verbose: bool = False
 ) -> bool:
@@ -435,16 +481,21 @@ def _check_resources_reserved(
         resources=resources,
     )
 
-    if not state.use_eviction and not can_fit and state.reserved_active_tasks == 0:
-        task_data_print(state, task, devices, TaskState.RESERVED)
-        resource_error_print(state, task, devices, resources, resource_types=["memory"])
-        raise RuntimeError(f"Failure to acquire resources for task {task.name}.")
+    print(f"Can fit resources: {can_fit}")
+    print(f"Reserved active tasks: {state.reserved_active_tasks}")
+
+    if not can_fit and state.reserved_active_tasks == 0:
+        if _check_eviction_status(state, task, check_complete=False):
+            task_data_print(state, task, devices, TaskState.RESERVED)
+            resource_error_print(
+                state, task, devices, resources, resource_types=["memory"]
+            )
+            raise RuntimeError(f"Failure to acquire resources for task {task.name}.")
 
     # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
     # print(
     #    f"Current resources in use for task {task.name} in RESERVED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
     # )
-
     return can_fit
 
 
@@ -470,6 +521,9 @@ def _acquire_resources_reserved(
 
     state.resource_pool.add_resources(
         devices, TaskState.RESERVED, ResourceGroup.PERSISTENT, resources
+    )
+    print(
+        f"Resources acquired for task {task.name} in RESERVED state on device {devices[0]}"
     )
 
     if logger.ENABLE_LOGGING:
@@ -642,6 +696,13 @@ def _release_resources_completed(
                 ),
             )
 
+        if isinstance(task, SimulatedEvictionTask):
+            print(f"I am an eviction task: {task.name} my parent is {task.parent}")
+            parent_task = state.objects.get_task(task.parent)
+            data = task.read_accesses[0].id
+            data = state.objects.get_data(data)
+            parent_task.requested_eviction_bytes[source_device] -= data.size
+
     state.resource_pool.remove_resources(
         devices=devices,
         state=TaskState.RESERVED,
@@ -786,6 +847,7 @@ def _use_data(
                 [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED],
                 state,
             )
+            data.status.remove_task(task.name, DataUses.EVICTING, pools=state.data_pool)
 
 
 def _release_data(

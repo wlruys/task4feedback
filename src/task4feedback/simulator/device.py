@@ -62,10 +62,16 @@ class SimulatedDevice:
         return hash(self.name)
 
     def __eq__(self, other):
-        return self.name == other.name
+        if isinstance(other, SimulatedDevice):
+            return self.name == other.name
+        elif isinstance(other, Device):
+            return self.name == other
 
     def __lt__(self, other):
-        return self.name < other.name
+        if isinstance(other, SimulatedDevice):
+            return self.name < other.name
+        elif isinstance(other, Device):
+            return self.name < other
 
     def __getitem__(self, key: ResourceType) -> Numeric:  # type: ignore
         if key == ResourceType.VCU:

@@ -33,8 +33,8 @@ class DeviceDataPools:
     def add_evictable(self, device: Device, data: DataID, size: int):
         self.device_evictionpool[device].add(data, size)
 
-    def remove_evictable(self, device: Device, data: DataID, size: int):
-        self.device_evictionpool[device].remove(data, size)
+    def remove_evictable(self, device: Device, data: DataID, size: int) -> bool:
+        return self.device_evictionpool[device].remove(data, size)
 
     @property
     def pool(self) -> Dict[Device, DataPool]:

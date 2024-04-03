@@ -63,8 +63,12 @@ class DataUses(IntEnum):
     """ A data task is currently moving the data to the device """
     MOVING_FROM = 4
     """ A data task is currently moving the data from the device """
-    USED = 4
+    USED = 5
     """ A launched compute task is using the data """
+    CHECKING = 6
+    """ A task is locking the data during a check """
+    EVICTING = 7
+    """ A task is evicting the data from the device """
 
 
 TaskStateToUse = {}
@@ -74,6 +78,7 @@ TaskStateToUse[TaskState.LAUNCHED] = DataUses.USED
 TaskStateToUse[TaskState.COMPLETED] = DataUses.USED
 
 NonEvictableUses = [
+    DataUses.EVICTING,
     DataUses.RESERVED,
     DataUses.MOVING_TO,
     DataUses.MOVING_FROM,
@@ -139,6 +144,7 @@ class DataUse:
         device: Device,
         pools: DeviceDataPools,
     ):
+        print(f"Adding {task} to {use.name} of {self.name} on {device}.")
         self.devices_uses_tasks[device][use].add(task)
         self.tasks_uses_devices[task][use].add(device)
 
@@ -152,6 +158,7 @@ class DataUse:
     def remove_task_use_from_device(
         self, task: TaskID, use: DataUses, device: Device, pools: DeviceDataPools
     ):
+        print(f"Removing {task} from {use.name} of {self.name} on {device}.")
         self.devices_uses_tasks[device][use].remove(task)
         self.tasks_uses_devices[task][use].remove(device)
 
@@ -159,7 +166,7 @@ class DataUse:
             self.nonevictable_usage_count[device] -= 1
             assert self.nonevictable_usage_count[device] >= 0, f"Negative usage count."
 
-        if self.is_evictable(device):
+        if self.is_evictable(device) and not use == DataUses.EVICTING:
             print(
                 f"Adding {self.name} to eviction pool on device {device}. Last usage was {task} with use {str(use.name)}."
             )
@@ -186,11 +193,15 @@ class DataUse:
         for device in devices:
             self.remove_task_use_from_device(task, use, device, pools)
 
-    def add_eviction_task(self, task: TaskID):
+    def add_eviction_task(self, task: TaskID, device: Device, pools: DeviceDataPools):
         self.eviction_tasks.add(task)
+        self.add_task_use_to_device(task, DataUses.EVICTING, device, pools)
 
-    def remove_eviction_task(self, task: TaskID):
+    def remove_eviction_task(
+        self, task: TaskID, device: Device, pools: DeviceDataPools
+    ):
         self.eviction_tasks.remove(task)
+        self.remove_task_use(task, DataUses.EVICTING, pools)
 
     def is_evictable(self, device: Device) -> bool:
         return self.nonevictable_usage_count[device] == 0
@@ -278,7 +289,7 @@ class DataStatus:
 
             if logger.ENABLE_LOGGING:
                 logger.data.debug(
-                    f"Setting data state of {self.id} on device {device} from {prior_state} to {data_state}",
+                    f"Setting data state of {self.id} on device {device} from {prior_state.name} to {data_state.name} in phase {state.name}",
                     extra=dict(
                         data=self.id,
                         device=device,
@@ -324,11 +335,13 @@ class DataStatus:
     ):
         self.uses.add_task_use_to_device(task, use, device, pools)
 
-    def add_eviction_task(self, task: TaskID):
-        self.uses.add_eviction_task(task)
+    def add_eviction_task(self, task: TaskID, device: Device, pools: DeviceDataPools):
+        self.uses.add_eviction_task(task, device, pools)
 
-    def remove_eviction_task(self, task: TaskID):
-        self.uses.remove_eviction_task(task)
+    def remove_eviction_task(
+        self, task: TaskID, device: Device, pools: DeviceDataPools
+    ):
+        self.uses.remove_eviction_task(task, device, pools)
 
     def remove_task_from_device(
         self, device: Device, task: TaskID, use: DataUses, pools: DeviceDataPools
@@ -391,13 +404,13 @@ class DataStatus:
         potential_targets: Sequence[Device],
         state: TaskState,
     ) -> Device:
-        # print(
-        #     f"Getting eviction target for {self.id} from {source_device} to {potential_targets}"
-        # )
+        print(
+            f"Getting eviction target for {self.id} from {source_device} to {potential_targets}"
+        )
         valid_copies = self.get_device_set_from_state(state, DataState.VALID)
         target_device = source_device
         current_state = self.get_data_state(source_device, state)
-        print("Current State", current_state)
+        print("Current state of eviction target on source device", current_state.name)
         assert (
             current_state == DataState.VALID
         ), f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device} in phase {state}."
@@ -480,7 +493,7 @@ class DataStatus:
             self.finish_move(task, source_device, target_device, pools, verbose=verbose)
 
         self.set_data_state(source_device, state, DataState.NONE)
-        self.remove_eviction_task(task)
+        self.remove_eviction_task(task, source_device, pools)
 
         return current_state, [source_device]
 
@@ -634,7 +647,7 @@ class DataStatus:
     ) -> Tuple[Optional[DataState], List[Device]]:
         if logger.ENABLE_LOGGING:
             logger.data.debug(
-                f"Using data on device {target_device} from task {task} in phase {state} with operation {operation}",
+                f"Using data on device {target_device} from task {task} in phase {state} with operation {operation.name}",
                 extra=dict(task=task, data=self.id, operation=operation, state=state),
             )
 
@@ -680,12 +693,13 @@ class DataStatus:
         else:
             raise ValueError(f"Invalid data operation {operation}")
 
+        print(
+            f"Start use on {self.id} to {target_device}, {TaskStateToUse[state].name}"
+        )
         self.add_task(target_device, task, TaskStateToUse[state], pools)
 
         for device in evicted_locations:
-            self.add_task(
-                device=device, task=task, use=TaskStateToUse[state], pools=pools
-            )
+            self.add_task(device=device, task=task, use=DataUses.EVICTING, pools=pools)
 
         return old_state, evicted_locations
 
@@ -701,7 +715,7 @@ class DataStatus:
     ):
         if logger.ENABLE_LOGGING:
             logger.data.debug(
-                f"Finished using data {self.id} on device {target_device} from task {task} in phase {state} with operation {operation}",
+                f"Finished using data {self.id} on device {target_device} from task {task} in phase {state} with operation {operation.name}",
                 extra=dict(task=task, data=self.id, operation=operation, state=state),
             )
         self.remove_task(task=task, use=TaskStateToUse[state], pools=pools)
@@ -794,6 +808,7 @@ class SimulatedData:
     info: DataInfo = None
     status: DataStatus = None
     init: bool = True
+    eviction_count: int = 0
 
     def __deepcopy__(self, memo):
         return SimulatedData(
@@ -801,6 +816,7 @@ class SimulatedData:
             info=self.info,
             status=deepcopy(self.status),
             init=self.init,
+            eviction_count=self.eviction_count,
         )
 
     def __post_init__(self):
@@ -965,6 +981,9 @@ class SimulatedData:
 
     def set_evictable(self, device: Device, pools: DeviceDataPools):
         pools.add_evictable(device, self.name, self.size)
+
+    def remove_evictable(self, device: Device, pools: DeviceDataPools) -> bool:
+        return pools.remove_evictable(device, self.name, self.size)
 
     def get_eviction_target(
         self,
