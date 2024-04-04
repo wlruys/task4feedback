@@ -1056,6 +1056,17 @@ class ParlaState(SystemState):
     mapped_active_tasks: int = 0
     reserved_active_tasks: int = 0
     launched_active_tasks: int = 0
+    # Total workload planned across devices
+    total_active_workload: float = 0
+    # Workload per device
+    perdev_active_workload: Dict[Device, int] = field(default_factory=dict)
+    # # of completed tasks
+    total_num_completed_tasks: int = 0
+    # Threshold of the number of tasks that can be mapped per each mapper event
+    mapper_threshold:int = 0
+    # # of tasks in (mapped~launchable) states
+    total_num_mapped_tasks: int = 0
+
 
     def __deepcopy__(self, memo):
         s = clock()

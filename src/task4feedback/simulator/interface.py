@@ -54,6 +54,8 @@ def create_simulator(config: SimulatorConfig):
         scheduler_state_type=config.scheduler_state_type,
         recorders=recorders,
         randomizer=config.randomizer,
+        rl_env=config.rl_env,
+        rl_mapper=config.rl_mapper,
         watcher=config.watcher,
         mapper=config.mapper,
         use_eviction=config.use_eviction,
