@@ -70,6 +70,7 @@ class SimulatedScheduler:
     def __post_init__(self):
         if self.state is None:
             scheduler_state = SchedulerOptions.get_state(self.scheduler_state_type)
+            print("scheduler state:", scheduler_state, " is created")
             self.state = scheduler_state(topology=self.topology,
                                          rl_env=self.rl_env,
                                          rl_mapper=self.rl_mapper,
@@ -161,9 +162,9 @@ class SimulatedScheduler:
     ):
         self.watcher.add_condition(condition)
 
-    def add_initial_tasks(self, tasks: List[TaskID], apply_sort: bool = True):
-        if apply_sort:
-            tasks = self.randomizer.task_order(tasks, self.taskmap)
+    def add_initial_tasks(self, tasks: List[TaskID]):
+        # if apply_sort:
+        #     tasks = self.randomizer.task_order(tasks, self.taskmap)
         self.tasks.extend(tasks)
 
     # def add_initial_tasks(self, tasks: List[TaskID]):
@@ -201,7 +202,10 @@ class SimulatedScheduler:
         watcher_status = True
 
         if self.init:
-            new_event_pairs = self.mechanisms.initialize(self.tasks, self.state)
+            print(">> self state:", self.state)
+            new_event_pairs = self.mechanisms.initialize(
+                tasks=self.tasks, scheduler_state=self.state, simulator=self
+            )
             for completion_time, new_event in new_event_pairs:
                 self.events.put(new_event, completion_time)
             self.init = False
@@ -237,6 +241,20 @@ class SimulatedScheduler:
 
         self.recorders.finalize(self.time, self.mechanisms, self.state)
 
+        for device in self.topology.devices:
+            last_active = max(
+                device.stats.last_active_compute, device.stats.last_active_movement
+            )
+
+            device.stats.idle_time += self.time - last_active
+
+            device.stats.idle_time_compute += (
+                self.time - device.stats.last_active_compute
+            )
+            device.stats.idle_time_movement += (
+                self.time - device.stats.last_active_movement
+            )
+
         print(f"Elapsed Time,{self.time}")
 
         # print(f"Event Count: {self.event_count}")
@@ -247,5 +265,4 @@ class SimulatedScheduler:
         if not is_complete and watcher_status:
             raise RuntimeError("Scheduler terminated without completing all tasks.")
 
-        return is_complete and events_empty
-        # return self.time, self.tasks
+        return self.time, self.tasks

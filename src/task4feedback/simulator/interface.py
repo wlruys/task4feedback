@@ -34,7 +34,6 @@ class SimulatorConfig:
     save_task_order: bool = False
     save_task_noise: bool = False
     load_task_noise: bool = False
-
     ###########################
     # RL related fields
     ###########################
@@ -54,8 +53,6 @@ def create_simulator(config: SimulatorConfig):
         scheduler_state_type=config.scheduler_state_type,
         recorders=recorders,
         randomizer=config.randomizer,
-        rl_env=config.rl_env,
-        rl_mapper=config.rl_mapper,
         watcher=config.watcher,
         mapper=config.mapper,
         use_eviction=config.use_eviction,
@@ -64,7 +61,9 @@ def create_simulator(config: SimulatorConfig):
         noise_scale=config.noise_scale,
         save_task_order=config.save_task_order,
         save_task_noise=config.save_task_noise,
-        load_task_noise=config.load_task_noise
+        load_task_noise=config.load_task_noise,
+        rl_env=config.rl_env,
+        rl_mapper=config.rl_mapper,
     )
 
     tasklist, simulated_tasks = create_sim_graph(

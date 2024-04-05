@@ -2,7 +2,7 @@ from .schedulers.state import SystemState
 from .schedulers.architecture import SchedulerArchitecture
 from ..types import *
 from .task import SimulatedTask
-from dataclasses import dataclass
+from dataclasses import dataclass, InitVar
 from copy import deepcopy
 from .watcher import *
 from functools import partial
@@ -104,6 +104,69 @@ def latest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
     return chosen_device  # default_mapping_policy(task, simulator)
 
 
+def loadbalancing_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
+    scheduler_state: SystemState = simulator.state
+    scheduler_arch: SchedulerArchitecture = simulator.mechanisms
+
+    lowest_workload = 9999999999999999999
+    potential_device = None
+    potential_devices = task.info.runtime.locations
+    for device in potential_devices:
+        workload = scheduler_state.perdev_active_workload[device.name]
+        if potential_device is None or workload < lowest_workload:
+            lowest_workload = workload
+            potential_device = device
+
+    if isinstance(potential_device, Tuple):
+        potential_device = potential_device[0]
+
+    return (potential_device,)
+
+
+def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
+    scheduler_state: SystemState = simulator.state
+    scheduler_arch: SchedulerArchitecture = simulator.mechanisms
+
+    taskmap = scheduler_state.objects.taskmap
+    datamap = scheduler_state.objects.datamap
+
+    highest_workload = -1
+    potential_device = None
+    potential_devices = task.info.runtime.locations
+
+    total_workload = 0
+    for device in potential_devices:
+        total_workload += scheduler_state.perdev_active_workload[device.name] 
+
+    for device in potential_devices:
+        workload = scheduler_state.perdev_active_workload[device.name]
+        norm_workload = (workload / total_workload
+                         if total_workload != 0 else workload)
+        local_data = 0
+        nonlocal_data = 0
+        total_data = 0
+        if task.data_tasks is not None:
+            for dtask_id in task.data_tasks:
+                dtask = taskmap[dtask_id]
+                for data_id in dtask.info.data_dependencies.all_ids():
+                    data = datamap[data_id]
+                    is_valid = data.is_valid(device.name, TaskState.MAPPED)
+                    local_data += data.size if is_valid else 0
+                    nonlocal_data += data.size if not is_valid else 0
+                    total_data += data.size
+            local_data = local_data / total_data if total_data > 0 else local_data
+            nonlocal_data = nonlocal_data / total_data if total_data > 0 else nonlocal_data
+        score = 50 + (30 * local_data - 30 * nonlocal_data - 10 * norm_workload)
+        if score > highest_workload:
+            highest_workload = score
+            potential_device = device
+
+    if isinstance(potential_device, Tuple):
+        potential_device = potential_device[0]
+
+    return (potential_device,)
+
+
 @dataclass(slots=True)
 class TaskMapper:
     restrict_tasks: bool = False
@@ -112,7 +175,12 @@ class TaskMapper:
     mapping_function: MappingFunction = random_mapping_policy
 
     def map_task(self, task: SimulatedTask, simulator) -> Optional[Devices]:
+        sched_state: SystemState = simulator.state
+        
         if self.check_allowed(task) is False:
+            return None
+
+        if (sched_state.total_num_mapped_tasks >= sched_state.mapper_num_tasks_threshold):
             return None
 
         if task.name in self.assignments:
@@ -137,3 +205,105 @@ class TaskMapper:
         return TaskMapper(
             mapping_function=self.mapping_function,
         )
+
+
+@dataclass(slots=True)
+class RLTaskMapper(TaskMapper):
+    # ***********************************
+    # Our RL model needs to collect task graph information for its state features
+    # ***********************************
+    # Max out/indegree
+    max_outdegree: int = 0
+    max_indegree: int = 0
+    # Max expected execution time
+    max_duration: float = 0
+    # Depth from a root task
+    max_depth: int = 0
+    # # of total tasks
+    total_num_tasks: int = 0
+    # degree information
+    outdegree: Dict[TaskID, int] = field(default_factory=dict)
+    indegree: Dict[TaskID, int] = field(default_factory=dict)
+
+    def initialize(
+        self, tasks: List[SimulatedTask], scheduler_state: SystemState
+    ):
+        self.collect_task_graph_info(tasks, scheduler_state)
+
+    def map_task(self, task: SimulatedTask, simulator) -> Optional[Devices]:
+        sched_state: SystemState = simulator.state
+        
+        if self.check_allowed(task) is False:
+            return None
+
+        print("active tasks:", sched_state.mapper_num_tasks_threshold,
+            " total tasks:", sched_state.total_num_mapped_tasks)
+
+        if (sched_state.total_num_mapped_tasks >= sched_state.mapper_num_tasks_threshold):
+            return None
+
+        curr_state = sched_state.rl_env.create_state(task, simulator, self)
+        assigned_devices = (Device(Architecture.GPU,
+                                  sched_state.rl_mapper.select_device(
+                                      task, curr_state, sched_state)),)
+
+        print(f"Task {task.name} mapped to {assigned_devices}.")
+        return assigned_devices
+
+
+    def __deepcopy__(self, memo):
+        return TaskMapper(
+            mapping_function=self.mapping_function,
+        )
+
+    def collect_task_graph_info(self, tasks: List[SimulatedTask], scheduler_state: SystemState):
+        """
+        Collect a task graph information before simulation starts.
+        """
+        taskmap = scheduler_state.objects.taskmap
+        for task in tasks:
+            num_dependents = 0
+            num_dependencies = 0
+            for dependent in task.dependents:
+                if isinstance(taskmap[dependent], SimulatedComputeTask):
+                    num_dependents += 1
+            for dependency in task.dependencies:
+                if isinstance(taskmap[dependency], SimulatedComputeTask):
+                    num_dependencies += 1
+            self.outdegree[task.name] = num_dependents
+            self.indegree[task.name] = num_dependencies
+            self.max_outdegree = max(self.max_outdegree, num_dependents)
+            self.max_indegree = max(self.max_indegree, num_dependencies)
+            task_duration_float = float(
+                scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
+                                                  scale_to("us"))
+            self.max_duration = max(self.max_duration, task_duration_float)
+
+            # Propagate depth to its successors
+            for dep in task.dependencies:
+                task.info.depth = max(task.info.depth, taskmap[dep].info.depth + 1)
+
+            if task.info.depth == -1:
+                # If its depth is not initialized
+                task.info.depth = 0
+
+            self.max_depth = max(self.max_depth, task.info.depth)
+        self.total_num_tasks = len(tasks)
+
+        print(f"max degree: {self.max_outdegree}, "
+              f"in-degree: {self.max_indegree}"
+              f" total tasks: {self.total_num_tasks}, "
+              f"max depth: {self.max_depth} \n"
+              f"max execution time: {self.max_duration}")
+        if logger.ENABLE_LOGGING:
+            logger.runtime.info(
+                f"Total tasks: {self.total_num_tasks}\n"
+                f"Max out-degree: {self.max_outdegree} "
+                f"and in-degree: {self.max_indegree}."
+            )
+
+    def get_indegree(self, task: SimulatedTask):
+        return self.indegree[task.name]
+
+    def get_outdegree(self, task: SimulatedTask):
+        return self.outdegree[task.name]

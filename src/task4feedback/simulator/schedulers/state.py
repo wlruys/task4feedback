@@ -188,6 +188,10 @@ class SystemState:
                 for device in self.topology.devices:
                     self.objects.add_device(device)
 
+            if self.resource_pool is None:
+                self.resource_pool = FasterResourcePool(devices=self.topology.devices)
+            self.init = False
+
         if self.save_task_order:
             if os.path.exists("replay.order"):
                 print("replay.order is removed..")
@@ -201,10 +205,6 @@ class SystemState:
         if self.load_task_noise:
             self.loaded_task_noises = load_task_noise()
             print("loaded task noises!:", self.loaded_task_noises)
-
-            if self.resource_pool is None:
-                self.resource_pool = FasterResourcePool(devices=self.topology.devices)
-            self.init = False
 
     def register_tasks(self, taskmap: SimulatedTaskMap, copy: bool = False):
         if copy:
@@ -268,15 +268,6 @@ class SystemState:
         self, task: SimulatedTask, status: TaskStatus, verbose: bool = False
     ):
         # Check the status of a task
-        raise NotImplementedError()
-
-    def finalize_stats(self):
-        raise NotImplementedError()
-
-    def launch_stats(self, task: SimulatedTask):
-        raise NotImplementedError()
-
-    def completion_stats(self, task: SimulatedTask):
         raise NotImplementedError()
 
     def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):

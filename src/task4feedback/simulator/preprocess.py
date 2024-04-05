@@ -250,14 +250,7 @@ def create_sim_graph(
         tasklist = task_order_log
     elif task_order_mode == TaskOrderType.REPLAY_FILE:
         tasklist = list(compute_tasks.keys())
-        # Read a stored task order and sort tasks by it
-        read_task_key = []
-        with open("saved_task_order.log", "r") as fp:
-            lines = fp.readlines()
-            for l in lines:
-                read_task_key.append(l.rstrip())
-        print("load task order:", read_task_key)
-        tasklist = sorted(list(compute_tasks.keys()), key=read_task_key)
+        tasklist = load_task_order(tasklist)
         print("sorted task order based on the loaded order:", tasklist)
     else:
         tasklist = list(compute_tasks.keys())

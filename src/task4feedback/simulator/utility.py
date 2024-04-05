@@ -215,14 +215,6 @@ def calculate_heft(
         if task.info.heft_makespan > max_heft:
             max_heft = task.info.heft_makespan
 
-    """
-    for key, value in agents.items():
-        test = sorted(value, key=lambda x: x.start)
-        print("Key:", key)
-        for t in test:
-          print(t.task.info.id, " :: ", t.start, " = ", t.end)
-    """
-
     if in_place_update:
         heft_events = sorted(heft_events, key=get_start_time)
         tasklist[:] = [he.task for he in heft_events]
@@ -241,99 +233,6 @@ def calculate_heft(
         print(t.info.id, "...")
     """
     return max_heft
-
-
-def random_mapping(
-    task: "SimulatedTask", sched_state: "SystemState"
-) -> Tuple[Device, ...]:
-    """
-    """
-    # -1 is not supported
-    # devices = task.info.runtime.locations
-    devices = sched_state.topology.devices
-    gpu_devices = []
-    for device in devices:
-        if device.name.architecture != Architecture.CPU:
-            gpu_devices.append(device.name)
-    random.shuffle(gpu_devices)
-    device = gpu_devices[0]
-
-    if not isinstance(device, Tuple):
-        device = (device,)
-
-    return device
-
-
-def load_balancing_mapping(
-    task: "SimulatedTask", sched_state: "SystemState"
-) -> Tuple[Device, ...]:
-    """
-    """
-    devices = sched_state.topology.devices
-    lowest_workload = 99999999999999
-    best_device = None
-
-    for device in devices:
-        if device.name.architecture == Architecture.CPU:
-            continue
-
-        workload = sched_state.perdev_active_workload[device.name]
-        if best_device is None or workload < lowest_workload:
-            lowest_workload = workload
-            best_device = device
-
-    return (best_device.name,)
-
-
-def parla_mapping(
-    task: "SimulatedTask", sched_state: "SystemState"
-) -> Tuple[Device, ...]:
-    """
-    """
-    devices = sched_state.topology.devices
-    taskmap = sched_state.objects.taskmap
-    datamap = sched_state.objects.datamap
-    best_score = -1
-    best_device = -1
-    total_workload = 0
-    for device in devices:
-        workload = sched_state.perdev_active_workload[device.name]
-        total_workload += workload
-
-    for device in devices:
-        if device.name.architecture == Architecture.CPU:
-            continue
-
-        workload = sched_state.perdev_active_workload[device.name]
-        norm_workload = (workload / total_workload
-                         if total_workload != 0 else workload)
-
-        local_data = 0
-        nonlocal_data = 0
-        total_data = 0
-        if task.data_tasks is not None:
-            for dtask_id in task.data_tasks:
-                # print("task ", task, " did:", dtask_id)
-                dtask = taskmap[dtask_id]
-                # print("dtask:", dtask)
-                for data_id in dtask.info.data_dependencies.all_ids():
-                    data = datamap[data_id]
-                    # print("data:", type(data))
-                    valid = data.is_valid(device.name, TaskState.MAPPED)
-                    local_data += data.size if valid else 0
-                    nonlocal_data += data.size if not valid else 0
-                    total_data += data.size
-                # print("device:", device.name, ", validity:", valid, " local size:", local_data,
-                #       " unlocal data:", nonlocal_data)
-        local_data = local_data / total_data if total_data > 0 else local_data
-        nonlocal_data = nonlocal_data / total_data if total_data > 0 else nonlocal_data
-        score = 50 + (30 * local_data - 30 * nonlocal_data - 10 * norm_workload)
-        if score > best_score:
-            best_score = score
-            best_device = device
-        # print("device:", device, " score:", score)
-    # print("best device:", best_device)
-    return (best_device.name,)
 
 
 def load_task_noise() -> Dict[str, int]:
@@ -355,3 +254,18 @@ def save_task_noise(task: "SimulatedTask", noise: "Time"):
     with open("replay.noise", "a") as fp:
         noise_value: int = noise.scale_to("us")
         fp.write(str(task.name) + ":" + str(noise_value) + "\n")
+
+
+def load_task_order(compute_tasks, fname: str = "saved_task_order.log"):
+    tasklist = list(compute_tasks.keys())
+    # Read a stored task order and sort task IDs by it
+    loaded_task_key = []
+    with open(fname, "r") as fp:
+        lines = fp.readlines()
+        for l in lines:
+            loaded_task_key.append(l.rstript())
+    return sorted(tasklist, key=loaded_task_key)
+
+
+def save_task_order():
+    pass

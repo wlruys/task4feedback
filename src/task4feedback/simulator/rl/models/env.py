@@ -6,19 +6,13 @@ from functools import partial
 from typing import Dict, List, Tuple
 from itertools import chain
 
-from ....logging import logger
-from ...utility import convert_to_float
-from ...task import SimulatedTask, SimulatedComputeTask
-from ....types import TaskState, TaskType, Device, Architecture
 from .globals import *
 
+from ...utility import convert_to_float
+from ...task import SimulatedTask, SimulatedComputeTask
 
-def get_indegree(task: SimulatedTask) -> int:
-    return len(task.dependencies)
-
-
-def get_outdegree(task: SimulatedTask) -> int:
-    return len(task.dependents)
+from ....types import TaskState, TaskType, Device, Architecture
+from ....logging import logger
 
 
 class RLBaseEnvironment:
@@ -64,41 +58,49 @@ class RLEnvironment(RLBaseEnvironment):
           logger.runtime.info(f"RL state dimension: {self.state_dim}.")
 
 
-  def create_state(self, target_task: SimulatedTask, sched_state: "SystemState"):
+  def create_state(
+      self, target_task: SimulatedTask, simulator,
+      mapper: "RLTaskMapper"
+  ):
       current_state = torch.zeros(self.state_dim, dtype=torch.float)
-      self.create_global_info(current_state, sched_state)
-      self.create_task_property_info(current_state, target_task, sched_state)
-      self.create_device_utilization_info(current_state, sched_state)
+      self.create_global_info(current_state, simulator, mapper)
+      self.create_task_property_info(current_state, target_task, simulator, mapper)
+      self.create_device_utilization_info(current_state, simulator)
       return current_state
 
 
-  def create_global_info(self, current_state, sched_state: "SystemState"):
+  def create_global_info(
+      self, current_state, simulator, mapper: "RLTaskMapper"
+  ):
       """
         ** Global information (2):
           * Completed tasks / total tasks (TODO(hc))
           * Relative current wall-clock time (TODO(hc))
       """
 
+      sched_state = simulator.state
+
       # % of completed tasks
-      current_state[0] = sched_state.total_num_completed_tasks / sched_state.total_num_tasks \
-                         if sched_state.total_num_tasks > 0 else 0
+      current_state[0] = sched_state.total_num_completed_tasks / mapper.total_num_tasks \
+                         if mapper.total_num_tasks > 0 else 0
 
       # Relative wall clock time
       target_exec_time = sched_state.target_exec_time
       # print("Current time:",convert_to_float(sched_state.time.scale_to("ms")))
       # print("Target time:", target_exec_time)
-      current_state[1] = convert_to_float(sched_state.time.scale_to("ms")) / (2 * target_exec_time) \
+      current_state[1] = convert_to_float(sched_state.time.scale_to("ms")) / (5 * target_exec_time) \
                          if target_exec_time > 0 else 0
 
       if logger.ENABLE_LOGGING:
           logger.runtime.debug(f"RL state [0]: {current_state[0].item()} "
                                f"(# completed tasks: {sched_state.total_num_completed_tasks}"
-                               f", # total tasks: {sched_state.total_num_tasks}).")
+                               f", # total tasks: {mapper.total_num_tasks}).")
           logger.runtime.debug(f"RL state [1]: {current_state[1].item()} (wall clock).")
 
 
-  def create_task_property_info(self, current_state, target_task: SimulatedTask,
-                                sched_state: "SystemState"):
+  def create_task_property_info(
+      self, current_state, target_task: SimulatedTask, simulator, mapper: "RLTaskMapper"
+  ):
       """
         ** Task-specific information (5 + # devices):
           * In-degree / max in-degree
@@ -109,24 +111,26 @@ class RLEnvironment(RLBaseEnvironment):
           * # parent tasks mapped per device / total # parent tasks
       """
 
+      sched_state = simulator.state
+
       offset = self.task_property_offset
 
       # In-degree 
-      if sched_state.max_indegree > 0:
-          current_state[offset] = get_indegree(target_task) / sched_state.max_indegree
+      if mapper.max_indegree > 0:
+          current_state[offset] = mapper.get_indegree(target_task) / mapper.max_indegree
       if logger.ENABLE_LOGGING:
           logger.runtime.debug(f"RL state [{offset}]: {current_state[offset].item()} "
-                               f"(indegree {get_indegree(target_task)}, "
-                               f"max indegree {sched_state.max_indegree}).")
+                               f"(indegree {mapper.get_indegree(target_task)}, "
+                               f"max indegree {mapper.max_indegree}).")
 
       # Out-degree
       offset += 1
-      if sched_state.max_outdegree > 0:
-          current_state[offset] = get_outdegree(target_task) / sched_state.max_outdegree
+      if mapper.max_outdegree > 0:
+          current_state[offset] = mapper.get_outdegree(target_task) / mapper.max_outdegree
       if logger.ENABLE_LOGGING:
           logger.runtime.debug(f"RL state [{offset}]: {current_state[offset].item()} "
-                               f"(outdegree {get_indegree(target_task)}, "
-                               f"max outdegree {sched_state.max_outdegree}).")
+                               f"(outdegree {mapper.get_outdegree(target_task)}, "
+                               f"max outdegree {mapper.max_outdegree}).")
 
       # Task function type
       offset += 1
@@ -139,7 +143,7 @@ class RLEnvironment(RLBaseEnvironment):
 
       # Task expected execution time
       offset += self.num_task_types
-      if sched_state.max_duration > 0:
+      if mapper.max_duration > 0:
           # Gets expected task duration time on the 0th device.
           # For RL, we assume that all devices require the same duration
           # for a task, which means that in real systems, it can be variable.
@@ -147,22 +151,22 @@ class RLEnvironment(RLBaseEnvironment):
               sched_state.get_task_duration(
                   target_task,
                   target_task.info.runtime.locations[0]).scale_to("us"))
-          current_state[offset] = task_duration / sched_state.max_duration
+          current_state[offset] = task_duration / mapper.max_duration
           if logger.ENABLE_LOGGING:
               logger.runtime.debug(f"RL state [{offset}]: "
                                    f"{current_state[offset].item()} "
                                    f"(duration {task_duration} "
-                                   f"max duration: {sched_state.max_duration}).")
+                                   f"max duration: {mapper.max_duration}).")
       
       # Task depth
       offset += 1
-      if sched_state.max_depth > 0:
-          current_state[offset] = target_task.info.depth / sched_state.max_depth
+      if mapper.max_depth > 0:
+          current_state[offset] = target_task.info.depth / mapper.max_depth
       if logger.ENABLE_LOGGING:
           logger.runtime.debug(f"RL state [{offset}]: "
                                f"{current_state[offset].item()} "
                                f"(depth {target_task.info.depth} "
-                               f"max depth: {sched_state.max_depth}).")
+                               f"max depth: {mapper.max_depth}).")
 
       # Parent task distribution
       offset += 1
@@ -175,7 +179,7 @@ class RLEnvironment(RLBaseEnvironment):
               if logger.ENABLE_LOGGING:
                   logger.runtime.debug(f"RL state [{offset + p_dev_id}]: "
                                        f"{current_state[offset + p_dev_id].item()} "
-                                       f"(# parant tasks at device {p_dev_id}).")
+                                       f"(# parent tasks at device {p_dev_id}).")
       # Normalization
       devicemap = sched_state.objects.devicemap
       for device in devicemap:
@@ -184,21 +188,26 @@ class RLEnvironment(RLBaseEnvironment):
               continue
 
           dev_id = device.device_id
-          if len(target_task.dependencies) > 0:
+          if mapper.get_indegree(target_task) > 0:
               current_state[offset + dev_id] = \
-                  current_state[offset + dev_id].item() / len(target_task.dependencies)
+                  current_state[offset + dev_id].item() / mapper.get_indegree(target_task)
           if logger.ENABLE_LOGGING:
               logger.runtime.debug(f"RL state [{offset + dev_id}]: "
-                                   f"{current_state[offset + dev_id].item()}.")
+                                   f"{current_state[offset + dev_id].item()} / {mapper.get_indegree(target_task)}."
+                                   f" (normalization)")
 
  
-  def create_device_utilization_info(self, current_state, sched_state: "SystemState"):
+  def create_device_utilization_info(self, current_state, simulator):
       """
         ** Device/network information (3 * # devices):
           * Normalized resource usage (memory, VCUs)
           * # mapped tasks per device / # active tasks
           * Relative per-device idle time so far
       """
+
+      sched_state = simulator.state
+      sched_arch = simulator.mechanisms
+
       offset = self.device_utilization_state_offset
 
       # Resource usage
@@ -238,14 +247,20 @@ class RLEnvironment(RLBaseEnvironment):
               continue
 
           dev_id = device.device_id
-          current_state[dev_id + offset] = convert_to_float(
-              device_instance.stats.idle_time.scale_to("ms")) / (2 * target_exec_time) if \
-              target_exec_time > 0 else 0
+          is_nothing_launched = sched_arch.is_nothing_launched[device]
+          if is_nothing_launched:
+              idle_time = float(sched_state.time.scale_to("ms"))
+              print("sched time:", sched_state.time, " idle time:", idle_time)
+          else:
+              idle_time = convert_to_float(device_instance.stats.idle_time.scale_to("ms"))
+          norm_idle_time = (idle_time / (5 * target_exec_time) if target_exec_time else 0)
+          current_state[dev_id + offset] = norm_idle_time
           if logger.ENABLE_LOGGING:
               logger.runtime.debug(f"RL state [{dev_id + offset}]: "
                                    f"{current_state[dev_id + offset].item()} "
-                                   f"(device {dev_id} idle time {device_instance.stats.idle_time}) ")
-
+                                   f"(device {dev_id} "
+                                   f"idle time: {idle_time}, target exect ime: {target_exec_time} "
+                                   f"norm idle time: {norm_idle_time}, flag: {is_nothing_launched}) ")
 
   def finalize_epoch(self, execution_time):
       pass

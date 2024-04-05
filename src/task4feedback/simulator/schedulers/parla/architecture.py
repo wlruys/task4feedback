@@ -54,12 +54,18 @@ def map_task(
     # Check if task is mappable
     if check_status := scheduler_state.check_task_status(task, TaskStatus.MAPPABLE):
         chosen_devices = mapper.map_task(task, simulator)
-        task.assigned_devices = chosen_devices
-        scheduler_state.acquire_resources(phase, task, verbose=verbose)
-        scheduler_state.use_data(phase, task, verbose=verbose)
-        scheduler_state.mapped_active_tasks += 1
+        if chosen_devices is not None:
+            task.assigned_devices = chosen_devices
+            task_workload = float(scheduler_state.get_task_duration(
+                                      task, task.info.runtime.locations[0]).scale_to("ms"))
+            scheduler_state.acquire_resources(phase, task, verbose=verbose)
+            scheduler_state.use_data(phase, task, verbose=verbose)
+            scheduler_state.mapped_active_tasks += 1
+            scheduler_state.total_num_mapped_tasks += 1
+            scheduler_state.perdev_active_workload[chosen_devices[0]] += task_workload
+            scheduler_state.total_active_workload += task_workload
 
-        return chosen_devices
+            return chosen_devices
 
     if logger.ENABLE_LOGGING:
         logger.runtime.debug(
@@ -204,6 +210,58 @@ def launch_task(
             task.completion_time = completion_time
             scheduler_state.launched_active_tasks += 1
 
+            devices = task.assigned_devices
+            assert devices is not None
+
+            if isinstance(task, SimulatedComputeTask):
+                scheduler_state.total_num_mapped_tasks -= 1
+
+            for device_id in devices:
+                device = scheduler_state.objects.get_device(device_id)
+                assert device is not None
+
+                if device.stats.active_compute == 0 and device.stats.active_movement == 0:
+                    last_active = max(
+                        device.stats.last_active_compute, device.stats.last_active_movement
+                    )
+                    duration = scheduler_state.time - last_active
+                    device.stats.idle_time += duration
+
+                    if logger.ENABLE_LOGGING:
+                        logger.stats.debug(
+                            f"Device {device_id} was idle. Duration: {duration}, Last Active: {last_active}",
+                            extra=dict(device=device_id),
+                        )
+
+                if isinstance(task, SimulatedComputeTask):
+                    if device.stats.active_compute == 0:
+                        duration = scheduler_state.time - device.stats.last_active_compute
+                        device.stats.idle_time_compute += duration
+
+                        if logger.ENABLE_LOGGING:
+                            logger.stats.debug(
+                                f"Device {device_id} was compute idle. Duration: {duration}, Last Active: {device.stats.last_active_compute}",
+                                extra=dict(device=device_id),
+                            )
+
+                elif isinstance(task, SimulatedDataTask) and task.real:
+                    if device.stats.active_movement == 0:
+                        duration = scheduler_state.time - device.stats.last_active_movement
+                        device.stats.idle_time_movement += duration
+
+                        if logger.ENABLE_LOGGING:
+                            logger.stats.debug(
+                                f"Device {device_id} was movement idle. Duration: {duration}, Last Active: {device.stats.last_active_movement}",
+                                extra=dict(device=device_id),
+                            )
+
+                if isinstance(task, SimulatedComputeTask):
+                    device.stats.last_active_compute = task.completion_time
+                    device.stats.active_compute += 1
+                elif isinstance(task, SimulatedDataTask) and task.real:
+                    device.stats.last_active_movement = task.completion_time
+                    device.stats.active_movement += 1
+
             return True
         else:
             if logger.ENABLE_LOGGING:
@@ -236,9 +294,27 @@ def complete_task(
     scheduler_state.mapped_active_tasks -= 1
     scheduler_state.reserved_active_tasks -= 1
     scheduler_state.launched_active_tasks -= 1
+    logger.runtime.debug(f"Task completion: {task.name}\n")
+    if isinstance(task, SimulatedComputeTask):
+        scheduler_state.total_num_completed_tasks += 1
+        logger.runtime.debug(f"Total num completed tasks: {scheduler_state.total_num_completed_tasks}\n")
+        task_workload = float(
+            scheduler_state.get_task_duration(
+                task, task.info.runtime.locations[0]).scale_to("ms"))
+        scheduler_state.total_active_workload -= task_workload
+    for device_id in task.assigned_devices:
+        device = scheduler_state.objects.get_device(device_id)
+        assert device is not None
 
-    # scheduler_state.completion_stats(task)
-
+        if isinstance(task, SimulatedComputeTask):
+            device.stats.active_compute -= 1
+            scheduler_state.perdev_active_workload[device_id] -= task_workload
+        elif isinstance(task, SimulatedDataTask) and task.real:
+            device.stats.active_movement -= 1
+            data_id = task.read_accesses[0].id
+            data = scheduler_state.objects.get_data(data_id)
+            data.stats.move_time += task.duration
+            data.stats.move_count += 1
     return True
 
 
@@ -255,6 +331,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         default_factory=dict
     )
     launched_tasks: Dict[Device, TaskQueue] = field(default_factory=dict)
+    is_nothing_launched: Dict[Device, bool] = field(default_factory=dict)
     success_count: int = 0
     active_scheduler: int = 0
     eviction_occured: bool = False
@@ -265,6 +342,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         reservable_tasks = deepcopy(self.reservable_tasks)
         launchable_tasks = deepcopy(self.launchable_tasks)
         launched_tasks = deepcopy(self.launched_tasks)
+        is_nothing_launched = deepcopy(self.is_nothing_launched)
         completed_tasks = [t for t in self.completed_tasks]
 
         # print("Mappable Tasks: ", launchable_tasks, self.launchable_tasks)
@@ -276,6 +354,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             reservable_tasks=reservable_tasks,
             launchable_tasks=launchable_tasks,
             launched_tasks=launched_tasks,
+            is_nothing_launched=is_nothing_launched,
             success_count=self.success_count,
             active_scheduler=self.active_scheduler,
             eviction_occured=self.eviction_occured,
@@ -295,6 +374,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 self.launchable_tasks[device.name][TaskType.EVICTION] = TaskQueue()
 
                 self.launched_tasks[device.name] = TaskQueue()
+                self.is_nothing_launched[device.name] = True
 
     def initialize(
         self, tasks: List[TaskID], scheduler_state: SystemState, **kwargs
@@ -308,6 +388,9 @@ class ParlaArchitecture(SchedulerArchitecture):
         scheduler_state.initialize(tasks, task_objects)
         # Initialize the set of visible tasks
         self.add_initial_tasks(task_objects, scheduler_state)
+         
+        simulator = kwargs["simulator"]
+        simulator.mapper.initialize(task_objects, scheduler_state)
 
         # Initialize memory for starting data blocks
         for data in objects.datamap.values():
@@ -592,6 +675,9 @@ class ParlaArchitecture(SchedulerArchitecture):
                 # print(task, " launched [done]")
                 device = task.assigned_devices[0]  # type: ignore
                 self.launched_tasks[device].put_id(taskid, completion_time)
+
+                if self.is_nothing_launched[device]:
+                    self.is_nothing_launched[device] = False
 
                 if logger.ENABLE_LOGGING:
                     logger.runtime.info(
