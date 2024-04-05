@@ -13,6 +13,7 @@ from task4feedback.types import *
 from task4feedback.simulator.preprocess import *
 from task4feedback.simulator.simulator import *
 from task4feedback.simulator.topology import *
+from task4feedback.simulator.mapper import *
 
 from task4feedback.simulator.analysis.recorder import *
 from task4feedback.simulator.analysis.plot import *
@@ -158,6 +159,7 @@ def test_data():
     task_order_log = None
     si = args.sorting_interval
 
+    mapper = TaskMapper()
     while True:
         if episode > args.episode and args.episode != -1:
             break
@@ -173,21 +175,24 @@ def test_data():
         state_mode = args.mode
         if state_mode == "testing" or state_mode == "training":
             state_mode = "rl"
+            mapper = RLTaskMapper()
+
         simulator_config = SimulatorConfig(
             topology=topology,
             tasks=tasks,
-            task_order_log=task_order_log,
             data=data,
+            task_order_log=task_order_log,
             scheduler_type="parla",
             scheduler_state_type=state_mode,
             randomizer=Randomizer(),
             task_order_mode=task_order_mode,
-            rl_env=rl_env,
-            rl_mapper=rl_agent,
             use_duration_noise=args.noise,
             noise_scale=args.noise_scale,
             save_task_noise=args.save_noise,
-            load_task_noise=args.load_noise
+            load_task_noise=args.load_noise,
+            mapper=mapper,
+            rl_env=rl_env,
+            rl_mapper=rl_agent,
         )
         simulator = create_simulator(config=simulator_config)
 
