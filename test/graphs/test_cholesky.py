@@ -172,9 +172,9 @@ def test_data():
 
         topology = TopologyManager().generate("frontera", config=None)
 
-        state_mode = args.mode
-        if state_mode == "testing" or state_mode == "training":
-            state_mode = "rl"
+        mapper_mode = args.mode
+        if args.mode == "testing" or args.mode == "training":
+            mapper_mode = "rl"
             mapper = RLTaskMapper()
 
         simulator_config = SimulatorConfig(
@@ -183,7 +183,7 @@ def test_data():
             data=data,
             task_order_log=task_order_log,
             scheduler_type="parla",
-            scheduler_state_type=state_mode,
+            mapper_type=mapper_mode,
             randomizer=Randomizer(),
             task_order_mode=task_order_mode,
             use_duration_noise=args.noise,

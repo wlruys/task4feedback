@@ -34,14 +34,29 @@ def default_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
 def random_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
     scheduler_state: SystemState = simulator.state
     scheduler_arch: SchedulerArchitecture = simulator.mechanisms
+    
+    num_gpus = len(scheduler_state.topology.devices) - 1
 
+    """
+    TODO(hc):-1 is not supported so for now sample from # GPUs
     potential_devices = task.info.runtime.locations
+    
     index = np.random.randint(0, len(potential_devices))
 
     potential_device = potential_devices[index]
 
     if isinstance(potential_device, Tuple):
         potential_device = potential_device[0]
+    """
+    potential_device = Device(Architecture.GPU, np.random.randint(0, num_gpus))
+    print("task:", task.name, " random device:", potential_device.device_id)
+
+    return (potential_device,)
+
+
+def heft_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
+    potential_device = Device(Architecture.GPU, task.info.heft_allocation)
+    print("task:", task.name, " heft device:", potential_device.device_id)
 
     return (potential_device,)
 
@@ -110,16 +125,20 @@ def loadbalancing_mapping_policy(task: SimulatedTask, simulator) -> Optional[Dev
 
     lowest_workload = 9999999999999999999
     potential_device = None
-    potential_devices = task.info.runtime.locations
+    # potential_devices = task.info.runtime.locations
+    potential_devices = scheduler_state.topology.devices
     for device in potential_devices:
+        if device.name.architecture == Architecture.CPU:
+            continue
         workload = scheduler_state.perdev_active_workload[device.name]
         if potential_device is None or workload < lowest_workload:
             lowest_workload = workload
-            potential_device = device
+            potential_device = device.name
 
     if isinstance(potential_device, Tuple):
         potential_device = potential_device[0]
 
+    print("load balancing device:", potential_device)
     return (potential_device,)
 
 
@@ -132,13 +151,20 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
 
     highest_workload = -1
     potential_device = None
-    potential_devices = task.info.runtime.locations
+    # potential_devices = task.info.runtime.locations
+    potential_devices = scheduler_state.topology.devices
 
     total_workload = 0
     for device in potential_devices:
+        if device.name.architecture == Architecture.CPU:
+            continue
+
         total_workload += scheduler_state.perdev_active_workload[device.name] 
 
     for device in potential_devices:
+        if device.name.architecture == Architecture.CPU:
+            continue
+
         workload = scheduler_state.perdev_active_workload[device.name]
         norm_workload = (workload / total_workload
                          if total_workload != 0 else workload)
@@ -159,11 +185,12 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
         score = 50 + (30 * local_data - 30 * nonlocal_data - 10 * norm_workload)
         if score > highest_workload:
             highest_workload = score
-            potential_device = device
+            potential_device = device.name
 
     if isinstance(potential_device, Tuple):
         potential_device = potential_device[0]
 
+    # print("potential device:", potential_device)
     return (potential_device,)
 
 
@@ -173,6 +200,21 @@ class TaskMapper:
     allowed_set: Set[TaskID] = field(default_factory=set)
     assignments: Dict[TaskID, Devices] = field(default_factory=dict)
     mapping_function: MappingFunction = random_mapping_policy
+
+    def initialize(
+        self, tasks: List[SimulatedTask], scheduler_state: SystemState, mapper_type: str
+    ):
+        if mapper_type == "random":
+            print("RANDOM mapper is enabled")
+            self.mapping_function = random_mapping_policy
+        elif mapper_type == "parla":
+            print("PARLA mapper is enabled")
+            self.mapping_function = parla_mapping_policy
+        elif mapper_type == "loadbalance":
+            print("Load balancing mapper is enabled")
+            self.mapping_function = loadbalancing_mapping_policy
+        elif mapper_type == "heft":
+            self.mapping_function = heft_mapping_policy
 
     def map_task(self, task: SimulatedTask, simulator) -> Optional[Devices]:
         sched_state: SystemState = simulator.state
@@ -226,7 +268,7 @@ class RLTaskMapper(TaskMapper):
     indegree: Dict[TaskID, int] = field(default_factory=dict)
 
     def initialize(
-        self, tasks: List[SimulatedTask], scheduler_state: SystemState
+        self, tasks: List[SimulatedTask], scheduler_state: SystemState, scheduler_state_type: str
     ):
         self.collect_task_graph_info(tasks, scheduler_state)
 

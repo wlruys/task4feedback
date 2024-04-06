@@ -33,11 +33,22 @@ from .mapper import *
 from enum import Enum
 
 
+def get_scheduler_state(mapper_type: str):
+    if (mapper_type == "random" or mapper_type == "parla" or
+        mapper_type == "loadbalance" or mapper_type == "heft"):
+        return "parla"
+    elif mapper_type == "rl":
+        return "rl"
+    else:
+        print(f"Unsupported mapper type: {mapper_type}")
+        return None
+
+
 @dataclass(slots=True)
 class SimulatedScheduler:
     topology: SimulatedTopology | None = None
     scheduler_type: str = "parla"
-    scheduler_state_type: str = "parla"
+    mapper_type: str = "parla"
     tasks: List[TaskID] = field(default_factory=list)
     name: str = "SimulatedScheduler"
     mechanisms: SchedulerArchitecture | None = None
@@ -69,7 +80,10 @@ class SimulatedScheduler:
 
     def __post_init__(self):
         if self.state is None:
-            scheduler_state = SchedulerOptions.get_state(self.scheduler_state_type)
+            scheduler_state_type = get_scheduler_state(self.mapper_type)
+            scheduler_state = SchedulerOptions.get_state(scheduler_state_type)
+            if self.mapper_type == "heft":
+                assert self.task_order_mode == TaskOrderType.HEFT
             print("scheduler state:", scheduler_state, " is created")
             self.state = scheduler_state(topology=self.topology,
                                          rl_env=self.rl_env,
@@ -204,7 +218,8 @@ class SimulatedScheduler:
         if self.init:
             print(">> self state:", self.state)
             new_event_pairs = self.mechanisms.initialize(
-                tasks=self.tasks, scheduler_state=self.state, simulator=self
+                tasks=self.tasks, scheduler_state=self.state, simulator=self,
+                mapper_type=self.mapper_type
             )
             for completion_time, new_event in new_event_pairs:
                 self.events.put(new_event, completion_time)

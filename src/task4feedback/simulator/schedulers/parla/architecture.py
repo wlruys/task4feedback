@@ -390,7 +390,8 @@ class ParlaArchitecture(SchedulerArchitecture):
         self.add_initial_tasks(task_objects, scheduler_state)
          
         simulator = kwargs["simulator"]
-        simulator.mapper.initialize(task_objects, scheduler_state)
+        mapper_type = kwargs["mapper_type"]
+        simulator.mapper.initialize(task_objects, scheduler_state, mapper_type)
 
         # Initialize memory for starting data blocks
         for data in objects.datamap.values():

@@ -1067,6 +1067,23 @@ class ParlaState(SystemState):
     # # of tasks in (mapped~launchable) states
     total_num_mapped_tasks: int = 0
 
+    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+        self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+
+        if self.task_order_mode == TaskOrderType.RANDOM:
+            print("PARLA RANDOM SORT")
+            task_objects[:] = self.randomizer.task_order(
+                task_objects, self.objects.taskmap)
+        elif self.task_order_mode == TaskOrderType.HEFT:
+            print("HEFT SORT")
+            # Tasks are sorted in-place
+            _ = calculate_heft(
+                task_objects, self.objects.taskmap,
+                len(self.objects.devicemap)-1, self, True)
+
+        task_ids[:] = [t.name for t in task_objects]
 
     def __deepcopy__(self, memo):
         s = clock()
@@ -1244,24 +1261,6 @@ class ParlaState(SystemState):
         else:
             return None
 
-    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
-        self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
-        for device in self.objects.devicemap:
-            self.perdev_active_workload[device] = 0
-
-        if self.task_order_mode == TaskOrderType.RANDOM:
-            print("PARLA RANDOM SORT")
-            task_objects[:] = self.randomizer.task_order(
-                task_objects, self.objects.taskmap)
-        elif self.task_order_mode == TaskOrderType.HEFT:
-            print("HEFT SORT")
-            # Tasks are sorted in-place
-            _ = calculate_heft(
-                task_objects, self.objects.taskmap,
-                len(self.objects.devicemap)-1, self, True)
-
-        task_ids[:] = [t.name for t in task_objects]
-
     def complete(self):
         pass
 
@@ -1302,71 +1301,7 @@ class RLState(ParlaState):
         self.rl_mapper.complete_episode(total_exec_time)
 
 
-
-
-
-
-
-
 '''
-@SchedulerOptions.register_state("heft")
-@dataclass(slots=True)
-class HEFTState(ParlaState):
-    target_exec_time: float = 0
-
-    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
-        assert self.task_order_mode == TaskOrderType.HEFT
-
-        self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
-        for device in self.objects.devicemap:
-            self.perdev_active_workload[device] = 0
-
-        print("HEFT ORDER")
-
-        # This state always assumes that the order is HEFT
-        # Calculate HEFT (ignore CPU)
-        self.target_exec_time = calculate_heft(
-            task_objects, self.objects.taskmap,
-            len(self.objects.devicemap) - 1, self, True
-        )
-
-        task_ids[:] = [t.name for t in task_objects]
-
-    def map_task(self, task: SimulatedTask, verbose: bool = False
-    ) -> Optional[Tuple[Device, ...]]:
-
-        phase = TaskState.MAPPED
-        objects = self.objects
-        assert objects is not None
-
-        current_time = self.time
-        print(task.name, " try to assign device")
-        assert current_time is not None
-
-        # Check if task is mappable
-        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
-            chosen_device_id = task.info.heft_allocation
-            chosen_device = (Device(Architecture.GPU, chosen_device_id),)
-            print(task.name, " chose device:", chosen_device_id)
-
-            task.assigned_devices = chosen_device
-            self.acquire_resources(phase, task, verbose=verbose)
-            self.use_data(phase, task, verbose=verbose)
-
-            self.total_num_mapped_tasks += 1
-
-            return chosen_device
-
-        if logger.ENABLE_LOGGING:
-            logger.runtime.debug(
-                f"Task {task.name} cannot be mapped: Invalid status.",
-                extra=dict(
-                    task=task.name, phase=phase, counters=task.counters, status=task.status
-                ),
-            )
-        return None
-
-
 @SchedulerOptions.register_state("worst")
 @dataclass(slots=True)
 class WorstState(ParlaState):
@@ -1461,108 +1396,4 @@ class WorstState(ParlaState):
             save_task_noise(task, noise)
 
         return duration, completion_time + noise
-
-
-
-@SchedulerOptions.register_state("loadbalance")
-@dataclass(slots=True)
-class LoadBalancingState(ParlaState):
-
-    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
-        assert self.task_order_mode == TaskOrderType.HEFT
-
-        self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
-        for device in self.objects.devicemap:
-            self.perdev_active_workload[device] = 0
-
-        print("Load Balancing Task Mapper")
-
-    def map_task(self, task: SimulatedTask, verbose: bool = False
-    ) -> Optional[Tuple[Device, ...]]:
-
-        phase = TaskState.MAPPED
-        objects = self.objects
-        assert objects is not None
-
-        current_time = self.time
-        assert current_time is not None
-
-        # Check if task is mappable
-        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
-            chosen_device = load_balancing_mapping(task, self)
-            # Assign all tasks to a single device
-            task.assigned_devices = chosen_device
-            self.acquire_resources(phase, task, verbose=verbose)
-            self.use_data(phase, task, verbose=verbose)
-
-            for dev in task.assigned_devices:
-                workload = convert_to_float(
-                    self.get_task_duration(task, task.info.runtime.locations[0]).
-                    scale_to("ms"))
-                self.perdev_active_workload[dev] += workload
-                self.total_active_workload += workload
-            self.total_num_mapped_tasks += 1
-
-            return task.assigned_devices
-
-        if logger.ENABLE_LOGGING:
-            logger.runtime.debug(
-                f"Task {task.name} cannot be mapped: Invalid status.",
-                extra=dict(
-                    task=task.name, phase=phase, counters=task.counters, status=task.status
-                ),
-            )
-        return None
-
-
-
-@SchedulerOptions.register_state("random")
-@dataclass(slots=True)
-class RandomState(ParlaState):
-
-    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
-        assert self.task_order_mode == TaskOrderType.HEFT
-
-        self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
-        for device in self.objects.devicemap:
-            self.perdev_active_workload[device] = 0
-
-        print("Random Task Mapper")
-
-    def map_task(self, task: SimulatedTask, verbose: bool = False
-    ) -> Optional[Tuple[Device, ...]]:
-
-        phase = TaskState.MAPPED
-        objects = self.objects
-        assert objects is not None
-
-        current_time = self.time
-        assert current_time is not None
-
-        # Check if task is mappable
-        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
-            chosen_device = random_mapping(task, self)
-            # Assign all tasks to a single device
-            task.assigned_devices = chosen_device
-            self.acquire_resources(phase, task, verbose=verbose)
-            self.use_data(phase, task, verbose=verbose)
-
-            for dev in task.assigned_devices:
-                workload = convert_to_float(
-                    self.get_task_duration(task, task.info.runtime.locations[0]).
-                    scale_to("ms"))
-                self.perdev_active_workload[dev] += workload
-                self.total_active_workload += workload
-            self.total_num_mapped_tasks += 1
-
-            return task.assigned_devices
-
-        if logger.ENABLE_LOGGING:
-            logger.runtime.debug(
-                f"Task {task.name} cannot be mapped: Invalid status.",
-                extra=dict(
-                    task=task.name, phase=phase, counters=task.counters, status=task.status
-                ),
-            )
-        return None
 '''
