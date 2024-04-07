@@ -99,7 +99,7 @@ def test_data(n_gpus, blocks, n, p, hier_levels, a=8, data_size=None, m=None, en
     # def sizes(data_id: DataID) -> int:
     #     return data_size
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
-        runtime_info = TaskRuntimeInfo(task_time=10000, device_fraction=1, memory=0)
+        runtime_info = TaskRuntimeInfo(task_time=100, device_fraction=1, memory=0)
         placement_info = TaskPlacementInfo()
         if dram:
             if(task_id.task_idx[2] == 0):
@@ -132,7 +132,11 @@ def test_data(n_gpus, blocks, n, p, hier_levels, a=8, data_size=None, m=None, en
     data_config.initial_sizes = initial_data_size
     config = CannonGemmHierConfig(hier_levels=hier_levels, levels=levels, blocks=blocks, n = n, p=p[0], task_config=task_placement)
     tasks, data = make_graph(config, data_config=data_config)
+    start_t = clock()
     topology = TopologyManager().generate("mesh_hier", config={"N": p[0], "TOTAL_N": n_gpus, "HIER_LEVELS": hier_levels, "ENERGY": tuple(energy), "DRAM": dram})
+    end_t = clock()
+    print(f"Time to Generate Topology: {end_t - start_t}")
+    
     # write_tasks_to_yaml(tasks, "graph")
     # write_data_to_yaml(data, "graph")
     #tasklist, taskmap, datamap = read_sim_graph("graph")
@@ -147,7 +151,11 @@ def test_data(n_gpus, blocks, n, p, hier_levels, a=8, data_size=None, m=None, en
         scheduler_type="parla",
         recorders=[DataValidRecorder, ComputeTaskRecorder, DataTaskRecorder],
     )
+    print("simulator_config")
+    start_t = clock()
     simulator = create_simulator(config=simulator_config)
+    end_t = clock()
+    print(f"Time to Create Simulator: {end_t - start_t}")
     start_t = clock()
     simulator.run()
     end_t = clock()
@@ -165,7 +173,7 @@ def test_data(n_gpus, blocks, n, p, hier_levels, a=8, data_size=None, m=None, en
     for task in data_task_recorder.tasks.values():
         if(task.data_size != 0 and task.communication_energy != 0):
             count += 1
-            print(str(task.data.idx[0][2]) + " " + str(task.name) + " " + str(task.data_size) + "D: " + str(task.devices) + "S: " + str(task.source) + " " + str(task.communication_energy))
+            # print(str(task.data.idx[0][2]) + " " + str(task.name) + " " + str(task.data_size) + "D: " + str(task.devices) + "S: " + str(task.source) + " " + str(task.communication_energy))
             
         #if(task.data.idx[0][2] == 0):
         #print(str(task.data.idx[0][2]) + " " + str(task.name) + " " + str(task.data_size) + "D: " + str(task.devices) + "S: " + str(task.source) + " " + str(task.communication_energy))
@@ -310,7 +318,7 @@ m4 = parse_size(args.m)
 m = [m4]
 
 #n = 256
-levels = 2
+#levels = 2
 #p_per_level = 4
 p = []
 a = 8
@@ -320,7 +328,7 @@ for i in range(args.max_levels):
 for i in range(1, args.max_levels):
     m.append(m[i - 1] * p[i - 1])
 
-#levels = test_util.calc_num_levels(a, n, m, p)
+levels = test_util.calc_num_levels(a, n, m, p)
 print(levels)
 p, total_p = test_util.get_total_p_hier_mesh(levels, p_per_level)
 # for i in range(levels):
@@ -329,4 +337,7 @@ p, total_p = test_util.get_total_p_hier_mesh(levels, p_per_level)
 print(total_p)
 print(p)
 dram = True
+start_t = clock()
 test_data(total_p, p_per_level, n, p, levels, a=a, energy=energy, dram=dram)
+end_t = clock()
+print(f"Total Time: {end_t - start_t}")

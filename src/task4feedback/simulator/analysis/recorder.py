@@ -290,6 +290,7 @@ class DataTaskRecord(TaskRecord):
     data: Optional[DataID] = None
     data_size: Optional[int] = None
     reserve_time: Time = Time(0)
+    communication_energy: float = 0
 
 
 @dataclass(slots=True)
@@ -402,12 +403,12 @@ class DataTaskRecorder(Recorder):
                         data_size = data.size
                         devices = task.assigned_devices
                         communication_energy = 0
-                        print("In recorder")
+                        #print("In recorder")
                         if(task.real): # check if there is any data movement
-                            print("In if")
+                            #print("In if")
                             for device in devices:
                                 communication_energy += device.energy * data_size
-                                print(communication_energy)
+                                #print(communication_energy)
 
                         self.tasks[name] = DataTaskRecord(
                             name,
