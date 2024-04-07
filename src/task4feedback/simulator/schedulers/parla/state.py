@@ -1252,7 +1252,7 @@ class ParlaState(SystemState):
             # print("task:", task.name, ", ", duration, " generated noise:", noise)
         elif self.load_task_noise:
             noise = Time(int(self.loaded_task_noises[str(task.name)]))
-            print("task:", task.name, " loaded noise:", noise)
+            # print("task:", task.name, " loaded noise:", noise)
 
         if self.save_task_noise:
             save_task_noise(task, noise)

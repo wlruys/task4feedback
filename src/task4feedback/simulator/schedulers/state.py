@@ -213,7 +213,10 @@ class SystemState:
 
         if self.load_task_noise:
             self.loaded_task_noises = load_task_noise()
-            print("loaded task noises!:", self.loaded_task_noises)
+            if self.loaded_task_noises is None:
+                self.load_task_noise = False
+                self.use_duration_noise = False
+                self.save_task_noise = False
 
     def register_tasks(self, taskmap: SimulatedTaskMap, copy: bool = False):
         if copy:

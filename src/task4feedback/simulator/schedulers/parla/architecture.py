@@ -204,7 +204,6 @@ def launch_task(
             duration, completion_time = scheduler_state.get_task_duration_completion(
                 task, task.assigned_devices, verbose=verbose
             )
-            # print("task:", task, " duration:", duration)
             scheduler_state.use_data(phase, task, verbose=verbose)
             task.duration = duration
             task.completion_time = completion_time

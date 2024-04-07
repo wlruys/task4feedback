@@ -279,9 +279,6 @@ class RLTaskMapper(TaskMapper):
         if self.check_allowed(task) is False:
             return None
 
-        print("active tasks:", sched_state.mapper_num_tasks_threshold,
-            " total tasks:", sched_state.total_num_mapped_tasks)
-
         if (sched_state.total_num_mapped_tasks >= sched_state.mapper_num_tasks_threshold):
             return None
 

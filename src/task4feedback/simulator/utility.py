@@ -212,6 +212,7 @@ def calculate_heft(
         bisect.insort(agents[earliest_start_agent], heft_event, key=lambda x: x.start)
         task.info.heft_makespan = earliest_start + duration
         task.info.heft_allocation = earliest_start_agent
+        print(f"heft task {task.name}, allocation: {earliest_start_agent}")
         if task.info.heft_makespan > max_heft:
             max_heft = task.info.heft_makespan
 
@@ -235,23 +236,27 @@ def calculate_heft(
     return max_heft
 
 
-def load_task_noise() -> Dict[str, int]:
+def load_task_noise(fname: str = "replay.noise") -> Dict[str, int]:
     loaded_task_noise = dict()
     print("task noise loading..")
-    with open("replay.noise", "r") as fp:
-        lines = fp.readlines()
-        for l in lines:
-            l = l.rstrip()
-            unpacked = l.split(":")
-            key = unpacked[0]
-            val = unpacked[1]
-            print(">>", key, ", ", val)
-            loaded_task_noise[key] = val
+    try:
+        with open(fname, "r") as fp:
+            lines = fp.readlines()
+            for l in lines:
+                l = l.rstrip()
+                unpacked = l.split(":")
+                key = unpacked[0]
+                val = unpacked[1]
+                loaded_task_noise[key] = val
+    except IOError:
+        print(f"Could not read task noise file: {fname}")
+        print("Disable task execution time noise")
+        return None
     return loaded_task_noise
 
     
-def save_task_noise(task: "SimulatedTask", noise: "Time"):
-    with open("replay.noise", "a") as fp:
+def save_task_noise(task: "SimulatedTask", noise: "Time", fname: str = "replay.noise"):
+    with open(fname, "a") as fp:
         noise_value: int = noise.scale_to("us")
         fp.write(str(task.name) + ":" + str(noise_value) + "\n")
 

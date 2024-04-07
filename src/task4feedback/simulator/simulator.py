@@ -84,7 +84,6 @@ class SimulatedScheduler:
             scheduler_state = SchedulerOptions.get_state(scheduler_state_type)
             if self.mapper_type == "heft":
                 assert self.task_order_mode == TaskOrderType.HEFT
-            print("scheduler state:", scheduler_state, " is created")
             self.state = scheduler_state(topology=self.topology,
                                          rl_env=self.rl_env,
                                          rl_mapper=self.rl_mapper,
@@ -234,7 +233,6 @@ class SimulatedScheduler:
         watcher_status = True
 
         if self.init:
-            print(">> self state:", self.state)
             new_event_pairs = self.mechanisms.initialize(
                 tasks=self.tasks, scheduler_state=self.state, simulator=self,
                 mapper_type=self.mapper_type

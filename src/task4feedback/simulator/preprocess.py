@@ -251,7 +251,6 @@ def create_sim_graph(
     elif task_order_mode == TaskOrderType.REPLAY_FILE:
         tasklist = list(compute_tasks.keys())
         tasklist = load_task_order(tasklist)
-        print("sorted task order based on the loaded order:", tasklist)
     else:
         tasklist = list(compute_tasks.keys())
     populate_dependents(taskmap)

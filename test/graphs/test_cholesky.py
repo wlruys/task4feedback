@@ -40,7 +40,7 @@ parser.add_argument("-n", "--noise",
                     help="True if task duration noise is enabled", default=False)
 parser.add_argument("-ns", "--noise_scale",
                     type=float,
-                    help="task duration noise scale", default=0)
+                    help="task duration noise scale", default=0.05)
 parser.add_argument("-e", "--episode",
                     type=int,
                     help="the number of episodes (-1 for inifite loop)", default=-1)
@@ -117,7 +117,7 @@ def test_data():
         return placement_info
 
     def get_task_sorting_method(episode: int) -> TaskOrderType:
-        if args.sort == "heft":
+        if args.sort == "heft" or args.mode == "heft":
             return TaskOrderType.HEFT
         elif args.sort == "random":
             si = args.sorting_interval
