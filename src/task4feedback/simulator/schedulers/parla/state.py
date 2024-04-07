@@ -1106,6 +1106,9 @@ class ParlaState(SystemState):
         time = deepcopy(self.time)
         # print(f"Time to deepcopy time: {clock() - s}")
 
+        s = clock()
+        perdev_active_workload = deepcopy(self.perdev_active_workload)
+
         return ParlaState(
             topology=topology,
             data_pool=data_pool,
@@ -1114,6 +1117,14 @@ class ParlaState(SystemState):
             time=time,
             init=self.init,
             use_eviction=self.use_eviction,
+            mapped_active_tasks=self.mapped_active_tasks,
+            reserved_active_tasks=self.reserved_active_tasks,
+            launched_active_tasks=self.launched_active_tasks,
+            total_active_workload=self.total_active_workload,
+            perdev_active_workload=perdev_active_workload,
+            total_num_completed_tasks=self.total_num_completed_tasks,
+            mapper_num_tasks_threshold=self.mapper_num_tasks_threshold,
+            total_num_mapped_tasks=self.total_num_mapped_tasks
         )
 
     def check_resources(

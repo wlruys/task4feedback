@@ -161,10 +161,16 @@ class SystemState:
         time = deepcopy(self.time)
         # print(f"Time to deepcopy time: {clock() - s}")
 
+        s = clock()
+        rl_env = deepcopy(self.rl_env)
+
+        s = clock()
+        rl_mapper = deepcopy(self.rl_mapper)
+
         return SystemState(
             randomizer=self.randomizer,
-            task_order_mode=self.task_order_mode,
             topology=topology,
+            task_order_mode=self.task_order_mode,
             data_pool=data_pool,
             resource_pool=resource_pool,
             objects=objects,
@@ -173,9 +179,12 @@ class SystemState:
             use_eviction=self.use_eviction,
             use_duration_noise=self.use_duration_noise,
             noise_scale=self.noise_scale,
-            # RL components do not need deepcopy
-            rl_env=self.rl_env,
-            rl_mapper=self.rl_mapper,
+            save_task_order=self.save_task_order,
+            save_task_noise=self.save_task_noise,
+            load_task_noise=self.load_task_noise,
+            loaded_task_noises=self.loaded_task_noises,
+            rl_env=rl_env,
+            rl_mapper=rl_mapper,
         )
 
     def __post_init__(self):

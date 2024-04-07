@@ -67,8 +67,7 @@ def random_topological_sort(
         taskmap[n].info.order = i
     tasklist = sorted(tasklist, key=lambda t: t.info.order)
 
-    return sorted(tasklist, key=lambda t: t.info.order)
-    # return sort_tasks_by_order(tasklist, taskmap)
+    return sort_tasks_by_order(tasklist, taskmap)
 
 
 @dataclass(slots=True)

@@ -2,7 +2,7 @@ from .schedulers.state import SystemState
 from .schedulers.architecture import SchedulerArchitecture
 from ..types import *
 from .task import SimulatedTask
-from dataclasses import dataclass, InitVar
+from dataclasses import dataclass
 from copy import deepcopy
 from .watcher import *
 from functools import partial
@@ -48,6 +48,7 @@ def random_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
     if isinstance(potential_device, Tuple):
         potential_device = potential_device[0]
     """
+    np.random.seed(None)
     potential_device = Device(Architecture.GPU, np.random.randint(0, num_gpus))
     print("task:", task.name, " random device:", potential_device.device_id)
 
