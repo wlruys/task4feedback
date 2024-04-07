@@ -116,11 +116,21 @@ class SimulatedScheduler:
         end_t = clock()
         # print(f"Time to deepcopy events: {end_t - start_t}")
 
+        start_t = clock()
+        mapper = deepcopy(self.mapper)
+        end_t = clock()
+
+        start_t = clock()
+        rl_env = deepcopy(self.rl_env)
+        end_t = clock()
+
+        start_t = clock()
+        rl_mapper = deepcopy(self.rl_mapper)
+        end_t
+
         return SimulatedScheduler(
             topology=self.topology,
-            # RL objects do not require deepdcopy
-            rl_env=self.rl_env,
-            rl_mapper=self.rl_mapper,
+            mapper_type=self.mapper_type,
             scheduler_type=self.scheduler_type,
             tasks=tasks,
             name=self.name,
@@ -129,11 +139,19 @@ class SimulatedScheduler:
             log_level=self.log_level,
             events=events,
             event_count=self.event_count,
+            mapper=mapper,
             init=self.init,
             randomizer=deepcopy(self.randomizer),
+            use_duration_noise=self.use_duration_noise,
+            save_task_order=self.save_task_order,
+            save_task_noise=self.save_task_noise,
+            load_task_noise=self.load_task_noise,
+            noise_scale=self.noise_scale,
             current_event=deepcopy(self.current_event),
             use_eviction=self.use_eviction,
             task_order_mode=self.task_order_mode,
+            rl_env=rl_env,
+            rl_mapper=rl_mapper,
         )
 
     def __str__(self):
