@@ -4,7 +4,6 @@ from task4feedback.graphs import *
 from task4feedback.load import *
 
 from rich import print
-from typing import List
 
 # from utility.execute import run
 from task4feedback.visualize import *
@@ -68,6 +67,7 @@ parser.add_argument("-ln", "--load_noise",
 
 
 args = parser.parse_args()
+
 
 def test_data():
 
