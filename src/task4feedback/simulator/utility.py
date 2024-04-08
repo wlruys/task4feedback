@@ -212,7 +212,7 @@ def calculate_heft(
         bisect.insort(agents[earliest_start_agent], heft_event, key=lambda x: x.start)
         task.info.heft_makespan = earliest_start + duration
         task.info.heft_allocation = earliest_start_agent
-        print(f"heft task {task.name}, allocation: {earliest_start_agent}")
+        # print(f"heft task {task.name}, allocation: {earliest_start_agent}")
         if task.info.heft_makespan > max_heft:
             max_heft = task.info.heft_makespan
 

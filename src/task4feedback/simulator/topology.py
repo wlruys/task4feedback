@@ -458,7 +458,7 @@ def generate_ngpus_1cpu_toplogy(
         SimulatedDevice(
             Device(Architecture.GPU, i), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
         )
-        for i in range(4)
+        for i in range(NGPUS)
     ]
     cpus = [
         SimulatedDevice(

@@ -443,6 +443,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         Append an initial task who does not have any dependency to
         a spawned task queue.
         """
+        print(f"Number of tasks: {len(tasks)}")
         for task in tasks:
             self.spawned_tasks.put(task)
 

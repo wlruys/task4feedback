@@ -50,14 +50,14 @@ def random_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
     """
     np.random.seed(None)
     potential_device = Device(Architecture.GPU, np.random.randint(0, num_gpus))
-    print("task:", task.name, " random device:", potential_device.device_id)
+    # print("task:", task.name, " random device:", potential_device.device_id)
 
     return (potential_device,)
 
 
 def heft_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
     potential_device = Device(Architecture.GPU, task.info.heft_allocation)
-    print("task:", task.name, " heft device:", potential_device.device_id)
+    # print("task:", task.name, " heft device:", potential_device.device_id)
 
     return (potential_device,)
 
@@ -139,7 +139,7 @@ def loadbalancing_mapping_policy(task: SimulatedTask, simulator) -> Optional[Dev
     if isinstance(potential_device, Tuple):
         potential_device = potential_device[0]
 
-    print("load balancing device:", potential_device)
+    # print("load balancing device:", potential_device)
     return (potential_device,)
 
 
@@ -287,7 +287,7 @@ class RLTaskMapper(TaskMapper):
                                   sched_state.rl_mapper.select_device(
                                       task, curr_state, sched_state)),)
 
-        print(f"Task {task.name} mapped to {assigned_devices}.")
+        # print(f"Task {task.name} mapped to {assigned_devices}.")
         return assigned_devices
 
 

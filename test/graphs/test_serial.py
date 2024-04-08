@@ -61,6 +61,12 @@ parser.add_argument("-sn", "--save_noise",
 parser.add_argument("-ln", "--load_noise",
                     type=bool,
                     help="load task mapping duration noise (saved in replay.noise)", default=False)
+parser.add_argument("-g", "--gpus",
+                    type=int,
+                    help="number of gpus", default=4)
+parser.add_argument("-pb", "--p2p",
+                    type=str,
+                    help="P2P bandwidth", default="200")
 
 
 args = parser.parse_args()
@@ -120,7 +126,7 @@ def test_data():
         func_id=func_type_id)
     tasks, data = make_graph(config, data_config=data_config)
 
-    num_gpus = 4
+    num_gpus = args.gpus
     rl_env = None
     rl_agent = None
     if args.mode != "parla":
@@ -132,6 +138,17 @@ def test_data():
     cum_wallclock_t = 0
     task_order_log = None
     si = args.sorting_interval
+
+    topo_config = {
+      "P2P_BW": parse_size(args.p2p + " GB"),
+      "H2D_BW": parse_size("100 GB"),
+      "D2H_BW": parse_size("100 GB"),
+      "GPU_MEM": parse_size("10000 GB"),
+      "CPU_MEM": parse_size("10000 GB"),
+      "GPU_COPY_ENGINES": 3,
+      "CPU_COPY_ENGINES": 3,
+      "NGPUS": num_gpus,
+    }
 
     mapper = TaskMapper()
 
@@ -145,7 +162,7 @@ def test_data():
         gpu0 = Device(Architecture.GPU, 0)
         gpu1 = Device(Architecture.GPU, 1)
 
-        topology = TopologyManager().generate("frontera", config=None)
+        topology = TopologyManager().generate("frontera", config=topo_config)
 
         mapper_mode = args.mode
         if args.mode == "testing" or args.mode == "training":
