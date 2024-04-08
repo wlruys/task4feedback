@@ -250,7 +250,7 @@ class RLEnvironment(RLBaseEnvironment):
           is_nothing_launched = sched_arch.is_nothing_launched[device]
           if is_nothing_launched:
               idle_time = float(sched_state.time.scale_to("ms"))
-              print("sched time:", sched_state.time, " idle time:", idle_time)
+              # print("sched time:", sched_state.time, " idle time:", idle_time)
           else:
               idle_time = convert_to_float(device_instance.stats.idle_time.scale_to("ms"))
           norm_idle_time = (idle_time / (5 * target_exec_time) if target_exec_time else 0)
