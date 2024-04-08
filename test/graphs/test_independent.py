@@ -63,6 +63,9 @@ parser.add_argument("-g", "--gpus",
 parser.add_argument("-pb", "--p2p",
                     type=str,
                     help="P2P bandwidth", default="200")
+parser.add_argument("-dd", "--data_size",
+                    type=float,
+                    help="per-task data size in GB", default="1")
 
 
 args = parser.parse_args()
@@ -74,7 +77,7 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 1 * 1024 * 1024 * 1024  # 1 GB
+        return args.data_size * 1024 * 1024 * 1024  # 1 GB
 
     def homog_task_duration():
         return 40000
@@ -111,6 +114,7 @@ def test_data():
     data_config = IndependentDataGraphConfig()
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
+    print("data size:", args.data_size, " GB")
 
     config = IndependentConfig(
         task_count=args.num_tasks, task_config=task_placement,
@@ -144,7 +148,7 @@ def test_data():
     mapper = TaskMapper()
 
     while True:
-        if episode > args.episode and args.episode != -1:
+        if episode >= args.episode and args.episode != -1:
             break
 
         task_order_mode = get_task_sorting_method(episode)

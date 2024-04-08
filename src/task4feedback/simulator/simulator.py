@@ -286,7 +286,7 @@ class SimulatedScheduler:
                 self.time - device.stats.last_active_movement
             )
 
-        print(f"Elapsed Time,{self.time}")
+        print(f"{self.mapper_type},simtime,{float(self.time.scale_to('s'))}")
 
         # print(f"Event Count: {self.event_count}")
 

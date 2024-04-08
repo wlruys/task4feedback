@@ -223,7 +223,7 @@ def calculate_heft(
         for task in tasklist:
             task.info.order = order
             order += 1
-    print("HEFT time:", max_heft)
+    print("HEFTTheory,simtime,", max_heft/1000)
 
     """
     for key, value in agents.items():

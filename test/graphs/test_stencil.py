@@ -38,13 +38,13 @@ parser.add_argument("-e", "--episode",
                     help="the number of episodes (-1 for inifite loop)", default=-1)
 parser.add_argument("-s", "--steps",
                     type=int,
-                    help="stencil steps", default=3)
+                    help="stencil steps", default=5)
 parser.add_argument("-w", "--width",
                     type=int,
-                    help="stencil width", default=4)
+                    help="stencil width", default=10)
 parser.add_argument("-d", "--dimensions",
                     type=int,
-                    help="stencil dimensions", default=1)
+                    help="stencil dimensions", default=2)
 parser.add_argument("-o", "--sort",
                     type=str,
                     help="task sorting method (random, heft, default)", default="default")
@@ -69,6 +69,9 @@ parser.add_argument("-g", "--gpus",
 parser.add_argument("-pb", "--p2p",
                     type=str,
                     help="P2P bandwidth", default="200")
+parser.add_argument("-dd", "--data_size",
+                    type=float,
+                    help="per-task data size in GB", default="1")
 
 
 args = parser.parse_args()
@@ -80,7 +83,7 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 1 * 1024 * 1024 * 1024
+        return args.data_size * 1024 * 1024 * 1024
 
     def homog_task_duration():
         return 40000
@@ -122,6 +125,7 @@ def test_data():
     data_config = StencilDataGraphConfig()
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
+    print("data size:", args.data_size, " GB")
 
     config = StencilConfig(
         steps=args.steps, width=args.width, dimensions=args.dimensions,
@@ -155,7 +159,7 @@ def test_data():
     mapper = TaskMapper()
 
     while True:
-        if episode > args.episode and args.episode != -1:
+        if episode >= args.episode and args.episode != -1:
             break
 
         task_order_mode = get_task_sorting_method(episode)

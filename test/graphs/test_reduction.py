@@ -38,7 +38,7 @@ parser.add_argument("-e", "--episode",
                     help="the number of episodes (-1 for inifite loop)", default=-1)
 parser.add_argument("-l", "--levels",
                     type=int,
-                    help="reduction tree levels", default=3)
+                    help="reduction tree levels", default=9)
 parser.add_argument("-b", "--branches",
                     type=int,
                     help="reduction tree branches", default=2)
@@ -66,6 +66,9 @@ parser.add_argument("-g", "--gpus",
 parser.add_argument("-pb", "--p2p",
                     type=str,
                     help="P2P bandwidth", default="200")
+parser.add_argument("-dd", "--data_size",
+                    type=float,
+                    help="per-task data size in GB", default="1")
 
 
 args = parser.parse_args()
@@ -77,7 +80,7 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 1 * 1024 * 1024 * 1024
+        return args.data_size * 1024 * 1024 * 1024
 
     def homog_task_duration():
         return 40000
@@ -119,6 +122,7 @@ def test_data():
     data_config = ReductionDataGraphConfig()
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
+    print("data size:", args.data_size, " GB")
 
     config = ReductionConfig(
         levels=args.levels, branch_factor=args.branches,
@@ -152,7 +156,7 @@ def test_data():
     mapper = TaskMapper()
 
     while True:
-        if episode > args.episode and args.episode != -1:
+        if episode >= args.episode and args.episode != -1:
             break
 
         task_order_mode = get_task_sorting_method(episode)

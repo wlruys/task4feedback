@@ -278,7 +278,7 @@ class SimpleAgent(RLModel):
         if not self.is_training_mode():
             print("reward,",self.steps-1, ",", self.accumulated_reward)
             print("consensus,", self.steps-1, ",", self.num_consensus, ",", self.num_selection)
-            print("simtime,",self.steps-1, ",", execution_time / 1000)
+        # print("simtime,",self.steps-1, ",", execution_time / 1000)
 
         self.num_consensus = 0
         self.num_selection = 0
