@@ -120,15 +120,15 @@ def run_device_eviction(
     from rich.console import Console
     from rich.text import Text
 
-    console = Console()
-    message = Text(
-        f"Running eviction requested by {parent_task} for {device_id}. Requested: {requested_resources.memory}."
-    )
-    message.stylize("bold red underline")
-    console.print(message)
-    print(
-        f"Resources on {device_id} before eviction: {scheduler_state.resource_pool[device_id][TaskState.RESERVED]}."
-    )
+    # console = Console()
+    # message = Text(
+    #     f"Running eviction requested by {parent_task} for {device_id}. Requested: {requested_resources.memory}."
+    # )
+    # message.stylize("bold red underline")
+    # console.print(message)
+    # print(
+    #     f"Resources on {device_id} before eviction: {scheduler_state.resource_pool[device_id][TaskState.RESERVED]}."
+    # )
 
     eviction_pool = scheduler_state.data_pool.evictable[device_id]
     quota = requested_resources.memory
@@ -164,16 +164,16 @@ def run_device_eviction(
                     size=data.info.size,
                 ),
             )
-        print(
-            f"Created eviction task {eviction_task.name} for data {data.name} on device {device.name} with size {data.info.size}."
-        )
+        # print(
+        #     f"Created eviction task {eviction_task.name} for data {data.name} on device {device.name} with size {data.info.size}."
+        # )
         size = data.info.size
         quota -= size
         popped = eviction_pool.remove(data_id, size)
-        print(f"Remaining quota: {quota}. Popped: {popped}.")
+        # print(f"Remaining quota: {quota}. Popped: {popped}.")
 
-    if quota > 0:
-        print(f"Eviction quota not met for device {device.name}. Remaining: {quota}.")
+    # if quota > 0:
+    #     print(f"Eviction quota not met for device {device.name}. Remaining: {quota}.")
 
     return new_eviction_tasks
 
@@ -214,13 +214,10 @@ def reserve_task(
     current_time = scheduler_state.time
     assert current_time is not None
 
-    print(f"Trying to reserve task {task.name} on {task.assigned_devices}.")
+    # print(f"Trying to reserve task {task.name} on {task.assigned_devices}.")
 
     if check_status := scheduler_state.check_task_status(task, TaskStatus.RESERVABLE):
         if can_fit := scheduler_state.check_resources(phase, task, verbose=verbose):
-            scheduler_state.acquire_resources(phase, task, verbose=verbose)
-            scheduler_state.use_data(phase, task, verbose=verbose)
-            scheduler_state.reserved_active_tasks += 1
             return True, None
 
         else:
@@ -229,7 +226,7 @@ def reserve_task(
                     f"Task {task.name} cannot be reserved: Insufficient resources.",
                     extra=dict(task=task.name, phase=phase),
                 )
-            print(f"Task {task.name} cannot be reserved: Insufficient resources.")
+            # print(f"Task {task.name} cannot be reserved: Insufficient resources.")
 
             eviction_event = scheduler_state.check_eviction(task)
 
@@ -245,7 +242,7 @@ def reserve_task(
                     status=task.status,
                 ),
             )
-            print(f"Task {task.name} cannot be reserved: Invalid status.")
+            # print(f"Task {task.name} cannot be reserved: Invalid status.")
         return False, None
 
 
@@ -254,7 +251,7 @@ def launch_task(
 ) -> bool:
     phase = TaskState.LAUNCHED
 
-    print(f"Trying to launch task {task.name}.")
+    # print(f"Trying to launch task {task.name}.")
     # if isinstance(task, SimulatedEvictionTask):
     #     print(
     #         f"Trying to launch eviction task {task.name}. Source Device: {task.source}. Target Device: {task.assigned_devices}."
@@ -281,14 +278,14 @@ def launch_task(
                 )
 
             device = task.assigned_devices[0]
-            print(f"Launching task {task.name} on devices {task.assigned_devices}.")
-            print(
-                f"Resources when launching task {task.name} on assigned {device}: {scheduler_state.resource_pool[device][TaskState.RESERVED]}"
-            )
-            if isinstance(task, SimulatedDataTask) and task.source is not None:
-                print(
-                    f"Resources when launching task {task.name} on source {task.source}: {scheduler_state.resource_pool[task.source][TaskState.RESERVED]}"
-                )
+            # print(f"Launching task {task.name} on devices {task.assigned_devices}.")
+            # print(
+            #     f"Resources when launching task {task.name} on assigned {device}: {scheduler_state.resource_pool[device][TaskState.RESERVED]}"
+            # )
+            # if isinstance(task, SimulatedDataTask) and task.source is not None:
+            #     print(
+            #         f"Resources when launching task {task.name} on source {task.source}: {scheduler_state.resource_pool[task.source][TaskState.RESERVED]}"
+            #     )
 
             # if isinstance(task, SimulatedEvictionTask):
             #     print(f"Task {task.name} before acquire_resources: {task.source}.")
@@ -310,20 +307,27 @@ def launch_task(
             return True
         else:
             if logger.ENABLE_LOGGING:
-                print(f"Task {task.name} cannot be launched: Insufficient resources.")
+                # print(f"Task {task.name} cannot be launched: Insufficient resources.")
                 logger.runtime.debug(
                     f"Task {task.name} cannot be launched: Insufficient resources.",
                     extra=dict(task=task.name, phase=phase),
                 )
     else:
         if logger.ENABLE_LOGGING:
-            print(f"Task {task.name} cannot be launched: Invalid status.")
-            print(f"Task status: {task.status}.")
-            print(f"Task counters: {task.counters}.")
-            print(f"Task dependencies: {task.dependencies}.")
-            for dep in task.dependencies:
-                sim_dep_task = scheduler_state.objects.get_task(dep)
-                print(f" -- Dependency Task {dep} state: {sim_dep_task.state}.")
+            # print(
+            #     f"Task {task.name} cannot be launched: Invalid status",
+            #     task.dependencies,
+            # )
+            # print(f"Task status: {task.status}.")
+            # print(f"Task counters: {task.counters}.")
+            # print(f"Task dependencies: {task.dependencies}.")
+            # for dep in task.dependencies:
+            #     sim_dep_task = scheduler_state.objects.get_task(dep)
+            #     print(f" -- Dependency Task {dep} state: {sim_dep_task.state}.")
+            #     # for dependents in sim_dep_task.dependents:
+            #     #    print(
+            #     #        f" ----- Dependents Task {dependents}: {scheduler_state.objects.get_task(dependents).state}."
+            #     #    )
             logger.runtime.debug(
                 f"Task {task.name} cannot be launched: Invalid status.",
                 extra=dict(
@@ -343,11 +347,11 @@ def complete_task(
     from rich.text import Text
     from rich.console import Console
 
-    device = task.assigned_devices[0]
-    message = Text(f"Completing task {task.name} on {device}.")
-    message.stylize("bold green underline")
-    console = Console()
-    console.print(message)
+    # device = task.assigned_devices[0]
+    # message = Text(f"Completing task {task.name} on {device}.")
+    # message.stylize("bold green underline")
+    # console = Console()
+    # console.print(message)
 
     scheduler_state.release_data(phase, task, verbose=verbose)
     scheduler_state.release_resources(phase, task, verbose=verbose)
@@ -355,13 +359,13 @@ def complete_task(
     scheduler_state.reserved_active_tasks -= 1
     scheduler_state.launched_active_tasks -= 1
 
-    print(
-        f"Resources after releasing task {task.name} on assigned {device}: {scheduler_state.resource_pool[device][TaskState.RESERVED]}"
-    )
-    if isinstance(task, SimulatedDataTask) and task.source is not None:
-        print(
-            f"Resources after releasing task {task.name} on source {task.source}: {scheduler_state.resource_pool[task.source][TaskState.RESERVED]}"
-        )
+    # print(
+    #     f"Resources after releasing task {task.name} on assigned {device}: {scheduler_state.resource_pool[device][TaskState.RESERVED]}"
+    # )
+    # if isinstance(task, SimulatedDataTask) and task.source is not None:
+    #     print(
+    #         f"Resources after releasing task {task.name} on source {task.source}: {scheduler_state.resource_pool[task.source][TaskState.RESERVED]}"
+    #     )
 
     return True
 
@@ -551,7 +555,7 @@ class ParlaArchitecture(SchedulerArchitecture):
     def _add_eviction_dependencies(
         self, task: SimulatedTask, scheduler_state: SystemState
     ):
-        print(f"Adding eviction dependencies for task {task.name}.")
+        # print(f"Adding eviction dependencies for task {task.name}.")
         self._add_eviction_dependencies_from_access(
             task, task.read_accesses, scheduler_state
         )
@@ -561,7 +565,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         self._add_eviction_dependencies_from_access(
             task, task.read_write_accesses, scheduler_state
         )
-        print(f"Task {task.name} dependencies: {task.dependencies}.")
+        # print(f"Task {task.name} dependencies: {task.dependencies}.")
 
     def _enqueue_data_tasks(self, task: SimulatedTask, scheduler_state: SystemState):
         objects = scheduler_state.objects
@@ -582,6 +586,25 @@ class ParlaArchitecture(SchedulerArchitecture):
                             phase=TaskState.RESERVED,
                         ),
                     )
+
+                data_object = objects.get_data(data_task.data_id)
+
+                valid_sources = data_object.get_device_set_from_states(
+                    TaskState.RESERVED, DataState.VALID
+                )
+                locked_source = list(valid_sources)[0]
+                # print(
+                #     f"Locking data {data_object.name} on {locked_source} for task {data_task_id}"
+                # )
+                # print(f"Data {data_object.name}:")
+                # print(data_object.status.uses)
+
+                data_object.status.add_task(
+                    device=locked_source,
+                    task=data_task_id,
+                    use=DataUses.RESERVED,
+                    pools=scheduler_state.data_pool,
+                )
 
                 device = task.assigned_devices[data_task.local_index]
                 data_task.assigned_devices = (device,)
@@ -621,20 +644,23 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
-            print(f"Atempting to reserve task {taskid}.")
-            print(self.reservable_tasks)
+            # print(f"Atempting to reserve task {taskid}.")
+            # print(self.reservable_tasks)
 
             reserve_success, eviction_event = reserve_task(task, scheduler_state)
-            print("Launchable Tasks", self.launchable_tasks)
-            print("Launched Tasks", self.launched_tasks)
 
             if reserve_success is True:
                 devices = task.assigned_devices
                 assert devices is not None
                 device = devices[0]
-
+                verbose = False
                 self._enqueue_data_tasks(task, scheduler_state)
                 self._add_eviction_dependencies(task, scheduler_state)
+                scheduler_state.acquire_resources(
+                    TaskState.RESERVED, task, verbose=verbose
+                )
+                scheduler_state.use_data(TaskState.RESERVED, task, verbose=verbose)
+                scheduler_state.reserved_active_tasks += 1
                 # print(f"Task {taskid} reserved successfully.")
                 # print(task.dependencies)
                 # print(task.counters)
@@ -651,6 +677,9 @@ class ParlaArchitecture(SchedulerArchitecture):
                 task.notify_state(TaskState.RESERVED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
+
+                # print("Launchable Tasks", self.launchable_tasks)
+                # print("Launched Tasks", self.launched_tasks)
             elif isinstance(eviction_event, Eviction):
                 next_tasks.fail()
                 return [(current_time + Time(10), eviction_event)]
@@ -710,7 +739,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
             # Process LAUNCHABLE state
             if launch_success := launch_task(task, scheduler_state):
-                print("Notifying launched state for task ", taskid)
+                # print("Notifying launched state for task ", taskid)
                 task.notify_state(TaskState.LAUNCHED, objects.taskmap, current_time)
                 completion_time = task.completion_time
 

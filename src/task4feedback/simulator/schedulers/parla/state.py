@@ -122,21 +122,21 @@ def _check_eviction(
         evictable_memory = state.data_pool.evictable[device].evictable_size
         unresolved_requests = task.requested_eviction_bytes[device]
 
-        print(f"Evictable memory on {device}: {evictable_memory}")
-        print(f"Incomplete eviction requests on {device}: {unresolved_requests}")
+        # print(f"Evictable memory on {device}: {evictable_memory}")
+        # print(f"Incomplete eviction requests on {device}: {unresolved_requests}")
 
         resources.memory -= unresolved_requests
 
-        print(f"Missing Memory on {device}: {resources.memory}")
+        # print(f"Missing Memory on {device}: {resources.memory}")
 
-        print(f"Data on {device}:)")
-        for data in state.objects.datamap.values():
-            if data.is_valid(device, TaskState.RESERVED):
-                print(f"{data.name} is valid on {device}")
-                print(data.status.uses)
+        # print(f"Data on {device}:)")
+        # for data in state.objects.datamap.values():
+        #     if data.is_valid(device, TaskState.RESERVED):
+        #         print(f"{data.name} is valid on {device}")
+        #         print(data.status.uses)
 
-        print(f"Eviction pool on Device {device}")
-        print(state.data_pool.evictable[device])
+        # print(f"Eviction pool on Device {device}")
+        # print(state.data_pool.evictable[device])
 
         if verbose:
             print(f"Evictable memory on {device}: {evictable_memory}")
@@ -155,6 +155,8 @@ def _check_nearest_source(
     task: SimulatedDataTask,
     verbose: bool = False,
 ) -> Optional[Device | SimulatedDevice]:
+    from rich import print
+
     assert isinstance(task, SimulatedDataTask)
     devices = task.assigned_devices
     assert devices is not None
@@ -177,10 +179,27 @@ def _check_nearest_source(
         device, valid_sources, require_copy_engines=True, require_symmetric=True
     )
 
+    # print(f"Source set for {data.name}: {valid_sources_ids}")
+    # print("Data Status")
+    # print(data.status)
+
+    # print("Data Uses")
+    # print(data.status.uses)
+
     for eviction_task in data.status.uses.eviction_tasks:
-        eviction_task = state.objects.get_task(eviction_task)
+        eviction_task: SimulatedEvictionTask = state.objects.get_task(eviction_task)
+        # print(
+        #     f"Eviction task: {eviction_task} uses {data.name}: evicting at {eviction_task.source}, moving to {eviction_task.assigned_devices}"
+        # )
         assert isinstance(eviction_task, SimulatedEvictionTask)
-        if eviction_task.assigned_devices[0] == source_device:
+        if eviction_task.source == source_device:
+            if eviction_task.state == TaskState.LAUNCHED:
+                # print(
+                #     f"Eviction task {eviction_task} is already evicting from {source_device}"
+                # )
+                return None
+
+            # print(f"Adding dependency on eviction task {eviction_task} for {task.name}")
             eviction_task.add_dependency(
                 task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED]
             )
@@ -257,9 +276,9 @@ def _get_difference_reserved(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
     )
 
-    print(f"Resources at time of eviction request")
-    task_data_print(state, task, devices, TaskState.RESERVED)
-    resource_error_print(state, task, task.assigned_devices, resources)
+    # print(f"Resources at time of eviction request")
+    # task_data_print(state, task, devices, TaskState.RESERVED)
+    # resource_error_print(state, task, task.assigned_devices, resources)
 
     # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
     # print(
@@ -481,8 +500,8 @@ def _check_resources_reserved(
         resources=resources,
     )
 
-    print(f"Can fit resources: {can_fit}")
-    print(f"Reserved active tasks: {state.reserved_active_tasks}")
+    # print(f"Can fit resources: {can_fit}")
+    # print(f"Reserved active tasks: {state.reserved_active_tasks}")
 
     if not can_fit and state.reserved_active_tasks == 0:
         if _check_eviction_status(state, task, check_complete=False):
@@ -522,9 +541,9 @@ def _acquire_resources_reserved(
     state.resource_pool.add_resources(
         devices, TaskState.RESERVED, ResourceGroup.PERSISTENT, resources
     )
-    print(
-        f"Resources acquired for task {task.name} in RESERVED state on device {devices[0]}"
-    )
+    # print(
+    #     f"Resources acquired for task {task.name} in RESERVED state on device {devices[0]}"
+    # )
 
     if logger.ENABLE_LOGGING:
         for device in devices:
@@ -697,7 +716,7 @@ def _release_resources_completed(
             )
 
         if isinstance(task, SimulatedEvictionTask):
-            print(f"I am an eviction task: {task.name} my parent is {task.parent}")
+            # print(f"I am an eviction task: {task.name} my parent is {task.parent}")
             parent_task = state.objects.get_task(task.parent)
             data = task.read_accesses[0].id
             data = state.objects.get_data(data)

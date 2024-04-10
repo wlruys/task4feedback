@@ -16,6 +16,7 @@ def _create_eviction_task(
     data_idx = data.name.idx
     eviction_id = TaskID(taskspace=eviction_space, task_idx=data_idx)
     eviction_dependencies = list(data.status.uses.eviction_tasks)
+
     data_dependencies = TaskDataInfo(read=[DataAccess(id=data.name, device=0)])
     eviction_runtime = TaskPlacementInfo()
     eviction_runtime.add(Device(Architecture.ANY, -1), TaskRuntimeInfo())
@@ -115,9 +116,9 @@ def eviction_init(
     data: SimulatedData,
 ) -> SimulatedEvictionTask:
 
-    print(
-        f"Task {parent_task} is requesting space. Generating eviction task to remove data {data.name} from {device.name}"
-    )
+    # print(
+    #     f"Task {parent_task} is requesting space. Generating eviction task to remove data {data.name} from {device.name}"
+    # )
 
     target_device_id = data.get_eviction_target(
         device.name, device.eviction_targets, TaskState.RESERVED
@@ -151,6 +152,25 @@ def eviction_init(
         data=data,
     )
 
+    # Make this eviction task depend on all data movement that is currently reserved but not yet started
+    # device_keys = data.status.uses.get_tasks_from_device_use.keys()
+    # for device in device_keys:
+    #     for task_id in data.status.uses.get_tasks_from_device_use[device][DataUses.RESERVED]:
+    #         usage_task = state.objects.get_task(task_id)
+    #         eviction_task.add_dependency(task)
+    #         state.objects.get_task(task_id).add_dependent(eviction_task)
+
     data.status.add_eviction_task(eviction_task.name, device, state.data_pool)
+
+    # Create dependents links
+    for task_id in eviction_task.dependencies:
+        # This line of code is printing a message that indicates the process of adding a dependent
+        # task to the current eviction task. The message includes the names of both the current
+        # eviction task (`eviction_task.name`) and the task that is being added as a dependent
+        # (`task_id`). This can be helpful for debugging and tracking the dependencies between tasks
+        # in the system.
+        # print(f"Adding dependent {eviction_task.name} to task {task_id}")
+        task = state.objects.get_task(task_id)
+        task.add_dependent(eviction_task.name)
 
     return eviction_task

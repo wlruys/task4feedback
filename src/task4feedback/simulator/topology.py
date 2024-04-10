@@ -429,8 +429,8 @@ def generate_ngpus_1cpu_toplogy(
         "P2P_BW": parse_size("200 GB"),
         "H2D_BW": parse_size("100 GB"),
         "D2H_BW": parse_size("100 GB"),
-        "GPU_MEM": parse_size("16 GB"),
-        "CPU_MEM": parse_size("130 GB"),
+        "GPU_MEM": parse_size("7 GB"),
+        "CPU_MEM": parse_size("1300 GB"),
         "GPU_COPY_ENGINES": 3,
         "CPU_COPY_ENGINES": 3,
         "NGPUS": 4,
@@ -531,7 +531,7 @@ def generate_mesh_toplogy(config: Optional[Dict[str, int]] = None) -> SimulatedT
         D2H_BW = parse_size("7 GB")  # 7 GB/s
 
         GPU_MEM = parse_size("16 GB")
-        CPU_MEM = parse_size("130 GB")
+        CPU_MEM = parse_size("1300 GB")
 
         GPU_COPY_ENGINES = 3
         CPU_COPY_ENGINES = 3
