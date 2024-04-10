@@ -122,6 +122,10 @@ def test_data():
     data_config = ReductionDataGraphConfig()
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
+    data_config.branch_factor=args.branches
+    data_config.levels=args.levels
+    data_config.n_devices=args.gpus
+    data_config.data_size=args.data_size
     print("data size:", args.data_size, " GB")
 
     config = ReductionConfig(

@@ -125,6 +125,9 @@ def test_data():
     data_config = SweepDataGraphConfig()
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
+    data_config.n_devices = args.gpus
+    data_config.large_size = args.data_size
+    data_config.small_size = args.data_size
     print("data size:", args.data_size, " GB")
 
     config = SweepConfig(
