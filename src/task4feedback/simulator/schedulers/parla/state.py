@@ -106,8 +106,6 @@ def _check_eviction(
 
     # print("Checking eviction for task: ", task.name)
 
-    # if this is the last task and
-
     # Only generate an eviction event if it would free enough resources to run the next task
     resource_differences = _get_difference_reserved(state, task, verbose=verbose)
 
@@ -117,6 +115,15 @@ def _check_eviction(
         print(
             f"Cannot allocate memory for task {task.name}. Requires {resource_differences} more memory."
         )
+
+    # Remove the task's own data from the eviction pool
+    # for data_access in task.info.data_dependencies.all_accesses():
+    #     data = state.objects.get_data(data_access.id)
+    #     assert data is not None
+    #     for device in state.topology.devices:
+    #         data.status.add_task(
+    #             device.name, task.name, DataUses.CHECKING, state.data_pool
+    #         )
 
     for device, resources in resource_differences.items():
         evictable_memory = state.data_pool.evictable[device].evictable_size
@@ -145,6 +152,14 @@ def _check_eviction(
         if resources.memory > evictable_memory or resources.memory < 0:
             # if : request is too big and not satisfiable by eviction, do not run eviction
             # if : request is already satisfied by previously enqueued (but not complete) eviction, do not run eviction
+            # Return tasks data to the eviction pool
+            # for data_access in task.info.data_dependencies.all_accesses():
+            #     data = state.objects.get_data(data_access.id)
+            #     assert data is not None
+            #     data.status.uses.remove_task_use(
+            #         task.name, DataUses.CHECKING, state.data_pool
+            #     )
+
             return None
 
     return Eviction(parent_task=task.name, requested_resources=resource_differences)

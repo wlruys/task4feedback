@@ -78,6 +78,7 @@ TaskStateToUse[TaskState.LAUNCHED] = DataUses.USED
 TaskStateToUse[TaskState.COMPLETED] = DataUses.USED
 
 NonEvictableUses = [
+    DataUses.CHECKING,
     DataUses.EVICTING,
     DataUses.RESERVED,
     DataUses.MOVING_TO,

@@ -199,7 +199,14 @@ def run_eviction(
         )
         eviction_tasks.extend(tasks)
 
+    # Add tasks data back to the eviction pool
     add_task_data_to_eviction_pool(parent_task, scheduler_state, removed_data_list)
+    # for data_access in parent_task.info.data_dependencies.all_accesses():
+    #     data = scheduler_state.objects.get_data(data_access.id)
+    #     assert data is not None
+    #     data.status.uses.remove_task_use(
+    #         parent_task.name, DataUses.CHECKING, scheduler_state.data_pool
+    #     )
 
     return eviction_tasks
 
