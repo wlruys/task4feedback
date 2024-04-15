@@ -1124,7 +1124,9 @@ class ParlaState(SystemState):
             perdev_active_workload=perdev_active_workload,
             total_num_completed_tasks=self.total_num_completed_tasks,
             mapper_num_tasks_threshold=self.mapper_num_tasks_threshold,
-            total_num_mapped_tasks=self.total_num_mapped_tasks
+            total_num_mapped_tasks=self.total_num_mapped_tasks,
+            randomizer=self.randomizer,
+            task_order_mode=self.task_order_mode
         )
 
     def check_resources(

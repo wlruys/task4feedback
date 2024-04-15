@@ -285,6 +285,11 @@ class SimulatedScheduler:
             device.stats.idle_time_movement += (
                 self.time - device.stats.last_active_movement
             )
+            print(f"device-{device.name}-compute-idle,{device.stats.idle_time_compute}")
+            print(f"device-{device.name}-data-idle,{device.stats.idle_time_movement}")
+            print(f"device-{device.name}-compute-active,{device.stats.active_time_compute}")
+            print(f"device-{device.name}-data-active,{device.stats.active_time_movement}")
+
 
         print(f"{self.mapper_type},simtime,{float(self.time.scale_to('s'))}")
 

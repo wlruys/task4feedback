@@ -236,6 +236,7 @@ def launch_task(
                     if device.stats.active_compute == 0:
                         duration = scheduler_state.time - device.stats.last_active_compute
                         device.stats.idle_time_compute += duration
+                        device.stats.last_idle_compute = scheduler_state.time 
 
                         if logger.ENABLE_LOGGING:
                             logger.stats.debug(
@@ -247,6 +248,7 @@ def launch_task(
                     if device.stats.active_movement == 0:
                         duration = scheduler_state.time - device.stats.last_active_movement
                         device.stats.idle_time_movement += duration
+                        device.stats.last_idle_movement = scheduler_state.time 
 
                         if logger.ENABLE_LOGGING:
                             logger.stats.debug(
@@ -308,12 +310,21 @@ def complete_task(
         if isinstance(task, SimulatedComputeTask):
             device.stats.active_compute -= 1
             scheduler_state.perdev_active_workload[device_id] -= task_workload
+
+            if device.stats.active_compute == 0:
+                print("device:", device.name, " time:", device.stats.last_idle_compute , " ~ ", scheduler_state.time)
+                device.stats.active_time_compute += (scheduler_state.time - device.stats.last_idle_compute)
+
         elif isinstance(task, SimulatedDataTask) and task.real:
             device.stats.active_movement -= 1
             data_id = task.read_accesses[0].id
             data = scheduler_state.objects.get_data(data_id)
             data.stats.move_time += task.duration
             data.stats.move_count += 1
+
+            if device.stats.active_movement == 0:
+                device.stats.active_time_movement += (scheduler_state.time - device.stats.last_idle_movement)
+
     return True
 
 
