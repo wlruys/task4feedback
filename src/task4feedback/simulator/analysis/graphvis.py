@@ -60,7 +60,7 @@ def build_data_usage_networkx_graph(
                 print(f"Dep: {dep}", type(dep))
             if isinstance(dep, SimulatedDataTask):
                 data_id = dep.read_accesses[0].id
-                print(f"Data ID: {data_id} from {dep.name}")
+                # print(f"Data ID: {data_id} from {dep.name}")
 
                 if data_id in read_data:
                     color = data_use_color_map[AccessType.READ]

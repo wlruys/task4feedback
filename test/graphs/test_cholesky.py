@@ -28,7 +28,7 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 32 * 1024 * 1024  # 1 GB
+        return 2 * 1024 * 1024 * 1024  # 1 GB
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         device_tuple = Device(Architecture.GPU, task_id.task_idx[0] % 4)
@@ -44,7 +44,7 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = CholeskyConfig(blocks=10, task_config=task_placement)
+    config = CholeskyConfig(blocks=5, task_config=task_placement)
     tasks, data = make_graph(config, data_config=data_config)
 
     topology = TopologyManager().generate("frontera", config=None)
@@ -59,47 +59,12 @@ def test_data():
     simulator = create_simulator(config=simulator_config)
 
     start_t = clock()
-    simulated_time = simulator.run()
+    success = simulator.run()
     end_t = clock()
 
     print(f"Time to Simulate: {end_t - start_t}")
-    print(f"Simulated Time: {simulated_time}")
-
-    # print(
-    #     simulator.recorders.get(LaunchedResourceUsageListRecorder).vcu_usage[
-    #         Device(Architecture.GPU, 0)
-    #     ]
-    # )
-
-    # make_resource_plot(
-    #     recorder=simulator.recorders,
-    #     resource_type=ResourceType.MEMORY,
-    #     phase=TaskState.LAUNCHED,
-    # )
-
-    # print("Tasks: ")
-    # print(summarize_dependencies(simulator_config.simulated_tasks))
-
-    # for task in simulator_config.simulated_tasks.values():
-    #    print(f"{task.name} {task.times}")
-
-    # verify_order(simulator_config.simulated_tasks)
-    # verify_runtime_resources(simulator_config.simulated_tasks, simulator.devicemap)
-
-    # print(simulator.recorders)
-
-    # make_plot(
-    #     simulator.recorders.recorders[0],
-    #     simulator.recorders.recorders[1],
-    #     simulator.recorders.recorders[2],
-    #     data_ids=[DataID((4, 1))],
-    # )
-
-    # export_task_records(
-    #     simulator.recorders.get(ComputeTaskRecorder),
-    #     simulator.recorders.get(DataTaskRecorder),
-    #     filename="task_records.json",
-    # )
+    print(f"Simulated Time: {simulator.time}")
+    print(f"Success: {success}")
 
 
 if __name__ == "__main__":

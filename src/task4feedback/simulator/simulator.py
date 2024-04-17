@@ -194,6 +194,9 @@ class SimulatedScheduler:
                 # Update Log
                 self.record(event, new_events)
 
+                # print("Event: ", event)
+                # print(self.mechanisms)
+
                 # Check Watcher Conditions
                 watcher_status = self.watcher.check_conditions(
                     self.state, self.mechanisms, event

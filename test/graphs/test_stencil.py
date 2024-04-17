@@ -24,7 +24,7 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-        return 100
+        return 1 * 1024 * 1024 * 512  # 1 GB
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         if task_id.task_idx[0] % 2 == 0:
@@ -42,7 +42,7 @@ def test_data():
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = sizes
 
-    config = StencilConfig(steps=3, width=4, dimensions=1, task_config=task_placement)
+    config = StencilConfig(steps=5, width=3, dimensions=1, task_config=task_placement)
     tasks, data = make_graph(config, data_config=data_config)
 
     topology = TopologyManager().generate("frontera", config=None)

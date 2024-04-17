@@ -32,7 +32,6 @@ class FasterResourcePool:
     init: bool = True
 
     def __deepcopy__(self, memo):
-
         devicemap = {k: v for k, v in self.devicemap.items()}
         pool = {
             k: {state: deepcopy(v) for state, v in v.items()}
@@ -82,7 +81,7 @@ class FasterResourcePool:
         resources = self._build_set(type, resources)
 
         resource_set += resources
-        resource_set.verify()
+        resource_set.verify(device, pool_state)
 
     def remove_device_resources(
         self,
@@ -95,7 +94,7 @@ class FasterResourcePool:
         resources = self._build_set(type, resources)
 
         resource_set -= resources
-        resource_set.verify()
+        resource_set.verify(device, pool_state)
 
     def add_resources(
         self,
@@ -124,7 +123,6 @@ class FasterResourcePool:
         type: ResourceGroup,
         resources: FasterResourceSet,
     ) -> FasterResourceSet:
-
         if device not in self.pool:
             raise ValueError(f"Device {device} not in Resource Pool")
 
@@ -151,23 +149,6 @@ class FasterResourcePool:
             device: self.get_difference_device(device, state, type, resource)
             for device, resource in zip(devices, resources)
         }
-
-    def should_evict_device(
-        self, device: Device, requested_difference: FasterResourceSet
-    ) -> bool:
-        sim_device = self.devicemap[device]
-        evictable_bytes = sim_device.evictable_bytes
-        if evictable_bytes >= requested_difference.memory:
-            return True
-        return False
-
-    def should_evict(
-        self, requested_difference: Dict[Device, FasterResourceSet]
-    ) -> bool:
-        return any(
-            self.should_evict_device(device, difference)
-            for device, difference in requested_difference.items()
-        )
 
     def check_device_resources(
         self,
@@ -258,7 +239,7 @@ class ResourcePool:
     ):
         resource_set = self.pool[device][pool_state]
         resource_set.add_types(resources, types)
-        resource_set.verify()
+        resource_set.verify(device, pool_state)
 
     def remove_device_resources(
         self,
@@ -269,7 +250,7 @@ class ResourcePool:
     ):
         resource_set = self.pool[device][pool_state]
         resource_set.subtract_types(resources, types)
-        resource_set.verify()
+        resource_set.verify(device, pool_state)
 
     def add_resources(
         self,
@@ -310,8 +291,8 @@ class ResourcePool:
 
         for resourcekey in types:
             if (
-                current_resources[resourcekey] + proposed_resources[resourcekey]
-                > max_resources[resourcekey]
+                current_resources[resourcekey] + proposed_resources[resourcekey]  # type: ignore
+                > max_resources[resourcekey]  # type: ignore
             ):
                 return False
         return True

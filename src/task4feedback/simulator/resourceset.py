@@ -78,9 +78,13 @@ class FasterResourceSet:
     def __str__(self) -> str:
         return f"ResourceSet(vcus={self.vcus}, memory={self.memory}, copy={self.copy})"
 
-    def verify(self):
+    def verify(
+        self, device: Optional[Device] = None, phase: Optional[TaskState] = None
+    ):
         if self.vcus < 0 or self.memory < 0 or self.copy < 0:
-            raise ValueError(f"ResourceSet {self} contains negative value.")
+            raise ValueError(
+                f"ResourceSet {self} contains negative value on {device} in phase {phase.name}."
+            )
 
     def __len__(self):
         return (self.vcus > 0) + (self.memory > 0) + (self.copy > 0)

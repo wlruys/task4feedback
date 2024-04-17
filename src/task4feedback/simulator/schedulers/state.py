@@ -6,6 +6,7 @@ from ..events import *
 from ..resources import *
 from ..task import *
 from ..topology import *
+from ..datapool import *
 
 from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
 from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
@@ -40,7 +41,7 @@ class ObjectRegistry:
         return ObjectRegistry(devicemap=devicemap, taskmap=taskmap, datamap=datamap)
 
     def add_task(self, task: SimulatedTask):
-        self.taskmap[task.name] = task
+        self.taskmap[task.name] = task  # type: ignore
 
     def get_task(self, task_id: Optional[TaskID]) -> SimulatedTask:
         assert task_id is not None
@@ -109,7 +110,7 @@ from time import perf_counter as clock
 @dataclass(slots=True)
 class SystemState:
     topology: SimulatedTopology
-    data_pool: DataPool | None = None
+    data_pool: DeviceDataPools | None = None
     resource_pool: FasterResourcePool | None = None
     objects: ObjectRegistry | None = None
     time: Time = field(default_factory=Time)
@@ -157,6 +158,9 @@ class SystemState:
                 for device in self.topology.devices:
                     self.objects.add_device(device)
 
+            self.data_pool = DeviceDataPools(devices=self.topology.devices)
+
+            self.resource_pool = FasterResourcePool(devices=self.topology.devices)
             if self.resource_pool is None:
                 self.resource_pool = FasterResourcePool(devices=self.topology.devices)
             self.init = False

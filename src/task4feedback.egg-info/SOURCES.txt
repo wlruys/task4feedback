@@ -14,6 +14,7 @@ src/task4feedback.egg-info/requires.txt
 src/task4feedback.egg-info/top_level.txt
 src/task4feedback/graphs/__init__.py
 src/task4feedback/graphs/butterfly.py
+src/task4feedback/graphs/cannon_gemm.py
 src/task4feedback/graphs/chain.py
 src/task4feedback/graphs/cholesky.py
 src/task4feedback/graphs/fully_connected.py
@@ -66,6 +67,7 @@ src/task4feedback/simulator/rl/networks/gcn.py
 src/task4feedback/simulator/rl/networks/test_fcn.py
 src/task4feedback/simulator/schedulers/__init__.py
 src/task4feedback/simulator/schedulers/architecture.py
+src/task4feedback/simulator/schedulers/architecture.sync-conflict-20240214-174838-YEKDOR7.py
 src/task4feedback/simulator/schedulers/state.py
 src/task4feedback/simulator/schedulers/minimal/__init__.py
 src/task4feedback/simulator/schedulers/minimal/architecture.py
