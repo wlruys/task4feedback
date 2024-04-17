@@ -120,7 +120,7 @@ def latest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
     return chosen_device  # default_mapping_policy(task, simulator)
 
 
-def loadbalancing_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
+def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     scheduler_state: SystemState = simulator.state
     scheduler_arch: SchedulerArchitecture = simulator.mechanisms
 
@@ -132,6 +132,46 @@ def loadbalancing_mapping_policy(task: SimulatedTask, simulator) -> Optional[Dev
         if device.name.architecture == Architecture.CPU:
             continue
         workload = scheduler_state.perdev_active_workload[device.name]
+        if potential_device is None or workload < lowest_workload:
+            lowest_workload = workload
+            potential_device = device.name
+
+    if isinstance(potential_device, Tuple):
+        potential_device = potential_device[0]
+
+    # print("load balancing device:", potential_device)
+    return (potential_device,)
+
+
+def eft_with_data_transfer(task: SimulatedTask, simulator) -> Optional[Devices]:
+    scheduler_state: SystemState = simulator.state
+    scheduler_arch: SchedulerArchitecture = simulator.mechanisms
+
+    taskmap = scheduler_state.objects.taskmap
+    datamap = scheduler_state.objects.datamap
+
+    lowest_workload = 9999999999999999999
+    potential_device = None
+    # potential_devices = task.info.runtime.locations
+    potential_devices = scheduler_state.topology.devices
+    for device in potential_devices:
+        if device.name.architecture == Architecture.CPU:
+            continue
+        workload = scheduler_state.perdev_active_workload[device.name]
+        if task.data_tasks is not None:
+            nonlocal_data = 0
+            for dtask_id in task.data_tasks:
+                dtask = taskmap[dtask_id]
+                for data_id in dtask.info.data_dependencies.all_ids():
+                    data = datamap[data_id]
+                    is_valid = data.is_valid(device.name, TaskState.MAPPED)
+                    nonlocal_data += data.size if not is_valid else 0
+            # GPU connection bandwidths are all equal
+            bandwidth = scheduler_state.topology.connection_pool.bandwidth[0, 1] 
+            # print(f"task: {task.name} tests device: {device.name} data size: {nonlocal_data} new workload: {nonlocal_data / bandwidth * 1000} orig workloaad: workload")
+            # Convert to ms
+            workload += (nonlocal_data / bandwidth) * 1000
+
         if potential_device is None or workload < lowest_workload:
             lowest_workload = workload
             potential_device = device.name
@@ -213,7 +253,10 @@ class TaskMapper:
             self.mapping_function = parla_mapping_policy
         elif mapper_type == "loadbalance":
             print("Load balancing mapper is enabled")
-            self.mapping_function = loadbalancing_mapping_policy
+            self.mapping_function = eft_without_data
+        elif mapper_type == "eft_with_data":
+            print("EFT with data is enabled")
+            self.mapping_function = eft_with_data_transfer
         elif mapper_type == "heft":
             self.mapping_function = heft_mapping_policy
 

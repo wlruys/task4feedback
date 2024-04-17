@@ -312,7 +312,6 @@ def complete_task(
             scheduler_state.perdev_active_workload[device_id] -= task_workload
 
             if device.stats.active_compute == 0:
-                print("device:", device.name, " time:", device.stats.last_idle_compute , " ~ ", scheduler_state.time)
                 device.stats.active_time_compute += (scheduler_state.time - device.stats.last_idle_compute)
 
         elif isinstance(task, SimulatedDataTask) and task.real:
@@ -456,6 +455,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         """
         print(f"Number of tasks: {len(tasks)}")
         for task in tasks:
+            print(">> task:", task.name)
             self.spawned_tasks.put(task)
 
     def mapper(

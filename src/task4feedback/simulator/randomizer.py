@@ -44,7 +44,7 @@ def random_topological_sort(
     L = []
     S = dict.fromkeys(get_initial_tasks(taskmap))
 
-    random.seed(None)
+    np.random.seed(None)
 
     taskmapcopy = deepcopy(taskmap)
     i = 0
@@ -67,7 +67,7 @@ def random_topological_sort(
         taskmap[n].info.order = i
     tasklist = sorted(tasklist, key=lambda t: t.info.order)
 
-    return sort_tasks_by_order(tasklist, taskmap)
+    return tasklist
 
 
 @dataclass(slots=True)

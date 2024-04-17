@@ -35,7 +35,8 @@ from enum import Enum
 
 def get_scheduler_state(mapper_type: str):
     if (mapper_type == "random" or mapper_type == "parla" or
-        mapper_type == "loadbalance" or mapper_type == "heft"):
+        mapper_type == "loadbalance" or mapper_type == "heft" or
+        mapper_type == "eft_with_data"):
         return "parla"
     elif mapper_type == "rl":
         return "rl"
