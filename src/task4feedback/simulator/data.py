@@ -124,7 +124,7 @@ class DataUse:
             self.init = False
 
     def __deepcopy__(self, memo):
-        devices_uses_tasks = deepcopy(self.device_uses_tasks)
+        devices_uses_tasks = deepcopy(self.devices_uses_tasks)
         tasks_uses_devices = deepcopy(self.tasks_uses_devices)
         nonevictable_usage_count = deepcopy(self.nonevictable_usage_count)
         eviction_tasks = deepcopy(self.eviction_tasks)
@@ -265,11 +265,11 @@ class DataStatus:
             k: {d: {v for v in v2} for d, v2 in v3.items()}
             for k, v3 in self.state2device.items()
         }
-        uses = deepcopy(uses)
+        uses = deepcopy(self.uses)
 
         return DataStatus(
             id=self.id,
-            size=size,
+            size=self.size,
             devices=self.devices,
             device2state=device2state,
             state2device=state2device,
