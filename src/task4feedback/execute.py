@@ -106,6 +106,9 @@ _GPUInfo = GPUInfo()
 @specialize
 def free_sleep(duration: float, config: RunConfig = None):
     sleep_nogil(duration)
+    
+def free_sleep_cpu(duration: float, config: RunConfig = None):
+    sleep_nogil(duration)
 
 
 @free_sleep.variant(architecture=gpu)
@@ -126,6 +129,9 @@ def free_sleep_gpu(duration: float, config: RunConfig = None):
 
 @specialize
 def lock_sleep(duration: float, config: RunConfig = None):
+    sleep_gil(duration)
+    
+def lock_sleep_cpu(duration: float, config: RunConfig = None):
     sleep_gil(duration)
 
 
@@ -185,6 +191,7 @@ def generate_array(
     n = data_size // 4
 
     location_to_block = dict()
+    data_scale = int(data_scale)
 
     if not isinstance(data_location, tuple):
         data_location = (data_location,)
@@ -241,6 +248,8 @@ def generate_data(
     movement_type: MovementType = MovementType.NO_MOVEMENT,
 ) -> Dict[DataID, PArray | Dict[Device, "np.ndarray | cupy.ndarray"]]:
     data_blocks = dict()
+    
+    print("Generating Data: ", data_config, movement_type)
 
     if movement_type == MovementType.NO_MOVEMENT:
         return data_blocks
@@ -321,7 +330,10 @@ def synthetic_kernel(runtime_info: TaskPlacementInfo, config: RunConfig):
                 f"TaskRuntimeInfo cannot be None for {device}. Please check the runtime info passed to the task."
             )
 
-    waste_time(info, config)
+    if config.use_cpu_sleep:
+        waste_time_cpu(info, config)
+    else:
+        waste_time(info, config)
 
     if config.verbose:
         task_internal_end_t = time.perf_counter()
@@ -349,6 +361,22 @@ def waste_time(info_list: List[TaskRuntimeInfo], config: RunConfig):
             free_sleep(free_time)
             lock_sleep(gil_time)
 
+def waste_time_cpu(info_list: List[TaskRuntimeInfo], config: RunConfig):
+    if len(info_list) == 0:
+        raise ValueError("No TaskRuntimeInfo provided to busy sleep kernel.")
+
+    info = info_list[0]
+
+    (free_time, gil_time), gil_accesses = get_kernel_info(info, config=config)
+
+    if gil_accesses == 0:
+        free_sleep_cpu(free_time)
+        return
+
+    else:
+        for i in range(gil_accesses):
+            free_sleep_cpu(free_time)
+            lock_sleep_cpu(gil_time)
 
 @waste_time.variant(architecture=gpu)
 def waste_time_gpu(info_list: List[TaskRuntimeInfo], config: RunConfig):
@@ -512,7 +540,7 @@ def create_task(task_name, task_info, data_info, runtime_info, config: RunConfig
 
         if config.verbose:
             print(
-                f"Creating Task {task_name} with dependencies {dependencies} on placement {placement_set}",
+                f"Creating Task {task_name} with dependencies {dependencies} on placement {placement_set} with data IN={IN} INOUT={INOUT}",
                 flush=True,
             )
 
@@ -611,10 +639,13 @@ def execute_graph(
                 taskspaces, tasks, run_config, data_list=data_list
             )
 
+            import cupy 
             graph_start_t = time.perf_counter()
 
             # execute_tasks(taskspaces, tasks, run_config, data_list=data_list)
+            cupy.cuda.profiler.start()
             execute_tasks_from_info(info_dict, run_config)
+            cupy.cuda.profiler.stop()
 
             for taskspace in taskspaces.values():
                 await taskspace
@@ -655,6 +686,7 @@ def run(
         data_config = {}
 
     timing = []
+    import cupy
 
     for outer in range(run_config.outer_iterations):
         outer_start_t = time.perf_counter()
