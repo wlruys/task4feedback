@@ -32,7 +32,7 @@ parser.add_argument("-n", "--noise",
                     help="True if task duration noise is enabled", default=False)
 parser.add_argument("-ns", "--noise_scale",
                     type=float,
-                    help="task duration noise scale", default=0.05)
+                    help="task duration noise scale", default=0.4)
 parser.add_argument("-e", "--episode",
                     type=int,
                     help="the number of episodes (-1 for inifite loop)", default=-1)
@@ -83,7 +83,7 @@ def test_data():
         return args.data_size * 1024 * 1024 * 1024
 
     def homog_task_duration():
-        return 40000
+        return 80000
 
     def func_type_id(task_id: TaskID):
         return 0
@@ -187,6 +187,8 @@ def test_data():
             task_order_mode=task_order_mode,
             use_duration_noise=args.noise,
             noise_scale=args.noise_scale,
+            save_task_order=args.save_order,
+            load_task_order=args.load_order,
             save_task_noise=args.save_noise,
             load_task_noise=args.load_noise,
             mapper=mapper,

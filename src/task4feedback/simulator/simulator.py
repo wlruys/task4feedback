@@ -69,6 +69,7 @@ class SimulatedScheduler:
     use_duration_noise: bool = False
     noise_scale: float = 0
     save_task_order: bool = False
+    load_task_order: bool = False
     save_task_noise: bool = False
     load_task_noise: bool = False
 
@@ -92,6 +93,7 @@ class SimulatedScheduler:
                                          use_duration_noise=self.use_duration_noise,
                                          noise_scale=self.noise_scale,
                                          save_task_order=self.save_task_order,
+                                         load_task_order=self.load_task_order,
                                          save_task_noise=self.save_task_noise,
                                          load_task_noise=self.load_task_noise,
                                          randomizer=self.randomizer)
@@ -144,6 +146,7 @@ class SimulatedScheduler:
             randomizer=deepcopy(self.randomizer),
             use_duration_noise=self.use_duration_noise,
             save_task_order=self.save_task_order,
+            load_task_order=self.load_task_order,
             save_task_noise=self.save_task_noise,
             load_task_noise=self.load_task_noise,
             noise_scale=self.noise_scale,
@@ -286,6 +289,8 @@ class SimulatedScheduler:
             device.stats.idle_time_movement += (
                 self.time - device.stats.last_active_movement
             )
+
+            print(f"{device.name},idle,{device.stats.idle_time}")
             print(f"device-{device.name}-compute-idle,{device.stats.idle_time_compute}")
             print(f"device-{device.name}-data-idle,{device.stats.idle_time_movement}")
             print(f"device-{device.name}-compute-active,{device.stats.active_time_compute}")

@@ -34,13 +34,13 @@ parser = argparse.ArgumentParser(prog="Cholesky")
 
 parser.add_argument("-m", "--mode",
                     type=str,
-                    help="testing, training, parla, worst, loadbalance, random")
+                    help="testing, training, parla, worst, loadbalance, eft_with_data, random")
 parser.add_argument("-n", "--noise",
                     type=bool,
                     help="True if task duration noise is enabled", default=False)
 parser.add_argument("-ns", "--noise_scale",
                     type=float,
-                    help="task duration noise scale", default=0.05)
+                    help="task duration noise scale", default=0.4)
 parser.add_argument("-e", "--episode",
                     type=int,
                     help="the number of episodes (-1 for inifite loop)", default=-1)
@@ -88,15 +88,15 @@ def test_data():
         return args.data_size * 1024 * 1024 * 1024  # 1 GB
 
     def task_duration_per_func(task_id: TaskID):
-        duration = 40000
+        duration = 10000
         if task_id.taskspace == "POTRF":
-            duration = 60000
+            duration = 80000
         elif task_id.taskspace == "SYRK":
-            duration = 40000
+            duration = 70000
         elif task_id.taskspace == "SOLVE":
-            duration = 30000
+            duration = 75000
         elif task_id.taskspace == "GEMM":
-            duration = 40000
+            duration = 70000
         return duration
 
     def homog_task_duration():
@@ -115,14 +115,18 @@ def test_data():
         return func_id
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
-        device_tuple = Device(Architecture.GPU, -1)
+# device_tuple = Device(Architecture.GPU, -1)
 
         runtime_info = TaskRuntimeInfo(
             task_time=task_duration_per_func(task_id), device_fraction=1,
             # task_time=homog_task_duration(), device_fraction=1,
             memory=int(0))
         placement_info = TaskPlacementInfo()
-        placement_info.add(device_tuple, runtime_info)
+        # placement_info.add(device_tuple, runtime_info)
+
+
+        for i in range(args.gpus):
+            placement_info.add(Device(Architecture.GPU, i), runtime_info)
 
         return placement_info
 
@@ -206,6 +210,8 @@ def test_data():
             task_order_mode=task_order_mode,
             use_duration_noise=args.noise,
             noise_scale=args.noise_scale,
+            save_task_order=args.save_order,
+            load_task_order=args.load_order,
             save_task_noise=args.save_noise,
             load_task_noise=args.load_noise,
             mapper=mapper,

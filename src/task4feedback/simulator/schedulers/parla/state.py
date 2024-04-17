@@ -1028,6 +1028,8 @@ def _data_task_duration(
             task.real = False
         duration = state.topology.get_transfer_time(task.source, target, data.size)
         completion_time = state.time + duration
+        if task.source.architecture == Architecture.CPU or target.architecture == Architecture.CPU:
+            print("CPU transfer time:", duration)
 
     # print(f"Data task {task.name} duration: {duration}, size: {data.size}")
     return duration, completion_time
@@ -1073,9 +1075,17 @@ class ParlaState(SystemState):
             self.perdev_active_workload[device] = 0
 
         if self.task_order_mode == TaskOrderType.RANDOM:
-            print("PARLA RANDOM SORT")
-            task_objects[:] = self.randomizer.task_order(
-                task_objects, self.objects.taskmap)
+            if self.load_task_order:
+                print("REPLAY RANDOM SORT")
+                task_objects[:] = load_task_order(task_objects)
+            else:
+                print("RANDOM SORT")
+                # Deep copy
+                task_objects[:] = self.randomizer.task_order(
+                    task_objects, self.objects.taskmap)
+                if self.save_task_order:
+                    print("save task order..")
+                    save_task_order(task_objects)
         elif self.task_order_mode == TaskOrderType.HEFT:
             print("HEFT SORT")
             # Tasks are sorted in-place
@@ -1126,7 +1136,11 @@ class ParlaState(SystemState):
             mapper_num_tasks_threshold=self.mapper_num_tasks_threshold,
             total_num_mapped_tasks=self.total_num_mapped_tasks,
             randomizer=self.randomizer,
-            task_order_mode=self.task_order_mode
+            task_order_mode=self.task_order_mode,
+            save_task_order=self.save_task_order,
+            load_task_order=self.load_task_order,
+            save_task_noise=self.save_task_noise,
+            load_task_noise=self.load_task_noise
         )
 
     def check_resources(
@@ -1295,10 +1309,17 @@ class RLState(ParlaState):
             self.task_order_mode == TaskOrderType.HEFT)
 
         if self.task_order_mode == TaskOrderType.RANDOM:
-            print("RANDOM SORT")
-            # Deep copy
-            task_objects[:] = self.randomizer.task_order(
-                task_objects, self.objects.taskmap)
+            if self.load_task_order:
+                print("REPLAY RANDOM SORT")
+                task_objects[:] = load_task_order(task_objects)
+            else:
+                print("RANDOM SORT")
+                # Deep copy
+                task_objects[:] = self.randomizer.task_order(
+                    task_objects, self.objects.taskmap)
+                if self.save_task_order:
+                    print("save task order..")
+                    save_task_order(task_objects)
         elif self.task_order_mode == TaskOrderType.HEFT:
             print("HEFT SORT") 
 

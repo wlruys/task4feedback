@@ -32,6 +32,7 @@ class SimulatorConfig:
     use_duration_noise: bool = False
     noise_scale: float = 0
     save_task_order: bool = False
+    load_task_order: bool = False
     save_task_noise: bool = False
     load_task_noise: bool = False
     ###########################
@@ -47,6 +48,7 @@ def create_simulator(config: SimulatorConfig):
 
     # print("state config:", config.scheduler_state_type)
 
+    print("save order:", config.save_task_order)
     scheduler = SimulatedScheduler(
         topology=config.topology,
         scheduler_type=config.scheduler_type,
@@ -60,6 +62,7 @@ def create_simulator(config: SimulatorConfig):
         use_duration_noise=config.use_duration_noise,
         noise_scale=config.noise_scale,
         save_task_order=config.save_task_order,
+        load_task_order=config.load_task_order,
         save_task_noise=config.save_task_noise,
         load_task_noise=config.load_task_noise,
         rl_env=config.rl_env,
