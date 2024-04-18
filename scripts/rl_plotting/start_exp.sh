@@ -2,9 +2,9 @@
 
 TARGET_DIR=$1
 
-APP_ARR=( "cholesky" "reduction" "stencil" "sweeps" )
+#APP_ARR=( "cholesky" "reduction" "stencil" "sweeps" )
 #APP_ARR=( "reduction" )
-#APP_ARR=( "cholesky" )
+APP_ARR=( "cholesky" )
 #NUM_GPUS_ARR=( "4" "8" "16" "32" "64" "128" )
 NUM_GPUS_ARR=( "32" )
 #DATA_SIZE_ARR=( "0.5" "1" "2" )
@@ -12,6 +12,7 @@ DATA_SIZE_ARR=( "0.5" )
 #BANDWIDTH_ARR=( "0.5" "1" "2" "4" "8" "16" "32" "64" "128" "256" "512" )
 #BANDWIDTH_ARR=( "0.5" "1" "4" "64" "256" )
 BANDWIDTH_ARR=( "25" )
+#MODE_ARR=(  "loadbalance" "eft_with_data" "random" "heft" )
 MODE_ARR=(  "loadbalance" "eft_with_data" "random" "heft" )
 
 
@@ -21,6 +22,11 @@ MODE_ARR=(  "loadbalance" "eft_with_data" "random" "heft" )
 #DATA_SIZE_ARR=( "10" )
 #BANDWIDTH_ARR=( "10" )
 #MODE_ARR=( "heft" "loadbalance" "parla" "random" )
+
+# File processing
+if [ ! -f outputs ] ; then
+  mkdir -p outputs/pdfs
+fi
 
 for APP in "${APP_ARR[@]}"; do
   script="test_"${APP}".py"
@@ -48,11 +54,13 @@ for APP in "${APP_ARR[@]}"; do
         SAVE_ORDER=true
         order_flag=" -so True"
 
-        for i in 1 2 3; do
+        for i in 1; do
           echo "repeat:$i"
           for MODE in "${MODE_ARR[@]}"; do
 
-            out_file_name=${file_name}_${MODE}".out"
+            out_file_name=${file_name}_${MODE}_${i}".out"
+
+            echo $out_file_name," mode:", $MODE
          
             echo $csv_file_name
             # Noise flag 
@@ -66,6 +74,7 @@ for APP in "${APP_ARR[@]}"; do
             python ${script} -e 1 -m ${MODE} ${noise_flags} -o random -g ${NUM_GPUS} -pb ${BANDWIDTH} -dd ${DATA_SIZE} ${order_flag} > $out_file_name
             grep "simtime" $out_file_name >> $csv_file_name
 
+            mv $out_file_name outputs
             if [ "$SAVE_ORDER" == true ]; then
               SAVE_ORDER=false
               order_flag=" -lo True"
@@ -75,13 +84,7 @@ for APP in "${APP_ARR[@]}"; do
 
         echo "Rscript $PWD/simtime.R $csv_file_name $pdf_file_name"
         Rscript $PWD/simtime.R $csv_file_name $pdf_file_name
-
-        # File processing
-        if [ ! -f outputs ] ; then
-          mkdir -p outputs/pdfs
-        fi
         mv $csv_file_name outputs
-        mv $out_file_name outputs
         mv $pdf_file_name outputs/pdfs
         mv replay.noise $noise_file_name
         mv replay.order $order_file_name
