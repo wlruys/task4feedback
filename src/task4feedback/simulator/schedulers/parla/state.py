@@ -1028,8 +1028,6 @@ def _data_task_duration(
             task.real = False
         duration = state.topology.get_transfer_time(task.source, target, data.size)
         completion_time = state.time + duration
-        if task.source.architecture == Architecture.CPU or target.architecture == Architecture.CPU:
-            print("CPU transfer time:", duration)
 
     # print(f"Data task {task.name} duration: {duration}, size: {data.size}")
     return duration, completion_time

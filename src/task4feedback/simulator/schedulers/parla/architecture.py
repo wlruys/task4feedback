@@ -56,6 +56,7 @@ def map_task(
         chosen_devices = mapper.map_task(task, simulator)
         if chosen_devices is not None:
             task.assigned_devices = chosen_devices
+            task.wait_time = current_time
             task_workload = float(scheduler_state.get_task_duration(
                                       task, task.info.runtime.locations[0]).scale_to("ms"))
             scheduler_state.acquire_resources(phase, task, verbose=verbose)
@@ -207,6 +208,7 @@ def launch_task(
             scheduler_state.use_data(phase, task, verbose=verbose)
             task.duration = duration
             task.completion_time = completion_time
+            scheduler_state.num_tasks += 1
             scheduler_state.launched_active_tasks += 1
 
             devices = task.assigned_devices
@@ -214,6 +216,9 @@ def launch_task(
 
             if isinstance(task, SimulatedComputeTask):
                 scheduler_state.total_num_mapped_tasks -= 1
+                task.wait_time = scheduler_state.time - task.wait_time
+                scheduler_state.wait_time_accum += task.wait_time
+
 
             for device_id in devices:
                 device = scheduler_state.objects.get_device(device_id)

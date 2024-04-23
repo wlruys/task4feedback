@@ -147,6 +147,7 @@ class SimulatedTask:
     eviction_requested: bool = False
     duration: Time = field(default_factory=Time)
     completion_time: Time = field(default_factory=Time)
+    wait_time: Time = field(default_factory=Time)
     init: bool = True
 
     def __post_init__(self):

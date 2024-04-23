@@ -296,6 +296,7 @@ class SimulatedScheduler:
 
 
         print(f"{self.mapper_type},simtime,{float(self.time.scale_to('s'))}")
+        print(f"{self.mapper_type},wait_time,{float(self.state.wait_time_accum.scale_to('s'))/self.state.num_tasks}")
 
         # print(f"Event Count: {self.event_count}")
 

@@ -58,9 +58,10 @@ def calculate_heft(
 
         # Get task's data with write and rw permission
         if task.info.data_dependencies is not None:
+            read = task.info.data_dependencies[AccessType.READ]
             write = task.info.data_dependencies[AccessType.WRITE]
             rw = task.info.data_dependencies[AccessType.READ_WRITE]
-            src_data = write + rw
+            src_data = read + write + rw
 
         # Get dependents' data and dependencies between them and the task
         # being mapped. Note that the dependencies are only between
@@ -80,24 +81,24 @@ def calculate_heft(
                     if sd.id == dd:
                         # intersected_data.append(sd)
                         intersected_data_size += scheduler_state.objects.datamap[sd.id].size 
+            # print("intersected data sizE:", intersected_data_size, " task:", task.name)
 
             # Change it to gb
             average_comm_time : float = 0
             num_pairs: float = 0
-            for d1 in range(len(scheduler_state.topology.devices)):
-                for d2 in range(len(scheduler_state.topology.devices)):
-                    if d1 == d2 or d1 == 0 or d2 == 0:
+            # for d1 in range(len(scheduler_state.topology.devices)):
+            for d1 in scheduler_state.topology.devices:
+                for d2 in scheduler_state.topology.devices:
+                    # if d1 == d2 or d1 == 0 or d2 == 0:
+                    #      continue
+                    if d1.name.architecture == Architecture.CPU or d2.name.architecture == Architecture.CPU or \
+                       d1 == d2:
                         continue
-                    bandwidth = scheduler_state.topology.connection_pool.bandwidth[d1, d2]
-                    # TODO(hc): I assume that all GPUs have HW connections through either
-                    # NVLink or P2P. But we can still use HW topo that might not have connections 
-                    # between some GPUs, and in this case, we need to move data through host.
-                    # But for now, I am not considering that case yet.
-                    if bandwidth > 0:
-                        # Change the unit to ms
-                        curr_average_comm_time = (intersected_data_size / bandwidth) * 1000
-                        average_comm_time += curr_average_comm_time
-                        num_pairs += 1
+                    average_comm_time += float(
+                        scheduler_state.topology.get_transfer_time(
+                        d1, d2, intersected_data_size).scale_to("ms")
+                    )
+                    num_pairs += 1
             average_comm_time /= num_pairs
 
             # print(task, " vs ", dependent_instance, " src data:", src_data, " all data:", all_dep_data)
@@ -133,7 +134,8 @@ def calculate_heft(
     for task in heft_sorted_tasks:
         duration = convert_to_float(
             scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
-            scale_to("ms"))
+            scale_to("ms")
+        )
 
         ready_time = 0
         earliest_start = -1.0 
@@ -145,14 +147,14 @@ def calculate_heft(
             # and find task's ready time when the task is assigned to the current
             # agent
             for dep in task.dependencies:
-                dependent_instance = taskmap[dep]
+                dependency_instance = taskmap[dep]
 
-                if isinstance(dependent_instance, SimulatedDataTask):
+                if isinstance(dependency_instance, SimulatedDataTask):
                     continue
 
                 # TODO(hc): We can reuse this information collected in the above later
                 # Compute communication overhead
-                all_dep_data = dependent_instance.info.data_dependencies.all_ids()
+                all_dep_data = dependency_instance.info.data_dependencies.all_ids()
                 intersected_data = []
                 intersected_data_size = 0
                 for sd in src_data: # SimulatedData
@@ -161,18 +163,22 @@ def calculate_heft(
                             intersected_data.append(sd)
                             intersected_data_size += scheduler_state.objects.datamap[sd.id].size 
 
-                assigned_agent_id = dependent_instance.info.heft_allocation
+                assigned_agent_id = dependency_instance.info.heft_allocation
 
-                # Calculate data transfer time from the dependency's device to
-                # the current device (CPU is index 0)
-                bandwidth = scheduler_state.topology.connection_pool.bandwidth[assigned_agent_id + 1, agent_id + 1]
-                # milliseconds! 
-                comm_time : float = (intersected_data_size / bandwidth) * 1000 if bandwidth > 0 else 0
+                comm_time: float = float(scheduler_state.topology.get_transfer_time(
+                    Device(Architecture.GPU, assigned_agent_id),
+                    Device(Architecture.GPU, agent_id), intersected_data_size
+                ).scale_to("ms"))
+                # print("oid: ", assigned_agent_id, ", nid: ", agent_id,
+                #     ", toid: ", scheduler_state.topology.connection_pool.get_index(
+                #       Device(Architecture.GPU, assigned_agent_id)),
+                #     ", tnid: ", scheduler_state.topology.connection_pool.get_index(
+                #       Device(Architecture.GPU, agent_id)))
                 ready_time = max(taskmap[dep].info.heft_makespan + comm_time,
                                  ready_time)
+                # print(" task:",  task.name, ">> size:", intersected_data_size, " actual comm time:", comm_time)
 
-                # print(">> size:", intersected_data_size, " actual comm time:", comm_time)
-
+            # print(task.name, " ready time:", ready_time)
 
             # Find the earliest start time on this agent
             if len(agent) > 0:
@@ -191,16 +197,14 @@ def calculate_heft(
                         candidate_earliest_start = tmp_earliest_start
                         any_slack_found = True
                         # print(task.info.id, " earliest start:", tmp_earliest_start, " e2 start:",
-                        #     e2.start, " duration: ", duration, " on device", agent_id)
+                        #    e2.start, " duration: ", duration, " on device", agent_id)
                         break 
 
                 if not any_slack_found:
                     candidate_earliest_start = max(agent[-1].end, ready_time)
                     # print(task.info.id, " earlist estart:", candidate_earliest_start)
             else:
-                # If this agent (device) does not have mapped tasks, the earliest start
-                # time is 0.
-                candidate_earliest_start = 0
+                candidate_earliest_start = ready_time
 
             if earliest_start == -1 or earliest_start > candidate_earliest_start:
                 earliest_start_agent = agent_id
@@ -211,6 +215,7 @@ def calculate_heft(
             heft_events.append(heft_event)
         bisect.insort(agents[earliest_start_agent], heft_event, key=lambda x: x.start)
         task.info.heft_makespan = earliest_start + duration
+        # print("makespan allocation:", task.name, " earliest start:", earliest_start, " duration:", duration, " mkspan:", task.info.heft_makespan, " dependencies:", task.dependencies)
         task.info.heft_allocation = earliest_start_agent
         # print(f"heft task {task.name}, allocation: {earliest_start_agent}")
         if task.info.heft_makespan > max_heft:

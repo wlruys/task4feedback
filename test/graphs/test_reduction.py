@@ -79,6 +79,13 @@ def test_data():
     def initial_data_placement(data_id: DataID) -> Devices:
         return Device(Architecture.CPU, 0)
 
+    def random_gpu_placement(data_id: DataID) -> Devices:
+        np.random.seed(None)
+        return Device(Architecture.GPU, np.random.randint(0, args.gpus))
+
+    def rr_gpu_placement(data_id: DataID) -> Devices:
+        return Device(Architecture.GPU, data_id.idx[-1] % args.gpus)
+
     def sizes(data_id: DataID) -> int:
         return args.data_size * 1024 * 1024 * 1024
 
@@ -120,7 +127,7 @@ def test_data():
             return TaskOrderType.DEFAULT
 
     data_config = ReductionDataGraphConfig()
-    data_config.initial_placement = initial_data_placement
+    data_config.initial_placement = rr_gpu_placement
     data_config.initial_sizes = sizes
     data_config.branch_factor=args.branches
     data_config.levels=args.levels
@@ -175,6 +182,8 @@ def test_data():
         if args.mode == "testing" or args.mode == "training":
             mapper_mode = "rl"
             mapper = RLTaskMapper()
+
+        print("noise:", args.noise)
 
         simulator_config = SimulatorConfig(
             topology=topology,

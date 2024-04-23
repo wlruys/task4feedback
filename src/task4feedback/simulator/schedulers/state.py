@@ -132,6 +132,8 @@ class SystemState:
     save_task_noise: bool = False
     load_task_noise: bool = False
     loaded_task_noises: Dict[str, int] | None = None
+    wait_time_accum: Time = field(default_factory=Time)
+    num_tasks: float = 0
 
     init: bool = True
 

@@ -84,19 +84,26 @@ def test_data():
     def initial_data_placement(data_id: DataID) -> Devices:
         return Device(Architecture.CPU, 0)
 
+    def random_gpu_placement(data_id: DataID) -> Devices:
+        np.random.seed(None)
+        return Device(Architecture.GPU, np.random.randint(0, args.gpus))
+
+    def rr_gpu_placement(data_id: DataID) -> Devices:
+        return Device(Architecture.GPU, data_id.idx[-1] % args.gpus)
+
     def sizes(data_id: DataID) -> int:
         return args.data_size * 1024 * 1024 * 1024  # 1 GB
 
     def task_duration_per_func(task_id: TaskID):
         duration = 10000
         if task_id.taskspace == "POTRF":
-            duration = 80000
+            duration = 160000
         elif task_id.taskspace == "SYRK":
-            duration = 70000
+            duration = 140000
         elif task_id.taskspace == "SOLVE":
-            duration = 75000
+            duration = 150000
         elif task_id.taskspace == "GEMM":
-            duration = 70000
+            duration = 140000
         return duration
 
     def homog_task_duration():
@@ -147,7 +154,9 @@ def test_data():
                 
     data_config = CholeskyDataGraphConfig()
     # data_config = NoDataGraphConfig()
-    data_config.initial_placement = initial_data_placement
+    # data_config.initial_placement = initial_data_placement
+    # data_config.initial_placement = random_gpu_placement
+    data_config.initial_placement = rr_gpu_placement
     data_config.initial_sizes = sizes
     print("data size:", args.data_size, " GB")
 
