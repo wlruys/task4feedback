@@ -27,12 +27,11 @@ parser = argparse.ArgumentParser(prog="Reduction")
 parser.add_argument("-m", "--mode",
                     type=str,
                     help="testing, training, parla, worst, loadbalance, random")
-parser.add_argument("-n", "--noise",
-                    type=bool,
-                    help="True if task duration noise is enabled", default=False)
 parser.add_argument("-ns", "--noise_scale",
                     type=float,
                     help="task duration noise scale", default=0.4)
+parser.add_argument("-n", "--noise",
+                    help="Set if task duration noise is enabled", action='store_true')
 parser.add_argument("-e", "--episode",
                     type=int,
                     help="the number of episodes (-1 for inifite loop)", default=-1)
@@ -49,17 +48,13 @@ parser.add_argument("-si", "--sorting_interval",
                     type=int,
                     help="task random sorting interval", default=0)
 parser.add_argument("-so", "--save_order",
-                    type=bool,
-                    help="save task mapping order (saved in replay.order)", default=False)
+                    help="save task mapping order (saved in replay.order)", action='store_true')
 parser.add_argument("-lo", "--load_order",
-                    type=bool,
-                    help="load task mapping order (saved in replay.order)", default=False)
+                    help="load task mapping order (saved in replay.order)", action='store_true')
 parser.add_argument("-sn", "--save_noise",
-                    type=bool,
-                    help="save task mapping duration noise (saved in replay.noise)", default=False)
+                    help="save task mapping duration noise (saved in replay.noise)", action='store_true')
 parser.add_argument("-ln", "--load_noise",
-                    type=bool,
-                    help="load task mapping duration noise (saved in replay.noise)", default=False)
+                    help="load task mapping duration noise (saved in replay.noise)", action='store_true')
 parser.add_argument("-g", "--gpus",
                     type=int,
                     help="number of gpus", default=4)
@@ -96,18 +91,13 @@ def test_data():
         return 0
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
-        """
-        if task_id.task_idx[0] % 2 == 0:
-            device_tuple = (gpu0,)
-        else:
-            device_tuple = (gpu1,)
-        """
-        device_tuple = Device(Architecture.GPU, -1)
-
         runtime_info = TaskRuntimeInfo(
-            task_time=homog_task_duration(), device_fraction=1, memory=0)
+            task_time=homog_task_duration(), device_fraction=1,
+            memory=int(0))
         placement_info = TaskPlacementInfo()
-        placement_info.add(device_tuple, runtime_info)
+
+        for i in range(args.gpus):
+            placement_info.add(Device(Architecture.GPU, i), runtime_info)
 
         return placement_info
 
@@ -133,7 +123,6 @@ def test_data():
     data_config.levels=args.levels
     data_config.n_devices=args.gpus
     data_config.data_size=args.data_size
-    print("data size:", args.data_size, " GB")
 
     config = ReductionConfig(
         levels=args.levels, branch_factor=args.branches,
@@ -172,18 +161,12 @@ def test_data():
 
         task_order_mode = get_task_sorting_method(episode)
 
-        cpu = Device(Architecture.CPU, 0)
-        gpu0 = Device(Architecture.GPU, 0)
-        gpu1 = Device(Architecture.GPU, 1)
-
         topology = TopologyManager().generate("frontera", config=topo_config)
 
         mapper_mode = args.mode
         if args.mode == "testing" or args.mode == "training":
             mapper_mode = "rl"
             mapper = RLTaskMapper()
-
-        print("noise:", args.noise)
 
         simulator_config = SimulatorConfig(
             topology=topology,
@@ -216,4 +199,20 @@ def test_data():
 
 
 if __name__ == "__main__":
+    print("Mode:", args.mode)
+    print("Noise enabled?:", args.noise)
+    print("Noise scale:", args.noise_scale)
+    print("# episodes:", args.episode)
+    print("# levels:", args.levels)
+    print("# branches:", args.branches)
+    print("Sorting enabled?:", args.sort)
+    print("Sorting interval:", args.sorting_interval)
+    print("Saving task processing order?:", args.save_order)
+    print("Loading task processing order stored?:", args.load_order)
+    print("Saving task execution time noise?:", args.save_noise)
+    print("Loading task execution time noise?:",  args.load_noise)
+    print("# GPUs?:", args.gpus)
+    print("p2p bandwidth?:", args.p2p)
+    print("data size:", args.data_size)
+
     test_data()
