@@ -8,17 +8,18 @@ class CannonGemmDataGraphConfig(DataGraphConfig):
     Defines a data graph pattern for a reduction.
     """
 
-    data_size: int = 256 * 16 # 4 * (n**2/p) n=2**8 and p=64
+    data_size: int = 256 * 256 * 8 # 4 * (n**2/p) n=2**8 and p=64
     n_devices: int = 4
     levels: int = 3
     blocks: int = 4
+    energy: float = 0.01
 
     def initial_data_placement(self, data_id: DataID) -> Devices:
         # return Device(Architecture.CPU, 0)
         step = math.sqrt(n_gpus)
         if(data_id.idx[0][0] == 0):
-            return Device(Architecture.GPU, data_id.idx[0][1])
-        return Device(Architecture.GPU, int(data_id.idx[0][1] // step))
+            return Device(Architecture.GPU, data_id.idx[0][1], energy)
+        return Device(Architecture.GPU, int(data_id.idx[0][1] // step), energy)
 
     def __post_init__(self):
         self.initial_placement = self.initial_data_placement
@@ -30,6 +31,7 @@ class CannonGemmDataGraphConfig(DataGraphConfig):
             j = task_id.task_idx[1]
             step = int(math.sqrt(self.blocks))
             # mod = 2 * self.blocks - 1
+            # print("TASK ID:", task_id.task_idx)
             start_row = (j // step) * step
             start_col = j % step
             shift = (self.levels - 1) - level
@@ -44,17 +46,24 @@ class CannonGemmDataGraphConfig(DataGraphConfig):
             if(level == self.levels - 1): # read data at the topmost level
                 in_data_indices.append((step + 1, 2 * j)) # read A block
                 in_data_indices.append((step + 1, 2 * j + 1)) # read B block
-                # print("in_data_indices: ", in_data_indices)
+                # print("IF in_data_indices: ", in_data_indices)
             elif(j == mod_a - 1):
-                in_data_indices.append((step + 1, (2 * ((j + shift) % mod_a + start_row)))) # read A block
-                in_data_indices.append((step + 1, (2 * ((j + step * shift) % mod_b) + 1))) # read A block
+                in_data_indices.append((step + 1, (2 * ((start_col + shift) % step + start_row)))) # read A block
+                # in_data_indices.append((step + 1, (2 * ((j + shift) % mod_a + start_row)))) # read A block
+                in_data_indices.append((step + 1, (2 * ((j + step * shift) % mod_b) + 1))) # read B block
                 # in_data_indices.append((step + 1, ((2 * ((j + step * shift) + 1) % mod)))) # read B block
-                # print("in_data_indices: ", in_data_indices, task_id.task_idx)
+                # print("ELIF in_data_indices: ", in_data_indices, task_id.task_idx)
             else:
-                in_data_indices.append((step + 1, (2 * ((j + shift) % mod_a)))) # read A block
-                in_data_indices.append((step + 1, (2 * ((j + shift * step) % mod_b) + 1))) # read A block
+                # if(j == 14 or j == 15):
+                    # print("start_col: ", start_col)
+                    # print("shift: ", shift)
+                    # print("mod_b: ", mod_b)
+                    # print("start_row: ", start_row)
+                in_data_indices.append((step + 1, (2 * ((start_col + shift) % step + start_row)))) # read A block
+                # in_data_indices.append((step + 1, (2 * ((j + shift) % mod_a)))) # read A block
+                in_data_indices.append((step + 1, (2 * ((j + shift * step) % mod_b) + 1))) # read B block
                 # in_data_indices.append((step + 1, ((2 * ((j + step * shift) + 1) % mod)))) # read B block
-                # print("in_data_indices: ", in_data_indices, task_id.task_idx)
+                # print("ELSE in_data_indices: ", in_data_indices, task_id.task_idx)
             out_data_index = (0, j) # always write to addition
 
             #inout_data_index = start
@@ -94,7 +103,9 @@ class CannonGemmConfig(GraphConfig):
 def make_cannon_gemm_graph(
     config: CannonGemmConfig, data_config: DataGraphConfig = NoDataGraphConfig()
 ) -> Tuple[TaskMap, DataMap]:
+    print("Check config")
     check_config(config)
+    #print("configurations")
     configurations = config.task_config
 
     task_dict = dict()
@@ -103,18 +114,20 @@ def make_cannon_gemm_graph(
     # Build Task Graph
     count = 0
     # levels = math.sqrt(config.blocks) + 1
+    #print("for loops")
     for level in range(config.levels - 1, -1, -1): #levels are going to be sq_root of # blocks + 1
         tasks_in_level = config.blocks
         subtree_segment = tasks_in_level / config.n_devices
 
         for j in range(tasks_in_level):
             # Task ID:
+            #print(j)
             task_idx = (level, j)
             task_id = TaskID("T", task_idx, 0)
 
             # Task Placement Info
             task_placement_info = configurations(task_id)
-
+            #print("Task Id: ", task_id)
             # Task Dependencies
             dependency_list = []
             if level == 0: # addition depends on all the prior multiplication
@@ -123,7 +136,7 @@ def make_cannon_gemm_graph(
                     dependency = TaskID(
                         "T", (level + k + 1, j), 0
                     )
-                    # print(dependency)
+                    #print(dependency)
                     dependency_list.append(dependency)
                 # print(dependency_list)
 
@@ -134,15 +147,18 @@ def make_cannon_gemm_graph(
                         )
                     dependency_list.append(dependency)
                 #for k in range(config.branch_factor):
-                    
+            #print(dependency_list)   
             # print("level: ", (level,j))
+            #print("get data deps")
             data_dependencies, data_dict = get_data_dependencies(
                 task_id, data_dict, data_config
             )
 
             # Task Mapping
+            #print("get mapping")
             task_mapping = get_mapping(config, task_id)
-
+            
+            print("task Info")
             task_dict[task_id] = TaskInfo(
                 task_id,
                 task_placement_info,
@@ -151,4 +167,5 @@ def make_cannon_gemm_graph(
                 task_mapping,
             )
 
+    print("return")
     return task_dict, data_dict
