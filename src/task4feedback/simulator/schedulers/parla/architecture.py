@@ -314,7 +314,9 @@ def launch_task(
             return True
         else:
             if logger.ENABLE_LOGGING:
-                # print(f"Task {task.name} cannot be launched: Insufficient resources.")
+                # print(
+                #     f"Task {task.name} cannot be launched: Insufficient resources at time {scheduler_state.time}."
+                # )
                 logger.runtime.debug(
                     f"Task {task.name} cannot be launched: Insufficient resources.",
                     extra=dict(task=task.name, phase=phase),
@@ -322,19 +324,20 @@ def launch_task(
     else:
         if logger.ENABLE_LOGGING:
             # print(
-            #     f"Task {task.name} cannot be launched: Invalid status",
-            #     task.dependencies,
+            #     f"Task {task.name} cannot be launched: Invalid status at time {scheduler_state.time}.",
             # )
-            # print(f"Task status: {task.status}.")
-            # print(f"Task counters: {task.counters}.")
-            # print(f"Task dependencies: {task.dependencies}.")
+            # # print(f"Task status: {task.status}.")
+            # # print(f"Task counters: {task.counters}.")
+            # # print(f"Task dependencies: {task.dependencies}.")
             # for dep in task.dependencies:
             #     sim_dep_task = scheduler_state.objects.get_task(dep)
-            #     print(f" -- Dependency Task {dep} state: {sim_dep_task.state}.")
-            #     # for dependents in sim_dep_task.dependents:
-            #     #    print(
-            #     #        f" ----- Dependents Task {dependents}: {scheduler_state.objects.get_task(dependents).state}."
-            #     #    )
+            #     print(
+            #         f"{task.name} -- Dependency Task {dep} state: {sim_dep_task.state}."
+            #     )
+            # for dependents in sim_dep_task.dependents:
+            #    print(
+            #        f" ----- Dependents Task {dependents}: {scheduler_state.objects.get_task(dependents).state}."
+            #    )
             logger.runtime.debug(
                 f"Task {task.name} cannot be launched: Invalid status.",
                 extra=dict(
@@ -501,6 +504,8 @@ class ParlaArchitecture(SchedulerArchitecture):
         self.success_count = 0
         next_tasks = TaskIterator(self.spawned_tasks)
 
+        # print(f"Running MAPPER at time {scheduler_state.time}")
+
         task_mapper = kwargs["mapper"]
         simulator = kwargs["simulator"]
 
@@ -624,7 +629,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 self._add_eviction_dependencies(data_task, scheduler_state)
 
                 self.launchable_tasks[device][TaskType.DATA].put_id(
-                    task_id=data_task_id, priority=data_task.priority
+                    task_id=data_task_id, priority=task.priority
                 )
 
                 scheduler_state.reserved_active_tasks += 1
@@ -634,6 +639,8 @@ class ParlaArchitecture(SchedulerArchitecture):
         self, scheduler_state: SystemState, event: Reserver, **kwargs
     ) -> List[EventPair]:
         from rich import print
+
+        # print(f"Running RESERVER at time {scheduler_state.time}")
 
         objects = scheduler_state.objects
         current_time = scheduler_state.time
@@ -689,12 +696,12 @@ class ParlaArchitecture(SchedulerArchitecture):
                 # print("Launched Tasks", self.launched_tasks)
             elif isinstance(eviction_event, Eviction):
                 next_tasks.fail()
-                return [(current_time + Time(10), eviction_event)]
+                return [(current_time + Time(1), eviction_event)]
             else:
                 next_tasks.fail()
                 continue
 
-        launcher_pair = (current_time + Time(10), Launcher())
+        launcher_pair = (current_time + Time(1), Launcher())
         return [launcher_pair]
 
     def eviction(
@@ -722,7 +729,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             scheduler_state.mapped_active_tasks += 1
             scheduler_state.reserved_active_tasks += 1
 
-        reserver_pair = (current_time + Time(10), Launcher())
+        reserver_pair = (current_time + Time(1), Launcher())
         return [reserver_pair]
 
     def launcher(
@@ -730,6 +737,11 @@ class ParlaArchitecture(SchedulerArchitecture):
     ) -> List[EventPair]:
         objects = scheduler_state.objects
         current_time = scheduler_state.time
+        from rich import print
+
+        # print(f"Running LAUNCHER at time {current_time}")
+        # print("Device Queues")
+        # print(self.launchable_tasks)
 
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
@@ -752,6 +764,15 @@ class ParlaArchitecture(SchedulerArchitecture):
 
                 device = task.assigned_devices[0]  # type: ignore
                 self.launched_tasks[device].put_id(taskid, completion_time)
+
+                # if isinstance(task, SimulatedComputeTask):
+                #     print(
+                #         f"Compute Task {task.name} launched on device {device} at time {current_time} for duration {task.duration} until {completion_time}."
+                #     )
+                # elif isinstance(task, SimulatedDataTask):
+                #     print(
+                #         f"Data Task {task.name} launched on device {device} at time {current_time} for duration {task.duration} until {completion_time}."
+                #     )
 
                 if logger.ENABLE_LOGGING:
                     logger.runtime.info(
@@ -785,7 +806,8 @@ class ParlaArchitecture(SchedulerArchitecture):
         # is_critical_eviction =
 
         if remaining_tasks := length(self.launchable_tasks) and self.success_count:
-            mapping_pair = (current_time + Time(10), Mapper())
+            # print("Success Count: ", self.success_count)
+            mapping_pair = (current_time + Time(1), Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
             self.eviction_occured = False
@@ -846,6 +868,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         self.success_count += 1
         if self.active_scheduler == 0:
+            # print("No active scheduler creating one")
             mapping_pair = (current_time, Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
