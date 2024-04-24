@@ -79,6 +79,8 @@ NonEvictableUses = [
     DataUses.USED,
 ]
 
+from copy import deepcopy
+
 
 @dataclass(slots=True)
 class DataStats:
@@ -87,16 +89,34 @@ class DataStats:
     move_count: int = 0
     move_time: Time = field(default_factory=Time)
 
+    def __deepcopy__(self, memo):
+        return DataStats(
+            read_count=self.read_count,
+            write_count=self.write_count,
+            move_count=self.move_count,
+            move_time=self.move_time,
+        )
+
 
 @dataclass(slots=True)
 class DataUse:
     tasks: Dict[DataUses, Set[TaskID]] = field(default_factory=dict)
     counters: Dict[DataUses, int] = field(default_factory=dict)
+    init: bool = True
+
+    def __deepcopy__(self, memo):
+        # print("Deepcopying DataUse")
+        tasks = {k: {t for t in v} for k, v in self.tasks.items()}
+        counters = {k: v for k, v in self.counters.items()}
+
+        return DataUse(tasks=tasks, counters=counters, init=self.init)
 
     def __post_init__(self):
-        for use in DataUses:
-            self.tasks[use] = set()
-            self.counters[use] = 0
+        if self.init:
+            for use in DataUses:
+                self.tasks[use] = set()
+                self.counters[use] = 0
+            self.init = False
 
     def is_evictable(self):
         for use in NonEvictableUses:
@@ -111,12 +131,16 @@ class DataUse:
         return self.counters[use]
 
     def add_task(self, task: TaskID, use: DataUses):
+        # print(f"Adding task {task} to {use}")
         self.tasks[use].add(task)
         self.counters[use] += 1
+        # print(f"Tasks: {self.tasks}")
 
     def remove_task(self, task: TaskID, use: DataUses):
+        # print(f"Removing task {task} from {use}", self)
         self.tasks[use].remove(task)
         self.counters[use] -= 1
+        # print(f"Tasks: {self.tasks}")
 
     def __rich_repr__(self):
         yield "tasks", self.tasks
@@ -125,27 +149,51 @@ class DataUse:
 @dataclass(slots=True)
 class DataStatus:
     id: DataID
-    devices: InitVar[Sequence[Device]]
+    devices: Sequence[Device]
     device2state: Dict[TaskState, Dict[Device, DataState]] = field(default_factory=dict)
     state2device: Dict[TaskState, Dict[DataState, Set[Device]]] = field(
         default_factory=dict
     )
     device2uses: Dict[Device, DataUse] = field(default_factory=dict)
     eviction_tasks: Set[TaskID] = field(default_factory=set)
+    init: bool = True
 
-    def __post_init__(self, devices: Sequence[Device]):
-        for state in TaskState:
-            self.device2state[state] = {}
-            self.state2device[state] = {}
+    def __deepcopy__(self, memo):
+        device2state = {
+            k: {d: v for d, v in v2.items()} for k, v2 in self.device2state.items()
+        }
+        state2device = {
+            k: {d: {v for v in v2} for d, v2 in v3.items()}
+            for k, v3 in self.state2device.items()
+        }
+        device2uses = {k: deepcopy(v) for k, v in self.device2uses.items()}
+
+        return DataStatus(
+            id=self.id,
+            devices=self.devices,
+            device2state=device2state,
+            state2device=state2device,
+            device2uses=device2uses,
+            eviction_tasks={t for t in self.eviction_tasks},
+            init=self.init,
+        )
+
+    def __post_init__(self):
+        devices = self.devices
+        if self.init:
+            for state in TaskState:
+                self.device2state[state] = {}
+                self.state2device[state] = {}
+
+                for device in devices:
+                    self.device2state[state][device] = DataState.NONE
+
+                for data_state in DataState:
+                    self.state2device[state][data_state] = set()
 
             for device in devices:
-                self.device2state[state][device] = DataState.NONE
-
-            for data_state in DataState:
-                self.state2device[state][data_state] = set()
-
-        for device in devices:
-            self.device2uses[device] = DataUse()
+                self.device2uses[device] = DataUse()
+            self.init = False
 
     def set_data_state(
         self, device: Device, state: TaskState, data_state: DataState, initial=False
@@ -169,11 +217,12 @@ class DataStatus:
                         prior_state=prior_state,
                     ),
                 )
-
-            self.state2device[state][prior_state].remove(device)
+            if(prior_state != DataState.NONE):
+                self.state2device[state][prior_state].remove(device)
 
         self.device2state[state][device] = data_state
-        self.state2device[state][data_state].add(device)
+        if(data_state != DataState.NONE):
+            self.state2device[state][data_state].add(device)
 
         return prior_state
 
@@ -208,11 +257,11 @@ class DataStatus:
         self.device2uses[device].add_task(task, use)
 
     def add_eviction_task(self, task: TaskID):
-        print(f"Adding eviction task {task} to {self.id}")
+        # print(f"Adding eviction task {task} to {self.id}")
         self.eviction_tasks.add(task)
 
     def remove_eviction_task(self, task: TaskID):
-        print(f"Removing eviction task {task} from {self.id}")
+        # print(f"Removing eviction task {task} from {self.id}")
         self.eviction_tasks.remove(task)
 
     def remove_task(self, device: Device, task: TaskID, use: DataUses):
@@ -254,7 +303,7 @@ class DataStatus:
         for device in status.keys():
             if status[device] == DataState.MOVING:
                 raise RuntimeError(
-                    f"Cannot write while device {device} is moving data {self}. Status: {status}"
+                    f"Cannot write while device {device} is moving data {self.id}. Status: {status}"
                 )
 
         # Ensure no device is using the data if check_use is True
@@ -262,7 +311,7 @@ class DataStatus:
             for device in status.keys():
                 if self.is_used(device=device, use=DataUses.USED):
                     raise RuntimeError(
-                        f"Cannot write while a device {device} that is using that data. Status: {status}"
+                        f"Cannot write while a device {device} that is using that data {self.id}. Status: {status}"
                     )
 
     def get_eviction_target(
@@ -271,8 +320,13 @@ class DataStatus:
         potential_targets: Sequence[Device],
         state: TaskState,
     ) -> Device:
+        # print(
+        #     f"Getting eviction target for {self.id} from {source_device} to {potential_targets}"
+        # )
         valid_copies = self.get_device_set_from_state(state, DataState.VALID)
         target_device = source_device
+
+        # print("Valid Copies", valid_copies)
 
         current_state = self.get_data_state(source_device, state)
         assert (
@@ -281,6 +335,9 @@ class DataStatus:
 
         if len(valid_copies) == 1:
             target_device = potential_targets[0]
+
+        # print("Target Device", target_device)
+        # print("Source Device", source_device)
 
         return target_device
 
@@ -299,10 +356,9 @@ class DataStatus:
         verify: bool = False,
         verbose: bool = False,
     ) -> Tuple[DataState, List[Device]]:
-
         if logger.ENABLE_LOGGING:
             logger.data.info(
-                f"Start eviction of {self.id} from device {source_device}.",
+                f"Start eviction of {self.id} from device {source_device} to {target_device}.",
                 extra=dict(
                     task=task,
                     data=self.id,
@@ -333,7 +389,7 @@ class DataStatus:
     ):
         if logger.ENABLE_LOGGING:
             logger.data.info(
-                f"Finish eviction of {self.id} from device {source_device}.",
+                f"Finish eviction of {self.id} from device {source_device} to {target_device}.",
                 extra=dict(
                     task=task,
                     data=self.id,
@@ -430,7 +486,7 @@ class DataStatus:
                 else:
                     if not self.check_data_state(device, state, DataState.VALID):
                         raise RuntimeError(
-                            f"Task {task} cannot write to data that is not valid on device {device}. Status: {status}"
+                            f"Task {task} cannot write to data {self.id} that is not valid on device {device}. Status: {status}"
                         )
             else:
                 assert (
@@ -473,7 +529,7 @@ class DataStatus:
         else:
             if not self.check_data_state(target_device, state, DataState.VALID):
                 raise RuntimeError(
-                    f"Task {task} cannot read from data that is not valid on device {target_device}. Status: {status}"
+                    f"Task {task} cannot read from data {self.id} that is not valid on device {target_device}. Status: {status}"
                 )
                 prior_state = None
             prior_state = self.get_data_state(target_device, state)
@@ -574,7 +630,7 @@ class DataStatus:
             source_device, TaskState.LAUNCHED, DataState.VALID
         ):
             raise RuntimeError(
-                f"Task {task} cannot move data from a device that is not valid."
+                f"Task {task} cannot move data {self.id} from a device that is not valid."
             )
 
         prior_target_state = self.get_data_state(target_device, TaskState.LAUNCHED)
@@ -595,7 +651,7 @@ class DataStatus:
         target_device: Device,
         verbose: bool = False,
     ) -> DataState:
-        from rich import print
+        # from rich import print
 
         if logger.ENABLE_LOGGING:
             logger.data.info(
@@ -609,7 +665,7 @@ class DataStatus:
             source_device, TaskState.LAUNCHED, DataState.VALID
         ):
             raise RuntimeError(
-                f"Task {task} cannot move data from a device that is not valid."
+                f"Task {task} cannot move data {self.id} from a device that is not valid."
             )
 
         prior_target_state = self.get_data_state(target_device, TaskState.LAUNCHED)
@@ -620,7 +676,7 @@ class DataStatus:
             self.set_data_state(target_device, TaskState.LAUNCHED, DataState.VALID)
         else:
             raise RuntimeError(
-                f"Task {task} cannot finish moving data to a device that is not valid or moving."
+                f"Task {task} cannot finish moving data {self.id} to a device that is not valid or moving."
             )
 
         if source_device != target_device:
@@ -637,30 +693,56 @@ class DataStatus:
 
 @dataclass(slots=True)
 class SimulatedData:
-    system_devices: InitVar[Sequence[Device]]
-    info: DataInfo
-    status: DataStatus = field(init=False)
-    stats: DataStats = field(default_factory=DataStats)
+    system_devices: Sequence[Device] = None
+    info: DataInfo = None
+    status: DataStatus = None
+    init: bool = True
+    # stats: DataStats = field(default_factory=DataStats)
 
-    def __post_init__(self, system_devices: Sequence[Device]):
-        self.status = DataStatus(id=self.info.id, devices=system_devices)
+    def __deepcopy__(self, memo):
+        return SimulatedData(
+            system_devices=self.system_devices,
+            info=self.info,
+            status=deepcopy(self.status),
+            init=self.init,
+        )
 
-        starting_devices = self.info.location
-        assert starting_devices is not None
+    def __post_init__(self):
+        system_devices = self.system_devices
+        if self.init:
+            self.status = DataStatus(id=self.info.id, devices=system_devices)
 
-        if isinstance(starting_devices, Device):
-            starting_devices = (starting_devices,)
+            starting_devices = self.info.location
+            assert starting_devices is not None
 
-        for device in system_devices:
+        # self.status.device2state = DefaultDict(lambda: DefaultDict(lambda: DataState.NONE))
+        self.status.state2device = DefaultDict(lambda: DefaultDict(lambda: set()))
+
+        
+        # data_state = DataState.NONE
+        # for device in system_devices:
+        #     for state in TaskState:
+        #         if device not in starting_devices:
+        #             self.status.state2device[state][data_state].add(device)
+        #print(len(starting_devices))
+        for device in starting_devices:
+            #print(device)
             for state in TaskState:
-                if device not in starting_devices:
-                    self.status.set_data_state(
-                        device, state, DataState.NONE, initial=True
-                    )
-                else:
-                    self.status.set_data_state(
+                self.status.set_data_state(
                         device, state, DataState.VALID, initial=True
                     )
+        # for device in system_devices:
+        #     for state in TaskState:
+        #         if device not in starting_devices:
+        #             self.status.set_data_state(
+        #                 device, state, DataState.NONE, initial=True
+        #             )
+        #         else:
+        #             self.status.set_data_state(
+        #                 device, state, DataState.VALID, initial=True
+        #             )
+        # print(self.status.device2state)
+        # print(self.status.state2device)
 
     @property
     def name(self) -> DataID:
@@ -772,4 +854,4 @@ class SimulatedData:
         return self.status.get_eviction_target(source_device, potential_targets, state)
 
 
-type SimulatedDataMap = Dict[DataID, SimulatedData]
+SimulatedDataMap = Dict[DataID, SimulatedData]

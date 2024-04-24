@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field, InitVar
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Self, Type
+from typing import Dict, List, Optional, Sequence, Set, Tuple, Type
 from fractions import Fraction
 
 from ..events import *
@@ -290,6 +290,7 @@ class DataTaskRecord(TaskRecord):
     data: Optional[DataID] = None
     data_size: Optional[int] = None
     reserve_time: Time = Time(0)
+    communication_energy: float = 0
 
 
 @dataclass(slots=True)
@@ -369,16 +370,23 @@ class DataTaskRecorder(Recorder):
                     data_id = task.read_accesses[0].id
                     data = system_state.objects.get_data(data_id)
                     data_size = data.size
+
+                    if isinstance(task, SimulatedEvictionTask):
+                        type = TaskType.EVICTION
+                    else:
+                        type = TaskType.DATA
+
                     devices = task.assigned_devices
                     communication_energy = 0
-                    print("In recorder end")
+                    #print("In recorder end")
                     if(task.real): # check if there is any data movement
-                        print("In if end")
+                        #print("In if end")
                         for device in devices:
                             communication_energy += device.energy * data_size
                             print(communication_energy)
                     self.tasks[name] = DataTaskRecord(
                         name,
+                        type=type,
                         end_time=current_time,
                         devices=task.assigned_devices,
                         source=task.source,
@@ -402,15 +410,21 @@ class DataTaskRecorder(Recorder):
                         data_size = data.size
                         devices = task.assigned_devices
                         communication_energy = 0
-                        print("In recorder")
+                        #print("In recorder")
                         if(task.real): # check if there is any data movement
-                            print("In if")
+                            #print("In if")
                             for device in devices:
                                 communication_energy += device.energy * data_size
-                                print(communication_energy)
+                                #print(communication_energy)
+
+                        if isinstance(task, SimulatedEvictionTask):
+                            type = TaskType.EVICTION
+                        else:
+                            type = TaskType.DATA
 
                         self.tasks[name] = DataTaskRecord(
                             name,
+                            type=type,
                             start_time=current_time,
                             devices=task.assigned_devices,
                             source=task.source,

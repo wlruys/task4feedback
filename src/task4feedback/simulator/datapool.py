@@ -2,7 +2,8 @@ from __future__ import annotations
 from ..types import DataID
 from .data import *
 from dataclasses import dataclass, field, InitVar
-from typing import Dict, List, Set, Tuple, Union, Self
+from typing import Dict, List, Set, Tuple, Union
+
 
 @dataclass(slots=True)
 class DataPool:
@@ -25,3 +26,6 @@ class DataPool:
 
     def __len__(self):
         return len(self.datalist)
+
+    def __deepcopy__(self, memo) -> DataPool:
+        return DataPool(datalist={d for d in self.datalist})

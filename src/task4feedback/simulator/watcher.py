@@ -25,10 +25,17 @@ class Watcher:
 def check_for_task_completion(
     state: SystemState, arch: SchedulerArchitecture, event: Event, tasks: Set[TaskID]
 ):
+    # print("Checking for task completion", event, tasks)
     if isinstance(event, TaskCompleted):
         if event.task in tasks:
             return False
     return True
+
+
+def check_for_mapper(state: SystemState, arch: SchedulerArchitecture, event: Event):
+    if isinstance(event, Mapper):
+        return True
+    return False
 
 
 def check_for_data_read(
@@ -55,3 +62,13 @@ def check_for_time(
     if state.time < time:
         return False
     return True
+
+
+def check_for_task_launch(
+    state: SystemState, arch: SchedulerArchitecture, event: Event, tasks: Set[TaskID]
+):
+    if isinstance(event, Launcher):
+        for task in tasks:
+            if task in event.tasks:
+                return True
+    return False

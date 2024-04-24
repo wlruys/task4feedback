@@ -10,7 +10,6 @@ from typing import (
     Set,
     Tuple,
     Optional,
-    Self,
     Sequence,
     Mapping,
     MutableMapping,
@@ -21,6 +20,7 @@ from dataclasses import dataclass, field
 from .resourceset import ResourceSet, FasterResourceSet
 from .datapool import DataPool
 from ..logging import logger
+import numpy as np
 
 
 @dataclass(slots=True)
@@ -29,6 +29,14 @@ class TaskTimes:
     completion_time: Time = field(default_factory=Time)
     state_times: Dict[TaskState, Time] = field(default_factory=dict)
     status_times: Dict[TaskStatus, Time] = field(default_factory=dict)
+
+    def __deepcopy__(self, memo):
+        return TaskTimes(
+            duration=self.duration,
+            completion_time=self.completion_time,
+            state_times={k: v for k, v in self.state_times.items()},
+            status_times={k: v for k, v in self.status_times.items()},
+        )
 
     def __post_init__(self):
         self.state_times = {}
@@ -51,28 +59,44 @@ class TaskTimes:
         else:
             self.status_times[state] = time
 
-    def get_state(self, time: Time) -> TaskState:
-        current = TaskState.SPAWNED
-        for state in [TaskState.MAPPED, TaskState.LAUNCHED, TaskState.COMPLETED]:
-            if self.state_times[state] <= time:
-                current = state
-        return current
+    # def get_state(self, time: Time) -> TaskState:
+    #     current = TaskState.SPAWNED
+    #     for state in [TaskState.MAPPED, TaskState.LAUNCHED, TaskState.COMPLETED]:
+    #         if self.state_times[state] <= time:
+    #             current = state
+    #     return current
 
 
-@dataclass(slots=True, init=False)
+@dataclass(slots=True)
 class TaskCounters:
-    remaining_deps_states: Dict[TaskState, int] = field(default_factory=dict)
-    remaining_deps_status: Dict[TaskStatus, int] = field(default_factory=dict)
+    n_deps: int | None = None
+    remaining_deps_states: np.ndarray = None
+    remaining_deps_status: np.ndarray = None
 
-    def __init__(self, info: TaskInfo):
-        self.remaining_deps_states = {}
-        self.remaining_deps_status = {}
+    def __deepcopy__(self, memo):
+        # return TaskCounters(
+        #     remaining_deps_states=self.remaining_deps_states,
+        #     remaining_deps_status=self.remaining_deps_status,
+        # )
+        return TaskCounters(
+            remaining_deps_states=self.remaining_deps_states.copy(),
+            remaining_deps_status=self.remaining_deps_status.copy(),
+        )
+        # return TaskCounters(
+        #     remaining_deps_states={k: v for k, v in self.remaining_deps_states.items()},
+        #     remaining_deps_status={k: v for k, v in self.remaining_deps_status.items()},
+        # )
 
-        for state in TaskState:
-            self.remaining_deps_states[state] = len(info.dependencies)
+    def __post_init__(self):
+        if self.n_deps is not None:
+            self.remaining_deps_states = np.zeros((len(TaskState),), dtype=np.int8)
+            self.remaining_deps_status = np.zeros((len(TaskStatus),), dtype=np.int8)
 
-        for state in TaskStatus:
-            self.remaining_deps_status[state] = len(info.dependencies)
+            for state in TaskState:
+                self.remaining_deps_states[state] = self.n_deps
+
+            for state in TaskStatus:
+                self.remaining_deps_status[state] = self.n_deps
 
     def __str__(self) -> str:
         return f"TaskCounters({self.remaining_deps_states})"
@@ -100,30 +124,72 @@ class TaskCounters:
         self.remaining_deps_status[new_status] -= 1
 
 
+from copy import deepcopy
+
+
 @dataclass(slots=True)
 class SimulatedTask:
     name: TaskID
     info: TaskInfo
     state: TaskState = TaskState.SPAWNED
     status: Set[TaskStatus] = field(default_factory=set)
-    times: TaskTimes = field(default_factory=TaskTimes)
-    counters: TaskCounters = field(init=False)
+    # times: TaskTimes = field(default_factory=TaskTimes)
+    counters: TaskCounters | None = None
+    dependencies: List[TaskID] = field(default_factory=list)
     dependents: List[TaskID] = field(default_factory=list)
     resources: List[FasterResourceSet] = field(default_factory=list)
     depth: int = 0
     type: TaskType = TaskType.BASE
     parent: Optional[TaskID] = None
     data_tasks: Optional[List[TaskID]] = None
-    eviction_tasks: Optional[List[TaskID]] = None
+    # eviction_tasks: Optional[List[TaskID]] = None
     spawn_tasks: Optional[List[TaskID]] = None
     eviction_requested: bool = False
+    duration: Time = field(default_factory=Time)
+    completion_time: Time = field(default_factory=Time)
+    init: bool = True
 
     def __post_init__(self):
-        self.counters = TaskCounters(self.info)
+        if self.init:
+            self.dependencies = [d for d in self.info.dependencies]
+            self.counters = TaskCounters(len(self.info.dependencies))
+            self.init = False
+
+    def __deepcopy__(self, memo):
+
+        state = self.state
+        status = {s for s in self.status}
+
+        # times = deepcopy(self.times)
+
+        counters = deepcopy(self.counters)
+        # eviction_tasks = deepcopy(self.eviction_tasks)
+        eviction_requested = self.eviction_requested
+        resources = [deepcopy(r) for r in self.resources]
+
+        return SimulatedTask(
+            name=self.name,
+            info=self.info,
+            state=state,
+            status=status,
+            # times=times,
+            counters=counters,
+            dependencies=[d for d in self.dependencies],
+            dependents=[d for d in self.dependents],
+            resources=resources,
+            depth=self.depth,
+            type=self.type,
+            parent=self.parent,
+            data_tasks=self.data_tasks,
+            # eviction_tasks=eviction_tasks,
+            spawn_tasks=self.spawn_tasks,
+            eviction_requested=eviction_requested,
+            init=self.init,
+        )
 
     def set_status(self, new_status: TaskStatus, time: Time, verify: bool = True):
         # print(f"Setting {self.name} to {new_status}. Status: {self.status}")
-        self.times[new_status] = time
+        # self.times[new_status] = time
         self.status.add(new_status)
 
     def set_state(self, new_state: TaskState, time: Time, verify: bool = True):
@@ -133,7 +199,7 @@ class SimulatedTask:
             TaskStatus.check_valid_transition(self.status, new_state)
             TaskState.check_valid_transition(self.state, new_state)
 
-        self.times[new_state] = time
+        # self.times[new_state] = time
         self.state = new_state
 
     def set_states(self, new_states: List[TaskState], time: Time):
@@ -160,29 +226,13 @@ class SimulatedTask:
     def priority(self, priority: int):
         self.info.order = priority
 
-    @property
-    def duration(self) -> Time:
-        return self.times.duration
+    # @property
+    # def completion_time(self) -> Time:
+    #     return self.times.completion_time
 
-    @duration.setter
-    def duration(self, time: Time):
-        self.times.duration = time
-
-    @property
-    def completion_time(self) -> Time:
-        return self.times.completion_time
-
-    @completion_time.setter
-    def completion_time(self, time: Time):
-        self.times.completion_time = time
-
-    @property
-    def dependencies(self) -> List[TaskID]:
-        return self.info.dependencies
-
-    @dependencies.setter
-    def dependencies(self, deps: List[TaskID]):
-        self.info.dependencies = deps
+    # @completion_time.setter
+    # def completion_time(self, time: Time):
+    #     self.times.completion_time = time
 
     @property
     def assigned_devices(self) -> Optional[Tuple[Device, ...]]:
@@ -209,7 +259,7 @@ class SimulatedTask:
         states: List[TaskState] = [],
         statuses: List[TaskStatus] = [],
     ):
-        self.info.dependencies.append(task)
+        self.dependencies.append(task)
         for state in states:
             self.counters.remaining_deps_states[state] += 1
         for status in statuses:
@@ -301,9 +351,9 @@ class SimulatedTask:
         self.add_dependency(task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED])
         task.dependents.append(self.name)
 
-        if self.eviction_tasks is None:
-            self.eviction_tasks = []
-        self.eviction_tasks.append(task.name)
+        # if self.eviction_tasks is None:
+        #     self.eviction_tasks = []
+        # self.eviction_tasks.append(task.name)
 
 
 @dataclass(slots=True)
@@ -330,6 +380,28 @@ class SimulatedComputeTask(SimulatedTask):
 
         return resources
 
+    def __deepcopy__(self, memo):
+
+        return SimulatedComputeTask(
+            name=self.name,
+            info=self.info,
+            state=self.state,
+            status={s for s in self.status},
+            # times=deepcopy(self.times),
+            counters=deepcopy(self.counters),
+            dependencies=[t for t in self.dependencies],
+            dependents=[t for t in self.dependents],
+            resources=[deepcopy(r) for r in self.resources],
+            depth=self.depth,
+            type=self.type,
+            parent=self.parent,
+            data_tasks=self.data_tasks,
+            # eviction_tasks=deepcopy(self.eviction_tasks),
+            spawn_tasks=self.spawn_tasks,
+            eviction_requested=deepcopy(self.eviction_requested),
+            init=self.init,
+        )
+
 
 @dataclass(slots=True)
 class SimulatedDataTask(SimulatedTask):
@@ -341,14 +413,61 @@ class SimulatedDataTask(SimulatedTask):
     def get_resources(self, devices: Devices) -> List[FasterResourceSet]:
         return [FasterResourceSet(vcus=0, memory=0, copy=1)]
 
+    def __deepcopy__(self, memo):
+        return SimulatedDataTask(
+            name=self.name,
+            info=self.info,
+            state=self.state,
+            status={s for s in self.status},
+            source=self.source,
+            local_index=self.local_index,
+            real=self.real,
+            # times=deepcopy(self.times),
+            counters=deepcopy(self.counters),
+            dependencies=[t for t in self.dependencies],
+            dependents=[t for t in self.dependents],
+            resources=[deepcopy(r) for r in self.resources],
+            depth=self.depth,
+            type=self.type,
+            parent=self.parent,
+            data_tasks=self.data_tasks,
+            # eviction_tasks=deepcopy(self.eviction_tasks),
+            spawn_tasks=self.spawn_tasks,
+            eviction_requested=deepcopy(self.eviction_requested),
+            init=self.init,
+        )
+
 
 @dataclass(slots=True)
 class SimulatedEvictionTask(SimulatedDataTask):
     type: TaskType = TaskType.EVICTION
 
+    def __deepcopy__(self, memo):
+        return SimulatedEvictionTask(
+            name=self.name,
+            info=self.info,
+            state=self.state,
+            source=self.source,
+            local_index=self.local_index,
+            real=self.real,
+            status={s for s in self.status},
+            # times=deepcopy(self.times),
+            counters=deepcopy(self.counters),
+            dependencies=[t for t in self.dependencies],
+            dependents=[t for t in self.dependents],
+            resources=[deepcopy(r) for r in self.resources],
+            depth=self.depth,
+            type=self.type,
+            parent=self.parent,
+            data_tasks=self.data_tasks,
+            spawn_tasks=self.spawn_tasks,
+            eviction_requested=self.eviction_requested,
+            init=self.init,
+        )
 
-type SimulatedTaskMap = Mapping[
+
+SimulatedTaskMap = Mapping[
     TaskID, SimulatedTask | SimulatedComputeTask | SimulatedDataTask
 ]
-type SimulatedComputeTaskMap = MutableMapping[TaskID, SimulatedComputeTask]
-type SimulatedDataTaskMap = MutableMapping[TaskID, SimulatedDataTask]
+SimulatedComputeTaskMap = MutableMapping[TaskID, SimulatedComputeTask]
+SimulatedDataTaskMap = MutableMapping[TaskID, SimulatedDataTask]

@@ -219,9 +219,15 @@ class ConnectionPool:
                 data_size / first_hop_bandwidth + data_size / second_hop_bandwidth
             )
             time_in_microseconds = int(time_in_seconds * 1e6)
+            # print(
+            #     f"Route through host: {data_size} bytes, {first_hop_bandwidth} -> {second_hop_bandwidth} = {time_in_microseconds} us"
+            # )
         else:
             time_in_seconds = data_size / bandwidth
             time_in_microseconds = int(time_in_seconds * 1e6)
+            # print(
+            #     f"Direct connection: {data_size} bytes, {bandwidth} = {time_in_microseconds} us"
+            # )
         return Time(time_in_microseconds)
 
     def get_connection_string(self, source: NamedDevice, target: NamedDevice) -> str:
@@ -397,7 +403,7 @@ class TopologyManager:
 
 
 @TopologyManager.register_generator("frontera")
-def generate_4gpus_1cpu_toplogy(
+def generate_ngpus_1cpu_toplogy(
     config: Optional[Dict[str, int]] = None
 ) -> SimulatedTopology:
     """
@@ -419,27 +425,34 @@ def generate_4gpus_1cpu_toplogy(
     Each GPU is equipped with 16GB DRAM, and CPU is equipped with 130GB.
     """
 
+    default_config = {
+        "P2P_BW": parse_size("200 GB"),
+        "H2D_BW": parse_size("100 GB"),
+        "D2H_BW": parse_size("100 GB"),
+        "GPU_MEM": parse_size("16 GB"),
+        "CPU_MEM": parse_size("130 GB"),
+        "GPU_COPY_ENGINES": 3,
+        "CPU_COPY_ENGINES": 3,
+        "NGPUS": 4,
+    }
+
     if config is not None:
-        P2P_BW = config["P2P_BW"]
-        H2D_BW = config["H2D_BW"]
-        D2H_BW = config["D2H_BW"]
+        for key, value in default_config.items():
+            if key in config:
+                default_config[key] = config[key]
 
-        GPU_MEM = config["GPU_MEM"]
-        CPU_MEM = config["CPU_MEM"]
+    config = default_config
 
-        GPU_COPY_ENGINES = config["GPU_COPY_ENGINES"]
-        CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
-    else:
-        # Default configuration for testing
-        P2P_BW = parse_size("9 GB")  # 9 GB/s
-        H2D_BW = parse_size("7 GB")  # 7 GB/s
-        D2H_BW = parse_size("7 GB")  # 7 GB/s
+    P2P_BW = config["P2P_BW"]
+    H2D_BW = config["H2D_BW"]
+    D2H_BW = config["D2H_BW"]
 
-        GPU_MEM = parse_size("16 GB")
-        CPU_MEM = parse_size("130 GB")
+    GPU_MEM = config["GPU_MEM"]
+    CPU_MEM = config["CPU_MEM"]
 
-        GPU_COPY_ENGINES = 3
-        CPU_COPY_ENGINES = 3
+    GPU_COPY_ENGINES = config["GPU_COPY_ENGINES"]
+    CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
+    NGPUS = config["NGPUS"]
 
     # Create devices
     gpus = [
@@ -462,11 +475,16 @@ def generate_4gpus_1cpu_toplogy(
         topology.add_bandwidth(gpu, cpus[0], D2H_BW)
         topology.add_bandwidth(cpus[0], gpu, H2D_BW)
 
-    topology.add_connection(gpus[0], gpus[1], bidirectional=True)
-    topology.add_bandwidth(gpus[0], gpus[1], P2P_BW)
+    for i in range(NGPUS):
+        for j in range(i + 1, NGPUS):
+            topology.add_connection(gpus[i], gpus[j], bidirectional=True)
+            topology.add_bandwidth(gpus[i], gpus[j], P2P_BW)
 
-    topology.add_connection(gpus[2], gpus[3], bidirectional=True)
-    topology.add_bandwidth(gpus[2], gpus[3], P2P_BW)
+    # topology.add_connection(gpus[0], gpus[1], bidirectional=True)
+    # topology.add_bandwidth(gpus[0], gpus[1], P2P_BW)
+
+    # topology.add_connection(gpus[2], gpus[3], bidirectional=True)
+    # topology.add_bandwidth(gpus[2], gpus[3], P2P_BW)
 
     return topology
 
