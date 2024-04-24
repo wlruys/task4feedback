@@ -297,12 +297,14 @@ def create_data_objects(
 
     devices = topology.devices
     devices = [device.name for device in devices]
-
+    print(len(datamap))
+    i = 0
     for data_info in datamap.values():
+        print(f'In data_info loop: {i} :: {data_info.id} ')
         data_objects[data_info.id] = SimulatedData(
             system_devices=devices, info=data_info
         )
-
+        i += 1
     return data_objects
 
 

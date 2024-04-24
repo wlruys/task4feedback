@@ -8,4 +8,6 @@ from .scatter_reduction import *
 from .chain import *
 from .stencil import *
 from .sweep import *
+from .cannon_gemm import *
+from .cannon_gemm_hier import *
 from .utilities import *
