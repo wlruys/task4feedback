@@ -21,38 +21,38 @@ class CannonGemmHierDataGraphConfig(DataGraphConfig):
     p: int = 4
 
     def initial_data_size(self, data_id: DataID) -> Devices:
-        num_proc = pow(config.p, (config.hier_levels - data_id.idx[0][0]))
-        n_on_each_proc = (config.n * config.n) / num_proc
-        return n_on_each_proc * config.a
+        num_proc = pow(self.p, (self.hier_levels - data_id.idx[0][0]))
+        n_on_each_proc = (self.n * self.n) / num_proc
+        return n_on_each_proc * self.a
     
     def initial_data_placement(self, data_id: DataID) -> Devices:
-        if dram:
-            if(data_id.idx[0][2] == levels):
-                cpu = Device(Architecture.CPU, data_id.idx[0][0] + 1, energy[data_id.idx[0][0]])
-                print("test: data_place ", str(data_id.idx[0]), " ", cpu, " ", energy[data_id.idx[0][0]])
+        if self.dram:
+            if(data_id.idx[0][2] == self.levels):
+                cpu = Device(Architecture.CPU, data_id.idx[0][0] + 1, self.energy[data_id.idx[0][0]])
+                print("test: data_place ", str(data_id.idx[0]), " ", cpu, " ", self.energy[data_id.idx[0][0]])
                 #print("test_ in initial_data_place [2]: ", cpu)
                 return cpu #read from DRAM
             elif(data_id.idx[0][2] == 0):
-                if(data_id.idx[0][0] == hier_levels - 1):
-                    cpu = Device(Architecture.CPU, data_id.idx[0][0] + 1, energy[data_id.idx[0][0]])
+                if(data_id.idx[0][0] == self.hier_levels - 1):
+                    cpu = Device(Architecture.CPU, data_id.idx[0][0] + 1, self.energy[data_id.idx[0][0]])
                     print("test: data_place ", str(data_id.idx[0]), " ", cpu, " ", energy[data_id.idx[0][0]])
                     #print("test_ in initial_data_place [0]: ", cpu)
                     return cpu #highest level writes to its own DRAM
                 else:
-                    cpu = Device(Architecture.CPU, data_id.idx[0][0] + 2, energy[data_id.idx[0][0] + 1])
-                    print("test: data_place ", str(data_id.idx[0]), " ", cpu, " ", energy[data_id.idx[0][0]])
+                    cpu = Device(Architecture.CPU, data_id.idx[0][0] + 2, self.energy[data_id.idx[0][0] + 1])
+                    print("test: data_place ", str(data_id.idx[0]), " ", cpu, " ", self.energy[data_id.idx[0][0]])
                     #print("test_ in initial_data_place else: ", cpu)
                     return cpu #lower levels write to next level's DRAM
                     
         start_gpu = 0
-        for i in range(hier_levels - data_id.idx[0][0] - 1, 0 , -1):
-            start_gpu += int(pow(config.p, i))
-        pos = start_gpu + data_id.idx[0][1] * config.p
+        for i in range(self.hier_levels - data_id.idx[0][0] - 1, 0 , -1):
+            start_gpu += int(pow(self.p, i))
+        pos = start_gpu + data_id.idx[0][1] * self.p
         if(data_id.idx[0][2] == 0):
             pos += data_id.idx[0][3]
         else:
-            idx_pos = data_id.idx[0][3] % (2 * blocks)
-            if(data_id.idx[0][3] >= 2 * blocks):
+            idx_pos = data_id.idx[0][3] % (2 * self.blocks)
+            if(data_id.idx[0][3] >= 2 * self.blocks):
                 pos += int(idx_pos) # To accomodate C
             else:
                 # pos += int(data_id.idx[0][3] // 2) #If only A,B read
@@ -61,7 +61,7 @@ class CannonGemmHierDataGraphConfig(DataGraphConfig):
         # print("Data id: ", data_id.idx, " ", pos)
         # print("test: data_place ", str(data_id.idx[0]), " ", pos, " ", energy[data_id.idx[0][0]])
         # print("cannon: ", pos, " ", config.energy[data_id.idx[0][0]])
-        return Device(Architecture.GPU, pos, config.energy[data_id.idx[0][0]])
+        return Device(Architecture.GPU, pos, self.energy[data_id.idx[0][0]])
 
     def __post_init__(self):
         self.initial_placement = self.initial_data_placement
