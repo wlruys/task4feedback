@@ -69,6 +69,9 @@ parser.add_argument("-pb", "--p2p",
 parser.add_argument("-dd", "--data_size",
                     type=float,
                     help="per-task data size in GB", default="1")
+parser.add_argument("-d", "--distribution",
+                    type=str,
+                    help="rr: distributing data to gpus in rr, cpu: distributing data from cpu, random: randomly distributing data to gpus", default="rr")
 
 
 args = parser.parse_args()
@@ -76,7 +79,7 @@ args = parser.parse_args()
 
 def test_data():
 
-    def initial_data_placement(data_id: DataID) -> Devices:
+    def cpu_data_placement(data_id: DataID) -> Devices:
         return Device(Architecture.CPU, 0)
 
     def random_gpu_placement(data_id: DataID) -> Devices:
@@ -145,11 +148,15 @@ def test_data():
                 
     data_config = CholeskyDataGraphConfig()
     # data_config = NoDataGraphConfig()
-    # data_config.initial_placement = initial_data_placement
-    # data_config.initial_placement = random_gpu_placement
-    data_config.initial_placement = rr_gpu_placement
+
+    if args.distribution == "rr":
+        data_config.initial_placement = rr_gpu_placement
+    elif args.distribution == "cpu":
+        data_config.initial_placement = cpu_data_placement
+    elif args.distribution == "random":
+        data_config.initial_placement = random_gpu_placement
+
     data_config.initial_sizes = sizes
-    data_config.n_devices=args.gpus
     data_config.data_size=args.data_size
 
     config = CholeskyConfig(blocks=args.block, task_config=task_placement,
@@ -241,5 +248,6 @@ if __name__ == "__main__":
     print("# GPUs?:", args.gpus)
     print("p2p bandwidth?:", args.p2p)
     print("data size:", args.data_size)
+    print("data distribution:", args.distribution)
 
     test_data()
