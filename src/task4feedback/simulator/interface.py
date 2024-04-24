@@ -26,9 +26,11 @@ class SimulatorConfig:
 
 
 def create_simulator(config: SimulatorConfig):
+    print("Creating simulated data....")
     simulated_data = create_data_objects(config.data, topology=config.topology)
+    print("Creating recorders")
     recorders = RecorderList(recorder_types=config.recorders)
-
+    print("scheduler intialized")
     scheduler = SimulatedScheduler(
         topology=config.topology,
         scheduler_type=config.scheduler_type,
@@ -38,17 +40,19 @@ def create_simulator(config: SimulatorConfig):
         mapper=config.mapper,
         use_eviction=config.use_eviction,
     )
-
+    print("create sim graph")
     tasklist, simulated_tasks = create_sim_graph(
         config.tasks, config.data, use_data=config.use_data
     )
-
+    print("assigning simulated tasks")
     config.simulated_tasks = simulated_tasks
+    print("assigning simulated data")
     config.simulated_data = simulated_data
-
+    print("reg simulated data")
     scheduler.register_datamap(simulated_data)
+    print("reg simulated tasks")
     scheduler.register_taskmap(simulated_tasks)
-
+    print("add intiial tasks")
     scheduler.add_initial_tasks(tasklist, apply_sort=True)
-
+    print("return sch")
     return scheduler

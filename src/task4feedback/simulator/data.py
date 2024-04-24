@@ -217,11 +217,12 @@ class DataStatus:
                         prior_state=prior_state,
                     ),
                 )
-
-            self.state2device[state][prior_state].remove(device)
+            if(prior_state != DataState.NONE):
+                self.state2device[state][prior_state].remove(device)
 
         self.device2state[state][device] = data_state
-        self.state2device[state][data_state].add(device)
+        if(data_state != DataState.NONE):
+            self.state2device[state][data_state].add(device)
 
         return prior_state
 
@@ -714,20 +715,34 @@ class SimulatedData:
             starting_devices = self.info.location
             assert starting_devices is not None
 
-            if isinstance(starting_devices, Device):
-                starting_devices = (starting_devices,)
+        # self.status.device2state = DefaultDict(lambda: DefaultDict(lambda: DataState.NONE))
+        self.status.state2device = DefaultDict(lambda: DefaultDict(lambda: set()))
 
-            for device in system_devices:
-                for state in TaskState:
-                    if device not in starting_devices:
-                        self.status.set_data_state(
-                            device, state, DataState.NONE, initial=True
-                        )
-                    else:
-                        self.status.set_data_state(
-                            device, state, DataState.VALID, initial=True
-                        )
-            self.init = False
+        
+        # data_state = DataState.NONE
+        # for device in system_devices:
+        #     for state in TaskState:
+        #         if device not in starting_devices:
+        #             self.status.state2device[state][data_state].add(device)
+        #print(len(starting_devices))
+        for device in starting_devices:
+            #print(device)
+            for state in TaskState:
+                self.status.set_data_state(
+                        device, state, DataState.VALID, initial=True
+                    )
+        # for device in system_devices:
+        #     for state in TaskState:
+        #         if device not in starting_devices:
+        #             self.status.set_data_state(
+        #                 device, state, DataState.NONE, initial=True
+        #             )
+        #         else:
+        #             self.status.set_data_state(
+        #                 device, state, DataState.VALID, initial=True
+        #             )
+        # print(self.status.device2state)
+        # print(self.status.state2device)
 
     @property
     def name(self) -> DataID:

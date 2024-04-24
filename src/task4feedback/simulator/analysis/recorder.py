@@ -290,6 +290,7 @@ class DataTaskRecord(TaskRecord):
     data: Optional[DataID] = None
     data_size: Optional[int] = None
     reserve_time: Time = Time(0)
+    communication_energy: float = 0
 
 
 @dataclass(slots=True)
@@ -414,7 +415,7 @@ class DataTaskRecorder(Recorder):
                             #print("In if")
                             for device in devices:
                                 communication_energy += device.energy * data_size
-                                print(communication_energy)
+                                #print(communication_energy)
 
                         if isinstance(task, SimulatedEvictionTask):
                             type = TaskType.EVICTION

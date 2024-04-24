@@ -499,12 +499,12 @@ def generate_mesh_toplogy(
 
      -----------
     |           |
-    -gpu0 --gpu1-
+    -gpu0 --gpu2-
      | \   / |
      |  \ /  |
      |  / \  |
      | /   \ |
-    -gpu2 -- gpu3-
+    -gpu1 -- gpu3-
     |           |
      -----------
    
@@ -514,24 +514,24 @@ def generate_mesh_toplogy(
     All GPUs are connected to CPU by connections having bandwidth of 100.
     Each GPU is equipped with 16GB DRAM, and CPU is equipped with 130GB.
     """
-    n = 4
+    energy = 0.01
     if config is not None:
-        P2P_BW = config["P2P_BW"]
-        H2D_BW = config["H2D_BW"]
-        D2H_BW = config["D2H_BW"]
+        n = config["N"]
+        # P2P_BW = config["P2P_BW"]
+        # H2D_BW = config["H2D_BW"]
+        # D2H_BW = config["D2H_BW"]
 
-        GPU_MEM = config["GPU_MEM"]
-        CPU_MEM = config["CPU_MEM"]
+        # GPU_MEM = config["GPU_MEM"]
+        # CPU_MEM = config["CPU_MEM"]
 
-        GPU_COPY_ENGINES = config["GPU_COPY_ENGINES"]
-        CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
-    else:
+        # GPU_COPY_ENGINES = config["GPU_COPY_ENGINES"]
+        # CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
         # Default configuration for testing
         P2P_BW = parse_size("9 GB")  # 9 GB/s
         H2D_BW = parse_size("7 GB")  # 7 GB/s
         D2H_BW = parse_size("7 GB")  # 7 GB/s
 
-        GPU_MEM = parse_size("2 KB")
+        GPU_MEM = parse_size("6 GB")
         CPU_MEM = parse_size("130 GB")
 
         GPU_COPY_ENGINES = 3
@@ -540,13 +540,13 @@ def generate_mesh_toplogy(
     # Create devices
     gpus = [
         SimulatedDevice(
-            Device(Architecture.GPU, i), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
+            Device(Architecture.GPU, i, energy), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
         )
         for i in range(n)
     ]
     cpus = [
         SimulatedDevice(
-            Device(Architecture.CPU, 0), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
+            Device(Architecture.CPU, 0, energy), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
         )
     ]
 
@@ -567,7 +567,12 @@ def generate_mesh_toplogy(
         mod = step * (i + 1)
         for j in range(step):
             curr_device = i * step + j
-            next_device = (curr_device + 1) % mod
+            if( j != step - 1):
+                next_device = (curr_device + 1) % mod
+            else:
+                next_device = i * step
+            # print("Adding col conn:")
+            # print(curr_device, "-->", next_device)
             topology.add_connection(gpus[curr_device], gpus[next_device], bidirectional=True)
             topology.add_bandwidth(gpus[curr_device], gpus[next_device], P2P_BW)
 
@@ -576,8 +581,174 @@ def generate_mesh_toplogy(
         for i in range(step):
             curr_device = j + i * step
             next_device = (j + (i + 1) * step) % n
+            # print("Adding row conn:")
+            # print(curr_device, "-->", next_device)
             topology.add_connection(gpus[curr_device], gpus[next_device], bidirectional=True)
             topology.add_bandwidth(gpus[curr_device], gpus[next_device], P2P_BW)
 
     return topology
 
+def generate_mesh(topology, gpus, bandwidth, start, step, n):
+    # add connections between cols
+    # print("STEP:", step)
+    for i in range (step):
+        mod = step * (i + 1) + start
+        for j in range(step):
+            curr_device = i * step + j + start
+            if( j != step - 1):
+                next_device = (curr_device + 1) % mod
+            else:
+                next_device = i * step + start
+            # print("Adding col conn:")
+            # print(curr_device, "-->", next_device)
+            topology.add_connection(gpus[curr_device], gpus[next_device], bidirectional=True)
+            topology.add_bandwidth(gpus[curr_device], gpus[next_device], bandwidth)
+
+    # add connection between rows
+    for j in range(step):
+        for i in range(step):
+            curr_device = j + i * step + start
+            next_device = (j + (i + 1) * step) % n + start
+            # print("Adding row conn:")
+            # print(curr_device, "-->", next_device)
+            topology.add_connection(gpus[curr_device], gpus[next_device], bidirectional=True)
+            topology.add_bandwidth(gpus[curr_device], gpus[next_device], bandwidth)
+
+    return topology
+
+@TopologyManager.register_generator("mesh_hier")
+def generate_mesh_toplogy_hier(
+    config: Optional[Dict[str, int]] = None
+) -> SimulatedTopology:
+    """
+    This function creates n GPUs and 1 CPU architecture.
+
+    The topology looks like below:
+
+     -----------
+    |           |
+    -gpu0 --gpu2-
+     | \   / |
+     |  \ /  |
+     |  / \  |
+     | /   \ |
+    -gpu1 -- gpu3-
+    |           |
+     -----------
+   
+    gpu0-gpu1 and gpu2-gpu3 have bandwidth of 200 (we assume NVLinks),
+    and other connections have bandiwdth of 100.
+
+    All GPUs are connected to CPU by connections having bandwidth of 100.
+    Each GPU is equipped with 16GB DRAM, and CPU is equipped with 130GB.
+    """
+    energy = [0.01, 1, 100, 1000]
+    n = 4
+    total_n = 20
+    hier_levels = 2
+    dram = False
+
+    if "N" in config:
+        n = config["N"]
+
+    if config is not None:
+        n = config["N"]
+        total_n = config["TOTAL_N"]
+        hier_levels = config["HIER_LEVELS"]
+        energy = config["ENERGY"]
+        # P2P_BW = config["P2P_BW"]
+        # H2D_BW = config["H2D_BW"]
+        # D2H_BW = config["D2H_BW"]
+
+        # GPU_MEM = config["GPU_MEM"]
+        # CPU_MEM = config["CPU_MEM"]
+
+        # GPU_COPY_ENGINES = config["GPU_COPY_ENGINES"]
+        # CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
+        # Default configuration for testing
+        P2P_BW = parse_size("9 GB")  # 9 GB/s
+        H2D_BW = parse_size("7 GB")  # 7 GB/s
+        D2H_BW = parse_size("7 GB")  # 7 GB/s
+
+        GPU_MEM = parse_size("10 GB")
+        CPU_MEM = parse_size("150 GB")
+
+        GPU_COPY_ENGINES = 3
+        CPU_COPY_ENGINES = 3
+
+  
+    if "DRAM" in config:
+        dram = config["DRAM"]
+    
+    # Create devices
+    if dram:
+        dram_cpus = []
+        for i in range(hier_levels):
+            print("topo: ", i + 1, " ", energy[i])
+            dram_cpus.append(SimulatedDevice(
+                            Device(Architecture.CPU, i + 1, energy[i]), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
+                        )   
+                    )
+        # print("topo: ", dram_cpus)
+    gpus = []
+    end = 0
+    start = 0
+    for i in range(hier_levels):
+        idx = hier_levels - i - 1
+        num_gpus = int(pow(n, i + 1))
+        end += num_gpus
+        for j in range(start, end):
+            gpus.append(SimulatedDevice(
+                            Device(Architecture.GPU, j, energy[idx]), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
+                        )
+                    )
+            # print("topo: ", j, " ", energy[idx])
+            #gpus.append(Device(Architecture.GPU, i))
+            #gpus.append(Device(Architecture.GPU, i, energy[idx]))
+        start = end
+
+    cpus = [
+        SimulatedDevice(
+            Device(Architecture.CPU, 0, energy[0]), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
+        )
+    ]
+    # print("topo ", cpus)
+    #print(total_n)
+    # Create device topology
+    if dram:
+        topology = SimulatedTopology(cpus + dram_cpus + gpus, "Topology::G-D-C")
+    else:
+        topology = SimulatedTopology(cpus + gpus, "Topology::G-C")
+    # add connections between all gpus and the cpu
+    for gpu in gpus:
+        # print(gpu)
+        topology.add_connection(gpu, cpus[0], bidirectional=True)
+        topology.add_bandwidth(gpu, cpus[0], D2H_BW)
+        topology.add_bandwidth(cpus[0], gpu, H2D_BW)
+
+    # add connection between gpus and dram at each level, if dram is True
+    if(dram):
+        start = 0
+        end = 0
+        # print(len(gpus))
+        for i in range(len(dram_cpus)):
+            idx = hier_levels - i - 1
+            num_gpus = int(pow(n, i + 1))
+            end += num_gpus
+            # print("I: ", i, "num_gpus: ", num_gpus)
+            for j in range(start, end):
+                # print(j)
+                topology.add_connection(gpus[j], dram_cpus[idx], bidirectional=True)
+                topology.add_bandwidth(gpus[j], dram_cpus[idx], D2H_BW)
+                topology.add_bandwidth(dram_cpus[idx], gpus[j], H2D_BW)
+            start = end
+
+    gpu = 0
+    mesh = 0
+    step = int(math.sqrt(n))
+    while(gpu < total_n):
+        #print("MESH: ", mesh)
+        topology = generate_mesh(topology, gpus, P2P_BW, mesh * n, step, n)
+        mesh += 1
+        gpu += n
+    return topology
