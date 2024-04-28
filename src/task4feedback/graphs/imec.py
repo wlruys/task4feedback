@@ -22,8 +22,7 @@ class ImecDataGraphConfig(DataGraphConfig):
     p: int = 4
 
     def initial_data_size(self, data_id: DataID) -> Devices:
-        num_proc = pow(self.p, (self.hier_levels - data_id.idx[0][0]))
-        n_on_each_proc = (self.n * self.n) / num_proc
+        n_on_each_proc = (self.n * self.n) / self.p
         return n_on_each_proc * self.a
     
     def initial_data_placement(self, data_id: DataID) -> Devices:
@@ -61,7 +60,7 @@ class ImecDataGraphConfig(DataGraphConfig):
         #return Device(Architecture.GPU, pos)
         # print("Data id: ", data_id.idx, " ", pos)
         # print("test: data_place ", str(data_id.idx[0]), " ", pos, " ", energy[data_id.idx[0][0]])
-        # print("cannon: ", pos, " ", config.energy[data_id.idx[0][0]])
+        print("imec.py: ", config.energy[data_id.idx[0][0]])
         return Device(Architecture.GPU, 0, self.energy[data_id.idx[0][0]]) # everyting is on HBM at the start
 
     def __post_init__(self):
@@ -99,13 +98,13 @@ class ImecDataGraphConfig(DataGraphConfig):
                 in_data_indices.append((irow, k, step + 1, 2 * j)) # read A block
                 in_data_indices.append((k, jcol, step + 1, 2 * j + 1)) # read B block
                 in_data_indices.append((irow, jcol, step + 1, 2 * self.blocks + j)) # read C block
-                # print("IF in_data_indices: ", in_data_indices)
+                print("IF in_data_indices: ", in_data_indices, task_id.task_idx)
             elif(j == mod_a - 1):
                 in_data_indices.append((irow, k, step + 1, (2 * ((start_col + shift) % step + start_row)))) # read A block
                 # in_data_indices.append((step + 1, (2 * ((j + shift) % mod_a + start_row)))) # read A block
                 in_data_indices.append((k, jcol, step + 1, (2 * ((j + step * shift) % mod_b) + 1))) # read B block
                 # in_data_indices.append((step + 1, ((2 * ((j + step * shift) + 1) % mod)))) # read B block
-                # print("ELIF in_data_indices: ", in_data_indices, task_id.task_idx)
+                print("ELIF in_data_indices: ", in_data_indices, task_id.task_idx)
             else:
                 # if(j == 14 or j == 15):
                     # print("start_col: ", start_col)
@@ -116,7 +115,7 @@ class ImecDataGraphConfig(DataGraphConfig):
                 # in_data_indices.append((step + 1, (2 * ((j + shift) % mod_a)))) # read A block
                 in_data_indices.append((k, jcol, step + 1, (2 * ((j + shift * step) % mod_b) + 1))) # read B block
                 # in_data_indices.append((step + 1, ((2 * ((j + step * shift) + 1) % mod)))) # read B block
-                # print("ELSE in_data_indices: ", in_data_indices, task_id.task_idx)
+                print("ELSE in_data_indices: ", in_data_indices, task_id.task_idx)
             #out_data_index = (hier_level, mesh_number, 0, j) # always write to addition
             # out_data_index = []
             # if(level == 1):
@@ -173,7 +172,9 @@ def make_imec_graph(
     prev = []
     for irow in range(config.B):
         for jcol in range(config.B):
+            # prev = []
             for k in range(config.B):
+                
                 for level in range(config.levels - 1, -1, -1): #levels are going to be sq_root of # blocks + 1
                     tasks_in_level = config.blocks
                     subtree_segment = tasks_in_level / config.n_devices
@@ -182,7 +183,7 @@ def make_imec_graph(
                         # Task ID:
                         task_idx = (irow, jcol, k, level, j)
                         task_id = TaskID("T", task_idx, 0)
-
+                        # print("Task ID:", task_id.idx)
                         # Task Placement Info
                         task_placement_info = configurations(task_id)
 
@@ -196,7 +197,7 @@ def make_imec_graph(
                                 )
                                 # print(dependency)
                                 dependency_list.append(dependency)
-                                prev.append(task_id) # add completion tasks of this cannon gemm as dependency of next cannon gemm
+                            prev.append(task_id) # add completion tasks of this cannon gemm as dependency of next cannon gemm
                                 # print(dependency_list)
 
                         elif level < config.levels - 1: # all multiplications except 1 can take place only after all prior level tasks are finished
@@ -209,10 +210,10 @@ def make_imec_graph(
                         elif level == config.levels - 1 and len(prev) != 0: #next Cannon Gemm depends on completion of previous cannon gemm
                             for l in prev:
                                 dependency_list.append(l)
-                            prev = []
+                            # prev = []
 
                         #for k in range(config.branch_factor):
-                    
+                        print("TASK: ", task_id.task_idx, "DEP: ", dependency_list)
                         # print("level: ", (level,j))
                         data_dependencies, data_dict = get_data_dependencies(
                             task_id, data_dict, data_config
