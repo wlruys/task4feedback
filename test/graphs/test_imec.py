@@ -25,11 +25,25 @@ def test_data():
     levels = 3
     blocks = 4
     B = 2
-    energy = [0.2, 0.2]
-    gpus = [Device(Architecture.GPU, i, energy[0]) for i in range(total_n)]
+    hier_levels = 2 # HBM and mesh
+    num_gpus = [1, 4]
+    start = 0
+    energy = [4.24, 0.2]
+    # gpus = [Device(Architecture.GPU, i, energy[0]) for i in range(total_n)]
+    end = 0
+    gpus = []
+    for i in range(hier_levels):
+        # idx = hier_levels - i - 1
+        end += num_gpus[i]
+        for j in range(start, end):
+            gpus.append(Device(Architecture.GPU, j, energy[i]))
+            # print("test: ", j, " ", energy[i])
+            #gpus.append(Device(Architecture.GPU, i))
+            #gpus.append(Device(Architecture.GPU, i, energy[idx]))
+        start = end
     n = 8
     a = 8
-    print(gpus)
+    # print(gpus)
     # gpu0 = Device(Architecture.GPU, 0)
     # gpu1 = Device(Architecture.GPU, 1)
     # gpu2 = Device(Architecture.GPU, 2)
@@ -41,6 +55,10 @@ def test_data():
         return n_on_each_proc * a
     
     def initial_data_placement(data_id: DataID) -> Devices:
+        # if(len(data_id.idx[0]) != 3):
+        #     if(data_id.idx[0][0] == 0):
+        #         return Device(Architecture.GPU, data_id.idx[0][1], energy)
+        #     return Device(Architecture.GPU, int(data_id.idx[0][1] // 2), energy)
         # if self.dram:
         #     if(data_id.idx[0][2] == levels):
         #         cpu = Device(Architecture.CPU, data_id.idx[0][0] + 1, energy[data_id.idx[0][0]])
@@ -76,7 +94,7 @@ def test_data():
         # print("Data id: ", data_id.idx, " ", pos)
         # print("test: data_place ", str(data_id.idx[0]), " ", pos, " ", energy[data_id.idx[0][0]])
         # print("cannon: ", 0, " ", energy[data_id.idx[0][0]])
-        return Device(Architecture.GPU, 0, energy[data_id.idx[0][0]]) # everyting is on HBM at the start
+        return Device(Architecture.GPU, 0, energy[0]) # everyting is on HBM at the start
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         device_tuple = (gpus[task_id.task_idx[4] % n_gpus],)
@@ -91,7 +109,7 @@ def test_data():
 
         return placement_info
 
-    data_config = ImecDataGraphConfig(levels=levels, blocks=blocks, energy=energy, p=n_gpus)
+    data_config = ImecDataGraphConfig(levels=levels, blocks=blocks, energy=energy[1], p=n_gpus)
     data_config.initial_placement = initial_data_placement
     data_config.initial_sizes = initial_data_size
     # data_config = NoDataGraphConfig()
@@ -135,10 +153,16 @@ def test_data():
 
     intervals = simulator.recorders.recorders[0].intervals
     data_task_recorder = simulator.recorders.get(DataTaskRecorder)
+    # print(data_task_recorder)
+    count = 0
     total_communication_energy = 0
     for task in data_task_recorder.tasks.values():
+        if(task.data_size != 0 and task.communication_energy != 0):
+            count += 1
+            print(str(task.data.idx[0][2]) + " " + str(task.name) + " " + str(task.data_size) + "D: " + str(task.devices) + "S: " + str(task.source) + " " + str(task.communication_energy))
         total_communication_energy += task.communication_energy
     print(f"Communication Energy: {total_communication_energy} pJ")
+    print(count)
     # make_data_plot(
     #     simulator.recorders,
     #     True,
