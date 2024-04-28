@@ -10,6 +10,7 @@ from task4feedback.visualize import *
 from task4feedback.types import *
 
 from task4feedback.simulator.preprocess import *
+from task4feedback.simulator.analysis.graphvis import *
 from task4feedback.simulator.simulator import *
 from task4feedback.simulator.topology import *
 from task4feedback.simulator.mapper import *
@@ -21,6 +22,7 @@ from time import perf_counter as clock
 from task4feedback.simulator.rl.models.env import *
 from task4feedback.simulator.rl.models.agent_using_oracle import *
 
+import numpy as np
 
 parser = argparse.ArgumentParser(prog="Sweep")
 
@@ -41,7 +43,7 @@ parser.add_argument("-s", "--steps",
 parser.add_argument("-w", "--width",
                     type=int,
                     help="sweep width", default=10)
-parser.add_argument("-d", "--dimensions",
+parser.add_argument("-dm", "--dimensions",
                     type=int,
                     help="sweep dimensions", default=1)
 parser.add_argument("-o", "--sort",
@@ -178,6 +180,19 @@ def test_data():
         if args.mode == "testing" or args.mode == "training":
             mapper_mode = "rl"
             mapper = RLTaskMapper()
+        G = build_networkx_graph_from_infos(tasks)
+        calculate_critical_path(G, args.gpus) 
+        print("BSP,simtime,", gen_time)
+
+        """
+        nx_graph = build_mapping_networkx_graph(tasks, topology)
+        generations = nx.topological_generations(nx_graph)
+        generations = [g for g in generations]
+        gen_time = 0;
+        for level in generations:
+            gen_time += (np.ceil(len(level)/args.gpus) * homog_task_duration()) / 1e6
+        print("BSP,simtime,", gen_time)
+        """
 
         simulator_config = SimulatorConfig(
             topology=topology,

@@ -15,8 +15,10 @@ from task4feedback.simulator.topology import *
 from task4feedback.simulator.mapper import *
 from task4feedback.simulator.utility import *
 
+from task4feedback.simulator.analysis.dag import *
 from task4feedback.simulator.analysis.recorder import *
 from task4feedback.simulator.analysis.plot import *
+from task4feedback.simulator.analysis.graphvis import *
 from task4feedback.simulator.analysis.export import *
 from task4feedback.simulator.interface import *
 from task4feedback.simulator.verify import *
@@ -26,6 +28,8 @@ from task4feedback.simulator.rl.models.env import *
 from task4feedback.simulator.rl.models.oracles import *
 from task4feedback.simulator.rl.models.agent_using_oracle import *
 from task4feedback.simulator.rl.models.agent_a2c import *
+
+import numpy as np
 
 from time import perf_counter as clock
 
@@ -65,10 +69,10 @@ parser.add_argument("-g", "--gpus",
                     help="number of gpus", default=4)
 parser.add_argument("-pb", "--p2p",
                     type=str,
-                    help="P2P bandwidth", default="200")
+                    help="P2P bandwidth (GB/s)", default="200")
 parser.add_argument("-dd", "--data_size",
                     type=float,
-                    help="per-task data size in GB", default="1")
+                    help="per-task data size (GB/s)", default="1")
 parser.add_argument("-d", "--distribution",
                     type=str,
                     help="rr: distributing data to gpus in rr, cpu: distributing data from cpu, random: randomly distributing data to gpus", default="rr")
@@ -197,7 +201,8 @@ def test_data():
         task_order_mode = get_task_sorting_method(episode)
 
         topology = TopologyManager().generate("frontera", config=topo_config)
-
+        G = build_networkx_graph_from_infos(tasks)
+        calculate_critical_path(G, args.gpus) 
         mapper_mode = args.mode
         if args.mode == "testing" or args.mode == "training":
             mapper_mode = "rl"
