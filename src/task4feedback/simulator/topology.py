@@ -616,111 +616,6 @@ def generate_mesh(topology, gpus, bandwidth, start, step, n):
 
     return topology
 
-
-@TopologyManager.register_generator("imec")
-def generate_imec_topology(
-    config: Optional[Dict[str, int]] = None
-) -> SimulatedTopology:
-    """
-    This function creates 2-level architecture. First level as 1 GPU. 
-    The second level has 90 * 90 GPUs in mesh topology.
-    """
-    energy = [0.01, 1, 100, 1000]
-    total_n = 1801
-    n = [1, 1800]
-    dram = False
-
-    # if "N" in config:
-    #     n = config["N"]
-
-    if config is not None:
-        n = config["N"]
-        total_n = config["TOTAL_N"]
-        hier_levels = config["HIER_LEVELS"]
-        energy = config["ENERGY"]
-        if "DRAM" in config:
-            dram = config["DRAM"]
-        P2P_BW = config["P2P_BW"]
-        H2D_BW = config["H2D_BW"]
-        D2H_BW = config["D2H_BW"]
-
-        GPU_MEM = config["GPU_MEM"]
-        CPU_MEM = config["CPU_MEM"]
-
-        GPU_COPY_ENGINES = config["GPU_COPY_ENGINES"]
-        CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
-        # Default configuration for testing
-    P2P_BW = parse_size("9 GB")  # 9 GB/s
-    H2D_BW = parse_size("7 GB")  # 7 GB/s
-    D2H_BW = parse_size("7 GB")  # 7 GB/s
-
-    GPU_MEM = parse_size("10 GB")
-    CPU_MEM = parse_size("150 GB")
-
-    GPU_COPY_ENGINES = 3
-    CPU_COPY_ENGINES = 3
-
-    cpus = [
-        SimulatedDevice(
-            Device(Architecture.CPU, 0, energy[0]), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
-        )
-    ]
-
-    gpus_1 = [
-        SimulatedDevice(
-            Device(Architecture.GPU, i, energy[0]), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
-        )
-        for i in range(n[0])
-    ]
-
-    gpus_2 = [
-        SimulatedDevice(
-            Device(Architecture.GPU, i, energy[0]), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
-        )
-        for i in range(n[1])
-    ]
-    # print("topo ", cpus)
-    #print(total_n)
-    # Create device topology
-    
-    topology = SimulatedTopology(cpus + gpus_1 + gpus_2, "Topology::G-C")
-
-    # add connections between all gpus and the cpu
-    for gpu in gpus_2:
-        # print(gpu)
-        topology.add_connection(gpu, cpus[0], bidirectional=True)
-        topology.add_bandwidth(gpu, cpus[0], D2H_BW)
-        topology.add_bandwidth(cpus[0], gpu, H2D_BW)
-
-    # add connection between level1 GPU and level2 GPUs
-    for gpu_1 in gpus_1:
-        for gpu_2 in gpus_2:
-            topology.add_connection(gpu_1, gpu_2, bidirectional=True)
-            topology.add_bandwidth(gpu_1, gpu_2, P2P_BW)
-
-    # add connection between gpus and dram at each level, if dram is True
-    # if(dram):
-    #     start = 0
-    #     end = 0
-    #     # print(len(gpus))
-    #     for i in range(len(dram_cpus)):
-    #         idx = hier_levels - i - 1
-    #         num_gpus = int(pow(n, i + 1))
-    #         end += num_gpus
-    #         # print("I: ", i, "num_gpus: ", num_gpus)
-    #         for j in range(start, end):
-    #             # print(j)
-    #             topology.add_connection(gpus[j], dram_cpus[idx], bidirectional=True)
-    #             topology.add_bandwidth(gpus[j], dram_cpus[idx], D2H_BW)
-    #             topology.add_bandwidth(dram_cpus[idx], gpus[j], H2D_BW)
-    #         start = end
-
-    step = int(math.sqrt(n[1]))
-    topology = generate_mesh(topology, gpus_2, P2P_BW, 0, step, n[1])
-    return topology
-
-
-
 @TopologyManager.register_generator("mesh_hier")
 def generate_mesh_toplogy_hier(
     config: Optional[Dict[str, int]] = None
@@ -969,4 +864,109 @@ def generate_imec_toplogy_hier(
         topology = generate_mesh(topology, gpus, P2P_BW, gpu, step, p_per_mesh[idx])
         mesh += 1
         gpu += p_per_mesh[idx]
+    return topology
+
+@TopologyManager.register_generator("imec")
+def generate_imec_topology(
+    config: Optional[Dict[str, int]] = None
+) -> SimulatedTopology:
+    """
+    This function creates 2-level architecture. First level as 1 GPU. 
+    The second level has 90 * 90 GPUs in mesh topology.
+    """
+    energy = [4.24, 0.2]
+    total_n = 5
+    n = [1, 4]
+    dram = False
+
+    # if "N" in config:
+    #     n = config["N"]
+
+    if config is not None:
+        n = config["N"]
+        total_n = config["TOTAL_N"]
+        hier_levels = config["HIER_LEVELS"]
+        energy = config["ENERGY"]
+        if "DRAM" in config:
+            dram = config["DRAM"]
+        P2P_BW = config["P2P_BW"]
+        H2D_BW = config["H2D_BW"]
+        D2H_BW = config["D2H_BW"]
+
+        GPU_MEM = config["GPU_MEM"]
+        CPU_MEM = config["CPU_MEM"]
+
+        GPU_COPY_ENGINES = config["GPU_COPY_ENGINES"]
+        CPU_COPY_ENGINES = config["CPU_COPY_ENGINES"]
+        # Default configuration for testing
+    P2P_BW = parse_size("9 GB")  # 9 GB/s
+    H2D_BW = parse_size("7 GB")  # 7 GB/s
+    D2H_BW = parse_size("7 GB")  # 7 GB/s
+
+    GPU_MEM = parse_size("10 GB")
+    CPU_MEM = parse_size("150 GB")
+
+    GPU_COPY_ENGINES = 3
+    CPU_COPY_ENGINES = 3
+
+    cpus = [
+        SimulatedDevice(
+            Device(Architecture.CPU, 0), FasterResourceSet(1, CPU_MEM, CPU_COPY_ENGINES)
+        )
+    ]
+
+    
+    # start = n[0]
+    gpus_2 = [
+        SimulatedDevice(
+            Device(Architecture.GPU, i, energy[1]), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
+        )
+        for i in range(n[1])
+    ]
+    start = n[1]
+    gpus_1 = [
+        SimulatedDevice(
+            Device(Architecture.GPU, i, energy[0]), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
+        )
+        for i in range(start, start + n[0])
+    ]
+    # print(gpus_2)
+    # print("topo ", cpus)
+    #print(total_n)
+    # Create device topology
+    
+    topology = SimulatedTopology(cpus + gpus_1 + gpus_2, "Topology::G-C")
+
+    # add connections between all gpus and the cpu
+    for gpu in gpus_2:
+        # print(gpu)
+        topology.add_connection(gpu, cpus[0], bidirectional=True)
+        topology.add_bandwidth(gpu, cpus[0], D2H_BW)
+        topology.add_bandwidth(cpus[0], gpu, H2D_BW)
+
+    # add connection between level1 GPU and level2 GPUs
+    for gpu_1 in gpus_1:
+        for gpu_2 in gpus_2:
+            topology.add_connection(gpu_1, gpu_2, bidirectional=True)
+            topology.add_bandwidth(gpu_1, gpu_2, P2P_BW)
+
+    # add connection between gpus and dram at each level, if dram is True
+    # if(dram):
+    #     start = 0
+    #     end = 0
+    #     # print(len(gpus))
+    #     for i in range(len(dram_cpus)):
+    #         idx = hier_levels - i - 1
+    #         num_gpus = int(pow(n, i + 1))
+    #         end += num_gpus
+    #         # print("I: ", i, "num_gpus: ", num_gpus)
+    #         for j in range(start, end):
+    #             # print(j)
+    #             topology.add_connection(gpus[j], dram_cpus[idx], bidirectional=True)
+    #             topology.add_bandwidth(gpus[j], dram_cpus[idx], D2H_BW)
+    #             topology.add_bandwidth(dram_cpus[idx], gpus[j], H2D_BW)
+    #         start = end
+
+    step = int(math.sqrt(n[1]))
+    topology = generate_mesh(topology, gpus_2, P2P_BW, 0, step, n[1])
     return topology
