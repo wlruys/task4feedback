@@ -379,11 +379,13 @@ class DataTaskRecorder(Recorder):
                     devices = task.assigned_devices
                     communication_energy = 0
                     #print("In recorder end")
-                    if(task.real): # check if there is any data movement
+                    #if(task.real): # check if there is any data movement
                         #print("In if end")
-                        for device in devices:
-                            communication_energy += device.energy * data_size
-                            print(communication_energy)
+                        #for device in devices:
+                            #communication_energy += device.energy * data_size
+                            #print(communication_energy)
+                    if(task.real):
+                            communication_energy = task.source.energy * data_size
                     self.tasks[name] = DataTaskRecord(
                         name,
                         type=type,
@@ -411,12 +413,13 @@ class DataTaskRecorder(Recorder):
                         devices = task.assigned_devices
                         communication_energy = 0
                         #print("In recorder")
-                        if(task.real): # check if there is any data movement
+                        #if(task.real): # check if there is any data movement
                             #print("In if")
-                            for device in devices:
-                                communication_energy += device.energy * data_size
+                            #for device in devices:
+                                #communication_energy += device.energy * data_size
                                 #print(communication_energy)
-
+                        if(task.real):
+                            communication_energy = task.source.energy * data_size
                         if isinstance(task, SimulatedEvictionTask):
                             type = TaskType.EVICTION
                         else:
