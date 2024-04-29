@@ -20,6 +20,7 @@ class ImecDataGraphConfig(DataGraphConfig):
     n: int = 8
     a: int = 8
     p: int = 4
+    total_n: int = 5
 
     def initial_data_size(self, data_id: DataID) -> Devices:
         n_on_each_proc = (self.n * self.n) / self.p
@@ -61,7 +62,7 @@ class ImecDataGraphConfig(DataGraphConfig):
         # print("Data id: ", data_id.idx, " ", pos)
         # print("test: data_place ", str(data_id.idx[0]), " ", pos, " ", energy[data_id.idx[0][0]])
         # print("imec.py: ", config.energy[data_id.idx[0][0]])
-        return Device(Architecture.GPU, 0, self.energy[0]) # everyting is on HBM at the start
+        return Device(Architecture.GPU, self.total_n - 1, self.energy[0]) # everyting is on HBM at the start
 
     def __post_init__(self):
         self.initial_placement = self.initial_data_placement
@@ -176,7 +177,6 @@ def make_imec_graph(
         for jcol in range(config.B):
             # prev = []
             for k in range(config.B):
-                
                 for level in range(config.levels - 1, -1, -1): #levels are going to be sq_root of # blocks + 1
                     tasks_in_level = config.blocks
                     subtree_segment = tasks_in_level / config.n_devices
