@@ -16,6 +16,7 @@ from task4feedback.simulator.topology import *
 from task4feedback.simulator.mapper import *
 
 from task4feedback.simulator.analysis.recorder import *
+from task4feedback.simulator.analysis.dag import *
 from task4feedback.simulator.interface import *
 from time import perf_counter as clock
 
@@ -182,7 +183,6 @@ def test_data():
             mapper = RLTaskMapper()
         G = build_networkx_graph_from_infos(tasks)
         calculate_critical_path(G, args.gpus) 
-        print("BSP,simtime,", gen_time)
 
         """
         nx_graph = build_mapping_networkx_graph(tasks, topology)
