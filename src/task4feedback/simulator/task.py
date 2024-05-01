@@ -147,6 +147,8 @@ class SimulatedTask:
     eviction_requested: bool = False
     duration: Time = field(default_factory=Time)
     completion_time: Time = field(default_factory=Time)
+    # This is only used for online EFT-based schedulers
+    est_completion_time: float = 0
     wait_time: Time = field(default_factory=Time)
     init: bool = True
 

@@ -37,8 +37,8 @@ from time import perf_counter as clock
 parser = argparse.ArgumentParser(prog="Cholesky")
 
 parser.add_argument("-m", "--mode",
-                    type=str,
-                    help="testing, training, parla, worst, loadbalance, eft_with_data, random")
+                   type=str,
+                    help="testing, training, parla, heft, loadbalance, eft_with_data, eft_without_data, random")
 parser.add_argument("-n", "--noise",
                     help="Set if task duration noise is enabled", action="store_true")
 parser.add_argument("-ns", "--noise_scale",

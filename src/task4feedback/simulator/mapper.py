@@ -120,7 +120,7 @@ def latest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
     return chosen_device  # default_mapping_policy(task, simulator)
 
 
-def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
+def load_balancing(task: SimulatedTask, simulator) -> Optional[Devices]:
     scheduler_state: SystemState = simulator.state
     scheduler_arch: SchedulerArchitecture = simulator.mechanisms
 
@@ -128,6 +128,7 @@ def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     potential_device = None
     # potential_devices = task.info.runtime.locations
     potential_devices = scheduler_state.topology.devices
+        
     for device in potential_devices:
         if device.name.architecture == Architecture.CPU:
             continue
@@ -143,12 +144,15 @@ def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     return (potential_device,)
 
 
-def eft_with_data_transfer(task: SimulatedTask, simulator) -> Optional[Devices]:
+def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     scheduler_state: SystemState = simulator.state
     scheduler_arch: SchedulerArchitecture = simulator.mechanisms
-
+    perdev_earliest_avail_time = scheduler_state.perdev_earliest_avail_time
     taskmap = scheduler_state.objects.taskmap
-    datamap = scheduler_state.objects.datamap
+
+    est_ready_time: float = 0
+    for dependency in task.dependencies:
+        est_ready_time = max(taskmap[dependency].est_completion_time, est_ready_time)
 
     lowest_workload = 9999999999999999999
     potential_device = None
@@ -157,7 +161,42 @@ def eft_with_data_transfer(task: SimulatedTask, simulator) -> Optional[Devices]:
     for device in potential_devices:
         if device.name.architecture == Architecture.CPU:
             continue
-        workload = scheduler_state.perdev_active_workload[device.name]
+        workload = max(perdev_earliest_avail_time[device.name], est_ready_time)
+        # print("\t", task.name, ", ", perdev_earliest_avail_time[device.name], ", ", est_ready_time, ", ", device.name)
+        if potential_device is None or workload < lowest_workload:
+            lowest_workload = workload
+            potential_device = device.name
+
+    task.est_completion_time = lowest_workload + float(
+        scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
+                                          scale_to("ms"))
+    perdev_earliest_avail_time[potential_device] = max(
+        task.est_completion_time, perdev_earliest_avail_time[potential_device])
+
+    # print("task ", task.name ," start:", lowest_workload, " complete:", task.est_completion_time, " potential device:", potential_device)
+    # print("load balancing device:", potential_device)
+    return (potential_device,)
+
+
+def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
+    scheduler_state: SystemState = simulator.state
+    scheduler_arch: SchedulerArchitecture = simulator.mechanisms
+    perdev_earliest_avail_time = scheduler_state.perdev_earliest_avail_time
+    taskmap = scheduler_state.objects.taskmap
+    datamap = scheduler_state.objects.datamap
+
+    est_ready_time: float = 0
+    for dependency in task.dependencies:
+        est_ready_time = max(taskmap[dependency].est_completion_time, est_ready_time)
+
+    lowest_workload = 9999999999999999999
+    potential_device = None
+    # potential_devices = task.info.runtime.locations
+    potential_devices = scheduler_state.topology.devices
+    for device in potential_devices:
+        if device.name.architecture == Architecture.CPU:
+            continue
+        workload = max(perdev_earliest_avail_time[device.name], est_ready_time)
         if task.data_tasks is not None:
             nonlocal_data = 0
             for dtask_id in task.data_tasks:
@@ -176,9 +215,14 @@ def eft_with_data_transfer(task: SimulatedTask, simulator) -> Optional[Devices]:
             lowest_workload = workload
             potential_device = device.name
 
-    if isinstance(potential_device, Tuple):
-        potential_device = potential_device[0]
 
+    task.est_completion_time = lowest_workload + float(
+        scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
+                                          scale_to("ms"))
+    perdev_earliest_avail_time[potential_device] = max(
+        task.est_completion_time, perdev_earliest_avail_time[potential_device])
+
+    # print("task ", task.name ," start:", lowest_workload, " complete:", task.est_completion_time, " potential device:", potential_device)
     # print("load balancing device:", potential_device)
     return (potential_device,)
 
@@ -253,10 +297,13 @@ class TaskMapper:
             self.mapping_function = parla_mapping_policy
         elif mapper_type == "loadbalance":
             print("Load balancing mapper is enabled")
-            self.mapping_function = eft_without_data
+            self.mapping_function = load_balancing
         elif mapper_type == "eft_with_data":
             print("EFT with data is enabled")
-            self.mapping_function = eft_with_data_transfer
+            self.mapping_function = eft_with_data
+        elif mapper_type == "eft_without_data":
+            print("EFT without data is enabled")
+            self.mapping_function = eft_without_data
         elif mapper_type == "heft":
             self.mapping_function = heft_mapping_policy
 

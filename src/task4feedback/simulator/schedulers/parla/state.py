@@ -1060,6 +1060,20 @@ class ParlaState(SystemState):
     total_active_workload: float = 0
     # Workload per device
     perdev_active_workload: Dict[Device, int] = field(default_factory=dict)
+    # Earliest device available time estimation
+    # It considers task dependencies and hence, is different from active workload.
+    # e.g., taskA -> taskB, taskA -> taskC, each task takes 3ms, there are 2 GPUS,
+    # taskA was mapped to GPU0, and others were mapped to GPU1.
+    # Then,
+    # perdev_active_workload:
+    # GPU0: 3, GPU1: 6
+    # But, perdev_earliest_avail_time:
+    # GPU0: 3, GPU1: 9 since taskB and taskC cannot start until taskA is completed.
+    #
+    # NOTE that this is only utilized for EFT mapping policies.
+    # This information provides more accurate estimation for the earliest ready time
+    # of a task.
+    perdev_earliest_avail_time: Dict[Device, int] = field(default_factory=dict)
     # # of completed tasks
     total_num_completed_tasks: int = 0
     # Threshold of the number of tasks that can be mapped per each mapper event
@@ -1071,6 +1085,7 @@ class ParlaState(SystemState):
         self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
         for device in self.objects.devicemap:
             self.perdev_active_workload[device] = 0
+            self.perdev_earliest_avail_time[device] = 0
 
         if self.task_order_mode == TaskOrderType.RANDOM:
             if self.load_task_order:
@@ -1117,6 +1132,9 @@ class ParlaState(SystemState):
         s = clock()
         perdev_active_workload = deepcopy(self.perdev_active_workload)
 
+        s = clock()
+        perdev_earliest_avail_time = deepcopy(self.perdev_earliest_avail_time)
+
         return ParlaState(
             topology=topology,
             data_pool=data_pool,
@@ -1130,6 +1148,7 @@ class ParlaState(SystemState):
             launched_active_tasks=self.launched_active_tasks,
             total_active_workload=self.total_active_workload,
             perdev_active_workload=perdev_active_workload,
+            perdev_earliest_avail_time=perdev_earliest_avail_time,
             total_num_completed_tasks=self.total_num_completed_tasks,
             mapper_num_tasks_threshold=self.mapper_num_tasks_threshold,
             total_num_mapped_tasks=self.total_num_mapped_tasks,
