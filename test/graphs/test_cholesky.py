@@ -184,8 +184,8 @@ def test_data():
 
     topo_config = {
       "P2P_BW": parse_size(args.p2p + " GB"),
-      "H2D_BW": parse_size("100 GB"),
-      "D2H_BW": parse_size("100 GB"),
+      "H2D_BW": parse_size("10 GB"),
+      "D2H_BW": parse_size("10 GB"),
       "GPU_MEM": parse_size("10000 GB"),
       "CPU_MEM": parse_size("10000 GB"),
       "GPU_COPY_ENGINES": 3,
