@@ -73,6 +73,7 @@ def calculate_critical_path(G, num_gpus):
 
     print(f"Critical Path Time: {critical_path_time / 10**6}")
     print(f"Generation Time: {generation_time / 10**6}")
+    print(f"BSP,simtime,{generation_time / 10**6}")
     print(f"Averaged Generation Time: {averaged_generation_time / 10**6}")
     # print(f"Other Critical Path Time: {other_critical_path_time / 10**6}")
     print(f"Independent Estimate: {total_work_in_graph / (10**6 * num_gpus)}")

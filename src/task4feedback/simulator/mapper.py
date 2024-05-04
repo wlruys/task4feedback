@@ -173,6 +173,11 @@ def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     perdev_earliest_avail_time[potential_device] = max(
         task.est_completion_time, perdev_earliest_avail_time[potential_device])
 
+    if logger.ENABLE_LOGGING:
+        logger.mapping.debug(
+            (f"Task {task.name}, start:{lowest_workload}, end:{task.est_completion_time}, device:{potential_device}")
+        )
+
     # print("task ", task.name ," start:", lowest_workload, " complete:", task.est_completion_time, " potential device:", potential_device)
     # print("load balancing device:", potential_device)
     return (potential_device,)
@@ -205,9 +210,10 @@ def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
                     data = datamap[data_id]
                     is_valid = data.is_valid(device.name, TaskState.MAPPED)
                     nonlocal_data += data.size if not is_valid else 0
-            # GPU connection bandwidths are all equal
-            bandwidth = scheduler_state.topology.connection_pool.bandwidth[0, 1] 
-            # print(f"task: {task.name} tests device: {device.name} data size: {nonlocal_data} new workload: {nonlocal_data / bandwidth * 1000} orig workloaad: workload")
+            # NOTE This assumes that GPU connection bandwidths are all equal
+            # NOTE This also assumes that # of GPUs >= 2
+            bandwidth = scheduler_state.topology.connection_pool.bandwidth[1, 2] 
+            print(f"\t task: {task.name} tests device: {device.name} data size: {nonlocal_data} new workload: {nonlocal_data / bandwidth * 1000} bw: {bandwidth}")
             # Convert to ms
             workload += (nonlocal_data / bandwidth) * 1000
 
@@ -215,12 +221,16 @@ def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
             lowest_workload = workload
             potential_device = device.name
 
-
     task.est_completion_time = lowest_workload + float(
         scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
                                           scale_to("ms"))
     perdev_earliest_avail_time[potential_device] = max(
         task.est_completion_time, perdev_earliest_avail_time[potential_device])
+
+    if logger.ENABLE_LOGGING:
+        logger.mapping.debug(
+            (f"Task {task.name}, start:{lowest_workload}, end:{task.est_completion_time}, device:{potential_device}")
+        )
 
     # print("task ", task.name ," start:", lowest_workload, " complete:", task.est_completion_time, " potential device:", potential_device)
     # print("load balancing device:", potential_device)

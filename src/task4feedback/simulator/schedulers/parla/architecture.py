@@ -197,7 +197,7 @@ def launch_task(
     if check_status := scheduler_state.check_task_status(task, TaskStatus.LAUNCHABLE):
         if can_fit := scheduler_state.check_resources(phase, task):
             if logger.ENABLE_LOGGING:
-                logger.runtime.critical(
+                logger.runtime.debug(
                     f"Launching task {task.name} on devices {task.assigned_devices}",
                     extra=dict(task=task.name, devices=task.assigned_devices),
                 )
@@ -210,6 +210,12 @@ def launch_task(
             task.completion_time = completion_time
             scheduler_state.num_tasks += 1
             scheduler_state.launched_active_tasks += 1
+
+            if logger.ENABLE_LOGGING:
+                logger.launching.debug(
+                    f"Task {task.name}, start:{float(scheduler_state.time.scale_to('ms'))}, "+
+                    f"end:{float(completion_time.scale_to('ms'))}, device:{task.assigned_devices[0]}"
+                )
 
             devices = task.assigned_devices
             assert devices is not None
@@ -767,7 +773,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         if logger.ENABLE_LOGGING:
             # print(f"Completing task {event.task}")
-            logger.runtime.critical(
+            logger.runtime.debug(
                 f"Completing task {event.task}",
                 extra=dict(
                     task=event.task, time=current_time, phase=TaskState.COMPLETED
