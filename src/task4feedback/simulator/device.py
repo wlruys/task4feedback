@@ -41,18 +41,16 @@ class SimulatedDevice:
     name: Device
     resources: FasterResourceSet
     stats: DeviceStats = field(default_factory=DeviceStats)
-    datapool: DataPool = field(default_factory=DataPool)
     eviction_pool_type: Type[EvictionPool] = LRUEvictionPool
-    eviction_pool: EvictionPool = field(init=False)
     eviction_targets: List[Device] = field(default_factory=list)
     memory_space: Device = field(init=False)
     init: bool = True
 
     def __post_init__(self):
         if self.init:
-            self.eviction_pool = self.eviction_pool_type()
             self.eviction_targets = [Device(Architecture.CPU, 0)]
             self.memory_space = self.name
+            self.init = False
 
     def __str__(self) -> str:
         return f"Device({self.name})"
@@ -64,12 +62,18 @@ class SimulatedDevice:
         return hash(self.name)
 
     def __eq__(self, other):
-        return self.name == other.name
+        if isinstance(other, SimulatedDevice):
+            return self.name == other.name
+        elif isinstance(other, Device):
+            return self.name == other
 
     def __lt__(self, other):
-        return self.name < other.name
+        if isinstance(other, SimulatedDevice):
+            return self.name < other.name
+        elif isinstance(other, Device):
+            return self.name < other
 
-    def __getitem__(self, key: ResourceType) -> Numeric:
+    def __getitem__(self, key: ResourceType) -> Numeric:  # type: ignore
         if key == ResourceType.VCU:
             return self.resources.vcus
         elif key == ResourceType.MEMORY:
@@ -77,28 +81,11 @@ class SimulatedDevice:
         elif key == ResourceType.COPY:
             return self.resources.copy
 
-    def add_data(self, data: SimulatedData):
-        self.datapool.add(data)
-
-    def remove_data(self, data: SimulatedData):
-        self.datapool.remove(data)
-
-    def add_evictable(self, data: SimulatedData):
-        self.eviction_pool.add(data)
-
-    def remove_evictable(self, data: SimulatedData):
-        self.eviction_pool.remove(data)
-
-    @property
-    def evictable_bytes(self):
-        return self.eviction_pool.evictable_size
-
     def __deepcopy__(self, memo):
         return SimulatedDevice(
             name=self.name,
             resources=deepcopy(self.resources),
             stats=deepcopy(self.stats),
-            datapool=deepcopy(self.datapool),
             eviction_pool_type=self.eviction_pool_type,
             eviction_targets=deepcopy(self.eviction_targets),
         )

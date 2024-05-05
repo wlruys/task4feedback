@@ -31,7 +31,6 @@ class CannonGemmDataGraphConfig(DataGraphConfig):
             j = task_id.task_idx[1]
             step = int(math.sqrt(self.blocks))
             # mod = 2 * self.blocks - 1
-            # print("TASK ID:", task_id.task_idx)
             start_row = (j // step) * step
             start_col = j % step
             shift = (self.levels - 1) - level
@@ -114,20 +113,19 @@ def make_cannon_gemm_graph(
     # Build Task Graph
     count = 0
     # levels = math.sqrt(config.blocks) + 1
-    #print("for loops")
+
     for level in range(config.levels - 1, -1, -1): #levels are going to be sq_root of # blocks + 1
         tasks_in_level = config.blocks
         subtree_segment = tasks_in_level / config.n_devices
 
         for j in range(tasks_in_level):
             # Task ID:
-            #print(j)
             task_idx = (level, j)
             task_id = TaskID("T", task_idx, 0)
 
             # Task Placement Info
             task_placement_info = configurations(task_id)
-            #print("Task Id: ", task_id)
+
             # Task Dependencies
             dependency_list = []
             if level == 0: # addition depends on all the prior multiplication
@@ -136,7 +134,7 @@ def make_cannon_gemm_graph(
                     dependency = TaskID(
                         "T", (level + k + 1, j), 0
                     )
-                    #print(dependency)
+
                     dependency_list.append(dependency)
                 # print(dependency_list)
 
@@ -147,18 +145,15 @@ def make_cannon_gemm_graph(
                         )
                     dependency_list.append(dependency)
                 #for k in range(config.branch_factor):
-            #print(dependency_list)   
-            # print("level: ", (level,j))
-            #print("get data deps")
+
             data_dependencies, data_dict = get_data_dependencies(
                 task_id, data_dict, data_config
             )
 
             # Task Mapping
-            #print("get mapping")
+
             task_mapping = get_mapping(config, task_id)
-            
-            print("task Info")
+
             task_dict[task_id] = TaskInfo(
                 task_id,
                 task_placement_info,
@@ -167,5 +162,4 @@ def make_cannon_gemm_graph(
                 task_mapping,
             )
 
-    print("return")
     return task_dict, data_dict

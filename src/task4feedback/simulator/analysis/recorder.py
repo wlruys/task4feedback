@@ -370,6 +370,20 @@ class DataTaskRecorder(Recorder):
                     data_id = task.read_accesses[0].id
                     data = system_state.objects.get_data(data_id)
                     data_size = data.size
+                    devices = task.assigned_devices
+                    assert devices is not None
+                    communication_energy = 0
+                    print("In recorder end")
+                    if task.real:  # check if there is any data movement
+                        print("In if end")
+                        for device in devices:
+                            communication_energy += device.energy * data_size
+                            print(communication_energy)
+
+                    if isinstance(task, SimulatedEvictionTask):
+                        type = TaskType.EVICTION
+                    else:
+                        type = TaskType.DATA
 
                     if isinstance(task, SimulatedEvictionTask):
                         type = TaskType.EVICTION
@@ -420,6 +434,20 @@ class DataTaskRecorder(Recorder):
                                 #print(communication_energy)
                         if(task.real):
                             communication_energy = task.source.energy * data_size
+                        assert devices is not None
+                        communication_energy = 0
+                        print("In recorder")
+                        if task.real:  # check if there is any data movement
+                            print("In if")
+                            for device in devices:
+                                communication_energy += device.energy * data_size
+                                print(communication_energy)
+
+                        if isinstance(task, SimulatedEvictionTask):
+                            type = TaskType.EVICTION
+                        else:
+                            type = TaskType.DATA
+
                         if isinstance(task, SimulatedEvictionTask):
                             type = TaskType.EVICTION
                         else:

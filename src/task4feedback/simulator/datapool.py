@@ -1,31 +1,54 @@
-from __future__ import annotations
-from ..types import DataID
-from .data import *
-from dataclasses import dataclass, field, InitVar
-from typing import Dict, List, Set, Tuple, Union
+from ..types import Device, DataID
+from typing import Dict, Sequence
+from dataclasses import dataclass
+from .eviction.base import DataPool
+from .eviction.base import EvictionPool
+from .device import SimulatedDevice
+from copy import deepcopy
 
 
 @dataclass(slots=True)
-class DataPool:
-    datalist: Set[DataID] = field(default_factory=set)
+class DeviceDataPools:
+    devices: Sequence[SimulatedDevice] = None
+    device_datapool: Dict[Device, DataPool] = None
+    device_evictionpool: Dict[Device, EvictionPool] = None
+    init: bool = True
 
-    def add(self, data: SimulatedData | DataID):
-        if isinstance(data, SimulatedData):
-            data = data.name
-        self.datalist.add(data)
+    def __post_init__(self):
+        if self.init:
+            self.device_datapool = {}
+            self.device_evictionpool = {}
 
-    def remove(self, data: SimulatedData | DataID):
-        if isinstance(data, SimulatedData):
-            data = data.name
-        self.datalist.remove(data)
+            for device in self.devices:
+                self.device_datapool[device.name] = DataPool()
+                self.device_evictionpool[device.name] = device.eviction_pool_type()
+            self.init = False
 
-    def __contains__(self, data: SimulatedData | DataID):
-        if isinstance(data, SimulatedData):
-            data = data.name
-        return data in self.datalist
+    def add(self, device: Device, data: DataID):
+        self.device_datapool[device].add(data)
 
-    def __len__(self):
-        return len(self.datalist)
+    def remove(self, device: Device, data: DataID):
+        self.device_datapool[device].remove(data)
 
-    def __deepcopy__(self, memo) -> DataPool:
-        return DataPool(datalist={d for d in self.datalist})
+    def add_evictable(self, device: Device, data: DataID, size: int):
+        self.device_evictionpool[device].add(data, size)
+
+    def remove_evictable(self, device: Device, data: DataID, size: int) -> bool:
+        return self.device_evictionpool[device].remove(data, size)
+
+    @property
+    def pool(self) -> Dict[Device, DataPool]:
+        return self.device_datapool
+
+    @property
+    def evictable(self) -> Dict[Device, EvictionPool]:
+        return self.device_evictionpool
+
+    def __deepcopy__(self, memo):
+        device_datapool = deepcopy(self.device_datapool)
+        device_evictionpool = deepcopy(self.device_evictionpool)
+        return DeviceDataPools(
+            devices=self.devices,
+            device_datapool=device_datapool,
+            device_evictionpool=device_evictionpool,
+        )

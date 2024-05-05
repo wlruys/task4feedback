@@ -40,7 +40,7 @@ def test_data():
     data_config.initial_sizes = sizes
 
     # config = IndependentConfig(task_count=4, task_config=task_placement)
-    config = ChainConfig(chains=1, steps=4, task_config=task_placement)
+    config = ChainConfig(chains=1, steps=100, task_config=task_placement)
     tasks, data = make_graph(config, data_config=data_config)
 
     topology = TopologyManager().generate("frontera", config=None)
@@ -61,7 +61,7 @@ def test_data():
     # print(f"Time to Simulate: {end_t - start_t}")
     print(f"Simulated Time: {simulator.time}")
 
-    print(simulator.recorders.get(LaunchedResourceUsageListRecorder).memory_usage)
+    # print(simulator.recorders.get(LaunchedResourceUsageListRecorder).memory_usage)
 
 
 if __name__ == "__main__":

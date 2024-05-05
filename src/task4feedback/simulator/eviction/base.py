@@ -1,31 +1,43 @@
 from __future__ import annotations
 from ...types import *
-from ..data import *
-from dataclasses import dataclass, field, InitVar
-from typing import Dict, List, Set, Tuple, Union
-from ..task import SimulatedEvictionTask, SimulatedComputeTask
+from dataclasses import dataclass, field
+from typing import Set
+
+
+@dataclass(slots=True)
+class DataPool:
+    pool: Set[DataID] = field(default_factory=set)
+
+    def add(self, data: DataID):
+        self.pool.add(data)
+
+    def remove(self, data: DataID):
+        self.pool.remove(data)
+
+    def __contains__(self, data: DataID):
+        return data in self.pool
+
+    def __len__(self):
+        return len(self.pool)
 
 
 @dataclass(slots=True)
 class EvictionPool:
     evictable_size: int = 0
 
-    def add(self, data: SimulatedData):
+    def add(self, data: DataID, size: int):
         raise NotImplementedError
 
-    def remove(self, data: SimulatedData):
+    def remove(self, data: DataID, size: int) -> bool:
         raise NotImplementedError
 
     def peek(self) -> DataID:
         raise NotImplementedError
 
-    def get(self) -> DataID:
-        raise NotImplementedError
-
     def __len__(self):
         raise NotImplementedError
 
-    def __contains__(self, data: SimulatedData | DataID):
+    def __contains__(self, data: DataID):
         raise NotImplementedError
 
     def empty(self) -> bool:

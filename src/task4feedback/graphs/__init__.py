@@ -13,3 +13,4 @@ from .cannon_gemm_hier import *
 from .imec import *
 from .imec_hier import *
 from .utilities import *
+from .cannon_gemm import *

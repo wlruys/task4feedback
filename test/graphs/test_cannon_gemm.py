@@ -34,6 +34,7 @@ def test_data(n_gpus, blocks, n, data_size=None, m=None, energy=0.01):
         return Device(Architecture.GPU, int(data_id.idx[0][1] // 2), energy)
     def sizes(data_id: DataID) -> int:
         return data_size
+
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         device_tuple = (gpus[task_id.task_idx[1] % n_gpus],)
         # if task_id.task_idx[1] % 2 == 0:
@@ -68,6 +69,7 @@ def test_data(n_gpus, blocks, n, data_size=None, m=None, energy=0.01):
         recorders=[DataValidRecorder, ComputeTaskRecorder, DataTaskRecorder],
     )
     simulator = create_simulator(config=simulator_config)
+
     start_t = clock()
     simulator.run()
     end_t = clock()
@@ -78,12 +80,13 @@ def test_data(n_gpus, blocks, n, data_size=None, m=None, energy=0.01):
         data_ids.append(DataID(((0, i),)))
     for i in range(2 * blocks):
         data_ids.append(DataID(((levels, i),)))
+
     intervals = simulator.recorders.recorders[0].intervals
     data_task_recorder = simulator.recorders.get(DataTaskRecorder)
     total_communication_energy = 0
     for task in data_task_recorder.tasks.values():
         total_communication_energy += task.communication_energy
-    # print(data_task_recorder)
+
     print(f"Communication Energy: {total_communication_energy} pJ")
     make_data_plot(
         simulator.recorders,
@@ -91,6 +94,7 @@ def test_data(n_gpus, blocks, n, data_size=None, m=None, energy=0.01):
         True,
         data_ids=data_ids,
     )
+
     return total_communication_energy
 
 test_data(n_gpus=8100, blocks=8100, n=180)

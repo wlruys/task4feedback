@@ -3,6 +3,35 @@ from ..types import *
 
 
 @dataclass(slots=True)
+class SimpleSweepDataGraphConfig(DataGraphConfig):
+    """
+    Defines a data graph pattern for a simple sweep graph.
+
+    Each task in a graph reads and writes to a data item from each row/column of the previous step.
+    """
+
+    n_devices: int = 1
+    size: int = 2**8
+
+    def __post_init__(self):
+        self.initial_placement = lambda x: Device(Architecture.CPU, 0)
+
+        self.initial_sizes = lambda x: self.size
+
+        def edges(task_id: TaskID):
+            data_info = TaskDataInfo()
+
+            task_idx = task_id.task_idx
+
+            for i, idx in enumerate(task_idx):
+                data_info.read_write.append(DataAccess(DataID((i, idx)), device=0))
+
+            return data_info
+
+        self.edges = edges
+
+
+@dataclass(slots=True)
 class SweepDataGraphConfig(DataGraphConfig):
     """
     Defines a data graph pattern for a sweep graph.
@@ -15,8 +44,8 @@ class SweepDataGraphConfig(DataGraphConfig):
     def __post_init__(self):
         self.initial_placement = lambda x: Device(Architecture.CPU, 0)
 
-        self.initial_sizes = (
-            lambda x: self.large_size if x.idx[0] == 0 else self.small_size
+        self.initial_sizes = lambda x: (
+            self.large_size if x.idx[0] == 0 else self.small_size
         )
 
         def edges(task_id: TaskID):
@@ -93,7 +122,6 @@ def make_sweep_graph(
                     dependency_grid[j] -= 1
                     dependency = TaskID("T", tuple(dependency_grid), 0)
                     dependency_list.append(dependency)
-
 
             # Task Data Dependencies
             data_dependencies, data_dict = get_data_dependencies(
