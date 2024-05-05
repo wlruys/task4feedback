@@ -319,8 +319,8 @@ class ComputeTaskRecorder(Recorder):
                         read_data=[d.id for d in task.read_accesses],
                         write_data=[d.id for d in task.write_accesses],
                         read_write_data=[d.id for d in task.read_write_accesses],
-                        reserve_time=task.times.state_times[TaskState.RESERVED],
-                        map_time=task.times.state_times[TaskState.MAPPED],
+                        #reserve_time=task.times.state_times[TaskState.RESERVED],
+                        #map_time=task.times.state_times[TaskState.MAPPED],
                     )
                 else:
                     self.tasks[name].end_time = current_time
@@ -341,8 +341,8 @@ class ComputeTaskRecorder(Recorder):
                             read_data=[d.id for d in task.read_accesses],
                             write_data=[d.id for d in task.write_accesses],
                             read_write_data=[d.id for d in task.read_write_accesses],
-                            reserve_time=task.times.state_times[TaskState.RESERVED],
-                            map_time=task.times.state_times[TaskState.MAPPED],
+                            # reserve_time=task.times.state_times[TaskState.RESERVED],
+                            #map_time=task.times.state_times[TaskState.MAPPED],
                         )
                     else:
                         self.tasks[name].start_time = current_time
@@ -390,7 +390,7 @@ class DataTaskRecorder(Recorder):
                         end_time=current_time,
                         devices=task.assigned_devices,
                         source=task.source,
-                        reserve_time=task.times.state_times[TaskState.RESERVED],
+                        # reserve_time=task.times.state_times[TaskState.RESERVED],
                         communication_energy=communication_energy,
                     )
                 else:
@@ -430,7 +430,7 @@ class DataTaskRecorder(Recorder):
                             source=task.source,
                             data=data_id,
                             data_size=data_size,
-                            reserve_time=task.times.state_times[TaskState.RESERVED],
+                            # reserve_time=task.times.state_times[TaskState.RESERVED],
                             communication_energy=communication_energy,
                         )
                     else:

@@ -9,59 +9,18 @@ class ImecDataGraphConfig(DataGraphConfig):
     Defines a data graph pattern for a reduction.
     """
     hier_levels: int = 1
-    # data_size: int = 256 * 256 * 8 # 4 * (n**2/p) n=2**8 and p=64
-    # n_devices: int = 4
     levels: int = 3
     blocks: int = 4
     energy: list = field(default_factory=list)
-    # energy: list[float] = [0.01, 1, 100, 1000]  
-    # energy: float = 0.01
-    dram: bool = False
     n: int = 8
     a: int = 8
-    p: int = 4
+    p: int = 4 # number of processors
 
     def initial_data_size(self, data_id: DataID) -> Devices:
-        num_proc = pow(self.p, (self.hier_levels - data_id.idx[0][0]))
-        n_on_each_proc = (self.n * self.n) / num_proc
+        n_on_each_proc = (self.n * self.n) / self.p
         return n_on_each_proc * self.a
     
     def initial_data_placement(self, data_id: DataID) -> Devices:
-        # if self.dram:
-        #     if(data_id.idx[0][2] == levels):
-        #         cpu = Device(Architecture.CPU, data_id.idx[0][0] + 1, energy[data_id.idx[0][0]])
-        #         print("test: data_place ", str(data_id.idx[0]), " ", cpu, " ", energy[data_id.idx[0][0]])
-        #         #print("test_ in initial_data_place [2]: ", cpu)
-        #         return cpu #read from DRAM
-        #     elif(data_id.idx[0][2] == 0):
-        #         if(data_id.idx[0][0] == hier_levels - 1):
-        #             cpu = Device(Architecture.CPU, data_id.idx[0][0] + 1, energy[data_id.idx[0][0]])
-        #             print("test: data_place ", str(data_id.idx[0]), " ", cpu, " ", energy[data_id.idx[0][0]])
-        #             #print("test_ in initial_data_place [0]: ", cpu)
-        #             return cpu #highest level writes to its own DRAM
-        #         else:
-        #             cpu = Device(Architecture.CPU, data_id.idx[0][0] + 2, energy[data_id.idx[0][0] + 1])
-        #             print("test: data_place ", str(data_id.idx[0]), " ", cpu, " ", energy[data_id.idx[0][0]])
-        #             #print("test_ in initial_data_place else: ", cpu)
-        #             return cpu #lower levels write to next level's DRAM
-                    
-        # start_gpu = 0
-        # for i in range(hier_levels - data_id.idx[0][0] - 1, 0 , -1):
-        #     start_gpu += int(pow(config.p, i))
-        # pos = start_gpu + data_id.idx[0][1] * config.p
-        # if(data_id.idx[0][2] == 0):
-        #     pos += data_id.idx[0][3]
-        # else:
-        #     idx_pos = data_id.idx[0][3] % (2 * blocks)
-        #     if(data_id.idx[0][3] >= 2 * blocks):
-        #         pos += int(idx_pos) # To accomodate C
-        #     else:
-        #         # pos += int(data_id.idx[0][3] // 2) #If only A,B read
-        #         pos += int(idx_pos // 2) # To accomodate A & B
-        #return Device(Architecture.GPU, pos)
-        # print("Data id: ", data_id.idx, " ", pos)
-        # print("test: data_place ", str(data_id.idx[0]), " ", pos, " ", energy[data_id.idx[0][0]])
-        # print("cannon: ", pos, " ", config.energy[data_id.idx[0][0]])
         return Device(Architecture.GPU, 0, self.energy[data_id.idx[0][0]]) # everyting is on HBM at the start
 
     def __post_init__(self):
@@ -87,13 +46,8 @@ class ImecDataGraphConfig(DataGraphConfig):
             # step = self.branch_factor ** (self.levels - level)
             # start = step * j
             if(level == 0):
-                # Final output in DRAM
-                if(self.dram):
-                    # in_data_indices.append((hier_level, mesh_number, level + 1, j))
-                    pass
-                else:
-                    data_info = TaskDataInfo()
-                    return data_info
+                data_info = TaskDataInfo()
+                return data_info
 
             elif(level == self.levels - 1): # read data at the topmost level
                 in_data_indices.append((irow, k, step + 1, 2 * j)) # read A block
@@ -107,22 +61,10 @@ class ImecDataGraphConfig(DataGraphConfig):
                 # in_data_indices.append((step + 1, ((2 * ((j + step * shift) + 1) % mod)))) # read B block
                 # print("ELIF in_data_indices: ", in_data_indices, task_id.task_idx)
             else:
-                # if(j == 14 or j == 15):
-                    # print("start_col: ", start_col)
-                    # print("shift: ", shift)
-                    # print("mod_b: ", mod_b)
-                    # print("start_row: ", start_row)
                 in_data_indices.append((irow, k, step + 1, (2 * ((start_col + shift) % step + start_row)))) # read A block
                 # in_data_indices.append((step + 1, (2 * ((j + shift) % mod_a)))) # read A block
                 in_data_indices.append((k, jcol, step + 1, (2 * ((j + shift * step) % mod_b) + 1))) # read B block
-                # in_data_indices.append((step + 1, ((2 * ((j + step * shift) + 1) % mod)))) # read B block
-                # print("ELSE in_data_indices: ", in_data_indices, task_id.task_idx)
-            #out_data_index = (hier_level, mesh_number, 0, j) # always write to addition
-            # out_data_index = []
-            # if(level == 1):
-            #     out_data_index.append((hier_level, mesh_number, 0, j)) # write C at last
 
-            #inout_data_index = start
             #print(in_data_indices)
             
             data_info = TaskDataInfo()
@@ -171,7 +113,7 @@ def make_imec_graph(
     count = 0
     # levels = math.sqrt(config.blocks) + 1
     prev = []
-    for irow in range(config.B):
+    for irow in range(config.B): # blocked GEMM
         for jcol in range(config.B):
             for k in range(config.B):
                 for level in range(config.levels - 1, -1, -1): #levels are going to be sq_root of # blocks + 1

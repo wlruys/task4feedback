@@ -717,7 +717,8 @@ class SimulatedData:
 
         # self.status.device2state = DefaultDict(lambda: DefaultDict(lambda: DataState.NONE))
         self.status.state2device = DefaultDict(lambda: DefaultDict(lambda: set()))
-
+        if not isinstance(starting_devices, tuple):
+            starting_devices = (starting_devices,)
         
         # data_state = DataState.NONE
         # for device in system_devices:
