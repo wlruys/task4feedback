@@ -50,16 +50,18 @@ class ImecDataGraphConfig(DataGraphConfig):
                 return data_info
 
             elif(level == self.levels - 1): # read data at the topmost level
-                in_data_indices.append((irow, k, step + 1, 2 * j)) # read A block
-                in_data_indices.append((k, jcol, step + 1, 2 * j + 1)) # read B block
-                in_data_indices.append((irow, jcol, step + 1, 2 * self.blocks + j)) # read C block
-                # print("IF in_data_indices: ", in_data_indices)
+                # in_data_indices.append((irow, jcol, k))
+                in_data_indices.append((irow, jcol, k, step + 1, 2 * j)) # read A block
+                in_data_indices.append((irow, jcol, k, step + 1, 2 * j + 1)) # read B block
+                if(k == 0): # Read C every i, j itr
+                    in_data_indices.append((irow, jcol, k, step + 1, 2 * self.blocks + j)) # read C block
+                print("IF in_data_indices: ", in_data_indices, task_id.task_idx)
             elif(j == mod_a - 1):
-                in_data_indices.append((irow, k, step + 1, (2 * ((start_col + shift) % step + start_row)))) # read A block
+                in_data_indices.append((irow, jcol, k, step + 1, (2 * ((start_col + shift) % step + start_row)))) # read A block
                 # in_data_indices.append((step + 1, (2 * ((j + shift) % mod_a + start_row)))) # read A block
-                in_data_indices.append((k, jcol, step + 1, (2 * ((j + step * shift) % mod_b) + 1))) # read B block
+                in_data_indices.append((irow, jcol, k, step + 1, (2 * ((j + step * shift) % mod_b) + 1))) # read B block
                 # in_data_indices.append((step + 1, ((2 * ((j + step * shift) + 1) % mod)))) # read B block
-                # print("ELIF in_data_indices: ", in_data_indices, task_id.task_idx)
+                #print("ELIF in_data_indices: ", in_data_indices, task_id.task_idx)
             else:
                 in_data_indices.append((irow, k, step + 1, (2 * ((start_col + shift) % step + start_row)))) # read A block
                 # in_data_indices.append((step + 1, (2 * ((j + shift) % mod_a)))) # read A block
@@ -115,6 +117,7 @@ def make_imec_graph(
     prev = []
     for irow in range(config.B): # blocked GEMM
         for jcol in range(config.B):
+            # prev = []
             for k in range(config.B):
                 for level in range(config.levels - 1, -1, -1): #levels are going to be sq_root of # blocks + 1
                     tasks_in_level = config.blocks
@@ -124,7 +127,7 @@ def make_imec_graph(
                         # Task ID:
                         task_idx = (irow, jcol, k, level, j)
                         task_id = TaskID("T", task_idx, 0)
-
+                        # print("Task ID:", task_id.idx)
                         # Task Placement Info
                         task_placement_info = configurations(task_id)
 
@@ -138,7 +141,7 @@ def make_imec_graph(
                                 )
                                 # print(dependency)
                                 dependency_list.append(dependency)
-                                prev.append(task_id) # add completion tasks of this cannon gemm as dependency of next cannon gemm
+                            # prev.append(task_id) # add completion tasks of this cannon gemm as dependency of next cannon gemm
                                 # print(dependency_list)
 
                         elif level < config.levels - 1: # all multiplications except 1 can take place only after all prior level tasks are finished
@@ -148,13 +151,44 @@ def make_imec_graph(
                                 )
                                 dependency_list.append(dependency)
 
-                        elif level == config.levels - 1 and len(prev) != 0: #next Cannon Gemm depends on completion of previous cannon gemm
-                            for l in prev:
-                                dependency_list.append(l)
-                            prev = []
+                        elif level == config.levels - 1: #next block of Cannon Gemm depends on completion of previous block of cannon gemm
+                            '''
+                            Example: 
+                            0 0 0 
+                            0 0 1
+                            0 1 0 
+                            0 1 1
+                            1 0 0
+                            1 0 1
+                            1 1 0
+                            1 1 1 
+                            Each row after the second row depends on the previous block cannon gemm
+                            '''
+                            i_idx = irow
+                            j_idx = jcol
+                            k_idx = k
+                            if(k > 0):
+                                k_idx = k - 1
+                            elif(jcol > 0):
+                                j_idx = jcol - 1
+                                k_idx = config.B - 1
+                            elif(irow > 0):
+                                i_idx = irow - 1
+                                j_idx = config.B - 1
+                                k_idx = config.B - 1
+                            if(irow > 0 or jcol > 0 or k > 0): # First block has no dependency
+                                for dep in range(tasks_in_level):
+                                    dependency = TaskID(
+                                        "T", (i_idx, j_idx, k_idx, 0, dep), 0
+                                    )
+                                    dependency_list.append(dependency)
+                        # elif level == config.levels - 1 and len(prev) != 0: #next Cannon Gemm depends on completion of previous cannon gemm
+                        #     for l in prev:
+                        #         dependency_list.append(l)
+                            # prev = []
 
                         #for k in range(config.branch_factor):
-                    
+                        # print("TASK: ", task_id.task_idx, "DEP: ", dependency_list)
                         # print("level: ", (level,j))
                         data_dependencies, data_dict = get_data_dependencies(
                             task_id, data_dict, data_config
