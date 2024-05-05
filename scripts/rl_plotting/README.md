@@ -97,6 +97,11 @@ This script creates multiple output files and directories.
           users can generate time breakdown plots (On 05/05/2024, this has a bug) by
           manually running `breakdown.sh`
           (This will execute `breakdown.R` to generate time plots).
+  - `simtime.R`: This R script generates a plot. In this plot, labels for the bars are hard-coded to
+                 ["Independent", "BSP", "HEFTTheory", "Serial", "heft", "loadbalance",
+                  "eft_without_data", "eft_with_data", "random"]. If users modified the mapping 
+                 policy configuration on `start_exp.sh`, this also should be changed properly.
+                 Otherwise, this will generate incorrect plots or dummy bars.
     
 # Convert plots in pdfs to pptx
 
