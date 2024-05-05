@@ -78,9 +78,9 @@ This script creates multiple output files and directories.
 - `fn_[iteration]_logs`: This directory includes each mapped task's start-end logs
                          for each GPU.
                          Depending on the policy, it has two types of logs.
-  - `gpu[gpu ID].launching.log: This includes actual start-end times for each task
+  - `gpu[gpu ID].launching.log`: This includes actual start-end times for each task
                                 on each gpu.
-  - `gpu[gpu ID].mapping.log: This is estimated start-end times for each task on each
+  - `gpu[gpu ID].mapping.log`: This is estimated start-end times for each task on each
                               gpu by earliest-finish time-based mapping policies.
                               It is designed to compare estimation and actual times.
 - `fn.csv`: This includes each execution's total execution time in a csv format.
