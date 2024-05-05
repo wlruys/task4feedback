@@ -53,10 +53,6 @@ for APP in "${APP_ARR[@]}"; do
 
           # Output file base name
           file_name=${APP}_${NUM_GPUS}_${DATA_SIZE}_${BANDWIDTH}
-          # Created noise log 
-          noise_file_name=${file_name}".noise"
-          # Created task creation order log 
-          order_file_name=${file_name}".order"
           # Total execution times for each configuration to be parsed by Rscripts
           csv_file_name=$file_name".csv"
           # Plot pdf name
@@ -81,12 +77,17 @@ for APP in "${APP_ARR[@]}"; do
           # will generate task noise and creation order.
           # Then, later executions under the same configuration with different policies reuse
           # the generated variabilities. 
-          noise_generation=true
-          SAVE_ORDER=true
-          order_flag=" -so "
 
           # Repeat 3 times
           for ((it=1;it<=3;it++)); do
+            noise_generation=true
+            SAVE_ORDER=true
+            order_flag=" -so "
+            # Created noise log 
+            noise_file_name=${file_name}_${it}".noise"
+            # Created task creation order log 
+            order_file_name=${file_name}_${it}".order"
+
             for MAPPING in "${MAPPING_POLICIES[@]}"; do
 
               echo $it"<<<<<<<<<<<<<<<<<<<<<<<<<<<"
@@ -133,16 +134,17 @@ for APP in "${APP_ARR[@]}"; do
                 order_flag=" -lo "
               fi
             done
+            mv replay.noise $noise_file_name
+            mv replay.order $order_file_name
+            mv $noise_file_name ${SORT}_outputs
+            mv $order_file_name ${SORT}_outputs
+
           done
 
           echo "Rscript $PWD/simtime.R $csv_file_name $pdf_file_name"
           Rscript $PWD/simtime.R $csv_file_name $pdf_file_name
           mv $csv_file_name ${SORT}_outputs
           mv $pdf_file_name ${SORT}_outputs/pdfs
-          mv replay.noise $noise_file_name
-          mv replay.order $order_file_name
-          mv $noise_file_name ${SORT}_outputs
-          mv $order_file_name ${SORT}_outputs
         done
       done
     done
