@@ -24,10 +24,12 @@ DATA_SIZE_ARR=( "0.5" )
 #BANDWIDTH_ARR=( "0.5" "1" "2" "4" "8" "16" "32" "64" "128" "256" "512" )
 #BANDWIDTH_ARR=( "0.5" "1" "4" "64" "256" )
 BANDWIDTH_ARR=( "25" "25000000" )
+#BANDWIDTH_ARR=( "25000000" )
 
 # Mapping policies
 #MAPPING_POLICIES=(  "loadbalance" "eft_with_data" "random" "heft" )
 MAPPING_POLICIES=( "loadbalance" "eft_without_data" "eft_with_data" "random" "heft" )
+#MAPPING_POLICIES=( "loadbalance" "heft" )
 #MAPPING_POLICIES=( "eft_without_data" "eft_with_data" "heft" )
 
 # Task creation order (All queues are FIFO)
@@ -84,19 +86,20 @@ for APP in "${APP_ARR[@]}"; do
           order_flag=" -so "
 
           # Repeat 3 times
-          for i in 1 2 3; do
+          for ((it=1;it<=3;it++)); do
             for MAPPING in "${MAPPING_POLICIES[@]}"; do
 
+              echo $it"<<<<<<<<<<<<<<<<<<<<<<<<<<<"
               # All plain prints
-              out_file_name=${file_name}_${MAPPING}_${i}".out"
+              out_file_name=${file_name}_${MAPPING}_${it}".out"
               # Each mapping/launching logs:
               # * mapping: specify expected start~finish time for each task calculated
               #            at the mapping phase (NOTE that only EFT-based policies provide)
               # * launching: specify actual start~finish time for each task measured
               #            at the launching phase
-              parsed_log_dir=${file_name}_${MAPPING}_${i}_logs
+              parsed_log_dir=${file_name}_${MAPPING}_${it}_logs
               mkdir $parsed_log_dir
-              echo $out_file_name" mapping:" $MAPPING" iteration:" $i
+              echo $out_file_name" mapping:" $MAPPING" iteration:" $it
 
               # Noise flag 
               if [ "$noise_generation" = true ]; then 
