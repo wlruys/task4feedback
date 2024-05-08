@@ -319,8 +319,8 @@ class ComputeTaskRecorder(Recorder):
                         read_data=[d.id for d in task.read_accesses],
                         write_data=[d.id for d in task.write_accesses],
                         read_write_data=[d.id for d in task.read_write_accesses],
-                        reserve_time=task.times.state_times[TaskState.RESERVED],
-                        map_time=task.times.state_times[TaskState.MAPPED],
+                        # reserve_time=task.times.state_times[TaskState.RESERVED],
+                        # map_time=task.times.state_times[TaskState.MAPPED],
                     )
                 else:
                     self.tasks[name].end_time = current_time
@@ -341,8 +341,8 @@ class ComputeTaskRecorder(Recorder):
                             read_data=[d.id for d in task.read_accesses],
                             write_data=[d.id for d in task.write_accesses],
                             read_write_data=[d.id for d in task.read_write_accesses],
-                            reserve_time=task.times.state_times[TaskState.RESERVED],
-                            map_time=task.times.state_times[TaskState.MAPPED],
+                            # reserve_time=task.times.state_times[TaskState.RESERVED],
+                            # map_time=task.times.state_times[TaskState.MAPPED],
                         )
                     else:
                         self.tasks[name].start_time = current_time
@@ -373,12 +373,12 @@ class DataTaskRecorder(Recorder):
                     devices = task.assigned_devices
                     assert devices is not None
                     communication_energy = 0
-                    print("In recorder end")
+                    # print("In recorder end")
                     if task.real:  # check if there is any data movement
-                        print("In if end")
+                        # print("In if end")
                         for device in devices:
                             communication_energy += device.energy * data_size
-                            print(communication_energy)
+                            # print(communication_energy)
 
                     if isinstance(task, SimulatedEvictionTask):
                         type = TaskType.EVICTION
@@ -396,7 +396,7 @@ class DataTaskRecorder(Recorder):
                         end_time=current_time,
                         devices=task.assigned_devices,
                         source=task.source,
-                        reserve_time=task.times.state_times[TaskState.RESERVED],
+                        # reserve_time=task.times.state_times[TaskState.RESERVED],
                         communication_energy=communication_energy,
                     )
                 else:
@@ -417,9 +417,9 @@ class DataTaskRecorder(Recorder):
                         devices = task.assigned_devices
                         assert devices is not None
                         communication_energy = 0
-                        print("In recorder")
+                        # print("In recorder")
                         if task.real:  # check if there is any data movement
-                            print("In if")
+                            # print("In if")
                             for device in devices:
                                 communication_energy += device.energy * data_size
                                 print(communication_energy)
@@ -442,7 +442,7 @@ class DataTaskRecorder(Recorder):
                             source=task.source,
                             data=data_id,
                             data_size=data_size,
-                            reserve_time=task.times.state_times[TaskState.RESERVED],
+                            # reserve_time=task.times.state_times[TaskState.RESERVED],
                             communication_energy=communication_energy,
                         )
                     else:
