@@ -122,12 +122,15 @@ def load_balancing(task: SimulatedTask, simulator) -> Optional[Devices]:
     # potential_devices = scheduler_state.topology.devices
         
     for device in potential_devices:
+        if isinstance(device, Tuple):
+            device = device[0]
+
         # if device.name.architecture == Architecture.CPU:
         #     continue
-        workload = scheduler_state.perdev_active_workload[device.name]
+        workload = scheduler_state.perdev_active_workload[device]
         if potential_device is None or workload < lowest_workload:
             lowest_workload = workload
-            potential_device = device.name
+            potential_device = device
 
     if isinstance(potential_device, Tuple):
         potential_device = potential_device[0]
@@ -151,13 +154,16 @@ def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     potential_devices = task.info.runtime.locations
     # potential_devices = scheduler_state.topology.devices
     for device in potential_devices:
+
+        if isinstance(device, Tuple):
+            device = device[0]
+
         # if device.name.architecture == Architecture.CPU:
         #     continue
-        workload = max(perdev_earliest_avail_time[device.name], est_ready_time)
-        # print("\t", task.name, ", ", perdev_earliest_avail_time[device.name], ", ", est_ready_time, ", ", device.name)
+        workload = max(perdev_earliest_avail_time[device], est_ready_time)
         if potential_device is None or workload < lowest_workload:
             lowest_workload = workload
-            potential_device = device.name
+            potential_device = device
 
     task.est_completion_time = lowest_workload + float(
         scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
@@ -193,25 +199,29 @@ def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     for device in potential_devices:
         # if device.name.architecture == Architecture.CPU:
         #     continue
-        workload = max(perdev_earliest_avail_time[device.name], est_ready_time)
+
+        if isinstance(device, Tuple):
+           device = device[0]
+
+        workload = max(perdev_earliest_avail_time[device], est_ready_time)
         if task.data_tasks is not None:
             nonlocal_data = 0
             for dtask_id in task.data_tasks:
                 dtask = taskmap[dtask_id]
                 for data_id in dtask.info.data_dependencies.all_ids():
                     data = datamap[data_id]
-                    is_valid = data.is_valid(device.name, TaskState.MAPPED)
+                    is_valid = data.is_valid(device, TaskState.MAPPED)
                     nonlocal_data += data.size if not is_valid else 0
             # NOTE This assumes that GPU connection bandwidths are all equal
             # NOTE This also assumes that # of GPUs >= 2
             bandwidth = scheduler_state.topology.connection_pool.bandwidth[1, 2] 
-            print(f"\t task: {task.name} tests device: {device.name} data size: {nonlocal_data} new workload: {nonlocal_data / bandwidth * 1000} bw: {bandwidth}")
+            print(f"\t task: {task.name} tests device: {device} data size: {nonlocal_data} new workload: {nonlocal_data / bandwidth * 1000} bw: {bandwidth}")
             # Convert to ms
             workload += (nonlocal_data / bandwidth) * 1000
 
         if potential_device is None or workload < lowest_workload:
             lowest_workload = workload
-            potential_device = device.name
+            potential_device = device
 
     task.est_completion_time = lowest_workload + float(
         scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
@@ -243,16 +253,24 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
 
     total_workload = 0
     for device in potential_devices:
+
+        if isinstance(device, Tuple):
+           device = device[0]
+
         # if device.name.architecture == Architecture.CPU:
         #     continue
 
-        total_workload += scheduler_state.perdev_active_workload[device.name] 
+        total_workload += scheduler_state.perdev_active_workload[device] 
 
     for device in potential_devices:
+
+        if isinstance(device, Tuple):
+           device = device[0]
+
         # if device.name.architecture == Architecture.CPU:
         #     continue
 
-        workload = scheduler_state.perdev_active_workload[device.name]
+        workload = scheduler_state.perdev_active_workload[device]
         norm_workload = (workload / total_workload
                          if total_workload != 0 else workload)
         local_data = 0
@@ -263,7 +281,7 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
                 dtask = taskmap[dtask_id]
                 for data_id in dtask.info.data_dependencies.all_ids():
                     data = datamap[data_id]
-                    is_valid = data.is_valid(device.name, TaskState.MAPPED)
+                    is_valid = data.is_valid(device, TaskState.MAPPED)
                     local_data += data.size if is_valid else 0
                     nonlocal_data += data.size if not is_valid else 0
                     total_data += data.size
@@ -272,7 +290,7 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
         score = 50 + (30 * local_data - 30 * nonlocal_data - 10 * norm_workload)
         if score > highest_workload:
             highest_workload = score
-            potential_device = device.name
+            potential_device = device
 
     if isinstance(potential_device, Tuple):
         potential_device = potential_device[0]

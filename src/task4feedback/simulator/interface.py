@@ -48,7 +48,7 @@ def create_simulator(config: SimulatorConfig):
 
     # print("state config:", config.scheduler_state_type)
 
-    print("save order:", config.save_task_order)
+    # print("save order:", config.save_task_order)
     scheduler = SimulatedScheduler(
         topology=config.topology,
         scheduler_type=config.scheduler_type,
