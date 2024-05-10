@@ -13,8 +13,8 @@ APP_ARR=( "cholesky" "sweeps" )
 
 # Number of GPUs
 #NUM_GPUS_ARR=( "4" "8" "16" "32" "64" "128" )
-NUM_GPUS_ARR=( "8" "32" )
-#NUM_GPUS_ARR=( "4" )
+#NUM_GPUS_ARR=( "8" "32" )
+NUM_GPUS_ARR=( "4" )
 
 # Data size (in GB)
 #DATA_SIZE_ARR=( "0.5" "1" "2" )
@@ -23,19 +23,19 @@ DATA_SIZE_ARR=( "0.5" )
 # Bandwidth (in GB/s)
 #BANDWIDTH_ARR=( "0.5" "1" "2" "4" "8" "16" "32" "64" "128" "256" "512" )
 #BANDWIDTH_ARR=( "0.5" "1" "4" "64" "256" )
-BANDWIDTH_ARR=( "25" "25000000" )
-#BANDWIDTH_ARR=( "25000000" )
+#BANDWIDTH_ARR=( "25" "25000000" )
+BANDWIDTH_ARR=( "25000000" )
 
 # Mapping policies
 #MAPPING_POLICIES=(  "loadbalance" "eft_with_data" "random" "heft" )
-MAPPING_POLICIES=( "loadbalance" "eft_without_data" "eft_with_data" "random" "heft" )
-#MAPPING_POLICIES=( "loadbalance" "heft" )
+#MAPPING_POLICIES=( "loadbalance" "eft_without_data" "eft_with_data" "random" "heft" )
+MAPPING_POLICIES=( "loadbalance" )
 #MAPPING_POLICIES=( "eft_without_data" "eft_with_data" "heft" )
 
 # Task creation order (All queues are FIFO)
 # * heft: HEFT rank order
 # * random: Random order
-SORT_ARR=( "heft" "random" )
+SORT_ARR=( "random" )
 
 
 for APP in "${APP_ARR[@]}"; do
@@ -64,7 +64,7 @@ for APP in "${APP_ARR[@]}"; do
           # Theory bounds (independent, serial)
           # NOTE that this uses # of tasks under the default settings
           if [[ "$APP" == "cholesky" ]]; then
-            python levelbylevel.py -g $NUM_GPUS -b 10 >> $csv_file_name
+            python cholesky_theory.py -g $NUM_GPUS -b 10 >> $csv_file_name
 					elif [[ "$APP" == "reduction" ]]; then
 						python homog_theory.py -g $NUM_GPUS -n 511 >> $csv_file_name
 					elif [[ "$APP" == "stencil" ]]; then
