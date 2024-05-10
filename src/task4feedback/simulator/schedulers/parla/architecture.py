@@ -401,16 +401,16 @@ class ParlaArchitecture(SchedulerArchitecture):
     ) -> List[EventPair]:
 
         objects = scheduler_state.objects
+        simulator = kwargs["simulator"]
+        mapper_type = kwargs["mapper_type"]
 
         task_objects = [objects.get_task(task) for task in tasks]
 
         # Initialize a scheduler state
-        scheduler_state.initialize(tasks, task_objects)
+        scheduler_state.initialize(tasks, task_objects, mapper_type)
         # Initialize the set of visible tasks
         self.add_initial_tasks(task_objects, scheduler_state)
-         
-        simulator = kwargs["simulator"]
-        mapper_type = kwargs["mapper_type"]
+
         simulator.mapper.initialize(task_objects, scheduler_state, mapper_type)
 
         # Initialize memory for starting data blocks

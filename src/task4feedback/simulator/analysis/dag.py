@@ -4,6 +4,25 @@ from ...types import *
 from ..topology import *
 
 
+def print_graph_info(G):
+    # Print number of edges in G
+    print("Number of edges in G:", G.number_of_edges())
+    # Print number of nodes in G
+    print("Number of nodes in G:", G.number_of_nodes())
+    # Print the width of the graph level by level
+    generations = nx.topological_generations(G)
+    num_gens = 0
+    widths = []
+    for gen in generations:
+        num_gens += 1
+        widths.append(len(gen))
+    # Print the average width of the graph
+    print("Number of generations(height):", num_gens)
+    # print("Widths of the graph:", widths)
+    print("Widths of the graph:", max(widths))
+    print("Average width of the graph:", sum(widths) / num_gens)
+
+
 def build_networkx_graph_from_infos(
     tasks: List
 ) -> Tuple[nx.DiGraph, Dict[TaskID, str]]:

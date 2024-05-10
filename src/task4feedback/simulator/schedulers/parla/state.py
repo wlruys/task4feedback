@@ -1081,13 +1081,20 @@ class ParlaState(SystemState):
     # # of tasks in (mapped~launchable) states
     total_num_mapped_tasks: int = 0
 
-    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+    def initialize(
+        self, task_ids: List[TaskID], task_objects: List[SimulatedTask],
+        mapper_type: str
+    ):
         self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
         for device in self.objects.devicemap:
             self.perdev_active_workload[device] = 0
             self.perdev_earliest_avail_time[device] = 0
 
         if self.task_order_mode == TaskOrderType.RANDOM:
+            if mapper_type == "heft":
+                _ = calculate_heft(
+                    task_objects, self.objects.taskmap,
+                    len(self.objects.devicemap)-1, self, False)
             if self.load_task_order:
                 print("REPLAY RANDOM SORT")
                 task_objects[:] = load_task_order(task_objects)
@@ -1314,7 +1321,10 @@ class ParlaState(SystemState):
 class RLState(ParlaState):
     target_exec_time: float = 0
 
-    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
+    def initialize(
+        self, task_ids: List[TaskID], task_objects: List[SimulatedTask],
+        mapper_type: str
+    ):
         self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
         for device in self.objects.devicemap:
             self.perdev_active_workload[device] = 0
