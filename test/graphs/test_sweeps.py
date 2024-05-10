@@ -182,6 +182,7 @@ def test_data():
             mapper_mode = "rl"
             mapper = RLTaskMapper()
         G = build_networkx_graph_from_infos(tasks)
+        print_graph_info(G)
         calculate_critical_path(G, args.gpus) 
 
         """

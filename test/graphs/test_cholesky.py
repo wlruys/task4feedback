@@ -136,7 +136,7 @@ def test_data():
         return placement_info
 
     def get_task_sorting_method(episode: int) -> TaskOrderType:
-        if args.sort == "heft" or args.mode == "heft":
+        if args.sort == "heft":
             return TaskOrderType.HEFT
         elif args.sort == "random":
             si = args.sorting_interval
@@ -202,6 +202,7 @@ def test_data():
 
         topology = TopologyManager().generate("frontera", config=topo_config)
         G = build_networkx_graph_from_infos(tasks)
+        print_graph_info(G)
         calculate_critical_path(G, args.gpus) 
         mapper_mode = args.mode
         if args.mode == "testing" or args.mode == "training":
