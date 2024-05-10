@@ -122,8 +122,8 @@ def load_balancing(task: SimulatedTask, simulator) -> Optional[Devices]:
     # potential_devices = scheduler_state.topology.devices
         
     for device in potential_devices:
-        if device.name.architecture == Architecture.CPU:
-            continue
+        # if device.name.architecture == Architecture.CPU:
+        #     continue
         workload = scheduler_state.perdev_active_workload[device.name]
         if potential_device is None or workload < lowest_workload:
             lowest_workload = workload
@@ -151,8 +151,8 @@ def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     potential_devices = task.info.runtime.locations
     # potential_devices = scheduler_state.topology.devices
     for device in potential_devices:
-        if device.name.architecture == Architecture.CPU:
-            continue
+        # if device.name.architecture == Architecture.CPU:
+        #     continue
         workload = max(perdev_earliest_avail_time[device.name], est_ready_time)
         # print("\t", task.name, ", ", perdev_earliest_avail_time[device.name], ", ", est_ready_time, ", ", device.name)
         if potential_device is None or workload < lowest_workload:
@@ -191,8 +191,8 @@ def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     potential_devices = task.info.runtime.locations
     # potential_devices = scheduler_state.topology.devices
     for device in potential_devices:
-        if device.name.architecture == Architecture.CPU:
-            continue
+        # if device.name.architecture == Architecture.CPU:
+        #     continue
         workload = max(perdev_earliest_avail_time[device.name], est_ready_time)
         if task.data_tasks is not None:
             nonlocal_data = 0
@@ -243,14 +243,14 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
 
     total_workload = 0
     for device in potential_devices:
-        if device.name.architecture == Architecture.CPU:
-            continue
+        # if device.name.architecture == Architecture.CPU:
+        #     continue
 
         total_workload += scheduler_state.perdev_active_workload[device.name] 
 
     for device in potential_devices:
-        if device.name.architecture == Architecture.CPU:
-            continue
+        # if device.name.architecture == Architecture.CPU:
+        #     continue
 
         workload = scheduler_state.perdev_active_workload[device.name]
         norm_workload = (workload / total_workload
