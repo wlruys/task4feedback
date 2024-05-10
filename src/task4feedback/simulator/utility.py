@@ -269,13 +269,14 @@ def save_task_noise(task: "SimulatedTask", noise: "Time", fname: str = "replay.n
 def load_task_order(task_objects, fname: str = "replay.order"):
     # Read a stored task order and sort task IDs by it
     loaded_task_key = []
+    print("task order loading..")
     with open(fname, "r") as fp:
         lines = fp.readlines()
         for l in lines:
             loaded_task_key.append(l.rstrip())
     def sort_key(task):
         return loaded_task_key.index(str(task.info.id))
-    print("loaded_task_key:", loaded_task_key)
+    # print("loaded_task_key:", loaded_task_key)
     return sorted(task_objects, key=sort_key)
 
 

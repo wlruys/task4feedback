@@ -34,6 +34,14 @@ from enum import Enum
 
 
 def get_scheduler_state(mapper_type: str):
+    """
+    This function returns a scheduler state type based on the specified
+    mapper type.
+    Different mappers may need different information due to their policies.
+    This information is usually tracked by the state.
+    NOTE that if you add new policy, you also should add the corresponding
+    state on here.
+    """
     if (mapper_type == "random" or mapper_type == "parla" or
         mapper_type == "loadbalance" or mapper_type == "heft" or
         mapper_type == "eft_without_data" or

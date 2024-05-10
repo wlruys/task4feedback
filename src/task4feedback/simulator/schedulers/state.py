@@ -165,6 +165,9 @@ class SystemState:
         # print(f"Time to deepcopy time: {clock() - s}")
 
         s = clock()
+        loaded_task_noises = deepcopy(self.loaded_task_noises)
+
+        s = clock()
         rl_env = deepcopy(self.rl_env)
 
         s = clock()
@@ -186,7 +189,9 @@ class SystemState:
             load_task_order=self.load_task_order,
             save_task_noise=self.save_task_noise,
             load_task_noise=self.load_task_noise,
-            loaded_task_noises=self.loaded_task_noises,
+            loaded_task_noises=loaded_task_noises,
+            wait_time_accum=self.wait_time_accum,
+            num_tasks=self.num_tasks,
             rl_env=rl_env,
             rl_mapper=rl_mapper,
         )

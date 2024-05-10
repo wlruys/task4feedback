@@ -57,8 +57,10 @@ def map_task(
         if chosen_devices is not None:
             task.assigned_devices = chosen_devices
             task.wait_time = current_time
-            task_workload = float(scheduler_state.get_task_duration(
-                                      task, task.info.runtime.locations[0]).scale_to("ms"))
+            task_workload = float(
+                scheduler_state.get_task_duration(
+                task, task.info.runtime.locations[0]).scale_to("ms")
+            )
             scheduler_state.acquire_resources(phase, task, verbose=verbose)
             scheduler_state.use_data(phase, task, verbose=verbose)
             scheduler_state.mapped_active_tasks += 1
@@ -225,7 +227,6 @@ def launch_task(
                 task.wait_time = scheduler_state.time - task.wait_time
                 scheduler_state.wait_time_accum += task.wait_time
 
-
             for device_id in devices:
                 device = scheduler_state.objects.get_device(device_id)
                 assert device is not None
@@ -310,7 +311,8 @@ def complete_task(
         logger.runtime.debug(f"Total num completed tasks: {scheduler_state.total_num_completed_tasks}\n")
         task_workload = float(
             scheduler_state.get_task_duration(
-                task, task.info.runtime.locations[0]).scale_to("ms"))
+            task, task.info.runtime.locations[0]).scale_to("ms")
+        )
         scheduler_state.total_active_workload -= task_workload
     for device_id in task.assigned_devices:
         device = scheduler_state.objects.get_device(device_id)
@@ -343,6 +345,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         default_factory=dict
     )
     launched_tasks: Dict[Device, TaskQueue] = field(default_factory=dict)
+    # Set True if nothing is launched on that device (for RL feature)
     is_nothing_launched: Dict[Device, bool] = field(default_factory=dict)
     success_count: int = 0
     active_scheduler: int = 0
@@ -488,8 +491,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                 next_tasks.success()
                 self.success_count += 1
             elif devices := map_task(simulator, task):
-            # if scheduler_state.total_num_mapped_tasks >= scheduler_state.mapper_threshold:
-            #     break
                 for device in devices:
                     self.reservable_tasks[device].put_id(
                         task_id=taskid, priority=priority
@@ -500,7 +501,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                         extra=dict(task=taskid, device=devices),
                     )
                 event.tasks.add(taskid)
-                # 
                 task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
@@ -765,7 +765,7 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         if logger.ENABLE_LOGGING:
             # print(f"Completing task {event.task}")
-            logger.runtime.debug(
+            logger.runtime.critical(
                 f"Completing task {event.task}",
                 extra=dict(
                     task=event.task, time=current_time, phase=TaskState.COMPLETED

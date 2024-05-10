@@ -1292,7 +1292,7 @@ class ParlaState(SystemState):
             # print("task:", task.name, ", ", duration, " generated noise:", noise)
         elif self.load_task_noise:
             noise = Time(int(self.loaded_task_noises[str(task.name)]))
-            print("task:", task.name, " loaded noise:", noise)
+            # print("task:", task.name, " loaded noise:", noise)
 
         if self.save_task_noise:
             save_task_noise(task, noise)
@@ -1360,101 +1360,3 @@ class RLState(ParlaState):
             # reward = -(1-reward) if reward < 0.8 else reward
             self.rl_mapper.optimize_model(reward, self)
         self.rl_mapper.complete_episode(total_exec_time)
-
-
-'''
-@SchedulerOptions.register_state("worst")
-@dataclass(slots=True)
-class WorstState(ParlaState):
-    """
-    The purpose of this class is to measure the worst theoretical exeuction time.
-    All tasks are chained and it assumes that data is always transfered.
-    To calculate the worst data transfer time, this class iterates all the HW connections
-    between GPU pairs and uses the worst bandwidth to transfer the data.
-    """
-    total_pure_task_duration_sum: bool = 0
-
-    def initialize(self, task_ids: List[TaskID], task_objects: List[SimulatedTask]):
-        assert self.task_order_mode == TaskOrderType.HEFT
-
-        self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
-        for device in self.objects.devicemap:
-            self.perdev_active_workload[device] = 0
-
-        print("WORST ORDER")
-
-    def map_task(self, task: SimulatedTask, verbose: bool = False
-    ) -> Optional[Tuple[Device, ...]]:
-
-        phase = TaskState.MAPPED
-        objects = self.objects
-        assert objects is not None
-
-        current_time = self.time
-        assert current_time is not None
-
-        # Check if task is mappable
-        if check_status := self.check_task_status(task, TaskStatus.MAPPABLE):
-            # Assign all tasks to a single device
-            task.assigned_devices = (Device(Architecture.GPU, 0),)
-            self.acquire_resources(phase, task, verbose=verbose)
-            self.use_data(phase, task, verbose=verbose)
-
-            return task.assigned_devices
-
-        if logger.ENABLE_LOGGING:
-            logger.runtime.debug(
-                f"Task {task.name} cannot be mapped: Invalid status.",
-                extra=dict(
-                    task=task.name, phase=phase, counters=task.counters, status=task.status
-                ),
-            )
-        return None
-
-    def get_task_duration_completion(
-        self, task: SimulatedTask, devices: Devices, verbose: bool = False
-    ) -> Tuple[Time, Time]:
-        """
-        This method gets and returns task duration and completion time normally.
-        On top of that, it also accumulates the task duration to get the
-        worst serial execution time. For data transfer tasks, it calculates
-        the worst data transfer time using the lowest bandwidth.
-        """
-
-        if isinstance(task, SimulatedComputeTask):
-            duration, completion_time = _compute_task_duration(
-                self, task, devices, verbose=verbose)
-            self.total_pure_task_duration_sum += float(duration.scale_to("ms"))
-        elif isinstance(task, SimulatedDataTask):
-            duration, completion_time = _data_task_duration(
-                self, task, devices, verbose=verbose)
-
-            # Calculate the worst data transfer time
-            data = self.objects.get_data(task.read_accesses[0].id)
-            worst_bandwidth = 9999999999999999
-            for d1 in range(len(self.topology.devices)):
-                for d2 in range(len(self.topology.devices)):
-                    if d1 == d2 or (d1 == 0 or d2 == 0):
-                        continue
-                    worst_bandwidth = min(worst_bandwidth,
-                        self.topology.connection_pool.bandwidth[d1, d2])
-            # print("worst bandwidth:", worst_bandwidth, " data size:", data.size)
-            worst_duration = int((data.size / worst_bandwidth) * 1e3)
-            # print("worst data transfer:", worst_duration, " actual transfer:", duration)
-            self.total_pure_task_duration_sum += float(worst_duration)
-        else:
-            raise RuntimeError(f"Invalid task type for {task} of type {type(task)}")
-        assert ((self.use_duration_noise == False and self.load_task_noise == False)
-                or self.use_duration_noise != self.load_task_noise)
-        noise = Time()
-        if self.use_duration_noise:
-            noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
-            # print("task:", task.name, ", ", duration, " generated noise:", noise)
-        elif self.load_task_noise:
-            noise = Time(int(self.loaded_task_noises[str(task.name)]))
-
-        if self.save_task_noise:
-            save_task_noise(task, noise)
-
-        return duration, completion_time + noise
-'''
