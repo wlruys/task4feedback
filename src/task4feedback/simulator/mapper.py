@@ -34,23 +34,15 @@ def default_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
 def random_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
     scheduler_state: SystemState = simulator.state
     scheduler_arch: SchedulerArchitecture = simulator.mechanisms
-    
-    num_gpus = len(scheduler_state.topology.devices) - 1
 
-    """
-    TODO(hc):-1 is not supported so for now sample from # GPUs
+    np.random.seed(None)
     potential_devices = task.info.runtime.locations
-    
     index = np.random.randint(0, len(potential_devices))
 
     potential_device = potential_devices[index]
 
     if isinstance(potential_device, Tuple):
         potential_device = potential_device[0]
-    """
-    np.random.seed(None)
-    potential_device = Device(Architecture.GPU, np.random.randint(0, num_gpus))
-    # print("task:", task.name, " random device:", potential_device.device_id)
 
     return (potential_device,)
 
@@ -126,8 +118,8 @@ def load_balancing(task: SimulatedTask, simulator) -> Optional[Devices]:
 
     lowest_workload = 9999999999999999999
     potential_device = None
-    # potential_devices = task.info.runtime.locations
-    potential_devices = scheduler_state.topology.devices
+    potential_devices = task.info.runtime.locations
+    # potential_devices = scheduler_state.topology.devices
         
     for device in potential_devices:
         if device.name.architecture == Architecture.CPU:
@@ -156,8 +148,8 @@ def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
 
     lowest_workload = 9999999999999999999
     potential_device = None
-    # potential_devices = task.info.runtime.locations
-    potential_devices = scheduler_state.topology.devices
+    potential_devices = task.info.runtime.locations
+    # potential_devices = scheduler_state.topology.devices
     for device in potential_devices:
         if device.name.architecture == Architecture.CPU:
             continue
@@ -196,8 +188,8 @@ def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
 
     lowest_workload = 9999999999999999999
     potential_device = None
-    # potential_devices = task.info.runtime.locations
-    potential_devices = scheduler_state.topology.devices
+    potential_devices = task.info.runtime.locations
+    # potential_devices = scheduler_state.topology.devices
     for device in potential_devices:
         if device.name.architecture == Architecture.CPU:
             continue
@@ -246,8 +238,8 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
 
     highest_workload = -1
     potential_device = None
-    # potential_devices = task.info.runtime.locations
-    potential_devices = scheduler_state.topology.devices
+    potential_devices = task.info.runtime.locations
+    # potential_devices = scheduler_state.topology.devices
 
     total_workload = 0
     for device in potential_devices:
