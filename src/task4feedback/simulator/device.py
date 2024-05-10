@@ -21,16 +21,10 @@ class DeviceStats:
 
     last_active_compute: Time = field(default_factory=Time)
     last_active_movement: Time = field(default_factory=Time)
-    last_idle_compute: Time = field(default_factory=Time)
-    last_idle_movement: Time = field(default_factory=Time)
 
     idle_time_compute: Time = field(default_factory=Time)
     idle_time_movement: Time = field(default_factory=Time)
     idle_time: Time = field(default_factory=Time)
-
-    active_time_compute: Time = field(default_factory=Time)
-    active_time_movement: Time = field(default_factory=Time)
-    active_time: Time = field(default_factory=Time)
 
     outgoing_transfers: int = 0
     incoming_transfers: int = 0
