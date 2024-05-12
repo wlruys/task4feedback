@@ -6,12 +6,9 @@ from ..events import *
 from ..resources import *
 from ..task import *
 from ..topology import *
-<<<<<<< HEAD
 from ..utility import *
 from ..randomizer import Randomizer
-=======
 from ..datapool import *
->>>>>>> main
 
 from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
 from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
@@ -122,12 +119,8 @@ from time import perf_counter as clock
 class SystemState:
     randomizer: Randomizer
     topology: SimulatedTopology
-<<<<<<< HEAD
     task_order_mode: TaskOrderType
-    data_pool: DataPool | None = None
-=======
     data_pool: DeviceDataPools | None = None
->>>>>>> main
     resource_pool: FasterResourcePool | None = None
     objects: ObjectRegistry | None = None
     time: Time = field(default_factory=Time)

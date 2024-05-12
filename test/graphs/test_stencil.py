@@ -81,7 +81,6 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
-<<<<<<< HEAD
         return args.data_size * 1024 * 1024 * 1024
 
     def homog_task_duration():
@@ -89,9 +88,6 @@ def test_data():
 
     def func_type_id(task_id: TaskID):
         return 0
-=======
-        return 1 * 1024 * 1024 * 512  # 1 GB
->>>>>>> main
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         runtime_info = TaskRuntimeInfo(

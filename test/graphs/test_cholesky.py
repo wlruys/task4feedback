@@ -94,7 +94,6 @@ def test_data():
         return Device(Architecture.GPU, data_id.idx[-1] % args.gpus)
 
     def sizes(data_id: DataID) -> int:
-<<<<<<< HEAD
         return args.data_size * 1024 * 1024 * 1024  # 1 GB
 
     def task_duration_per_func(task_id: TaskID):
@@ -123,9 +122,6 @@ def test_data():
         elif task_id.taskspace == "GEMM":
             func_id = 3
         return func_id
-=======
-        return 2 * 1024 * 1024 * 1024  # 1 GB
->>>>>>> main
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         runtime_info = TaskRuntimeInfo(
@@ -157,7 +153,6 @@ def test_data():
     data_config = CholeskyDataGraphConfig()
     # data_config = NoDataGraphConfig()
 
-<<<<<<< HEAD
     if args.distribution == "rr":
         data_config.initial_placement = rr_gpu_placement
     elif args.distribution == "cpu":
@@ -170,9 +165,6 @@ def test_data():
 
     config = CholeskyConfig(blocks=args.block, task_config=task_placement,
                             func_id=func_type_id)
-=======
-    config = CholeskyConfig(blocks=5, task_config=task_placement)
->>>>>>> main
     tasks, data = make_graph(config, data_config=data_config)
 
     num_gpus = args.gpus
@@ -187,7 +179,6 @@ def test_data():
     episode = 0
     cum_wallclock_t = 0
 
-<<<<<<< HEAD
     task_order_log = None
     si = args.sorting_interval
 
