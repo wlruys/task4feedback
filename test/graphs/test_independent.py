@@ -127,9 +127,14 @@ def test_data():
 
     data_config.initial_sizes = sizes
 
+<<<<<<< HEAD
     config = IndependentConfig(
         task_count=args.num_tasks, task_config=task_placement,
         func_id=func_type_id)
+=======
+    # config = IndependentConfig(task_count=4, task_config=task_placement)
+    config = ChainConfig(chains=1, steps=100, task_config=task_placement)
+>>>>>>> main
     tasks, data = make_graph(config, data_config=data_config)
 
     num_gpus = args.gpus
@@ -158,6 +163,7 @@ def test_data():
 
     mapper = TaskMapper()
 
+<<<<<<< HEAD
     while True:
         if episode >= args.episode and args.episode != -1:
             break
@@ -195,11 +201,14 @@ def test_data():
 
         start_t = clock()
         episode += 1
-        simulated_time, task_order_log = simulator.run()
+        simulated_time, task_order_log, success = simulator.run()
         end_t = clock()
         # if not rl_agent.is_training_mode():
         cum_wallclock_t += end_t - start_t
         print("Wallclock,",episode,",",cum_wallclock_t)
+        print(f"Time to Simulate: {end_t - start_t}")
+        print(f"Simulated Time: {simulator.time}")
+        print(f"Success: {success}")
 
 
 if __name__ == "__main__":

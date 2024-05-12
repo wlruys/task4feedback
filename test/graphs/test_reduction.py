@@ -201,11 +201,14 @@ def test_data():
 
         start_t = clock()
         episode += 1
-        simulated_time, task_order_log = simulator.run()
+        simulated_time, task_order_log, success = simulator.run()
         end_t = clock()
         # if not rl_agent.is_training_mode():
         cum_wallclock_t += end_t - start_t
         print("Wallclock,",episode,",",cum_wallclock_t)
+        print(f"Time to Simulate: {end_t - start_t}")
+        print(f"Simulated Time: {simulator.time}")
+        print(f"Success: {success}")
 
 
 if __name__ == "__main__":

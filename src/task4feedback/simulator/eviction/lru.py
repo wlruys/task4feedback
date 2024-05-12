@@ -9,7 +9,7 @@ from .base import EvictionPool
 
 @dataclass(slots=True)
 class DataNode:
-    data: Optional[DataInfo] = None
+    data: Optional[DataID] = None
     next: Optional[DataNode] = None
     prev: Optional[DataNode] = None
 
@@ -27,12 +27,12 @@ class DataNodeList:
         self.head.next = self.tail
         self.tail.prev = self.head
 
-    def append(self, data: DataInfo) -> bool:
-        if data.id in self.map:
+    def append(self, data: DataID) -> bool:
+        if data in self.map:
             return False
 
         node = DataNode(data)
-        self.map[data.id] = node
+        self.map[data] = node
 
         node.next = self.tail
         node.prev = self.tail.prev
@@ -45,12 +45,12 @@ class DataNodeList:
 
         return True
 
-    def remove(self, data: DataInfo) -> bool:
-        if data.id not in self.map:
+    def remove(self, data: DataID) -> bool:
+        if data not in self.map:
             return False
 
-        node = self.map[data.id]
-        del self.map[data.id]
+        node = self.map[data]
+        del self.map[data]
 
         assert node.prev is not None
         assert node.next is not None
@@ -85,31 +85,25 @@ class DataNodeList:
 class LRUEvictionPool(EvictionPool):
     datalist: DataNodeList = field(default_factory=DataNodeList)
 
-    def add(self, data: SimulatedData):
-        if self.datalist.append(data.info):
+    def add(self, data: DataID, size: int):
+        if self.datalist.append(data):
             # print("Adding {data.info} to eviction pool: {data.size}, {self.evictable_size}")
-            self.evictable_size += data.size
+            self.evictable_size += size
 
-    def remove(self, data: SimulatedData):
-        if self.datalist.remove(data.info):
+    def remove(self, data: DataID, size: int) -> bool:
+        if status := self.datalist.remove(data):
             # print(f"Removing {data.info} from eviction pool: {data.size}")
-            self.evictable_size -= data.size
-            assert self.evictable_size >= 0
+            self.evictable_size -= size
+            assert (
+                self.evictable_size >= 0
+            ), f"Evictable size is negative: {self.evictable_size}"
+        return status
 
     def peek(self) -> DataID:
         assert self.datalist.head.next is not None
         data = self.datalist.head.next.data
         assert data is not None
-        return data.id
-
-    def get(self) -> DataID:
-        assert self.datalist.head.next is not None
-        data = self.datalist.head.next.data
-        assert data is not None
-        self.datalist.remove(data)
-        self.evictable_size -= data.size
-        assert self.evictable_size >= 0
-        return data.id
+        return data
 
     def __len__(self):
         return len(self.datalist)

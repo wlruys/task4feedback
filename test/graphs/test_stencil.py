@@ -81,6 +81,7 @@ def test_data():
         return Device(Architecture.CPU, 0)
 
     def sizes(data_id: DataID) -> int:
+<<<<<<< HEAD
         return args.data_size * 1024 * 1024 * 1024
 
     def homog_task_duration():
@@ -88,6 +89,9 @@ def test_data():
 
     def func_type_id(task_id: TaskID):
         return 0
+=======
+        return 1 * 1024 * 1024 * 512  # 1 GB
+>>>>>>> main
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         runtime_info = TaskRuntimeInfo(
@@ -115,6 +119,7 @@ def test_data():
         else:
             return TaskOrderType.DEFAULT
 
+<<<<<<< HEAD
     data_config = StencilDataGraphConfig()
     data_config.initial_sizes = sizes
     data_config.n_devices = args.gpus
@@ -133,6 +138,9 @@ def test_data():
     config = StencilConfig(
         steps=args.steps, width=args.width, dimensions=args.dimensions,
         task_config=task_placement, func_id=func_type_id)
+=======
+    config = StencilConfig(steps=5, width=3, dimensions=1, task_config=task_placement)
+>>>>>>> main
     tasks, data = make_graph(config, data_config=data_config)
 
     num_gpus = args.gpus
@@ -197,11 +205,14 @@ def test_data():
 
         start_t = clock()
         episode += 1
-        simulated_time, task_order_log = simulator.run()
+        simulated_time, task_order_log, success = simulator.run()
         end_t = clock()
         # if not rl_agent.is_training_mode():
         cum_wallclock_t += end_t - start_t
         print("Wallclock,",episode,",",cum_wallclock_t)
+        print(f"Time to Simulate: {end_t - start_t}")
+        print(f"Simulated Time: {simulator.time}")
+        print(f"Success: {success}")
 
 
 if __name__ == "__main__":

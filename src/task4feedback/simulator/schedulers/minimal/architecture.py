@@ -268,10 +268,6 @@ def complete_task(task: SimulatedTask, scheduler_state: SystemState) -> bool:
         resources=task.resources,
     )
 
-    print(
-        f"Removed resources for task {task.name} completed at time {scheduler_state.time}."
-    )
-
     return True
 
 
@@ -431,14 +427,14 @@ class MinimalArchitecture(SchedulerArchitecture):
     def complete_task(
         self, scheduler_state: SystemState, event: TaskCompleted
     ) -> Sequence[EventPair]:
-        print(f"Completing task: {event.task}...")
+        # print(f"Completing task: {event.task}...")
         objects = scheduler_state.objects
         assert objects is not None
         task = objects.get_task(event.task)
         assert task is not None
         # print(task)
         # print(scheduler_state.resource_pool[Device(Architecture.GPU, 1)])
-        print(self)
+        # print(self)
 
         self._verify_correct_task_completed(task, scheduler_state)
         complete_task(task, scheduler_state)

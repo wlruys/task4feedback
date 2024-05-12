@@ -6,8 +6,12 @@ from ..events import *
 from ..resources import *
 from ..task import *
 from ..topology import *
+<<<<<<< HEAD
 from ..utility import *
 from ..randomizer import Randomizer
+=======
+from ..datapool import *
+>>>>>>> main
 
 from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
 from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
@@ -48,7 +52,7 @@ class ObjectRegistry:
         return ObjectRegistry(devicemap=devicemap, taskmap=taskmap, datamap=datamap)
 
     def add_task(self, task: SimulatedTask):
-        self.taskmap[task.name] = task
+        self.taskmap[task.name] = task  # type: ignore
 
     def get_task(self, task_id: Optional[TaskID]) -> SimulatedTask:
         assert task_id is not None
@@ -118,8 +122,12 @@ from time import perf_counter as clock
 class SystemState:
     randomizer: Randomizer
     topology: SimulatedTopology
+<<<<<<< HEAD
     task_order_mode: TaskOrderType
     data_pool: DataPool | None = None
+=======
+    data_pool: DeviceDataPools | None = None
+>>>>>>> main
     resource_pool: FasterResourcePool | None = None
     objects: ObjectRegistry | None = None
     time: Time = field(default_factory=Time)
@@ -206,6 +214,9 @@ class SystemState:
                 for device in self.topology.devices:
                     self.objects.add_device(device)
 
+            self.data_pool = DeviceDataPools(devices=self.topology.devices)
+
+            self.resource_pool = FasterResourcePool(devices=self.topology.devices)
             if self.resource_pool is None:
                 self.resource_pool = FasterResourcePool(devices=self.topology.devices)
             self.init = False

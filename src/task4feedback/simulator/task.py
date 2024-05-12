@@ -1,5 +1,14 @@
 from __future__ import annotations
-from ..types import TaskID, TaskInfo, TaskState, TaskStatus, DataAccess, Time, TaskType
+from ..types import (
+    TaskID,
+    TaskInfo,
+    TaskState,
+    TaskStatus,
+    DataAccess,
+    Time,
+    TaskType,
+    DataID,
+)
 
 from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 from ..types import Architecture, Device, Devices
@@ -18,9 +27,9 @@ from typing import (
 from .queue import PriorityQueue
 from dataclasses import dataclass, field
 from .resourceset import ResourceSet, FasterResourceSet
-from .datapool import DataPool
 from ..logging import logger
 import numpy as np
+from collections import defaultdict
 
 
 @dataclass(slots=True)
@@ -115,6 +124,7 @@ class TaskCounters:
             return value == 0
 
     def notified_state(self, new_state: TaskState) -> Optional[TaskStatus]:
+        # print(f"New state of {self}: {new_state}", self.remaining_deps_states)
         self.remaining_deps_states[new_state] -= 1
         if self.check_count(new_state):
             if new_status := TaskState.matching_status(new_state):
@@ -142,9 +152,12 @@ class SimulatedTask:
     type: TaskType = TaskType.BASE
     parent: Optional[TaskID] = None
     data_tasks: Optional[List[TaskID]] = None
+    eviction_tasks: Optional[Set[TaskID]] = None
     # eviction_tasks: Optional[List[TaskID]] = None
     spawn_tasks: Optional[List[TaskID]] = None
-    eviction_requested: bool = False
+    requested_eviction_bytes: defaultdict[Device, int] = field(
+        default_factory=lambda: defaultdict(int)
+    )
     duration: Time = field(default_factory=Time)
     completion_time: Time = field(default_factory=Time)
     # This is only used for online EFT-based schedulers
@@ -156,6 +169,7 @@ class SimulatedTask:
         if self.init:
             self.dependencies = [d for d in self.info.dependencies]
             self.counters = TaskCounters(len(self.info.dependencies))
+            self.eviction_tasks = set()
             self.init = False
 
     def __deepcopy__(self, memo):
@@ -166,8 +180,9 @@ class SimulatedTask:
         # times = deepcopy(self.times)
 
         counters = deepcopy(self.counters)
-        # eviction_tasks = deepcopy(self.eviction_tasks)
-        eviction_requested = self.eviction_requested
+        eviction_tasks = deepcopy(self.eviction_tasks)
+
+        requested_eviction_bytes = deepcopy(self.requested_eviction_bytes)
         resources = [deepcopy(r) for r in self.resources]
 
         return SimulatedTask(
@@ -184,9 +199,9 @@ class SimulatedTask:
             type=self.type,
             parent=self.parent,
             data_tasks=self.data_tasks,
-            # eviction_tasks=eviction_tasks,
+            eviction_tasks=eviction_tasks,
             spawn_tasks=self.spawn_tasks,
-            eviction_requested=eviction_requested,
+            requested_eviction_bytes=requested_eviction_bytes,
             init=self.init,
         )
 
@@ -262,6 +277,7 @@ class SimulatedTask:
         states: List[TaskState] = [],
         statuses: List[TaskStatus] = [],
     ):
+        # print(f"Internal adding dependency {task} to {self.name}")
         self.dependencies.append(task)
         for state in states:
             self.counters.remaining_deps_states[state] += 1
@@ -289,6 +305,8 @@ class SimulatedTask:
 
         for taskid in self.dependents:
             task = taskmap[taskid]
+            # print(f"Task {self.name} notifying {task.name} of state change")
+            # print(f"Dependencies of {task.name}: {task.dependencies}")
             if new_status := task.counters.notified_state(state):
                 task.notify_status(new_status, taskmap, time)
 
@@ -355,6 +373,9 @@ class SimulatedTask:
         self.add_dependency(task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED])
         task.dependents.append(self.name)
 
+        assert self.eviction_tasks is not None
+        self.eviction_tasks.add(task.name)
+
         # if self.eviction_tasks is None:
         #     self.eviction_tasks = []
         # self.eviction_tasks.append(task.name)
@@ -400,9 +421,9 @@ class SimulatedComputeTask(SimulatedTask):
             type=self.type,
             parent=self.parent,
             data_tasks=self.data_tasks,
-            # eviction_tasks=deepcopy(self.eviction_tasks),
+            eviction_tasks=deepcopy(self.eviction_tasks),
             spawn_tasks=self.spawn_tasks,
-            eviction_requested=deepcopy(self.eviction_requested),
+            requested_eviction_bytes=deepcopy(self.requested_eviction_bytes),
             init=self.init,
         )
 
@@ -410,12 +431,17 @@ class SimulatedComputeTask(SimulatedTask):
 @dataclass(slots=True)
 class SimulatedDataTask(SimulatedTask):
     type: TaskType = TaskType.DATA
+    state: TaskState = TaskState.RESERVED
     source: Optional[Device] = None
     local_index: int = 0
     real: bool = True
 
     def get_resources(self, devices: Devices) -> List[FasterResourceSet]:
         return [FasterResourceSet(vcus=0, memory=0, copy=1)]
+
+    @property
+    def data_id(self) -> DataID:
+        return self.info.data_dependencies.read[0].id
 
     def __deepcopy__(self, memo):
         return SimulatedDataTask(
@@ -435,9 +461,9 @@ class SimulatedDataTask(SimulatedTask):
             type=self.type,
             parent=self.parent,
             data_tasks=self.data_tasks,
-            # eviction_tasks=deepcopy(self.eviction_tasks),
+            eviction_tasks=deepcopy(self.eviction_tasks),
             spawn_tasks=self.spawn_tasks,
-            eviction_requested=deepcopy(self.eviction_requested),
+            requested_eviction_bytes=deepcopy(self.requested_eviction_bytes),
             init=self.init,
         )
 
@@ -465,7 +491,8 @@ class SimulatedEvictionTask(SimulatedDataTask):
             parent=self.parent,
             data_tasks=self.data_tasks,
             spawn_tasks=self.spawn_tasks,
-            eviction_requested=self.eviction_requested,
+            eviction_tasks=deepcopy(self.eviction_tasks),
+            requested_eviction_bytes=deepcopy(self.requested_eviction_bytes),
             init=self.init,
         )
 

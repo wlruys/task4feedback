@@ -161,7 +161,8 @@ class Device:
     architecture: Architecture = Architecture.CPU
     # The id of the device (-1 for any)
     device_id: int = 0
-
+    energy: float = 1 # energy in pJ to communicate 1 byte
+    
     def __str__(self):
         return f"{self.architecture.name}[{self.device_id}]"
 
@@ -269,6 +270,14 @@ class DataAccess:
         self.id = id
         self.pattern = pattern
         self.device = device
+        
+    def __hash__(self) -> int:
+        return hash((id, self.pattern, self.device))
+    
+    def __eq__(self, __value: object) -> bool:
+        return (self.id == __value.id) and (self.device == __value.device)
+    
+    
 
 
 @dataclass(slots=True)
@@ -728,6 +737,7 @@ class RunConfig:
     logfile: str = "testing.blog"
     do_check: bool = False
     num_gpus: int = 4
+    use_cpu_sleep: bool = True
 
 
 class ExecutionMode(IntEnum):

@@ -26,7 +26,7 @@ def default_task_mapping(task_id: TaskID) -> Devices:
     """
     Default task mapping function for a synthetic task graph.
     """
-    return Device(Architecture.CPU, 0)
+    return None
 
 
 def round_robin_task_mapping_gpu(

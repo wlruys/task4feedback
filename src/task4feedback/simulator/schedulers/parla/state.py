@@ -104,29 +104,65 @@ def _check_eviction(
     task: SimulatedTask,
     verbose: bool = False,
 ) -> Optional[Eviction]:
-    # print("Checking eviction for task: ", task.name)
+    from rich import print
 
-    if task.eviction_requested:
-        # print(f"Eviction already requested for task {task.name}")
-        return None
+    # print("Checking eviction for task: ", task.name)
 
     # Only generate an eviction event if it would free enough resources to run the next task
     resource_differences = _get_difference_reserved(state, task, verbose=verbose)
+
     # verbose = True
     # print("Time: ", state.time)
     if verbose:
         print(
             f"Cannot allocate memory for task {task.name}. Requires {resource_differences} more memory."
         )
+
+    # Remove the task's own data from the eviction pool
+    # for data_access in task.info.data_dependencies.all_accesses():
+    #     data = state.objects.get_data(data_access.id)
+    #     assert data is not None
+    #     for device in state.topology.devices:
+    #         data.status.add_task(
+    #             device.name, task.name, DataUses.CHECKING, state.data_pool
+    #         )
+
     for device, resources in resource_differences.items():
-        evictable_memory = state.objects.get_device(device).evictable_bytes
+        evictable_memory = state.data_pool.evictable[device].evictable_size
+        unresolved_requests = task.requested_eviction_bytes[device]
+
+        # print(f"Evictable memory on {device}: {evictable_memory}")
+        # print(f"Incomplete eviction requests on {device}: {unresolved_requests}")
+
+        resources.memory -= unresolved_requests
+
+        # print(f"Missing Memory on {device}: {resources.memory}")
+
+        # print(f"Data on {device}:)")
+        # for data in state.objects.datamap.values():
+        #     if data.is_valid(device, TaskState.RESERVED):
+        #         print(f"{data.name} is valid on {device}")
+        #         print(data.status.uses)
+
+        # print(f"Eviction pool on Device {device}")
+        # print(state.data_pool.evictable[device])
+
         if verbose:
             print(f"Evictable memory on {device}: {evictable_memory}")
             print(f"Missing Memory on {device}: {resources.memory}")
-        if evictable_memory < resources.memory:
-            return None
 
-    task.eviction_requested = True
+        if resources.memory > evictable_memory or resources.memory < 0:
+            # if : request is too big and not satisfiable by eviction, do not run eviction
+            # if : request is already satisfied by previously enqueued (but not complete) eviction, do not run eviction
+            # Return tasks data to the eviction pool
+            # for data_access in task.info.data_dependencies.all_accesses():
+            #     data = state.objects.get_data(data_access.id)
+            #     assert data is not None
+            #     data.status.uses.remove_task_use(
+            #         task.name, DataUses.CHECKING, state.data_pool
+            #     )
+
+            return None
 
     return Eviction(parent_task=task.name, requested_resources=resource_differences)
 
@@ -136,6 +172,8 @@ def _check_nearest_source(
     task: SimulatedDataTask,
     verbose: bool = False,
 ) -> Optional[Device | SimulatedDevice]:
+    from rich import print
+
     assert isinstance(task, SimulatedDataTask)
     devices = task.assigned_devices
     assert devices is not None
@@ -157,6 +195,32 @@ def _check_nearest_source(
     source_device = state.topology.nearest_valid_connection(
         device, valid_sources, require_copy_engines=True, require_symmetric=True
     )
+
+    # print(f"Source set for {data.name}: {valid_sources_ids}")
+    # print("Data Status")
+    # print(data.status)
+
+    # print("Data Uses")
+    # print(data.status.uses)
+
+    for eviction_task in data.status.uses.eviction_tasks:
+        eviction_task: SimulatedEvictionTask = state.objects.get_task(eviction_task)
+        # print(
+        #     f"Eviction task: {eviction_task} uses {data.name}: evicting at {eviction_task.source}, moving to {eviction_task.assigned_devices}"
+        # )
+        assert isinstance(eviction_task, SimulatedEvictionTask)
+        if eviction_task.source == source_device:
+            if eviction_task.state == TaskState.LAUNCHED:
+                # print(
+                #     f"Eviction task {eviction_task} is already evicting from {source_device}"
+                # )
+                return None
+
+            # print(f"Adding dependency on eviction task {eviction_task} for {task.name}")
+            eviction_task.add_dependency(
+                task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED]
+            )
+            task.add_dependent(eviction_task.name)
 
     if logger.ENABLE_LOGGING:
         logger.data.debug(
@@ -228,6 +292,10 @@ def _get_difference_reserved(
     resources = get_required_resources(
         TaskState.RESERVED, task, devices, state.objects, count_data=True
     )
+
+    # print(f"Resources at time of eviction request")
+    # task_data_print(state, task, devices, TaskState.RESERVED)
+    # resource_error_print(state, task, task.assigned_devices, resources)
 
     # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
     # print(
@@ -380,7 +448,6 @@ def resource_error_print(
     table_resources.add_column("Difference", justify="right", style="red")
 
     for device, resources in zip(devices, requested_resources):
-
         used_resources = state.resource_pool.pool[device][TaskState.RESERVED]
         max_resources = state.objects.devicemap[device].resources
         available_resources = max_resources - used_resources
@@ -413,6 +480,18 @@ def resource_error_print(
     console.print(table_resources)
 
 
+def _check_eviction_status(state, task, check_complete=True):
+    if not state.use_eviction:
+        return True
+    if check_complete:
+        # if: there are any outstanding eviction requests, don't throw an error yet
+        if any([d > 0 for d in task.requested_eviction_bytes.values()]):
+            return False
+        return True
+    else:
+        return False
+
+
 def _check_resources_reserved(
     state: SystemState, task: SimulatedTask, verbose: bool = False
 ) -> bool:
@@ -438,16 +517,21 @@ def _check_resources_reserved(
         resources=resources,
     )
 
+    # print(f"Can fit resources: {can_fit}")
+    # print(f"Reserved active tasks: {state.reserved_active_tasks}")
+
     if not can_fit and state.reserved_active_tasks == 0:
-        task_data_print(state, task, devices, TaskState.RESERVED)
-        resource_error_print(state, task, devices, resources, resource_types=["memory"])
-        raise RuntimeError(f"Failure to acquire resources for task {task.name}.")
+        if _check_eviction_status(state, task, check_complete=False):
+            task_data_print(state, task, devices, TaskState.RESERVED)
+            resource_error_print(
+                state, task, devices, resources, resource_types=["memory"]
+            )
+            raise RuntimeError(f"Failure to acquire resources for task {task.name}.")
 
     # print(f"Resources required for task {task.name} in RESERVED state: {resources}")
     # print(
     #    f"Current resources in use for task {task.name} in RESERVED state: {state.resource_pool.pool[devices[0]][TaskState.RESERVED]}"
     # )
-
     return can_fit
 
 
@@ -474,6 +558,9 @@ def _acquire_resources_reserved(
     state.resource_pool.add_resources(
         devices, TaskState.RESERVED, ResourceGroup.PERSISTENT, resources
     )
+    # print(
+    #     f"Resources acquired for task {task.name} in RESERVED state on device {devices[0]}"
+    # )
 
     if logger.ENABLE_LOGGING:
         for device in devices:
@@ -645,6 +732,13 @@ def _release_resources_completed(
                 ),
             )
 
+        if isinstance(task, SimulatedEvictionTask):
+            # print(f"I am an eviction task: {task.name} my parent is {task.parent}")
+            parent_task = state.objects.get_task(task.parent)
+            data = task.read_accesses[0].id
+            data = state.objects.get_data(data)
+            parent_task.requested_eviction_bytes[source_device] -= data.size
+
     state.resource_pool.remove_resources(
         devices=devices,
         state=TaskState.RESERVED,
@@ -705,6 +799,22 @@ def _release_resources_completed(
             # )
 
 
+def _remove_memory(
+    data: SimulatedData,
+    locations: Sequence[Device],
+    phases: Sequence[TaskState],
+    state: SystemState,
+):
+    for device in locations:
+        for phase in phases:
+            state.resource_pool.remove_device_resources(
+                device,
+                phase,
+                ResourceGroup.PERSISTENT,
+                FasterResourceSet(memory=data.size, vcus=0, copy=0),
+            )
+
+
 def _use_data(
     state: SystemState,
     phase: TaskState,
@@ -737,43 +847,43 @@ def _use_data(
             initial_state = True
         elif phase == TaskState.RESERVED:
             data.finish_use(
-                task.name, device_id, TaskState.MAPPED, operation=access_type
+                task=task.name,
+                target_device=device_id,
+                state=TaskState.MAPPED,
+                operation=access_type,
+                pools=state.data_pool,
             )
-
-            # Data is not in the eviction pool if it is reserved
-            device.remove_evictable(data)
 
         elif phase == TaskState.LAUNCHED:
             data.finish_use(
-                task.name, device_id, TaskState.RESERVED, operation=access_type
+                task=task.name,
+                target_device=device_id,
+                state=TaskState.RESERVED,
+                operation=access_type,
+                pools=state.data_pool,
             )
             # State updates at runtime are managed by data movement tasks
             # Compute tasks only verify and evict
             update_state = False
 
         old_state, evicted_locations = data.start_use(
-            task.name,
-            device_id,
-            phase,
+            task=task.name,
+            target_device=device_id,
+            state=phase,
             operation=access_type,
+            pools=state.data_pool,
             update=update_state,
             verbose=verbose,
         )
 
         if phase == TaskState.LAUNCHED:
-            for device in evicted_locations:
-                for pool in [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED]:
-                    state.resource_pool.remove_device_resources(
-                        device,
-                        pool,
-                        ResourceGroup.PERSISTENT,
-                        FasterResourceSet(memory=data.size, vcus=0, copy=0),
-                    )
-                # print(
-                #     f"Removed resources for {data.name} on {device} due to write invalidation. Time: {state.time}."
-                # )
-                # remove from eviction pools
-                state.objects.get_device(device).remove_evictable(data)
+            _remove_memory(
+                data,
+                evicted_locations,
+                [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED],
+                state,
+            )
+            data.status.remove_task(task.name, DataUses.EVICTING, pools=state.data_pool)
 
 
 def _release_data(
@@ -805,14 +915,13 @@ def _release_data(
         data = state.objects.get_data(data_id)
         assert data is not None
 
-        data.finish_use(task.name, device_id, TaskState.LAUNCHED, operation=access_type)
-
-        # print(
-        #    f"Data {data.name} finished use on {device_id} in {phase} phase. Evitable: {data.is_evictable(device_id)}"
-        # )
-        # print(data)
-        if data.is_evictable(device_id):
-            device.eviction_pool.add(data)
+        data.finish_use(
+            task=task.name,
+            target_device=device_id,
+            state=TaskState.LAUNCHED,
+            operation=access_type,
+            pools=state.data_pool,
+        )
 
 
 def _move_data(
@@ -849,7 +958,12 @@ def _move_data(
     assert source_device is not None
 
     # Mark data as moving onto target device
-    prior_state = data.start_move(task.name, source_device, target_device)
+    prior_state = data.start_move(
+        task=task.name,
+        source_device=source_device,
+        target_device=target_device,
+        pools=state.data_pool,
+    )
 
 
 def _finish_move(
@@ -883,7 +997,12 @@ def _finish_move(
     assert source_device is not None
 
     # Mark data as valid on target device
-    prior_state = data.finish_move(task.name, source_device, target_device)
+    prior_state = data.finish_move(
+        task=task.name,
+        source_device=source_device,
+        target_device=target_device,
+        pools=state.data_pool,
+    )
 
 
 def _start_evict(
@@ -924,6 +1043,7 @@ def _start_evict(
             target_device=device_id,
             source_device=task.source,
             state=TaskState.LAUNCHED,
+            pools=state.data_pool,
         )
 
 
@@ -960,21 +1080,13 @@ def _finish_evict(
             task=task.name,
             target_device=device_id,
             source_device=task.source,
-            state=TaskState.COMPLETED,
+            state=TaskState.LAUNCHED,
+            pools=state.data_pool,
         )
 
-        for device in evicted_locations:
-            for pool in [TaskState.MAPPED, TaskState.RESERVED, TaskState.LAUNCHED]:
-                # print(f"Finishing eviction: {device} for {data.name}")
-                state.resource_pool.remove_device_resources(
-                    device,
-                    pool,
-                    ResourceGroup.PERSISTENT,
-                    FasterResourceSet(memory=data.size, vcus=0, copy=0),
-                )
-            # print(
-            #     f"Removed resources for {data.name} on {device} due to eviction. Time: {state.time}."
-            # )
+        _remove_memory(
+            data, evicted_locations, [TaskState.RESERVED, TaskState.LAUNCHED], state
+        )
 
 
 def _compute_task_duration(
@@ -1016,7 +1128,7 @@ def _data_task_duration(
     if len(other_moving_tasks) > 0:
         task.real = False
         duration = Time(0)
-        other_task = other_moving_tasks[0]
+        other_task = list(other_moving_tasks)[0]
         assert (
             other_task != task.name
         ), f"Current task {task} should not be in the list of moving tasks {other_moving_tasks} during duration calculation."
@@ -1039,7 +1151,6 @@ def _eviction_task_duration(
     devices: Devices,
     verbose: bool = False,
 ) -> Tuple[Time, Time]:
-
     assert isinstance(task, SimulatedEvictionTask)
     duration, completion_time = _data_task_duration(
         state, task, devices, verbose=verbose
