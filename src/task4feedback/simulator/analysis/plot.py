@@ -1,8 +1,11 @@
+from asyncio import Task
 from .recorder import *
 import numpy as np
 from pandas import *
 import matplotlib.pyplot as plt
 from ...types import *
+from task4feedback.simulator.simulator import *
+import pydot
 
 
 def make_resource_plot(
@@ -487,15 +490,16 @@ def make_data_plot(
 
 
 def make_dag_and_timeline(
+    simulator: SimulatedScheduler,
     tasks: List[Mapping[TaskID, TaskInfo]],
-    recorders: RecorderList,
     plot_dag: bool = True,
     plot_timeline: bool = True,
+    plot_data_movement: bool = False,
 ):
-    import pydot
+    recorders = simulator.recorders
 
     try:
-        compute_task_recorder: Optional[ComputeTaskRecorder] = recorders.get(
+        compute_task_record: Optional[ComputeTaskRecorder] = recorders.get(
             ComputeTaskRecorder
         )
     except KeyError as e:  # raise error if not found
@@ -507,7 +511,7 @@ def make_dag_and_timeline(
 
     # Make dictionary of task results (Device it ran on, start time, end time)
     task_results = {}
-    for taskid, task_record in compute_task_recorder.tasks.items():
+    for taskid, task_record in compute_task_record.tasks.items():
         task_result = {}
         task_result["devices"] = task_record.devices
         if task_record.devices[0] not in device_colors:
@@ -566,6 +570,41 @@ def make_dag_and_timeline(
                 color="black",  # Text color
                 fontsize="xx-small",  # Font size
             )
+
+        if plot_data_movement:
+            try:
+                data_task_record: Optional[DataTaskRecorder] = recorders.get(
+                    DataTaskRecorder
+                )
+            except KeyError as e:  # raise error if not found
+                raise KeyError(e)
+
+            for taskid, task_record in data_task_record.tasks.items():
+                if task_record.type == TaskType.DATA:
+                    start_time = task_record.start_time.duration
+                    duration = (task_record.end_time - task_record.start_time).duration
+
+                    # Draw the horizontal bar
+                    bar = ax.barh(
+                        task_record.devices[0].device_id,
+                        duration,
+                        left=start_time,
+                        height=0.4,
+                        color="black",
+                        edgecolor="black",
+                    )
+
+                    # Add text inside the bar
+                    text_position = start_time + duration / 2
+                    ax.text(
+                        text_position,
+                        task_record.devices[0].device_id,
+                        str(task_record.source) + "->" + str(task_record.devices[0]),
+                        va="center",
+                        ha="center",
+                        color="white",
+                        fontsize="xx-small",
+                    )
 
         ax.set_xlabel("Time")
         ax.set_ylabel("Device")
