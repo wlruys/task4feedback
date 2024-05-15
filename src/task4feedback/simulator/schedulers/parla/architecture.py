@@ -146,11 +146,11 @@ def run_device_eviction(
     new_eviction_tasks = []
 
     while quota > 0 and not eviction_pool.empty():
-        # print(f"Quota: {quota}.")
+        print(f"Quota: {quota}.")
         data_id = eviction_pool.peek()
         data: SimulatedData = objects.get_data(data_id)
-        # print("Data ID: ", data_id, data.info.size)
-        # print("Data Pool: ", eviction_pool)
+        print("Data ID: ", data_id, data.info.size)
+        print("Data Pool: ", eviction_pool)
         assert data is not None
 
         eviction_task = eviction_init(parent_task, scheduler_state, device, data)
@@ -779,6 +779,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         self.eviction_occured = True
 
         objects = scheduler_state.objects
+        current_time = scheduler_state.time
 
         if logger.ENABLE_LOGGING:
             logger.runtime.info(

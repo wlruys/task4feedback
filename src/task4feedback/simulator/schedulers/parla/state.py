@@ -1398,15 +1398,17 @@ class ParlaState(SystemState):
         assert ((self.use_duration_noise == False and self.load_task_noise == False)
                 or self.use_duration_noise != self.load_task_noise)
         noise = Time()
-        if self.use_duration_noise:
-            noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
-            # print("task:", task.name, ", ", duration, " generated noise:", noise)
-        elif self.load_task_noise:
-            noise = Time(int(self.loaded_task_noises[str(task.name)]))
-            # print("task:", task.name, " loaded noise:", noise)
 
-        if self.save_task_noise:
-            save_task_noise(task, noise)
+        if "eviction" not in str(task.name):
+            if self.use_duration_noise:
+                noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
+                # print("task:", task.name, ", ", duration, " generated noise:", noise)
+            elif self.load_task_noise:
+                noise = Time(int(self.loaded_task_noises[str(task.name)]))
+                # print("task:", task.name, " loaded noise:", noise)
+
+            if self.save_task_noise:
+                save_task_noise(task, noise)
 
         return duration, completion_time + noise
 
