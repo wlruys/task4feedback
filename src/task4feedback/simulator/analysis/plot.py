@@ -491,8 +491,8 @@ def make_data_plot(
 
 def make_dag_and_timeline(
     simulator: SimulatedScheduler,
-    tasks: List[Mapping[TaskID, TaskInfo]],
     plot_dag: bool = True,
+    color_dag: bool = True,
     plot_timeline: bool = True,
     plot_data_movement: bool = False,
     file_name: str = None,
@@ -521,7 +521,7 @@ def make_dag_and_timeline(
         task_result = {}
         task_result["devices"] = task_record.devices
         if task_record.devices[0] not in device_colors:
-            device_colors[task_record.devices[0]] = colors[len(device_colors)]
+            device_colors[task_record.devices[0]] = colors[len(device_colors) % 8]
         task_result["start_time"] = task_record.start_time
         task_result["end_time"] = task_record.end_time
         task_results[str(taskid)] = task_result
@@ -530,18 +530,27 @@ def make_dag_and_timeline(
     # Assign same color for same device
     if plot_dag:
         graph = pydot.Dot(graph_type="digraph")
-        for name, task_info in tasks.items():
-            name = str(name)
-            node = pydot.Node(
-                name=name,
-                style="filled",
-                fillcolor=device_colors[task_results[name]["devices"][0]],
-            )
-            graph.add_node(node)
-            for dep_id in task_info.dependencies:
-                dep_id = str(dep_id)
-                edge = pydot.Edge(dep_id, name)
-                graph.add_edge(edge)
+        for name, task_info in simulator.taskmap.items():
+            if isinstance(task_info, SimulatedComputeTask):
+                task_info = task_info.info
+                name = str(name)
+                if color_dag:
+                    node = pydot.Node(
+                        name=name,
+                        style="filled",
+                        fillcolor=device_colors[task_results[name]["devices"][0]],
+                    )
+                else:
+                    node = pydot.Node(
+                        name=name,
+                        style="filled",
+                        fillcolor="white",
+                    )
+                graph.add_node(node)
+                for dep_id in task_info.dependencies:
+                    dep_id = str(dep_id)
+                    edge = pydot.Edge(dep_id, name)
+                    graph.add_edge(edge)
 
         if save_file:
             graph.write_png(file_name + "_dag.png")

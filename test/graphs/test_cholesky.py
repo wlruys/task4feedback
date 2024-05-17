@@ -36,46 +36,78 @@ from time import perf_counter as clock
 
 parser = argparse.ArgumentParser(prog="Cholesky")
 
-parser.add_argument("-m", "--mode",
-                   type=str,
-                    help="testing, training, parla, heft, loadbalance, eft_with_data, eft_without_data, random")
-parser.add_argument("-n", "--noise",
-                    help="Set if task duration noise is enabled", action="store_true")
-parser.add_argument("-ns", "--noise_scale",
-                    type=float,
-                    help="task duration noise scale", default=0.4)
-parser.add_argument("-e", "--episode",
-                    type=int,
-                    help="the number of episodes (-1 for inifite loop)", default=-1)
-parser.add_argument("-b", "--block",
-                    type=int,
-                    help="bxb blocks", default=10)
-parser.add_argument("-o", "--sort",
-                    type=str,
-                    help="task sorting method (random, heft, default)", default="default")
-parser.add_argument("-si", "--sorting_interval",
-                    type=int,
-                    help="task random sorting interval", default=0)
-parser.add_argument("-so", "--save_order",
-                    help="save task mapping order (saved in replay.order)", action="store_true")
-parser.add_argument("-lo", "--load_order",
-                    help="load task mapping order (saved in replay.order)", action="store_true")
-parser.add_argument("-sn", "--save_noise",
-                    help="save task mapping duration noise (saved in replay.noise)", action="store_true")
-parser.add_argument("-ln", "--load_noise",
-                    help="load task mapping duration noise (saved in replay.noise)", action="store_true")
-parser.add_argument("-g", "--gpus",
-                    type=int,
-                    help="number of gpus", default=4)
-parser.add_argument("-pb", "--p2p",
-                    type=str,
-                    help="P2P bandwidth (GB/s)", default="200")
-parser.add_argument("-dd", "--data_size",
-                    type=float,
-                    help="per-task data size (GB/s)", default="1")
-parser.add_argument("-d", "--distribution",
-                    type=str,
-                    help="rr: distributing data to gpus in rr, cpu: distributing data from cpu, random: randomly distributing data to gpus", default="rr")
+parser.add_argument(
+    "-m",
+    "--mode",
+    type=str,
+    help="testing, training, parla, heft, loadbalance, eft_with_data, eft_without_data, random",
+)
+parser.add_argument(
+    "-n", "--noise", help="Set if task duration noise is enabled", action="store_true"
+)
+parser.add_argument(
+    "-ns", "--noise_scale", type=float, help="task duration noise scale", default=0.4
+)
+parser.add_argument(
+    "-e",
+    "--episode",
+    type=int,
+    help="the number of episodes (-1 for inifite loop)",
+    default=-1,
+)
+parser.add_argument("-b", "--block", type=int, help="bxb blocks", default=10)
+parser.add_argument(
+    "-o",
+    "--sort",
+    type=str,
+    help="task sorting method (random, heft, default)",
+    default="default",
+)
+parser.add_argument(
+    "-si",
+    "--sorting_interval",
+    type=int,
+    help="task random sorting interval",
+    default=0,
+)
+parser.add_argument(
+    "-so",
+    "--save_order",
+    help="save task mapping order (saved in replay.order)",
+    action="store_true",
+)
+parser.add_argument(
+    "-lo",
+    "--load_order",
+    help="load task mapping order (saved in replay.order)",
+    action="store_true",
+)
+parser.add_argument(
+    "-sn",
+    "--save_noise",
+    help="save task mapping duration noise (saved in replay.noise)",
+    action="store_true",
+)
+parser.add_argument(
+    "-ln",
+    "--load_noise",
+    help="load task mapping duration noise (saved in replay.noise)",
+    action="store_true",
+)
+parser.add_argument("-g", "--gpus", type=int, help="number of gpus", default=4)
+parser.add_argument(
+    "-pb", "--p2p", type=str, help="P2P bandwidth (GB/s)", default="200"
+)
+parser.add_argument(
+    "-dd", "--data_size", type=float, help="per-task data size (GB/s)", default="1"
+)
+parser.add_argument(
+    "-d",
+    "--distribution",
+    type=str,
+    help="rr: distributing data to gpus in rr, cpu: distributing data from cpu, random: randomly distributing data to gpus",
+    default="rr",
+)
 
 
 args = parser.parse_args()
@@ -125,9 +157,11 @@ def test_data():
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         runtime_info = TaskRuntimeInfo(
-            task_time=task_duration_per_func(task_id), device_fraction=1,
+            task_time=task_duration_per_func(task_id),
+            device_fraction=1,
             # task_time=homog_task_duration(), device_fraction=1,
-            memory=int(0))
+            memory=int(0),
+        )
         placement_info = TaskPlacementInfo()
 
         for i in range(args.gpus):
@@ -140,8 +174,7 @@ def test_data():
             return TaskOrderType.HEFT
         elif args.sort == "random":
             si = args.sorting_interval
-            if si <= 0 or (
-               si > 0 and episode % si == 0):
+            if si <= 0 or (si > 0 and episode % si == 0):
                 return TaskOrderType.RANDOM
             else:
                 return TaskOrderType.REPLAY_LAST_ITER
@@ -149,7 +182,7 @@ def test_data():
             return TaskOrderType.REPLAY_FILE
         else:
             return TaskOrderType.DEFAULT
-                
+
     data_config = CholeskyDataGraphConfig()
     # data_config = NoDataGraphConfig()
 
@@ -161,20 +194,25 @@ def test_data():
         data_config.initial_placement = random_gpu_placement
 
     data_config.initial_sizes = sizes
-    data_config.data_size=args.data_size
+    data_config.data_size = args.data_size
 
-    config = CholeskyConfig(blocks=args.block, task_config=task_placement,
-                            func_id=func_type_id)
+    config = CholeskyConfig(
+        blocks=args.block, task_config=task_placement, func_id=func_type_id
+    )
     tasks, data = make_graph(config, data_config=data_config)
 
     num_gpus = args.gpus
     rl_env = None
     rl_agent = None
     if args.mode != "parla":
-        exec_mode = ExecutionMode.TESTING if args.mode == "testing" else ExecutionMode.TRAINING
+        exec_mode = (
+            ExecutionMode.TESTING if args.mode == "testing" else ExecutionMode.TRAINING
+        )
         rl_env = RLEnvironment(num_gpus)
-        rl_agent = SimpleAgent(rl_env, oracle_function=LoadbalancingPolicy(), exec_mode=exec_mode)
-        #rl_agent = A2CAgent(rl_env)
+        rl_agent = SimpleAgent(
+            rl_env, oracle_function=LoadbalancingPolicy(), exec_mode=exec_mode
+        )
+        # rl_agent = A2CAgent(rl_env)
 
     episode = 0
     cum_wallclock_t = 0
@@ -183,14 +221,14 @@ def test_data():
     si = args.sorting_interval
 
     topo_config = {
-      "P2P_BW": parse_size(args.p2p + " GB"),
-      "H2D_BW": parse_size("10 GB"),
-      "D2H_BW": parse_size("10 GB"),
-      "GPU_MEM": parse_size("7 GB"),
-      "CPU_MEM": parse_size("1300 GB"),
-      "GPU_COPY_ENGINES": 3,
-      "CPU_COPY_ENGINES": 3,
-      "NGPUS": num_gpus,
+        "P2P_BW": parse_size(args.p2p + " GB"),
+        "H2D_BW": parse_size("10 GB"),
+        "D2H_BW": parse_size("10 GB"),
+        "GPU_MEM": parse_size("7 GB"),
+        "CPU_MEM": parse_size("1300 GB"),
+        "GPU_COPY_ENGINES": 3,
+        "CPU_COPY_ENGINES": 3,
+        "NGPUS": num_gpus,
     }
 
     mapper = TaskMapper()
@@ -203,7 +241,7 @@ def test_data():
         topology = TopologyManager().generate("frontera", config=topo_config)
         G = build_networkx_graph_from_infos(tasks)
         print_graph_info(G)
-        calculate_critical_path(G, args.gpus) 
+        calculate_critical_path(G, args.gpus)
         mapper_mode = args.mode
         if args.mode == "testing" or args.mode == "training":
             mapper_mode = "rl"
@@ -227,6 +265,7 @@ def test_data():
             mapper=mapper,
             rl_env=rl_env,
             rl_mapper=rl_agent,
+            recorders=[ComputeTaskRecorder, DataTaskRecorder],
         )
         simulator = create_simulator(config=simulator_config)
 
@@ -234,9 +273,10 @@ def test_data():
         episode += 1
         simulated_time, task_order_log, success = simulator.run()
         end_t = clock()
+        make_dag_and_timeline(simulator=simulator)
         # if not rl_agent.is_training_mode():
         cum_wallclock_t += end_t - start_t
-        print("Wallclock,",episode,",",cum_wallclock_t)
+        print("Wallclock,", episode, ",", cum_wallclock_t)
         print(f"Time to Simulate: {end_t - start_t}")
         print(f"Simulated Time: {simulator.time}")
         print(f"Success: {success}")
@@ -253,7 +293,7 @@ if __name__ == "__main__":
     print("Saving task processing order?:", args.save_order)
     print("Loading task processing order stored?:", args.load_order)
     print("Saving task execution time noise?:", args.save_noise)
-    print("Loading task execution time noise?:",  args.load_noise)
+    print("Loading task execution time noise?:", args.load_noise)
     print("# GPUs?:", args.gpus)
     print("p2p bandwidth?:", args.p2p)
     print("data size:", args.data_size)
