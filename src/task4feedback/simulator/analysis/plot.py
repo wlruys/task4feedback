@@ -495,7 +495,13 @@ def make_dag_and_timeline(
     plot_dag: bool = True,
     plot_timeline: bool = True,
     plot_data_movement: bool = False,
+    file_name: str = None,
+    save_file: bool = True,
+    show_plot: bool = False,
+    timeline_plot_size: Tuple[int, int] = (25, 10),
 ):
+    if file_name is None:
+        file_name = f"""{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}"""
     recorders = simulator.recorders
 
     try:
@@ -537,10 +543,11 @@ def make_dag_and_timeline(
                 edge = pydot.Edge(dep_id, name)
                 graph.add_edge(edge)
 
-        graph.write_png("dag.png")
+        if save_file:
+            graph.write_png(file_name + "_dag.png")
 
     if plot_timeline:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=timeline_plot_size)
         fig.subplots_adjust(left=0.01, right=0.99)
         for taskid, task_result in task_results.items():
             # Calculate the start time and duration for each task
@@ -609,4 +616,7 @@ def make_dag_and_timeline(
         ax.set_xlabel("Time")
         ax.set_ylabel("Device")
         ax.set_title("Timeline of Tasks")
-        plt.show()
+        if save_file:
+            plt.savefig(file_name + "_timeline.png")
+        elif show_plot:
+            plt.show()
