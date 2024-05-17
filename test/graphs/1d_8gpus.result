@@ -1,0 +1,247 @@
+Notice: Logging enabled
+Mode: heft
+Noise enabled?: False
+Noise scale: 0.4
+# episodes: 1
+Steps: 10
+Width: 10
+Dimension: 1
+Sorting enabled?: heft
+Sorting interval: 0
+Saving task processing order?: False
+Loading task processing order stored?: False
+Saving task execution time noise?: False
+Loading task execution time noise?: False
+# GPUs?: 8
+p2p bandwidth?: 25
+data size: 0.5
+data distribution: rr
+PVFCN is activated
+Number of edges in G: 180
+Number of nodes in G: 100
+Number of generations(height): 19
+Widths of the graph: 10
+Average width of the graph: 5.2631578947368425
+Critical Path Time: 1.52
+Generation Time: 1.76
+BSP,simtime,1.76
+Averaged Generation Time: 1.56
+Independent Estimate: 1.0
+HEFT SORT
+HEFTTheory,simtime, 1.664423
+Number of tasks: 100
+>> task: T[0, 0]
+>> task: T[1, 0]
+>> task: T[0, 1]
+>> task: T[2, 0]
+>> task: T[1, 1]
+>> task: T[0, 2]
+>> task: T[3, 0]
+>> task: T[2, 1]
+>> task: T[1, 2]
+>> task: T[0, 3]
+>> task: T[4, 0]
+>> task: T[3, 1]
+>> task: T[2, 2]
+>> task: T[1, 3]
+>> task: T[0, 4]
+>> task: T[5, 0]
+>> task: T[4, 1]
+>> task: T[3, 2]
+>> task: T[2, 3]
+>> task: T[1, 4]
+>> task: T[0, 5]
+>> task: T[6, 0]
+>> task: T[5, 1]
+>> task: T[4, 2]
+>> task: T[3, 3]
+>> task: T[2, 4]
+>> task: T[1, 5]
+>> task: T[0, 6]
+>> task: T[7, 0]
+>> task: T[6, 1]
+>> task: T[5, 2]
+>> task: T[4, 3]
+>> task: T[3, 4]
+>> task: T[2, 5]
+>> task: T[1, 6]
+>> task: T[0, 7]
+>> task: T[8, 0]
+>> task: T[7, 1]
+>> task: T[6, 2]
+>> task: T[5, 3]
+>> task: T[4, 4]
+>> task: T[3, 5]
+>> task: T[2, 6]
+>> task: T[1, 7]
+>> task: T[0, 8]
+>> task: T[9, 0]
+>> task: T[8, 1]
+>> task: T[7, 2]
+>> task: T[6, 3]
+>> task: T[5, 4]
+>> task: T[4, 5]
+>> task: T[3, 6]
+>> task: T[2, 7]
+>> task: T[1, 8]
+>> task: T[0, 9]
+>> task: T[9, 1]
+>> task: T[8, 2]
+>> task: T[7, 3]
+>> task: T[6, 4]
+>> task: T[5, 5]
+>> task: T[4, 6]
+>> task: T[3, 7]
+>> task: T[2, 8]
+>> task: T[1, 9]
+>> task: T[9, 2]
+>> task: T[8, 3]
+>> task: T[7, 4]
+>> task: T[6, 5]
+>> task: T[5, 6]
+>> task: T[4, 7]
+>> task: T[3, 8]
+>> task: T[2, 9]
+>> task: T[9, 3]
+>> task: T[8, 4]
+>> task: T[7, 5]
+>> task: T[6, 6]
+>> task: T[5, 7]
+>> task: T[4, 8]
+>> task: T[3, 9]
+>> task: T[9, 4]
+>> task: T[8, 5]
+>> task: T[7, 6]
+>> task: T[6, 7]
+>> task: T[5, 8]
+>> task: T[4, 9]
+>> task: T[9, 5]
+>> task: T[8, 6]
+>> task: T[7, 7]
+>> task: T[6, 8]
+>> task: T[5, 9]
+>> task: T[9, 6]
+>> task: T[8, 7]
+>> task: T[7, 8]
+>> task: T[6, 9]
+>> task: T[9, 7]
+>> task: T[8, 8]
+>> task: T[7, 9]
+>> task: T[9, 8]
+>> task: T[8, 9]
+>> task: T[9, 9]
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+Evicting data.
+CPU[0],idle,612676.0us
+GPU[0],idle,9258940.0us
+GPU[1],idle,9112045.0us
+GPU[2],idle,8260122.0us
+GPU[3],idle,8741730.0us
+GPU[4],idle,10163780.0us
+GPU[5],idle,10870870.0us
+GPU[6],idle,13924833.0us
+GPU[7],idle,7832469.0us
+heft,simtime,7.547221
+heft,wait_time,0.2723081912442396
+Wallclock, 1 , 5.471123582916334
+Time to Simulate: 5.471123582916334
+Simulated Time: 7547221.0us
+Success: True
