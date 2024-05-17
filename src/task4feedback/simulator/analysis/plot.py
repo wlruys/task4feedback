@@ -1,8 +1,11 @@
+from asyncio import Task
 from .recorder import *
 import numpy as np
 from pandas import *
 import matplotlib.pyplot as plt
 from ...types import *
+from task4feedback.simulator.simulator import *
+import pydot
 
 
 def make_resource_plot(
@@ -484,3 +487,136 @@ def make_data_plot(
         plt.tight_layout()
 
         plt.show()
+
+
+def make_dag_and_timeline(
+    simulator: SimulatedScheduler,
+    tasks: List[Mapping[TaskID, TaskInfo]],
+    plot_dag: bool = True,
+    plot_timeline: bool = True,
+    plot_data_movement: bool = False,
+    file_name: str = None,
+    save_file: bool = True,
+    show_plot: bool = False,
+    timeline_plot_size: Tuple[int, int] = (25, 10),
+):
+    if file_name is None:
+        file_name = f"""{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}"""
+    recorders = simulator.recorders
+
+    try:
+        compute_task_record: Optional[ComputeTaskRecorder] = recorders.get(
+            ComputeTaskRecorder
+        )
+    except KeyError as e:  # raise error if not found
+        raise KeyError(e)
+
+    # Make color map of upto 32 colors in strings
+    colors = ["Red", "Green", "Blue", "Yellow", "Purple", "Orange", "Pink", "Brown"]
+    device_colors = {}
+
+    # Make dictionary of task results (Device it ran on, start time, end time)
+    task_results = {}
+    for taskid, task_record in compute_task_record.tasks.items():
+        task_result = {}
+        task_result["devices"] = task_record.devices
+        if task_record.devices[0] not in device_colors:
+            device_colors[task_record.devices[0]] = colors[len(device_colors)]
+        task_result["start_time"] = task_record.start_time
+        task_result["end_time"] = task_record.end_time
+        task_results[str(taskid)] = task_result
+
+    # Generate pydot graph from tasks
+    # Assign same color for same device
+    if plot_dag:
+        graph = pydot.Dot(graph_type="digraph")
+        for name, task_info in tasks.items():
+            name = str(name)
+            node = pydot.Node(
+                name=name,
+                style="filled",
+                fillcolor=device_colors[task_results[name]["devices"][0]],
+            )
+            graph.add_node(node)
+            for dep_id in task_info.dependencies:
+                dep_id = str(dep_id)
+                edge = pydot.Edge(dep_id, name)
+                graph.add_edge(edge)
+
+        if save_file:
+            graph.write_png(file_name + "_dag.png")
+
+    if plot_timeline:
+        fig, ax = plt.subplots(figsize=timeline_plot_size)
+        fig.subplots_adjust(left=0.01, right=0.99)
+        for taskid, task_result in task_results.items():
+            # Calculate the start time and duration for each task
+            start_time = task_result["start_time"].duration
+            duration = (task_result["end_time"] - task_result["start_time"]).duration
+
+            # Draw the horizontal bar
+            bar = ax.barh(
+                task_result["devices"][0].device_id,
+                duration,
+                left=start_time,
+                height=0.4,
+                color=device_colors[task_result["devices"][0]],
+                edgecolor="black",
+            )
+
+            # Add text inside the bar
+            text_position = (
+                start_time + duration / 2
+            )  # Positioning text at the middle of the bar
+            ax.text(
+                text_position,
+                task_result["devices"][0].device_id,
+                taskid,  # The text to display (taskid in this case)
+                va="center",  # Vertical alignment
+                ha="center",  # Horizontal alignment
+                color="black",  # Text color
+                fontsize="xx-small",  # Font size
+            )
+
+        if plot_data_movement:
+            try:
+                data_task_record: Optional[DataTaskRecorder] = recorders.get(
+                    DataTaskRecorder
+                )
+            except KeyError as e:  # raise error if not found
+                raise KeyError(e)
+
+            for taskid, task_record in data_task_record.tasks.items():
+                if task_record.type == TaskType.DATA:
+                    start_time = task_record.start_time.duration
+                    duration = (task_record.end_time - task_record.start_time).duration
+
+                    # Draw the horizontal bar
+                    bar = ax.barh(
+                        task_record.devices[0].device_id,
+                        duration,
+                        left=start_time,
+                        height=0.4,
+                        color="black",
+                        edgecolor="black",
+                    )
+
+                    # Add text inside the bar
+                    text_position = start_time + duration / 2
+                    ax.text(
+                        text_position,
+                        task_record.devices[0].device_id,
+                        str(task_record.source) + "->" + str(task_record.devices[0]),
+                        va="center",
+                        ha="center",
+                        color="white",
+                        fontsize="xx-small",
+                    )
+
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Device")
+        ax.set_title("Timeline of Tasks")
+        if save_file:
+            plt.savefig(file_name + "_timeline.png")
+        elif show_plot:
+            plt.show()
