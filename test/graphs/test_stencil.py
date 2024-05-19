@@ -115,7 +115,6 @@ def test_data():
         else:
             return TaskOrderType.DEFAULT
 
-<<<<<<< HEAD
     data_config = StencilDataGraphConfig()
     data_config.initial_sizes = sizes
     data_config.n_devices = args.gpus
@@ -134,9 +133,6 @@ def test_data():
     config = StencilConfig(
         steps=args.steps, width=args.width, dimensions=args.dimensions,
         task_config=task_placement, func_id=func_type_id)
-=======
-    config = StencilConfig(steps=5, width=3, dimensions=1, task_config=task_placement)
->>>>>>> main
     tasks, data = make_graph(config, data_config=data_config)
 
     num_gpus = args.gpus
