@@ -113,6 +113,47 @@ parser.add_argument(
 args = parser.parse_args()
 
 
+@dataclass(slots=True)
+class DataPlacer:
+    cpu_size: float = 0
+    gpu_size: float = 0
+    num_gpus: int = 0
+    data_size: float = 0
+
+    device_data_sizes: dict = field(default_factory=dict, init=False)
+    device_data_limit: dict = field(default_factory=dict, init=False)
+
+    def __post_init__(self):
+        self.device_data_limit[Device(Architecture.CPU, 0)] = self.cpu_size
+        self.device_data_sizes[Device(Architecture.CPU, 0)] = 0
+        for i in range(self.num_gpus):
+            self.device_data_limit[Device(Architecture.GPU, i)] = self.gpu_size
+            self.device_data_sizes[Device(Architecture.GPU, i)] = 0
+
+    def rr_gpu_placement(self, data_id: DataID) -> Devices:
+        chosen = data_id.idx[-1] % self.num_gpus
+        if (
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] + self.data_size
+            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+        ):
+            return Device(Architecture.CPU, 0)
+        else:
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size
+            return Device(Architecture.GPU, chosen)
+
+    def random_gpu_placement(self, data_id: DataID) -> Devices:
+        np.random.seed(None)
+        chosen = np.random.randint(0, self.num_gpus)
+        if (
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] + self.data_size
+            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+        ):
+            return Device(Architecture.CPU, 0)
+        else:
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size
+            return Device(Architecture.GPU, chosen)
+
+
 def test_data():
 
     def cpu_data_placement(data_id: DataID) -> Devices:
@@ -183,18 +224,19 @@ def test_data():
         else:
             return TaskOrderType.DEFAULT
 
+    placer = DataPlacer(
+        cpu_size=13000, gpu_size=7, num_gpus=args.gpus, data_size=args.data_size
+    )
     data_config = CholeskyDataGraphConfig()
-    # data_config = NoDataGraphConfig()
+    data_config.initial_sizes = sizes
+    data_config.data_size = args.data_size
 
     if args.distribution == "rr":
-        data_config.initial_placement = rr_gpu_placement
+        data_config.initial_placement = placer.rr_gpu_placement
     elif args.distribution == "cpu":
         data_config.initial_placement = cpu_data_placement
     elif args.distribution == "random":
-        data_config.initial_placement = random_gpu_placement
-
-    data_config.initial_sizes = sizes
-    data_config.data_size = args.data_size
+        data_config.initial_placement = placer.random_gpu_placement
 
     config = CholeskyConfig(
         blocks=args.block, task_config=task_placement, func_id=func_type_id
