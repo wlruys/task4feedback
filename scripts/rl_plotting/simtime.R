@@ -30,7 +30,7 @@ levels(data$Mode)[levels(data$Mode) == "random"] <- "Random"
 levels(data$Mode)[levels(data$Mode) == "loadbalance"] <- "LoadBalance"
 
 data$vlines <- factor(data$Mode, labels=c(
-  "Theory", "Theory", "Theory", "Offline", "Online", "Online", "Online", "Online", "Online")) 
+  "Theory", "Theory", "Theory", "Offline", "Offline", "Online", "Online", "Online", "Online")) 
 
 print(data$Mode)
 print(data)
