@@ -1401,10 +1401,11 @@ class ParlaState(SystemState):
 
         if "eviction" not in str(task.name):
             if self.use_duration_noise:
-                noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
+                # noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
+                noise = log_normal_noise(duration.duration, self.noise_scale)
                 # print("task:", task.name, ", ", duration, " generated noise:", noise)
             elif self.load_task_noise:
-                noise = Time(int(self.loaded_task_noises[str(task.name)]))
+                noise = int(self.loaded_task_noises[str(task.name)])
                 # print("task:", task.name, " loaded noise:", noise)
 
             if self.save_task_noise:
