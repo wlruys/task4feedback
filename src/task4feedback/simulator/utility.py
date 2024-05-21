@@ -137,6 +137,13 @@ def calculate_heft(
             scale_to("ms")
         )
 
+        # Get task's data with write and rw permission
+        if task.info.data_dependencies is not None:
+            read = task.info.data_dependencies[AccessType.READ]
+            write = task.info.data_dependencies[AccessType.WRITE]
+            rw = task.info.data_dependencies[AccessType.READ_WRITE]
+            src_data = read + write + rw
+
         ready_time = 0
         earliest_start = -1.0 
         earliest_start_agent = -1
