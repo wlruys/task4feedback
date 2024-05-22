@@ -36,14 +36,15 @@ data$vlines <- factor(data$Mode, labels=c(
  "Offline", "Online", "Online", "Online", "Online"))
 
 wide_data <- data %>%
-  pivot_wider(names_from = BarLoc, values_from = ExecutionTime)
+  pivot_wider(names_from = BarLoc, values_from = ExecutionTime) %>%
+  mutate(vlines = data$vlines[match(Mode, data$Mode)])
 print(wide_data)
 
 
 time_breakdown <- rbind(
-  data.frame(wide_data$Mode, "time" = wide_data$bottom, "time_type" = "Total Execution Time"),
-  data.frame(wide_data$Mode, "time" = wide_data$middle, "time_type" = "Computation Time"),
-  data.frame(wide_data$Mode, "time" = wide_data$top, "time_type" = "Data Move Time")
+  data.frame(wide_data$Mode, wide_data$vlines, "time" = wide_data$bottom, "time_type" = "Total Execution Time"),
+  data.frame(wide_data$Mode, wide_data$vlines, "time" = wide_data$middle, "time_type" = "Computation Time"),
+  data.frame(wide_data$Mode, wide_data$vlines, "time" = wide_data$top, "time_type" = "Data Move Time")
 )
 
 time_breakdown$time_type <- factor(time_breakdown$time_type,
@@ -53,6 +54,7 @@ print(time_breakdown)
 
 plot <- ggplot(data = time_breakdown,
        mapping = aes(x=wide_data.Mode, y=time, fill=time_type)) + geom_bar(stat = "identity", position = position_dodge(width=0.3)) +
+  facet_grid(. ~wide_data.vlines, scales="free_x", space="free") +
   theme(legend.position="top", panel.spacing = unit(0.3, "lines"),
         axis.text.y = element_text(color="black", size=10),
         axis.text.x = element_text(color="black", size=10),
