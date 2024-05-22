@@ -63,7 +63,7 @@ for APP in "${APP_ARR[@]}"; do
           # middle = compute + top, bottom = data move + middle
           # to show sort of breakdown and each operation's contribution to the total time
           time_accum_csv_file_name=$file_name"_accum.csv"
-          time_accum_pdf_file_name=${file_name}".pdf"
+          time_accum_pdf_file_name=${file_name}"_accum.pdf"
 
           # Columns for output CSVs for plotting
           echo "Mode, Label, ExecutionTime," > $csv_file_name
