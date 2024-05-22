@@ -362,9 +362,9 @@ def test_data():
         # print(f"{args.mode},bottom,{gpu_compute_times[max_gpu] + gpu_data_times[max_gpu] + max_gpu_idletime}")
         # print(f"{args.mode},middle,{gpu_compute_times[max_gpu] + max_gpu_idletime}")
         # print(f"{args.mode},top,{max_gpu_idletime}")
-        print(f"{args.mode},bottom,{simulated_time.scale_to('s')}")
-        print(f"{args.mode},middle,{gpu_compute_times[max_gpu].scale_to('s')}")
-        print(f"{args.mode},top,{gpu_data_times[max_gpu].scale_to('s')}")
+        print(f"{args.mode},bottom,{float(simulated_time)/1000000}")
+        print(f"{args.mode},middle,{float(gpu_compute_times[max_gpu])/1000000}")
+        print(f"{args.mode},top,{float(gpu_data_times[max_gpu])/1000000}")
 
 
 if __name__ == "__main__":
