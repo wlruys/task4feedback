@@ -19,25 +19,25 @@ data_summary <- function(data, varname, groupnames) {
 }
 
 data <- read.csv(args[1], header=T, fileEncoding="UTF-8-BOM")
-print (data)
+data <- data %>% filter(data$Mode != "HEFTTheory" & data$Mode != "Serial")
 data <- data_summary(data, varname="ExecutionTime", groupnames=c("Mode"))
 
 data$Mode <- factor(data$Mode, levels=c(
-  "Serial", "BSP", "Independent", "HEFTTheory", "heft", "loadbalance", "eft_without_data", "eft_with_data", "random"))
+  "BSP", "Independent", "heft", "loadbalance", "eft_without_data", "eft_with_data", "random"))
 levels(data$Mode)[levels(data$Mode) == "eft_without_data"] <- "EFT-NoData"
 levels(data$Mode)[levels(data$Mode) == "eft_with_data"] <- "EFT"
 levels(data$Mode)[levels(data$Mode) == "random"] <- "Random"
+levels(data$Mode)[levels(data$Mode) == "heft"] <- "HEFT"
 levels(data$Mode)[levels(data$Mode) == "loadbalance"] <- "LoadBalance"
 
 data$vlines <- factor(data$Mode, labels=c(
-  "Theory", "Theory", "Theory", "Offline", "Offline", "Online", "Online", "Online", "Online")) 
+  "Theory", "Theory", "Offline", "Online", "Online", "Online", "Online")) 
 
 print(data$Mode)
 print(data)
 time_plot <- ggplot(data=data, aes(x=Mode, fill=Mode, y=ExecutionTime)) +
              # scale_x_discrete(labels=c("Serial", "BSP", "Independent", "HEFTTheory",  "HEFT", "LoadBalance", "EFT-NoData", "EFT", "Random"))+
              geom_bar(
-                      #mapping=aes(x=factor(Mode), fill=Mode, y=ExecutionTime),
                       position=position_dodge(preserve='single'), stat="identity") +
              labs(fill="Methods", y="Execution time (s)", x="")+
              theme(axis.title = element_text(color="black", size=20),

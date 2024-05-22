@@ -152,6 +152,7 @@ def calculate_heft(
             ).scale_to("ms")
         )
 
+        # Get task's data with write and rw permission
         if task.info.data_dependencies is not None:
             read = task.info.data_dependencies[AccessType.READ]
             write = task.info.data_dependencies[AccessType.WRITE]
@@ -305,10 +306,12 @@ def load_task_noise(fname: str = "replay.noise") -> Dict[str, int]:
     return loaded_task_noise
 
 
-def save_task_noise(task: "SimulatedTask", noise: "Time", fname: str = "replay.noise"):
+def save_task_noise(task: "SimulatedTask", noise: int, fname: str = "replay.noise"):
+    """
+    noise should be 'us' scale.
+    """
     with open(fname, "a") as fp:
-        noise_value: int = noise.scale_to("us")
-        fp.write(str(task.name) + ":" + str(noise_value) + "\n")
+        fp.write(str(task.name) + ":" + str(noise) + "\n")
 
 
 def load_task_order(task_objects, fname: str = "replay.order"):

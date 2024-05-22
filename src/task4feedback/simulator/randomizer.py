@@ -34,6 +34,12 @@ def gaussian_noise(duration: float, scale: float = 0.05) -> int:
     return int(noise)
 
 
+def log_normal_noise(duration: float, scale: float = 0.2) -> int:
+    np.random.seed(None)
+    noise = (np.random.lognormal(0, scale) - np.exp(scale**2/2)) * duration
+    return int(noise)
+
+
 def no_noise(task: SimulatedTask) -> int:
     return 0
 
