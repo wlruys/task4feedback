@@ -356,6 +356,7 @@ def test_data():
             print(f"GPU[{gpu}],data,{time}")
             if max_gpu is None or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times:
                 max_gpu = gpu
+                max_gpu_times = gpu_compute_times[gpu] + gpu_data_times[gpu]
         for gpu in topology.devices:
             if gpu.name.architecture == Architecture.CPU:
                 continue

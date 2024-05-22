@@ -38,7 +38,7 @@ parser.add_argument(
     "-n", "--noise", help="Set if task duration noise is enabled", action="store_true"
 )
 parser.add_argument(
-    "-ns", "--noise_scale", type=float, help="task duration noise scale", default=0.4
+    "-ns", "--noise_scale", type=float, help="task duration noise scale", default=0.2
 )
 parser.add_argument(
     "-e",
@@ -159,10 +159,13 @@ def test_data():
         return Device(Architecture.GPU, data_id.idx[-1] % args.gpus)
 
     def sizes(data_id: DataID) -> int:
-        return args.data_size * 1024 * 1024 * 1024
+        if data_id.idx[0] == 1:
+            return args.data_size * 1024 * 1024 * 1024
+        else:
+            return int(np.sqrt(args.data_size * 1024 * 1024 * 1024))
 
     def homog_task_duration():
-        return 80000
+        return 10000
 
     def func_type_id(task_id: TaskID):
         return 0
@@ -240,8 +243,8 @@ def test_data():
         "D2H_BW": parse_size("10 GB"),
         "GPU_MEM": parse_size("7 GB"),
         "CPU_MEM": parse_size("1300 GB"),
-        "GPU_COPY_ENGINES": 3,
-        "CPU_COPY_ENGINES": 3,
+        "GPU_COPY_ENGINES": 2,
+        "CPU_COPY_ENGINES": 2,
         "NGPUS": num_gpus,
     }
 
@@ -348,6 +351,7 @@ def test_data():
             print(f"GPU[{gpu}],data,{time}")
             if max_gpu is None or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times:
                 max_gpu = gpu
+                max_gpu_times = gpu_compute_times[gpu] + gpu_data_times[gpu]
         for gpu in topology.devices:
             if gpu.name.architecture == Architecture.CPU:
                 continue
