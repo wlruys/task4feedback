@@ -326,6 +326,7 @@ def test_data():
             if gpu_id not in compute_per_gpu:
                 compute_per_gpu[gpu_id] = 0
             else:
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
                 compute_per_gpu[gpu_id] += (
                     task.end_time.duration - task.start_time.duration
                 )
@@ -339,6 +340,8 @@ def test_data():
                 movement_per_gpu[gpu_id] += (
                     task.end_time.duration - task.start_time.duration
                 )
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                print("gpuid:", gpu_id, " accum:", movement_per_gpu[gpu_id])
 
         gpu_compute_times = {}
         gpu_data_times = {}
@@ -362,7 +365,7 @@ def test_data():
         # print(f"{args.mode},bottom,{gpu_compute_times[max_gpu] + gpu_data_times[max_gpu] + max_gpu_idletime}")
         # print(f"{args.mode},middle,{gpu_compute_times[max_gpu] + max_gpu_idletime}")
         # print(f"{args.mode},top,{max_gpu_idletime}")
-        print(f"{args.mode},bottom,{simulated_time.scale_to('s')}")
+        print(f"{args.mode},bottom,{float(simulated_time.scale_to('s'))}")
         print(f"{args.mode},middle,{float(gpu_compute_times[max_gpu])/1000000}")
         print(f"{args.mode},top,{float(gpu_data_times[max_gpu])/1000000}")
 
