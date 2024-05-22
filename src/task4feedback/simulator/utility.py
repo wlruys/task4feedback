@@ -9,7 +9,8 @@ from ..types import Device, Architecture, TaskState, AccessType
 import bisect
 import random
 
-units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12} 
+units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12}
+
 
 def parse_size(size_str: str):
     number, unit = [string.strip() for string in size_str.split()]
@@ -20,9 +21,9 @@ def convert_to_float(frac_str):
     try:
         return float(frac_str)
     except ValueError:
-        num, denom = frac_str.split('/')
+        num, denom = frac_str.split("/")
         try:
-            leading, num = num.split(' ')
+            leading, num = num.split(" ")
             whole = float(leading)
         except ValueError:
             whole = 0
@@ -31,8 +32,11 @@ def convert_to_float(frac_str):
 
 
 def calculate_heft(
-    tasklist, taskmap, num_devices: int,
-    scheduler_state: "SystemState", in_place_update: bool = False
+    tasklist,
+    taskmap,
+    num_devices: int,
+    scheduler_state: "SystemState",
+    in_place_update: bool = False,
 ) -> float:
     """
     Calculate HEFT (Heterogeneous Earliest Finish Time) for each task.
@@ -80,23 +84,29 @@ def calculate_heft(
                 for dd in all_dep_data:
                     if sd.id == dd:
                         # intersected_data.append(sd)
-                        intersected_data_size += scheduler_state.objects.datamap[sd.id].size 
-            # print("intersected data sizE:", intersected_data_size, " task:", task.name)
+                        intersected_data_size += scheduler_state.objects.datamap[
+                            sd.id
+                        ].size
+            # print("intersected data size:", intersected_data_size, " task:", task.name)
 
             # Change it to gb
-            average_comm_time : float = 0
+            average_comm_time: float = 0
             num_pairs: float = 0
             # for d1 in range(len(scheduler_state.topology.devices)):
             for d1 in scheduler_state.topology.devices:
                 for d2 in scheduler_state.topology.devices:
                     # if d1 == d2 or d1 == 0 or d2 == 0:
                     #      continue
-                    if d1.name.architecture == Architecture.CPU or d2.name.architecture == Architecture.CPU or \
-                       d1 == d2:
+                    if (
+                        d1.name.architecture == Architecture.CPU
+                        or d2.name.architecture == Architecture.CPU
+                        or d1 == d2
+                    ):
                         continue
                     average_comm_time += float(
                         scheduler_state.topology.get_transfer_time(
-                        d1, d2, intersected_data_size).scale_to("ms")
+                            d1, d2, intersected_data_size
+                        ).scale_to("ms")
                     )
                     num_pairs += 1
             average_comm_time /= num_pairs
@@ -106,12 +116,16 @@ def calculate_heft(
             #      average_comm_time, " data size:", intersected_data_size)
 
             # Upward calculation
-            max_dependent_rank = max(dependent_instance.info.heft_rank + average_comm_time,
-                                     max_dependent_rank) 
-               
+            max_dependent_rank = max(
+                dependent_instance.info.heft_rank + average_comm_time,
+                max_dependent_rank,
+            )
+
         duration = convert_to_float(
-            scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
-            scale_to("ms"))
+            scheduler_state.get_task_duration(
+                task, task.info.runtime.locations[0]
+            ).scale_to("ms")
+        )
 
         # Calculate the HEFT rank
         task.info.heft_rank = duration + max_dependent_rank
@@ -121,7 +135,7 @@ def calculate_heft(
 
     agents = {agent: [] for agent in range(0, num_devices)}
 
-    HEFTEvent = namedtuple('HEFTEvent', 'task start end')
+    HEFTEvent = namedtuple("HEFTEvent", "task start end")
 
     def get_start_time(heft_event):
         return heft_event.start
@@ -133,8 +147,9 @@ def calculate_heft(
     # Forward phase to allocate each task to each device
     for task in heft_sorted_tasks:
         duration = convert_to_float(
-            scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
-            scale_to("ms")
+            scheduler_state.get_task_duration(
+                task, task.info.runtime.locations[0]
+            ).scale_to("ms")
         )
 
         # Get task's data with write and rw permission
@@ -145,11 +160,10 @@ def calculate_heft(
             src_data = read + write + rw
 
         ready_time = 0
-        earliest_start = -1.0 
+        earliest_start = -1.0
         earliest_start_agent = -1
         # Try to insert each task to each agent (device)
         for agent_id, agent in agents.items():
-
             # Iterate all dependencies and check rank + communication overhead
             # and find task's ready time when the task is assigned to the current
             # agent
@@ -164,25 +178,37 @@ def calculate_heft(
                 all_dep_data = dependency_instance.info.data_dependencies.all_ids()
                 intersected_data = []
                 intersected_data_size = 0
-                for sd in src_data: # SimulatedData
-                    for dd in all_dep_data: # DataID
+                print("My data: ", [sd.id for sd in src_data])
+                print("Dep data: ", all_dep_data)
+                for sd in src_data:  # SimulatedData
+                    for dd in all_dep_data:  # DataID
                         if sd.id == dd:
                             intersected_data.append(sd)
-                            intersected_data_size += scheduler_state.objects.datamap[sd.id].size 
+                            intersected_data_size += scheduler_state.objects.datamap[
+                                sd.id
+                            ].size
 
                 assigned_agent_id = dependency_instance.info.heft_allocation
 
-                comm_time: float = float(scheduler_state.topology.get_transfer_time(
-                    Device(Architecture.GPU, assigned_agent_id),
-                    Device(Architecture.GPU, agent_id), intersected_data_size
-                ).scale_to("ms"))
+                comm_time: float = float(
+                    scheduler_state.topology.get_transfer_time(
+                        Device(Architecture.GPU, assigned_agent_id),
+                        Device(Architecture.GPU, agent_id),
+                        intersected_data_size,
+                    ).scale_to("ms")
+                )
+                print(
+                    f"Task {task} - {agent_id}: Dep {dep} - {assigned_agent_id}, Comm Time {comm_time}, Shared {intersected_data_size}",
+                    flush=True,
+                )
                 # print("oid: ", assigned_agent_id, ", nid: ", agent_id,
                 #     ", toid: ", scheduler_state.topology.connection_pool.get_index(
                 #       Device(Architecture.GPU, assigned_agent_id)),
                 #     ", tnid: ", scheduler_state.topology.connection_pool.get_index(
                 #       Device(Architecture.GPU, agent_id)))
-                ready_time = max(taskmap[dep].info.heft_makespan + comm_time,
-                                 ready_time)
+                ready_time = max(
+                    taskmap[dep].info.heft_makespan + comm_time, ready_time
+                )
                 # print(" task:",  task.name, ">> size:", intersected_data_size, " actual comm time:", comm_time)
 
             # print(task.name, " ready time:", ready_time)
@@ -203,13 +229,26 @@ def calculate_heft(
                         # schedule that task to the slack.
                         candidate_earliest_start = tmp_earliest_start
                         any_slack_found = True
-                        # print(task.info.id, " earliest start:", tmp_earliest_start, " e2 start:",
-                        #    e2.start, " duration: ", duration, " on device", agent_id)
-                        break 
+                        print(
+                            task.info.id,
+                            " earliest start:",
+                            tmp_earliest_start,
+                            " e2 start:",
+                            e2.start,
+                            " duration: ",
+                            duration,
+                            " on device",
+                            agent_id,
+                        )
+                        break
 
                 if not any_slack_found:
                     candidate_earliest_start = max(agent[-1].end, ready_time)
-                    # print(task.info.id, " earlist estart:", candidate_earliest_start)
+                    print(
+                        task.info.id,
+                        "(no slack) earliest start:",
+                        candidate_earliest_start,
+                    )
             else:
                 candidate_earliest_start = ready_time
 
@@ -235,7 +274,7 @@ def calculate_heft(
         for task in tasklist:
             task.info.order = order
             order += 1
-    print("HEFTTheory,simtime,", max_heft/1000)
+    print("HEFTTheory,simtime,", max_heft / 1000)
 
     """
     for key, value in agents.items():
@@ -266,7 +305,7 @@ def load_task_noise(fname: str = "replay.noise") -> Dict[str, int]:
         return None
     return loaded_task_noise
 
-    
+
 def save_task_noise(task: "SimulatedTask", noise: int, fname: str = "replay.noise"):
     """
     noise should be 'us' scale.
@@ -283,8 +322,10 @@ def load_task_order(task_objects, fname: str = "replay.order"):
         lines = fp.readlines()
         for l in lines:
             loaded_task_key.append(l.rstrip())
+
     def sort_key(task):
         return loaded_task_key.index(str(task.info.id))
+
     # print("loaded_task_key:", loaded_task_key)
     return sorted(task_objects, key=sort_key)
 
@@ -292,4 +333,4 @@ def load_task_order(task_objects, fname: str = "replay.order"):
 def save_task_order(task_objects, fname: str = "replay.order"):
     with open(fname, "w") as fp:
         for t in task_objects:
-            fp.write(str(t.info.id)+"\n")
+            fp.write(str(t.info.id) + "\n")
