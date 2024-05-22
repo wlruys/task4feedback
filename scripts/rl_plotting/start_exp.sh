@@ -74,13 +74,13 @@ for APP in "${APP_ARR[@]}"; do
           # NOTE that this uses # of tasks under the default settings
           if [[ "$APP" == "cholesky" ]]; then
             python cholesky_theory.py -g $NUM_GPUS -b 10 >> $csv_file_name
-					elif [[ "$APP" == "reduction" ]]; then
-						python homog_theory.py -g $NUM_GPUS -n 511 >> $csv_file_name
-					elif [[ "$APP" == "stencil" ]]; then
-						python homog_theory.py -g $NUM_GPUS -n 500 >> $csv_file_name
-					elif [[ "$APP" == "sweeps" ]]; then
-						python homog_theory.py -g $NUM_GPUS -n 100 >> $csv_file_name
-					fi
+          elif [[ "$APP" == "reduction" ]]; then
+            python homog_theory.py -g $NUM_GPUS -n 511 >> $csv_file_name
+          elif [[ "$APP" == "stencil" ]]; then
+            python homog_theory.py -g $NUM_GPUS -n 500 >> $csv_file_name
+          elif [[ "$APP" == "sweeps" ]]; then
+            python homog_theory.py -g $NUM_GPUS -n 100 >> $csv_file_name
+          fi
 
           # The first execution under a specific (app, # gpus, data size, bandwidth, sort)
           # will generate task noise and creation order.
@@ -88,7 +88,7 @@ for APP in "${APP_ARR[@]}"; do
           # the generated variabilities. 
 
           # Repeat 3 times
-          for ((it=1;it<=3;it++)); do
+          for ((it=1;it<=1;it++)); do
             noise_generation=true
             SAVE_ORDER=true
             order_flag=" -so "
