@@ -340,10 +340,31 @@ def test_data():
                     task.end_time.duration - task.start_time.duration
                 )
 
+        gpu_compute_times = {}
+        gpu_data_times = {}
+        max_gpu = None
+        max_gpu_times = -1
+        max_gpu_idletime = -1
         for gpu, time in compute_per_gpu.items():
-            print(f"GPU[]{gpu}],compute,{time}")
+            gpu_compute_times[gpu] = time
+            print(f"GPU[{gpu}],compute,{time}")
         for gpu, time in movement_per_gpu.items():
+            gpu_data_times[gpu] = time
             print(f"GPU[{gpu}],data,{time}")
+            if max_gpu is None or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times:
+                max_gpu = gpu
+        for gpu in topology.devices:
+            if gpu.name.architecture == Architecture.CPU:
+                continue
+            print(f"GPU[{gpu.name.device_id}],idle,{gpu.stats.idle_time}")
+            if gpu.name.device_id == max_gpu:
+                max_gpu_idletime = float(gpu.stats.idle_time.scale_to("us"))
+        # print(f"{args.mode},bottom,{gpu_compute_times[max_gpu] + gpu_data_times[max_gpu] + max_gpu_idletime}")
+        # print(f"{args.mode},middle,{gpu_compute_times[max_gpu] + max_gpu_idletime}")
+        # print(f"{args.mode},top,{max_gpu_idletime}")
+        print(f"{args.mode},bottom,{simulated_time / 1000000}")
+        print(f"{args.mode},middle,{gpu_compute_times[max_gpu] / 1000000}")
+        print(f"{args.mode},top,{gpu_data_times[max_gpu] / 1000000}")
 
 
 if __name__ == "__main__":
