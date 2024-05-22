@@ -7,13 +7,14 @@ TARGET_DIR=$1
 # Applications
 #APP_ARR=( "cholesky" "reduction" "stencil" "sweeps" )
 #APP_ARR=( "reduction" )
-APP_ARR=( "cholesky" "sweeps" )
-#APP_ARR=( "cholesky" )
+#APP_ARR=( "cholesky" "sweeps" )
+APP_ARR=( "cholesky" )
 #APP_ARR=( "sweeps" )
 
 # Number of GPUs
 #NUM_GPUS_ARR=( "4" "8" "16" "32" "64" "128" )
 #NUM_GPUS_ARR=( "8" "32" )
+#NUM_GPUS_ARR=( "4" "8" "32" )
 NUM_GPUS_ARR=( "4" )
 
 # Data size (in GB)
@@ -24,18 +25,19 @@ DATA_SIZE_ARR=( "0.5" )
 #BANDWIDTH_ARR=( "0.5" "1" "2" "4" "8" "16" "32" "64" "128" "256" "512" )
 #BANDWIDTH_ARR=( "0.5" "1" "4" "64" "256" )
 #BANDWIDTH_ARR=( "25" "25000000" )
-BANDWIDTH_ARR=( "25000000" )
+BANDWIDTH_ARR=( "25" )
 
 # Mapping policies
 #MAPPING_POLICIES=(  "loadbalance" "eft_with_data" "random" "heft" )
-#MAPPING_POLICIES=( "loadbalance" "eft_without_data" "eft_with_data" "random" "heft" )
-MAPPING_POLICIES=( "loadbalance" )
+MAPPING_POLICIES=( "loadbalance" "eft_without_data" "eft_with_data" "random" "heft" )
+#MAPPING_POLICIES=( "loadbalance" )
 #MAPPING_POLICIES=( "eft_without_data" "eft_with_data" "heft" )
 
 # Task creation order (All queues are FIFO)
 # * heft: HEFT rank order
 # * random: Random order
-SORT_ARR=( "random" )
+#SORT_ARR=( "random" "heft" )
+SORT_ARR=( "heft" )
 
 
 for APP in "${APP_ARR[@]}"; do
@@ -57,9 +59,16 @@ for APP in "${APP_ARR[@]}"; do
           csv_file_name=$file_name".csv"
           # Plot pdf name
           pdf_file_name=${file_name}".pdf"
+          # Time accumulation per each time; top = idle time,
+          # middle = compute + top, bottom = data move + middle
+          # to show sort of breakdown and each operation's contribution to the total time
+          time_accum_csv_file_name=$file_name"_accum.csv"
+          time_accum_pdf_file_name=${file_name}".pdf"
 
           # Columns for output CSVs for plotting
           echo "Mode, Label, ExecutionTime," > $csv_file_name
+
+          echo "Mode, BarLoc, ExecutionTime," > $time_accum_csv_file_name
 
           # Theory bounds (independent, serial)
           # NOTE that this uses # of tasks under the default settings
@@ -116,6 +125,10 @@ for APP in "${APP_ARR[@]}"; do
               # Redirect level-by-level time + simulated total execution times
               grep "simtime" $out_file_name >> $csv_file_name
 
+              grep "bottom" $out_file_name >> $time_accum_csv_file_name
+              grep "middle" $out_file_name >> $time_accum_csv_file_name
+              grep "top" $out_file_name >> $time_accum_csv_file_name
+
               # Parse and split mapping/launching logs (check the above) for each device
               source log_parsing.sh logs/file.log ${NUM_GPUS}
               mv gpu*mapping.log ${parsed_log_dir}
@@ -142,9 +155,12 @@ for APP in "${APP_ARR[@]}"; do
           done
 
           echo "Rscript $PWD/simtime.R $csv_file_name $pdf_file_name"
-          Rscript $PWD/simtime.R $csv_file_name $pdf_file_name
+          Rscript $PWD/summarized_simtime.R $csv_file_name $pdf_file_name
+          Rscript $PWD/time_breakdown.R $time_accum_csv_file_name $time_accum_pdf_file_name
           mv $csv_file_name ${SORT}_outputs
+          mv $time_accum_csv_file_name ${SORT}_outputs
           mv $pdf_file_name ${SORT}_outputs/pdfs
+          mv $time_accum_pdf_file_name ${SORT}_outputs/pdfs
         done
       done
     done

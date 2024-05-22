@@ -46,6 +46,9 @@ time_breakdown <- rbind(
   data.frame(wide_data$Mode, "time" = wide_data$top, "time_type" = "Data Move Time")
 )
 
+time_breakdown$time_type <- factor(time_breakdown$time_type,
+    levels = c("Total Execution Time", "Computation Time", "Data Move Time"))
+
 print(time_breakdown)
 
 plot <- ggplot(data = time_breakdown,
