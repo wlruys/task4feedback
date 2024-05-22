@@ -296,6 +296,11 @@ def launch_task(
                     f"end:{float(completion_time.scale_to('ms'))}, device:{task.assigned_devices[0]}"
                 )
 
+            print(
+                f"Task {task.name}, start:{float(scheduler_state.time.scale_to('ms'))}, "+
+                f"end:{float(completion_time.scale_to('ms'))}, device:{task.assigned_devices[0]}"
+            )
+
             devices = task.assigned_devices
             assert devices is not None
 
