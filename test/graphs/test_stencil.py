@@ -24,14 +24,18 @@ from task4feedback.simulator.rl.models.agent_using_oracle import *
 
 parser = argparse.ArgumentParser(prog="Stencil")
 
+parser.add_argument("-t", "--time", type=int, help="time", default=4000)
 parser.add_argument(
-    "-m", "--mode", type=str, help="testing, training, parla, loadbalance, random"
+    "-m",
+    "--mode",
+    type=str,
+    help="testing, training, parla, heft, loadbalance, eft_with_data, eft_without_data, random"
 )
 parser.add_argument(
     "-n", "--noise", help="Set if task duration noise is enabled", action="store_true"
 )
 parser.add_argument(
-    "-ns", "--noise_scale", type=float, help="task duration noise scale", default=0.4
+    "-ns", "--noise_scale", type=float, help="task duration noise scale", default=0.2
 )
 parser.add_argument(
     "-e",
@@ -40,11 +44,9 @@ parser.add_argument(
     help="the number of episodes (-1 for inifite loop)",
     default=-1,
 )
-parser.add_argument("-s", "--steps", type=int, help="stencil steps", default=5)
+parser.add_argument("-s", "--steps", type=int, help="stencil steps", default=10)
 parser.add_argument("-w", "--width", type=int, help="stencil width", default=10)
-parser.add_argument(
-    "-di", "--dimensions", type=int, help="stencil dimensions", default=2
-)
+parser.add_argument("-dm", "--dimensions", type=int, help="stencil dimensions", default=2)
 parser.add_argument(
     "-o",
     "--sort",
@@ -150,7 +152,7 @@ def test_data():
         return args.data_size * 1024 * 1024 * 1024
 
     def homog_task_duration():
-        return 80000
+        return args.time
 
     def func_type_id(task_id: TaskID):
         return 0
@@ -181,7 +183,7 @@ def test_data():
             return TaskOrderType.DEFAULT
 
     placer = DataPlacer(
-        cpu_size=13000, gpu_size=7, num_gpus=args.gpus, data_size=args.data_size
+        cpu_size=13000, gpu_size=16, num_gpus=args.gpus, data_size=args.data_size
     )
     data_config = StencilDataGraphConfig()
     data_config.initial_sizes = sizes
@@ -226,10 +228,10 @@ def test_data():
 
     topo_config = {
         "P2P_BW": parse_size(args.p2p + " GB"),
-        "H2D_BW": parse_size("100 GB"),
-        "D2H_BW": parse_size("100 GB"),
-        "GPU_MEM": parse_size("10000 GB"),
-        "CPU_MEM": parse_size("10000 GB"),
+        "H2D_BW": parse_size("10 GB"),
+        "D2H_BW": parse_size("10 GB"),
+        "GPU_MEM": parse_size("16 GB"),
+        "CPU_MEM": parse_size("1300 GB"),
         "GPU_COPY_ENGINES": 3,
         "CPU_COPY_ENGINES": 3,
         "NGPUS": num_gpus,
@@ -249,6 +251,9 @@ def test_data():
         if args.mode == "testing" or args.mode == "training":
             mapper_mode = "rl"
             mapper = RLTaskMapper()
+        G = build_networkx_graph_from_infos(tasks)
+        print_graph_info(G)
+        calculate_critical_path(G, args.gpus)
 
         simulator_config = SimulatorConfig(
             topology=topology,
@@ -268,6 +273,7 @@ def test_data():
             mapper=mapper,
             rl_env=rl_env,
             rl_mapper=rl_agent,
+            recorders=[ComputeTaskRecorder, DataTaskRecorder],
         )
         simulator = create_simulator(config=simulator_config)
 
@@ -281,6 +287,62 @@ def test_data():
         print(f"Time to Simulate: {end_t - start_t}")
         print(f"Simulated Time: {simulator.time}")
         print(f"Success: {success}")
+
+        data_tasks: DataTaskRecorder = simulator.recorders.get(DataTaskRecorder)
+        compute_tasks: ComputeTaskRecorder = simulator.recorders.get(
+            ComputeTaskRecorder
+        )
+
+        compute_per_gpu = {}
+        for task in compute_tasks.tasks.values():
+            gpu_id = task.devices[0].device_id
+            if gpu_id not in compute_per_gpu:
+                compute_per_gpu[gpu_id] = 0
+            else:
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                compute_per_gpu[gpu_id] += (
+                    task.end_time.duration - task.start_time.duration
+                )
+
+        movement_per_gpu = {}
+        for task in data_tasks.tasks.values():
+            gpu_id = task.devices[0].device_id
+            if gpu_id not in movement_per_gpu:
+                movement_per_gpu[gpu_id] = 0
+            else:
+                movement_per_gpu[gpu_id] += (
+                    task.end_time.duration - task.start_time.duration
+                )
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                print("gpuid:", gpu_id, " accum:", movement_per_gpu[gpu_id])
+
+        gpu_compute_times = {}
+        gpu_data_times = {}
+        max_gpu = None
+        max_gpu_times = -1
+        max_gpu_idletime = -1
+        for gpu, time in compute_per_gpu.items():
+            gpu_compute_times[gpu] = time
+            print(f"GPU[{gpu}],compute,{time}")
+        for gpu, time in movement_per_gpu.items():
+            gpu_data_times[gpu] = time
+            print(f"GPU[{gpu}],data,{time}")
+            if max_gpu is None or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times:
+                max_gpu = gpu
+                max_gpu_times = gpu_compute_times[gpu] + gpu_data_times[gpu]
+        for gpu in topology.devices:
+            if gpu.name.architecture == Architecture.CPU:
+                continue
+            print(f"GPU[{gpu.name.device_id}],idle,{gpu.stats.idle_time}")
+            if gpu.name.device_id == max_gpu:
+                max_gpu_idletime = float(gpu.stats.idle_time.scale_to("us"))
+        # print(f"{args.mode},bottom,{gpu_compute_times[max_gpu] + gpu_data_times[max_gpu] + max_gpu_idletime}")
+        # print(f"{args.mode},middle,{gpu_compute_times[max_gpu] + max_gpu_idletime}")
+        # print(f"{args.mode},top,{max_gpu_idletime}")
+        print(f"{args.mode},bottom,{float(simulated_time.scale_to('s'))}")
+        print(f"{args.mode},middle,{float(gpu_compute_times[max_gpu])/1000000}")
+        print(f"{args.mode},top,{float(gpu_data_times[max_gpu])/1000000}")
+
 
 
 if __name__ == "__main__":
@@ -297,6 +359,7 @@ if __name__ == "__main__":
     print("Loading task processing order stored?:", args.load_order)
     print("Saving task execution time noise?:", args.save_noise)
     print("Loading task execution time noise?:", args.load_noise)
+    print("Per-task time (It is used only in homogeneous task time mode)", args.time)
     print("# GPUs?:", args.gpus)
     print("p2p bandwidth?:", args.p2p)
     print("data size:", args.data_size)

@@ -36,6 +36,7 @@ from time import perf_counter as clock
 
 parser = argparse.ArgumentParser(prog="Cholesky")
 
+parser.add_argument("-t", "--time", type=int, help="time", default=4000)
 parser.add_argument(
     "-m",
     "--mode",
@@ -131,7 +132,7 @@ class DataPlacer:
             self.device_data_sizes[Device(Architecture.GPU, i)] = 0
 
     def rr_gpu_placement(self, data_id: DataID) -> Devices:
-        chosen = data_id.idx[-1] % self.num_gpus
+        chosen = data_id.idx[0] % self.num_gpus
         if (
             self.device_data_sizes[Device(Architecture.GPU, chosen)] + self.data_size
             >= self.device_data_limit[Device(Architecture.GPU, chosen)]
@@ -182,7 +183,7 @@ def test_data():
         return duration
 
     def homog_task_duration():
-        return 80000
+        return args.time
 
     def func_type_id(task_id: TaskID):
         func_id = 0
@@ -198,9 +199,9 @@ def test_data():
 
     def task_placement(task_id: TaskID) -> TaskPlacementInfo:
         runtime_info = TaskRuntimeInfo(
-            task_time=task_duration_per_func(task_id),
+            # task_time=task_duration_per_func(task_id),
+            task_time=homog_task_duration(),
             device_fraction=1,
-            # task_time=homog_task_duration(), device_fraction=1,
             memory=int(0),
         )
         placement_info = TaskPlacementInfo()
@@ -225,7 +226,7 @@ def test_data():
             return TaskOrderType.DEFAULT
 
     placer = DataPlacer(
-        cpu_size=13000, gpu_size=7, num_gpus=args.gpus, data_size=args.data_size
+        cpu_size=13000, gpu_size=16, num_gpus=args.gpus, data_size=args.data_size
     )
     data_config = CholeskyDataGraphConfig()
     data_config.initial_sizes = sizes
@@ -266,7 +267,7 @@ def test_data():
         "P2P_BW": parse_size(args.p2p + " GB"),
         "H2D_BW": parse_size("10 GB"),
         "D2H_BW": parse_size("10 GB"),
-        "GPU_MEM": parse_size("7 GB"),
+        "GPU_MEM": parse_size("16 GB"),
         "CPU_MEM": parse_size("1300 GB"),
         "GPU_COPY_ENGINES": 3,
         "CPU_COPY_ENGINES": 3,
@@ -323,6 +324,61 @@ def test_data():
         print(f"Simulated Time: {simulator.time}")
         print(f"Success: {success}")
 
+        data_tasks: DataTaskRecorder = simulator.recorders.get(DataTaskRecorder)
+        compute_tasks: ComputeTaskRecorder = simulator.recorders.get(
+            ComputeTaskRecorder
+        )
+
+        compute_per_gpu = {}
+        for task in compute_tasks.tasks.values():
+            gpu_id = task.devices[0].device_id
+            if gpu_id not in compute_per_gpu:
+                compute_per_gpu[gpu_id] = 0
+            else:
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                compute_per_gpu[gpu_id] += (
+                    task.end_time.duration - task.start_time.duration
+                )
+
+        movement_per_gpu = {}
+        for task in data_tasks.tasks.values():
+            gpu_id = task.devices[0].device_id
+            if gpu_id not in movement_per_gpu:
+                movement_per_gpu[gpu_id] = 0
+            else:
+                movement_per_gpu[gpu_id] += (
+                    task.end_time.duration - task.start_time.duration
+                )
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                print("gpuid:", gpu_id, " accum:", movement_per_gpu[gpu_id])
+
+        gpu_compute_times = {}
+        gpu_data_times = {}
+        max_gpu = None
+        max_gpu_times = -1
+        max_gpu_idletime = -1
+        for gpu, time in compute_per_gpu.items():
+            gpu_compute_times[gpu] = time
+            print(f"GPU[{gpu}],compute,{time}")
+        for gpu, time in movement_per_gpu.items():
+            gpu_data_times[gpu] = time
+            print(f"GPU[{gpu}],data,{time}")
+            if max_gpu is None or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times:
+                max_gpu = gpu
+                max_gpu_times = gpu_compute_times[gpu] + gpu_data_times[gpu]
+        for gpu in topology.devices:
+            if gpu.name.architecture == Architecture.CPU:
+                continue
+            print(f"GPU[{gpu.name.device_id}],idle,{gpu.stats.idle_time}")
+            if gpu.name.device_id == max_gpu:
+                max_gpu_idletime = float(gpu.stats.idle_time.scale_to("us"))
+        # print(f"{args.mode},bottom,{gpu_compute_times[max_gpu] + gpu_data_times[max_gpu] + max_gpu_idletime}")
+        # print(f"{args.mode},middle,{gpu_compute_times[max_gpu] + max_gpu_idletime}")
+        # print(f"{args.mode},top,{max_gpu_idletime}")
+        print(f"{args.mode},bottom,{float(simulated_time.scale_to('s'))}")
+        print(f"{args.mode},middle,{float(gpu_compute_times[max_gpu])/1000000}")
+        print(f"{args.mode},top,{float(gpu_data_times[max_gpu])/1000000}")
+
 
 if __name__ == "__main__":
     print("Mode:", args.mode)
@@ -336,6 +392,7 @@ if __name__ == "__main__":
     print("Loading task processing order stored?:", args.load_order)
     print("Saving task execution time noise?:", args.save_noise)
     print("Loading task execution time noise?:", args.load_noise)
+    print("Per-task time (It is used only in homogeneous task time mode)", args.time)
     print("# GPUs?:", args.gpus)
     print("p2p bandwidth?:", args.p2p)
     print("data size:", args.data_size)
