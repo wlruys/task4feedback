@@ -10,11 +10,14 @@ from task4feedback.visualize import *
 from task4feedback.types import *
 
 from task4feedback.simulator.preprocess import *
+from task4feedback.simulator.analysis.graphvis import *
 from task4feedback.simulator.simulator import *
 from task4feedback.simulator.topology import *
 from task4feedback.simulator.mapper import *
 
 from task4feedback.simulator.analysis.recorder import *
+from task4feedback.simulator.analysis.dag import *
+from task4feedback.simulator.analysis.plot import *
 from task4feedback.simulator.interface import *
 from time import perf_counter as clock
 
@@ -231,7 +234,7 @@ def test_data():
         "H2D_BW": parse_size("10 GB"),
         "D2H_BW": parse_size("10 GB"),
         "GPU_MEM": parse_size("16 GB"),
-        "CPU_MEM": parse_size("1300 GB"),
+        "CPU_MEM": parse_size("130000 GB"),
         "GPU_COPY_ENGINES": 3,
         "CPU_COPY_ENGINES": 3,
         "NGPUS": num_gpus,

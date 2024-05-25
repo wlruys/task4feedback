@@ -7,15 +7,15 @@ TARGET_DIR=$1
 # Applications
 #APP_ARR=( "cholesky" "reduction" "stencil" "sweeps" )
 #APP_ARR=( "reduction" )
-#APP_ARR=( "cholesky" "sweeps" )
+#APP_ARR=( "cholesky" "sweeps" "stencil" )
 APP_ARR=( "cholesky" )
-#APP_ARR=( "sweeps" )
+#APP_ARR=( "stencil" )
 
 # Number of GPUs
 #NUM_GPUS_ARR=( "4" "8" "16" "32" "64" "128" )
 #NUM_GPUS_ARR=( "8" "32" )
-#NUM_GPUS_ARR=( "4" "8" "32" )
-NUM_GPUS_ARR=( "4" )
+NUM_GPUS_ARR=( "4" "8" "32" )
+NUM_GPUS_ARR=( "8" "32" )
 
 # Data size (in GB)
 #DATA_SIZE_ARR=( "0.5" "1" "2" )
@@ -36,7 +36,6 @@ MAPPING_POLICIES=( "loadbalance" "eft_without_data" "eft_with_data" "random" "he
 # Task creation order (All queues are FIFO)
 # * heft: HEFT rank order
 # * random: Random order
-#SORT_ARR=( "random" "heft" )
 SORT_ARR=( "heft" )
 
 
@@ -70,25 +69,13 @@ for APP in "${APP_ARR[@]}"; do
 
           echo "Mode, BarLoc, ExecutionTime," > $time_accum_csv_file_name
 
-          # Theory bounds (independent, serial)
-          # NOTE that this uses # of tasks under the default settings
-          if [[ "$APP" == "cholesky" ]]; then
-            python cholesky_theory.py -g $NUM_GPUS -b 10 >> $csv_file_name
-          elif [[ "$APP" == "reduction" ]]; then
-            python homog_theory.py -g $NUM_GPUS -n 511 >> $csv_file_name
-          elif [[ "$APP" == "stencil" ]]; then
-            python homog_theory.py -g $NUM_GPUS -n 500 >> $csv_file_name
-          elif [[ "$APP" == "sweeps" ]]; then
-            python homog_theory.py -g $NUM_GPUS -n 100 >> $csv_file_name
-          fi
-
           # The first execution under a specific (app, # gpus, data size, bandwidth, sort)
           # will generate task noise and creation order.
           # Then, later executions under the same configuration with different policies reuse
           # the generated variabilities. 
 
           # Repeat 3 times
-          for ((it=1;it<=1;it++)); do
+          for ((it=1;it<=4;it++)); do
             noise_generation=true
             SAVE_ORDER=true
             order_flag=" -so "
@@ -155,7 +142,9 @@ for APP in "${APP_ARR[@]}"; do
           done
 
           echo "Rscript $PWD/simtime.R $csv_file_name $pdf_file_name"
-          Rscript $PWD/summarized_simtime.R $csv_file_name $pdf_file_name
+          Rscript $PWD/simtime.R $csv_file_name $pdf_file_name
+          # Rscript $PWD/summarized_simtime.R $csv_file_name $pdf_file_name
+          echo "Rscript $PWD/time_breakdown.R $time_accum_csv_file_name $time_accum_pdf_file_name"
           Rscript $PWD/time_breakdown.R $time_accum_csv_file_name $time_accum_pdf_file_name
           mv $csv_file_name ${SORT}_outputs
           mv $time_accum_csv_file_name ${SORT}_outputs

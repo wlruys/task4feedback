@@ -204,8 +204,6 @@ def test_data():
     data_config.n_devices = args.gpus
     data_config.large_size = args.data_size
     data_config.small_size = args.data_size
-    data_config.dimensions = args.dimensions
-    data_config.width = args.width
 
     if args.distribution == "rr":
         data_config.initial_placement = placer.rr_gpu_placement

@@ -66,7 +66,14 @@ def calculate_critical_path(G, num_gpus):
     critical_path = nx.dag_longest_path(G)
     critical_path_time = 0
     generation_time = 0
+    independent_time = 0
+    serial_time = 0
     averaged_generation_time = 0
+
+    # Calculate serial/independent task times
+    for n in G:
+        serial_time += G.nodes[n].get("duration", 0)
+    independent_time = serial_time / num_gpus
 
     for p in critical_path:
         critical_path_time += G.nodes[p].get("duration")
@@ -93,6 +100,8 @@ def calculate_critical_path(G, num_gpus):
     print(f"Critical Path Time: {critical_path_time / 10**6}")
     print(f"Generation Time: {generation_time / 10**6}")
     print(f"BSP,simtime,{generation_time / 10**6}")
+    print(f"Independent,simtime,{independent_time / 10**6}")
+    print(f"Serial,simtime,{serial_time / 10**6}")
     print(f"Averaged Generation Time: {averaged_generation_time / 10**6}")
     # print(f"Other Critical Path Time: {other_critical_path_time / 10**6}")
     print(f"Independent Estimate: {total_work_in_graph / (10**6 * num_gpus)}")

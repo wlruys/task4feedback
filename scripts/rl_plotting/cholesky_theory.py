@@ -9,6 +9,9 @@ parser.add_argument("-b", "--block",
 parser.add_argument("-g", "--gpus",
                     type=int,
                     help="number of gpus", default=4)
+parser.add_argument("-t", "--time",
+                    help="per-task execution time (us)", default=None)
+
 args = parser.parse_args()
 
 
@@ -28,6 +31,11 @@ def get_bounds(b: int, p: int) -> Bounds:
     potrf_weight = 160000
     trsm_weight = 150000
     gemm_weight = 140000
+
+    if args.time is not None:
+        potrf_weight = float(args.time)
+        trsm_weight = float(args.time)
+        gemm_weight = float(args.time)
 
     for k in range(1, b):
         new_potrf_tasks = 1
