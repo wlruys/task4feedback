@@ -210,7 +210,7 @@ def _check_nearest_source(
         # )
         assert isinstance(eviction_task, SimulatedEvictionTask)
         if eviction_task.source == source_device:
-            if eviction_task.state == TaskState.LAUNCHED:
+            if eviction_task.in_ready_queue:
                 # print(
                 #     f"Eviction task {eviction_task} is already evicting from {source_device}"
                 # )
@@ -1188,13 +1188,15 @@ class ParlaState(SystemState):
     # # of completed tasks
     total_num_completed_tasks: int = 0
     # Threshold of the number of tasks that can be mapped per each mapper event
-    mapper_num_tasks_threshold:int = -1
+    mapper_num_tasks_threshold: int = -1
     # # of tasks in (mapped~launchable) states
     total_num_mapped_tasks: int = 0
 
     def initialize(
-        self, task_ids: List[TaskID], task_objects: List[SimulatedTask],
-        mapper_type: str
+        self,
+        task_ids: List[TaskID],
+        task_objects: List[SimulatedTask],
+        mapper_type: str,
     ):
         self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
         for device in self.objects.devicemap:
@@ -1204,8 +1206,12 @@ class ParlaState(SystemState):
         if self.task_order_mode == TaskOrderType.RANDOM:
             if mapper_type == "heft":
                 _ = calculate_heft(
-                    task_objects, self.objects.taskmap,
-                    len(self.objects.devicemap)-1, self, False)
+                    task_objects,
+                    self.objects.taskmap,
+                    len(self.objects.devicemap) - 1,
+                    self,
+                    False,
+                )
             if self.load_task_order:
                 print("REPLAY RANDOM SORT")
                 task_objects[:] = load_task_order(task_objects)
@@ -1213,7 +1219,8 @@ class ParlaState(SystemState):
                 print("RANDOM SORT")
                 # Deep copy
                 task_objects[:] = self.randomizer.task_order(
-                    task_objects, self.objects.taskmap)
+                    task_objects, self.objects.taskmap
+                )
                 if self.save_task_order:
                     print("save task order..")
                     save_task_order(task_objects)
@@ -1221,8 +1228,12 @@ class ParlaState(SystemState):
             print("HEFT SORT")
             # Tasks are sorted in-place
             _ = calculate_heft(
-                task_objects, self.objects.taskmap,
-                len(self.objects.devicemap)-1, self, True)
+                task_objects,
+                self.objects.taskmap,
+                len(self.objects.devicemap) - 1,
+                self,
+                True,
+            )
 
         task_ids[:] = [t.name for t in task_objects]
 
@@ -1275,7 +1286,7 @@ class ParlaState(SystemState):
             save_task_order=self.save_task_order,
             load_task_order=self.load_task_order,
             save_task_noise=self.save_task_noise,
-            load_task_noise=self.load_task_noise
+            load_task_noise=self.load_task_noise,
         )
 
     def check_resources(
@@ -1374,10 +1385,12 @@ class ParlaState(SystemState):
     ) -> Tuple[Time, Time]:
         if isinstance(task, SimulatedComputeTask):
             duration, completion_time = _compute_task_duration(
-                self, task, devices, verbose=verbose)
+                self, task, devices, verbose=verbose
+            )
         elif isinstance(task, SimulatedDataTask):
             duration, completion_time = _data_task_duration(
-                self, task, devices, verbose=verbose)
+                self, task, devices, verbose=verbose
+            )
         else:
             raise RuntimeError(f"Invalid task type for {task} of type {type(task)}")
 
@@ -1388,15 +1401,18 @@ class ParlaState(SystemState):
     ) -> Tuple[Time, Time]:
         if isinstance(task, SimulatedComputeTask):
             duration, completion_time = _compute_task_duration(
-                self, task, devices, verbose=verbose)
+                self, task, devices, verbose=verbose
+            )
         elif isinstance(task, SimulatedDataTask):
             duration, completion_time = _data_task_duration(
-                self, task, devices, verbose=verbose)
+                self, task, devices, verbose=verbose
+            )
         else:
             raise RuntimeError(f"Invalid task type for {task} of type {type(task)}")
 
-        assert ((self.use_duration_noise == False and self.load_task_noise == False)
-                or self.use_duration_noise != self.load_task_noise)
+        assert (
+            self.use_duration_noise == False and self.load_task_noise == False
+        ) or self.use_duration_noise != self.load_task_noise
         noise = Time()
 
         if "eviction" not in str(task.name) and "data" not in str(task.name):
@@ -1406,7 +1422,16 @@ class ParlaState(SystemState):
                 print("task:", task.name, ", ", duration, " generated noise:", noise)
             elif self.load_task_noise:
                 noise = int(self.loaded_task_noises[str(task.name)])
-                print("task:", task.name, " loaded noise:", noise, " duration:", duration, " completion time:", completion_time)
+                print(
+                    "task:",
+                    task.name,
+                    " loaded noise:",
+                    noise,
+                    " duration:",
+                    duration,
+                    " completion time:",
+                    completion_time,
+                )
 
             if self.save_task_noise:
                 save_task_noise(task, noise)
@@ -1436,8 +1461,10 @@ class RLState(ParlaState):
     target_exec_time: float = 0
 
     def initialize(
-        self, task_ids: List[TaskID], task_objects: List[SimulatedTask],
-        mapper_type: str
+        self,
+        task_ids: List[TaskID],
+        task_objects: List[SimulatedTask],
+        mapper_type: str,
     ):
         self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
         for device in self.objects.devicemap:
@@ -1446,8 +1473,12 @@ class RLState(ParlaState):
         # RL state always requires HEFT calculation for rewarding
         # Tasks are sorted in-place
         self.target_exec_time = calculate_heft(
-            task_objects, self.objects.taskmap, len(self.objects.devicemap)-1, self,
-            self.task_order_mode == TaskOrderType.HEFT)
+            task_objects,
+            self.objects.taskmap,
+            len(self.objects.devicemap) - 1,
+            self,
+            self.task_order_mode == TaskOrderType.HEFT,
+        )
 
         if self.task_order_mode == TaskOrderType.RANDOM:
             if self.load_task_order:
@@ -1457,20 +1488,24 @@ class RLState(ParlaState):
                 print("RANDOM SORT")
                 # Deep copy
                 task_objects[:] = self.randomizer.task_order(
-                    task_objects, self.objects.taskmap)
+                    task_objects, self.objects.taskmap
+                )
                 if self.save_task_order:
                     print("save task order..")
                     save_task_order(task_objects)
         elif self.task_order_mode == TaskOrderType.HEFT:
-            print("HEFT SORT") 
+            print("HEFT SORT")
 
         task_ids[:] = [t.name for t in task_objects]
-        
+
     def complete(self):
         total_exec_time = convert_to_float(self.time.scale_to("ms"))
         if self.rl_mapper.is_training_mode():
-            reward = 0 if total_exec_time == 0 else (
-                self.target_exec_time - total_exec_time) / self.target_exec_time
+            reward = (
+                0
+                if total_exec_time == 0
+                else (self.target_exec_time - total_exec_time) / self.target_exec_time
+            )
             # reward = -(1-reward) if reward < 0.8 else reward
             self.rl_mapper.optimize_model(reward, self)
         self.rl_mapper.complete_episode(total_exec_time)

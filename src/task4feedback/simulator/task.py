@@ -164,6 +164,7 @@ class SimulatedTask:
     est_completion_time: float = 0
     wait_time: Time = field(default_factory=Time)
     init: bool = True
+    in_ready_queue: bool = False
 
     def __post_init__(self):
         if self.init:
@@ -173,7 +174,6 @@ class SimulatedTask:
             self.init = False
 
     def __deepcopy__(self, memo):
-
         state = self.state
         status = {s for s in self.status}
 
@@ -406,7 +406,6 @@ class SimulatedComputeTask(SimulatedTask):
         return resources
 
     def __deepcopy__(self, memo):
-
         return SimulatedComputeTask(
             name=self.name,
             info=self.info,

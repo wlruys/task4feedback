@@ -62,7 +62,8 @@ def map_task(
             task.wait_time = current_time
             task_workload = float(
                 scheduler_state.get_task_duration(
-                task, task.info.runtime.locations[0]).scale_to("ms")
+                    task, task.info.runtime.locations[0]
+                ).scale_to("ms")
             )
             scheduler_state.acquire_resources(phase, task, verbose=verbose)
             scheduler_state.use_data(phase, task, verbose=verbose)
@@ -86,7 +87,6 @@ def map_task(
 def remove_task_data_from_eviction_pool(
     task: SimulatedTask, scheduler_state: ParlaState
 ) -> List[Tuple[Device, SimulatedData]]:
-
     devices = task.assigned_devices
     removed_list = []
 
@@ -292,13 +292,13 @@ def launch_task(
 
             if logger.ENABLE_LOGGING:
                 logger.launching.debug(
-                    f"Task {task.name}, start:{float(scheduler_state.time.scale_to('ms'))}, "+
-                    f"end:{float(completion_time.scale_to('ms'))}, device:{task.assigned_devices[0]}"
+                    f"Task {task.name}, start:{float(scheduler_state.time.scale_to('ms'))}, "
+                    + f"end:{float(completion_time.scale_to('ms'))}, device:{task.assigned_devices[0]}"
                 )
 
             print(
-                f"Task {task.name}, start:{float(scheduler_state.time.scale_to('ms'))}, "+
-                f"end:{float(completion_time.scale_to('ms'))}, device:{task.assigned_devices[0]}"
+                f"Task {task.name}, start:{float(scheduler_state.time.scale_to('ms'))}, "
+                + f"end:{float(completion_time.scale_to('ms'))}, device:{task.assigned_devices[0]}"
             )
 
             devices = task.assigned_devices
@@ -313,9 +313,13 @@ def launch_task(
                 device = scheduler_state.objects.get_device(device_id)
                 assert device is not None
 
-                if device.stats.active_compute == 0 and device.stats.active_movement == 0:
+                if (
+                    device.stats.active_compute == 0
+                    and device.stats.active_movement == 0
+                ):
                     last_active = max(
-                        device.stats.last_active_compute, device.stats.last_active_movement
+                        device.stats.last_active_compute,
+                        device.stats.last_active_movement,
                     )
                     duration = scheduler_state.time - last_active
                     device.stats.idle_time += duration
@@ -328,7 +332,9 @@ def launch_task(
 
                 if isinstance(task, SimulatedComputeTask):
                     if device.stats.active_compute == 0:
-                        duration = scheduler_state.time - device.stats.last_active_compute
+                        duration = (
+                            scheduler_state.time - device.stats.last_active_compute
+                        )
                         device.stats.idle_time_compute += duration
 
                         if logger.ENABLE_LOGGING:
@@ -339,7 +345,9 @@ def launch_task(
 
                 elif isinstance(task, SimulatedDataTask) and task.real:
                     if device.stats.active_movement == 0:
-                        duration = scheduler_state.time - device.stats.last_active_movement
+                        duration = (
+                            scheduler_state.time - device.stats.last_active_movement
+                        )
                         device.stats.idle_time_movement += duration
 
                         if logger.ENABLE_LOGGING:
@@ -415,10 +423,13 @@ def complete_task(
     logger.runtime.debug(f"Task completion: {task.name}\n")
     if isinstance(task, SimulatedComputeTask):
         scheduler_state.total_num_completed_tasks += 1
-        logger.runtime.debug(f"Total num completed tasks: {scheduler_state.total_num_completed_tasks}\n")
+        logger.runtime.debug(
+            f"Total num completed tasks: {scheduler_state.total_num_completed_tasks}\n"
+        )
         task_workload = float(
             scheduler_state.get_task_duration(
-            task, task.info.runtime.locations[0]).scale_to("ms")
+                task, task.info.runtime.locations[0]
+            ).scale_to("ms")
         )
         scheduler_state.total_active_workload -= task_workload
     for device_id in task.assigned_devices:
@@ -501,7 +512,6 @@ class ParlaArchitecture(SchedulerArchitecture):
     def initialize(
         self, tasks: List[TaskID], scheduler_state: SystemState, **kwargs
     ) -> List[EventPair]:
-
         objects = scheduler_state.objects
         simulator = kwargs["simulator"]
         mapper_type = kwargs["mapper_type"]
@@ -703,6 +713,8 @@ class ParlaArchitecture(SchedulerArchitecture):
                 )
                 self._add_eviction_dependencies(data_task, scheduler_state)
 
+                data_task.in_ready_queue = True
+
                 self.launchable_tasks[device][TaskType.DATA].put_id(
                     task_id=data_task_id, priority=task.priority
                 )
@@ -753,6 +765,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 # print(task.dependencies)
                 # print(task.counters)
 
+                task.in_ready_queue = True
                 self.launchable_tasks[device][TaskType.COMPUTE].put_id(
                     task_id=taskid, priority=priority
                 )
@@ -796,6 +809,8 @@ class ParlaArchitecture(SchedulerArchitecture):
         for device, eviction_task in eviction_tasks:
             # print(device, eviction_task)
             task_i = objects.get_task(eviction_task)
+
+            task_i.in_ready_queue = True
 
             self.launchable_tasks[device][TaskType.DATA].put_id(
                 task_id=eviction_task, priority=0
