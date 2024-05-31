@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from ...types import *
 from task4feedback.simulator.simulator import *
 import pydot
+from mplcursors import cursor  # separate package must be installed
 
 
 def make_resource_plot(
@@ -600,12 +601,15 @@ def make_dag_and_timeline(
                     start_time = task_record.start_time.duration
                     duration = (task_record.end_time - task_record.start_time).duration
 
+                    if task_record.source.device_id == task_record.devices[0].device_id:
+                        continue
+
                     # Draw the horizontal bar
                     bar = ax.barh(
                         task_record.devices[0].device_id,
                         duration,
                         left=start_time,
-                        height=0.4,
+                        height=0.1,
                         color="black",
                         edgecolor="black",
                     )
@@ -615,17 +619,61 @@ def make_dag_and_timeline(
                     ax.text(
                         text_position,
                         task_record.devices[0].device_id,
-                        str(task_record.source) + "->" + str(task_record.devices[0]),
+                        str(task_record.source),
+                        va="center",
+                        ha="center",
+                        color="white",
+                        fontsize="xx-small",
+                    )
+                elif task_record.type == TaskType.EVICTION:
+                    start_time = task_record.start_time.duration
+                    duration = (task_record.end_time - task_record.start_time).duration
+                    if task_record.source.device_id == task_record.devices[0].device_id:
+                        continue
+                    # Draw the horizontal bar
+                    bar = ax.barh(
+                        task_record.source.device_id + 0.25,
+                        duration,
+                        left=start_time,
+                        height=0.1,
+                        color="gray",
+                        edgecolor="black",
+                    )
+
+                    # Add text inside the bar
+                    text_position = start_time + duration / 2
+                    ax.text(
+                        text_position,
+                        task_record.source.device_id + 0.25,
+                        "Evict",
                         va="center",
                         ha="center",
                         color="white",
                         fontsize="xx-small",
                     )
 
+        # Add horizontal lines for each device
+        for device in device_colors.keys():
+            ax.axhline(
+                device.device_id - 0.5,
+                color="black",
+                linestyle="--",
+                linewidth=1,
+            )
+            ax.text(
+                10,
+                device.device_id - 0.4,
+                str(device),
+                va="center",
+                ha="left",
+                color="black",
+                fontsize="small",
+            )
         ax.set_xlabel("Time")
         ax.set_ylabel("Device")
         ax.set_title("Timeline of Tasks")
         if save_file:
             plt.savefig(file_name + "_timeline.png")
-        elif show_plot:
+        if show_plot:
+            cursor()
             plt.show()
