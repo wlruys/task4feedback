@@ -31,20 +31,7 @@ def convert_to_float(frac_str):
         return whole - frac if whole < 0 else whole + frac
 
 
-def calculate_heft(
-    tasklist,
-    taskmap,
-    num_devices: int,
-    scheduler_state: "SystemState",
-    in_place_update: bool = False,
-) -> float:
-    """
-    Calculate HEFT (Heterogeneous Earliest Finish Time) for each task.
-    This function assumes that the tasklist is already sorted by a topology.
-    The below is the equation:
-
-    HEFT_rank = task_duration + max(HEFT_rank(successors))
-    """
+def calculate_heft_upward_rank(tasklist, taskmap, scheduler_state):
 
     def get_heft_rank(task):
         return task.info.heft_rank
@@ -131,8 +118,14 @@ def calculate_heft(
         task.info.heft_rank = duration + max_dependent_rank
 
     # Sort task list by heft rank
-    heft_sorted_tasks = reversed(sorted(tasklist, key=get_heft_rank))
+    return reversed(sorted(tasklist, key=get_heft_rank))
 
+
+def map_task_heft(
+    tasklist, taskmap, num_devices,
+    scheduler_state, in_place_update,
+    heft_sorted_tasks
+):
     agents = {agent: [] for agent in range(0, num_devices)}
 
     HEFTEvent = namedtuple("HEFTEvent", "task start end")
@@ -178,8 +171,6 @@ def calculate_heft(
                 all_dep_data = dependency_instance.info.data_dependencies.all_ids()
                 intersected_data = []
                 intersected_data_size = 0
-                print("My data: ", [sd.id for sd in src_data])
-                print("Dep data: ", all_dep_data)
                 for sd in src_data:  # SimulatedData
                     for dd in all_dep_data:  # DataID
                         if sd.id == dd:
@@ -196,10 +187,6 @@ def calculate_heft(
                         Device(Architecture.GPU, agent_id),
                         intersected_data_size,
                     ).scale_to("ms")
-                )
-                print(
-                    f"Task {task} - {agent_id}: Dep {dep} - {assigned_agent_id}, Comm Time {comm_time}, Shared {intersected_data_size}",
-                    flush=True,
                 )
                 # print("oid: ", assigned_agent_id, ", nid: ", agent_id,
                 #     ", toid: ", scheduler_state.topology.connection_pool.get_index(
@@ -261,9 +248,9 @@ def calculate_heft(
             heft_events.append(heft_event)
         bisect.insort(agents[earliest_start_agent], heft_event, key=lambda x: x.start)
         task.info.heft_makespan = earliest_start + duration
-        # print("makespan allocation:", task.name, " earliest start:", earliest_start, " duration:", duration, " mkspan:", task.info.heft_makespan, " dependencies:", task.dependencies)
+        print("makespan allocation:", task.name, " earliest start:", earliest_start, " duration:", duration, " mkspan:", task.info.heft_makespan, " dependencies:", task.dependencies)
         task.info.heft_allocation = earliest_start_agent
-        # print(f"heft task {task.name}, allocation: {earliest_start_agent}")
+        print(f"heft task {task.name}, allocation: {earliest_start_agent}")
         if task.info.heft_makespan > max_heft:
             max_heft = task.info.heft_makespan
 
@@ -274,6 +261,31 @@ def calculate_heft(
         for task in tasklist:
             task.info.order = order
             order += 1
+    return max_heft
+
+
+def calculate_heft(
+    tasklist,
+    taskmap,
+    num_devices: int,
+    scheduler_state: "SystemState",
+    in_place_update: bool = False,
+) -> float:
+    """
+    Calculate HEFT (Heterogeneous Earliest Finish Time) for each task.
+    This function assumes that the tasklist is already sorted by a topology.
+    The below is the equation:
+
+    HEFT_rank = task_duration + max(HEFT_rank(successors))
+    """
+
+    heft_sorted_tasks = calculate_heft_upward_rank(tasklist, taskmap, scheduler_state)
+
+    max_heft = map_task_heft(
+        tasklist, taskmap, num_devices,
+        scheduler_state, in_place_update,
+        heft_sorted_tasks
+    )
     print("HEFTTheory,simtime,", max_heft / 1000)
 
     """
