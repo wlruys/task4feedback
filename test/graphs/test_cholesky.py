@@ -118,7 +118,7 @@ args = parser.parse_args()
 
 def test_data():
     def sizes(data_id: DataID) -> int:
-        return 128 * 1024 * 1024  # 128 MB
+        return args.data_size * 1024 * 1024 * 1024  # GB
 
     def task_duration_per_func(task_id: TaskID):
         duration = args.time

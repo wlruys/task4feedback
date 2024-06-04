@@ -203,6 +203,7 @@ class DataPlacer:
 
     device_data_sizes: dict = field(default_factory=dict, init=False)
     device_data_limit: dict = field(default_factory=dict, init=False)
+    data_id_to_device: Dict[DataID, Devices] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
         self.device_data_limit[Device(Architecture.CPU, 0)] = self.cpu_size
@@ -212,20 +213,28 @@ class DataPlacer:
             self.device_data_sizes[Device(Architecture.GPU, i)] = 0
 
     def rr_gpu_placement(self, data_id: DataID) -> Devices:
+        if data_id in self.data_id_to_device:
+            return self.data_id_to_device[data_id]
+
         chosen = data_id.idx[-1] % self.num_gpus
         if (
             self.device_data_sizes[Device(Architecture.GPU, chosen)]
             + self.data_size(data_id)
             >= self.device_data_limit[Device(Architecture.GPU, chosen)]
         ):
-            return Device(Architecture.CPU, 0)
+            self.data_id_to_device[data_id] = Device(Architecture.CPU, 0)
         else:
             self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size(
                 data_id
             )
-            return Device(Architecture.GPU, chosen)
+            self.data_id_to_device[data_id] = Device(Architecture.GPU, chosen)
+
+        return self.data_id_to_device[data_id]
 
     def random_gpu_placement(self, data_id: DataID) -> Devices:
+        if data_id in self.data_id_to_device:
+            return self.data_id_to_device[data_id]
+
         np.random.seed(None)
         chosen = np.random.randint(0, self.num_gpus)
         if (
@@ -233,12 +242,14 @@ class DataPlacer:
             + self.data_size(data_id)
             >= self.device_data_limit[Device(Architecture.GPU, chosen)]
         ):
-            return Device(Architecture.CPU, 0)
+            self.data_id_to_device[data_id] = Device(Architecture.CPU, 0)
         else:
             self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size(
                 data_id
             )
-            return Device(Architecture.GPU, chosen)
+            self.data_id_to_device[data_id] = Device(Architecture.GPU, chosen)
+
+        return self.data_id_to_device[data_id]
 
     def cpu_data_placement(self, data_id: DataID) -> Devices:
         return Device(Architecture.CPU, 0)
