@@ -55,7 +55,7 @@ parser.add_argument(
     "-i",
     "--ignore_initial_placement",
     help="ignore initial placement during HEFT calculation",
-    action="store_true"
+    action="store_true",
 )
 parser.add_argument(
     "-o",
@@ -114,10 +114,10 @@ args = parser.parse_args()
 
 @dataclass(slots=True)
 class DataPlacer:
-    cpu_size: float = 0
-    gpu_size: float = 0
+    cpu_size: int = 0
+    gpu_size: int = 0
     num_gpus: int = 0
-    data_size: float = 0
+    data_size: Callable[[DataID], int] = default_data_sizes
 
     device_data_sizes: dict = field(default_factory=dict, init=False)
     device_data_limit: dict = field(default_factory=dict, init=False)
@@ -132,24 +132,30 @@ class DataPlacer:
     def rr_gpu_placement(self, data_id: DataID) -> Devices:
         chosen = data_id.idx[-1] % self.num_gpus
         if (
-            self.device_data_sizes[Device(Architecture.GPU, chosen)] + self.data_size
+            self.device_data_sizes[Device(Architecture.GPU, chosen)]
+            + self.data_size(data_id)
             >= self.device_data_limit[Device(Architecture.GPU, chosen)]
         ):
             return Device(Architecture.CPU, 0)
         else:
-            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size(
+                data_id
+            )
             return Device(Architecture.GPU, chosen)
 
     def random_gpu_placement(self, data_id: DataID) -> Devices:
         np.random.seed(None)
         chosen = np.random.randint(0, self.num_gpus)
         if (
-            self.device_data_sizes[Device(Architecture.GPU, chosen)] + self.data_size
+            self.device_data_sizes[Device(Architecture.GPU, chosen)]
+            + self.data_size(data_id)
             >= self.device_data_limit[Device(Architecture.GPU, chosen)]
         ):
             return Device(Architecture.CPU, 0)
         else:
-            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size(
+                data_id
+            )
             return Device(Architecture.GPU, chosen)
 
 
@@ -202,9 +208,24 @@ def test_data():
         else:
             return TaskOrderType.DEFAULT
 
+    topo_config = {
+        "P2P_BW": parse_size(args.p2p + " GB"),
+        "H2D_BW": parse_size("10 GB"),
+        "D2H_BW": parse_size("10 GB"),
+        "GPU_MEM": parse_size("16 GB"),
+        "CPU_MEM": parse_size("1300 GB"),
+        "GPU_COPY_ENGINES": 3,
+        "CPU_COPY_ENGINES": 3,
+        "NGPUS": args.gpus,
+    }
+
     placer = DataPlacer(
-        cpu_size=13000, gpu_size=16, num_gpus=args.gpus, data_size=args.data_size
+        cpu_size=topo_config["CPU_MEM"],
+        gpu_size=topo_config["GPU_MEM"],
+        num_gpus=args.gpus,
+        data_size=sizes,
     )
+
     data_config = SweepDataGraphConfig()
     data_config.initial_sizes = sizes
     data_config.n_devices = args.gpus
@@ -243,17 +264,6 @@ def test_data():
     cum_wallclock_t = 0
     task_order_log = None
     si = args.sorting_interval
-
-    topo_config = {
-        "P2P_BW": parse_size(args.p2p + " GB"),
-        "H2D_BW": parse_size("10 GB"),
-        "D2H_BW": parse_size("10 GB"),
-        "GPU_MEM": parse_size("16 GB"),
-        "CPU_MEM": parse_size("1300 GB"),
-        "GPU_COPY_ENGINES": 3,
-        "CPU_COPY_ENGINES": 3,
-        "NGPUS": num_gpus,
-    }
 
     mapper = TaskMapper()
 
@@ -329,7 +339,12 @@ def test_data():
             if gpu_id not in compute_per_gpu:
                 compute_per_gpu[gpu_id] = 0
             else:
-                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                print(
+                    "task:",
+                    task.name,
+                    " duration:",
+                    task.end_time.duration - task.start_time.duration,
+                )
                 compute_per_gpu[gpu_id] += (
                     task.end_time.duration - task.start_time.duration
                 )
@@ -343,7 +358,12 @@ def test_data():
                 movement_per_gpu[gpu_id] += (
                     task.end_time.duration - task.start_time.duration
                 )
-                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                print(
+                    "task:",
+                    task.name,
+                    " duration:",
+                    task.end_time.duration - task.start_time.duration,
+                )
                 print("gpuid:", gpu_id, " accum:", movement_per_gpu[gpu_id])
 
         gpu_compute_times = {}
@@ -357,7 +377,10 @@ def test_data():
         for gpu, time in movement_per_gpu.items():
             gpu_data_times[gpu] = time
             print(f"GPU[{gpu}],data,{time}")
-            if max_gpu is None or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times:
+            if (
+                max_gpu is None
+                or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times
+            ):
                 max_gpu = gpu
                 max_gpu_times = gpu_compute_times[gpu] + gpu_data_times[gpu]
         for gpu in topology.devices:
@@ -378,7 +401,10 @@ if __name__ == "__main__":
     print("Mode:", args.mode)
     print("Noise enabled?:", args.noise)
     print("Noise scale:", args.noise_scale)
-    print("Ignore initial placement during HEFT calculation?:", args.ignore_initial_placement)
+    print(
+        "Ignore initial placement during HEFT calculation?:",
+        args.ignore_initial_placement,
+    )
     print("# episodes:", args.episode)
     print("Steps:", args.steps)
     print("Width:", args.width)

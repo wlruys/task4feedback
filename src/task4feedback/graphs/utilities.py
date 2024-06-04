@@ -181,3 +181,64 @@ def make_graph(
             return func(config, data_config=data_config)
 
     raise ValueError(f"Invalid graph configuration: {config}")
+
+
+@dataclass(slots=True)
+class DataPlacer:
+    """
+    Data placer class for placing data on devices.
+    """
+
+    cpu_size: int = 0
+    """CPU memory size in Bytes"""
+
+    gpu_size: int = 0
+    """GPU memory size in Bytes"""
+
+    num_gpus: int = 0
+    """Number of GPUs"""
+
+    data_size: Callable[[DataID], int] = default_data_sizes
+    """Function to determine data size"""
+
+    device_data_sizes: dict = field(default_factory=dict, init=False)
+    device_data_limit: dict = field(default_factory=dict, init=False)
+
+    def __post_init__(self):
+        self.device_data_limit[Device(Architecture.CPU, 0)] = self.cpu_size
+        self.device_data_sizes[Device(Architecture.CPU, 0)] = 0
+        for i in range(self.num_gpus):
+            self.device_data_limit[Device(Architecture.GPU, i)] = self.gpu_size
+            self.device_data_sizes[Device(Architecture.GPU, i)] = 0
+
+    def rr_gpu_placement(self, data_id: DataID) -> Devices:
+        chosen = data_id.idx[-1] % self.num_gpus
+        if (
+            self.device_data_sizes[Device(Architecture.GPU, chosen)]
+            + self.data_size(data_id)
+            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+        ):
+            return Device(Architecture.CPU, 0)
+        else:
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size(
+                data_id
+            )
+            return Device(Architecture.GPU, chosen)
+
+    def random_gpu_placement(self, data_id: DataID) -> Devices:
+        np.random.seed(None)
+        chosen = np.random.randint(0, self.num_gpus)
+        if (
+            self.device_data_sizes[Device(Architecture.GPU, chosen)]
+            + self.data_size(data_id)
+            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+        ):
+            return Device(Architecture.CPU, 0)
+        else:
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size(
+                data_id
+            )
+            return Device(Architecture.GPU, chosen)
+
+    def cpu_data_placement(self, data_id: DataID) -> Devices:
+        return Device(Architecture.CPU, 0)
