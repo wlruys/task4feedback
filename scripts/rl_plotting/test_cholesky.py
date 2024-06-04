@@ -35,7 +35,7 @@ from time import perf_counter as clock
 
 
 parser = argparse.ArgumentParser(prog="Cholesky")
-parser.add_argument("-t", "--time", type=int, help="time", default=4000)
+parser.add_argument("-t", "--time", type=int, help="time", default=5000)
 parser.add_argument(
     "-m",
     "--mode",
@@ -259,8 +259,8 @@ def test_data():
         "D2H_BW": parse_size("10 GB"),
         "GPU_MEM": parse_size("16 GB"),
         "CPU_MEM": parse_size("1300 GB"),
-        "GPU_COPY_ENGINES": 2000,
-        "CPU_COPY_ENGINES": 2000,
+        "GPU_COPY_ENGINES": 3,
+        "CPU_COPY_ENGINES": 3,
         "NGPUS": num_gpus,
     }
 

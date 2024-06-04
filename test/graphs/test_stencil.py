@@ -58,6 +58,12 @@ parser.add_argument(
     default="default",
 )
 parser.add_argument(
+    "-i",
+    "--ignore_initial_placement",
+    help="ignore initial placement during HEFT calculation",
+    action="store_true"
+)
+parser.add_argument(
     "-si",
     "--sorting_interval",
     type=int,
@@ -265,6 +271,7 @@ def test_data():
             task_order_log=task_order_log,
             scheduler_type="parla",
             mapper_type=mapper_mode,
+            consider_initial_placement=(not args.ignore_initial_placement),
             randomizer=Randomizer(),
             task_order_mode=task_order_mode,
             use_duration_noise=args.noise,
@@ -352,6 +359,7 @@ if __name__ == "__main__":
     print("Mode:", args.mode)
     print("Noise enabled?:", args.noise)
     print("Noise scale:", args.noise_scale)
+    print("Ignore initial placement during HEFT calculation?:", args.ignore_initial_placement)
     print("# episodes:", args.episode)
     print("Steps:", args.steps)
     print("Width:", args.width)

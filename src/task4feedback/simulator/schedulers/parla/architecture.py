@@ -146,11 +146,8 @@ def run_device_eviction(
     new_eviction_tasks = []
 
     while quota > 0 and not eviction_pool.empty():
-        print(f"Quota: {quota}.")
         data_id = eviction_pool.peek()
         data: SimulatedData = objects.get_data(data_id)
-        print("Data ID: ", data_id, data.info.size)
-        print("Data Pool: ", eviction_pool)
         assert data is not None
 
         eviction_task = eviction_init(parent_task, scheduler_state, device, data)
@@ -295,11 +292,6 @@ def launch_task(
                     f"Task {task.name}, start:{float(scheduler_state.time.scale_to('ms'))}, "
                     + f"end:{float(completion_time.scale_to('ms'))}, device:{task.assigned_devices[0]}"
                 )
-
-            print(
-                f"Task {task.name}, start:{float(scheduler_state.time.scale_to('ms'))}, "
-                + f"end:{float(completion_time.scale_to('ms'))}, device:{task.assigned_devices[0]}"
-            )
 
             devices = task.assigned_devices
             assert devices is not None
@@ -515,11 +507,13 @@ class ParlaArchitecture(SchedulerArchitecture):
         objects = scheduler_state.objects
         simulator = kwargs["simulator"]
         mapper_type = kwargs["mapper_type"]
+        # True if HEFT considers the initial placement
+        consider_initial_placement = kwargs["consider_initial_placement"]
 
         task_objects = [objects.get_task(task) for task in tasks]
 
         # Initialize a scheduler state
-        scheduler_state.initialize(tasks, task_objects, mapper_type)
+        scheduler_state.initialize(tasks, task_objects, mapper_type, consider_initial_placement)
         # Initialize the set of visible tasks
         self.add_initial_tasks(task_objects, scheduler_state)
 
@@ -804,7 +798,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                 "Evicting data.",
                 extra=dict(time=current_time),
             )
-        print("Evicting data.")
         eviction_tasks = run_eviction(scheduler_state, event)
         for device, eviction_task in eviction_tasks:
             # print(device, eviction_task)

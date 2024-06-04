@@ -1197,6 +1197,7 @@ class ParlaState(SystemState):
         task_ids: List[TaskID],
         task_objects: List[SimulatedTask],
         mapper_type: str,
+        consider_initial_placement: bool,
     ):
         self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
         for device in self.objects.devicemap:
@@ -1211,6 +1212,7 @@ class ParlaState(SystemState):
                     len(self.objects.devicemap) - 1,
                     self,
                     False,
+                    consider_initial_placement,
                 )
             if self.load_task_order:
                 print("REPLAY RANDOM SORT")
@@ -1233,6 +1235,7 @@ class ParlaState(SystemState):
                 len(self.objects.devicemap) - 1,
                 self,
                 True,
+                consider_initial_placement,
             )
 
         task_ids[:] = [t.name for t in task_objects]
@@ -1419,19 +1422,8 @@ class ParlaState(SystemState):
             if self.use_duration_noise:
                 # noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
                 noise = log_normal_noise(duration.duration, self.noise_scale)
-                print("task:", task.name, ", ", duration, " generated noise:", noise)
             elif self.load_task_noise:
                 noise = int(self.loaded_task_noises[str(task.name)])
-                print(
-                    "task:",
-                    task.name,
-                    " loaded noise:",
-                    noise,
-                    " duration:",
-                    duration,
-                    " completion time:",
-                    completion_time,
-                )
 
             if self.save_task_noise:
                 save_task_noise(task, noise)
@@ -1465,6 +1457,7 @@ class RLState(ParlaState):
         task_ids: List[TaskID],
         task_objects: List[SimulatedTask],
         mapper_type: str,
+        consider_initial_placement: bool,
     ):
         self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
         for device in self.objects.devicemap:
@@ -1478,6 +1471,7 @@ class RLState(ParlaState):
             len(self.objects.devicemap) - 1,
             self,
             self.task_order_mode == TaskOrderType.HEFT,
+            consider_initial_placement
         )
 
         if self.task_order_mode == TaskOrderType.RANDOM:

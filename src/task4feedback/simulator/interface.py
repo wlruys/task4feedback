@@ -19,6 +19,7 @@ class SimulatorConfig:
     task_order_log: List[TaskID] | None = None
     scheduler_type: str = "parla"
     mapper_type: str = "parla"
+    consider_initial_placement: bool = True
     name: str = "Simulator"
     recorders: List[Type[Recorder]] = field(default_factory=list)
     simulated_tasks: SimulatedTaskMap = field(init=False)
@@ -53,6 +54,7 @@ def create_simulator(config: SimulatorConfig):
         topology=config.topology,
         scheduler_type=config.scheduler_type,
         mapper_type=config.mapper_type,
+        consider_initial_placement=config.consider_initial_placement,
         recorders=recorders,
         randomizer=config.randomizer,
         watcher=config.watcher,

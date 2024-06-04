@@ -59,6 +59,8 @@ class SimulatedScheduler:
     topology: SimulatedTopology | None = None
     scheduler_type: str = "parla"
     mapper_type: str = "parla"
+    # Consider data's initial placement for HEFT
+    consider_initial_placement: bool = True
     tasks: List[TaskID] = field(default_factory=list)
     name: str = "SimulatedScheduler"
     mechanisms: SchedulerArchitecture | None = None
@@ -140,6 +142,7 @@ class SimulatedScheduler:
         return SimulatedScheduler(
             topology=self.topology,
             mapper_type=self.mapper_type,
+            consider_initial_placement=self.consider_initial_placement,
             scheduler_type=self.scheduler_type,
             tasks=tasks,
             name=self.name,
@@ -246,7 +249,8 @@ class SimulatedScheduler:
         if self.init:
             new_event_pairs = self.mechanisms.initialize(
                 tasks=self.tasks, scheduler_state=self.state, simulator=self,
-                mapper_type=self.mapper_type
+                mapper_type=self.mapper_type,
+                consider_initial_placement=self.consider_initial_placement,
             )
             for completion_time, new_event in new_event_pairs:
                 self.events.put(new_event, completion_time)
