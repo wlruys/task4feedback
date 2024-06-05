@@ -513,7 +513,9 @@ class ParlaArchitecture(SchedulerArchitecture):
         task_objects = [objects.get_task(task) for task in tasks]
 
         # Initialize a scheduler state
-        scheduler_state.initialize(tasks, task_objects, mapper_type, consider_initial_placement)
+        scheduler_state.initialize(
+            tasks, task_objects, mapper_type, consider_initial_placement
+        )
         # Initialize the set of visible tasks
         self.add_initial_tasks(task_objects, scheduler_state)
 
@@ -572,7 +574,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         """
         print(f"Number of tasks: {len(tasks)}")
         for task in tasks:
-            print(">> task:", task.name)
+            # print(">> task:", task.name)
             self.spawned_tasks.put(task)
 
     def mapper(
