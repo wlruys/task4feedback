@@ -174,7 +174,7 @@ def test_data():
         interior_size = args.data_size * 1024 * 1024 * 1024
         elements = interior_size / 4
         d = args.dimensions + 1
-        boundary_elements = elements ** (d - 1 / d)
+        boundary_elements = int(elements ** ((d - 1) / d))
         boundary_size = boundary_elements * 4
 
         if data_id.idx[0] == 0:
