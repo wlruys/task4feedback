@@ -876,16 +876,18 @@ class ParlaArchitecture(SchedulerArchitecture):
         self.active_scheduler -= 1
 
         # if there are launchable tasks and we're still launching them
-        are_launchable_tasks = length(self.launchable_tasks) and self.success_count
-        # if this is the last task and eviction occurred
-        # is_critical_eviction =
+        # are_launchable_tasks = length(self.launchable_tasks) and self.success_count
+        # # if this is the last task and eviction occurred
+        # # is_critical_eviction =
+        #
+        # if remaining_tasks := length(self.launchable_tasks) and self.success_count:
 
-        if remaining_tasks := length(self.launchable_tasks) and self.success_count:
-            # print("Success Count: ", self.success_count)
+        if self.success_count:
+            #     # print("Success Count: ", self.success_count)
             mapping_pair = (current_time + Time(1), Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1
-            self.eviction_occured = False
+        #     self.eviction_occured = False
 
         return next_events
 
@@ -943,8 +945,9 @@ class ParlaArchitecture(SchedulerArchitecture):
         task.notify_state(TaskState.COMPLETED, objects.taskmap, scheduler_state.time)
 
         self.success_count += 1
+        print("Active Scheduler Count: ", {self.active_scheduler})
         if self.active_scheduler == 0:
-            # print("No active scheduler creating one")
+            print("No active scheduler creating one")
             mapping_pair = (current_time, Mapper())
             next_events.append(mapping_pair)
             self.active_scheduler += 1

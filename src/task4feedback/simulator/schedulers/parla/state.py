@@ -485,7 +485,9 @@ def _check_eviction_status(state, task, check_complete=True):
         return True
     if check_complete:
         # if: there are any outstanding eviction requests, don't throw an error yet
-        if any([d > 0 for d in task.requested_eviction_bytes.values()]):
+        outstanding_bytes = list(task.requested_eviction_bytes.values())
+        print(f">> outstanding bytes for task {task}", outstanding_bytes)
+        if any([d > 0 for d in outstanding_bytes]):
             return False
         return True
     else:
@@ -517,8 +519,8 @@ def _check_resources_reserved(
         resources=resources,
     )
 
-    # print(f"Can fit resources: {can_fit}")
-    # print(f"Reserved active tasks: {state.reserved_active_tasks}")
+    print(f"Can fit resources: {can_fit}")
+    print(f"Reserved active tasks: {state.reserved_active_tasks}")
 
     if not can_fit and state.reserved_active_tasks == 0:
         if _check_eviction_status(state, task, check_complete=False):
@@ -1471,7 +1473,7 @@ class RLState(ParlaState):
             len(self.objects.devicemap) - 1,
             self,
             self.task_order_mode == TaskOrderType.HEFT,
-            consider_initial_placement
+            consider_initial_placement,
         )
 
         if self.task_order_mode == TaskOrderType.RANDOM:
