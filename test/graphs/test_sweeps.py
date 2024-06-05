@@ -160,7 +160,6 @@ class DataPlacer:
 
 
 def test_data():
-
     def cpu_data_placement(data_id: DataID) -> Devices:
         return Device(Architecture.CPU, 0)
 
@@ -172,10 +171,16 @@ def test_data():
         return Device(Architecture.GPU, data_id.idx[-1] % args.gpus)
 
     def sizes(data_id: DataID) -> int:
-        if data_id.idx[0] == 1:
-            return args.data_size * 1024 * 1024 * 1024
+        interior_size = args.data_size * 1024 * 1024 * 1024
+        elements = interior_size / 4
+        d = args.dimensions + 1
+        boundary_elements = elements ** (d - 1 / d)
+        boundary_size = boundary_elements * 4
+
+        if data_id.idx[0] == 0:
+            return interior_size
         else:
-            return int(np.sqrt(args.data_size * 1024 * 1024 * 1024))
+            return boundary_size
 
     def homog_task_duration():
         return args.time
