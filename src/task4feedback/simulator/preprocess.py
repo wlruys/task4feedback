@@ -50,31 +50,30 @@ def find_writer_bfs(
     queue = []
     visited = []
     visited.append(node)
-    queue.append(node)
     found = []
+
+    for neighbor_id in graph[node].dependencies:
+        queue.append(neighbor_id)
 
     while queue:
         s = queue.pop(0)
-        if verbose:
-            print(f"Checking dependencies of {s}")
-        for neighbor_id in graph[s].dependencies:
-            neighbor = graph[neighbor_id]
 
-            writes_to = data_from_task(neighbor, AccessType.WRITE)
-            writes_to = writes_to + data_from_task(neighbor, AccessType.READ_WRITE)
-            write_to = set(writes_to)
+        if s in visited:
+            continue
+        visited.append(s)
 
+        current = graph[s]
+        writes_to = data_from_task(current, AccessType.WRITE)
+        writes_to = writes_to + data_from_task(current, AccessType.READ_WRITE)
+        write_to = set(writes_to)
+
+        if target in writes_to:
             if verbose:
-                print(f"Dependency {neighbor_id} writes to {writes_to}")
+                print(f"Found writer {s} to {target}")
+            found.append(s)
 
-            if target in writes_to:
-                if verbose:
-                    print(f"Found writer {neighbor_id} to {target}")
-                found.append(neighbor_id if neighbor_id != node else target)
-
-            if neighbor_id not in visited and len(found) == 0:
-                visited.append(neighbor.id)
-                queue.append(neighbor.id)
+        for neighbor_id in graph[s].dependencies:
+            queue.append(neighbor_id)
 
     if verbose and len(found) == 0:
         print(f"Could not find writer to {target} from {node}.")
@@ -100,14 +99,20 @@ def most_recent_writer(
     touches = set(read_data)
 
     if verbose:
-        print(f"Task {task.id} reads data: {touches}")
+        print(f" -- Task {task.id} reads data: {touches}")
 
     recent_writer = dict()
 
     for target in touches:
         if verbose:
-            print(f"Looking for most recent writer to Data {target}")
+            print(
+                f"Looking for most recent writer to Data {target} from task {task.id}..."
+            )
         recent_writer[target] = find_writer_bfs(graph, task.id, target, verbose=verbose)
+        if verbose:
+            print(
+                f"Recent writer to {target} from {task.id} is {recent_writer[target]}"
+            )
 
     return recent_writer
 
@@ -155,7 +160,7 @@ def create_data_tasks(
         task_info = task.info
         recent_writer = recent_writers[task_info.id]
         for i, (data, writer_list) in enumerate(recent_writer.items()):
-            # print(f"Creating data task for {data} from {writer}")
+            print(f"Creating data task for {data} from {writer_list}")
             dependencies = writer_list
 
             data_task_id = TaskID(taskspace=f"{task_info.id}.data", task_idx=data.idx)
@@ -169,7 +174,7 @@ def create_data_tasks(
                 dependencies=dependencies,
                 runtime=runtime,
                 data_dependencies=data_info,
-                func_id=task_info.func_id
+                func_id=task_info.func_id,
             )
 
             data_task = SimulatedDataTask(
@@ -216,7 +221,7 @@ def create_task_graph(graph: TaskMap) -> SimulatedComputeTaskMap:
 def create_data_task_graph(
     graph: TaskMap, compute_tasks: SimulatedComputeTaskMap, verbose: bool = False
 ) -> SimulatedDataTaskMap:
-    recent_writers = find_recent_writers(graph, verbose=False)
+    recent_writers = find_recent_writers(graph, verbose=True)
     data_tasks = create_data_tasks(compute_tasks, recent_writers)
     return data_tasks
 
@@ -234,9 +239,11 @@ def combine_task_graphs(
 
 
 def create_sim_graph(
-    tasks: TaskMap, data: DataMap, use_data: bool = True,
+    tasks: TaskMap,
+    data: DataMap,
+    use_data: bool = True,
     task_order_mode: TaskOrderType = TaskOrderType.DEFAULT,
-    task_order_log: List[TaskID] | None = None
+    task_order_log: List[TaskID] | None = None,
 ) -> Tuple[List[TaskID], SimulatedTaskMap]:
     compute_tasks = create_task_graph(tasks)
     if use_data:
