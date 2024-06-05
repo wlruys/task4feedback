@@ -160,7 +160,7 @@ def create_data_tasks(
         task_info = task.info
         recent_writer = recent_writers[task_info.id]
         for i, (data, writer_list) in enumerate(recent_writer.items()):
-            print(f"Creating data task for {data} from {writer_list}")
+            # print(f"Creating data task for {data} from {writer_list}")
             dependencies = writer_list
 
             data_task_id = TaskID(taskspace=f"{task_info.id}.data", task_idx=data.idx)
@@ -221,7 +221,7 @@ def create_task_graph(graph: TaskMap) -> SimulatedComputeTaskMap:
 def create_data_task_graph(
     graph: TaskMap, compute_tasks: SimulatedComputeTaskMap, verbose: bool = False
 ) -> SimulatedDataTaskMap:
-    recent_writers = find_recent_writers(graph, verbose=True)
+    recent_writers = find_recent_writers(graph, verbose=False)
     data_tasks = create_data_tasks(compute_tasks, recent_writers)
     return data_tasks
 

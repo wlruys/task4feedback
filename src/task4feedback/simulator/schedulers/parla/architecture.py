@@ -159,7 +159,7 @@ def run_device_eviction(
         )
 
         simulated_parent_task = objects.get_task(parent_task)
-        simulated_parent_task.add_eviction_dependency(eviction_task)
+        # simulated_parent_task.add_eviction_dependency(eviction_task)
 
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
@@ -709,7 +709,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 data_task.set_status(
                     TaskStatus.RESERVABLE, scheduler_state.time, verify=False
                 )
-                self._add_eviction_dependencies(data_task, scheduler_state)
+                # self._add_eviction_dependencies(data_task, scheduler_state)
 
                 data_task.in_ready_queue = True
 
@@ -752,7 +752,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 device = devices[0]
                 verbose = False
                 self._enqueue_data_tasks(task, scheduler_state)
-                self._add_eviction_dependencies(task, scheduler_state)
+                # self._add_eviction_dependencies(task, scheduler_state)
                 scheduler_state.acquire_resources(
                     TaskState.RESERVED, task, verbose=verbose
                 )
@@ -772,6 +772,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                         extra=dict(task=taskid),
                     )
                 event.tasks.add(taskid)
+                # print(f"Task {taskid} reserved successfully.")
                 task.notify_state(TaskState.RESERVED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1

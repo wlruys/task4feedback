@@ -237,11 +237,12 @@ def _check_nearest_source(
                 # )
                 return None
 
-            # print(f"Adding dependency on eviction task {eviction_task} for {task.name}")
-            eviction_task.add_dependency(
-                task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED]
-            )
-            task.add_dependent(eviction_task.name)
+            if eviction_task not in task.dependents:
+                # print(f"Adding dependency on eviction task {eviction_task} for {task.name}")
+                eviction_task.add_dependency(
+                    task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED]
+                )
+                task.add_dependent(eviction_task.name)
 
     if logger.ENABLE_LOGGING:
         logger.data.debug(
