@@ -9,7 +9,7 @@ from ..types import Device, Architecture, TaskState, AccessType
 import bisect
 import random
 
-units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12}
+units = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 
 
 def parse_size(size_str: str):
@@ -32,7 +32,6 @@ def convert_to_float(frac_str):
 
 
 def calculate_heft_upward_rank(tasklist, taskmap, scheduler_state):
-
     def get_heft_rank(task):
         return task.info.heft_rank
 
@@ -75,7 +74,7 @@ def calculate_heft_upward_rank(tasklist, taskmap, scheduler_state):
 
             average_comm_time: float = 0
             num_pairs: float = 0
-            # Consider CPU too 
+            # Consider CPU too
             for d1 in scheduler_state.topology.devices:
                 for d2 in scheduler_state.topology.devices:
                     if d1 == d2:
@@ -115,9 +114,13 @@ def calculate_heft_upward_rank(tasklist, taskmap, scheduler_state):
 #           For now, let me use separate functions until this code is confirmed
 #           as stabled.
 def map_task_heft_with_cache(
-    tasklist, taskmap, num_devices,
-    scheduler_state, update_task_order,
-    heft_sorted_tasks, consider_init_placement
+    tasklist,
+    taskmap,
+    num_devices,
+    scheduler_state,
+    update_task_order,
+    heft_sorted_tasks,
+    consider_init_placement,
 ):
     # Tasks mapped to each device
     agents = {agent: [] for agent in range(0, num_devices)}
@@ -128,15 +131,17 @@ def map_task_heft_with_cache(
     # Add all data to its initial placement
     for task in tasklist:
         if task.info.data_dependencies is not None:
-            task_data_list = (task.info.data_dependencies[AccessType.READ] +
-                              task.info.data_dependencies[AccessType.WRITE] +
-                              task.info.data_dependencies[AccessType.READ_WRITE])
+            task_data_list = (
+                task.info.data_dependencies[AccessType.READ]
+                + task.info.data_dependencies[AccessType.WRITE]
+                + task.info.data_dependencies[AccessType.READ_WRITE]
+            )
             for data in task_data_list:
                 data_info = scheduler_state.objects.datamap[data.id].info
                 initial_placement = data_info.location
                 if initial_placement not in data_cache:
                     data_cache[initial_placement] = set()
-                data_cache[initial_placement].add(data_info.id) 
+                data_cache[initial_placement].add(data_info.id)
 
     print("data cache:", data_cache)
 
@@ -170,7 +175,6 @@ def map_task_heft_with_cache(
 
         # Try to insert each task to each agent (device)
         for agent_id, agent in agents.items():
-
             # Collect unique data to be moved from dependency tasks
             # This is used to identify data from initial placement
             moved_data_from_dependencies = set()
@@ -204,7 +208,9 @@ def map_task_heft_with_cache(
                                 sd.id
                             ].size
                             moved_data_from_dependencies.add(sd.id)
-                            print(f"{sd.id} is moved by task {task.name} from {dependency_instance.name}")
+                            print(
+                                f"{sd.id} is moved by task {task.name} from {dependency_instance.name}"
+                            )
 
                 assigned_agent_id = dependency_instance.info.heft_allocation
 
@@ -237,12 +243,15 @@ def map_task_heft_with_cache(
 
                         comm_time_from_initial_place = float(
                             scheduler_state.topology.get_transfer_time(
-                                initial_placement, Device(Architecture.GPU, agent_id),
-                                sd_info.size
+                                initial_placement,
+                                Device(Architecture.GPU, agent_id),
+                                sd_info.size,
                             ).scale_to("ms")
                         )
 
-                        print(f"{sd.id} is from initial placement {initial_placement} to {agent_id} and overhead {comm_time_from_initial_place} by task {task.name}")
+                        print(
+                            f"{sd.id} is from initial placement {initial_placement} to {agent_id} and overhead {comm_time_from_initial_place} by task {task.name}"
+                        )
                         ready_time = max(comm_time_from_initial_place, ready_time)
                         print(f"{task.name}'s ready time: {ready_time}")
 
@@ -287,7 +296,9 @@ def map_task_heft_with_cache(
             else:
                 candidate_earliest_start = ready_time
 
-            print(f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}")
+            print(
+                f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}"
+            )
             if earliest_start == None or earliest_start > candidate_earliest_start:
                 earliest_start_agent = agent_id
                 earliest_start = candidate_earliest_start
@@ -301,7 +312,18 @@ def map_task_heft_with_cache(
             heft_events.append(heft_event)
         bisect.insort(agents[earliest_start_agent], heft_event, key=lambda x: x.start)
         task.info.heft_makespan = earliest_start + duration
-        print("makespan allocation:", task.name, " earliest start:", earliest_start, " duration:", duration, " mkspan:", task.info.heft_makespan, " dependencies:", task.dependencies)
+        print(
+            "makespan allocation:",
+            task.name,
+            " earliest start:",
+            earliest_start,
+            " duration:",
+            duration,
+            " mkspan:",
+            task.info.heft_makespan,
+            " dependencies:",
+            task.dependencies,
+        )
         task.info.heft_allocation = earliest_start_agent
         print(f"heft task {task.name}, allocation: {earliest_start_agent}")
         if task.info.heft_makespan > max_heft:
@@ -324,11 +346,14 @@ def map_task_heft_with_cache(
     return max_heft
 
 
-
 def map_task_heft(
-    tasklist, taskmap, num_devices,
-    scheduler_state, update_task_order,
-    heft_sorted_tasks, consider_init_placement
+    tasklist,
+    taskmap,
+    num_devices,
+    scheduler_state,
+    update_task_order,
+    heft_sorted_tasks,
+    consider_init_placement,
 ):
     agents = {agent: [] for agent in range(0, num_devices)}
 
@@ -362,7 +387,6 @@ def map_task_heft(
 
         # Try to insert each task to each agent (device)
         for agent_id, agent in agents.items():
-
             # Collect unique data to be moved from dependency tasks
             # This is used to identify data from initial placement
             moved_data_from_dependencies = set()
@@ -389,7 +413,9 @@ def map_task_heft(
                                 sd.id
                             ].size
                             moved_data_from_dependencies.add(sd.id)
-                            print(f"{sd.id} is moved by task {task.name} from {dependency_instance.name}")
+                            print(
+                                f"{sd.id} is moved by task {task.name} from {dependency_instance.name}"
+                            )
 
                 assigned_agent_id = dependency_instance.info.heft_allocation
 
@@ -422,12 +448,15 @@ def map_task_heft(
 
                         comm_time_from_initial_place = float(
                             scheduler_state.topology.get_transfer_time(
-                                initial_placement, Device(Architecture.GPU, agent_id),
-                                sd_info.size
+                                initial_placement,
+                                Device(Architecture.GPU, agent_id),
+                                sd_info.size,
                             ).scale_to("ms")
                         )
 
-                        print(f"{sd.id} is from initial placement {initial_placement} to {agent_id} and overhead {comm_time_from_initial_place} by task {task.name}")
+                        print(
+                            f"{sd.id} is from initial placement {initial_placement} to {agent_id} and overhead {comm_time_from_initial_place} by task {task.name}"
+                        )
                         ready_time = max(comm_time_from_initial_place, ready_time)
                         print(f"{task.name}'s ready time: {ready_time}")
 
@@ -472,7 +501,9 @@ def map_task_heft(
             else:
                 candidate_earliest_start = ready_time
 
-            print(f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}")
+            print(
+                f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}"
+            )
             if earliest_start == None or earliest_start > candidate_earliest_start:
                 earliest_start_agent = agent_id
                 earliest_start = candidate_earliest_start
@@ -482,7 +513,18 @@ def map_task_heft(
             heft_events.append(heft_event)
         bisect.insort(agents[earliest_start_agent], heft_event, key=lambda x: x.start)
         task.info.heft_makespan = earliest_start + duration
-        print("makespan allocation:", task.name, " earliest start:", earliest_start, " duration:", duration, " mkspan:", task.info.heft_makespan, " dependencies:", task.dependencies)
+        print(
+            "makespan allocation:",
+            task.name,
+            " earliest start:",
+            earliest_start,
+            " duration:",
+            duration,
+            " mkspan:",
+            task.info.heft_makespan,
+            " dependencies:",
+            task.dependencies,
+        )
         task.info.heft_allocation = earliest_start_agent
         print(f"heft task {task.name}, allocation: {earliest_start_agent}")
         if task.info.heft_makespan > max_heft:
@@ -524,9 +566,13 @@ def calculate_heft(
     heft_sorted_tasks = calculate_heft_upward_rank(tasklist, taskmap, scheduler_state)
 
     max_heft = map_task_heft(
-        tasklist, taskmap, num_devices,
-        scheduler_state, update_task_order,
-        heft_sorted_tasks, consider_init_placement
+        tasklist,
+        taskmap,
+        num_devices,
+        scheduler_state,
+        update_task_order,
+        heft_sorted_tasks,
+        consider_init_placement,
     )
     print("HEFTTheory,simtime,", max_heft / 1000)
     """

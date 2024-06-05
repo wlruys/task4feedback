@@ -29,11 +29,13 @@ def get_required_memory_for_data(
     data_id: DataID,
     objects: ObjectRegistry,
     access_type: AccessType,
+    always_count: bool = False,
 ) -> int:
     data = objects.get_data(data_id)
 
-    if is_valid := data.is_valid_or_moving(device, phase) and (
-        access_type == AccessType.READ or access_type == AccessType.READ_WRITE
+    if not always_count and (
+        is_valid := data.is_valid_or_moving(device, phase)
+        and (access_type == AccessType.READ or access_type == AccessType.READ_WRITE)
     ):
         return 0
     else:
@@ -47,12 +49,13 @@ def get_required_memory(
     data_accesses: List[DataAccess],
     objects: ObjectRegistry,
     access_type: AccessType = AccessType.READ,
+    always_count: bool = False,
 ) -> None:
     for data_access in data_accesses:
         idx = data_access.device
         device = devices[idx]
         memory[idx] += get_required_memory_for_data(
-            phase, device, data_access.id, objects, access_type
+            phase, device, data_access.id, objects, access_type, always_count
         )
 
 
@@ -63,6 +66,7 @@ def get_required_resources(
     objects: ObjectRegistry,
     count_data: bool = True,
     verbose: bool = False,
+    always_count_data: bool = False,
 ) -> List[FasterResourceSet]:
     if isinstance(devices, Device):
         devices = (devices,)
@@ -78,9 +82,15 @@ def get_required_resources(
     memory: List[int] = [s.memory for s in resources]
 
     if count_data:
-        get_required_memory(memory, phase, devices, task.read_accesses, objects)
-        get_required_memory(memory, phase, devices, task.read_write_accesses, objects)
-        get_required_memory(memory, phase, devices, task.write_accesses, objects)
+        get_required_memory(
+            memory, phase, devices, task.read_accesses, objects, always_count_data
+        )
+        get_required_memory(
+            memory, phase, devices, task.read_write_accesses, objects, always_count_data
+        )
+        get_required_memory(
+            memory, phase, devices, task.write_accesses, objects, always_count_data
+        )
 
     resources = []
     for i in range(len(devices)):
@@ -154,6 +164,17 @@ def _check_eviction(
         if resources.memory > evictable_memory or resources.memory < 0:
             # if : request is too big and not satisfiable by eviction, do not run eviction
             # if : request is already satisfied by previously enqueued (but not complete) eviction, do not run eviction
+            if state.reserved_active_tasks == 0:
+                devices = task.assigned_devices
+                if _check_eviction_status(state, task, check_complete=True):
+                    task_data_print(state, task, devices, TaskState.RESERVED)
+                    resource_error_print(
+                        state, task, devices, [resources], resource_types=["memory"]
+                    )
+                    raise RuntimeError(
+                        f"Failure to acquire resources for task {task.name}."
+                    )
+
             # Return tasks data to the eviction pool
             # for data_access in task.info.data_dependencies.all_accesses():
             #     data = state.objects.get_data(data_access.id)
@@ -483,6 +504,7 @@ def resource_error_print(
 def _check_eviction_status(state, task, check_complete=True):
     if not state.use_eviction:
         return True
+
     if check_complete:
         # if: there are any outstanding eviction requests, don't throw an error yet
         outstanding_bytes = list(task.requested_eviction_bytes.values())
@@ -519,10 +541,32 @@ def _check_resources_reserved(
         resources=resources,
     )
 
-    print(f"Can fit resources: {can_fit}")
-    print(f"Reserved active tasks: {state.reserved_active_tasks}")
+    # print(f"Can fit resources: {can_fit}: ", resources)
+    # print(f"Reserved active tasks: {state.reserved_active_tasks}")
 
     if not can_fit and state.reserved_active_tasks == 0:
+        # check if task could NEVER fit
+        max_resources = get_required_resources(
+            TaskState.RESERVED,
+            task,
+            devices,
+            state.objects,
+            count_data=True,
+            always_count_data=True,
+        )
+        can_fit_max = state.resource_pool.check_max_resources(
+            devices=devices, type=ResourceGroup.PERSISTENT, resources=max_resources
+        )
+        if not can_fit_max:
+            task_data_print(state, task, devices, TaskState.RESERVED)
+            resource_error_print(
+                state, task, devices, max_resources, resource_types=["memory"]
+            )
+            raise RuntimeError(
+                f"Task {task.name} requires more memory than is satisifiable on its chosen devices (at max capacity)."
+            )
+
+        # print("Checking eviction status")
         if _check_eviction_status(state, task, check_complete=False):
             task_data_print(state, task, devices, TaskState.RESERVED)
             resource_error_print(

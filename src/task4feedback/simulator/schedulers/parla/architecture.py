@@ -126,10 +126,10 @@ def run_device_eviction(
     device = objects.get_device(device_id)
     assert device is not None
 
-    from rich import print
-    from rich.console import Console
-    from rich.text import Text
-
+    # from rich import print
+    # from rich.console import Console
+    # from rich.text import Text
+    #
     # console = Console()
     # message = Text(
     #     f"Running eviction requested by {parent_task} for {device_id}. Requested: {requested_resources.memory}."
@@ -179,8 +179,10 @@ def run_device_eviction(
         popped = eviction_pool.remove(data_id, size)
         # print(f"Remaining quota: {quota}. Popped: {popped}.")
 
-    # if quota > 0:
-    #     print(f"Eviction quota not met for device {device.name}. Remaining: {quota}.")
+    if len(new_eviction_tasks) == 0 and scheduler_state.reserved_active_tasks == 0:
+        raise RuntimeError(
+            "Unable to create an eviction task for {task}. No available evictable blocks remaining."
+        )
 
     return new_eviction_tasks
 
@@ -459,7 +461,7 @@ class ParlaArchitecture(SchedulerArchitecture):
     is_nothing_launched: Dict[Device, bool] = field(default_factory=dict)
     success_count: int = 0
     active_scheduler: int = 0
-    eviction_occured: bool = False
+    eviction_occurred: bool = False
 
     def __deepcopy__(self, memo):
         spawned_tasks = deepcopy(self.spawned_tasks)
@@ -482,7 +484,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             is_nothing_launched=is_nothing_launched,
             success_count=self.success_count,
             active_scheduler=self.active_scheduler,
-            eviction_occured=self.eviction_occured,
+            eviction_occurred=self.eviction_occurred,
             completed_tasks=completed_tasks,
         )
 
@@ -714,7 +716,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                 self.launchable_tasks[device][TaskType.DATA].put_id(
                     task_id=data_task_id, priority=task.priority
                 )
-
                 scheduler_state.reserved_active_tasks += 1
                 scheduler_state.mapped_active_tasks += 1
 
@@ -739,7 +740,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
-            # print(f"Atempting to reserve task {taskid}.")
+            # print(f"Attempting to reserve task {taskid}.")
             # print(self.reservable_tasks)
 
             reserve_success, eviction_event = reserve_task(task, scheduler_state)
@@ -756,8 +757,8 @@ class ParlaArchitecture(SchedulerArchitecture):
                     TaskState.RESERVED, task, verbose=verbose
                 )
                 scheduler_state.use_data(TaskState.RESERVED, task, verbose=verbose)
+
                 scheduler_state.reserved_active_tasks += 1
-                # print(f"Task {taskid} reserved successfully.")
                 # print(task.dependencies)
                 # print(task.counters)
 
@@ -790,7 +791,7 @@ class ParlaArchitecture(SchedulerArchitecture):
     def eviction(
         self, scheduler_state: SystemState, event: Eviction, **kwargs
     ) -> List[EventPair]:
-        self.eviction_occured = True
+        self.eviction_occurred = True
 
         objects = scheduler_state.objects
         current_time = scheduler_state.time

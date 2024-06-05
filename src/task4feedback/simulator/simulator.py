@@ -42,10 +42,14 @@ def get_scheduler_state(mapper_type: str):
     NOTE that if you add new policy, you also should add the corresponding
     state on here.
     """
-    if (mapper_type == "random" or mapper_type == "parla" or
-        mapper_type == "loadbalance" or mapper_type == "heft" or
-        mapper_type == "eft_without_data" or
-        mapper_type == "eft_with_data"):
+    if (
+        mapper_type == "random"
+        or mapper_type == "parla"
+        or mapper_type == "loadbalance"
+        or mapper_type == "heft"
+        or mapper_type == "eft_without_data"
+        or mapper_type == "eft_with_data"
+    ):
         return "parla"
     elif mapper_type == "rl":
         return "rl"
@@ -95,17 +99,19 @@ class SimulatedScheduler:
         if self.state is None:
             scheduler_state_type = get_scheduler_state(self.mapper_type)
             scheduler_state = SchedulerOptions.get_state(scheduler_state_type)
-            self.state = scheduler_state(topology=self.topology,
-                                         rl_env=self.rl_env,
-                                         rl_mapper=self.rl_mapper,
-                                         task_order_mode=self.task_order_mode,
-                                         use_duration_noise=self.use_duration_noise,
-                                         noise_scale=self.noise_scale,
-                                         save_task_order=self.save_task_order,
-                                         load_task_order=self.load_task_order,
-                                         save_task_noise=self.save_task_noise,
-                                         load_task_noise=self.load_task_noise,
-                                         randomizer=self.randomizer)
+            self.state = scheduler_state(
+                topology=self.topology,
+                rl_env=self.rl_env,
+                rl_mapper=self.rl_mapper,
+                task_order_mode=self.task_order_mode,
+                use_duration_noise=self.use_duration_noise,
+                noise_scale=self.noise_scale,
+                save_task_order=self.save_task_order,
+                load_task_order=self.load_task_order,
+                save_task_noise=self.save_task_noise,
+                load_task_noise=self.load_task_noise,
+                randomizer=self.randomizer,
+            )
         if self.mechanisms is None:
             scheduler_arch = SchedulerOptions.get_architecture(self.scheduler_type)
             self.mechanisms = scheduler_arch(topology=self.topology)
@@ -248,7 +254,9 @@ class SimulatedScheduler:
 
         if self.init:
             new_event_pairs = self.mechanisms.initialize(
-                tasks=self.tasks, scheduler_state=self.state, simulator=self,
+                tasks=self.tasks,
+                scheduler_state=self.state,
+                simulator=self,
                 mapper_type=self.mapper_type,
                 consider_initial_placement=self.consider_initial_placement,
             )
@@ -256,7 +264,7 @@ class SimulatedScheduler:
                 self.events.put(new_event, completion_time)
             self.init = False
 
-        # from rich import print
+        from rich import print
         from copy import deepcopy
         from time import perf_counter as clock
 
@@ -306,9 +314,10 @@ class SimulatedScheduler:
 
             print(f"{device.name},idle,{device.stats.idle_time}")
 
-
         print(f"{self.mapper_type},simtime,{float(self.time.scale_to('s'))}")
-        print(f"{self.mapper_type},wait_time,{float(self.state.wait_time_accum.scale_to('s'))/self.state.num_tasks}")
+        print(
+            f"{self.mapper_type},wait_time,{float(self.state.wait_time_accum.scale_to('s'))/self.state.num_tasks}"
+        )
 
         # print(f"Event Count: {self.event_count}")
 
@@ -316,6 +325,8 @@ class SimulatedScheduler:
         events_empty = self.events.empty()
 
         if not is_complete and watcher_status:
+            print("Event Queue", self.events)
+            print("Arch", self.mechanisms)
             raise RuntimeError("Scheduler terminated without completing all tasks.")
 
         return self.time, self.tasks, (is_complete and events_empty)
