@@ -7,6 +7,7 @@ import networkx as nx
 from .topology import *
 from copy import deepcopy
 import random
+from collections import deque
 
 
 def summarize_dependencies(taskmap: TaskMap | SimulatedTaskMap):
@@ -134,6 +135,83 @@ def find_recent_writers(graph: TaskMap, verbose: bool = False) -> DataWriters:
     return recent_writers
 
 
+def find_recent_writers_topdown(graph: TaskMap, verbose: bool = False) -> DataWriters:
+    """
+    For each task, find the most recent writer for each of its inputs.
+    """
+    recent_writers = dict()
+
+    if verbose:
+        print("Finding recent writers...")
+
+    ready_task_deque = deque()
+    task_dependent_dict: Dict[TaskID, List[TaskInfo]] = {}
+    task_dependency_dict: Dict[TaskID, int] = {}
+    # task dependent relationship are created for SimulatedTask later, but
+    # to sort tasks by a topological order, creates that here.
+    for task in graph.values():
+        num_dependencies = len(task.dependencies)
+        task_dependency_dict[task.id] = num_dependencies
+        if num_dependencies == 0:
+            ready_task_deque.append(task)
+        else:
+            for dependency_id in task.dependencies:
+                dependency = graph[dependency_id]
+                if dependency_id not in task_dependent_dict:
+                    task_dependent_dict[dependency.id] = []
+                task_dependent_dict[dependency.id].append(task)
+        if task.id not in task_dependent_dict:
+            task_dependent_dict[task.id] = []
+
+    # Sort tasks based on a graph's topology
+    tasklist = []
+    i = 0
+    while ready_task_deque:
+        task = ready_task_deque.popleft()
+
+        for dependent in task_dependent_dict[task.id]:
+            task_dependency_dict[dependent.id] -= 1
+            if task_dependency_dict[dependent.id] == 0:
+                ready_task_deque.append(dependent)
+        task.order = i
+        i += 1
+        tasklist.append(task)
+    tasklist = sorted(tasklist, key=lambda t: t.order)
+
+    # 
+    data_dependency_dict: DataWriters = dict()
+    recent_writers: Dict[DataID, TaskID] = dict()
+    for task in tasklist:
+        if verbose:
+            print(f"task {task.id} order {task.order}")
+
+        read_data = data_from_task(task, AccessType.READ)
+        read_write_data = data_from_task(task, AccessType.READ_WRITE)
+        read_data = read_data + read_write_data
+        touches = set(read_data)
+
+        write_data = data_from_task(task, AccessType.WRITE)
+        write_data = write_data + read_write_data
+        write_data = set(write_data)
+
+        data_dependency_dict_for_task: DataWriter = dict()
+
+        if verbose:
+            print(f" -- Task {task.id} reads data: {touches}")
+
+        for target in touches:
+            if target not in data_dependency_dict_for_task:
+                data_dependency_dict_for_task[target] = []
+            if target in recent_writers:
+                data_dependency_dict_for_task[target].append(recent_writers[target])
+            if target in write_data:
+                recent_writers[target] = task.id
+                
+        data_dependency_dict[task.id] = data_dependency_dict_for_task                 
+
+    return data_dependency_dict
+
+
 def create_compute_tasks(graph: TaskMap) -> SimulatedComputeTaskMap:
     """
     Create compute tasks for each task in the graph.
@@ -221,7 +299,18 @@ def create_task_graph(graph: TaskMap) -> SimulatedComputeTaskMap:
 def create_data_task_graph(
     graph: TaskMap, compute_tasks: SimulatedComputeTaskMap, verbose: bool = False
 ) -> SimulatedDataTaskMap:
-    recent_writers = find_recent_writers(graph, verbose=False)
+    recent_writers = find_recent_writers_topdown(graph, verbose=False)
+    recent_writers2 = find_recent_writers(graph, verbose=False)
+
+    # For checking correctness.
+    # TODO(hc): Remove it
+    for key, value in recent_writers.items():
+        assert key in recent_writers2
+
+        for vk, vv in value.items():
+            for vvv in vv:
+                assert vvv in recent_writers2[key][vk]
+
     data_tasks = create_data_tasks(compute_tasks, recent_writers)
     return data_tasks
 
