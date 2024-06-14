@@ -502,7 +502,7 @@ def make_dag_and_timeline(
     timeline_plot_size: Tuple[int, int] = (25, 10),
 ):
     if file_name is None:
-        file_name = f"""{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}"""
+        file_name = f"""{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}_{str(len(simulator.topology.get_devices(device_type=Architecture.GPU)))}GPUs"""
     recorders = simulator.recorders
 
     try:
@@ -521,8 +521,10 @@ def make_dag_and_timeline(
     for taskid, task_record in compute_task_record.tasks.items():
         task_result = {}
         task_result["devices"] = task_record.devices
-        if task_record.devices[0] not in device_colors:
-            device_colors[task_record.devices[0]] = colors[len(device_colors) % 8]
+        if task_record.devices[0].device_id not in device_colors:
+            device_colors[task_record.devices[0].device_id] = colors[
+                task_record.devices[0].device_id % 8
+            ]
         task_result["start_time"] = task_record.start_time
         task_result["end_time"] = task_record.end_time
         task_results[str(taskid)] = task_result
@@ -534,12 +536,15 @@ def make_dag_and_timeline(
         for name, task_info in simulator.taskmap.items():
             if isinstance(task_info, SimulatedComputeTask):
                 task_info = task_info.info
+                idx = name.task_idx
                 name = str(name)
                 if color_dag:
                     node = pydot.Node(
                         name=name,
                         style="filled",
-                        fillcolor=device_colors[task_results[name]["devices"][0]],
+                        fillcolor=device_colors[
+                            task_results[name]["devices"][0].device_id
+                        ],
                     )
                 else:
                     node = pydot.Node(
@@ -570,7 +575,7 @@ def make_dag_and_timeline(
                 duration,
                 left=start_time,
                 height=0.4,
-                color=device_colors[task_result["devices"][0]],
+                color=device_colors[task_result["devices"][0].device_id],
                 edgecolor="black",
             )
 
@@ -655,14 +660,14 @@ def make_dag_and_timeline(
         # Add horizontal lines for each device
         for device in device_colors.keys():
             ax.axhline(
-                device.device_id - 0.5,
+                device - 0.5,
                 color="black",
                 linestyle="--",
                 linewidth=1,
             )
             ax.text(
                 10,
-                device.device_id - 0.4,
+                device - 0.4,
                 str(device),
                 va="center",
                 ha="left",

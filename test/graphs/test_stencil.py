@@ -27,7 +27,7 @@ from task4feedback.simulator.rl.models.agent_using_oracle import *
 
 parser = argparse.ArgumentParser(prog="Stencil")
 
-parser.add_argument("-t", "--time", type=int, help="time", default=9033)
+parser.add_argument("-t", "--time", type=int, help="time", default=138)
 parser.add_argument(
     "-m",
     "--mode",
@@ -47,10 +47,10 @@ parser.add_argument(
     help="the number of episodes (-1 for inifite loop)",
     default=-1,
 )
-parser.add_argument("-s", "--steps", type=int, help="stencil steps", default=5)
+parser.add_argument("-s", "--steps", type=int, help="stencil steps", default=7)
 parser.add_argument("-w", "--width", type=int, help="stencil width", default=5)
 parser.add_argument(
-    "-dm", "--dimensions", type=int, help="stencil dimensions", default=3
+    "-dm", "--dimensions", type=int, help="stencil dimensions", default=2
 )
 parser.add_argument(
     "-o",
@@ -115,8 +115,8 @@ args = parser.parse_args()
 def test_data():
 
     def sizes(data_id: DataID) -> int:
-        interior_size = 4 * 1024 * 1024 * 1024  #  4096 MB
-        boundary_size = 8 * 1024 * 1024  # 8 MB
+        interior_size = 63 * 1024 * 1024  #  63 MB
+        boundary_size = 32511  # ~0.03 MB
         return boundary_size if data_id.idx[1] == 1 else interior_size
 
     def homog_task_duration():
@@ -137,7 +137,7 @@ def test_data():
         return placement_info
 
     def get_task_sorting_method(episode: int) -> TaskOrderType:
-        if args.sort == "heft" or args.mode == "heft":
+        if args.sort == "heft":
             return TaskOrderType.HEFT
         elif args.sort == "random":
             si = args.sorting_interval
@@ -164,6 +164,8 @@ def test_data():
     data_config = StencilDataGraphConfig()
     data_config.initial_sizes = sizes
     data_config.n_devices = args.gpus
+    # data_config.large_size = 4  # Interior data size
+    # data_config.small_size = 0.0078125  # Boundary data size
     data_config.dimensions = args.dimensions
     data_config.width = args.width
 
@@ -172,6 +174,7 @@ def test_data():
         gpu_size=topo_config["GPU_MEM"],
         num_gpus=args.gpus,
         data_size=sizes,
+        stencil_width=args.width,
     )
 
     if args.distribution == "rr":
@@ -180,6 +183,8 @@ def test_data():
         data_config.initial_placement = placer.cpu_data_placement
     elif args.distribution == "random":
         data_config.initial_placement = placer.random_gpu_placement
+    elif args.distribution == "opt":
+        data_config.initial_placement = placer.optimal_placement
 
     config = StencilConfig(
         steps=args.steps,
@@ -252,6 +257,13 @@ def test_data():
         episode += 1
         simulated_time, task_order_log, success = simulator.run()
         end_t = clock()
+        make_dag_and_timeline(
+            simulator=simulator,
+            plot_data_movement=True,
+            # show_plot=True,
+            plot_timeline=False,
+            save_file=True,
+        )
         # if not rl_agent.is_training_mode():
         cum_wallclock_t += end_t - start_t
         print("Wallclock,", episode, ",", cum_wallclock_t)
@@ -322,9 +334,6 @@ def test_data():
             print(f"GPU[{gpu.name.device_id}],idle,{gpu.stats.idle_time}")
             if gpu.name.device_id == max_gpu:
                 max_gpu_idletime = float(gpu.stats.idle_time.scale_to("us"))
-        # print(f"{args.mode},bottom,{gpu_compute_times[max_gpu] + gpu_data_times[max_gpu] + max_gpu_idletime}")
-        # print(f"{args.mode},middle,{gpu_compute_times[max_gpu] + max_gpu_idletime}")
-        # print(f"{args.mode},top,{max_gpu_idletime}")
         print(f"{args.mode},bottom,{float(simulated_time.scale_to('s'))}")
         print(f"{args.mode},middle,{float(gpu_compute_times[max_gpu])/1000000}")
         print(f"{args.mode},top,{float(gpu_data_times[max_gpu])/1000000}")
