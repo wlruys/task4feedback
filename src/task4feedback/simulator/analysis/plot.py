@@ -682,3 +682,38 @@ def make_dag_and_timeline(
         if show_plot:
             cursor()
             plt.show()
+
+
+def plot_data_movement_count(
+    simulator: SimulatedScheduler,
+    threshold: int = 0,  # Threshold for data movement in Bytes. Only plot data movements that are greater than this threshold
+    bandwidth: float = 1e10,  # Bandwidth of the network in Bytes/s
+    args=None,  # argparse arguments
+):
+    data_tasks: DataTaskRecorder = simulator.recorders.get(DataTaskRecorder)
+
+    data_movement = []
+    for task in data_tasks.tasks.values():
+        if task.source.device_id == task.devices[0].device_id:
+            continue
+        if (task.end_time - task.start_time) < (1e6 * threshold / bandwidth):
+            continue
+        data_movement.append(task.start_time.duration)
+    # Sort the data movement times
+    data_movement.sort()
+
+    # Generate the accumulated count of data movements over time
+    accumulated_movements = list(range(1, len(data_movement) + 1))
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.plot(data_movement, accumulated_movements, drawstyle="steps-post")
+    plt.xlabel("Time(us)")
+    plt.ylabel("Accumulated Number of Data Movements")
+    plt.title(
+        f"Accumulated Data Movements Over Time\n{args.mode}_{args.sort}Order_{args.gpus}GPUs_Initial:{args.distribution}_{args.time}us_{args.steps}Steps_Simulated Time: {simulator.time}"
+    )
+    plt.grid(True)
+    plt.savefig(
+        f"{args.mode}_{args.sort}_{args.gpus}_{args.distribution}_{args.time}us_{args.steps}Steps.png"
+    )  # You can change the file format to .pdf, .svg, etc.
