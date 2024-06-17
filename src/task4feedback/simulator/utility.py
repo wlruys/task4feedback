@@ -105,6 +105,7 @@ def calculate_heft_upward_rank(tasklist, taskmap, scheduler_state):
 
         # Calculate the HEFT rank
         task.info.heft_rank = duration + max_dependent_rank
+        print(f"{task.name} ranking {task.info.heft_rank}")
 
     # Sort task list by heft rank
     return reversed(sorted(tasklist, key=get_heft_rank))
@@ -169,12 +170,12 @@ def map_task_heft_with_cache(
             rw = task.info.data_dependencies[AccessType.READ_WRITE]
             src_data = read + write + rw
 
-        ready_time = 0
         earliest_start = None
         earliest_start_agent = -1
 
         # Try to insert each task to each agent (device)
         for agent_id, agent in agents.items():
+            ready_time = 0
             # Collect unique data to be moved from dependency tasks
             # This is used to identify data from initial placement
             moved_data_from_dependencies = set()
@@ -296,13 +297,13 @@ def map_task_heft_with_cache(
             else:
                 candidate_earliest_start = ready_time
 
-            print(
-                f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}"
-            )
             if earliest_start == None or earliest_start > candidate_earliest_start:
                 earliest_start_agent = agent_id
                 earliest_start = candidate_earliest_start
 
+            print(
+                f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}"
+            )
         # Add data to cache
         for data in src_data:
             data_cache[Device(Architecture.GPU, earliest_start_agent)].add(data.id)
@@ -381,12 +382,12 @@ def map_task_heft(
             rw = task.info.data_dependencies[AccessType.READ_WRITE]
             src_data = read + write + rw
 
-        ready_time = 0
         earliest_start = None
         earliest_start_agent = -1
 
         # Try to insert each task to each agent (device)
         for agent_id, agent in agents.items():
+            ready_time = 0
             # Collect unique data to be moved from dependency tasks
             # This is used to identify data from initial placement
             moved_data_from_dependencies = set()
@@ -497,16 +498,18 @@ def map_task_heft(
                         task.info.id,
                         "(no slack) earliest start:",
                         candidate_earliest_start,
+                        " agent available:",
+                        agent[-1].end
                     )
             else:
                 candidate_earliest_start = ready_time
+            if earliest_start == None or earliest_start > candidate_earliest_start:
+                earliest_start_agent = agent_id
+                earliest_start = candidate_earliest_start
 
             print(
                 f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}"
             )
-            if earliest_start == None or earliest_start > candidate_earliest_start:
-                earliest_start_agent = agent_id
-                earliest_start = candidate_earliest_start
 
         heft_event = HEFTEvent(task, earliest_start, earliest_start + duration)
         if update_task_order:
