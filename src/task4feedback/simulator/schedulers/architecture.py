@@ -58,8 +58,10 @@ class SchedulerArchitecture:
         raise NotImplementedError()
         return []
 
-    def add_initial_tasks(self, task: SimulatedTask):
-        pass
+    def add_initial_tasks(
+        self, tasks: List[SimulatedTask], scheduler_state: SystemState
+    ):
+        raise NotImplementedError()
 
     def mapper(
         self, scheduler_state: SystemState, event: Event, **kwargs

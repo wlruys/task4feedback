@@ -422,7 +422,7 @@ class DataTaskRecorder(Recorder):
                             # print("In if")
                             for device in devices:
                                 communication_energy += device.energy * data_size
-                                print(communication_energy)
+                                # print(communication_energy)
 
                         if isinstance(task, SimulatedEvictionTask):
                             type = TaskType.EVICTION

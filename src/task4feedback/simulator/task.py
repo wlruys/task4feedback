@@ -98,8 +98,8 @@ class TaskCounters:
 
     def __post_init__(self):
         if self.n_deps is not None:
-            self.remaining_deps_states = np.zeros((len(TaskState),), dtype=np.int8)
-            self.remaining_deps_status = np.zeros((len(TaskStatus),), dtype=np.int8)
+            self.remaining_deps_states = np.zeros((len(TaskState),), dtype=np.int32)
+            self.remaining_deps_status = np.zeros((len(TaskStatus),), dtype=np.int32)
 
             for state in TaskState:
                 self.remaining_deps_states[state] = self.n_deps
@@ -124,7 +124,6 @@ class TaskCounters:
             return value == 0
 
     def notified_state(self, new_state: TaskState) -> Optional[TaskStatus]:
-        # print(f"New state of {self}: {new_state}", self.remaining_deps_states)
         self.remaining_deps_states[new_state] -= 1
         if self.check_count(new_state):
             if new_status := TaskState.matching_status(new_state):
@@ -132,6 +131,7 @@ class TaskCounters:
 
     def notified_status(self, new_status: TaskStatus) -> None:
         self.remaining_deps_status[new_status] -= 1
+        self.check_count(new_status)
 
 
 from copy import deepcopy
@@ -160,7 +160,11 @@ class SimulatedTask:
     )
     duration: Time = field(default_factory=Time)
     completion_time: Time = field(default_factory=Time)
+    # This is only used for online EFT-based schedulers
+    est_completion_time: float = 0
+    wait_time: Time = field(default_factory=Time)
     init: bool = True
+    in_ready_queue: bool = False
 
     def __post_init__(self):
         if self.init:
@@ -170,7 +174,6 @@ class SimulatedTask:
             self.init = False
 
     def __deepcopy__(self, memo):
-
         state = self.state
         status = {s for s in self.status}
 
@@ -274,7 +277,6 @@ class SimulatedTask:
         states: List[TaskState] = [],
         statuses: List[TaskStatus] = [],
     ):
-        # print(f"Internal adding dependency {task} to {self.name}")
         self.dependencies.append(task)
         for state in states:
             self.counters.remaining_deps_states[state] += 1
@@ -302,8 +304,12 @@ class SimulatedTask:
 
         for taskid in self.dependents:
             task = taskmap[taskid]
-            # print(f"Task {self.name} notifying {task.name} of state change")
-            # print(f"Dependencies of {task.name}: {task.dependencies}")
+
+            if state in [TaskState.MAPPED, TaskState.RESERVED] and isinstance(
+                task, SimulatedDataTask
+            ):
+                continue
+
             if new_status := task.counters.notified_state(state):
                 task.notify_status(new_status, taskmap, time)
 
@@ -314,7 +320,6 @@ class SimulatedTask:
             "Notifying dependents of status change",
             extra=dict(task=self.name, status=status, time=time),
         )
-
         for taskid in self.dependents:
             task = taskmap[taskid]
             task.counters.notified_status(status)
@@ -342,6 +347,7 @@ class SimulatedTask:
         yield "state", self.state
         yield "status", self.status
         yield "duration", self.duration
+        yield "func_id", self.info.func_id
         yield "dependencies", self.dependencies
         yield "assigned_devices", self.assigned_devices
 
@@ -366,7 +372,11 @@ class SimulatedTask:
 
     def add_eviction_dependency(self, task: SimulatedTask):
         assert task.type == TaskType.EVICTION
-        self.add_dependency(task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED])
+        self.add_dependency(
+            task.name,
+            states=[TaskState.LAUNCHED, TaskState.COMPLETED],
+            statuses=[TaskStatus.LAUNCHABLE],
+        )
         task.dependents.append(self.name)
 
         assert self.eviction_tasks is not None
@@ -382,7 +392,11 @@ class SimulatedComputeTask(SimulatedTask):
     type: TaskType = TaskType.COMPUTE
 
     def add_data_dependency(self, task: TaskID):
-        self.add_dependency(task, states=[TaskState.LAUNCHED, TaskState.COMPLETED])
+        self.add_dependency(
+            task,
+            states=[TaskState.LAUNCHED, TaskState.COMPLETED],
+            statuses=[TaskStatus.LAUNCHABLE],
+        )
 
         if self.data_tasks is None:
             self.data_tasks = []
@@ -402,7 +416,6 @@ class SimulatedComputeTask(SimulatedTask):
         return resources
 
     def __deepcopy__(self, memo):
-
         return SimulatedComputeTask(
             name=self.name,
             info=self.info,

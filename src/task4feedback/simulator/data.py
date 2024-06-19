@@ -843,6 +843,7 @@ class SimulatedData:
     info: DataInfo = None
     status: DataStatus = None
     init: bool = True
+    stats: DataStats = field(default_factory=DataStats)
     eviction_count: int = 0
 
     def __deepcopy__(self, memo):

@@ -24,10 +24,10 @@ from time import perf_counter as clock
 from task4feedback.simulator.rl.models.env import *
 from task4feedback.simulator.rl.models.agent_using_oracle import *
 
+import numpy as np
 
-parser = argparse.ArgumentParser(prog="Stencil")
+parser = argparse.ArgumentParser(prog="Sweep")
 
-parser.add_argument("-t", "--time", type=int, help="time", default=138)
 parser.add_argument(
     "-m",
     "--mode",
@@ -47,11 +47,9 @@ parser.add_argument(
     help="the number of episodes (-1 for inifite loop)",
     default=-1,
 )
-parser.add_argument("-s", "--steps", type=int, help="stencil steps", default=15)
-parser.add_argument("-w", "--width", type=int, help="stencil width", default=8)
-parser.add_argument(
-    "-dm", "--dimensions", type=int, help="stencil dimensions", default=2
-)
+parser.add_argument("-s", "--steps", type=int, help="sweep steps", default=10)
+parser.add_argument("-w", "--width", type=int, help="sweep width", default=10)
+parser.add_argument("-dm", "--dimensions", type=int, help="sweep dimensions", default=1)
 parser.add_argument(
     "-o",
     "--sort",
@@ -91,9 +89,9 @@ parser.add_argument(
     action="store_true",
 )
 parser.add_argument("-g", "--gpus", type=int, help="number of gpus", default=4)
-parser.add_argument("-pb", "--p2p", type=str, help="P2P bandwidth", default="10")
+parser.add_argument("-pb", "--p2p", type=str, help="P2P bandwidth", default="200")
 parser.add_argument(
-    "-dd", "--data_size", type=float, help="per-task data size in GB", default="4"
+    "-dd", "--data_size", type=float, help="per-task data size in GB", default="1"
 )
 parser.add_argument(
     "-d",
@@ -102,42 +100,72 @@ parser.add_argument(
     help="rr: distributing data to gpus in rr, cpu: distributing data from cpu, random: randomly distributing data to gpus",
     default="rr",
 )
-parser.add_argument(
-    "-i",
-    "--ignore_initial_placement",
-    help="ignore initial placement during HEFT calculation",
-    action="store_true",
-)
 
-parser.add_argument(
-    "-id",
-    "--interior_data_size",
-    type=str,
-    help="interior data size in MB",
-    default="63",
-)
-
-parser.add_argument(
-    "-bd",
-    "--boundary_data_size",
-    type=str,
-    help="boundary data size in MB",
-    default="0.03",
-)
 
 args = parser.parse_args()
 
 
+@dataclass(slots=True)
+class DataPlacer:
+    cpu_size: float = 0
+    gpu_size: float = 0
+    num_gpus: int = 0
+    data_size: float = 0
+
+    device_data_sizes: dict = field(default_factory=dict, init=False)
+    device_data_limit: dict = field(default_factory=dict, init=False)
+
+    def __post_init__(self):
+        self.device_data_limit[Device(Architecture.CPU, 0)] = self.cpu_size
+        self.device_data_sizes[Device(Architecture.CPU, 0)] = 0
+        for i in range(self.num_gpus):
+            self.device_data_limit[Device(Architecture.GPU, i)] = self.gpu_size
+            self.device_data_sizes[Device(Architecture.GPU, i)] = 0
+
+    def rr_gpu_placement(self, data_id: DataID) -> Devices:
+        chosen = data_id.idx[-1] % self.num_gpus
+        if (
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] + self.data_size
+            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+        ):
+            return Device(Architecture.CPU, 0)
+        else:
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size
+            return Device(Architecture.GPU, chosen)
+
+    def random_gpu_placement(self, data_id: DataID) -> Devices:
+        np.random.seed(None)
+        chosen = np.random.randint(0, self.num_gpus)
+        if (
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] + self.data_size
+            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+        ):
+            return Device(Architecture.CPU, 0)
+        else:
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size
+            return Device(Architecture.GPU, chosen)
+
+
 def test_data():
 
-    interior_size = parse_size(args.interior_data_size + " MB")  #  63 MB
-    boundary_size = parse_size(args.boundary_data_size + " MB")  # ~0.03 MB
+    def cpu_data_placement(data_id: DataID) -> Devices:
+        return Device(Architecture.CPU, 0)
+
+    def random_gpu_placement(data_id: DataID) -> Devices:
+        np.random.seed(None)
+        return Device(Architecture.GPU, np.random.randint(0, args.gpus))
+
+    def rr_gpu_placement(data_id: DataID) -> Devices:
+        return Device(Architecture.GPU, data_id.idx[-1] % args.gpus)
 
     def sizes(data_id: DataID) -> int:
-        return boundary_size if data_id.idx[1] == 1 else interior_size
+        if data_id.idx[0] == 1:
+            return args.data_size * 1024 * 1024 * 1024
+        else:
+            return int(np.sqrt(args.data_size * 1024 * 1024 * 1024))
 
     def homog_task_duration():
-        return args.time
+        return 10000
 
     def func_type_id(task_id: TaskID):
         return 0
@@ -154,7 +182,7 @@ def test_data():
         return placement_info
 
     def get_task_sorting_method(episode: int) -> TaskOrderType:
-        if args.sort == "heft":
+        if args.sort == "heft" or args.mode == "heft":
             return TaskOrderType.HEFT
         elif args.sort == "random":
             si = args.sorting_interval
@@ -167,41 +195,23 @@ def test_data():
         else:
             return TaskOrderType.DEFAULT
 
-    topo_config = {
-        "P2P_BW": parse_size(args.p2p + " GB"),
-        "H2D_BW": parse_size("10 GB"),
-        "D2H_BW": parse_size("10 GB"),
-        "GPU_MEM": parse_size("16 GB"),
-        "CPU_MEM": parse_size("130000 GB"),
-        "GPU_COPY_ENGINES": 3,
-        "CPU_COPY_ENGINES": 3,
-        "NGPUS": args.gpus,
-    }
-
-    data_config = StencilDataGraphConfig()
+    placer = DataPlacer(
+        cpu_size=13000, gpu_size=7, num_gpus=args.gpus, data_size=args.data_size
+    )
+    data_config = SweepDataGraphConfig()
     data_config.initial_sizes = sizes
     data_config.n_devices = args.gpus
-    data_config.dimensions = args.dimensions
-    data_config.width = args.width
-
-    placer = DataPlacer(
-        cpu_size=topo_config["CPU_MEM"],
-        gpu_size=topo_config["GPU_MEM"],
-        num_gpus=args.gpus,
-        data_size=sizes,
-        stencil_width=args.width,
-    )
+    data_config.large_size = args.data_size
+    data_config.small_size = args.data_size
 
     if args.distribution == "rr":
         data_config.initial_placement = placer.rr_gpu_placement
     elif args.distribution == "cpu":
-        data_config.initial_placement = placer.cpu_data_placement
+        data_config.initial_placement = cpu_data_placement
     elif args.distribution == "random":
         data_config.initial_placement = placer.random_gpu_placement
-    elif args.distribution == "opt":
-        data_config.initial_placement = placer.optimal_placement
 
-    config = StencilConfig(
+    config = SweepConfig(
         steps=args.steps,
         width=args.width,
         dimensions=args.dimensions,
@@ -227,6 +237,17 @@ def test_data():
     task_order_log = None
     si = args.sorting_interval
 
+    topo_config = {
+        "P2P_BW": parse_size(args.p2p + " GB"),
+        "H2D_BW": parse_size("10 GB"),
+        "D2H_BW": parse_size("10 GB"),
+        "GPU_MEM": parse_size("7 GB"),
+        "CPU_MEM": parse_size("1300 GB"),
+        "GPU_COPY_ENGINES": 2,
+        "CPU_COPY_ENGINES": 2,
+        "NGPUS": num_gpus,
+    }
+
     mapper = TaskMapper()
 
     while True:
@@ -245,6 +266,16 @@ def test_data():
         print_graph_info(G)
         calculate_critical_path(G, args.gpus)
 
+        """
+        nx_graph = build_mapping_networkx_graph(tasks, topology)
+        generations = nx.topological_generations(nx_graph)
+        generations = [g for g in generations]
+        gen_time = 0;
+        for level in generations:
+            gen_time += (np.ceil(len(level)/args.gpus) * homog_task_duration()) / 1e6
+        print("BSP,simtime,", gen_time)
+        """
+
         simulator_config = SimulatorConfig(
             topology=topology,
             tasks=tasks,
@@ -252,7 +283,6 @@ def test_data():
             task_order_log=task_order_log,
             scheduler_type="parla",
             mapper_type=mapper_mode,
-            consider_initial_placement=(not args.ignore_initial_placement),
             randomizer=Randomizer(),
             task_order_mode=task_order_mode,
             use_duration_noise=args.noise,
@@ -272,13 +302,7 @@ def test_data():
         episode += 1
         simulated_time, task_order_log, success = simulator.run()
         end_t = clock()
-        # make_dag_and_timeline(
-        #     simulator=simulator,
-        #     # show_plot=True,
-        #     plot_timeline=False,
-        #     save_file=True,
-        #     file_name=f"{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}_{str(args.gpus)}GPUs_{args.steps}Steps_{args.width}Width",
-        # )
+        make_dag_and_timeline(simulator=simulator)
         # if not rl_agent.is_training_mode():
         cum_wallclock_t += end_t - start_t
         print("Wallclock,", episode, ",", cum_wallclock_t)
@@ -286,22 +310,66 @@ def test_data():
         print(f"Simulated Time: {simulator.time}")
         print(f"Success: {success}")
 
-        plot_data_movement_count(
-            simulator,
-            threshold=60 * 1024 * 1024,
-            bandwidth=parse_size(args.p2p + " GB"),
-            args=args,
+        data_tasks: DataTaskRecorder = simulator.recorders.get(DataTaskRecorder)
+        compute_tasks: ComputeTaskRecorder = simulator.recorders.get(
+            ComputeTaskRecorder
         )
+
+        compute_per_gpu = {}
+        for task in compute_tasks.tasks.values():
+            gpu_id = task.devices[0].device_id
+            if gpu_id not in compute_per_gpu:
+                compute_per_gpu[gpu_id] = 0
+            else:
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                compute_per_gpu[gpu_id] += (
+                    task.end_time.duration - task.start_time.duration
+                )
+
+        movement_per_gpu = {}
+        for task in data_tasks.tasks.values():
+            gpu_id = task.devices[0].device_id
+            if gpu_id not in movement_per_gpu:
+                movement_per_gpu[gpu_id] = 0
+            else:
+                movement_per_gpu[gpu_id] += (
+                    task.end_time.duration - task.start_time.duration
+                )
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                print("gpuid:", gpu_id, " accum:", movement_per_gpu[gpu_id])
+
+        gpu_compute_times = {}
+        gpu_data_times = {}
+        max_gpu = None
+        max_gpu_times = -1
+        max_gpu_idletime = -1
+        for gpu, time in compute_per_gpu.items():
+            gpu_compute_times[gpu] = time
+            print(f"GPU[{gpu}],compute,{time}")
+        for gpu, time in movement_per_gpu.items():
+            gpu_data_times[gpu] = time
+            print(f"GPU[{gpu}],data,{time}")
+            if max_gpu is None or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times:
+                max_gpu = gpu
+                max_gpu_times = gpu_compute_times[gpu] + gpu_data_times[gpu]
+        for gpu in topology.devices:
+            if gpu.name.architecture == Architecture.CPU:
+                continue
+            print(f"GPU[{gpu.name.device_id}],idle,{gpu.stats.idle_time}")
+            if gpu.name.device_id == max_gpu:
+                max_gpu_idletime = float(gpu.stats.idle_time.scale_to("us"))
+        # print(f"{args.mode},bottom,{gpu_compute_times[max_gpu] + gpu_data_times[max_gpu] + max_gpu_idletime}")
+        # print(f"{args.mode},middle,{gpu_compute_times[max_gpu] + max_gpu_idletime}")
+        # print(f"{args.mode},top,{max_gpu_idletime}")
+        print(f"{args.mode},bottom,{float(simulated_time.scale_to('s'))}")
+        print(f"{args.mode},middle,{float(gpu_compute_times[max_gpu])/1000000}")
+        print(f"{args.mode},top,{float(gpu_data_times[max_gpu])/1000000}")
 
 
 if __name__ == "__main__":
     print("Mode:", args.mode)
     print("Noise enabled?:", args.noise)
     print("Noise scale:", args.noise_scale)
-    print(
-        "Ignore initial placement during HEFT calculation?:",
-        args.ignore_initial_placement,
-    )
     print("# episodes:", args.episode)
     print("Steps:", args.steps)
     print("Width:", args.width)
@@ -312,7 +380,6 @@ if __name__ == "__main__":
     print("Loading task processing order stored?:", args.load_order)
     print("Saving task execution time noise?:", args.save_noise)
     print("Loading task execution time noise?:", args.load_noise)
-    print("Per-task time (It is used only in homogeneous task time mode)", args.time)
     print("# GPUs?:", args.gpus)
     print("p2p bandwidth?:", args.p2p)
     print("data size:", args.data_size)

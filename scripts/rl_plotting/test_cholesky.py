@@ -35,7 +35,7 @@ from time import perf_counter as clock
 
 
 parser = argparse.ArgumentParser(prog="Cholesky")
-parser.add_argument("-t", "--time", type=int, help="time", default=34708)
+parser.add_argument("-t", "--time", type=int, help="time", default=5000)
 parser.add_argument(
     "-m",
     "--mode",
@@ -95,7 +95,9 @@ parser.add_argument(
     action="store_true",
 )
 parser.add_argument("-g", "--gpus", type=int, help="number of gpus", default=4)
-parser.add_argument("-pb", "--p2p", type=str, help="P2P bandwidth (GB/s)", default="10")
+parser.add_argument(
+    "-pb", "--p2p", type=str, help="P2P bandwidth (GB/s)", default="200"
+)
 parser.add_argument(
     "-dd", "--data_size", type=float, help="per-task data size (GB/s)", default="1"
 )
@@ -106,23 +108,72 @@ parser.add_argument(
     help="rr: distributing data to gpus in rr, cpu: distributing data from cpu, random: randomly distributing data to gpus",
     default="rr",
 )
-parser.add_argument(
-    "-i",
-    "--ignore_initial_placement",
-    help="ignore initial placement during HEFT calculation",
-    action="store_true",
-)
+
 
 args = parser.parse_args()
 
 
+@dataclass(slots=True)
+class DataPlacer:
+    cpu_size: float = 0
+    gpu_size: float = 0
+    num_gpus: int = 0
+    data_size: float = 0
+
+    device_data_sizes: dict = field(default_factory=dict, init=False)
+    device_data_limit: dict = field(default_factory=dict, init=False)
+
+    def __post_init__(self):
+        self.device_data_limit[Device(Architecture.CPU, 0)] = self.cpu_size
+        self.device_data_sizes[Device(Architecture.CPU, 0)] = 0
+        for i in range(self.num_gpus):
+            self.device_data_limit[Device(Architecture.GPU, i)] = self.gpu_size
+            self.device_data_sizes[Device(Architecture.GPU, i)] = 0
+
+    def rr_gpu_placement(self, data_id: DataID) -> Devices:
+        chosen = data_id.idx[0] % self.num_gpus
+        if (
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] + self.data_size
+            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+        ):
+            return Device(Architecture.CPU, 0)
+        else:
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size
+            return Device(Architecture.GPU, chosen)
+
+    def random_gpu_placement(self, data_id: DataID) -> Devices:
+        np.random.seed(None)
+        chosen = np.random.randint(0, self.num_gpus)
+        if (
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] + self.data_size
+            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+        ):
+            return Device(Architecture.CPU, 0)
+        else:
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size
+            return Device(Architecture.GPU, chosen)
+
+
 def test_data():
+    def cpu_data_placement(data_id: DataID) -> Devices:
+        return Device(Architecture.CPU, 0)
+
+    def random_gpu_placement(data_id: DataID) -> Devices:
+        np.random.seed(None)
+        return Device(Architecture.GPU, np.random.randint(0, args.gpus))
+
+    def rr_gpu_placement(data_id: DataID) -> Devices:
+        return Device(Architecture.GPU, data_id.idx[-1] % args.gpus)
+
     def sizes(data_id: DataID) -> int:
-        return args.data_size * 1024 * 1024 * 1024  # GB
+        return args.data_size * 1024 * 1024 * 1024  # 1 GB
 
     def task_duration_per_func(task_id: TaskID):
         duration = args.time
         return duration
+
+    def homog_task_duration():
+        return args.time
 
     def func_type_id(task_id: TaskID):
         func_id = 0
@@ -164,22 +215,8 @@ def test_data():
         else:
             return TaskOrderType.DEFAULT
 
-    topo_config = {
-        "P2P_BW": parse_size(args.p2p + " GB"),
-        "H2D_BW": parse_size("10 GB"),
-        "D2H_BW": parse_size("10 GB"),
-        "GPU_MEM": parse_size("16 GB"),
-        "CPU_MEM": parse_size("1300 GB"),
-        "GPU_COPY_ENGINES": 3,
-        "CPU_COPY_ENGINES": 3,
-        "NGPUS": args.gpus,
-    }
-
     placer = DataPlacer(
-        cpu_size=topo_config["CPU_MEM"],
-        gpu_size=topo_config["GPU_MEM"],
-        num_gpus=args.gpus,
-        data_size=sizes,
+        cpu_size=13000, gpu_size=16, num_gpus=args.gpus, data_size=args.data_size
     )
     data_config = CholeskyDataGraphConfig()
     data_config.initial_sizes = sizes
@@ -188,7 +225,7 @@ def test_data():
     if args.distribution == "rr":
         data_config.initial_placement = placer.rr_gpu_placement
     elif args.distribution == "cpu":
-        data_config.initial_placement = placer.cpu_data_placement
+        data_config.initial_placement = cpu_data_placement
     elif args.distribution == "random":
         data_config.initial_placement = placer.random_gpu_placement
 
@@ -216,6 +253,17 @@ def test_data():
     task_order_log = None
     si = args.sorting_interval
 
+    topo_config = {
+        "P2P_BW": parse_size(args.p2p + " GB"),
+        "H2D_BW": parse_size("10 GB"),
+        "D2H_BW": parse_size("10 GB"),
+        "GPU_MEM": parse_size("16 GB"),
+        "CPU_MEM": parse_size("1300 GB"),
+        "GPU_COPY_ENGINES": 3,
+        "CPU_COPY_ENGINES": 3,
+        "NGPUS": num_gpus,
+    }
+
     mapper = TaskMapper()
     while True:
         if episode >= args.episode and args.episode != -1:
@@ -239,7 +287,6 @@ def test_data():
             task_order_log=task_order_log,
             scheduler_type="parla",
             mapper_type=mapper_mode,
-            consider_initial_placement=(not args.ignore_initial_placement),
             randomizer=Randomizer(),
             task_order_mode=task_order_mode,
             use_duration_noise=args.noise,
@@ -260,7 +307,7 @@ def test_data():
         episode += 1
         simulated_time, task_order_log, success = simulator.run()
         end_t = clock()
-        # make_dag_and_timeline(simulator=simulator)
+        make_dag_and_timeline(simulator=simulator)
         # if not rl_agent.is_training_mode():
         cum_wallclock_t += end_t - start_t
         print("Wallclock,", episode, ",", cum_wallclock_t)
@@ -279,12 +326,7 @@ def test_data():
             if gpu_id not in compute_per_gpu:
                 compute_per_gpu[gpu_id] = 0
             else:
-                print(
-                    "task:",
-                    task.name,
-                    " duration:",
-                    task.end_time.duration - task.start_time.duration,
-                )
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
                 compute_per_gpu[gpu_id] += (
                     task.end_time.duration - task.start_time.duration
                 )
@@ -298,12 +340,7 @@ def test_data():
                 movement_per_gpu[gpu_id] += (
                     task.end_time.duration - task.start_time.duration
                 )
-                print(
-                    "task:",
-                    task.name,
-                    " duration:",
-                    task.end_time.duration - task.start_time.duration,
-                )
+                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
                 print("gpuid:", gpu_id, " accum:", movement_per_gpu[gpu_id])
 
         gpu_compute_times = {}
@@ -317,10 +354,7 @@ def test_data():
         for gpu, time in movement_per_gpu.items():
             gpu_data_times[gpu] = time
             print(f"GPU[{gpu}],data,{time}")
-            if (
-                max_gpu is None
-                or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times
-            ):
+            if max_gpu is None or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times:
                 max_gpu = gpu
                 max_gpu_times = gpu_compute_times[gpu] + gpu_data_times[gpu]
         for gpu in topology.devices:
@@ -341,10 +375,6 @@ if __name__ == "__main__":
     print("Mode:", args.mode)
     print("Noise enabled?:", args.noise)
     print("Noise scale:", args.noise_scale)
-    print(
-        "Ignore initial placement during HEFT calculation?:",
-        args.ignore_initial_placement,
-    )
     print("# episodes:", args.episode)
     print("block x block:", args.block)
     print("Sorting enabled?:", args.sort)
