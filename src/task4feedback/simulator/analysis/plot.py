@@ -540,7 +540,7 @@ def make_dag_and_timeline(
                 name = str(name)
                 if color_dag:
                     node = pydot.Node(
-                        name=name,
+                        name=str(f"T[{idx[0]:02d}, {idx[1]:02d}, {idx[2]:02d}]"),
                         style="filled",
                         fillcolor=device_colors[
                             task_results[name]["devices"][0].device_id
@@ -548,14 +548,18 @@ def make_dag_and_timeline(
                     )
                 else:
                     node = pydot.Node(
-                        name=name,
+                        name=str(f"T[{idx[0]:02d}, {idx[1]:02d}, {idx[2]:02d}]"),
                         style="filled",
                         fillcolor="white",
                     )
                 graph.add_node(node)
                 for dep_id in task_info.dependencies:
-                    dep_id = str(dep_id)
-                    edge = pydot.Edge(dep_id, name)
+                    dep_id = str(
+                        f"T[{dep_id.task_idx[0]:02d}, {dep_id.task_idx[1]:02d}, {dep_id.task_idx[2]:02d}]"
+                    )
+                    edge = pydot.Edge(
+                        dep_id, str(f"T[{idx[0]:02d}, {idx[1]:02d}, {idx[2]:02d}]")
+                    )
                     graph.add_edge(edge)
 
         if save_file:
