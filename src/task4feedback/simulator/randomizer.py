@@ -2,7 +2,8 @@ from .task import *
 from ..types import *
 import numpy as np
 import random
-#from .schedulers import SystemState
+
+# from .schedulers import SystemState
 from .preprocess import *
 
 
@@ -36,7 +37,8 @@ def gaussian_noise(duration: float, scale: float = 0.05) -> int:
 
 def log_normal_noise(duration: float, scale: float = 0.2) -> int:
     np.random.seed(None)
-    noise = (np.random.lognormal(0, scale) - np.exp(scale**2/2)) * duration
+    noise = (np.random.lognormal(0, scale) - np.exp(scale**2 / 2)) * duration
+    # noise = max(0, (np.random.lognormal(0, scale) - np.exp(scale**2 / 2)) * duration)
     return int(noise)
 
 

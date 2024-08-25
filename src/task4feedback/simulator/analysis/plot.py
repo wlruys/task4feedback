@@ -4,6 +4,7 @@ import numpy as np
 from pandas import *
 import matplotlib.pyplot as plt
 from ...types import *
+from typing import cast
 from task4feedback.simulator.simulator import *
 import pydot
 from mplcursors import cursor  # separate package must be installed
@@ -506,8 +507,9 @@ def make_dag_and_timeline(
     recorders = simulator.recorders
 
     try:
-        compute_task_record: Optional[ComputeTaskRecorder] = recorders.get(
-            ComputeTaskRecorder
+        recorder_instance = recorders.get(ComputeTaskRecorder)
+        compute_task_record: Optional[ComputeTaskRecorder] = cast(
+            Optional[ComputeTaskRecorder], recorder_instance
         )
     except KeyError as e:  # raise error if not found
         raise KeyError(e)
@@ -540,7 +542,7 @@ def make_dag_and_timeline(
                 name = str(name)
                 if color_dag:
                     node = pydot.Node(
-                        name=str(f"T[{idx[0]:02d}, {idx[1]:02d}, {idx[2]:02d}]"),
+                        name=name,
                         style="filled",
                         fillcolor=device_colors[
                             task_results[name]["devices"][0].device_id
@@ -548,18 +550,14 @@ def make_dag_and_timeline(
                     )
                 else:
                     node = pydot.Node(
-                        name=str(f"T[{idx[0]:02d}, {idx[1]:02d}, {idx[2]:02d}]"),
+                        name=name,
                         style="filled",
                         fillcolor="white",
                     )
                 graph.add_node(node)
                 for dep_id in task_info.dependencies:
-                    dep_id = str(
-                        f"T[{dep_id.task_idx[0]:02d}, {dep_id.task_idx[1]:02d}, {dep_id.task_idx[2]:02d}]"
-                    )
-                    edge = pydot.Edge(
-                        dep_id, str(f"T[{idx[0]:02d}, {idx[1]:02d}, {idx[2]:02d}]")
-                    )
+                    dep_id = str(dep_id)
+                    edge = pydot.Edge(dep_id, name)
                     graph.add_edge(edge)
 
         if save_file:
@@ -615,7 +613,7 @@ def make_dag_and_timeline(
 
                     # Draw the horizontal bar
                     bar = ax.barh(
-                        task_record.devices[0].device_id,
+                        task_record.devices[0].device_id - 0.25,
                         duration,
                         left=start_time,
                         height=0.1,
@@ -627,7 +625,7 @@ def make_dag_and_timeline(
                     text_position = start_time + duration / 2
                     ax.text(
                         text_position,
-                        task_record.devices[0].device_id,
+                        task_record.devices[0].device_id - 0.25,
                         str(task_record.source),
                         va="center",
                         ha="center",
@@ -721,3 +719,60 @@ def plot_data_movement_count(
     plt.savefig(
         f"{args.mode}_{args.sort}_{args.gpus}_{args.distribution}_{args.time}us_{args.steps}Steps.png"
     )  # You can change the file format to .pdf, .svg, etc.
+
+
+def eviction_event_checker(
+    task: DataTaskRecord,
+) -> bool:
+    if (
+        task.devices[0].architecture == Architecture.CPU
+        and task.source.architecture != Architecture.CPU
+    ):  # Eviction only happens from GPU to CPU
+        return True
+    return False
+
+
+def data_size_checker(
+    task: DataTaskRecord,
+    threshold: int = 0,
+) -> bool:
+    if (
+        task.data_size > threshold
+        and task.source.device_id
+        != task.devices[0].device_id  # Source and destination should be different
+    ):
+        return True
+    return False
+
+
+def plot_data_event_count(
+    simulator: SimulatedScheduler,
+    rule: Callable[
+        [DataTaskRecord], bool
+    ] = lambda x: False,  # Rule to filter data events. default to false
+    name: str = "",  # {args.mode}_{args.sort}Order_{args.gpus}GPUs_Initial:{args.distribution}_{args.time}us_{args.steps}Steps
+    title: str = "",  # Title of the plot
+    ylabel: str = "Accumulated Number of Data Movements",  # Label of the y-axis
+):
+    data_tasks: DataTaskRecorder = simulator.recorders.get(DataTaskRecorder)
+    if name is "":
+        name = f"DataEventCount_{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}_{str(len(simulator.topology.get_devices(device_type=Architecture.GPU)))}GPUs"
+    data_movement = []
+    for task in data_tasks.tasks.values():
+        if rule(task):
+            data_movement.append(task.start_time.duration)
+    # Sort the data movement times
+    data_movement.sort()
+
+    # Generate the accumulated count of data movements over time
+    accumulated_movements = list(range(1, len(data_movement) + 1))
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.plot(data_movement, accumulated_movements, drawstyle="steps-post")
+    plt.xlabel("Time(us)")
+    plt.xlim((0, simulator.time.duration))
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
+    plt.savefig(f"{name}.png")  # You can change the file format to .pdf, .svg, etc.

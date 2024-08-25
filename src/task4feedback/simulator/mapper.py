@@ -54,6 +54,15 @@ def heft_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
     return (potential_device,)
 
 
+def optimal_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
+    if task.info.z3_allocation == -1:
+        raise ValueError(
+            "Optimal mapping policy requires a valid allocation. Currently only supported in random graph."
+        )
+    potential_device = Device(Architecture.GPU, task.info.z3_allocation)
+    return (potential_device,)
+
+
 def earliest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
     min_time = Time(9999999999999999999)
     chosen_device = None
@@ -120,7 +129,7 @@ def load_balancing(task: SimulatedTask, simulator) -> Optional[Devices]:
     potential_device = None
     potential_devices = task.info.runtime.locations
     # potential_devices = scheduler_state.topology.devices
-        
+
     for device in potential_devices:
         if isinstance(device, Tuple):
             device = device[0]
@@ -166,14 +175,19 @@ def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
             potential_device = device
 
     task.est_completion_time = lowest_workload + float(
-        scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
-                                          scale_to("ms"))
+        scheduler_state.get_task_duration(
+            task, task.info.runtime.locations[0]
+        ).scale_to("ms")
+    )
     perdev_earliest_avail_time[potential_device] = max(
-        task.est_completion_time, perdev_earliest_avail_time[potential_device])
+        task.est_completion_time, perdev_earliest_avail_time[potential_device]
+    )
 
     if logger.ENABLE_LOGGING:
         logger.mapping.debug(
-            (f"Task {task.name}, start:{lowest_workload}, end:{task.est_completion_time}, device:{potential_device}")
+            (
+                f"Task {task.name}, start:{lowest_workload}, end:{task.est_completion_time}, device:{potential_device}"
+            )
         )
 
     # print("task ", task.name ," start:", lowest_workload, " complete:", task.est_completion_time, " potential device:", potential_device)
@@ -201,7 +215,7 @@ def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
         #     continue
 
         if isinstance(device, Tuple):
-           device = device[0]
+            device = device[0]
 
         workload = max(perdev_earliest_avail_time[device], est_ready_time)
         if task.data_tasks is not None:
@@ -214,8 +228,10 @@ def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
                     nonlocal_data += data.size if not is_valid else 0
             # NOTE This assumes that GPU connection bandwidths are all equal
             # NOTE This also assumes that # of GPUs >= 2
-            bandwidth = scheduler_state.topology.connection_pool.bandwidth[1, 2] 
-            print(f"\t task: {task.name} tests device: {device} data size: {nonlocal_data} new workload: {nonlocal_data / bandwidth * 1000} bw: {bandwidth}")
+            bandwidth = scheduler_state.topology.connection_pool.bandwidth[1, 2]
+            print(
+                f"\t task: {task.name} tests device: {device} data size: {nonlocal_data} new workload: {nonlocal_data / bandwidth * 1000 * 1000} bw: {bandwidth}"
+            )
             # Convert to ms
             workload += (nonlocal_data / bandwidth) * 1000
 
@@ -224,14 +240,19 @@ def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
             potential_device = device
 
     task.est_completion_time = lowest_workload + float(
-        scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
-                                          scale_to("ms"))
+        scheduler_state.get_task_duration(
+            task, task.info.runtime.locations[0]
+        ).scale_to("ms")
+    )
     perdev_earliest_avail_time[potential_device] = max(
-        task.est_completion_time, perdev_earliest_avail_time[potential_device])
+        task.est_completion_time, perdev_earliest_avail_time[potential_device]
+    )
 
     if logger.ENABLE_LOGGING:
         logger.mapping.debug(
-            (f"Task {task.name}, start:{lowest_workload}, end:{task.est_completion_time}, device:{potential_device}")
+            (
+                f"Task {task.name}, start:{lowest_workload}, end:{task.est_completion_time}, device:{potential_device}"
+            )
         )
 
     # print("task ", task.name ," start:", lowest_workload, " complete:", task.est_completion_time, " potential device:", potential_device)
@@ -255,24 +276,23 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
     for device in potential_devices:
 
         if isinstance(device, Tuple):
-           device = device[0]
+            device = device[0]
 
         # if device.name.architecture == Architecture.CPU:
         #     continue
 
-        total_workload += scheduler_state.perdev_active_workload[device] 
+        total_workload += scheduler_state.perdev_active_workload[device]
 
     for device in potential_devices:
 
         if isinstance(device, Tuple):
-           device = device[0]
+            device = device[0]
 
         # if device.name.architecture == Architecture.CPU:
         #     continue
 
         workload = scheduler_state.perdev_active_workload[device]
-        norm_workload = (workload / total_workload
-                         if total_workload != 0 else workload)
+        norm_workload = workload / total_workload if total_workload != 0 else workload
         local_data = 0
         nonlocal_data = 0
         total_data = 0
@@ -286,7 +306,9 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
                     nonlocal_data += data.size if not is_valid else 0
                     total_data += data.size
             local_data = local_data / total_data if total_data > 0 else local_data
-            nonlocal_data = nonlocal_data / total_data if total_data > 0 else nonlocal_data
+            nonlocal_data = (
+                nonlocal_data / total_data if total_data > 0 else nonlocal_data
+            )
         score = 50 + (30 * local_data - 30 * nonlocal_data - 10 * norm_workload)
         if score > highest_workload:
             highest_workload = score
@@ -326,14 +348,16 @@ class TaskMapper:
             self.mapping_function = eft_without_data
         elif mapper_type == "heft":
             self.mapping_function = heft_mapping_policy
+        elif mapper_type == "opt":
+            self.mapping_function = optimal_mapping_policy
 
     def map_task(self, task: SimulatedTask, simulator) -> Optional[Devices]:
         sched_state: SystemState = simulator.state
-        
+
         if self.check_allowed(task) is False:
             return None
 
-        if (sched_state.total_num_mapped_tasks >= sched_state.mapper_num_tasks_threshold):
+        if sched_state.total_num_mapped_tasks >= sched_state.mapper_num_tasks_threshold:
             return None
 
         if task.name in self.assignments:
@@ -379,34 +403,41 @@ class RLTaskMapper(TaskMapper):
     indegree: Dict[TaskID, int] = field(default_factory=dict)
 
     def initialize(
-        self, tasks: List[SimulatedTask], scheduler_state: SystemState, scheduler_state_type: str
+        self,
+        tasks: List[SimulatedTask],
+        scheduler_state: SystemState,
+        scheduler_state_type: str,
     ):
         self.collect_task_graph_info(tasks, scheduler_state)
 
     def map_task(self, task: SimulatedTask, simulator) -> Optional[Devices]:
         sched_state: SystemState = simulator.state
-        
+
         if self.check_allowed(task) is False:
             return None
 
-        if (sched_state.total_num_mapped_tasks >= sched_state.mapper_num_tasks_threshold):
+        if sched_state.total_num_mapped_tasks >= sched_state.mapper_num_tasks_threshold:
             return None
 
         curr_state = sched_state.rl_env.create_state(task, simulator, self)
-        assigned_devices = (Device(Architecture.GPU,
-                                  sched_state.rl_mapper.select_device(
-                                      task, curr_state, sched_state)),)
+        assigned_devices = (
+            Device(
+                Architecture.GPU,
+                sched_state.rl_mapper.select_device(task, curr_state, sched_state),
+            ),
+        )
 
         # print(f"Task {task.name} mapped to {assigned_devices}.")
         return assigned_devices
-
 
     def __deepcopy__(self, memo):
         return TaskMapper(
             mapping_function=self.mapping_function,
         )
 
-    def collect_task_graph_info(self, tasks: List[SimulatedTask], scheduler_state: SystemState):
+    def collect_task_graph_info(
+        self, tasks: List[SimulatedTask], scheduler_state: SystemState
+    ):
         """
         Collect a task graph information before simulation starts.
         """
@@ -425,8 +456,10 @@ class RLTaskMapper(TaskMapper):
             self.max_outdegree = max(self.max_outdegree, num_dependents)
             self.max_indegree = max(self.max_indegree, num_dependencies)
             task_duration_float = float(
-                scheduler_state.get_task_duration(task, task.info.runtime.locations[0]).
-                                                  scale_to("us"))
+                scheduler_state.get_task_duration(
+                    task, task.info.runtime.locations[0]
+                ).scale_to("us")
+            )
             self.max_duration = max(self.max_duration, task_duration_float)
 
             # Propagate depth to its successors
@@ -440,11 +473,13 @@ class RLTaskMapper(TaskMapper):
             self.max_depth = max(self.max_depth, task.info.depth)
         self.total_num_tasks = len(tasks)
 
-        print(f"max degree: {self.max_outdegree}, "
-              f"in-degree: {self.max_indegree}"
-              f" total tasks: {self.total_num_tasks}, "
-              f"max depth: {self.max_depth} \n"
-              f"max execution time: {self.max_duration}")
+        print(
+            f"max degree: {self.max_outdegree}, "
+            f"in-degree: {self.max_indegree}"
+            f" total tasks: {self.total_num_tasks}, "
+            f"max depth: {self.max_depth} \n"
+            f"max execution time: {self.max_duration}"
+        )
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
                 f"Total tasks: {self.total_num_tasks}\n"

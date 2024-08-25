@@ -9,23 +9,22 @@ def print_graph_info(G):
     print("Number of edges in G:", G.number_of_edges())
     # Print number of nodes in G
     print("Number of nodes in G:", G.number_of_nodes())
-    # Print the width of the graph level by level
-    generations = nx.topological_generations(G)
-    num_gens = 0
-    widths = []
-    for gen in generations:
-        num_gens += 1
-        widths.append(len(gen))
-    # Print the average width of the graph
-    print("Number of generations(height):", num_gens)
-    # print("Widths of the graph:", widths)
-    print("Widths of the graph:", max(widths))
-    print("Average width of the graph:", sum(widths) / num_gens)
+    # Print level of G
+    print("Density:", nx.density(G) * 2)
+    # Since the graph is directed, the density is multiplied by 2
+    print("avg degree:", sum(dict(G.degree()).values()) / G.number_of_nodes())
+    # print("Degree Centrality:", nx.degree_centrality(G))
+    # print("Diameter:", nx.diameter(G))
+    print("Average Clustering Coefficient:", nx.average_clustering(G))
+    # print("clustering:", nx.clustering(G))
+    # print("Betweenness Centrality:", nx.betweenness_centrality(G))
+    # print("Closeness Centrality:", nx.closeness_centrality(G))
+    # print("Eigenvector Centrality:", nx.eigenvector_centrality(G))
 
 
 def build_networkx_graph_from_infos(
-    tasks: List
-) -> Tuple[nx.DiGraph, Dict[TaskID, str]]:
+    tasks: Mapping[TaskID, TaskInfo],
+) -> nx.DiGraph:
     """
     Build a networkx graph with nodes representing tasks and edges representing dependencies.
     Edges are weighted by the duration of the task such that the critical path length can be computed.

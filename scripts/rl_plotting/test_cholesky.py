@@ -326,7 +326,12 @@ def test_data():
             if gpu_id not in compute_per_gpu:
                 compute_per_gpu[gpu_id] = 0
             else:
-                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                print(
+                    "task:",
+                    task.name,
+                    " duration:",
+                    task.end_time.duration - task.start_time.duration,
+                )
                 compute_per_gpu[gpu_id] += (
                     task.end_time.duration - task.start_time.duration
                 )
@@ -340,7 +345,12 @@ def test_data():
                 movement_per_gpu[gpu_id] += (
                     task.end_time.duration - task.start_time.duration
                 )
-                print("task:", task.name, " duration:", task.end_time.duration - task.start_time.duration)
+                print(
+                    "task:",
+                    task.name,
+                    " duration:",
+                    task.end_time.duration - task.start_time.duration,
+                )
                 print("gpuid:", gpu_id, " accum:", movement_per_gpu[gpu_id])
 
         gpu_compute_times = {}
@@ -354,7 +364,10 @@ def test_data():
         for gpu, time in movement_per_gpu.items():
             gpu_data_times[gpu] = time
             print(f"GPU[{gpu}],data,{time}")
-            if max_gpu is None or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times:
+            if (
+                max_gpu is None
+                or gpu_compute_times[gpu] + gpu_data_times[gpu] > max_gpu_times
+            ):
                 max_gpu = gpu
                 max_gpu_times = gpu_compute_times[gpu] + gpu_data_times[gpu]
         for gpu in topology.devices:

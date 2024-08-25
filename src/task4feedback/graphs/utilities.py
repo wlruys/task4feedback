@@ -217,21 +217,33 @@ class DataPlacer:
     def rr_gpu_placement(self, data_id: DataID) -> Devices:
         if data_id in self.data_id_to_device:
             return self.data_id_to_device[data_id]
-        data_size = self.data_size(data_id)
-        chosen = data_id.idx[-1] % self.num_gpus
-        if (
-            self.device_data_sizes[Device(Architecture.GPU, chosen)] + data_size
-            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
-        ):
-            self.data_id_to_device[data_id] = Device(Architecture.CPU, 0)
-        else:
-            self.device_data_sizes[Device(Architecture.GPU, chosen)] += data_size
-            self.data_id_to_device[data_id] = Device(Architecture.GPU, chosen)
 
-        print(
-            f"data ID: {data_id} size in MB: {data_size} placed: {self.data_id_to_device[data_id]}."
+        data_size = self.data_size(data_id)
+        candidate_devices = sorted(
+            [
+                (device, size)
+                for device, size in self.device_data_sizes.items()
+                if device.architecture == Architecture.GPU
+            ],
+            key=lambda x: x[1],
         )
-        return self.data_id_to_device[data_id]
+
+        for device, current_size in candidate_devices:
+            if current_size + data_size <= self.device_data_limit[device]:
+                self.device_data_sizes[device] += data_size
+                self.data_id_to_device[data_id] = device
+                print(
+                    f"data ID: {data_id} size in MB: {data_size/1024/1024} placed: {device}."
+                )
+                return device
+
+        # If no GPU can accommodate the data, place it on a CPU
+        cpu_device = Device(Architecture.CPU, 0)
+        self.data_id_to_device[data_id] = cpu_device
+        print(
+            f"data ID: {data_id} size in MB: {data_size/1024/1024} placed: {cpu_device}."
+        )
+        return cpu_device
 
     def random_gpu_placement(self, data_id: DataID) -> Devices:
         if data_id in self.data_id_to_device:
@@ -250,14 +262,14 @@ class DataPlacer:
             self.data_id_to_device[data_id] = Device(Architecture.GPU, chosen)
 
         print(
-            f"data ID: {data_id} size in MB: {data_size} placed: {self.data_id_to_device[data_id]}."
+            f"data ID: {data_id} size in MB: {data_size/1024/1024} placed: {self.data_id_to_device[data_id]}."
         )
 
         return self.data_id_to_device[data_id]
 
     def cpu_data_placement(self, data_id: DataID) -> Devices:
         print(
-            f"data ID: {data_id} size in MB: {self.data_size(data_id)} placed: {Device(Architecture.CPU, 0)}."
+            f"data ID: {data_id} size in MB: {self.data_size(data_id)/1024/1024} placed: {Device(Architecture.CPU, 0)}."
         )
         return Device(Architecture.CPU, 0)
 
