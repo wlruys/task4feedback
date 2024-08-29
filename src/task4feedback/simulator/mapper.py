@@ -229,9 +229,9 @@ def eft_with_data(task: SimulatedTask, simulator) -> Optional[Devices]:
             # NOTE This assumes that GPU connection bandwidths are all equal
             # NOTE This also assumes that # of GPUs >= 2
             bandwidth = scheduler_state.topology.connection_pool.bandwidth[1, 2]
-            print(
-                f"\t task: {task.name} tests device: {device} data size: {nonlocal_data} new workload: {nonlocal_data / bandwidth * 1000 * 1000} bw: {bandwidth}"
-            )
+            # print(
+            #     f"\t task: {task.name} tests device: {device} data size: {nonlocal_data} new workload: {nonlocal_data / bandwidth * 1000 * 1000} bw: {bandwidth}"
+            # )
             # Convert to ms
             workload += (nonlocal_data / bandwidth) * 1000
 

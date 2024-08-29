@@ -9,7 +9,7 @@ from ..types import Device, Architecture, TaskState, AccessType
 import bisect
 import random
 
-units = {"B": 1, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4}
+units = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 
 
 def parse_size(size_str: str):

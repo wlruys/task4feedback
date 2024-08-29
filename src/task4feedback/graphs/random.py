@@ -25,9 +25,9 @@ class RandomConfig(GraphConfig):
     # These are here specifically for random graph generation
     # initial_sizes: Callable[[DataID], int] = default_data_sizes
     initial_placement: Callable[[DataID], Devices] = default_data_initial_placement
-    gpu_size_limit: int = 16 * 1000 * 1000 * 1000  # 16 GB
-    p2p_bw: int = 10 * 1000 * 1000 * 1000  # 10GB
-    average_task_duration: int = 10000  # unit of us 10000us == 100MB / 10GB/s
+    gpu_size_limit: int = 16 * 1024 * 1024 * 1024  # 16 GB
+    p2p_bw: int = 10 * 1024 * 1024 * 1024  # 10GB
+    average_task_duration: int = 10000  # unit of us 10000us == 100MB / 10GB/start_time
     # 1us == 100000KB
     no_data: bool = True
     ccr: float = 1  # Computation to Communication Ratio. Higher, more data.
@@ -45,9 +45,7 @@ def make_random_graph(
     tid_to_int: dict[TaskID, int] = {}
     dag: dict[int, list[int]] = {i: [] for i in range(config.nodes)}
     task_times: list[int] = []
-    transfer_times = array = [
-        [0 for _ in range(config.nodes)] for _ in range(config.nodes)
-    ]
+    transfer_times = [[0 for _ in range(config.nodes)] for _ in range(config.nodes)]
 
     random = Random(config.seed)
     average_data_size = int(
@@ -128,7 +126,7 @@ def make_random_graph(
             dep_task_idx = random.randint(0, len(tasks_by_level[total_level - 1]) - 1)
             dependency = tasks_by_level[total_level - 1][dep_task_idx]
             dependency_list.append(dependency)
-            dag[tid_to_int[dependency]].append(tid_to_int[task_id])
+            dag[tid_to_int[task_id]].append(tid_to_int[dependency])
 
             task_mapping = get_mapping(config, task_id)
 
@@ -177,7 +175,7 @@ def make_random_graph(
             task2 = random.choice(higher_level_tasks)
             if task1 not in task_dict[task2].dependencies:
                 task_dict[task2].dependencies.append(task1)
-                dag[tid_to_int[task1]].append(tid_to_int[task2])
+                dag[tid_to_int[task2]].append(tid_to_int[task1])
                 success += 1
                 skipped_levels.append(task2.task_idx[0] - task1_level)
     if config.density > 0:
@@ -205,7 +203,7 @@ def make_random_graph(
                     int(average_data_size / 2),
                     average_data_size * 2,
                 )
-                data_size = data_size - data_size % 100000
+                data_size = data_size - data_size % (1024 * 1024)
 
                 data_dict[dep_data_id] = DataInfo(
                     dep_data_id, data_size, data_placement
@@ -227,54 +225,81 @@ def make_random_graph(
         print("Using Z3 solver")
         # print(f"# of gpu: {config.num_gpus}")
         # print(f"Task times: {task_times}")
-        # print(f"Transfer times: {transfer_times}")
+        # print("Task times:")
+        # for tid, i in tid_to_int.items():
+        #     print(f"{tid} : {task_times[i]}")
+        # print("Transfer Times:")
+        # for i in range(config.nodes):
+        #     for j in range(config.nodes):
+        #         if transfer_times[i][j] != 0:
+        #             # find tid based on int
+        #             for tid, k in tid_to_int.items():
+        #                 if k == i:
+        #                     iid = tid
+        #                 if k == j:
+        #                     jid = tid
+        #             print(f"{iid} -> {jid}: {transfer_times[i][j]}")
         # print(f"DAG: {dag}")
 
         M = len(task_times)  # Number of tasks
         N = config.num_gpus  # Number of devices
 
         # Define Z3 variables
-        x = [Int(f"x_{i}") for i in range(M)]  # Device assignment for each task
-        s = [Int(f"s_{i}") for i in range(M)]  # Start time for each task
-        e = [Int(f"e_{i}") for i in range(M)]  # End time for each task
+        mapped = [Int(f"x_{i}") for i in range(M)]  # Device assignment for each task
+        start_time = [Int(f"s_{i}") for i in range(M)]  # Start time for each task
+        end_time = [Int(f"e_{i}") for i in range(M)]  # End time for each task
         T = Int("T")  # Makespan
 
         solver = Optimize()
 
         # Constraints for device assignment
         for i in range(M):
-            solver.add(And(x[i] >= 0, x[i] < N))
+            solver.add(And(mapped[i] >= 0, mapped[i] < N))
 
         # Constraints for start and end times (ensure non-negative times)
         for i in range(M):
-            solver.add(s[i] >= 0)
-            solver.add(e[i] == s[i] + task_times[i])
-            solver.add(e[i] >= s[i])
+            solver.add(start_time[i] >= 0)
+            solver.add(end_time[i] == start_time[i] + task_times[i])
+            solver.add(end_time[i] >= start_time[i])
 
         # Precedence constraints
         for task in range(M):
             for dep1 in dag[task]:  # Iterate over all dependencies
+                # If task is assigned to the same device as its dependency, ensure that it starts after the dependency ends
+                solver.add(
+                    If(
+                        mapped[task] == mapped[dep1],
+                        start_time[task] >= end_time[dep1],
+                        start_time[task] >= end_time[dep1] + transfer_times[dep1][task],
+                    )
+                )
+                # Since the communication starts when the last dependent task ends, add the transfer time to the end of all dependent tasks
                 for dep2 in dag[task]:
                     if dep1 == dep2:
                         continue
                     solver.add(
                         If(
-                            x[task] == x[dep1],
-                            s[dep1] >= e[task],
-                            s[dep1] >= e[task] + transfer_times[task][dep1],
+                            mapped[task] == mapped[dep1],
+                            True,
+                            start_time[task]
+                            >= end_time[dep2] + transfer_times[dep1][task],
                         )
                     )
+                    # Below is assuming perfect prefetcher.
+                    # Dependent data is moved to the successor when the task is finished.
+                    # This is not the case for current simulator.
+                    # Current simulator starts moving data when all the dependent tasks are finished.
                     # solver.add(
                     #     If(
-                    #         x[task] == x[dep1],
-                    #         If(x[task] == x[dep2],),
-                    #         s[dep1] >= e[task] + transfer_times[task][dep1],
+                    #         mapped[task] == mapped[dep1],
+                    #         If(mapped[task] == mapped[dep2],),
+                    #         start_time[dep1] >= end_time[task] + transfer_times[task][dep1],
                     #     )
                     # )
 
         # Makespan constraints
         for i in range(M):
-            solver.add(T >= e[i])
+            solver.add(T >= end_time[i])
 
         # Ensure that makespan is non-negative
         solver.add(T >= 0)
@@ -284,9 +309,10 @@ def make_random_graph(
             for j in range(i + 1, M):
                 solver.add(
                     If(
-                        x[i] == x[j],
+                        mapped[i] == mapped[j],
                         Or(
-                            e[i] <= s[j], e[j] <= s[i]
+                            end_time[i] <= start_time[j],
+                            end_time[j] <= start_time[i],
                         ),  # Task i ends before Task j starts or vice versa
                         True,
                     )
@@ -298,11 +324,11 @@ def make_random_graph(
         # Check for solution
         if solver.check() == sat:
             model = solver.model()
-            best_mapping = [model.evaluate(x[i]).as_long() for i in range(M)]
-            best_start_times = [model.evaluate(s[i]).as_long() for i in range(M)]
-            best_end_times = [model.evaluate(e[i]).as_long() for i in range(M)]
-            best_makespan = model.evaluate(T).as_long()
-
+            best_mapping = [model.evaluate(mapped[i]).as_long() for i in range(M)]  # type: ignore
+            best_start_times = [model.evaluate(start_time[i]).as_long() for i in range(M)]  # type: ignore
+            best_end_times = [model.evaluate(end_time[i]).as_long() for i in range(M)]  # type: ignore
+            # best_makespan = model.evaluate(T).as_long()  # type: ignore
+            best_makespan = max(best_end_times)
             # Store ranking of each starttime
             sorted_idx = sorted(
                 range(len(best_start_times)), key=lambda k: best_start_times[k]
@@ -312,13 +338,13 @@ def make_random_graph(
                 ranks[sorted_idx[i]] = i
 
             print(f"Best Mapping: {best_mapping}")
-            print(f"Best Makespan: {best_makespan}")
+            print(f"Optimal,simtime,{best_makespan/(1000**2)}")
             for tid, i in tid_to_int.items():
                 task_dict[tid].z3_allocation = best_mapping[i]
                 task_dict[tid].z3_order = ranks[i]
-                print(
-                    f"{tid} at {best_mapping[i]} Order:{ranks[i]} start:{best_start_times[i]} end:{best_end_times[i]}"
-                )
+                # print(
+                #     f"{tid} at {best_mapping[i]} Order:{ranks[i]} start:{best_start_times[i]} end:{best_end_times[i]}"
+                # )
         else:
             print("No solution found")
 

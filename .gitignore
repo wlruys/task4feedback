@@ -9,3 +9,5 @@ build/
 dist/
 .zed
 .vscode/
+.DS_Store
+src/task4feedback/.DS_Store

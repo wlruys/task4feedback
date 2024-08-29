@@ -1300,6 +1300,10 @@ class ParlaState(SystemState):
                     consider_initial_placement,
                 )
             task_objects = sorted(task_objects, key=lambda x: x.info.z3_order)
+            # print("OPTIMAL ORDER")
+            for task in task_objects:
+                # print(task.info.z3_order, task.name)
+                task.info.order = task.info.z3_order
 
         task_ids[:] = [t.name for t in task_objects]
 

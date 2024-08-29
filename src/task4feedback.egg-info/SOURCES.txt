@@ -54,6 +54,7 @@ src/task4feedback/simulator/analysis/export.py
 src/task4feedback/simulator/analysis/graphvis.py
 src/task4feedback/simulator/analysis/plot.py
 src/task4feedback/simulator/analysis/recorder.py
+src/task4feedback/simulator/analysis/z3_solver.py
 src/task4feedback/simulator/eviction/__init__.py
 src/task4feedback/simulator/eviction/base.py
 src/task4feedback/simulator/eviction/lru.py
