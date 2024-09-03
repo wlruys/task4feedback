@@ -178,7 +178,7 @@ def make_random_graph(
                 dag[tid_to_int[task2]].append(tid_to_int[task1])
                 success += 1
                 skipped_levels.append(task2.task_idx[0] - task1_level)
-    if config.density > 0:
+    if len(skipped_levels) > 0:
         print(f"Avg. skipped levels: {average(skipped_levels)}")
     else:
         print(f"Avg. skipped levels: {0}")
