@@ -280,7 +280,7 @@ def make_random_graph(
                     solver.add(
                         If(
                             mapped[task] == mapped[dep1],
-                            True,
+                            start_time[task] >= end_time[dep2],
                             start_time[task]
                             >= end_time[dep2] + transfer_times[dep1][task],
                         )
@@ -342,9 +342,9 @@ def make_random_graph(
             for tid, i in tid_to_int.items():
                 task_dict[tid].z3_allocation = best_mapping[i]
                 task_dict[tid].z3_order = ranks[i]
-                # print(
-                #     f"{tid} at {best_mapping[i]} Order:{ranks[i]} start:{best_start_times[i]} end:{best_end_times[i]}"
-                # )
+                print(
+                    f"{tid} at {best_mapping[i]} Order:{ranks[i]} start:{best_start_times[i]} end:{best_end_times[i]}"
+                )
         else:
             print("No solution found")
 
