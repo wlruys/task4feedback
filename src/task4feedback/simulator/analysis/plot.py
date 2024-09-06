@@ -501,6 +501,7 @@ def make_dag_and_timeline(
     save_file: bool = True,
     show_plot: bool = False,
     timeline_plot_size: Tuple[int, int] = (25, 10),
+    timeline_plot_fontsize: str = "xx-large",
 ):
     if file_name is None:
         file_name = f"""{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}_{str(len(simulator.topology.get_devices(device_type=Architecture.GPU)))}GPUs"""
@@ -592,7 +593,7 @@ def make_dag_and_timeline(
                 va="center",  # Vertical alignment
                 ha="center",  # Horizontal alignment
                 color="black",  # Text color
-                fontsize="xx-small",  # Font size
+                fontsize=timeline_plot_fontsize,  # Font size
             )
 
         if plot_data_movement:
