@@ -49,6 +49,7 @@ def get_scheduler_state(mapper_type: str):
         or mapper_type == "heft"
         or mapper_type == "eft_without_data"
         or mapper_type == "eft_with_data"
+        or mapper_type == "opt"
     ):
         return "parla"
     elif mapper_type == "rl":

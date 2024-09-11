@@ -161,8 +161,8 @@ class Device:
     architecture: Architecture = Architecture.CPU
     # The id of the device (-1 for any)
     device_id: int = 0
-    energy: float = 1 # energy in pJ to communicate 1 byte
-    
+    energy: float = 1  # energy in pJ to communicate 1 byte
+
     def __str__(self):
         return f"{self.architecture.name}[{self.device_id}]"
 
@@ -270,14 +270,12 @@ class DataAccess:
         self.id = id
         self.pattern = pattern
         self.device = device
-        
+
     def __hash__(self) -> int:
         return hash((id, self.pattern, self.device))
-    
+
     def __eq__(self, __value: object) -> bool:
         return (self.id == __value.id) and (self.device == __value.device)
-    
-    
 
 
 @dataclass(slots=True)
@@ -459,9 +457,9 @@ class TaskRuntimeInfo:
     memory: int = 0
 
 
-TaskRuntimeSpec = TaskRuntimeInfo | Mapping[Device, TaskRuntimeInfo] | List[
-    TaskRuntimeInfo
-]
+TaskRuntimeSpec = (
+    TaskRuntimeInfo | Mapping[Device, TaskRuntimeInfo] | List[TaskRuntimeInfo]
+)
 TaskRuntimeMap = MutableMapping[Devices, TaskRuntimeSpec]
 
 
@@ -476,9 +474,9 @@ class TaskPlacementInfo:
     def add(
         self,
         placement: Device | Tuple[Device, ...],
-        runtime_info: TaskRuntimeInfo
-        | Dict[Device, TaskRuntimeInfo]
-        | List[TaskRuntimeInfo],
+        runtime_info: (
+            TaskRuntimeInfo | Dict[Device, TaskRuntimeInfo] | List[TaskRuntimeInfo]
+        ),
     ):
         if isinstance(placement, Device):
             placement = (placement,)
@@ -634,6 +632,8 @@ class TaskInfo:
     heft_rank: int = -1
     heft_makespan: float = 0
     heft_allocation: int = -1
+    z3_allocation: int = -1
+    z3_order: int = -1
 
 
 # Graph Type Aliases
@@ -744,23 +744,26 @@ class ExecutionMode(IntEnum):
     """
     Specify the current execution mode
     """
-    TRAINING     = 0
-    TESTING      = 1
-    EVALUATION   = 2
+
+    TRAINING = 0
+    TESTING = 1
+    EVALUATION = 2
 
     def __str__(self):
         return self.name
 
- 
+
 class TaskOrderType(IntEnum):
     """
     Specify task spawning (mapping) order
     """
-    DEFAULT          = 0
-    HEFT             = 1
-    RANDOM           = 2
+
+    DEFAULT = 0
+    HEFT = 1
+    RANDOM = 2
     REPLAY_LAST_ITER = 3
-    REPLAY_FILE      = 4
+    REPLAY_FILE = 4
+    OPTIMAL = 5
 
 
 #########################################

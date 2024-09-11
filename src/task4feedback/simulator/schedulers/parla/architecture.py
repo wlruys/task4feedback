@@ -159,7 +159,7 @@ def run_device_eviction(
         )
 
         simulated_parent_task = objects.get_task(parent_task)
-        # simulated_parent_task.add_eviction_dependency(eviction_task)
+        simulated_parent_task.add_eviction_dependency(eviction_task)
 
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
@@ -752,7 +752,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                 device = devices[0]
                 verbose = False
                 self._enqueue_data_tasks(task, scheduler_state)
-                # self._add_eviction_dependencies(task, scheduler_state)
+                self._add_eviction_dependencies(task, scheduler_state)
                 scheduler_state.acquire_resources(
                     TaskState.RESERVED, task, verbose=verbose
                 )

@@ -201,6 +201,8 @@ class DataPlacer:
     data_size: Callable[[DataID], int] = default_data_sizes
     """Function to determine data size"""
 
+    stencil_width: int = 1
+
     device_data_sizes: dict = field(default_factory=dict, init=False)
     device_data_limit: dict = field(default_factory=dict, init=False)
     data_id_to_device: Dict[DataID, Devices] = field(default_factory=dict, init=False)
@@ -246,40 +248,84 @@ class DataPlacer:
         if data_id in self.data_id_to_device:
             return self.data_id_to_device[data_id]
 
-        chosen = data_id.idx[-1] % self.num_gpus
-        if (
-            self.device_data_sizes[Device(Architecture.GPU, chosen)]
-            + self.data_size(data_id)
-            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
-        ):
-            self.data_id_to_device[data_id] = Device(Architecture.CPU, 0)
-        else:
-            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size(
-                data_id
-            )
-            self.data_id_to_device[data_id] = Device(Architecture.GPU, chosen)
+        data_size = self.data_size(data_id)
+        candidate_devices = sorted(
+            [
+                (device, size)
+                for device, size in self.device_data_sizes.items()
+                if device.architecture == Architecture.GPU
+            ],
+            key=lambda x: x[1],
+        )
 
-        return self.data_id_to_device[data_id]
+        for device, current_size in candidate_devices:
+            if current_size + data_size <= self.device_data_limit[device]:
+                self.device_data_sizes[device] += data_size
+                self.data_id_to_device[data_id] = device
+                print(
+                    f"data ID: {data_id} size in MB: {data_size/1024/1024} placed: {device}."
+                )
+                return device
+
+        # If no GPU can accommodate the data, place it on a CPU
+        cpu_device = Device(Architecture.CPU, 0)
+        self.data_id_to_device[data_id] = cpu_device
+        print(
+            f"data ID: {data_id} size in MB: {data_size/1024/1024} placed: {cpu_device}."
+        )
+        return cpu_device
 
     def random_gpu_placement(self, data_id: DataID) -> Devices:
         if data_id in self.data_id_to_device:
             return self.data_id_to_device[data_id]
 
         np.random.seed(None)
+        data_size = self.data_size(data_id)
         chosen = np.random.randint(0, self.num_gpus)
         if (
-            self.device_data_sizes[Device(Architecture.GPU, chosen)]
-            + self.data_size(data_id)
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] + data_size
             >= self.device_data_limit[Device(Architecture.GPU, chosen)]
         ):
             self.data_id_to_device[data_id] = Device(Architecture.CPU, 0)
         else:
-            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size(
-                data_id
-            )
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += data_size
             self.data_id_to_device[data_id] = Device(Architecture.GPU, chosen)
+
+        print(
+            f"data ID: {data_id} size in MB: {data_size/1024/1024} placed: {self.data_id_to_device[data_id]}."
+        )
 
         return self.data_id_to_device[data_id]
 
     def cpu_data_placement(self, data_id: DataID) -> Devices:
+        print(
+            f"data ID: {data_id} size in MB: {self.data_size(data_id)/1024/1024} placed: {Device(Architecture.CPU, 0)}."
+        )
         return Device(Architecture.CPU, 0)
+
+    def optimal_placement(self, data_id: DataID) -> Devices:
+        data_size = self.data_size(data_id)
+        if self.num_gpus == 2:
+            chosen = int(data_id.idx[-2] / (float(self.stencil_width) / 2))
+            if (
+                self.device_data_sizes[Device(Architecture.GPU, chosen)] + data_size
+                >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+            ):
+                assert "Data size exceeds GPU memory limit. Not allowed on stencil optimal placement"
+        elif self.num_gpus == 4:  # Quadrant divide
+            chosen = int(data_id.idx[-2] / (float(self.stencil_width) / 2))
+            chosen += int(data_id.idx[-1] / (float(self.stencil_width) / 2)) * 2
+            if (
+                self.device_data_sizes[Device(Architecture.GPU, chosen)] + data_size
+                >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+            ):
+                assert "Data size exceeds GPU memory limit. Not allowed on stencil optimal placement"
+        elif self.num_gpus == 8:
+            chosen = int(data_id.idx[-2] / (float(self.stencil_width) / 8))
+            if (
+                self.device_data_sizes[Device(Architecture.GPU, chosen)] + data_size
+                >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+            ):
+                assert "Data size exceeds GPU memory limit. Not allowed on stencil optimal placement"
+
+        return Device(Architecture.GPU, chosen)

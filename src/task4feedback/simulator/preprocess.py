@@ -178,7 +178,7 @@ def find_recent_writers_topdown(graph: TaskMap, verbose: bool = False) -> DataWr
         tasklist.append(task)
     tasklist = sorted(tasklist, key=lambda t: t.order)
 
-    # 
+    #
     data_dependency_dict: DataWriters = dict()
     recent_writers: Dict[DataID, TaskID] = dict()
     for task in tasklist:
@@ -206,8 +206,8 @@ def find_recent_writers_topdown(graph: TaskMap, verbose: bool = False) -> DataWr
                 data_dependency_dict_for_task[target].append(recent_writers[target])
             if target in write_data:
                 recent_writers[target] = task.id
-                
-        data_dependency_dict[task.id] = data_dependency_dict_for_task                 
+
+        data_dependency_dict[task.id] = data_dependency_dict_for_task
 
     return data_dependency_dict
 
@@ -299,18 +299,7 @@ def create_task_graph(graph: TaskMap) -> SimulatedComputeTaskMap:
 def create_data_task_graph(
     graph: TaskMap, compute_tasks: SimulatedComputeTaskMap, verbose: bool = False
 ) -> SimulatedDataTaskMap:
-    recent_writers = find_recent_writers_topdown(graph, verbose=False)
-    recent_writers2 = find_recent_writers(graph, verbose=False)
-
-    # For checking correctness.
-    # TODO(hc): Remove it
-    for key, value in recent_writers.items():
-        assert key in recent_writers2
-
-        for vk, vv in value.items():
-            for vvv in vv:
-                assert vvv in recent_writers2[key][vk]
-
+    recent_writers = find_recent_writers(graph, verbose=False)
     data_tasks = create_data_tasks(compute_tasks, recent_writers)
     return data_tasks
 

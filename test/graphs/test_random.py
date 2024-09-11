@@ -1,6 +1,7 @@
 import argparse
 
 from task4feedback.graphs import *
+from task4feedback.graphs.random import RandomConfig
 from task4feedback.load import *
 
 from rich import print
@@ -25,9 +26,9 @@ from task4feedback.simulator.rl.models.env import *
 from task4feedback.simulator.rl.models.agent_using_oracle import *
 
 
-parser = argparse.ArgumentParser(prog="Stencil")
+parser = argparse.ArgumentParser(prog="Random")
 
-parser.add_argument("-t", "--time", type=int, help="time", default=138)
+parser.add_argument("-t", "--time", type=int, help="time", default=10000)
 parser.add_argument(
     "-m",
     "--mode",
@@ -38,20 +39,23 @@ parser.add_argument(
     "-n", "--noise", help="Set if task duration noise is enabled", action="store_true"
 )
 parser.add_argument(
-    "-ns", "--noise_scale", type=float, help="task duration noise scale", default=0.2
+    "-ns", "--noise_scale", type=float, help="task duration noise scale", default=0.5
 )
 parser.add_argument(
     "-e",
     "--episode",
     type=int,
     help="the number of episodes (-1 for inifite loop)",
-    default=-1,
+    default=1,
 )
-parser.add_argument("-s", "--steps", type=int, help="stencil steps", default=15)
-parser.add_argument("-w", "--width", type=int, help="stencil width", default=8)
 parser.add_argument(
-    "-dm", "--dimensions", type=int, help="stencil dimensions", default=2
+    "-tn", "--total_nodes", type=int, help="total number of nodes", default=1000
 )
+parser.add_argument(
+    "-p", "--density", type=float, help="density of the graph", default=0.05
+)
+parser.add_argument("-sd", "--seed", type=int, help="random seed", default=1)
+parser.add_argument("-w", "--width", type=int, help="random width", default=8)
 parser.add_argument(
     "-o",
     "--sort",
@@ -100,7 +104,7 @@ parser.add_argument(
     "--distribution",
     type=str,
     help="rr: distributing data to gpus in rr, cpu: distributing data from cpu, random: randomly distributing data to gpus",
-    default="rr",
+    default="cpu",
 )
 parser.add_argument(
     "-i",
@@ -108,33 +112,24 @@ parser.add_argument(
     help="ignore initial placement during HEFT calculation",
     action="store_true",
 )
-
 parser.add_argument(
-    "-id",
-    "--interior_data_size",
-    type=str,
-    help="interior data size in MB",
-    default="63",
+    "-pg",
+    "--plot",
+    help="plot the graph",
+    action="store_true",
+)
+parser.add_argument(
+    "-cr", "--ccr", help="Computation to Communication Ratio", type=float, default=1
 )
 
-parser.add_argument(
-    "-bd",
-    "--boundary_data_size",
-    type=str,
-    help="boundary data size in MB",
-    default="0.03",
-)
 
 args = parser.parse_args()
 
 
 def test_data():
 
-    interior_size = parse_size(args.interior_data_size + " MB")  #  63 MB
-    boundary_size = parse_size(args.boundary_data_size + " MB")  # ~0.03 MB
-
     def sizes(data_id: DataID) -> int:
-        return boundary_size if data_id.idx[1] == 1 else interior_size
+        return 128 * 1024 * 1024  # 128MB
 
     def homog_task_duration():
         return args.time
@@ -164,6 +159,8 @@ def test_data():
                 return TaskOrderType.REPLAY_LAST_ITER
         elif args.sort == "replay":
             return TaskOrderType.REPLAY_FILE
+        elif args.sort == "opt":
+            return TaskOrderType.OPTIMAL
         else:
             return TaskOrderType.DEFAULT
 
@@ -171,44 +168,27 @@ def test_data():
         "P2P_BW": parse_size(args.p2p + " GB"),
         "H2D_BW": parse_size("10 GB"),
         "D2H_BW": parse_size("10 GB"),
-        "GPU_MEM": parse_size("16 GB"),
+        "GPU_MEM": parse_size("99999 GB"),
         "CPU_MEM": parse_size("130000 GB"),
-        "GPU_COPY_ENGINES": 3,
-        "CPU_COPY_ENGINES": 3,
+        "GPU_COPY_ENGINES": 9999,
+        "CPU_COPY_ENGINES": 9999,
         "NGPUS": args.gpus,
     }
 
-    data_config = StencilDataGraphConfig()
-    data_config.initial_sizes = sizes
-    data_config.n_devices = args.gpus
-    data_config.dimensions = args.dimensions
-    data_config.width = args.width
-
-    placer = DataPlacer(
-        cpu_size=topo_config["CPU_MEM"],
-        gpu_size=topo_config["GPU_MEM"],
-        num_gpus=args.gpus,
-        data_size=sizes,
-        stencil_width=args.width,
-    )
-
-    if args.distribution == "rr":
-        data_config.initial_placement = placer.rr_gpu_placement
-    elif args.distribution == "cpu":
-        data_config.initial_placement = placer.cpu_data_placement
-    elif args.distribution == "random":
-        data_config.initial_placement = placer.random_gpu_placement
-    elif args.distribution == "opt":
-        data_config.initial_placement = placer.optimal_placement
-
-    config = StencilConfig(
-        steps=args.steps,
-        width=args.width,
-        dimensions=args.dimensions,
+    config = RandomConfig(
+        nodes=args.total_nodes,
+        max_width=args.width,
+        density=args.density,
+        seed=args.seed,
         task_config=task_placement,
         func_id=func_type_id,
+        gpu_size_limit=topo_config["GPU_MEM"],
+        num_gpus=args.gpus,
+        ccr=args.ccr,
+        no_data=False,
+        p2p_bw=parse_size(args.p2p + " GB"),
     )
-    tasks, data = make_graph(config, data_config=data_config)
+    tasks, data = make_graph(config, data_config=NoDataGraphConfig())
 
     num_gpus = args.gpus
     rl_env = None
@@ -272,26 +252,22 @@ def test_data():
         episode += 1
         simulated_time, task_order_log, success = simulator.run()
         end_t = clock()
-        # make_dag_and_timeline(
-        #     simulator=simulator,
-        #     # show_plot=True,
-        #     plot_timeline=False,
-        #     save_file=True,
-        #     file_name=f"{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}_{str(args.gpus)}GPUs_{args.steps}Steps_{args.width}Width",
-        # )
+        if args.plot:
+            make_dag_and_timeline(
+                simulator=simulator,
+                # show_plot=True,
+                plot_timeline=True,
+                plot_data_movement=True,
+                save_file=True,
+                file_name=f"output_image",
+            )
+
         # if not rl_agent.is_training_mode():
         cum_wallclock_t += end_t - start_t
         print("Wallclock,", episode, ",", cum_wallclock_t)
         print(f"Time to Simulate: {end_t - start_t}")
         print(f"Simulated Time: {simulator.time}")
         print(f"Success: {success}")
-
-        plot_data_movement_count(
-            simulator,
-            threshold=60 * 1024 * 1024,
-            bandwidth=parse_size(args.p2p + " GB"),
-            args=args,
-        )
 
 
 if __name__ == "__main__":
@@ -303,9 +279,7 @@ if __name__ == "__main__":
         args.ignore_initial_placement,
     )
     print("# episodes:", args.episode)
-    print("Steps:", args.steps)
     print("Width:", args.width)
-    print("Dimension:", args.dimensions)
     print("Sorting enabled?:", args.sort)
     print("Sorting interval:", args.sorting_interval)
     print("Saving task processing order?:", args.save_order)

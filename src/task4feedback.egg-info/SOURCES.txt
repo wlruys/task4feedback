@@ -17,9 +17,11 @@ src/task4feedback/graphs/butterfly.py
 src/task4feedback/graphs/cannon_gemm.py
 src/task4feedback/graphs/chain.py
 src/task4feedback/graphs/cholesky.py
+src/task4feedback/graphs/custom.py
 src/task4feedback/graphs/fully_connected.py
 src/task4feedback/graphs/independent.py
 src/task4feedback/graphs/map_reduce.py
+src/task4feedback/graphs/random.py
 src/task4feedback/graphs/reduction.py
 src/task4feedback/graphs/scatter_reduction.py
 src/task4feedback/graphs/stencil.py
@@ -52,6 +54,7 @@ src/task4feedback/simulator/analysis/export.py
 src/task4feedback/simulator/analysis/graphvis.py
 src/task4feedback/simulator/analysis/plot.py
 src/task4feedback/simulator/analysis/recorder.py
+src/task4feedback/simulator/analysis/z3_solver.py
 src/task4feedback/simulator/eviction/__init__.py
 src/task4feedback/simulator/eviction/base.py
 src/task4feedback/simulator/eviction/lru.py

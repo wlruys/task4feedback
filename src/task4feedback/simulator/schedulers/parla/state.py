@@ -1,3 +1,4 @@
+from task4feedback.simulator import task
 from ....types import *
 from ...data import *
 from ...device import *
@@ -1252,6 +1253,7 @@ class ParlaState(SystemState):
             self.perdev_earliest_avail_time[device] = 0
 
         if self.task_order_mode == TaskOrderType.RANDOM:
+            # Calculation of HEFT is required when using HEFT mapper
             if mapper_type == "heft":
                 _ = calculate_heft(
                     task_objects,
@@ -1284,6 +1286,24 @@ class ParlaState(SystemState):
                 True,
                 consider_initial_placement,
             )
+        elif self.task_order_mode == TaskOrderType.OPTIMAL:
+            print("OPTIMAL SORT")
+
+            # Calculation of HEFT is required when using HEFT mapper
+            if mapper_type == "heft":
+                _ = calculate_heft(
+                    task_objects,
+                    self.objects.taskmap,
+                    len(self.objects.devicemap) - 1,
+                    self,
+                    False,
+                    consider_initial_placement,
+                )
+            task_objects = sorted(task_objects, key=lambda x: x.info.z3_order)
+            # print("OPTIMAL ORDER")
+            for task in task_objects:
+                # print(task.info.z3_order, task.name)
+                task.info.order = task.info.z3_order
 
         task_ids[:] = [t.name for t in task_objects]
 
@@ -1466,6 +1486,7 @@ class ParlaState(SystemState):
         noise = Time()
 
         if "eviction" not in str(task.name) and "data" not in str(task.name):
+            # if True:
             if self.use_duration_noise:
                 # noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
                 noise = log_normal_noise(duration.duration, self.noise_scale)

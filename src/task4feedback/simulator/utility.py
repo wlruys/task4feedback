@@ -105,6 +105,7 @@ def calculate_heft_upward_rank(tasklist, taskmap, scheduler_state):
 
         # Calculate the HEFT rank
         task.info.heft_rank = duration + max_dependent_rank
+        # print(f"{task.name} ranking {task.info.heft_rank}")
 
     # Sort task list by heft rank
     return reversed(sorted(tasklist, key=get_heft_rank))
@@ -169,12 +170,12 @@ def map_task_heft_with_cache(
             rw = task.info.data_dependencies[AccessType.READ_WRITE]
             src_data = read + write + rw
 
-        ready_time = 0
         earliest_start = None
         earliest_start_agent = -1
 
         # Try to insert each task to each agent (device)
         for agent_id, agent in agents.items():
+            ready_time = 0
             # Collect unique data to be moved from dependency tasks
             # This is used to identify data from initial placement
             moved_data_from_dependencies = set()
@@ -208,9 +209,7 @@ def map_task_heft_with_cache(
                                 sd.id
                             ].size
                             moved_data_from_dependencies.add(sd.id)
-                            print(
-                                f"{sd.id} is moved by task {task.name} from {dependency_instance.name}"
-                            )
+                            # print(f"{sd.id} is moved by task {task.name} from {dependency_instance.name}")
 
                 assigned_agent_id = dependency_instance.info.heft_allocation
 
@@ -229,7 +228,7 @@ def map_task_heft_with_cache(
                 ready_time = max(
                     taskmap[dep].info.heft_makespan + comm_time, ready_time
                 )
-                print(f"{task.name}'s ready time: {ready_time}")
+                # print(f"{task.name}'s ready time: {ready_time}")
                 # print(" task:",  task.name, ">> size:", intersected_data_size, " actual comm time:", comm_time)
 
             if consider_init_placement:
@@ -249,13 +248,11 @@ def map_task_heft_with_cache(
                             ).scale_to("ms")
                         )
 
-                        print(
-                            f"{sd.id} is from initial placement {initial_placement} to {agent_id} and overhead {comm_time_from_initial_place} by task {task.name}"
-                        )
+                        #  print(f"{sd.id} is from initial placement {initial_placement} to {agent_id} and overhead {comm_time_from_initial_place} by task {task.name}")
                         ready_time = max(comm_time_from_initial_place, ready_time)
-                        print(f"{task.name}'s ready time: {ready_time}")
+                        # print(f"{task.name}'s ready time: {ready_time}")
 
-            print(task.name, " final ready time:", ready_time)
+            # print(task.name, " final ready time:", ready_time)
 
             # Find the earliest start time on this agent
             if len(agent) > 0:
@@ -296,13 +293,13 @@ def map_task_heft_with_cache(
             else:
                 candidate_earliest_start = ready_time
 
-            print(
-                f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}"
-            )
             if earliest_start == None or earliest_start > candidate_earliest_start:
                 earliest_start_agent = agent_id
                 earliest_start = candidate_earliest_start
 
+            # print(
+            #     f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}"
+            # )
         # Add data to cache
         for data in src_data:
             data_cache[Device(Architecture.GPU, earliest_start_agent)].add(data.id)
@@ -312,20 +309,20 @@ def map_task_heft_with_cache(
             heft_events.append(heft_event)
         bisect.insort(agents[earliest_start_agent], heft_event, key=lambda x: x.start)
         task.info.heft_makespan = earliest_start + duration
-        print(
-            "makespan allocation:",
-            task.name,
-            " earliest start:",
-            earliest_start,
-            " duration:",
-            duration,
-            " mkspan:",
-            task.info.heft_makespan,
-            " dependencies:",
-            task.dependencies,
-        )
+        # print(
+        #     "makespan allocation:",
+        #     task.name,
+        #     " earliest start:",
+        #     earliest_start,
+        #     " duration:",
+        #     duration,
+        #     " mkspan:",
+        #     task.info.heft_makespan,
+        #     " dependencies:",
+        #     task.dependencies,
+        # )
         task.info.heft_allocation = earliest_start_agent
-        print(f"heft task {task.name}, allocation: {earliest_start_agent}")
+        # print(f"heft task {task.name}, allocation: {earliest_start_agent}")
         if task.info.heft_makespan > max_heft:
             max_heft = task.info.heft_makespan
 
@@ -381,12 +378,12 @@ def map_task_heft(
             rw = task.info.data_dependencies[AccessType.READ_WRITE]
             src_data = read + write + rw
 
-        ready_time = 0
         earliest_start = None
         earliest_start_agent = -1
 
         # Try to insert each task to each agent (device)
         for agent_id, agent in agents.items():
+            ready_time = 0
             # Collect unique data to be moved from dependency tasks
             # This is used to identify data from initial placement
             moved_data_from_dependencies = set()
@@ -413,9 +410,9 @@ def map_task_heft(
                                 sd.id
                             ].size
                             moved_data_from_dependencies.add(sd.id)
-                            print(
-                                f"{sd.id} is moved by task {task.name} from {dependency_instance.name}"
-                            )
+                            # print(
+                            #     f"{sd.id} is moved by task {task.name} from {dependency_instance.name}"
+                            # )
 
                 assigned_agent_id = dependency_instance.info.heft_allocation
 
@@ -434,7 +431,7 @@ def map_task_heft(
                 ready_time = max(
                     taskmap[dep].info.heft_makespan + comm_time, ready_time
                 )
-                print(f"{task.name}'s ready time: {ready_time}")
+                # print(f"{task.name}'s ready time: {ready_time}")
                 # print(" task:",  task.name, ">> size:", intersected_data_size, " actual comm time:", comm_time)
 
             if consider_init_placement:
@@ -454,13 +451,13 @@ def map_task_heft(
                             ).scale_to("ms")
                         )
 
-                        print(
-                            f"{sd.id} is from initial placement {initial_placement} to {agent_id} and overhead {comm_time_from_initial_place} by task {task.name}"
-                        )
+                        # print(
+                        #     f"{sd.id} is from initial placement {initial_placement} to {agent_id} and overhead {comm_time_from_initial_place} by task {task.name}"
+                        # )
                         ready_time = max(comm_time_from_initial_place, ready_time)
-                        print(f"{task.name}'s ready time: {ready_time}")
+                        # print(f"{task.name}'s ready time: {ready_time}")
 
-            print(task.name, " final ready time:", ready_time)
+            # print(task.name, " final ready time:", ready_time)
 
             # Find the earliest start time on this agent
             if len(agent) > 0:
@@ -478,55 +475,57 @@ def map_task_heft(
                         # schedule that task to the slack.
                         candidate_earliest_start = tmp_earliest_start
                         any_slack_found = True
-                        print(
-                            task.info.id,
-                            " earliest start:",
-                            tmp_earliest_start,
-                            " e2 start:",
-                            e2.start,
-                            " duration: ",
-                            duration,
-                            " on device",
-                            agent_id,
-                        )
+                        # print(
+                        #     task.info.id,
+                        #     " earliest start:",
+                        #     tmp_earliest_start,
+                        #     " e2 start:",
+                        #     e2.start,
+                        #     " duration: ",
+                        #     duration,
+                        #     " on device",
+                        #     agent_id,
+                        # )
                         break
 
                 if not any_slack_found:
                     candidate_earliest_start = max(agent[-1].end, ready_time)
-                    print(
-                        task.info.id,
-                        "(no slack) earliest start:",
-                        candidate_earliest_start,
-                    )
+                    # print(
+                    #     task.info.id,
+                    #     "(no slack) earliest start:",
+                    #     candidate_earliest_start,
+                    #     " agent available:",
+                    #     agent[-1].end,
+                    # )
             else:
                 candidate_earliest_start = ready_time
-
-            print(
-                f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}"
-            )
             if earliest_start == None or earliest_start > candidate_earliest_start:
                 earliest_start_agent = agent_id
                 earliest_start = candidate_earliest_start
+
+            # print(
+            #     f"task {task.name} candidate earliest finish time: {candidate_earliest_start}, earliest start: {earliest_start}"
+            # )
 
         heft_event = HEFTEvent(task, earliest_start, earliest_start + duration)
         if update_task_order:
             heft_events.append(heft_event)
         bisect.insort(agents[earliest_start_agent], heft_event, key=lambda x: x.start)
         task.info.heft_makespan = earliest_start + duration
-        print(
-            "makespan allocation:",
-            task.name,
-            " earliest start:",
-            earliest_start,
-            " duration:",
-            duration,
-            " mkspan:",
-            task.info.heft_makespan,
-            " dependencies:",
-            task.dependencies,
-        )
+        # print(
+        #     "makespan allocation:",
+        #     task.name,
+        #     " earliest start:",
+        #     earliest_start,
+        #     " duration:",
+        #     duration,
+        #     " mkspan:",
+        #     task.info.heft_makespan,
+        #     " dependencies:",
+        #     task.dependencies,
+        # )
         task.info.heft_allocation = earliest_start_agent
-        print(f"heft task {task.name}, allocation: {earliest_start_agent}")
+        # print(f"heft task {task.name}, allocation: {earliest_start_agent}")
         if task.info.heft_makespan > max_heft:
             max_heft = task.info.heft_makespan
 
