@@ -92,6 +92,39 @@ def earliest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
     return chosen_device  # default_mapping_policy(task, simulator)
 
 
+def eft_lookahead(task: SimulatedTask, simulator) -> Optional[Devices]:
+    min_time = Time(9999999999999999999)
+    chosen_device = None
+    # name of dependent tasks
+    task_names = task.dependents
+    task_names.append(task.name)
+
+    for device in task.info.runtime.locations:
+        print(f"Task {task.name} on device {device}")
+        simulator_copy = deepcopy(simulator)
+        mapper = TaskMapper(
+            mapping_function=eft_with_data,
+            restrict_tasks=True,
+            allowed_set=task_names,
+            assignments={task.name: device},
+        )
+        simulator_copy.set_mapper(mapper)
+        task_completion_check = partial(check_for_task_completion, tasks=task_names)
+        simulator_copy.add_stop_condition(task_completion_check)
+
+        simulator_copy.run()
+        # print(f"EFT of {task.name} on device {device} is {simulator_copy.time}")
+
+        if simulator_copy.time < min_time:
+            min_time = simulator_copy.time
+            chosen_device = device
+
+    # print("----")
+    # print(simulator_copy.current_event)
+
+    return chosen_device  # default_mapping_policy(task, simulator)
+
+
 def latest_finish_time(task: SimulatedTask, simulator) -> Optional[Devices]:
     max_time = Time(0)
     chosen_device = None
@@ -346,6 +379,9 @@ class TaskMapper:
         elif mapper_type == "eft_without_data":
             print("EFT without data is enabled")
             self.mapping_function = eft_without_data
+        elif mapper_type == "eft_lookahead":
+            print("EFT lookahead is enabled")
+            self.mapping_function = eft_lookahead
         elif mapper_type == "heft":
             self.mapping_function = heft_mapping_policy
         elif mapper_type == "opt":

@@ -49,6 +49,7 @@ def get_scheduler_state(mapper_type: str):
         or mapper_type == "heft"
         or mapper_type == "eft_without_data"
         or mapper_type == "eft_with_data"
+        or mapper_type == "eft_lookahead"
         or mapper_type == "opt"
     ):
         return "parla"
@@ -118,33 +119,13 @@ class SimulatedScheduler:
             self.mechanisms = scheduler_arch(topology=self.topology)
 
     def __deepcopy__(self, memo):
-        tasks = [t for t in self.tasks]
-        start_t = clock()
+        tasks = deepcopy(self.tasks)
         state = deepcopy(self.state)
-        end_t = clock()
-        # print(f"Time to deepcopy state: {end_t - start_t}")
-
-        start_t = clock()
         mechanisms = deepcopy(self.mechanisms)
-        end_t = clock()
-        # print(f"Time to deepcopy mechanisms: {end_t - start_t}")
-
-        start_t = clock()
         events = deepcopy(self.events)
-        end_t = clock()
-        # print(f"Time to deepcopy events: {end_t - start_t}")
-
-        start_t = clock()
         mapper = deepcopy(self.mapper)
-        end_t = clock()
-
-        start_t = clock()
         rl_env = deepcopy(self.rl_env)
-        end_t = clock()
-
-        start_t = clock()
         rl_mapper = deepcopy(self.rl_mapper)
-        end_t
 
         return SimulatedScheduler(
             topology=self.topology,
