@@ -214,6 +214,36 @@ class DataPlacer:
             self.device_data_limit[Device(Architecture.GPU, i)] = self.gpu_size
             self.device_data_sizes[Device(Architecture.GPU, i)] = 0
 
+    def rr_2d_gpu_placement(self, data_id: DataID) -> Devices:
+        if data_id in self.data_id_to_device:
+            return self.data_id_to_device[data_id]
+
+        def factor(n):
+            # Pick closest to even split
+            for i in range(2, int(n**0.5) + 1):
+                if n % i == 0:
+                    return i, n // i
+            return n, 1
+
+        grid = data_id.idx[-2:]
+        dim_1, dim_2 = factor(self.num_gpus)
+
+        chosen = (grid[1] % dim_2) * dim_1 + (grid[0] % dim_1)
+
+        if (
+            self.device_data_sizes[Device(Architecture.GPU, chosen)]
+            + self.data_size(data_id)
+            >= self.device_data_limit[Device(Architecture.GPU, chosen)]
+        ):
+            self.data_id_to_device[data_id] = Device(Architecture.CPU, 0)
+        else:
+            self.device_data_sizes[Device(Architecture.GPU, chosen)] += self.data_size(
+                data_id
+            )
+            self.data_id_to_device[data_id] = Device(Architecture.GPU, chosen)
+
+        return self.data_id_to_device[data_id]
+
     def rr_gpu_placement(self, data_id: DataID) -> Devices:
         if data_id in self.data_id_to_device:
             return self.data_id_to_device[data_id]
