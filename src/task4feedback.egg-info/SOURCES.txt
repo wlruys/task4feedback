@@ -27,6 +27,7 @@ src/task4feedback/graphs/scatter_reduction.py
 src/task4feedback/graphs/stencil.py
 src/task4feedback/graphs/sweep.py
 src/task4feedback/graphs/utilities.py
+src/task4feedback/graphs/write_test.py
 src/task4feedback/logging/__init__.py
 src/task4feedback/logging/logger.py
 src/task4feedback/logging/parse_blog.py

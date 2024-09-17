@@ -10,6 +10,8 @@ from .utilities import *
 from ..types import *
 from z3 import *
 
+import matplotlib.pyplot as plt
+
 
 @dataclass(slots=True)
 class RandomConfig(GraphConfig):
@@ -33,6 +35,7 @@ class RandomConfig(GraphConfig):
     ccr: float = 1  # Computation to Communication Ratio. Higher, more data.
     num_gpus: int = 4
     z3_solver: bool = True
+    plot_timeline: bool = False
 
 
 @register_graph_generator
@@ -347,5 +350,40 @@ def make_random_graph(
                 )
         else:
             print("No solution found")
+
+        if config.plot_timeline:
+            device_colors = [
+                "Red",
+                "Green",
+                "Blue",
+                "Yellow",
+                "Purple",
+                "Orange",
+                "Pink",
+                "Brown",
+            ]
+            fig, ax = plt.subplots(figsize=(25, 10))
+            fig.subplots_adjust(left=0.01, right=0.99)
+            for tid, i in tid_to_int.items():
+                start = best_start_times[i]
+                end = best_end_times[i]
+                bar = ax.barh(
+                    y=best_mapping[i],
+                    width=end - start,
+                    left=start,
+                    height=0.4,
+                    color=device_colors[best_mapping[i]],
+                    edgecolor="black",
+                )
+                ax.text(
+                    start + (end - start) / 2,
+                    best_mapping[i],
+                    tid,
+                    ha="center",
+                    va="center",
+                    color="black",
+                    fontsize="xx-large",
+                )
+                plt.savefig("optimal_timeline.png")
 
     return task_dict, data_dict
