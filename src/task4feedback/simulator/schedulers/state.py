@@ -125,7 +125,7 @@ class SystemState:
     objects: ObjectRegistry | None = None
     time: Time = field(default_factory=Time)
     init: bool = True
-    use_eviction: bool = True
+    use_eviction: bool = False  # TODO: Eviction is now deprecated with ready-first
     use_duration_noise: bool = False
     noise_scale: float = 0
     save_task_order: bool = False
