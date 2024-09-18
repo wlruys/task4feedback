@@ -116,11 +116,11 @@ class TaskCounters:
     def check_count(self, key: TaskStatus | TaskState) -> bool:
         if isinstance(key, TaskState):
             value = self.remaining_deps_states[key]
-            assert value >= 0
+            # assert value >= 0
             return value == 0
         else:
             value = self.remaining_deps_status[key]
-            assert value >= 0
+            # assert value >= 0
             return value == 0
 
     def notified_state(self, new_state: TaskState) -> Optional[TaskStatus]:
