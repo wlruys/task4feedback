@@ -173,6 +173,35 @@ class FasterResourcePool:
             return True
         return False
 
+    def check_max_device_resources(
+        self,
+        device: Device,
+        type: ResourceGroup,
+        proposed_resources: FasterResourceSet,
+    ) -> bool:
+        if device not in self.pool:
+            return False
+
+        max_resources = self.devicemap[device].resources
+        proposed_resources = self._build_set(type, proposed_resources)
+        # max_resources = self._build_set(type, max_resources)
+
+        if max_resources >= (proposed_resources):
+            return True
+        return False
+
+    def check_max_resources(
+        self,
+        devices: Sequence[Device],
+        type: ResourceGroup,
+        resources: Sequence[FasterResourceSet],
+    ) -> bool:
+        for device, resource in zip(devices, resources):
+            check = self.check_max_device_resources(device, type, resource)
+            if not check:
+                return False
+        return True
+
     def check_resources(
         self,
         devices: Sequence[Device],

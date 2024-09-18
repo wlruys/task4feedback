@@ -21,15 +21,25 @@ from copy import copy, deepcopy
 
 
 @dataclass(slots=True)
+class OrderConfig:
+    mappable: bool = False
+    reservable: bool = False
+    launchable: bool = True
+    apply_sort: bool = False
+
+
+@dataclass(slots=True)
 class SchedulerArchitecture:
     topology: SimulatedTopology
     completed_tasks: List[TaskID] = field(default_factory=list)
-    use_eviction: bool = True
+    use_eviction: bool = False  # TODO: Eviction is now deprecated with ready-first
+    order_config: OrderConfig = field(default_factory=OrderConfig)
 
     def __deepcopy__(self, memo):
         return SchedulerArchitecture(
             topology=self.topology,
             completed_tasks=[t for t in self.completed_tasks],
+            order_config=self.order_config,
         )
 
     def __post_init__(self):
@@ -58,8 +68,10 @@ class SchedulerArchitecture:
         raise NotImplementedError()
         return []
 
-    def add_initial_tasks(self, task: SimulatedTask):
-        pass
+    def add_initial_tasks(
+        self, tasks: List[SimulatedTask], scheduler_state: SystemState
+    ):
+        raise NotImplementedError()
 
     def mapper(
         self, scheduler_state: SystemState, event: Event, **kwargs
