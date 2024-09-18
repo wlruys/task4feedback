@@ -574,23 +574,16 @@ class ParlaArchitecture(SchedulerArchitecture):
         Append an initial task who does not have any dependency to
         a spawned task queue.
         """
-        objects = scheduler_state.objects
-        current_time = scheduler_state.time
+        # print(f"Number of tasks: {len(tasks)}")
         for task in tasks:
-            if self.order_config.mappable:
-                if check_status := task.check_status(
-                    TaskStatus.MAPPABLE, objects.taskmap, current_time
-                ):
-                    self.mappable_tasks.put(task)
-
-            else:
-                self.mappable_tasks.put(task)
+            # print(">> task:", task.name)
+            self.spawned_tasks.put(task)
 
     def mapper(
         self, scheduler_state: SystemState, event: Mapper, **kwargs
     ) -> List[EventPair]:
         self.success_count = 0
-        next_tasks = TaskIterator(self.mappable_tasks)
+        next_tasks = TaskIterator(self.spawned_tasks)
 
         # print(f"Running MAPPER at time {scheduler_state.time}")
 
@@ -599,14 +592,6 @@ class ParlaArchitecture(SchedulerArchitecture):
 
         current_time = scheduler_state.time
         objects = scheduler_state.objects
-
-        mappable_first = self.order_config.mappable
-        reservable_first = self.order_config.reservable
-
-        if mappable_first:
-            task_queue = self.mappable_tasks
-        else:
-            task_queue = None
 
         if logger.ENABLE_LOGGING:
             logger.runtime.info(
@@ -619,35 +604,21 @@ class ParlaArchitecture(SchedulerArchitecture):
 
             if not task_mapper.check_allowed(task):
                 # print(f"Task {task.name} not allowed. Draining task.")
-                task.notify_state(
-                    TaskState.MAPPED,
-                    objects.taskmap,
-                    current_time,
-                    next_pool=task_queue,
-                )
+                task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
             elif devices := map_task(simulator, task):
-                # print(f"Task {task.name} mapped successfully.", task.status)
-                if (not reservable_first) or task.check_status(
-                    TaskStatus.RESERVABLE, objects.taskmap, current_time
-                ):
-                    for device in devices:
-                        self.reservable_tasks[device].put_id(
-                            task_id=taskid, priority=priority
-                        )
+                for device in devices:
+                    self.reservable_tasks[device].put_id(
+                        task_id=taskid, priority=priority
+                    )
                 if logger.ENABLE_LOGGING:
                     logger.runtime.info(
                         f"Task {task.name}, mapped successfully.",
                         extra=dict(task=taskid, device=devices),
                     )
                 event.tasks.add(taskid)
-                task.notify_state(
-                    TaskState.MAPPED,
-                    objects.taskmap,
-                    current_time,
-                    next_pool=task_queue,
-                )
+                task.notify_state(TaskState.MAPPED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
 
@@ -695,8 +666,6 @@ class ParlaArchitecture(SchedulerArchitecture):
         assert objects is not None
         assert task.assigned_devices is not None
 
-        launchable_first = self.order_config.launchable
-
         if task.data_tasks is not None:
             for data_task_id in task.data_tasks:
                 data_task: SimulatedDataTask = objects.get_task(data_task_id)  # type: ignore
@@ -737,18 +706,16 @@ class ParlaArchitecture(SchedulerArchitecture):
                 data_task.set_state(
                     TaskState.RESERVED, scheduler_state.time, verify=False
                 )
+                data_task.set_status(
+                    TaskStatus.RESERVABLE, scheduler_state.time, verify=False
+                )
                 # self._add_eviction_dependencies(data_task, scheduler_state)
 
-                if (not launchable_first) or (
-                    data_task.check_status(
-                        TaskStatus.LAUNCHABLE, objects.taskmap, scheduler_state.time
-                    )
-                ):
-                    # TODO: This is used for eviction purposes (need to refactor with the ready-first policy)
-                    data_task.in_ready_queue = True
-                    self.launchable_tasks[device][TaskType.DATA].put_id(
-                        task_id=data_task_id, priority=task.priority
-                    )
+                data_task.in_ready_queue = True
+
+                self.launchable_tasks[device][TaskType.DATA].put_id(
+                    task_id=data_task_id, priority=task.priority
+                )
                 scheduler_state.reserved_active_tasks += 1
                 scheduler_state.mapped_active_tasks += 1
 
@@ -768,14 +735,6 @@ class ParlaArchitecture(SchedulerArchitecture):
                 extra=dict(time=current_time, phase=TaskState.RESERVED),
             )
 
-        reservable_first = self.order_config.reservable
-        launchable_first = self.order_config.launchable
-
-        if reservable_first:
-            task_queue = self.reservable_tasks
-        else:
-            task_queue = None
-
         next_tasks = MultiTaskIterator(self.reservable_tasks)
         for priority, taskid in next_tasks:
             task = objects.get_task(taskid)
@@ -787,7 +746,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             reserve_success, eviction_event = reserve_task(task, scheduler_state)
 
             if reserve_success is True:
-                # print(f"Task {taskid} reserved successfully.", task.status)
+                # print(task, " reserved [done]")
                 devices = task.assigned_devices
                 assert devices is not None
                 device = devices[0]
@@ -803,20 +762,10 @@ class ParlaArchitecture(SchedulerArchitecture):
                 # print(task.dependencies)
                 # print(task.counters)
 
-                if (not launchable_first) or (
-                    task.check_status(
-                        TaskStatus.LAUNCHABLE, objects.taskmap, current_time
-                    )
-                ):
-                    # print(
-                    #     f"Task {taskid} is launchable, adding to launchable queue in reserver.",
-                    #     task.status,
-                    # )
-                    task.in_ready_queue = True
-                    self.launchable_tasks[device][TaskType.COMPUTE].put_id(
-                        task_id=taskid, priority=priority
-                    )
-
+                task.in_ready_queue = True
+                self.launchable_tasks[device][TaskType.COMPUTE].put_id(
+                    task_id=taskid, priority=priority
+                )
                 if logger.ENABLE_LOGGING:
                     logger.runtime.info(
                         f"Task {taskid} reserved successfully.",
@@ -824,12 +773,7 @@ class ParlaArchitecture(SchedulerArchitecture):
                     )
                 event.tasks.add(taskid)
                 # print(f"Task {taskid} reserved successfully.")
-                task.notify_state(
-                    TaskState.RESERVED,
-                    objects.taskmap,
-                    current_time,
-                    next_pool=task_queue,
-                )
+                task.notify_state(TaskState.RESERVED, objects.taskmap, current_time)
                 next_tasks.success()
                 self.success_count += 1
 
@@ -863,12 +807,11 @@ class ParlaArchitecture(SchedulerArchitecture):
             # print(device, eviction_task)
             task_i = objects.get_task(eviction_task)
 
-            # TODO: This is BROKEN
-            if TaskStatus.LAUNCHABLE in task_i.status:
-                task_i.in_ready_queue = True
-                self.launchable_tasks[device][TaskType.DATA].put_id(
-                    task_id=eviction_task, priority=0
-                )
+            task_i.in_ready_queue = True
+
+            self.launchable_tasks[device][TaskType.DATA].put_id(
+                task_id=eviction_task, priority=0
+            )
             scheduler_state.mapped_active_tasks += 1
             scheduler_state.reserved_active_tasks += 1
 
@@ -899,7 +842,7 @@ class ParlaArchitecture(SchedulerArchitecture):
             task = objects.get_task(taskid)
             assert task is not None
 
-            # print(f"Attempting to launch task {taskid}.")
+            # print(task, " launched")
             # Process LAUNCHABLE state
             if launch_success := launch_task(task, scheduler_state):
                 # print("Notifying launched state for task ", taskid)
@@ -986,11 +929,6 @@ class ParlaArchitecture(SchedulerArchitecture):
         task = objects.get_task(event.task)
         current_time = scheduler_state.time
 
-        if self.order_config.launchable:
-            task_queue = self.launchable_tasks
-        else:
-            task_queue = None
-
         if logger.ENABLE_LOGGING:
             # print(f"Completing task {event.task}")
             logger.runtime.critical(
@@ -1006,12 +944,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         complete_task(task, scheduler_state)
 
         # Update status of dependencies
-        task.notify_state(
-            TaskState.COMPLETED,
-            objects.taskmap,
-            scheduler_state.time,
-            next_pool=task_queue,
-        )
+        task.notify_state(TaskState.COMPLETED, objects.taskmap, scheduler_state.time)
 
         self.success_count += 1
         if self.active_scheduler == 0:
@@ -1022,7 +955,7 @@ class ParlaArchitecture(SchedulerArchitecture):
         return next_events
 
     def complete(self, scheduler_state: SystemState, **kwargs) -> bool:
-        complete_flag = self.mappable_tasks.empty()
+        complete_flag = self.spawned_tasks.empty()
         # print("spawned tasks:", self.spawned_tasks)
         for device in self.reservable_tasks:
             complete_flag = complete_flag and self.reservable_tasks[device].empty()

@@ -292,19 +292,7 @@ class SimulatedTask:
         taskmap: SimulatedTaskMap,
         time: Time,
         verbose: bool = False,
-        next_pool=None,
     ):
-        """
-        Only notify dependents if the state has changed.
-
-        Loop over all dependents and notify them of the state change.
-        This may change the status of the dependent task.
-        For example, if a task is mapped, the dependent task may become mappable.
-
-        If the dependent task's status changes and it is in the correct state,
-        add it to the next type
-        """
-
         # Notify only if changed
         if self.state == state:
             return
@@ -315,7 +303,6 @@ class SimulatedTask:
         )
 
         for taskid in self.dependents:
-            # The dependent task
             task = taskmap[taskid]
 
             if state in [TaskState.MAPPED, TaskState.RESERVED] and isinstance(
@@ -325,29 +312,6 @@ class SimulatedTask:
 
             if new_status := task.counters.notified_state(state):
                 task.notify_status(new_status, taskmap, time)
-
-                if next_pool is not None:
-
-                    # The status of the dependent task has changed, we need to check if it can be added to the next task queue
-                    dependent_state = task.state
-
-                    # Note: the state implies the previous states
-                    # MAPPED -> SPAWNED, RESERVED -> MAPPED, LAUNCHED -> RESERVED
-
-                    if new_status == TaskStatus.MAPPABLE:
-                        # The task is becomming mappable, ensure that it is SPAWNED
-                        if dependent_state == TaskState.SPAWNED:
-                            next_pool.put(task)
-                    elif new_status == TaskStatus.RESERVABLE:
-                        # The task is becomming reservable, ensure that it is MAPPED
-                        if dependent_state == TaskState.MAPPED:
-                            for device in task.assigned_devices:
-                                next_pool[device].put(task)
-                    elif new_status == TaskStatus.LAUNCHABLE:
-                        # The task is becomming launchable, ensure that it is RESERVED
-                        if dependent_state == TaskState.RESERVED:
-                            for device in task.assigned_devices:
-                                next_pool[device][task.type].put(task)
 
         self.set_state(state, time)
 
@@ -422,9 +386,6 @@ class SimulatedTask:
         #     self.eviction_tasks = []
         # self.eviction_tasks.append(task.name)
 
-    def __lt__(self, __other: SimulatedTask):
-        return self.priority < __other.priority
-
 
 @dataclass(slots=True)
 class SimulatedComputeTask(SimulatedTask):
@@ -479,10 +440,7 @@ class SimulatedComputeTask(SimulatedTask):
 @dataclass(slots=True)
 class SimulatedDataTask(SimulatedTask):
     type: TaskType = TaskType.DATA
-    state: TaskState = TaskState.MAPPED
-    status: Set[TaskStatus] = field(
-        default_factory=lambda: {TaskStatus.MAPPABLE, TaskStatus.RESERVABLE}
-    )
+    state: TaskState = TaskState.RESERVED
     source: Optional[Device] = None
     local_index: int = 0
     real: bool = True

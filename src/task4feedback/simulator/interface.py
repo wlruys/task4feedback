@@ -28,8 +28,7 @@ class SimulatorConfig:
     randomizer: Randomizer = field(default_factory=Randomizer)
     watcher: Watcher = field(default_factory=Watcher)
     mapper: TaskMapper = field(default_factory=TaskMapper)
-    use_eviction: bool = False  # TODO: Eviction is now deprecated with ready-first
-    order_config: OrderConfig = field(default_factory=OrderConfig)
+    use_eviction: bool = True
     task_order_mode: TaskOrderType = TaskOrderType.DEFAULT
     use_duration_noise: bool = False
     noise_scale: float = 0
@@ -61,7 +60,6 @@ def create_simulator(config: SimulatorConfig):
         watcher=config.watcher,
         mapper=config.mapper,
         use_eviction=config.use_eviction,
-        order_config=config.order_config,
         task_order_mode=config.task_order_mode,
         use_duration_noise=config.use_duration_noise,
         noise_scale=config.noise_scale,
@@ -74,11 +72,9 @@ def create_simulator(config: SimulatorConfig):
     )
 
     tasklist, simulated_tasks = create_sim_graph(
-        config.tasks,
-        config.data,
-        use_data=config.use_data,
+        config.tasks, config.data, use_data=config.use_data,
         task_order_mode=config.task_order_mode,
-        task_order_log=config.task_order_log,
+        task_order_log=config.task_order_log
     )
 
     # for task in simulated_tasks.values():

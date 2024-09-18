@@ -21,19 +21,10 @@ from copy import copy, deepcopy
 
 
 @dataclass(slots=True)
-class OrderConfig:
-    mappable: bool = False
-    reservable: bool = False
-    launchable: bool = True
-    apply_sort: bool = False
-
-
-@dataclass(slots=True)
 class SchedulerArchitecture:
     topology: SimulatedTopology
     completed_tasks: List[TaskID] = field(default_factory=list)
-    use_eviction: bool = False  # TODO: Eviction is now deprecated with ready-first
-    order_config: OrderConfig = field(default_factory=OrderConfig)
+    use_eviction: bool = True
 
     def __deepcopy__(self, memo):
         return SchedulerArchitecture(
