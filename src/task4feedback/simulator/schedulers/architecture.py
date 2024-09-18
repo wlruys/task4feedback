@@ -39,6 +39,7 @@ class SchedulerArchitecture:
         return SchedulerArchitecture(
             topology=self.topology,
             completed_tasks=[t for t in self.completed_tasks],
+            order_config=self.order_config,
         )
 
     def __post_init__(self):

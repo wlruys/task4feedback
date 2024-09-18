@@ -156,6 +156,7 @@ class SimulatedScheduler:
             task_order_mode=self.task_order_mode,
             rl_env=rl_env,
             rl_mapper=rl_mapper,
+            order_config=self.order_config,
         )
 
     def __str__(self):
