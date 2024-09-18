@@ -276,29 +276,6 @@ def make_random_graph(
                         start_time[task] >= end_time[dep1] + transfer_times[dep1][task],
                     )
                 )
-                # Since the communication starts when the last dependent task ends, add the transfer time to the end of all dependent tasks
-                for dep2 in dag[task]:
-                    if dep1 == dep2:
-                        continue
-                    solver.add(
-                        If(
-                            mapped[task] == mapped[dep1],
-                            start_time[task] >= end_time[dep2],
-                            start_time[task]
-                            >= end_time[dep2] + transfer_times[dep1][task],
-                        )
-                    )
-                    # Below is assuming perfect prefetcher.
-                    # Dependent data is moved to the successor when the task is finished.
-                    # This is not the case for current simulator.
-                    # Current simulator starts moving data when all the dependent tasks are finished.
-                    # solver.add(
-                    #     If(
-                    #         mapped[task] == mapped[dep1],
-                    #         If(mapped[task] == mapped[dep2],),
-                    #         start_time[dep1] >= end_time[task] + transfer_times[task][dep1],
-                    #     )
-                    # )
 
         # Makespan constraints
         for i in range(M):
