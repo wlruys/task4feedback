@@ -77,11 +77,12 @@ class SimulatedScheduler:
     watcher: Watcher = field(default_factory=Watcher)
     mapper: TaskMapper = field(default_factory=TaskMapper)
     current_event: Event | None = None
+    order_config: OrderConfig = field(default_factory=OrderConfig)
 
     events: EventQueue = EventQueue()
     event_count: int = 0
     init: bool = True
-    use_eviction: bool = True
+    use_eviction: bool = False  # TODO: Eviction is now deprecated with ready-first
     task_order_mode: TaskOrderType = TaskOrderType.DEFAULT
     use_duration_noise: bool = False
     noise_scale: float = 0
@@ -116,7 +117,9 @@ class SimulatedScheduler:
             )
         if self.mechanisms is None:
             scheduler_arch = SchedulerOptions.get_architecture(self.scheduler_type)
-            self.mechanisms = scheduler_arch(topology=self.topology)
+            self.mechanisms = scheduler_arch(
+                topology=self.topology, order_config=self.order_config
+            )
 
     def __deepcopy__(self, memo):
         tasks = deepcopy(self.tasks)
@@ -195,9 +198,9 @@ class SimulatedScheduler:
     ):
         self.watcher.add_condition(condition)
 
-    def add_initial_tasks(self, tasks: List[TaskID]):
-        # if apply_sort:
-        #     tasks = self.randomizer.task_order(tasks, self.taskmap)
+    def add_initial_tasks(self, tasks: List[TaskID], apply_sort: bool = False):
+        if apply_sort:
+            tasks = self.randomizer.task_order(tasks, self.taskmap)
         self.tasks.extend(tasks)
 
     # def add_initial_tasks(self, tasks: List[TaskID]):
