@@ -24,7 +24,7 @@ from copy import copy, deepcopy
 class OrderConfig:
     mappable: bool = False
     reservable: bool = False
-    launchable: bool = False
+    launchable: bool = True
     apply_sort: bool = False
 
 
