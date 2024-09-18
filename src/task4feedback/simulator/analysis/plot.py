@@ -518,6 +518,7 @@ def make_dag_and_timeline(
     # Make color map of upto 32 colors in strings
     colors = ["Red", "Green", "Blue", "Yellow", "Purple", "Orange", "Pink", "Brown"]
     device_colors = {}
+    # device_colors = colors
 
     # Make dictionary of task results (Device it ran on, start time, end time)
     task_results = {}
