@@ -7,6 +7,7 @@ import cython
 from task_state cimport random_topological_sort, TaskManager, TaskIDList, DeviceType, DataIDList, DeviceIDList, populate_dependents, taskid_t, devid_t, depcount_t, vcu_t, mem_t, timecount_t, copy_t
 from cython.operator cimport dereference as deref, preincrement as inc
 from libcpp.utility cimport move
+from libcpp.string cimport string
 
 import numpy as np
 cimport numpy as np
@@ -79,9 +80,11 @@ cdef class Simulator:
     def __cinit__(self, n: int):
         self.task_manager = new TaskManager(n)
 
-    def add_task(self, taskid_t taskid, list py_dependencies):
+    def add_task(self, taskid_t taskid, str pyname, list py_dependencies):
         cdef TaskIDList dependencies = convert_to_taskid_list(py_dependencies)
-        self.task_manager.add_task(taskid, move(dependencies))
+        cname = pyname.encode('utf-8')
+        self.task_manager.add_task(taskid, cname, move(dependencies))
+        print("Added task", taskid, pyname, py_dependencies)
 
     def add_read_set(self, taskid_t taskid, list py_dataids):
         cdef DataIDList dataids = convert_to_dataid_list(py_dataids)

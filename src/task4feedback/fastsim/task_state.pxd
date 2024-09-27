@@ -9,13 +9,14 @@ cimport cython
 
 from libcpp.vector cimport vector 
 from cython.operator cimport dereference as deref, preincrement as inc
-
+from libc.stdint cimport int64_t, int32_t, uint32_t, uint64_t 
+from libcpp.string cimport string
 
 cdef extern from "include/tasks.hpp":
 
     cdef cppclass TaskManager:
         TaskManager(int n)
-        void add_task(taskid_t id, TaskIDList dependencies)
+        void add_task(taskid_t id, string name, TaskIDList dependencies)
         void set_read(taskid_t id, DataIDList dataids)
         void set_write(taskid_t id, DataIDList dataids)
         void add_variant(taskid_t id, DeviceType arch, vcu_t vcus, mem_t mem, timecount_t time)
@@ -24,5 +25,5 @@ cdef extern from "include/tasks.hpp":
 
 cdef extern from "include/graph.hpp" namespace "Graph":
     void populate_dependents(TaskManager &task_manager)
-    TaskIDList random_topological_sort(TaskManager &task_manager, int seed)
+    TaskIDList random_topological_sort(TaskManager &task_manager, uint64_t seed)
 

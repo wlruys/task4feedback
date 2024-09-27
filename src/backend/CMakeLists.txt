@@ -1,16 +1,18 @@
 set(BACKEND_SRC 
-    tasks.cpp
     graph.cpp
+    tasks.cpp
 )
 
 set(BACKEND_HDR
+    data.hpp
+    devices.hpp
     graph.hpp
     macros.hpp 
-    devices.hpp
-    data.hpp
+    queues.hpp 
     resources.hpp
-    settings.hpp
-    tasks.hpp
+    scheduler.hpp 
+    settings.hpp 
+    tasks.hpp 
 )
 
 # Add "include" to all header files
