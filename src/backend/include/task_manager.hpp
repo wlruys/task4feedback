@@ -184,9 +184,9 @@ public:
 
   Table make_status_table(taskid_t id);
 
-  Table wrap_tables(
+  [[nodiscard]] Table wrap_tables(
       const std::vector<std::function<tabulate::Table(taskid_t)>> &generators,
-      taskid_t id);
+      taskid_t id) const;
 
   void print_tables(
       const std::vector<std::function<tabulate::Table(taskid_t)>> &generators,

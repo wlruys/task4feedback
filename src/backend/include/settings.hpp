@@ -1,16 +1,16 @@
 #pragma once
 #include <array>
+#include <cstdint>
 #include <iostream>
 #include <list>
 #include <unordered_map>
 #include <vector>
 
-using priority_t = int;
-using taskid_t = unsigned long long;
-using dataid_t = unsigned long long;
-using devid_t = unsigned int;
-
-using depcount_t = unsigned int;
+using priority_t = uint8_t;
+using taskid_t = uint64_t;
+using dataid_t = uint64_t;
+using devid_t = uint8_t;
+using depcount_t = uint64_t;
 
 using TaskIDList = std::vector<taskid_t>;
 using TaskIDLinkedList = std::list<taskid_t>;

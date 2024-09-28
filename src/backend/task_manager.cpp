@@ -430,7 +430,7 @@ Table TaskPrinter::make_status_table(taskid_t id) {
 
 Table TaskPrinter::wrap_tables(
     const std::vector<std::function<tabulate::Table(taskid_t)>> &generators,
-    taskid_t id) {
+    taskid_t id) const {
   Table table;
 
   Table::Row_t task_name;

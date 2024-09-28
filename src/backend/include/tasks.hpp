@@ -168,6 +168,8 @@ public:
   void set_read(DataIDList _read) { this->read = std::move(_read); }
   void set_write(DataIDList _write) { this->write = std::move(_write); }
 
+  std::vector<DeviceType> get_supported_architectures();
+
   [[nodiscard]] const DataIDList &get_read() const { return read; }
   [[nodiscard]] const DataIDList &get_write() const { return write; }
 };

@@ -1,3 +1,4 @@
+#include <queue>
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 #include "include/queues.hpp"
@@ -112,21 +113,100 @@ TEST_CASE("TopKQueue: size") {
   CHECK(queue.size() == 5);
 }
 
-TEST_CASE("TopKQueue: performance") {
+TEST_CASE("TopKQueue: performance (asc)") {
   auto start = std::chrono::high_resolution_clock::now();
 
   Top10Queue queue;
   for (int i = 0; i < 1000000; i++) {
     queue.push(i);
   }
-  for (int i = 0; i < 10000; i++) {
-    queue.pop();
+  for (int k = 0; k < 1000; k++) {
+
+    for (int i = 0; i < 10; i++) {
+      queue.pop();
+    }
+    for (int i = 0; i < 10; i++) {
+      queue.push(i);
+    }
   }
-  for (int i = 0; i < 10000; i++) {
+}
+
+TEST_CASE("TopKQueue: performance (desc)") {
+  Top10Queue queue;
+  for (int i = 1000000; i > 0; i--) {
     queue.push(i);
   }
+  for (int k = 1000; k > 0; k--) {
 
-  auto end = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double> elapsed = end - start;
-  MESSAGE("Performance test took ", elapsed.count(), " seconds");
+    for (int i = 0; i < 10; i++) {
+      queue.pop();
+    }
+    for (int i = 10; i > 0; i--) {
+      queue.push(i);
+    }
+  }
+}
+
+TEST_CASE("PriorityQueue: performance") {
+  std::priority_queue<int> queue;
+  for (int i = 0; i < 1000000; i++) {
+    queue.push(i);
+  }
+  for (int k = 0; k < 1000; k++) {
+
+    for (int i = 0; i < 10; i++) {
+      queue.pop();
+    }
+    for (int i = 0; i < 10; i++) {
+      queue.push(i);
+    }
+  }
+}
+
+TEST_CASE("PriorityQueue: performance (desc)") {
+  std::priority_queue<int> queue;
+  for (int i = 1000000; i > 0; i--) {
+    queue.push(i);
+  }
+  for (int k = 1000; k > 0; k--) {
+
+    for (int i = 0; i < 10; i++) {
+      queue.pop();
+    }
+    for (int i = 10; i > 0; i--) {
+      queue.push(i);
+    }
+  }
+}
+
+TEST_CASE("ContainerPriorityQueue: performance") {
+  ContainerQueue<int, std::priority_queue> queue;
+  for (int i = 0; i < 1000000; i++) {
+    queue.push(i, i);
+  }
+  for (int k = 0; k < 1000; k++) {
+
+    for (int i = 0; i < 10; i++) {
+      queue.pop();
+    }
+    for (int i = 0; i < 10; i++) {
+      queue.push(i, i);
+    }
+  }
+}
+
+TEST_CASE("RandomPriorityQueue: performance") {
+  ContainerQueue<int, std::priority_queue> queue;
+  for (int i = 0; i < 1000000; i++) {
+    queue.push_random(i);
+  }
+  for (int k = 0; k < 1000; k++) {
+
+    for (int i = 0; i < 10; i++) {
+      queue.pop();
+    }
+    for (int i = 0; i < 10; i++) {
+      queue.push_random(i);
+    }
+  }
 }

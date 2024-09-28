@@ -73,27 +73,33 @@ public:
   [[nodiscard]] bool empty() const { return l == 0; }
 };
 
+template <typename T> struct Element {
+  T value;
+  int priority;
+
+  bool operator<(const Element &other) const {
+    return priority < other.priority;
+  }
+};
+
+template <typename T> inline Element<T> make_element(T value, int priority) {
+  return Element{value, priority};
+}
+
+template <typename T> inline Element<T> make_element(T value) {
+  return Element{value, 0};
+}
+
 template <typename T, template <typename...> class Queue = std::priority_queue,
           typename Compare = std::less<T>>
 class ContainerQueue {
 private:
-  template <typename U> struct Element {
-    U value;
-    int priority;
-  };
-
   struct ElementCompare {
     Compare compare;
     bool operator()(const Element<T> &lhs, const Element<T> &rhs) const {
       return compare(lhs.priority, rhs.priority);
     }
   };
-
-  Element<T> make_element(T value, int priority) {
-    return Element{value, priority};
-  }
-
-  Element<T> make_element(T value) { return Element{value, 0}; }
 
   using QueueType = Queue<Element<T>, std::vector<Element<T>>, ElementCompare>;
   static_assert(PriorityQueueConcept<QueueType>,
