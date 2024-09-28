@@ -4,7 +4,9 @@
 
 import cython 
 
-from task_state cimport random_topological_sort, TaskManager, TaskIDList, DeviceType, DataIDList, DeviceIDList, populate_dependents, taskid_t, devid_t, depcount_t, vcu_t, mem_t, timecount_t, copy_t
+from graph cimport GraphManager
+from settings cimport taskid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t, copy_t
+from tasks cimport Tasks
 from cython.operator cimport dereference as deref, preincrement as inc
 from libcpp.utility cimport move
 from libcpp.string cimport string
@@ -74,35 +76,45 @@ cdef convert_devid_list_to_numpy(DeviceIDList devid_list, copy: bool = False):
     return result
 
 
-cdef class Simulator:
-    cdef TaskManager* task_manager
+cdef class TaskGraph:
+    cdef Tasks* tasks
 
     def __cinit__(self, n: int):
-        self.task_manager = new TaskManager(n)
+        self.tasks = new Tasks(n)
 
-    def add_task(self, taskid_t taskid, str pyname, list py_dependencies):
+    def create_task(self, taskid_t tid, str pyname, list py_dependencies):
+        print(pyname, py_dependencies)
         cdef TaskIDList dependencies = convert_to_taskid_list(py_dependencies)
         cname = pyname.encode('utf-8')
-        self.task_manager.add_task(taskid, cname, move(dependencies))
-        print("Added task", taskid, pyname, py_dependencies)
+        self.tasks.create_compute_task(tid, cname, move(dependencies))
+        print("Added task", tid, pyname, py_dependencies)   
 
     def add_read_set(self, taskid_t taskid, list py_dataids):
         cdef DataIDList dataids = convert_to_dataid_list(py_dataids)
-        self.task_manager.set_read(taskid, move(dataids))
+        self.tasks.set_read(taskid, move(dataids))
 
     def add_write_set(self, taskid_t taskid, list py_dataids):
         cdef DataIDList dataids = convert_to_dataid_list(py_dataids)
-        self.task_manager.set_write(taskid, move(dataids))
-    
+        self.tasks.set_write(taskid, move(dataids))
+
     def add_variant(self, taskid_t id, DeviceType arch, vcu_t vcus, mem_t mem, timecount_t time):
-        self.task_manager.add_variant(id, arch, vcus, mem, time)
+        self.tasks.add_variant(id, arch, vcus, mem, time)
 
+    def get_dependencies(self, taskid_t taskid):
+        cdef TaskIDList dependencies = deref(self.tasks).get_dependencies(taskid)
+        return convert_taskid_list_to_numpy(dependencies, copy=True)
+
+    def get_dependents(self, taskid_t taskid):
+        cdef TaskIDList dependents = deref(self.tasks).get_dependents(taskid)
+        return convert_taskid_list_to_numpy(dependents, copy=True)
+
+    def get_read(self, taskid_t taskid):
+        cdef DataIDList dataids = deref(self.tasks).get_read(taskid)
+        return convert_dataid_list_to_numpy(dataids, copy=True)
+
+    def get_write(self, taskid_t taskid):
+        cdef DataIDList dataids = deref(self.tasks).get_write(taskid)
+        return convert_dataid_list_to_numpy(dataids, copy=True)
+    
     def initialize_dependents(self):
-        populate_dependents(deref(self.task_manager))
-
-    def random_topological_sort(self):
-        cdef TaskIDList result = random_topological_sort(deref(self.task_manager), 0)
-        return convert_taskid_list_to_numpy(result, copy=True)
-
-    def print_task(self, taskid_t taskid):
-        self.task_manager.print_task(taskid)
+        GraphManager.populate_dependents(deref(self.tasks))

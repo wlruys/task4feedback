@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
+using priority_t = int;
 using taskid_t = unsigned long long;
 using dataid_t = unsigned long long;
 using devid_t = unsigned int;

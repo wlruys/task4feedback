@@ -7,7 +7,7 @@ set(PYX_FILES
 )
 
 set(FILE_MAP
-    "task_state.pxd settings.pxd"
+    "tasks.pxd graph.pxd settings.pxd"
 )
 
 set(index 0)

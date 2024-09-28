@@ -1,0 +1,39 @@
+CompileFlags:
+  Add:
+  - -std=c++20
+  - -Wall
+  - -Wextra
+  - -Wpedantic
+  - -Werror
+  - -Wshadow
+  - -Wconversion
+  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/external/tabulate/include
+  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/external/doctest
+  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/src/backend
+  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/src/backend/include
+Diagnostics:
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+  ClangTidy:
+    Add:
+    - modernize*
+    - performance*
+    - readability*
+    - bugprone*
+    Remove:
+    - modernize-use-trailing-return-type
+    CheckOptions:
+      readability-identifier-naming.IgnoreMainLikeFunctions: true
+      readability-identifier-length.MinimumVariableNameLength: '1'
+      readability-identifier-length.MinimumParameterNameLength: '1'
+Index:
+  Background: Build
+InlayHints:
+  Enabled: true
+  ParameterNames: false
+  DeducedTypes: true
+  Designators: true
+Hover:
+  ShowAKA: true
+Completion:
+  AllScopes: true

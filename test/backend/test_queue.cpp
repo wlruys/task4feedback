@@ -4,7 +4,7 @@
 #include <chrono>
 
 TEST_CASE("TopKQueue: push") {
-  TopKQueue<int, 3> queue;
+  Top3Queue queue;
   queue.push(5);
   queue.push(1);
   queue.push(3);
@@ -17,7 +17,7 @@ TEST_CASE("TopKQueue: push") {
 }
 
 TEST_CASE("TopKQueue: push: pop") {
-  TopKQueue<int, 3> queue;
+  Top3Queue queue;
   queue.push(5);
   queue.push(1);
   queue.push(3);
@@ -36,7 +36,7 @@ TEST_CASE("TopKQueue: push: pop") {
 }
 
 TEST_CASE("TopKQueue: top") {
-  TopKQueue<int, 3> queue;
+  Top3Queue queue;
   queue.push(5);
   queue.push(1);
   queue.push(3);
@@ -47,7 +47,7 @@ TEST_CASE("TopKQueue: top") {
 }
 
 TEST_CASE("TopKQueue: at") {
-  TopKQueue<int, 3> queue;
+  Top3Queue queue;
   queue.push(5);
   queue.push(1);
   queue.push(3);
@@ -58,7 +58,7 @@ TEST_CASE("TopKQueue: at") {
 }
 
 TEST_CASE("TopKQueue: remove_at") {
-  TopKQueue<int, 3> queue;
+  Top3Queue queue;
   queue.push(5);
   queue.push(1);
   queue.push(3);
@@ -77,7 +77,7 @@ TEST_CASE("TopKQueue: remove_at") {
 }
 
 TEST_CASE("TopKQueue: empty") {
-  TopKQueue<int, 3> queue;
+  Top3Queue queue;
   CHECK(queue.empty());
 
   queue.push(5);
@@ -99,7 +99,7 @@ TEST_CASE("TopKQueue: empty") {
 }
 
 TEST_CASE("TopKQueue: size") {
-  TopKQueue<int, 3> queue;
+  Top3Queue queue;
   CHECK(queue.size() == 0);
 
   queue.push(5);
@@ -115,7 +115,7 @@ TEST_CASE("TopKQueue: size") {
 TEST_CASE("TopKQueue: performance") {
   auto start = std::chrono::high_resolution_clock::now();
 
-  TopKQueue<int, 4> queue;
+  Top10Queue queue;
   for (int i = 0; i < 1000000; i++) {
     queue.push(i);
   }

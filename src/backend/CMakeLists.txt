@@ -1,6 +1,8 @@
 set(BACKEND_SRC 
     graph.cpp
     tasks.cpp
+    task_manager.cpp 
+    queues.cpp 
 )
 
 set(BACKEND_HDR
@@ -13,6 +15,8 @@ set(BACKEND_HDR
     scheduler.hpp 
     settings.hpp 
     tasks.hpp 
+    task_manager.hpp
+    device_manager.hpp
 )
 
 # Add "include" to all header files

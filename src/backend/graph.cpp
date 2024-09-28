@@ -2,81 +2,68 @@
 #include "include/queues.hpp"
 #include "include/settings.hpp"
 #include "include/tasks.hpp"
+#include "task_manager.hpp"
 #include <queue>
 #include <random>
 #include <stack>
 
-namespace Graph {
-
-void populate_dependents(TaskManager &tm) {
-  for (taskid_t i = 0; i < tm.size(); ++i) {
-    for (auto &dependency : tm.tasks[i].dependencies) {
-      tm.tasks[dependency].dependents.push_back(i);
+void GraphManager::populate_dependents(Tasks &tasks) {
+  for (auto &task : tasks.get_compute_tasks()) {
+    for (auto dependency_id : task.get_dependencies()) {
+      auto &dependency_task = tasks.get_compute_task(dependency_id);
+      dependency_task.add_dependent(task.id);
     }
   }
 }
 
-TaskIDList get_tasks_without_dependencies(TaskManager &tm) {
+TaskIDList GraphManager::initial_tasks(const ComputeTaskList &tasks) {
   TaskIDList tasks_without_dependencies;
-  for (taskid_t i = 0; i < tm.tasks.size(); ++i) {
-    if (tm.tasks[i].dependencies.empty()) {
-      tasks_without_dependencies.push_back(i);
+  for (const auto &task : tasks) {
+    if (task.get_dependencies().empty()) {
+      tasks_without_dependencies.push_back(task.id);
     }
   }
   return tasks_without_dependencies;
 }
 
-template <typename Obj>
-std::unordered_map<Obj, Obj> convert_vector_to_map(std::vector<Obj> &vec) {
-  std::unordered_map<Obj, Obj> map;
-  for (auto &obj : vec) {
-    map[obj] = obj;
+TaskIDList GraphManager::initial_tasks(const TaskIDList &task_ids,
+                                       Tasks &tasks) {
+  TaskIDList tasks_without_dependencies;
+  for (auto task_id : task_ids) {
+    const auto &task = tasks.get_task(task_id);
+    if (task.get_dependencies().empty()) {
+      tasks_without_dependencies.push_back(task.id);
+    }
   }
-  return map;
-}
-
-template <typename Key, typename Obj>
-std::unordered_map<Key, Obj> convert_vector_to_id_map(std::vector<Obj> &vec) {
-  std::unordered_map<Key, Obj> map;
-  for (auto &obj : vec) {
-    map[obj.id] = obj;
-  }
-  return map;
+  return tasks_without_dependencies;
 }
 
 std::unordered_map<taskid_t, MinimalTask>
-create_minimal_tasks(TaskManager &tm) {
+GraphManager::create_minimal_tasks(const TaskIDList &task_ids, Tasks &tasks) {
   std::unordered_map<taskid_t, MinimalTask> minimal_tasks;
-  for (taskid_t i = 0; i < tm.tasks.size(); ++i) {
-    minimal_tasks.emplace(i, MinimalTask(tm.tasks[i]));
+  for (auto task_id : task_ids) {
+    const auto &task = tasks.get_task(task_id);
+    minimal_tasks.emplace(task.id, MinimalTask(task));
   }
   return minimal_tasks;
 }
 
-std::vector<taskid_t> get_tasks_without_dependencies(
-    std::unordered_map<taskid_t, MinimalTask> &minimal_tasks) {
-  std::vector<taskid_t> tasks_without_dependencies;
-
-  for (auto &id_task_pair : minimal_tasks) {
-    auto &minimal_task = id_task_pair.second;
-    if (minimal_task.dependencies.empty()) {
-      tasks_without_dependencies.push_back(minimal_task.id);
-    }
+std::unordered_map<taskid_t, MinimalTask>
+GraphManager::create_minimal_tasks(const ComputeTaskList &tasks) {
+  std::unordered_map<taskid_t, MinimalTask> minimal_tasks;
+  for (const auto &task : tasks) {
+    minimal_tasks.emplace(task.id, MinimalTask(task));
   }
-  return tasks_without_dependencies;
+  return minimal_tasks;
 }
 
-TaskIDList depth_first_sort(TaskManager &tm) {
+TaskIDList
+depth_first_sort_(TaskIDList &starting_tasks,
+                  std::unordered_map<taskid_t, MinimalTask> &minimal_task_map) {
   TaskIDList sorted_tasks;
-  std::unordered_map<taskid_t, MinimalTask> minimal_task_map =
-      create_minimal_tasks(tm);
-
-  std::vector<taskid_t> tasks_without_dependencies =
-      get_tasks_without_dependencies(minimal_task_map);
-
   std::stack<taskid_t> stack;
-  for (auto &task : tasks_without_dependencies) {
-    stack.push(task);
+  for (auto taskid : starting_tasks) {
+    stack.push(taskid);
   }
 
   while (!stack.empty()) {
@@ -85,11 +72,11 @@ TaskIDList depth_first_sort(TaskManager &tm) {
     auto &task = minimal_task_map[taskid];
     sorted_tasks.push_back(task.id);
 
-    for (auto dependent : task.dependents) {
-      auto &dependent_task = minimal_task_map[dependent];
+    for (auto dependent_id : task.dependents) {
+      auto &dependent_task = minimal_task_map[dependent_id];
       dependent_task.dependencies.erase(taskid);
       if (dependent_task.dependencies.empty()) {
-        stack.push(dependent);
+        stack.push(dependent_id);
       }
     }
   }
@@ -97,17 +84,14 @@ TaskIDList depth_first_sort(TaskManager &tm) {
   return sorted_tasks;
 }
 
-TaskIDList breadth_first_sort(TaskManager &tm) {
+TaskIDList breadth_first_sort_(
+    TaskIDList &starting_tasks,
+    std::unordered_map<taskid_t, MinimalTask> &minimal_task_map) {
+
   TaskIDList sorted_tasks;
-  std::unordered_map<taskid_t, MinimalTask> minimal_task_map =
-      create_minimal_tasks(tm);
-
-  std::vector<taskid_t> tasks_without_dependencies =
-      get_tasks_without_dependencies(minimal_task_map);
-
   std::queue<taskid_t> queue;
-  for (auto &task : tasks_without_dependencies) {
-    queue.push(task);
+  for (auto taskid : starting_tasks) {
+    queue.push(taskid);
   }
 
   while (!queue.empty()) {
@@ -116,11 +100,11 @@ TaskIDList breadth_first_sort(TaskManager &tm) {
     auto &task = minimal_task_map[taskid];
     sorted_tasks.push_back(task.id);
 
-    for (auto dependent : task.dependents) {
-      auto &dependent_task = minimal_task_map[dependent];
+    for (auto dependent_id : task.dependents) {
+      auto &dependent_task = minimal_task_map[dependent_id];
       dependent_task.dependencies.erase(taskid);
       if (dependent_task.dependencies.empty()) {
-        queue.push(dependent);
+        queue.push(dependent_id);
       }
     }
   }
@@ -128,30 +112,16 @@ TaskIDList breadth_first_sort(TaskManager &tm) {
   return sorted_tasks;
 }
 
-/**
- * The function `random_topological_sort` returns a list of task IDs that are
- * randomly sorted in a topological order.
- *
- * @param tm TaskManager object that contains a list of tasks, where each task
- * has a unique identifier (taskid_t) and a list of dependencies that are also
- * task identifiers.
- *
- * @return The function `random_topological_sort` returns a list of task IDs
- * that are randomly sorted in a topological order.
- */
-TaskIDList random_topological_sort(TaskManager &tm, unsigned long seed) {
+TaskIDList random_topological_sort_(
+    TaskIDList &starting_tasks,
+    std::unordered_map<taskid_t, MinimalTask> &minimal_task_map,
+    unsigned long seed) {
+
   TaskIDList sorted_tasks;
+  auto r = ContainerQueue<taskid_t, std::priority_queue>(seed);
 
-  std::unordered_map<taskid_t, MinimalTask> minimal_task_map =
-      create_minimal_tasks(tm);
-
-  std::vector<taskid_t> tasks_without_dependencies =
-      get_tasks_without_dependencies(minimal_task_map);
-
-  auto r = Randomizer<taskid_t, std::priority_queue>(seed);
-
-  for (auto &task : tasks_without_dependencies) {
-    r.push_random(task);
+  for (auto taskid : starting_tasks) {
+    r.push_random(taskid);
   }
 
   while (!r.empty()) {
@@ -160,11 +130,11 @@ TaskIDList random_topological_sort(TaskManager &tm, unsigned long seed) {
     auto &task = minimal_task_map[taskid];
     sorted_tasks.push_back(task.id);
 
-    for (auto dependent : task.dependents) {
-      auto &dependent_task = minimal_task_map[dependent];
+    for (auto dependent_id : task.dependents) {
+      auto &dependent_task = minimal_task_map[dependent_id];
       dependent_task.dependencies.erase(taskid);
       if (dependent_task.dependencies.empty()) {
-        r.push(dependent);
+        r.push(dependent_id);
       }
     }
   }
@@ -172,4 +142,69 @@ TaskIDList random_topological_sort(TaskManager &tm, unsigned long seed) {
   return sorted_tasks;
 }
 
-} // namespace Graph
+TaskIDList GraphManager::breadth_first_sort(const TaskIDList &task_ids,
+                                            Tasks &tasks) {
+  std::unordered_map<taskid_t, MinimalTask> minimal_task_map =
+      create_minimal_tasks(task_ids, tasks);
+
+  TaskIDList starting_tasks = initial_tasks(task_ids, tasks);
+
+  return breadth_first_sort_(starting_tasks, minimal_task_map);
+}
+
+TaskIDList GraphManager::depth_first_sort(const TaskIDList &task_ids,
+                                          Tasks &tasks) {
+  TaskIDList sorted_tasks;
+  std::unordered_map<taskid_t, MinimalTask> minimal_task_map =
+      create_minimal_tasks(task_ids, tasks);
+
+  TaskIDList starting_tasks = initial_tasks(task_ids, tasks);
+
+  return depth_first_sort_(starting_tasks, minimal_task_map);
+}
+
+TaskIDList GraphManager::random_topological_sort(const TaskIDList &task_ids,
+                                                 Tasks &tasks,
+                                                 unsigned long seed) {
+  TaskIDList sorted_tasks;
+
+  std::unordered_map<taskid_t, MinimalTask> minimal_task_map =
+      create_minimal_tasks(task_ids, tasks);
+
+  TaskIDList starting_tasks = initial_tasks(task_ids, tasks);
+
+  return random_topological_sort_(starting_tasks, minimal_task_map, seed);
+}
+
+TaskIDList GraphManager::breadth_first_sort(Tasks &tasks) {
+  const auto &task_list = tasks.get_compute_tasks();
+  std::unordered_map<taskid_t, MinimalTask> minimal_task_map =
+      create_minimal_tasks(task_list);
+
+  TaskIDList starting_tasks = initial_tasks(task_list);
+
+  return breadth_first_sort_(starting_tasks, minimal_task_map);
+}
+
+TaskIDList GraphManager::depth_first_sort(Tasks &tasks) {
+  TaskIDList sorted_tasks;
+  const auto &task_list = tasks.get_compute_tasks();
+  std::unordered_map<taskid_t, MinimalTask> minimal_task_map =
+      create_minimal_tasks(task_list);
+
+  TaskIDList starting_tasks = initial_tasks(task_list);
+
+  return depth_first_sort_(starting_tasks, minimal_task_map);
+}
+
+TaskIDList GraphManager::random_topological_sort(Tasks &tasks,
+                                                 unsigned long seed) {
+  TaskIDList sorted_tasks;
+  const auto &task_list = tasks.get_compute_tasks();
+  std::unordered_map<taskid_t, MinimalTask> minimal_task_map =
+      create_minimal_tasks(task_list);
+
+  TaskIDList starting_tasks = initial_tasks(task_list);
+
+  return random_topological_sort_(starting_tasks, minimal_task_map, seed);
+}
