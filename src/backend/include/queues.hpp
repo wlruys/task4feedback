@@ -53,7 +53,7 @@ private:
 
 public:
   ResizeableArray() = default;
-  T &at(int index) { return arr[index]; }
+  T &at(std::size_t index) { return arr[index]; }
   T &operator[](int index) { return arr[index]; }
   void remove_at(int index);
   void erase(T *it);

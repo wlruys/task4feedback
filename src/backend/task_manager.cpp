@@ -129,19 +129,22 @@ bool TaskStateInfo::is_launchable(taskid_t id) {
 bool TaskStateInfo::decrement_unmapped(taskid_t id) {
   counts[id].unmapped--;
   assert(counts[id].unmapped >= 0);
-  return (counts[id].unmapped == 0);
+  // return if the task just became mappable
+  return (counts[id].unmapped == 0) && (state[id] == TaskState::SPAWNED);
 }
 
 bool TaskStateInfo::decrement_unreserved(taskid_t id) {
   counts[id].unreserved--;
   assert(counts[id].unreserved >= 0);
-  return (counts[id].unreserved == 0);
+  // return if the task just became reservable
+  return (counts[id].unreserved == 0) && (state[id] == TaskState::MAPPED);
 }
 
 bool TaskStateInfo::decrement_incomplete(taskid_t id) {
   counts[id].incomplete--;
   assert(counts[id].incomplete >= 0);
-  return (counts[id].incomplete == 0);
+  // return if the task just became launchable
+  return (counts[id].incomplete == 0) && (state[id] == TaskState::RESERVED);
 }
 
 void TaskStateInfo::set_mapping_priority(taskid_t id, priority_t priority) {
@@ -207,6 +210,45 @@ void TaskManager::initialize_records() { records = TaskRecords(tasks.size()); }
 
 void TaskManager::map_task(taskid_t id, devid_t devid) {
   state.set_mapping(id, devid);
+}
+
+TaskIDList TaskManager::notify_mapped(taskid_t id) {
+  const auto &task_objects = get_tasks();
+  TaskIDList newly_mappable;
+
+  for (auto dependent_id : task_objects.get_dependents(id)) {
+    if (state.decrement_unmapped(dependent_id)) {
+      newly_mappable.push_back(dependent_id);
+    }
+  }
+
+  return newly_mappable;
+}
+
+TaskIDList TaskManager::notify_reserved(taskid_t id) {
+  const auto &task_objects = get_tasks();
+  TaskIDList newly_reservable;
+
+  for (auto dependent_id : task_objects.get_dependents(id)) {
+    if (state.decrement_unreserved(dependent_id)) {
+      newly_reservable.push_back(dependent_id);
+    }
+  }
+
+  return newly_reservable;
+}
+
+TaskIDList TaskManager::notify_completed(taskid_t id) {
+  const auto &task_objects = get_tasks();
+  TaskIDList newly_launchable;
+
+  for (auto dependent_id : task_objects.get_dependents(id)) {
+    if (state.decrement_incomplete(dependent_id)) {
+      newly_launchable.push_back(dependent_id);
+    }
+  }
+
+  return newly_launchable;
 }
 
 // TaskPrinter

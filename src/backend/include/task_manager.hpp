@@ -150,9 +150,9 @@ public:
   [[nodiscard]] const Tasks &get_tasks() const { return tasks; }
 
   void map_task(taskid_t id, devid_t devid);
-  TaskIDList &notify_mapped(taskid_t id);
-  TaskIDList &notify_reserved(taskid_t id);
-  TaskIDList &notify_completed(taskid_t id);
+  TaskIDList notify_mapped(taskid_t id);
+  TaskIDList notify_reserved(taskid_t id);
+  TaskIDList notify_completed(taskid_t id);
 
   void print_task(taskid_t id);
 };
