@@ -4,7 +4,6 @@ set(CMAKE_CXX_STANDARD 20)
 project(${SKBUILD_PROJECT_NAME} LANGUAGES C CXX)
 
 set(3RD_PARTY_DIR ${PROJECT_SOURCE_DIR}/external)
-option(SIMULATOR_DEBUG "Enables all debugging flags" ON)
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 include(CTest)

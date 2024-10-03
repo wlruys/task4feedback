@@ -27,7 +27,6 @@ def generate_clangd_config(output_file):
         },
         "Diagnostics": {
             "UnusedIncludes": "Strict",
-            "MissingIncludes": "Strict",
             "ClangTidy": {
                 "Add": ["modernize*", "performance*", "readability*", "bugprone*"],
                 "Remove": ["modernize-use-trailing-return-type"],
