@@ -21,6 +21,8 @@ public:
 
   T &get_active() { return containers[active_index]; }
   T &operator[](std::size_t index) { return containers[index]; }
+  const T &operator[](std::size_t index) const { return containers[index]; }
+
   T &at(std::size_t index) { return containers[index]; }
 
   std::size_t size() { return containers.size(); }

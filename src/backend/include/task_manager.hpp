@@ -95,55 +95,112 @@ public:
   // Store the task state
   std::vector<devid_t> mapping;
 
-  std::vector<priority_t> mapping_priority;
-  std::vector<priority_t> reservation_priority;
-  std::vector<priority_t> launch_priority;
+  PriorityList mapping_priority;
+  PriorityList reserving_priority;
+  PriorityList launching_priority;
 
   TaskStateInfo() = default;
   TaskStateInfo(std::size_t n_tasks);
 
-  TaskState get_state(taskid_t id) { return state[id]; }
+  [[nodiscard]] TaskState get_state(taskid_t id) const { return state[id]; }
 
-  TaskStatus get_status(taskid_t id);
+  [[nodiscard]] TaskStatus get_status(taskid_t id) const;
 
-  bool is_mappable(taskid_t id);
-  bool is_reservable(taskid_t id);
-  bool is_launchable(taskid_t id);
+  [[nodiscard]] bool is_mappable(taskid_t id) const;
+  [[nodiscard]] bool is_reservable(taskid_t id) const;
+  [[nodiscard]] bool is_launchable(taskid_t id) const;
 
-  depcount_t get_unmapped(taskid_t id) { return counts[id].unmapped; }
-  depcount_t get_unreserved(taskid_t id) { return counts[id].unreserved; }
-  depcount_t get_incomplete(taskid_t id) { return counts[id].incomplete; }
+  [[nodiscard]] depcount_t get_unmapped(taskid_t id) const {
+    return counts[id].unmapped;
+  }
+  [[nodiscard]] depcount_t get_unreserved(taskid_t id) const {
+    return counts[id].unreserved;
+  }
+  [[nodiscard]] depcount_t get_incomplete(taskid_t id) const {
+    return counts[id].incomplete;
+  }
 
   void set_mapping(taskid_t id, devid_t devid) { mapping[id] = devid; }
-  void set_mapping_priority(taskid_t id, priority_t priority);
-  void set_reservation_priority(taskid_t id, priority_t priority);
-  void set_launch_priority(taskid_t id, priority_t priority);
+  void set_mapping_priority(taskid_t id, priority_t p);
+  void set_mapping_priority(PriorityList &ps) {
+    mapping_priority = std::move(ps);
+  }
+
+  void set_reserving_priority(taskid_t id, priority_t p);
+  void set_reserving_priority(PriorityList &ps) {
+    reserving_priority = std::move(ps);
+  }
+  void set_launching_priority(taskid_t id, priority_t p);
+  void set_launching_priority(PriorityList &ps) {
+    launching_priority = std::move(ps);
+  }
+
+  [[nodiscard]] devid_t get_mapping(taskid_t id) const;
+  [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const;
+  [[nodiscard]] const PriorityList &get_mapping_priorities() const {
+    return mapping_priority;
+  }
+  [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const;
+  [[nodiscard]] priority_t get_launching_priority(taskid_t id) const;
 
   friend class TaskManager;
 };
 
 class TaskRecords {
+
+private:
+  static std::size_t task_to_index(taskid_t id, std::size_t state_index) {
+    return id * n_tracked_states + state_index;
+  }
+
 public:
-  std::vector<timecount_t> start_times;
-  std::vector<timecount_t> end_times;
+  static constexpr std::size_t mapped_idx = 0;
+  static constexpr std::size_t reserved_idx = 1;
+  static constexpr std::size_t launched_idx = 2;
+  static constexpr std::size_t completed_idx = 3;
+  static constexpr std::size_t n_tracked_states = 4;
+
+  std::vector<timecount_t> state_times;
 
   TaskRecords() = default;
-  TaskRecords(std::size_t n_tasks);
+  TaskRecords(std::size_t n_tasks) {
+    state_times.resize(n_tasks * n_tracked_states);
+  }
 
-  void record_start(taskid_t id, timecount_t time);
-  void record_end(taskid_t id, timecount_t time);
+  void record_mapped(taskid_t id, timecount_t time);
+  void record_reserved(taskid_t id, timecount_t time);
+  void record_launched(taskid_t id, timecount_t time);
+  void record_completed(taskid_t id, timecount_t time);
+
+  [[nodiscard]] timecount_t get_mapped_time(taskid_t id) const;
+  [[nodiscard]] timecount_t get_reserved_time(taskid_t id) const;
+  [[nodiscard]] timecount_t get_launched_time(taskid_t id) const;
+  [[nodiscard]] timecount_t get_completed_time(taskid_t id) const;
 };
 
 class TaskManager {
+private:
+  void initialize_state();
+
 public:
   Tasks &tasks;
   TaskStateInfo state;
   TaskRecords records;
 
-  TaskManager(Tasks &tasks);
+  bool initialized = false;
+
+  TaskManager(Tasks &tasks)
+      : tasks(tasks), state(tasks.size()), records(tasks.size()) {};
   [[nodiscard]] std::size_t size() const { return tasks.size(); }
-  void initialize_state();
-  void initialize_records();
+
+  void initialize() {
+    initialize_state();
+    initialized = true;
+  }
+
+  void set_mapping_priority(PriorityList &ps) {
+    state.set_mapping_priority(ps);
+  }
 
   [[nodiscard]] const TaskStateInfo &get_state() const { return state; }
   [[nodiscard]] const TaskRecords &get_records() const { return records; }
@@ -154,6 +211,8 @@ public:
   TaskIDList notify_reserved(taskid_t id);
   TaskIDList notify_completed(taskid_t id);
 
+  Variant &get_task_variant(taskid_t id);
+  Variant &get_task_resources(taskid_t id, devid_t device);
   void print_task(taskid_t id);
 };
 

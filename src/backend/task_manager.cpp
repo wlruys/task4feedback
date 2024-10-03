@@ -100,7 +100,7 @@ TaskStateInfo::TaskStateInfo(std::size_t n) {
   mapping.resize(n);
 }
 
-TaskStatus TaskStateInfo::get_status(taskid_t id) {
+TaskStatus TaskStateInfo::get_status(taskid_t id) const {
   if (is_launchable(id)) {
     return TaskStatus::LAUNCHABLE;
   }
@@ -113,15 +113,15 @@ TaskStatus TaskStateInfo::get_status(taskid_t id) {
   return TaskStatus::NONE;
 }
 
-bool TaskStateInfo::is_mappable(taskid_t id) {
+bool TaskStateInfo::is_mappable(taskid_t id) const {
   return counts[id].unmapped == 0 && this->get_state(id) == TaskState::SPAWNED;
 }
 
-bool TaskStateInfo::is_reservable(taskid_t id) {
+bool TaskStateInfo::is_reservable(taskid_t id) const {
   return counts[id].unreserved == 0 && this->get_state(id) == TaskState::MAPPED;
 }
 
-bool TaskStateInfo::is_launchable(taskid_t id) {
+bool TaskStateInfo::is_launchable(taskid_t id) const {
   return counts[id].incomplete == 0 &&
          this->get_state(id) == TaskState::RESERVED;
 }
@@ -151,12 +151,12 @@ void TaskStateInfo::set_mapping_priority(taskid_t id, priority_t priority) {
   mapping_priority[id] = priority;
 }
 
-void TaskStateInfo::set_reservation_priority(taskid_t id, priority_t priority) {
-  reservation_priority[id] = priority;
+void TaskStateInfo::set_reserving_priority(taskid_t id, priority_t priority) {
+  reserving_priority[id] = priority;
 }
 
-void TaskStateInfo::set_launch_priority(taskid_t id, priority_t priority) {
-  launch_priority[id] = priority;
+void TaskStateInfo::set_launching_priority(taskid_t id, priority_t priority) {
+  launching_priority[id] = priority;
 }
 
 void TaskStateInfo::set_unmapped(taskid_t id, depcount_t count) {
@@ -173,23 +173,47 @@ void TaskStateInfo::set_incomplete(taskid_t id, depcount_t count) {
 
 // TaskRecords
 
-TaskRecords::TaskRecords(std::size_t n_tasks) {
-  start_times.resize(n_tasks, 0);
-  end_times.resize(n_tasks, 0);
+void TaskRecords::record_mapped(taskid_t id, timecount_t time) {
+  auto index = task_to_index(id, mapped_idx);
+  state_times[index] = time;
 }
 
-void TaskRecords::record_start(taskid_t id, timecount_t time) {
-  start_times[id] = time;
+void TaskRecords::record_reserved(taskid_t id, timecount_t time) {
+  auto index = task_to_index(id, reserved_idx);
+  state_times[index] = time;
 }
 
-void TaskRecords::record_end(taskid_t id, timecount_t time) {
-  end_times[id] = time;
+void TaskRecords::record_launched(taskid_t id, timecount_t time) {
+  auto index = task_to_index(id, launched_idx);
+  state_times[index] = time;
+}
+
+void TaskRecords::record_completed(taskid_t id, timecount_t time) {
+  auto index = task_to_index(id, completed_idx);
+  state_times[index] = time;
+}
+
+timecount_t TaskRecords::get_mapped_time(taskid_t id) const {
+  auto index = task_to_index(id, mapped_idx);
+  return state_times[index];
+}
+
+timecount_t TaskRecords::get_reserved_time(taskid_t id) const {
+  auto index = task_to_index(id, reserved_idx);
+  return state_times[index];
+}
+
+timecount_t TaskRecords::get_launched_time(taskid_t id) const {
+  auto index = task_to_index(id, launched_idx);
+  return state_times[index];
+}
+
+timecount_t TaskRecords::get_completed_time(taskid_t id) const {
+  auto index = task_to_index(id, completed_idx);
+  return state_times[index];
 }
 
 // Task Manager
-
-TaskManager::TaskManager(Tasks &tasks) : tasks(tasks) {}
-
 void TaskManager::initialize_state() {
   const auto &const_tasks = this->tasks;
 
@@ -205,8 +229,6 @@ void TaskManager::initialize_state() {
     state.set_incomplete(id, n_deps);
   }
 }
-
-void TaskManager::initialize_records() { records = TaskRecords(tasks.size()); }
 
 void TaskManager::map_task(taskid_t id, devid_t devid) {
   state.set_mapping(id, devid);
@@ -376,9 +398,9 @@ Table TaskPrinter::make_variant_table(Variant v) {
   header_row.emplace_back("MEM");
   header_row.emplace_back("TIME");
 
-  value_row.emplace_back(std::to_string(v.vcu));
-  value_row.emplace_back(std::to_string(v.mem));
-  value_row.emplace_back(std::to_string(v.time));
+  value_row.emplace_back(std::to_string(v.get_vcus()));
+  value_row.emplace_back(std::to_string(v.get_mem()));
+  value_row.emplace_back(std::to_string(v.get_execution_time()));
 
   variant_table.add_row(header_row);
   variant_table.add_row(value_row);

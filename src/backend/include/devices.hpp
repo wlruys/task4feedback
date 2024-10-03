@@ -30,20 +30,18 @@ inline std::ostream &operator<<(std::ostream &os, const DeviceType &arch) {
 struct Resources {
   vcu_t vcu = 0;
   mem_t mem = 0;
-  timecount_t time = 0;
 
   Resources() = default;
   Resources(vcu_t vcu, mem_t mem) : vcu(vcu), mem(mem) {}
-  Resources(vcu_t vcu, mem_t mem, timecount_t time)
-      : vcu(vcu), mem(mem), time(time) {}
 };
 
-class Device : public Resources {
+class Device {
 public:
   devid_t id;
   DeviceType arch = DeviceType::NONE;
+  Resources max_resources;
 
   Device() = default;
   Device(devid_t id, DeviceType arch, vcu_t vcu, mem_t mem)
-      : Resources(vcu, mem), id(id), arch(arch) {}
+      : id(id), arch(arch), max_resources(vcu, mem) {}
 };

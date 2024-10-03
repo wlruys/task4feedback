@@ -86,17 +86,22 @@ inline std::ostream &operator<<(std::ostream &os, const TaskStatus &state) {
   return os;
 }
 
-class Variant : public Resources {
+class Variant {
 public:
   DeviceType arch = DeviceType::NONE;
+  Resources resources;
+  timecount_t time;
 
   Variant() = default;
-  Variant(DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time)
-      : arch(arch) {
-    this->vcu = vcu;
-    this->mem = mem;
-    this->time = time;
-  }
+  Variant(DeviceType arch_, vcu_t vcu_, mem_t mem_, timecount_t time_)
+      : arch(arch_), resources(vcu_, mem_), time(time_) {}
+
+  [[nodiscard]] vcu_t get_vcus() const { return resources.vcu; }
+  [[nodiscard]] mem_t get_mem() const { return resources.mem; }
+
+  [[nodiscard]] const Resources &get_resources() const { return resources; }
+
+  [[nodiscard]] timecount_t get_execution_time() const { return time; }
 };
 
 using VariantList = std::array<Variant, num_device_types>;

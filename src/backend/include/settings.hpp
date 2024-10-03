@@ -21,6 +21,8 @@ using TaskIDLinkedList = std::list<taskid_t>;
 using DeviceIDList = std::vector<devid_t>;
 using DeviceIDLinkedList = std::list<devid_t>;
 
+using PriorityList = std::vector<priority_t>;
+
 template <typename T> void print(std::vector<T> vec) {
   for (auto &elem : vec) {
     std::cout << elem << " ";
