@@ -118,6 +118,10 @@ public:
   [[nodiscard]] bool is_reservable(taskid_t id) const;
   [[nodiscard]] bool is_launchable(taskid_t id) const;
 
+  bool is_mapped(taskid_t id) const;
+  bool is_reserved(taskid_t id) const;
+  bool is_launched(taskid_t id) const;
+
   [[nodiscard]] depcount_t get_unmapped(taskid_t id) const {
     return counts[id].unmapped;
   }
@@ -143,16 +147,22 @@ public:
     launching_priority = std::move(ps);
   }
 
-  [[nodiscard]] devid_t get_mapping(taskid_t id) const;
-  [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const;
+  [[nodiscard]] devid_t get_mapping(taskid_t id) const { return mapping[id]; };
+  [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const {
+    return mapping_priority[id];
+  };
   [[nodiscard]] const PriorityList &get_mapping_priorities() const {
     return mapping_priority;
   }
-  [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const;
+  [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const {
+    return reserving_priority[id];
+  };
   [[nodiscard]] const PriorityList &get_reserving_priorities() const {
     return reserving_priority;
   }
-  [[nodiscard]] priority_t get_launching_priority(taskid_t id) const;
+  [[nodiscard]] priority_t get_launching_priority(taskid_t id) const {
+    return launching_priority[id];
+  };
   [[nodiscard]] const PriorityList &get_launching_priorities() const {
     return launching_priority;
   }
@@ -208,7 +218,7 @@ public:
   bool initialized = false;
 
   TaskManager(Tasks &tasks)
-      : tasks(tasks), state(tasks.size()), records(tasks.size()) {};
+      : tasks(tasks), state(tasks.size()), records(tasks.size()){};
   [[nodiscard]] std::size_t size() const { return tasks.size(); }
 
   void initialize() {

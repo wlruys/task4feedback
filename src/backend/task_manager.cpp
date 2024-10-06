@@ -139,6 +139,18 @@ bool TaskStateInfo::is_launchable(taskid_t id) const {
          this->get_state(id) == TaskState::RESERVED;
 }
 
+bool TaskStateInfo::is_mapped(taskid_t id) const {
+  return this->get_state(id) == TaskState::MAPPED;
+}
+
+bool TaskStateInfo::is_reserved(taskid_t id) const {
+  return this->get_state(id) == TaskState::RESERVED;
+}
+
+bool TaskStateInfo::is_launched(taskid_t id) const {
+  return this->get_state(id) == TaskState::LAUNCHED;
+}
+
 bool TaskStateInfo::decrement_unmapped(taskid_t id) {
   counts[id].unmapped--;
   assert(counts[id].unmapped >= 0);

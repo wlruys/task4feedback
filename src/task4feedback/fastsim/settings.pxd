@@ -32,3 +32,8 @@ cdef extern from "include/resources.hpp":
     ctypedef uint64_t mem_t
     ctypedef uint64_t timecount_t
 
+    cdef cppclass Resources:
+        Resources(vcu_t vcus, mem_t mem)
+        vcu_t get_vcus() const
+        mem_t get_mem() const
+

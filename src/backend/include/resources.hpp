@@ -45,3 +45,65 @@ consteval vcu_t operator"" _vcus(long double val) {
   // Return fraction of MAX_VCUS
   return static_cast<vcu_t>(val * MAX_VCUS);
 }
+
+struct Resources {
+  vcu_t vcu = 0;
+  mem_t mem = 0;
+
+  Resources() = default;
+  Resources(vcu_t vcu, mem_t mem) : vcu(vcu), mem(mem) {}
+
+  [[nodiscard]] bool empty() const { return vcu == 0 && mem == 0; }
+
+  [[nodiscard]] bool empty_vcu() const { return vcu == 0; }
+
+  [[nodiscard]] bool empty_mem() const { return mem == 0; }
+
+  Resources &operator+=(const Resources &rhs) {
+    vcu += rhs.vcu;
+    mem += rhs.mem;
+    return *this;
+  }
+
+  Resources &operator-=(const Resources &rhs) {
+    vcu -= rhs.vcu;
+    mem -= rhs.mem;
+    return *this;
+  }
+
+  Resources operator+(const Resources &rhs) const {
+    Resources result = *this;
+    result += rhs;
+    return result;
+  }
+
+  Resources operator-(const Resources &rhs) const {
+    Resources result = *this;
+    result -= rhs;
+    return result;
+  }
+
+  [[nodiscard]] bool operator==(const Resources &rhs) const {
+    return vcu == rhs.vcu && mem == rhs.mem;
+  }
+
+  [[nodiscard]] bool operator!=(const Resources &rhs) const {
+    return !(*this == rhs);
+  }
+
+  [[nodiscard]] bool operator<(const Resources &rhs) const {
+    return vcu < rhs.vcu && mem < rhs.mem;
+  }
+
+  [[nodiscard]] bool operator>(const Resources &rhs) const {
+    return vcu > rhs.vcu && mem > rhs.mem;
+  }
+
+  [[nodiscard]] bool operator<=(const Resources &rhs) const {
+    return vcu <= rhs.vcu && mem <= rhs.mem;
+  }
+
+  [[nodiscard]] bool operator>=(const Resources &rhs) const {
+    return vcu >= rhs.vcu && mem >= rhs.mem;
+  }
+};

@@ -4,10 +4,10 @@
 #include <cstddef>
 
 enum class StopReason {
-  ERROR = 0,
-  COMPLETE = 1,
-  BREAKPOINT = 2,
-  MAPPING = 3,
+  COMPLETE = 0,
+  BREAKPOINT = 1,
+  MAPPING = 2,
+  ERROR = 3,
 };
 
 class Simulator {
@@ -28,15 +28,14 @@ public:
   Simulator(Tasks &tasks, Devices &devices)
       : event_manager(EventManager()), scheduler(Scheduler(tasks, devices)) {}
 
-  void initialize() {
+  void initialize(unsigned int seed) {
     add_initial_event();
-    scheduler.initialize();
+    scheduler.initialize(seed);
     initialized = true;
   }
 
   EventList handle_event(Event &event) {
     auto event_type = event.get_type();
-    const auto &tasks = event.get_tasks();
 
     switch (event_type) {
     case EventType::MAPPER:
@@ -71,12 +70,14 @@ public:
     return true;
   }
 
-  void run() {
+  StopReason run() {
     while (is_running) {
       Event next_event = event_manager.pop_next_event();
       update_time(next_event);
       handle_event(next_event);
       check_status();
     }
+
+    return StopReason::COMPLETE;
   }
 };

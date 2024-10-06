@@ -1,4 +1,4 @@
-from task4feedback.fastsim.simulator import TaskGraph
+from task4feedback.fastsim.simulator import PyTasks, PyDevices, PySimulator
 from task4feedback.graphs import *
 import argparse
 
@@ -38,15 +38,28 @@ def build_c_graph(tasks):
 
     tasks_to_ids, ids_to_task = create_task_ids(tasks)
 
-    s = TaskGraph(n_tasks)
+    s = PyTasks(n_tasks)
 
     for task_name, task in tasks.items():
         id = tasks_to_ids[task_name]
         dependencies = [tasks_to_ids[dep] for dep in task.dependencies]
         s.create_task(id, str(task_name), dependencies)
+        s.add_variant(id, 0, 1, 0, 1000)
 
     s.initialize_dependents()
-    print(s.get_dependents(0))
+
+    return s
 
 
-build_c_graph(tasks)
+def build_devices():
+    d = PyDevices(1)
+    mem = 1e9
+    d.create_device(0, "CPU", 0, 1, mem)
+
+    return d
+
+
+pytasks = build_c_graph(tasks)
+pyydevices = build_devices()
+
+simulator = PySimulator(pytasks, pyydevices)

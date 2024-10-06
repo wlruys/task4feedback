@@ -76,7 +76,31 @@ cdef convert_devid_list_to_numpy(DeviceIDList devid_list, copy: bool = False):
     return result
 
 
-cdef class TaskGraph:
+cdef class PyDevices:
+    cdef Devices* devices
+
+    def __cinit__(self, n: int):
+        self.devices = new Devices(n)
+
+    def create_device(self, devid_t id, str pyname, DeviceType arch, vcu_t vcus, mem_t mem):
+        cname = pyname.encode('utf-8')
+        self.devices.create_device(id, cname, arch, vcus, mem)
+
+    def get_devices(self, DeviceType arch):
+        cdef DeviceIDList devices = deref(self.devices).get_devices(arch)
+        return convert_devid_list_to_numpy(devices, copy=True)
+
+    def get_type(self, devid_t id):
+        return deref(self.devices).get_type(id)
+
+    def get_name(self, devid_t id):
+        cdef string s = deref(self.devices).get_name(id)
+        py_s = s.decode('utf-8')
+        return py_s
+
+    
+
+cdef class PyTasks:
     cdef Tasks* tasks
 
     def __cinit__(self, n: int):
@@ -118,3 +142,20 @@ cdef class TaskGraph:
     
     def initialize_dependents(self):
         GraphManager.populate_dependents(deref(self.tasks))
+
+
+cdef class PySimulator:
+    cdef Simulator* simulator
+
+    def __cinit__(self, PyTasks tasks, PyDevices devices):
+        self.simulator = new Simulator(deref(tasks.tasks), deref(devices.devices))
+
+    def initialize(self, unsigned int seed):
+        self.simulator.initialize(seed)
+
+    def run(self):
+        cdef StopReason stop_reason = self.simulator.run()
+        return stop_reason
+
+    def __dealloc__(self):
+        del self.simulator  

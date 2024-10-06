@@ -27,14 +27,6 @@ inline std::ostream &operator<<(std::ostream &os, const DeviceType &arch) {
   return os;
 }
 
-struct Resources {
-  vcu_t vcu = 0;
-  mem_t mem = 0;
-
-  Resources() = default;
-  Resources(vcu_t vcu, mem_t mem) : vcu(vcu), mem(mem) {}
-};
-
 class Device {
 public:
   devid_t id;

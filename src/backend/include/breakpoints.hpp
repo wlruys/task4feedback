@@ -1,6 +1,7 @@
 #include "events.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
+#include <algorithm>
 #include <limits>
 #include <map>
 

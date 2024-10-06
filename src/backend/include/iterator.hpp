@@ -1,8 +1,9 @@
 #pragma once
+#include "queues.hpp"
 #include <vector>
 
 template <typename T> class ActiveIterator {
-private:
+protected:
   std::vector<T> containers;
   std::vector<bool> active;
   std::size_t active_index;
@@ -98,4 +99,39 @@ public:
     }
     num_active = containers.size();
   }
+};
+
+template <PriorityQueueConcept Q>
+class ActiveQueueIterator : public ActiveIterator<Q> {
+
+public:
+  void push(Q::value_type value) {
+    this->containers[this->active_index].push(value);
+  }
+
+  void push(Q::value_type value, int priority) {
+    this->containers[this->active_index].push(value, priority);
+  }
+
+  void push_at(std::size_t index, Q::value_type value) {
+    this->containers[index].push(value);
+  }
+
+  void push_random(Q::value_type value) {
+    this->containers[this->active_index].push_random(value);
+  }
+
+  void push_random_at(std::size_t index, Q::value_type value) {
+    this->containers[index].push_random(value);
+  }
+
+  [[nodiscard]] const Q::value_type &top() const {
+    return this->containers[this->active_index].top();
+  }
+
+  [[nodiscard]] const Element<typename Q::value_type> &top_element() const {
+    return this->containers[this->active_index].top_element();
+  };
+
+  void pop() { this->containers[this->active_index].pop(); }
 };

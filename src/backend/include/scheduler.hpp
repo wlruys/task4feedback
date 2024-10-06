@@ -2,6 +2,7 @@
 
 #include "breakpoints.hpp"
 #include "device_manager.hpp"
+#include "devices.hpp"
 #include "events.hpp"
 #include "graph.hpp"
 #include "iterator.hpp"
@@ -11,9 +12,10 @@
 #include "task_manager.hpp"
 #include "tasks.hpp"
 #include <cassert>
+#include <random>
 
 using TaskQueue = ContainerQueue<taskid_t, std::priority_queue>;
-using DeviceQueue = ActiveIterator<TaskQueue>;
+using DeviceQueue = ActiveQueueIterator<TaskQueue>;
 
 using TaskIDTimeList = std::pair<TaskIDList, std::vector<timecount_t>>;
 
@@ -45,18 +47,33 @@ public:
                        devid_t device);
 
   [[nodiscard]] std::size_t n_mappable() const { return mappable.size(); }
+  [[nodiscard]] bool has_mappable() const { return !mappable.empty(); }
+
   [[nodiscard]] std::size_t n_reservable(devid_t device) const {
     const auto &device_queue = reservable[device];
     return device_queue.size();
   }
+
+  [[nodiscard]] bool has_reservable(devid_t device) const {
+    const auto &device_queue = reservable[device];
+    return !device_queue.empty();
+  }
+
+  [[nodiscard]] bool has_active_reservable() const {
+    return reservable.total_active_size() > 0;
+  }
+
   [[nodiscard]] std::size_t n_launchable(devid_t device) const {
     const auto &device_queue = launchable[device];
     return device_queue.size();
   }
+  [[nodiscard]] bool has_launchable(devid_t device) const {
+    const auto &device_queue = launchable[device];
+    return !device_queue.empty();
+  }
 
-  [[nodiscard]] std::size_t n_data_launchable(devid_t device) const {
-    const auto &device_queue = data_launchable[device];
-    return device_queue.size();
+  [[nodiscard]] bool has_active_launchable() const {
+    return launchable.total_active_size() > 0;
   }
 
   void populate(const TaskManager &task_manager);
@@ -65,11 +82,59 @@ public:
   friend class Scheduler;
 };
 
+struct ResourceRequest {
+  Resources requested;
+  Resources missing;
+};
+
 class SchedulerState {
 protected:
   timecount_t global_time = 0;
   TaskManager task_manager;
   DeviceManager device_manager;
+
+  [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id,
+                                                      devid_t device_id) const;
+  [[nodiscard]] ResourceRequest
+  request_reserve_resources(taskid_t task_id, devid_t device_id) const;
+  [[nodiscard]] ResourceRequest
+  request_launch_resources(taskid_t task_id, devid_t device_id) const;
+
+  void map_resources(taskid_t task_id, devid_t device_id,
+                     const Resources &requested);
+
+  void reserve_resources(taskid_t task_id, devid_t device_id,
+                         const Resources &requested);
+
+  void launch_resources(taskid_t task_id, devid_t device_id,
+                        const Resources &requested);
+
+  void free_resources(taskid_t task_id);
+
+  const TaskIDList &notify_mapped(taskid_t task_id);
+  const TaskIDList &notify_reserved(taskid_t task_id);
+  void notify_launched(taskid_t task_id);
+  const TaskIDList &notify_completed(taskid_t task_id);
+
+  bool is_mapped(taskid_t task_id) const;
+  bool is_reserved(taskid_t task_id) const;
+  bool is_launched(taskid_t task_id) const;
+
+  bool is_mappable(taskid_t task_id) const;
+  bool is_reservable(taskid_t task_id) const;
+  bool is_launchable(taskid_t task_id) const;
+
+  void set_mapping(taskid_t task_id, devid_t device_id);
+
+  const PriorityList &get_mapping_priorities() const;
+  const PriorityList &get_reserving_priorities() const;
+  const PriorityList &get_launching_priorities() const;
+
+  priority_t get_reserving_priority(taskid_t task_id) const;
+  priority_t get_launching_priority(taskid_t task_id) const;
+
+  void set_reserving_priority(taskid_t task_id, priority_t priority);
+  void set_launching_priority(taskid_t task_id, priority_t priority);
 
 public:
   SchedulerState(Tasks &tasks, Devices &devices)
@@ -83,17 +148,22 @@ public:
 
   void initialize() { task_manager.initialize(); }
 
+  [[nodiscard]] const Resources &get_task_resources(taskid_t task_id,
+                                                    devid_t device_id) const;
+
+  [[nodiscard]] const Resources &get_task_resources(taskid_t task_id) const;
+
   friend class Scheduler;
   friend class TransitionConstraints;
 };
 
 template <typename T>
-concept TransitionConditionConcept =
-    requires(T t, SchedulerState &state, SchedulerQueues &queues) {
-      { T::should_map(state, queues) } -> std::convertible_to<bool>;
-      { T::should_reserve(state, queues) } -> std::convertible_to<bool>;
-      { T::should_launch(state, queues) } -> std::convertible_to<bool>;
-    };
+concept TransitionConditionConcept = requires(T t, SchedulerState &state,
+                                              SchedulerQueues &queues) {
+  { T::should_map(state, queues) } -> std::convertible_to<bool>;
+  { T::should_reserve(state, queues) } -> std::convertible_to<bool>;
+  { T::should_launch(state, queues) } -> std::convertible_to<bool>;
+};
 
 class TransitionConditions {
 public:
@@ -173,6 +243,42 @@ public:
   EventList &map_tasks(Event &map_event);
   EventList &map_tasks(std::vector<std::size_t> pos, DeviceIDList &devices);
 
+  void push_mappable(taskid_t id) {
+    priority_t p = state.task_manager.state.get_mapping_priority(id);
+    queues.push_mappable(id, p);
+  }
+
+  void push_mappable(const TaskIDList &ids) {
+    const auto &ps = state.task_manager.state.get_mapping_priorities();
+    queues.push_mappable(ids, ps);
+  }
+
+  void push_reservable(taskid_t id, devid_t device) {
+    priority_t p = state.task_manager.state.get_reserving_priority(id);
+    queues.push_reservable(id, p, device);
+  }
+
+  void push_reservable(const TaskIDList &ids) {
+    const auto &ps = state.task_manager.state.get_reserving_priorities();
+    for (auto id : ids) {
+      queues.push_reservable(id, ps[id],
+                             state.task_manager.state.get_mapping(id));
+    }
+  }
+
+  void push_launchable(taskid_t id, devid_t device) {
+    priority_t p = state.task_manager.state.get_launching_priority(id);
+    queues.push_launchable(id, p, device);
+  }
+
+  void push_launchable(const TaskIDList &ids) {
+    const auto &ps = state.task_manager.state.get_launching_priorities();
+    for (auto id : ids) {
+      queues.push_launchable(id, ps[id],
+                             state.task_manager.state.get_mapping(id));
+    }
+  }
+
   template <TransitionConditionConcept Conditions>
   EventList &reserve_tasks(Event &reserve_event);
 
@@ -187,6 +293,11 @@ public:
     return event_buffer;
   }
   void clear_event_buffer() { event_buffer.clear(); }
+
+  EventList &get_clear_event_buffer() {
+    clear_event_buffer();
+    return event_buffer;
+  }
 
   void update_time(timecount_t time) { state.update_time(time); }
 

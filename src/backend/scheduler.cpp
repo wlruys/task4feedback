@@ -1,8 +1,152 @@
 #include "scheduler.hpp"
 #include "events.hpp"
 #include "settings.hpp"
+#include "task_manager.hpp"
 #include "tasks.hpp"
+// SchedulerState
 
+const Resources &SchedulerState::get_task_resources(taskid_t task_id,
+                                                    devid_t device_id) const {
+  const Resources &task_resources = task_manager.get_task_resources(
+      task_id, device_manager.devices.get_type(device_id));
+  return task_resources;
+}
+
+const Resources &SchedulerState::get_task_resources(taskid_t task_id) const {
+  devid_t device_id = task_manager.state.get_mapping(task_id);
+  const Resources &task_resources = task_manager.get_task_resources(
+      task_id, device_manager.devices.get_type(device_id));
+  return task_resources;
+}
+
+ResourceRequest SchedulerState::request_map_resources(taskid_t task_id,
+                                                      devid_t device_id) const {
+  const Resources &task_resources = get_task_resources(task_id, device_id);
+  Resources requested = task_resources;
+  Resources missing;
+  return {requested, missing};
+}
+
+ResourceRequest
+SchedulerState::request_reserve_resources(taskid_t task_id,
+                                          devid_t device_id) const {
+  const Resources &task_resources = get_task_resources(task_id, device_id);
+  Resources requested = task_resources;
+  auto missing_mem = device_manager.overflow_mem<TaskState::RESERVED>(
+      device_id, requested.mem);
+  return {requested, Resources(0, missing_mem)};
+}
+
+ResourceRequest
+SchedulerState::request_launch_resources(taskid_t task_id,
+                                         devid_t device_id) const {
+  const Resources &task_resources = get_task_resources(task_id, device_id);
+  Resources requested = task_resources;
+  auto missing_vcu = device_manager.overflow_vcu<TaskState::LAUNCHED>(
+      device_id, requested.vcu);
+  return {requested, Resources(missing_vcu, 0)};
+}
+
+void SchedulerState::map_resources(taskid_t task_id, devid_t device_id,
+                                   const Resources &requested) {
+  device_manager.add_resources<TaskState::MAPPED>(device_id, requested);
+}
+
+void SchedulerState::reserve_resources(taskid_t task_id, devid_t device_id,
+                                       const Resources &requested) {
+  device_manager.add_resources<TaskState::RESERVED>(device_id, requested);
+}
+
+void SchedulerState::launch_resources(taskid_t task_id, devid_t device_id,
+                                      const Resources &requested) {
+  device_manager.add_resources<TaskState::LAUNCHED>(device_id, requested);
+}
+
+void SchedulerState::free_resources(taskid_t task_id) {
+  devid_t device_id = task_manager.state.get_mapping(task_id);
+  const auto &task_resources = get_task_resources(task_id);
+  device_manager.remove_resources<TaskState::MAPPED>(device_id, task_resources);
+  device_manager.remove_resources<TaskState::RESERVED>(device_id,
+                                                       task_resources);
+  device_manager.remove_resources<TaskState::LAUNCHED>(device_id,
+                                                       task_resources);
+}
+
+const TaskIDList &SchedulerState::notify_mapped(taskid_t task_id) {
+  return task_manager.notify_mapped(task_id, global_time);
+}
+
+const TaskIDList &SchedulerState::notify_reserved(taskid_t task_id) {
+  return task_manager.notify_reserved(task_id, global_time);
+}
+
+void SchedulerState::notify_launched(taskid_t task_id) {
+  task_manager.notify_launched(task_id, global_time);
+}
+
+const TaskIDList &SchedulerState::notify_completed(taskid_t task_id) {
+  return task_manager.notify_completed(task_id, global_time);
+}
+
+bool SchedulerState::is_mapped(taskid_t task_id) const {
+  return task_manager.state.is_mapped(task_id);
+}
+
+bool SchedulerState::is_reserved(taskid_t task_id) const {
+  return task_manager.state.is_reserved(task_id);
+}
+
+bool SchedulerState::is_launched(taskid_t task_id) const {
+  return task_manager.state.is_launched(task_id);
+}
+
+bool SchedulerState::is_mappable(taskid_t task_id) const {
+  return task_manager.state.is_mappable(task_id);
+}
+
+bool SchedulerState::is_reservable(taskid_t task_id) const {
+  return task_manager.state.is_reservable(task_id);
+}
+
+bool SchedulerState::is_launchable(taskid_t task_id) const {
+  return task_manager.state.is_launchable(task_id);
+}
+
+void SchedulerState::set_mapping(taskid_t task_id, devid_t device_id) {
+  task_manager.state.set_mapping(task_id, device_id);
+}
+
+const PriorityList &SchedulerState::get_mapping_priorities() const {
+  return task_manager.state.get_mapping_priorities();
+}
+
+const PriorityList &SchedulerState::get_reserving_priorities() const {
+  return task_manager.state.get_reserving_priorities();
+}
+
+const PriorityList &SchedulerState::get_launching_priorities() const {
+  return task_manager.state.get_launching_priorities();
+}
+
+priority_t SchedulerState::get_reserving_priority(taskid_t task_id) const {
+  return task_manager.state.get_reserving_priority(task_id);
+}
+
+priority_t SchedulerState::get_launching_priority(taskid_t task_id) const {
+  return task_manager.state.get_launching_priority(task_id);
+}
+
+void SchedulerState::set_reserving_priority(taskid_t task_id,
+                                            priority_t priority) {
+  task_manager.state.set_reserving_priority(task_id, priority);
+}
+
+void SchedulerState::set_launching_priority(taskid_t task_id,
+                                            priority_t priority) {
+  task_manager.state.set_launching_priority(task_id, priority);
+}
+
+// Scheduler Queues
 void SchedulerQueues::push_mappable(taskid_t id, priority_t p) {
   mappable.push(id, p);
 }
@@ -95,45 +239,40 @@ devid_t Scheduler::choose_random_target() {
 template <TransitionConditionConcept Conditions>
 EventList &Scheduler::map_tasks(Event &map_event) {
   assert(map_event.get_type() == EventType::MAPPER);
-  clear_event_buffer();
-  EventList &next_events = event_buffer;
-  auto &task_manager = state.task_manager;
-  auto &device_manager = state.device_manager;
-  const auto &devices = device_manager.devices;
-  const auto &task_states = task_manager.get_state();
-  timecount_t current_time = state.global_time;
+  assert(map_event.get_tasks().empty());
+  EventList &next_events = get_clear_event_buffer();
+  auto &s = this->state;
+  auto &task_states = state.task_manager.state;
 
-  while (queues.n_mappable() != 0U) {
+  while (queues.has_mappable()) {
     taskid_t task_id = queues.mappable.top();
     queues.mappable.pop();
 
+    assert(task_states.is_mappable(task_id));
+
     // Choose a random target device
     fill_mappable_targets(task_id);
-    devid_t device_id = choose_random_target();
-    DeviceType device_type = devices.get_type(device_id);
-    task_manager.set_mapping(task_id, device_id);
+    devid_t chosen_device = choose_random_target();
+    s.set_mapping(task_id, chosen_device);
 
     // TODO(wlr): Update mapped data locations
 
     // Update mapped resources
-    const auto &task_resources =
-        task_manager.get_task_resources(task_id, device_type);
-    device_manager.add_resources<TaskState::MAPPED>(device_id, task_resources);
+    auto [requested, missing] = s.request_map_resources(task_id, chosen_device);
+    s.map_resources(task_id, chosen_device, requested);
 
     // Notify dependents and enqueue newly mappable tasks
-    const auto &newly_mappable =
-        task_manager.notify_mapped(task_id, current_time);
-    queues.push_mappable(newly_mappable, task_states.get_mapping_priorities());
+    const auto &newly_mappable_tasks = s.notify_mapped(task_id);
+    push_mappable(newly_mappable_tasks);
 
     // Check if the mapped task is reservable, and if so, enqueue it
     if (task_states.is_reservable(task_id)) {
-      queues.push_reservable(
-          task_id, task_states.get_reserving_priority(task_id), device_id);
+      push_reservable(task_id, chosen_device);
     }
   }
 
   // The next event is a reserving event
-  timecount_t reserver_time = current_time + 0;
+  timecount_t reserver_time = s.global_time + 0;
   next_events.emplace_back(EventType::RESERVER, reserver_time, TaskIDList());
 
   return next_events;
@@ -142,38 +281,25 @@ EventList &Scheduler::map_tasks(Event &map_event) {
 template <TransitionConditionConcept Conditions>
 EventList &Scheduler::reserve_tasks(Event &reserve_event) {
   assert(reserve_event.get_type() == EventType::RESERVER);
-  clear_event_buffer();
-  EventList &next_events = event_buffer;
-
-  auto &task_manager = state.task_manager;
-  auto &device_manager = state.device_manager;
-  const auto &devices = device_manager.devices;
-  const auto &task_states = task_manager.get_state();
-  timecount_t current_time = state.global_time;
+  assert(reserve_event.get_tasks().empty());
+  EventList &next_events = get_clear_event_buffer();
+  auto &s = this->state;
 
   auto &reservable = queues.reservable;
   reservable.reset();
 
-  while (reservable.has_active()) {
-    auto &device_queue = reservable.get_active();
+  while (queues.has_active_reservable()) {
     auto device_id = static_cast<devid_t>(reservable.get_active_index());
-    DeviceType device_type = devices.get_type(device_id);
-    taskid_t task_id = device_queue.top();
+    taskid_t task_id = reservable.top();
+
+    assert(s.is_reservable(task_id));
 
     // Get total required task memory
-    // TODO(wlr): This should include non-local data, replace with function
-    const Resources &task_resources =
-        task_manager.get_task_resources(task_id, device_type);
-    const mem_t total_task_mem = task_resources.mem;
+    const auto [requested, missing] =
+        s.request_reserve_resources(task_id, device_id);
 
-    // Check if the task can be reserved
-    const bool can_fit = device_manager.can_fit_mem<TaskState::RESERVED>(
-        device_id, total_task_mem);
-
-    if (!can_fit) {
+    if (!missing.empty_mem()) {
       // Cannot fit the task at this time
-      // TODO(wlr): Implement eviction triggers
-
       // Mark current device queue as inactive
       // and cycle to the next active device queue
       reservable.deactivate();
@@ -182,32 +308,25 @@ EventList &Scheduler::reserve_tasks(Event &reserve_event) {
     }
 
     // Pop the task from the queue
-    device_queue.pop();
+    reservable.pop();
     // Update reserved resources
-    device_manager.add_resources<TaskState::RESERVED>(device_id,
-                                                      task_resources);
-
-    // TODO(wlr): Update reserved data locations
+    s.reserve_resources(task_id, device_id, requested);
 
     // Notify dependents and enqueue newly reservable tasks
-    const auto &newly_reservable =
-        task_manager.notify_reserved(task_id, current_time);
-    queues.push_reservable(newly_reservable,
-                           task_states.get_reserving_priorities(), device_id);
+    const auto &newly_reservable_tasks = s.notify_reserved(task_id);
+    push_reservable(newly_reservable_tasks);
 
     // Check if the reserved task is launchable, and if so, enqueue it
-    if (task_states.is_launchable(task_id)) {
-      queues.push_launchable(
-          task_id, task_states.get_launching_priority(task_id), device_id);
+    if (s.is_launchable(task_id)) {
+      push_launchable(task_id, device_id);
     }
 
-    // TODO(wlr): Enqueue relevant data tasks
     // Cycle to the next active device queue
     reservable.next();
   }
 
   // The next event is a launching event
-  timecount_t launcher_time = current_time + 0;
+  timecount_t launcher_time = s.global_time + 0;
   next_events.emplace_back(EventType::LAUNCHER, launcher_time, TaskIDList());
   return next_events;
 }
@@ -215,32 +334,25 @@ EventList &Scheduler::reserve_tasks(Event &reserve_event) {
 template <TransitionConditionConcept Conditions>
 EventList &Scheduler::launch_tasks(Event &launch_event) {
   assert(launch_event.get_type() == EventType::LAUNCHER);
-  clear_event_buffer();
-  EventList &next_events = event_buffer;
+  assert(launch_event.get_tasks().empty());
+  EventList &next_events = get_clear_event_buffer();
 
-  auto &task_manager = state.task_manager;
-  auto &device_manager = state.device_manager;
-  const auto &devices = device_manager.devices;
-  // const auto &task_states = task_manager.get_state();
-  timecount_t current_time = state.global_time;
+  auto &s = this->state;
 
   auto &launchable = queues.launchable;
   launchable.reset();
 
-  while (launchable.has_active()) {
-    auto &device_queue = launchable.get_active();
+  while (queues.has_active_launchable()) {
     auto device_id = static_cast<devid_t>(launchable.get_active_index());
-    DeviceType device_type = devices.get_type(device_id);
-    taskid_t task_id = device_queue.top();
+    taskid_t task_id = launchable.top();
 
-    // Check if the task can be launched (check VCUs)
-    const Resources &task_resources =
-        task_manager.get_task_resources(task_id, device_type);
-    const vcu_t total_task_vcu = task_resources.vcu;
-    const bool can_fit = device_manager.can_fit_vcu<TaskState::LAUNCHED>(
-        device_id, total_task_vcu);
+    assert(s.is_launchable(task_id));
+    assert(s.get_mapping(task_id) == device_id);
 
-    if (!can_fit) {
+    const auto [requested, missing] =
+        s.request_launch_resources(task_id, device_id);
+
+    if (!missing.empty_vcu()) {
       // Cannot launch the task at this time
       // Mark current device queue as inactive
       // and cycle to the next active device queue
@@ -250,12 +362,12 @@ EventList &Scheduler::launch_tasks(Event &launch_event) {
     }
 
     // Pop the task from the queue
-    device_queue.pop();
+    launchable.pop();
     // Update launched resources
-    device_manager.add_resources<TaskState::LAUNCHED>(device_id,
-                                                      task_resources);
+    s.launch_resources(task_id, device_id, requested);
+
     // Record launching time
-    task_manager.notify_launched(task_id, current_time);
+    s.notify_launched(task_id);
     // Cycle to the next active device queue
     launchable.next();
   }
@@ -273,20 +385,26 @@ EventList &Scheduler::evict() {
 }
 
 EventList &Scheduler::complete_task(Event &complete_event) {
-  clear_event_buffer();
-  EventList &next_events = event_buffer;
+  assert(complete_event.get_type() == EventType::COMPLETER);
+  assert(complete_event.get_tasks().size() == 1);
+  EventList &next_events = get_clear_event_buffer();
 
-  auto &task_manager = state.task_manager;
-  auto &device_manager = state.device_manager;
-  const auto &devices = device_manager.devices;
-  const auto &task_states = task_manager.get_state();
-  timecount_t current_time = state.global_time;
+  auto &s = this->state;
+  taskid_t task_id = complete_event.get_tasks().front();
 
-  // Free mapped resources
+  // Free mapped, reserved, and launched resources
+  s.free_resources(task_id);
 
-  // Free reserved resources (does not include data blocks)
-
-  // Free launched resources (does not include data blocks)
+  // Notify dependents and enqueue newly launchable tasks
+  const auto &newly_launchable_tasks = s.notify_completed(task_id);
+  push_launchable(newly_launchable_tasks);
 
   return next_events;
 }
+
+template EventList &
+Scheduler::map_tasks<DefaultTransitionConditions>(Event &map_event);
+template EventList &
+Scheduler::reserve_tasks<DefaultTransitionConditions>(Event &reserve_event);
+template EventList &
+Scheduler::launch_tasks<DefaultTransitionConditions>(Event &launch_event);

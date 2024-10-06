@@ -7,7 +7,7 @@ set(PYX_FILES
 )
 
 set(FILE_MAP
-    "tasks.pxd graph.pxd settings.pxd"
+    "tasks.pxd devices.pxd graph.pxd settings.pxd simulator.pxd"
 )
 
 set(index 0)
