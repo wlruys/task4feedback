@@ -23,16 +23,17 @@ constexpr int MAX_PRIORITY = 100;
 template <typename Q>
 concept QueueConcept = requires(Q q) {
   typename Q::value_type;
-  { q.push(std::declval<typename Q::value_type>()) };
-  { q.pop() };
+  {q.push(std::declval<typename Q::value_type>())};
+  {q.pop()};
   { q.top() } -> std::convertible_to<typename Q::value_type>;
   { q.size() } -> std::convertible_to<std::size_t>;
   { q.empty() } -> std::convertible_to<bool>;
 };
 
 template <typename Q>
-concept PriorityQueueConcept =
-    QueueConcept<Q> && requires(Q q) { typename Q::value_compare; };
+concept PriorityQueueConcept = QueueConcept<Q> && requires(Q q) {
+  typename Q::value_compare;
+};
 
 template <typename Q>
 concept WrappedQueueConcept = QueueConcept<Q> && requires(Q q) {
@@ -88,6 +89,9 @@ template <typename T> inline Element<T> make_element(T value, int priority) {
 template <typename T> inline Element<T> make_element(T value) {
   return Element{value, 0};
 }
+
+// TODO(wlr): Add support for emplace instead of push to avoid making temporary
+// Elements in ContainerQueue
 
 template <typename T, template <typename...> class Queue = std::priority_queue,
           typename Compare = std::less<T>>
