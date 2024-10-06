@@ -1,3 +1,0 @@
-[submodule "external/tabulate"]
-	path = external/tabulate
-	url = https://github.com/p-ranav/tabulate.git
