@@ -17,20 +17,22 @@ using DeviceQueue = ActiveIterator<TaskQueue>;
 
 using TaskIDTimeList = std::pair<TaskIDList, std::vector<timecount_t>>;
 
+class TransitionConditions;
 class Scheduler;
-class TransitionConstraints;
 
 class SchedulerQueues {
 protected:
   TaskQueue mappable;
   DeviceQueue reservable;
   DeviceQueue launchable;
+  DeviceQueue data_launchable;
 
   void id_to_queue(taskid_t id, const TaskStateInfo &state);
 
 public:
   SchedulerQueues(std::size_t num_devices)
-      : reservable(num_devices), launchable(num_devices) {}
+      : reservable(num_devices), launchable(num_devices),
+        data_launchable(num_devices) {}
 
   void push_mappable(taskid_t id, priority_t p);
   void push_mappable(const TaskIDList &ids, const PriorityList &ps);
@@ -49,6 +51,11 @@ public:
   }
   [[nodiscard]] std::size_t n_launchable(devid_t device) const {
     const auto &device_queue = launchable[device];
+    return device_queue.size();
+  }
+
+  [[nodiscard]] std::size_t n_data_launchable(devid_t device) const {
+    const auto &device_queue = data_launchable[device];
     return device_queue.size();
   }
 
@@ -80,29 +87,45 @@ public:
   friend class TransitionConstraints;
 };
 
-class TransitionConstraints {
+template <typename T>
+concept TransitionConditionConcept =
+    requires(T t, SchedulerState &state, SchedulerQueues &queues) {
+      { T::should_map(state, queues) } -> std::convertible_to<bool>;
+      { T::should_reserve(state, queues) } -> std::convertible_to<bool>;
+      { T::should_launch(state, queues) } -> std::convertible_to<bool>;
+    };
+
+class TransitionConditions {
 public:
-  bool should_map(const SchedulerState &state, const SchedulerQueues &queues) {
+  static bool should_map(SchedulerState &state, SchedulerQueues &queues) {
     return true;
-  };
-  bool should_reserve(const SchedulerState &state,
-                      const SchedulerQueues &queues) {
+  }
+
+  static bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
     return true;
-  };
-  bool should_launch(const SchedulerState &state,
-                     const SchedulerQueues &queues) {
+  }
+
+  static bool should_launch(SchedulerState &state, SchedulerQueues &queues) {
     return true;
-  };
+  }
 };
 
-#define INITIAL_BUFFER_SIZE 10
+static_assert(TransitionConditionConcept<TransitionConditions>);
+
+// TODO(wlr): Define these (restruct number of mapped and reservable tasks)
+class DefaultTransitionConditions : public TransitionConditions {};
+class ReservableTransitionConditions : public TransitionConditions {};
+class ReadyTransitionConditions : public TransitionConditions {};
+
+#define INITIAL_TASK_BUFFER_SIZE 10
+#define INITIAL_DEVICE_BUFFER_SIZE 10
+#define INITIAL_EVENT_BUFFER_SIZE 10
 
 class Scheduler {
 
 protected:
   SchedulerState state;
   SchedulerQueues queues;
-  TransitionConstraints constraints;
   BreakpointManager breakpoints;
 
   bool can_map = true;
@@ -110,12 +133,22 @@ protected:
   bool can_launch = true;
 
   TaskIDList task_buffer;
+  DeviceIDList device_buffer;
+  EventList event_buffer;
+
+  std::random_device rd;
+  std::mt19937 gen;
+
+  void fill_mappable_targets(taskid_t task_id);
+  devid_t choose_random_target();
 
 public:
   bool initialized = false;
   Scheduler(Tasks &tasks, Devices &devices)
       : state(tasks, devices), queues(SchedulerQueues(devices.size())) {
-    task_buffer.reserve(INITIAL_BUFFER_SIZE);
+    task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
+    device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
+    event_buffer.reserve(INITIAL_EVENT_BUFFER_SIZE);
   }
 
   TaskIDList initially_mappable_tasks() {
@@ -124,7 +157,8 @@ public:
     return GraphManager::initial_tasks(compute_tasks);
   }
 
-  void initialize() {
+  void initialize(unsigned int seed) {
+    gen.seed(seed);
     state.initialize();
     const auto &task_states = state.task_manager.state;
     auto initial_tasks = initially_mappable_tasks();
@@ -132,17 +166,27 @@ public:
     initialized = true;
   }
 
+  template <TransitionConditionConcept Conditions>
   TaskIDList &get_mappable_candidates();
 
-  EventList map_tasks();
-  EventList map_tasks(std::vector<std::size_t> pos, DeviceIDList &devices);
+  template <TransitionConditionConcept Conditions>
+  EventList &map_tasks(Event &map_event);
+  EventList &map_tasks(std::vector<std::size_t> pos, DeviceIDList &devices);
 
-  EventList reserve_tasks();
-  EventList launch_tasks();
+  template <TransitionConditionConcept Conditions>
+  EventList &reserve_tasks(Event &reserve_event);
 
-  EventList evict();
+  template <TransitionConditionConcept Conditions>
+  EventList &launch_tasks(Event &launch_event);
 
-  EventList complete_tasks(const TaskIDList &completed_tasks);
+  EventList &evict();
+
+  EventList &complete_task(Event &complete_event);
+
+  [[nodiscard]] const EventList &get_event_buffer() const {
+    return event_buffer;
+  }
+  void clear_event_buffer() { event_buffer.clear(); }
 
   void update_time(timecount_t time) { state.update_time(time); }
 

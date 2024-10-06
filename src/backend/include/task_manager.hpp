@@ -65,12 +65,20 @@ public:
   [[nodiscard]] const TaskIDList &get_dependencies(taskid_t id) const;
   [[nodiscard]] const TaskIDList &get_dependents(taskid_t id) const;
   [[nodiscard]] const VariantList &get_variants(taskid_t id) const;
+  [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const;
   [[nodiscard]] const DataIDList &get_read(taskid_t id) const;
   [[nodiscard]] const DataIDList &get_write(taskid_t id) const;
+
+  [[nodiscard]] const Resources &get_task_resources(taskid_t id) const;
+  [[nodiscard]] const Resources &get_task_resources(taskid_t id,
+                                                    DeviceType arch) const;
 
   [[nodiscard]] std::string const &get_name(taskid_t id) const {
     return task_names[id];
   }
+
+  [[nodiscard]] std::vector<DeviceType>
+  get_supported_architectures(taskid_t id) const;
 
   [[nodiscard]] const Task &get_task(taskid_t id) const;
 
@@ -141,7 +149,13 @@ public:
     return mapping_priority;
   }
   [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const;
+  [[nodiscard]] const PriorityList &get_reserving_priorities() const {
+    return reserving_priority;
+  }
   [[nodiscard]] priority_t get_launching_priority(taskid_t id) const;
+  [[nodiscard]] const PriorityList &get_launching_priorities() const {
+    return launching_priority;
+  }
 
   friend class TaskManager;
 };
@@ -178,6 +192,8 @@ public:
   [[nodiscard]] timecount_t get_completed_time(taskid_t id) const;
 };
 
+#define TASK_MANAGER_TASK_BUFFER_SIZE 10
+
 class TaskManager {
 private:
   void initialize_state();
@@ -187,6 +203,8 @@ public:
   TaskStateInfo state;
   TaskRecords records;
 
+  TaskIDList task_buffer;
+
   bool initialized = false;
 
   TaskManager(Tasks &tasks)
@@ -194,6 +212,7 @@ public:
   [[nodiscard]] std::size_t size() const { return tasks.size(); }
 
   void initialize() {
+    task_buffer.reserve(TASK_MANAGER_TASK_BUFFER_SIZE);
     initialize_state();
     initialized = true;
   }
@@ -206,13 +225,26 @@ public:
   [[nodiscard]] const TaskRecords &get_records() const { return records; }
   [[nodiscard]] const Tasks &get_tasks() const { return tasks; }
 
-  void map_task(taskid_t id, devid_t devid);
-  TaskIDList notify_mapped(taskid_t id);
-  TaskIDList notify_reserved(taskid_t id);
-  TaskIDList notify_completed(taskid_t id);
+  void set_mapping(taskid_t id, devid_t devid);
+  const TaskIDList &notify_mapped(taskid_t id, timecount_t time);
+  const TaskIDList &notify_reserved(taskid_t id, timecount_t time);
+  void notify_launched(taskid_t id, timecount_t time);
+  const TaskIDList &notify_completed(taskid_t id, timecount_t time);
 
-  Variant &get_task_variant(taskid_t id);
-  Variant &get_task_resources(taskid_t id, devid_t device);
+  [[nodiscard]] const Variant &get_task_variant(taskid_t id,
+                                                DeviceType arch) const {
+    return tasks.get_variant(id, arch);
+  }
+  [[nodiscard]] const Resources &get_task_resources(taskid_t id,
+                                                    DeviceType arch) const {
+    return get_task_variant(id, arch).resources;
+  }
+
+  [[nodiscard]] Resources copy_task_resources(taskid_t id,
+                                              DeviceType arch) const {
+    return get_task_resources(id, arch);
+  }
+
   void print_task(taskid_t id);
 };
 

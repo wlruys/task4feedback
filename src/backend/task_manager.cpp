@@ -1,4 +1,5 @@
 #include "include/task_manager.hpp"
+#include "devices.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
 
@@ -70,12 +71,24 @@ const VariantList &Tasks::get_variants(taskid_t id) const {
   return compute_tasks[id].get_variants();
 }
 
+const Variant &Tasks::get_variant(taskid_t id, DeviceType arch) const {
+  return compute_tasks[id].get_variants()[static_cast<std::size_t>(arch)];
+}
+
 const DataIDList &Tasks::get_read(taskid_t id) const {
   return compute_tasks[id].get_read();
 }
 
 const DataIDList &Tasks::get_write(taskid_t id) const {
   return compute_tasks[id].get_write();
+}
+
+const Resources &Tasks::get_task_resources(taskid_t id, DeviceType arch) const {
+  return get_variant(id, arch).resources;
+}
+
+std::vector<DeviceType> Tasks::get_supported_architectures(taskid_t id) const {
+  return compute_tasks[id].get_supported_architectures();
 }
 
 Task &Tasks::get_task(taskid_t id) {
@@ -230,47 +243,63 @@ void TaskManager::initialize_state() {
   }
 }
 
-void TaskManager::map_task(taskid_t id, devid_t devid) {
+void TaskManager::set_mapping(taskid_t id, devid_t devid) {
   state.set_mapping(id, devid);
 }
 
-TaskIDList TaskManager::notify_mapped(taskid_t id) {
+const TaskIDList &TaskManager::notify_mapped(taskid_t id, timecount_t time) {
   const auto &task_objects = get_tasks();
-  TaskIDList newly_mappable;
+
+  records.record_mapped(id, time);
+
+  // clear exising task buffer
+  task_buffer.clear();
 
   for (auto dependent_id : task_objects.get_dependents(id)) {
     if (state.decrement_unmapped(dependent_id)) {
-      newly_mappable.push_back(dependent_id);
+      task_buffer.push_back(dependent_id);
     }
   }
 
-  return newly_mappable;
+  return task_buffer;
 }
 
-TaskIDList TaskManager::notify_reserved(taskid_t id) {
+const TaskIDList &TaskManager::notify_reserved(taskid_t id, timecount_t time) {
   const auto &task_objects = get_tasks();
-  TaskIDList newly_reservable;
+
+  records.record_reserved(id, time);
+
+  // clear existing task buffer
+  task_buffer.clear();
 
   for (auto dependent_id : task_objects.get_dependents(id)) {
     if (state.decrement_unreserved(dependent_id)) {
-      newly_reservable.push_back(dependent_id);
+      task_buffer.push_back(dependent_id);
     }
   }
 
-  return newly_reservable;
+  return task_buffer;
 }
 
-TaskIDList TaskManager::notify_completed(taskid_t id) {
+void TaskManager::notify_launched(taskid_t id, timecount_t time) {
+  records.record_launched(id, time);
+}
+
+const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
   const auto &task_objects = get_tasks();
-  TaskIDList newly_launchable;
+
+  records.record_completed(id, time);
+
+  // clear task_buffer
+  task_buffer.clear();
 
   for (auto dependent_id : task_objects.get_dependents(id)) {
     if (state.decrement_incomplete(dependent_id)) {
-      newly_launchable.push_back(dependent_id);
+      task_buffer.push_back(dependent_id);
     }
   }
 
-  return newly_launchable;
+  return task_buffer;
 }
 
 // TaskPrinter

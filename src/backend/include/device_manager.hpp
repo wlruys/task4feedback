@@ -1,5 +1,6 @@
 #pragma once
 #include "devices.hpp"
+#include "settings.hpp"
 #include "tasks.hpp"
 #include <cassert>
 
@@ -26,9 +27,9 @@ public:
   void set_mem(devid_t id, mem_t m) { mem[id] = m; }
   void set_time(devid_t id, timecount_t t) { time[id] = t; }
 
-  vcu_t get_vcus(devid_t id) const { return vcu[id]; }
-  mem_t get_mem(devid_t id) const { return mem[id]; }
-  timecount_t get_time(devid_t id) const { return time[id]; }
+  [[nodiscard]] vcu_t get_vcus(devid_t id) const { return vcu[id]; }
+  [[nodiscard]] mem_t get_mem(devid_t id) const { return mem[id]; }
+  [[nodiscard]] timecount_t get_time(devid_t id) const { return time[id]; }
 
   void add_vcus(devid_t id, vcu_t vcu_) { vcu[id] += vcu_; }
   void add_mem(devid_t id, mem_t m) { mem[id] += m; }
@@ -70,6 +71,12 @@ public:
     return fit_vcus(id, r.vcu, max.vcu) && fit_mem(id, r.mem, max.mem);
   }
 
+  Resources overflow_resources(devid_t id, Resources &r, Resources &max) const {
+    vcu_t vcu_overflow = overflow_vcus(id, r.vcu, max.vcu);
+    mem_t mem_overflow = overflow_mem(id, r.mem, max.mem);
+    return {vcu_overflow, mem_overflow};
+  }
+
   friend class DeviceManager;
 };
 
@@ -77,7 +84,7 @@ class Devices {
 
 protected:
   std::vector<Device> devices;
-  std::array<std::vector<devid_t>, num_device_types> type_map;
+  std::array<DeviceIDList, num_device_types> type_map;
   std::vector<std::string> device_names;
 
   void resize(std::size_t n_devices) {
@@ -101,6 +108,17 @@ public:
 
   [[nodiscard]] std::size_t size() const { return devices.size(); }
 
+  [[nodiscard]] const DeviceIDList &get_devices(DeviceType type) const {
+    return type_map[static_cast<std::size_t>(type)];
+  }
+
+  [[nodiscard]] const Resources &get_max_resources(devid_t id) const {
+    return devices[id].max_resources;
+  }
+
+  [[nodiscard]] DeviceType get_type(devid_t id) const {
+    return devices[id].arch;
+  }
   friend class DeviceManager;
 };
 
@@ -111,6 +129,8 @@ protected:
     reserved.resize(n_devices);
     launched.resize(n_devices);
   }
+
+  Devices &get_devices() { return devices; }
 
 public:
   Devices &devices;
@@ -124,13 +144,13 @@ public:
     resize(n_devices);
   };
 
-  [[nodiscard]] mem_t get_mapped_mem(devid_t id) const {
-    return mapped.get_mem(id);
-  }
+  [[nodiscard]] const Devices &get_devices() const { return devices; }
 
   template <TaskState State>
   [[nodiscard]] const DeviceResources &get_resources() const;
   template <TaskState State> DeviceResources &get_resources();
+  template <TaskState State>
+  [[nodiscard]] Resources get_resources(devid_t id) const;
 
   template <TaskState State> mem_t get_mem(devid_t id);
   template <TaskState State> mem_t add_mem(devid_t id, mem_t mem_);
@@ -147,4 +167,11 @@ public:
   [[nodiscard]] bool can_fit_vcu(devid_t id, vcu_t vcu_) const;
   template <TaskState>
   [[nodiscard]] vcu_t overflow_vcu(devid_t id, vcu_t vcu_) const;
+
+  template <TaskState> void add_resources(devid_t id, const Resources &r);
+  template <TaskState> void sub_resources(devid_t id, const Resources &r);
+  template <TaskState> bool can_fit_resources(devid_t id, Resources &r) const;
+  template <TaskState>
+  [[nodiscard]] Resources overflow_resources(devid_t id,
+                                             const Resources &r) const;
 };

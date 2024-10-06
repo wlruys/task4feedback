@@ -40,19 +40,19 @@ public:
 
     switch (event_type) {
     case EventType::MAPPER:
-      return scheduler.map_tasks();
+      return scheduler.map_tasks<DefaultTransitionConditions>(event);
       break;
     case EventType::RESERVER:
-      return scheduler.reserve_tasks();
+      return scheduler.reserve_tasks<DefaultTransitionConditions>(event);
       break;
     case EventType::LAUNCHER:
-      return scheduler.launch_tasks();
+      return scheduler.launch_tasks<DefaultTransitionConditions>(event);
       break;
     case EventType::EVICTOR:
       return scheduler.evict();
       break;
     case EventType::COMPLETER:
-      return scheduler.complete_tasks(tasks);
+      return scheduler.complete_task(event);
       break;
     }
   }
