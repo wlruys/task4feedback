@@ -14,6 +14,34 @@ enum class EventType {
 };
 constexpr std::size_t num_event_types = 5;
 
+// Define << operator for EventType
+inline std::string to_string(const EventType &type) {
+  switch (type) {
+  case EventType::MAPPER:
+    return "MAPPER";
+    break;
+  case EventType::RESERVER:
+    return "RESERVER";
+    break;
+  case EventType::LAUNCHER:
+    return "LAUNCHER";
+    break;
+  case EventType::EVICTOR:
+    return "EVICTOR";
+    break;
+  case EventType::COMPLETER:
+    return "COMPLETER";
+    break;
+  default:
+    return "UNKNOWN";
+  }
+}
+
+inline std::ostream &operator<<(std::ostream &os, const EventType &type) {
+  os << to_string(type);
+  return os;
+}
+
 class Event {
 protected:
   EventType type;
@@ -31,6 +59,10 @@ public:
 
   [[nodiscard]] bool operator<(const Event &other) const {
     return time < other.time;
+  }
+
+  [[nodiscard]] bool operator>(const Event &other) const {
+    return time > other.time;
   }
 };
 

@@ -9,8 +9,8 @@ class DeviceManager;
 class DeviceResources {
 protected:
   void resize(std::size_t n) {
-    vcu.resize(n);
-    mem.resize(n);
+    vcu.resize(n, 0);
+    mem.resize(n, 0);
   }
 
 public:
@@ -44,13 +44,19 @@ public:
   }
 
   [[nodiscard]] vcu_t overflow_vcu(devid_t id, vcu_t query, vcu_t max) const {
-    vcu_t overflow = vcu[id] + query - max;
-    return overflow;
+    const vcu_t request = vcu[id] + query;
+    if (request <= max) {
+      return 0;
+    }
+    return request - max;
   }
 
   [[nodiscard]] mem_t overflow_mem(devid_t id, mem_t query, mem_t max) const {
-    mem_t overflow = mem[id] + query - max;
-    return overflow;
+    const mem_t request = mem[id] + query;
+    if (request <= max) {
+      return 0;
+    }
+    return request - max;
   }
 
   [[nodiscard]] bool fit_vcu(devid_t id, vcu_t query, vcu_t max) const {
@@ -117,7 +123,9 @@ public:
 
   void create_device(devid_t id, std::string name, DeviceType arch, vcu_t vcu,
                      mem_t mem) {
+    assert(id < devices.size());
     devices[id] = Device(id, arch, vcu, mem);
+    type_map[static_cast<std::size_t>(arch)].push_back(id);
     device_names[id] = std::move(name);
   }
 
@@ -145,6 +153,8 @@ public:
     std::size_t n_devices = devices.size();
     resize(n_devices);
   };
+
+  [[nodiscard]] std::size_t size() const { return devices.size(); }
 
   [[nodiscard]] const Devices &get_devices() const { return devices; }
 

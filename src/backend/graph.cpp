@@ -208,3 +208,87 @@ TaskIDList GraphManager::random_topological_sort(Tasks &tasks,
 
   return random_topological_sort_(starting_tasks, minimal_task_map, seed);
 }
+
+void GraphManager::calculate_depth(TaskIDList &sorted, Tasks &tasks) {
+  for (auto task_id : sorted) {
+    auto &task = tasks.get_task(task_id);
+    task.depth = 0;
+    for (auto dependency_id : task.get_dependencies()) {
+      auto &dependency = tasks.get_task(dependency_id);
+      task.depth = std::max(task.depth, dependency.depth + 1);
+    }
+  }
+}
+
+void GraphManager::update_writers(
+    std::unordered_map<dataid_t, taskid_t> &writers, const DataIDList &write,
+    taskid_t task_id) {
+  for (auto data_id : write) {
+    writers[data_id] = task_id;
+  }
+}
+
+Writer
+GraphManager::find_writer(std::unordered_map<dataid_t, taskid_t> &writers,
+                          dataid_t data_id) {
+  bool found = false;
+  taskid_t task_id = 0;
+
+  auto it = writers.find(data_id);
+  if (it != writers.end()) {
+    found = true;
+    task_id = it->second;
+  }
+  return {found, task_id};
+}
+
+void GraphManager::add_missing_writer_dependencies(
+    std::unordered_map<dataid_t, taskid_t> &writers, ComputeTask &task,
+    Tasks &tasks) {
+
+  for (auto data_id : task.get_write()) {
+    auto [found, writer_id] = find_writer(writers, data_id);
+    if (found) {
+      auto &writer_task = tasks.get_compute_task(writer_id);
+
+      // Add writer as a dependency if it is not already a dependency
+      const auto &dependencies = task.get_dependencies();
+      if (std::find(dependencies.begin(), dependencies.end(), writer_id) ==
+          dependencies.end()) {
+        task.add_dependency(writer_id);
+        writer_task.add_dependent(task.id);
+      }
+    }
+  }
+}
+
+void GraphManager::create_data_tasks(
+    std::unordered_map<dataid_t, taskid_t> &writers, ComputeTask &task,
+    Tasks &tasks) {
+  for (auto data_id : task.get_read()) {
+    auto writer = find_writer(writers, data_id);
+    tasks.create_data_task(task, writer.found, writer.task_id);
+  }
+}
+
+void GraphManager::populate_data_dependencies(TaskIDList &sorted,
+                                              Tasks &tasks) {
+  std::unordered_map<dataid_t, taskid_t> writers;
+
+  for (auto task_id : sorted) {
+    auto &task = tasks.get_compute_task(task_id);
+    create_data_tasks(writers, task, tasks);
+    add_missing_writer_dependencies(writers, task, tasks);
+    update_writers(writers, task.get_write(), task_id);
+  }
+}
+
+void GraphManager::finalize(Tasks &tasks, bool create_data_tasks) {
+  TaskIDList sorted = breadth_first_sort(tasks);
+  populate_dependents(tasks);
+  // Depths is of the compute graph
+  calculate_depth(sorted, tasks);
+  if (create_data_tasks) {
+    populate_data_dependencies(sorted, tasks);
+  }
+}

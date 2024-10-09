@@ -10,9 +10,55 @@ from tasks cimport Tasks
 from cython.operator cimport dereference as deref, preincrement as inc
 from libcpp.utility cimport move
 from libcpp.string cimport string
-
+from enum import IntEnum 
 import numpy as np
 cimport numpy as np
+
+class PyEventType(IntEnum):
+    MAPPER = <int>EventType.MAPPER,
+    RESERVER = <int>EventType.RESERVER,
+    LAUNCHER = <int>EventType.LAUNCHER,
+    EVICTOR = <int>EventType.EVICTOR,
+    COMPLETER = <int>EventType.COMPLETER
+
+    def __str__(self):
+        return self.name
+
+class PyExecutionState(IntEnum):
+    NONE = <int>ExecutionState.NONE,
+    RUNNING = <int>ExecutionState.RUNNING,
+    COMPLETE = <int>ExecutionState.COMPLETE,
+    BREAKPOINT = <int>ExecutionState.BREAKPOINT,
+    PYTHON_MAPPING = <int>ExecutionState.PYTHON_MAPPING,
+    ERROR = <int>ExecutionState.ERROR 
+
+    def __str__(self):
+        return self.name
+
+class PyDeviceType(IntEnum):
+    CPU = <int>DeviceType.CPU,
+    GPU = <int>DeviceType.GPU
+
+    def __str__(self):
+        return self.name
+
+cdef EventType convert_py_event_type(py_event_type):
+    return EventType(<int>py_event_type)
+
+def convert_cpp_event_type(EventType event_type):
+    return PyEventType(<int>event_type)
+
+cdef DeviceType convert_py_device_type(py_device_type):
+    return DeviceType(<int>py_device_type)
+
+def convert_cpp_device_type(DeviceType device_type):
+    return PyDeviceType(<int>device_type)
+
+cdef ExecutionState convert_py_execution_state(py_execution_state):
+    return ExecutionState(<int>py_execution_state)
+
+def convert_cpp_execution_state(ExecutionState execution_state):
+    return PyExecutionState(<int>execution_state)
 
 cdef convert_to_taskid_list(list taskid_list):
     cdef TaskIDList result
@@ -41,7 +87,7 @@ cdef convert_taskid_list_to_numpy(TaskIDList taskid_list, copy: bool = False):
     cdef np.ndarray[np.uint64_t, ndim=1] result
 
     if not copy:
-        result = np.PyArray_SimpleNewFromData(1, &n, np.NPY_UINT64, <void*>taskid_list.data())
+        result = np.PyArray_SimpleNewFromData(1, &n, np.NPY_UINT64, <uint64_t*>taskid_list.data())
     else:
         result = np.PyArray_SimpleNew(1, &n, np.NPY_UINT64)
         for i in range(n):
@@ -67,14 +113,23 @@ cdef convert_devid_list_to_numpy(DeviceIDList devid_list, copy: bool = False):
     cdef np.ndarray[np.uint32_t, ndim=1] result
 
     if not copy:
-        result = np.PyArray_SimpleNewFromData(1, &n, np.NPY_UINT32, <void*>devid_list.data())
+        result = np.PyArray_SimpleNewFromData(1, &n, np.NPY_UINT64, <void*>devid_list.data())
     else:
-        result = np.PyArray_SimpleNew(1, &n, np.NPY_UINT32)
+        result = np.PyArray_SimpleNew(1, &n, np.NPY_UINT64)
         for i in range(n):
             result[i] = devid_list[i]
 
     return result
 
+
+cdef class PyAction:
+    cdef Action* action
+
+    def __cinit__(self, taskid_t task_id, size_t pos, devid_t device, priority_t reservable_priority, priority_t launchable_priority):
+        self.action = new Action(task_id, pos, device, reservable_priority, launchable_priority)
+
+    def __dealloc__(self):
+        del self.action
 
 cdef class PyDevices:
     cdef Devices* devices
@@ -98,6 +153,8 @@ cdef class PyDevices:
         py_s = s.decode('utf-8')
         return py_s
 
+    def __dealloc__(self):
+        del self.devices
     
 
 cdef class PyTasks:
@@ -107,11 +164,9 @@ cdef class PyTasks:
         self.tasks = new Tasks(n)
 
     def create_task(self, taskid_t tid, str pyname, list py_dependencies):
-        print(pyname, py_dependencies)
         cdef TaskIDList dependencies = convert_to_taskid_list(py_dependencies)
         cname = pyname.encode('utf-8')
         self.tasks.create_compute_task(tid, cname, move(dependencies))
-        print("Added task", tid, pyname, py_dependencies)   
 
     def add_read_set(self, taskid_t taskid, list py_dataids):
         cdef DataIDList dataids = convert_to_dataid_list(py_dataids)
@@ -143,6 +198,9 @@ cdef class PyTasks:
     def initialize_dependents(self):
         GraphManager.populate_dependents(deref(self.tasks))
 
+    def __dealloc__(self):
+        del self.tasks
+
 
 cdef class PySimulator:
     cdef Simulator* simulator
@@ -154,8 +212,34 @@ cdef class PySimulator:
         self.simulator.initialize(seed)
 
     def run(self):
-        cdef StopReason stop_reason = self.simulator.run()
-        return stop_reason
+        cdef ExecutionState stop_reason = self.simulator.run()
+        return convert_cpp_execution_state(stop_reason)
+
+    def get_current_time(self):
+        return self.simulator.get_current_time()
+
+    def get_mappable_candidates(self):
+        cdef TaskIDList candidates = deref(self.simulator).get_mappable_candidates()
+        if candidates.empty():
+            return np.array([], dtype=np.uint64)
+        else:
+            return convert_taskid_list_to_numpy(candidates, copy=True)
+
+    def map_tasks(self, list[PyAction] actions):
+        cdef ActionList action_list
+        cdef PyAction action
+        cdef Action* action_ptr
+
+        for action in actions:
+            action_ptr = action.action
+            action_list.push_back(deref(action_ptr))
+        self.simulator.map_tasks(action_list)
+
+    def add_task_breakpoint(self, event_type, taskid_t task_id):
+        self.simulator.add_task_breakpoint(convert_py_event_type(event_type), task_id)
+
+    def add_time_breakpoint(self, timecount_t time):
+        self.simulator.add_time_breakpoint(time)
 
     def __dealloc__(self):
         del self.simulator  

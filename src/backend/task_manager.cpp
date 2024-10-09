@@ -7,6 +7,7 @@
 
 Tasks::Tasks(taskid_t num_compute_tasks)
     : num_compute_tasks(num_compute_tasks) {
+  current_task_id = num_compute_tasks;
   compute_tasks.resize(num_compute_tasks);
   task_names.resize(num_compute_tasks);
 }
@@ -30,6 +31,25 @@ void Tasks::add_compute_task(ComputeTask task) {
 
 void Tasks::add_data_task(DataTask task) {
   data_tasks.emplace_back(std::move(task));
+}
+
+void Tasks::create_data_task(ComputeTask &task, bool has_writer,
+                             taskid_t writer_id) {
+  taskid_t data_task_id = current_task_id++;
+  data_tasks.emplace_back(data_task_id);
+  DataTask &data_task = data_tasks.back();
+  auto &compute_task_name = task_names[task.id];
+  task_names.emplace_back(compute_task_name + "_data[" +
+                          std::to_string(data_task_id) + "]");
+
+  if (has_writer) {
+    data_task.add_dependency(writer_id);
+    auto &writer_task = get_compute_task(writer_id);
+    writer_task.add_data_dependent(data_task_id);
+  }
+
+  data_task.add_dependent(task.id);
+  task.add_data_dependency(data_task_id);
 }
 
 void Tasks::create_compute_task(taskid_t id, std::string name,
@@ -110,7 +130,10 @@ const Task &Tasks::get_task(taskid_t id) const {
 TaskStateInfo::TaskStateInfo(std::size_t n) {
   state.resize(n, TaskState::SPAWNED);
   counts.resize(n, DepCount());
-  mapping.resize(n);
+  mapping.resize(n, 0);
+  mapping_priority.resize(n, 0);
+  reserving_priority.resize(n, 0);
+  launching_priority.resize(n, 0);
 }
 
 TaskStatus TaskStateInfo::get_status(taskid_t id) const {
@@ -263,6 +286,7 @@ const TaskIDList &TaskManager::notify_mapped(taskid_t id, timecount_t time) {
   const auto &task_objects = get_tasks();
 
   records.record_mapped(id, time);
+  state.set_state(id, TaskState::MAPPED);
 
   // clear exising task buffer
   task_buffer.clear();
@@ -280,6 +304,7 @@ const TaskIDList &TaskManager::notify_reserved(taskid_t id, timecount_t time) {
   const auto &task_objects = get_tasks();
 
   records.record_reserved(id, time);
+  state.set_state(id, TaskState::RESERVED);
 
   // clear existing task buffer
   task_buffer.clear();
@@ -294,6 +319,7 @@ const TaskIDList &TaskManager::notify_reserved(taskid_t id, timecount_t time) {
 }
 
 void TaskManager::notify_launched(taskid_t id, timecount_t time) {
+  state.set_state(id, TaskState::LAUNCHED);
   records.record_launched(id, time);
 }
 
@@ -301,6 +327,7 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
   const auto &task_objects = get_tasks();
 
   records.record_completed(id, time);
+  state.set_state(id, TaskState::COMPLETED);
 
   // clear task_buffer
   task_buffer.clear();

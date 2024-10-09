@@ -28,6 +28,8 @@ protected:
   }
   Task &get_task(taskid_t id);
 
+  void create_data_task(ComputeTask &task, bool has_writer, taskid_t writer_id);
+
 public:
   Tasks(taskid_t num_compute_tasks);
 
@@ -89,6 +91,7 @@ class TaskStateInfo {
 protected:
   std::vector<TaskState> state;
   std::vector<DepCount> counts;
+  std::vector<bool> existed;
 
   void set_state(taskid_t id, TaskState _state) { state[id] = _state; }
   void set_unmapped(taskid_t id, depcount_t count);
@@ -99,6 +102,8 @@ protected:
   bool decrement_unreserved(taskid_t id);
   bool decrement_incomplete(taskid_t id);
 
+  void set_data_task_existed(taskid_t id) { existed[id] = true; }
+
 public:
   // Store the task state
   std::vector<devid_t> mapping;
@@ -106,6 +111,9 @@ public:
   PriorityList mapping_priority;
   PriorityList reserving_priority;
   PriorityList launching_priority;
+
+  std::vector<TaskIDList> eviction_dependencies;
+  std::vector<TaskIDList> eviction_dependents;
 
   TaskStateInfo() = default;
   TaskStateInfo(std::size_t n_tasks);
@@ -165,6 +173,10 @@ public:
   };
   [[nodiscard]] const PriorityList &get_launching_priorities() const {
     return launching_priority;
+  }
+
+  [[nodiscard]] bool data_task_existed(taskid_t id) const {
+    return existed[id];
   }
 
   friend class TaskManager;

@@ -1,5 +1,6 @@
 #pragma once
 #include "queues.hpp"
+#include "settings.hpp"
 #include <vector>
 
 template <typename T> class ActiveIterator {
@@ -27,6 +28,7 @@ public:
   T &at(std::size_t index) { return containers[index]; }
 
   [[nodiscard]] std::size_t size() const { return containers.size(); }
+
   [[nodiscard]] std::size_t active_size() const { return num_active; }
   [[nodiscard]] std::size_t total_size() const {
     std::size_t tsize = 0;
@@ -71,6 +73,12 @@ public:
 
   void next() { active_index = (active_index + 1) % containers.size(); }
 
+  void current_or_next_active() {
+    if (!active[active_index]) {
+      next_active();
+    }
+  }
+
   void prev() {
     if (active_index == 0) {
       active_index = containers.size() - 1;
@@ -109,12 +117,18 @@ public:
     this->containers[this->active_index].push(value);
   }
 
-  void push(Q::value_type value, int priority) {
+  void push(Q::value_type value, priority_t priority) {
     this->containers[this->active_index].push(value, priority);
   }
 
   void push_at(std::size_t index, Q::value_type value) {
     this->containers[index].push(value);
+  }
+
+  void push_priority_at(std::size_t index, Q::value_type value,
+                        priority_t priority) {
+    this->activate(index);
+    this->containers[index].push(value, priority);
   }
 
   void push_random(Q::value_type value) {

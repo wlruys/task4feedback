@@ -6,10 +6,10 @@
 #include <unordered_map>
 #include <vector>
 
-using priority_t = uint8_t;
+using priority_t = uint64_t;
 using taskid_t = uint64_t;
 using dataid_t = uint64_t;
-using devid_t = uint8_t;
+using devid_t = uint64_t;
 using depcount_t = uint64_t;
 
 using TaskIDList = std::vector<taskid_t>;

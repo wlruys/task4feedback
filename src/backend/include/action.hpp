@@ -1,3 +1,4 @@
+#pragma once
 #include "events.hpp"
 #include "settings.hpp"
 #include <cstddef>

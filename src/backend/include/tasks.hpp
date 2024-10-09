@@ -117,10 +117,10 @@ class Task {
 protected:
   TaskIDList dependencies;
   TaskIDList dependents;
-  uint64_t depth;
 
 public:
   taskid_t id;
+  uint64_t depth;
 
   Task() = default;
   Task(taskid_t id) : id(id) {}
@@ -137,6 +137,10 @@ public:
     return dependencies;
   }
   [[nodiscard]] const TaskIDList &get_dependents() const { return dependents; }
+
+  void add_dependency(taskid_t dependency) {
+    dependencies.push_back(dependency);
+  }
 
   void add_dependent(taskid_t dependent) { dependents.push_back(dependent); }
 };
@@ -178,6 +182,22 @@ public:
 
   [[nodiscard]] const DataIDList &get_read() const { return read; }
   [[nodiscard]] const DataIDList &get_write() const { return write; }
+
+  void add_data_dependency(taskid_t dependency) {
+    data_dependencies.push_back(dependency);
+  }
+
+  void add_data_dependent(taskid_t dependent) {
+    data_dependents.push_back(dependent);
+  }
+
+  [[nodiscard]] const TaskIDList &get_data_dependencies() const {
+    return data_dependencies;
+  }
+
+  [[nodiscard]] const TaskIDList &get_data_dependents() const {
+    return data_dependents;
+  }
 };
 
 class DataTask : public Task {

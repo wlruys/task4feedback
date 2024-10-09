@@ -106,4 +106,9 @@ struct Resources {
   [[nodiscard]] bool operator>=(const Resources &rhs) const {
     return vcu >= rhs.vcu && mem >= rhs.mem;
   }
+
+  friend std::ostream &operator<<(std::ostream &os, const Resources &r) {
+    os << "Resources(VCUs: " << r.vcu << ", MEM: " << r.mem << ")";
+    return os;
+  }
 };
