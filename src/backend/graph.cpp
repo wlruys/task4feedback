@@ -97,6 +97,7 @@ TaskIDList breadth_first_sort_(
   while (!queue.empty()) {
     auto taskid = queue.front();
     queue.pop();
+
     auto &task = minimal_task_map[taskid];
     sorted_tasks.push_back(task.id);
 
@@ -267,7 +268,7 @@ void GraphManager::create_data_tasks(
     Tasks &tasks) {
   for (auto data_id : task.get_read()) {
     auto writer = find_writer(writers, data_id);
-    tasks.create_data_task(task, writer.found, writer.task_id);
+    tasks.create_data_task(task, writer.found, writer.task_id, data_id);
   }
 }
 
@@ -284,8 +285,8 @@ void GraphManager::populate_data_dependencies(TaskIDList &sorted,
 }
 
 void GraphManager::finalize(Tasks &tasks, bool create_data_tasks) {
-  TaskIDList sorted = breadth_first_sort(tasks);
   populate_dependents(tasks);
+  TaskIDList sorted = breadth_first_sort(tasks);
   // Depths is of the compute graph
   calculate_depth(sorted, tasks);
   if (create_data_tasks) {

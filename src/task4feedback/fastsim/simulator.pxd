@@ -17,6 +17,7 @@ from libcpp.string cimport string
 from libcpp.utility cimport move
 from libc.stddef cimport size_t
 from libcpp.vector cimport vector
+from libcpp cimport bool 
 
 cdef extern from "include/action.hpp":
     cdef cppclass Action:
@@ -57,8 +58,8 @@ cdef extern from "include/simulator.hpp":
         PYTHON_MAPPING,
         ERROR
     cdef cppclass Simulator:
-        Simulator(Tasks& tasks, Devices& devices)
-        void initialize(unsigned int seed)
+        Simulator(Tasks& tasks, Devices& devices, Mapper& mapper)
+        void initialize(unsigned int seed, bool create_data_tasks)
         ExecutionState run()
         timecount_t get_current_time()
         TaskIDList get_mappable_candidates()

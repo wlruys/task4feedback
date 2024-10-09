@@ -206,7 +206,9 @@ public:
     assert(global_time >= 0);
   }
 
-  void initialize() { task_manager.initialize(); }
+  void initialize(bool create_data_tasks = false) {
+    task_manager.initialize(create_data_tasks);
+  }
 
   [[nodiscard]] bool is_complete() const {
     return counts.n_completed() == task_manager.size();
@@ -370,9 +372,9 @@ public:
     return GraphManager::initial_tasks(compute_tasks);
   }
 
-  void initialize(unsigned int seed) {
+  void initialize(unsigned int seed, bool create_data_tasks = false) {
     gen.seed(seed);
-    state.initialize();
+    state.initialize(create_data_tasks);
     const auto &task_states = state.task_manager.state;
     auto initial_tasks = initially_mappable_tasks();
     queues.push_mappable(initial_tasks, task_states.get_mapping_priorities());

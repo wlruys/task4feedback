@@ -90,11 +90,13 @@ class Variant {
 public:
   DeviceType arch = DeviceType::NONE;
   Resources resources;
-  timecount_t time;
+  timecount_t time = 0;
 
   Variant() = default;
   Variant(DeviceType arch_, vcu_t vcu_, mem_t mem_, timecount_t time_)
       : arch(arch_), resources(vcu_, mem_), time(time_) {}
+
+  [[nodiscard]] DeviceType get_arch() const { return arch; }
 
   [[nodiscard]] vcu_t get_vcus() const { return resources.vcu; }
   [[nodiscard]] mem_t get_mem() const { return resources.mem; }
@@ -108,9 +110,9 @@ using VariantList = std::array<Variant, num_device_types>;
 
 class DepCount {
 public:
-  depcount_t unmapped;
-  depcount_t unreserved;
-  depcount_t incomplete;
+  depcount_t unmapped = 0;
+  depcount_t unreserved = 0;
+  depcount_t incomplete = 0;
 };
 
 class Task {
@@ -119,8 +121,8 @@ protected:
   TaskIDList dependents;
 
 public:
-  taskid_t id;
-  uint64_t depth;
+  taskid_t id = 0;
+  uint64_t depth = 0;
 
   Task() = default;
   Task(taskid_t id) : id(id) {}
@@ -174,6 +176,9 @@ public:
   }
 
   [[nodiscard]] const VariantList &get_variants() const { return variants; }
+  [[nodiscard]] std::vector<Variant> get_variant_vector() const {
+    return std::vector<Variant>(variants.begin(), variants.end());
+  }
 
   void set_read(DataIDList _read) { this->read = std::move(_read); }
   void set_write(DataIDList _write) { this->write = std::move(_write); }
@@ -206,7 +211,11 @@ public:
   dataid_t data_id;
 
   DataTask() = default;
-  DataTask(taskid_t id) { this->id = id; }
+  DataTask(taskid_t id_) { this->id = id_; }
+
+  void set_data_id(dataid_t data_id_) { this->data_id = data_id_; }
+
+  [[nodiscard]] dataid_t get_data_id() const { return data_id; }
 };
 
 class MinimalTask {
@@ -254,4 +263,99 @@ public:
     }
     return *this;
   }
+};
+
+using ComputeTaskList = std::vector<ComputeTask>;
+using DataTaskList = std::vector<DataTask>;
+using TaskList = std::vector<Task>;
+
+class GraphManager;
+
+class Tasks {
+protected:
+  const taskid_t num_compute_tasks;
+  taskid_t current_task_id = 0;
+  ComputeTaskList compute_tasks;
+  DataTaskList data_tasks;
+  std::vector<std::string> task_names;
+
+  ComputeTaskList &get_compute_tasks() { return compute_tasks; }
+  DataTaskList &get_data_tasks() { return data_tasks; }
+
+  ComputeTask &get_compute_task(taskid_t id) { return compute_tasks[id]; }
+  DataTask &get_data_task(taskid_t id) {
+    return data_tasks[id - num_compute_tasks];
+  }
+  Task &get_task(taskid_t id);
+
+  void create_data_task(ComputeTask &task, bool has_writer, taskid_t writer_id,
+                        dataid_t data_id);
+
+public:
+  Tasks(taskid_t num_compute_tasks);
+
+  [[nodiscard]] std::size_t size() const;
+  [[nodiscard]] std::size_t compute_size() const;
+  [[nodiscard]] std::size_t data_size() const;
+  [[nodiscard]] bool empty() const;
+  [[nodiscard]] bool is_compute(taskid_t id) const;
+  [[nodiscard]] bool is_data(taskid_t id) const;
+
+  void add_compute_task(ComputeTask task);
+  void add_data_task(DataTask task);
+
+  void create_compute_task(taskid_t tid, std::string name,
+                           TaskIDList dependencies);
+  void add_variant(taskid_t id, DeviceType arch, vcu_t vcu, mem_t mem,
+                   timecount_t time);
+  void set_read(taskid_t id, DataIDList read);
+  void set_write(taskid_t id, DataIDList write);
+
+  [[nodiscard]] const ComputeTaskList &get_compute_tasks() const {
+    return compute_tasks;
+  }
+  [[nodiscard]] const DataTaskList &get_data_tasks() const {
+    return data_tasks;
+  }
+
+  [[nodiscard]] const ComputeTask &get_compute_task(taskid_t id) const {
+    assert(id < num_compute_tasks);
+    return compute_tasks[id];
+  }
+  [[nodiscard]] const DataTask &get_data_task(taskid_t id) const {
+    assert(id >= num_compute_tasks);
+    return data_tasks[id - num_compute_tasks];
+  }
+
+  [[nodiscard]] const TaskIDList &get_dependencies(taskid_t id) const;
+  [[nodiscard]] const TaskIDList &get_dependents(taskid_t id) const;
+  [[nodiscard]] const VariantList &get_variants(taskid_t id) const;
+  [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const;
+  [[nodiscard]] const DataIDList &get_read(taskid_t id) const;
+  [[nodiscard]] const DataIDList &get_write(taskid_t id) const;
+
+  [[nodiscard]] const Resources &get_task_resources(taskid_t id) const;
+  [[nodiscard]] const Resources &get_task_resources(taskid_t id,
+                                                    DeviceType arch) const;
+
+  [[nodiscard]] const TaskIDList &get_data_dependencies(taskid_t id) const;
+  [[nodiscard]] const TaskIDList &get_data_dependents(taskid_t id) const;
+
+  [[nodiscard]] std::size_t get_depth(taskid_t id) const;
+  [[nodiscard]] dataid_t get_data_id(taskid_t id) const;
+
+  [[nodiscard]] std::string const &get_name(taskid_t id) const {
+    return task_names[id];
+  }
+
+  [[nodiscard]] std::vector<DeviceType>
+  get_supported_architectures(taskid_t id) const;
+
+  [[nodiscard]] std::vector<Variant> get_variant_vector(taskid_t id) const {
+    return get_compute_task(id).get_variant_vector();
+  }
+
+  [[nodiscard]] const Task &get_task(taskid_t id) const;
+
+  friend class GraphManager;
 };

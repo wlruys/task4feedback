@@ -82,9 +82,9 @@ public:
 
   void set_mapper(Mapper &mapper_) { mapper = mapper_; }
 
-  void initialize(unsigned int seed) {
+  void initialize(unsigned int seed, bool create_data_tasks = false) {
     add_initial_event();
-    scheduler.initialize(seed);
+    scheduler.initialize(seed, create_data_tasks);
     initialized = true;
   }
 

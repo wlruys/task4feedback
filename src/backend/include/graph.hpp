@@ -1,7 +1,7 @@
 #pragma once
 
 #include "settings.hpp"
-#include "task_manager.hpp"
+#include "tasks.hpp"
 #include <unordered_map>
 
 struct Writer {

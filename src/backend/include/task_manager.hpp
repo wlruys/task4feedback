@@ -1,91 +1,11 @@
 #pragma once
+#include "graph.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
 #include "tasks.hpp"
 #include <ctime>
 
-using ComputeTaskList = std::vector<ComputeTask>;
-using DataTaskList = std::vector<DataTask>;
-using TaskList = std::vector<Task>;
-
-class GraphManager;
 class TaskManager;
-
-class Tasks {
-protected:
-  const taskid_t num_compute_tasks;
-  taskid_t current_task_id = 0;
-  ComputeTaskList compute_tasks;
-  DataTaskList data_tasks;
-  std::vector<std::string> task_names;
-
-  ComputeTaskList &get_compute_tasks() { return compute_tasks; }
-  DataTaskList &get_data_tasks() { return data_tasks; }
-
-  ComputeTask &get_compute_task(taskid_t id) { return compute_tasks[id]; }
-  DataTask &get_data_task(taskid_t id) {
-    return data_tasks[id - num_compute_tasks];
-  }
-  Task &get_task(taskid_t id);
-
-  void create_data_task(ComputeTask &task, bool has_writer, taskid_t writer_id);
-
-public:
-  Tasks(taskid_t num_compute_tasks);
-
-  [[nodiscard]] std::size_t size() const;
-  [[nodiscard]] std::size_t compute_size() const;
-  [[nodiscard]] std::size_t data_size() const;
-  [[nodiscard]] bool empty() const;
-  [[nodiscard]] bool is_compute(taskid_t id) const;
-  [[nodiscard]] bool is_data(taskid_t id) const;
-
-  void add_compute_task(ComputeTask task);
-  void add_data_task(DataTask task);
-
-  void create_compute_task(taskid_t tid, std::string name,
-                           TaskIDList dependencies);
-  void add_variant(taskid_t id, DeviceType arch, vcu_t vcu, mem_t mem,
-                   timecount_t time);
-  void set_read(taskid_t id, DataIDList read);
-  void set_write(taskid_t id, DataIDList write);
-
-  [[nodiscard]] const ComputeTaskList &get_compute_tasks() const {
-    return compute_tasks;
-  }
-  [[nodiscard]] const DataTaskList &get_data_tasks() const {
-    return data_tasks;
-  }
-
-  [[nodiscard]] const ComputeTask &get_compute_task(taskid_t id) const {
-    return compute_tasks[id];
-  }
-  [[nodiscard]] const DataTask &get_data_task(taskid_t id) const {
-    return data_tasks[id - num_compute_tasks];
-  }
-
-  [[nodiscard]] const TaskIDList &get_dependencies(taskid_t id) const;
-  [[nodiscard]] const TaskIDList &get_dependents(taskid_t id) const;
-  [[nodiscard]] const VariantList &get_variants(taskid_t id) const;
-  [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const;
-  [[nodiscard]] const DataIDList &get_read(taskid_t id) const;
-  [[nodiscard]] const DataIDList &get_write(taskid_t id) const;
-
-  [[nodiscard]] const Resources &get_task_resources(taskid_t id) const;
-  [[nodiscard]] const Resources &get_task_resources(taskid_t id,
-                                                    DeviceType arch) const;
-
-  [[nodiscard]] std::string const &get_name(taskid_t id) const {
-    return task_names[id];
-  }
-
-  [[nodiscard]] std::vector<DeviceType>
-  get_supported_architectures(taskid_t id) const;
-
-  [[nodiscard]] const Task &get_task(taskid_t id) const;
-
-  friend class GraphManager;
-};
 
 class TaskStateInfo {
 protected:
@@ -126,9 +46,9 @@ public:
   [[nodiscard]] bool is_reservable(taskid_t id) const;
   [[nodiscard]] bool is_launchable(taskid_t id) const;
 
-  bool is_mapped(taskid_t id) const;
-  bool is_reserved(taskid_t id) const;
-  bool is_launched(taskid_t id) const;
+  [[nodiscard]] bool is_mapped(taskid_t id) const;
+  [[nodiscard]] bool is_reserved(taskid_t id) const;
+  [[nodiscard]] bool is_launched(taskid_t id) const;
 
   [[nodiscard]] depcount_t get_unmapped(taskid_t id) const {
     return counts[id].unmapped;
@@ -233,8 +153,9 @@ public:
       : tasks(tasks), state(tasks.size()), records(tasks.size()){};
   [[nodiscard]] std::size_t size() const { return tasks.size(); }
 
-  void initialize() {
+  void initialize(bool create_data_tasks = false) {
     task_buffer.reserve(TASK_MANAGER_TASK_BUFFER_SIZE);
+    GraphManager::finalize(tasks, create_data_tasks);
     initialize_state();
     initialized = true;
   }
