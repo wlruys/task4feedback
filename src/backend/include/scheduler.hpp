@@ -14,6 +14,7 @@
 #include "tasks.hpp"
 #include <cassert>
 #include <random>
+#include <utility>
 
 #define TIME_TO_MAP 0
 #define TIME_TO_RESERVE 0
@@ -28,6 +29,7 @@ using TaskIDTimeList = std::pair<TaskIDList, std::vector<timecount_t>>;
 
 class TransitionConditions;
 class Scheduler;
+class Mapper;
 
 class SchedulerQueues {
 protected:
@@ -250,6 +252,14 @@ public:
     return global_time;
   }
 
+  [[nodiscard]] const TaskManager &get_task_manager() const {
+    return task_manager;
+  }
+
+  [[nodiscard]] const DeviceManager &get_device_manager() const {
+    return device_manager;
+  }
+
   friend class Scheduler;
   friend class TransitionConstraints;
 };
@@ -374,7 +384,7 @@ public:
   const TaskIDList &map_task(Action &action);
   void remove_mapped_tasks(ActionList &action_list);
 
-  void map_tasks(Event &map_event, EventManager &event_manager);
+  void map_tasks(Event &map_event, EventManager &event_manager, Mapper &mapper);
   void map_tasks_from_python(ActionList &action_list,
                              EventManager &event_manager);
 
@@ -464,4 +474,169 @@ public:
 
   friend class SchedulerState;
   friend class SchedulerQueues;
+};
+
+class Mapper {
+
+protected:
+  DeviceIDList device_buffer;
+  std::vector<DeviceType> arch_buffer;
+
+  void fill_arch_targets(taskid_t task_id, const SchedulerState &state) {
+    arch_buffer.clear();
+    const auto &tasks = state.get_task_manager().get_tasks();
+    arch_buffer = tasks.get_supported_architectures(task_id);
+    assert(!arch_buffer.empty());
+  }
+
+  void fill_device_targets(taskid_t task_id, const SchedulerState &state) {
+    device_buffer.clear();
+    fill_arch_targets(task_id, state);
+    const auto &supported_architectures = arch_buffer;
+    const auto &devices = state.get_device_manager().get_devices();
+
+    for (auto arch : supported_architectures) {
+      const auto &device_ids = devices.get_devices(arch);
+      device_buffer.insert(device_buffer.end(), device_ids.begin(),
+                           device_ids.end());
+    }
+    assert(!device_buffer.empty());
+  }
+
+  const DeviceIDList &get_devices_from_arch(DeviceType arch,
+                                            SchedulerState &state) {
+    const auto &devices = state.get_device_manager().get_devices();
+    return devices.get_devices(arch);
+  }
+
+public:
+  Mapper() = default;
+  virtual Action map_task(taskid_t task_id, const SchedulerState &state) {
+    return Action(task_id, 0);
+  }
+
+  virtual ActionList map_tasks(const TaskIDList &task_ids,
+                               const SchedulerState &state) {
+    ActionList actions;
+    for (auto task_id : task_ids) {
+      actions.push_back(map_task(task_id, state));
+    }
+    return actions;
+  }
+};
+
+class RandomMapper : public Mapper {
+protected:
+  std::random_device rd;
+  std::mt19937 gen;
+
+  DeviceType choose_random_architecture(std::vector<DeviceType> &arch_buffer) {
+    std::uniform_int_distribution<std::size_t> dist(0, arch_buffer.size() - 1);
+    return arch_buffer[dist(gen)];
+  }
+
+  devid_t choose_random_device(DeviceIDList &device_buffer) {
+    std::uniform_int_distribution<std::size_t> dist(0,
+                                                    device_buffer.size() - 1);
+    return device_buffer[dist(gen)];
+  }
+
+public:
+  RandomMapper() = default;
+  Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    fill_device_targets(task_id, state);
+    devid_t device_id = choose_random_device(device_buffer);
+    return Action(task_id, device_id);
+  }
+};
+
+class RoundRobinMapper : public Mapper {
+protected:
+  std::size_t device_index = 0;
+
+public:
+  RoundRobinMapper() = default;
+  Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    fill_device_targets(task_id, state);
+    devid_t device_id = device_buffer[device_index];
+    device_index = (device_index + 1) % device_buffer.size();
+    return Action(task_id, device_id);
+  }
+};
+
+class StaticMapper : public Mapper {
+protected:
+  DeviceIDList mapping;
+  PriorityList reserving_priorities;
+  PriorityList launching_priorities;
+
+  static bool check_supported_architecture(devid_t device_id, taskid_t task_id,
+                                           const SchedulerState &state) {
+    const auto &tasks = state.get_task_manager().get_tasks();
+    const auto &supported_architectures =
+        tasks.get_supported_architectures(task_id);
+    const auto &devices = state.get_device_manager().get_devices();
+    const auto &device = devices.get_device(device_id);
+    return std::find(supported_architectures.begin(),
+                     supported_architectures.end(),
+                     device.arch) != supported_architectures.end();
+  }
+
+public:
+  StaticMapper() = default;
+
+  StaticMapper(DeviceIDList device_ids_) : mapping(std::move(device_ids_)) {}
+
+  StaticMapper(DeviceIDList device_ids_, PriorityList reserving_priorities_,
+               PriorityList launching_priorities_)
+      : mapping(std::move(device_ids_)),
+        reserving_priorities(std::move(reserving_priorities_)),
+        launching_priorities(std::move(launching_priorities_)) {}
+
+  void set_reserving_priorities(PriorityList reserving_priorities_) {
+    reserving_priorities = std::move(reserving_priorities_);
+  }
+
+  void set_launching_priorities(PriorityList launching_priorities_) {
+    launching_priorities = std::move(launching_priorities_);
+  }
+
+  void set_mapping(DeviceIDList device_ids_) {
+    mapping = std::move(device_ids_);
+  }
+
+  Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    devid_t device_id = 0;
+    priority_t rp = 0;
+    priority_t lp = 0;
+
+    if (!mapping.empty()) {
+      device_id = mapping[task_id % mapping.size()];
+    }
+    if (!reserving_priorities.empty()) {
+      rp = reserving_priorities[task_id % reserving_priorities.size()];
+    }
+    if (!launching_priorities.empty()) {
+      lp = launching_priorities[task_id % launching_priorities.size()];
+    }
+
+    assert(check_supported_architecture(device_id, task_id, state));
+    assert(device_id < state.get_device_manager().size());
+    assert(rp >= 0);
+    assert(lp >= 0);
+
+    return Action(task_id, device_id, rp, lp);
+  }
+};
+
+class StaticActionMapper : public Mapper {
+protected:
+  ActionList actions;
+
+public:
+  StaticActionMapper(ActionList actions_) : actions(std::move(actions_)) {}
+
+  Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    return actions[task_id];
+  }
 };

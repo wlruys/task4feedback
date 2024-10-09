@@ -23,6 +23,7 @@ cdef extern from "include/settings.hpp":
     ctypedef vector[taskid_t] TaskIDList
     ctypedef vector[dataid_t] DataIDList
     ctypedef vector[devid_t] DeviceIDList
+    ctypedef vector[priority_t] PriorityList
 
 cdef extern from "include/devices.hpp":
     cpdef enum class DeviceType(int):

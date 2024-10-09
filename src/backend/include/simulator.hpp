@@ -56,23 +56,31 @@ protected:
     if (use_python_mapper) {
       return ExecutionState::PYTHON_MAPPING;
     }
-
-    scheduler.map_tasks(event, event_manager);
+    // otherwise just run the mapper from C++
+    scheduler.map_tasks(event, event_manager, mapper);
     return ExecutionState::RUNNING;
   }
 
 public:
   EventManager event_manager;
   Scheduler scheduler;
+  Mapper &mapper;
 
   bool initialized = false;
-  bool use_python_mapper = true;
+  volatile bool use_python_mapper = true;
 
   ExecutionState last_state = ExecutionState::NONE;
   Event last_event = Event(EventType::MAPPER, 0, TaskIDList());
 
-  Simulator(Tasks &tasks, Devices &devices)
-      : event_manager(EventManager()), scheduler(Scheduler(tasks, devices)) {}
+  Simulator(Tasks &tasks, Devices &devices, Mapper &mapper_)
+      : event_manager(EventManager()), scheduler(Scheduler(tasks, devices)),
+        mapper(mapper_) {}
+
+  void set_use_python_mapper(bool use_python_mapper_) {
+    use_python_mapper = use_python_mapper_;
+  }
+
+  void set_mapper(Mapper &mapper_) { mapper = mapper_; }
 
   void initialize(unsigned int seed) {
     add_initial_event();

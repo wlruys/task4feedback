@@ -204,12 +204,23 @@ cdef class PyTasks:
 
 cdef class PySimulator:
     cdef Simulator* simulator
+    cdef Mapper* mapper 
 
     def __cinit__(self, PyTasks tasks, PyDevices devices):
         self.simulator = new Simulator(deref(tasks.tasks), deref(devices.devices))
+        self.mapper = new StaticMapper()
 
     def initialize(self, unsigned int seed):
         self.simulator.initialize(seed)
+
+    def set_mapping(self, devid_t[:] device_list):
+        self.mapper.set_mapping(device_list)
+
+    def set_launching_priorities(self, priority_t[:] priorities):
+        self.mapper.set_launching_priorities(priorities)
+
+    def set_reserving_priorities(self, priority_t[:] priorities):
+        self.mapper.set_reserving_priorities(priorities)
 
     def run(self):
         cdef ExecutionState stop_reason = self.simulator.run()

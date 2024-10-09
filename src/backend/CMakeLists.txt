@@ -11,7 +11,7 @@ set(BACKEND_SRC
 set(BACKEND_HDR
     action.hpp
     breakpoints.hpp
-    data.hpp
+    data_manager.hpp
     device_manager.hpp 
     devices.hpp 
     event_manager.hpp

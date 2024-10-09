@@ -74,4 +74,4 @@ add_subdirectory(test)
 
 set(test_path_file ${CMAKE_SOURCE_DIR}/test/run_tests.sh)
 file(WRITE ${test_path_file} "export PARLA_TESTS=${CMAKE_BINARY_DIR}/test\n")
-file(APPEND ${test_path_file} "ctest --test-dir $PARLA_TESTS\n")
+file(APPEND ${test_path_file} "ctest --test-dir $PARLA_TESTS --output-on-failure\n")

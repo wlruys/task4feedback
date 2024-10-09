@@ -2,7 +2,7 @@
 #cython: embedsignature=True
 #cython: language=c++
 
-from settings cimport taskid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, priority_t, depcount_t, vcu_t, mem_t, timecount_t
+from settings cimport taskid_t, TaskIDList, DataIDList, DeviceIDList, PriorityList, DeviceType, devid_t, priority_t, depcount_t, vcu_t, mem_t, timecount_t
 
 from tasks cimport Tasks
 from devices cimport Devices
@@ -37,6 +37,15 @@ cdef extern from "include/events.hpp":
         LAUNCHER,
         EVICTOR,
         COMPLETER
+
+cdef extern from "include/scheduler.hpp":
+    cdef cppclass Mapper:
+        pass 
+
+    cdef cppclass StaticMapper(Mapper):
+        void set_mapping(DeviceIDList& devices)
+        void set_launching_priorities(PriorityList& priorities)
+        void set_reserving_priorities(PriorityList& priorities)
 
 cdef extern from "include/simulator.hpp":
 

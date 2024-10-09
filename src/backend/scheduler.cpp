@@ -293,31 +293,6 @@ void TaskCostInfo::count_completed(devid_t device_id, timecount_t time) {
 
 // Scheduler
 
-void Scheduler::fill_mappable_targets(taskid_t task_id) {
-  device_buffer.clear();
-
-  std::size_t supported_device_count = 0;
-  auto &task_manager = state.task_manager;
-  const auto &tasks = task_manager.get_tasks();
-  auto supported_architectures = tasks.get_supported_architectures(task_id);
-  assert(!supported_architectures.empty());
-
-  for (auto arch : supported_architectures) {
-    const auto &device_ids = state.device_manager.devices.get_devices(arch);
-    supported_device_count += device_ids.size();
-    device_buffer.insert(device_buffer.end(), device_ids.begin(),
-                         device_ids.end());
-  }
-  assert(supported_device_count > 0);
-}
-
-devid_t Scheduler::choose_random_target() {
-  assert(!device_buffer.empty());
-  std::uniform_int_distribution<std::size_t> dis(0, device_buffer.size() - 1);
-  const auto idx = dis(gen);
-  return device_buffer[idx];
-}
-
 TaskIDList &Scheduler::get_mappable_candidates() {
   auto &s = this->state;
   bool condition = queues.has_mappable() && conditions.should_map(s, queues);
@@ -330,12 +305,6 @@ TaskIDList &Scheduler::get_mappable_candidates() {
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
   task_buffer.insert(task_buffer.end(), top_k_tasks.begin(), top_k_tasks.end());
-
-  // for (auto task_id : task_buffer) {
-  //   std::cout << "Task " << state.get_task_name(task_id) << " is mappable."
-  //             << std::endl;
-  // }
-
   return task_buffer;
 }
 
@@ -406,7 +375,8 @@ void Scheduler::map_tasks_from_python(ActionList &action_list,
   event_manager.create_event(EventType::RESERVER, reserver_time, TaskIDList());
 }
 
-void Scheduler::map_tasks(Event &map_event, EventManager &event_manager) {
+void Scheduler::map_tasks(Event &map_event, EventManager &event_manager,
+                          Mapper &mapper) {
   assert(map_event.get_type() == EventType::MAPPER);
   assert(map_event.get_tasks().empty());
   success_count = 0;
@@ -417,43 +387,11 @@ void Scheduler::map_tasks(Event &map_event, EventManager &event_manager) {
   while (queues.has_mappable() && conditions.should_map(s, queues)) {
     taskid_t task_id = queues.mappable.top();
     queues.mappable.pop();
-
     assert(task_states.is_mappable(task_id));
 
-    // std::cout << "Mapping task " << state.get_task_name(task_id) << " at time
-    // "
-    //           << s.global_time << std::endl;
-
-    // Choose a random target device
-    // fill_mappable_targets(task_id);
-    // devid_t chosen_device = choose_random_target();
-    devid_t chosen_device = task_id % state.device_manager.devices.size();
-    s.set_mapping(task_id, chosen_device);
-
-    // std::cout << "Mapped task " << state.get_task_name(task_id) << " to
-    // device "
-    //           << state.device_manager.devices.get_name(chosen_device)
-    //           << std::endl;
-
-    // TODO(wlr): Update mapped data locations
-
-    // Update mapped resources
-    auto [requested, missing] = s.request_map_resources(task_id, chosen_device);
-    s.map_resources(task_id, chosen_device, requested);
-
-    // Notify dependents and enqueue newly mappable tasks
-    const auto &newly_mappable_tasks = s.notify_mapped(task_id);
+    Action action = mapper.map_task(task_id, s);
+    const auto &newly_mappable_tasks = map_task(action);
     push_mappable(newly_mappable_tasks);
-    success_count += 1;
-    state.counts.count_mapped(chosen_device);
-    breakpoints.check_task_breakpoint(EventType::MAPPER, task_id);
-
-    // Check if the mapped task is reservable, and if so, enqueue it
-    if (s.is_reservable(task_id)) {
-      // std::cout << "Task " << state.get_task_name(task_id)
-      //           << " is reservable at time " << s.global_time << std::endl;
-      push_reservable(task_id, chosen_device);
-    }
   }
 
   // The next event is a reserving event

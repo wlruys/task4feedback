@@ -91,7 +91,7 @@ public:
     return valid_locations;
   }
 
-  bool read_update(devid_t device_id) {
+  bool validate(devid_t device_id) {
     if (is_valid(device_id)) {
       return false;
     }
@@ -142,6 +142,10 @@ public:
   [[nodiscard]] std::vector<devid_t>
   get_valid_locations(dataid_t data_id) const {
     return block_locations[data_id].get_valid_locations();
+  }
+
+  BlockLocation &operator[](dataid_t data_id) {
+    return block_locations[data_id];
   }
 };
 
@@ -240,6 +244,14 @@ public:
     auto it = moving_counts.find(data_id);
     return it == moving_counts.end() ? 0 : it->second;
   }
+
+  void run_asserts(dataid_t data_id) const {
+    assert(count_mapped(data_id) >= count_reserved(data_id));
+    assert(count_reserved(data_id) >= count_launched(data_id));
+    assert(count_reserved(data_id) >= count_moving(data_id));
+  }
+
+  friend class DataCounts;
 };
 
 class DataCounts {
@@ -318,11 +330,63 @@ protected:
     });
   }
 
-  void read_update(dataid_t data_id, devid_t device_id,
-                   LocationManager &locations, DeviceResources &resources) {}
+  static void read_update(dataid_t data_id, devid_t device_id,
+                          LocationManager &locations) {
+    locations[data_id].validate(device_id);
+  }
 
-  void write_update(dataid_t data_id, devid_t device_id,
-                    LocationManager &locations, DeviceResources &resources) {}
+  static auto write_update(dataid_t data_id, devid_t device_id,
+                           LocationManager &locations) {
+    auto updated_ids = locations[data_id].invalidate_except(device_id);
+    return updated_ids;
+  }
+
+  void read_update_mapped(DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      read_update(data_id, device_id, mapped_locations);
+    }
+  }
+
+  void write_update_mapped(DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      write_update(data_id, device_id, mapped_locations);
+    }
+  }
+
+  void read_update_reserved(DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      read_update(data_id, device_id, reserved_locations);
+    }
+  }
+
+  void write_update_reserved(DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      write_update(data_id, device_id, reserved_locations);
+    }
+  }
+
+  void read_update_launched(DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      read_update(data_id, device_id, launched_locations);
+    }
+  }
+
+  void remove_memory(DeviceIDList &device_list, devid_t device_id) {
+    for (auto device : device_list) {
+      auto size = data.get_size(device);
+      device_manager.remove_mem<TaskState::MAPPED>(device_id, size);
+      device_manager.remove_mem<TaskState::RESERVED>(device_id, size);
+      device_manager.remove_mem<TaskState::LAUNCHED>(device_id, size);
+    }
+  }
+
+  void write_update_launched(DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      auto updated_devices =
+          write_update(data_id, device_id, launched_locations);
+      remove_memory(updated_devices, device_id);
+    }
+  }
 
 public:
   DataManager(Data &data_, DeviceManager &device_manager_)
