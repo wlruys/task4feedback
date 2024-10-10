@@ -127,6 +127,11 @@ public:
   Task() = default;
   Task(taskid_t id) : id(id) {}
 
+  void set_depth(uint64_t depth_) { this->depth = depth_; }
+
+  [[nodiscard]] taskid_t get_id() const { return id; }
+  [[nodiscard]] uint64_t get_depth() const { return depth; }
+
   void set_dependencies(TaskIDList _dependencies) {
     this->dependencies = std::move(_dependencies);
   }
@@ -176,9 +181,7 @@ public:
   }
 
   [[nodiscard]] const VariantList &get_variants() const { return variants; }
-  [[nodiscard]] std::vector<Variant> get_variant_vector() const {
-    return std::vector<Variant>(variants.begin(), variants.end());
-  }
+  [[nodiscard]] std::vector<Variant> get_variant_vector() const;
 
   void set_read(DataIDList _read) { this->read = std::move(_read); }
   void set_write(DataIDList _write) { this->write = std::move(_write); }
@@ -206,14 +209,22 @@ public:
 };
 
 class DataTask : public Task {
+private:
+  dataid_t data_id;
+  taskid_t compute_task;
+
 public:
   static constexpr TaskType task_type = TaskType::DATA;
-  dataid_t data_id;
 
   DataTask() = default;
   DataTask(taskid_t id_) { this->id = id_; }
 
   void set_data_id(dataid_t data_id_) { this->data_id = data_id_; }
+  void set_compute_task(taskid_t compute_task_) {
+    this->compute_task = compute_task_;
+  }
+
+  [[nodiscard]] taskid_t get_compute_task() const { return compute_task; }
 
   [[nodiscard]] dataid_t get_data_id() const { return data_id; }
 };
@@ -265,9 +276,15 @@ public:
   }
 };
 
+struct TaskTypeBundle {
+  TaskType type;
+  taskid_t id;
+};
+
 using ComputeTaskList = std::vector<ComputeTask>;
 using DataTaskList = std::vector<DataTask>;
 using TaskList = std::vector<Task>;
+using MixedTaskIDList = std::vector<TaskTypeBundle>;
 
 class GraphManager;
 

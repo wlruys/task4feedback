@@ -31,7 +31,7 @@ public:
   [[nodiscard]] bool empty() const { return size() == 0; }
 
   void set_size(dataid_t id, mem_t size) { sizes[id] = size; }
-  void set_initial_location(dataid_t id, devid_t location) {
+  void set_location(dataid_t id, devid_t location) {
     initial_location[id] = location;
   }
   void set_name(dataid_t id, std::string name) {
@@ -40,12 +40,12 @@ public:
 
   void add_block(dataid_t id, mem_t size, devid_t location, std::string name) {
     set_size(id, size);
-    set_initial_location(id, location);
+    set_location(id, location);
     set_name(id, std::move(name));
   }
 
   [[nodiscard]] mem_t get_size(dataid_t id) const { return sizes[id]; }
-  [[nodiscard]] devid_t get_initial_location(dataid_t id) const {
+  [[nodiscard]] devid_t get_location(dataid_t id) const {
     return initial_location[id];
   }
   [[nodiscard]] const std::string &get_name(dataid_t id) const {
@@ -398,7 +398,7 @@ public:
 
   void initialize() {
     for (dataid_t i = 0; i < data.size(); i++) {
-      auto initial_location = data.get_initial_location(i);
+      auto initial_location = data.get_location(i);
       mapped_locations.set_valid(i, initial_location);
       device_manager.add_mem<TaskState::MAPPED>(initial_location,
                                                 data.get_size(i));

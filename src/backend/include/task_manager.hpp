@@ -77,26 +77,30 @@ public:
 
   [[nodiscard]] devid_t get_mapping(taskid_t id) const { return mapping[id]; };
   [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const {
+    assert(id < mapping_priority.size());
     return mapping_priority[id];
   };
   [[nodiscard]] const PriorityList &get_mapping_priorities() const {
     return mapping_priority;
   }
   [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const {
+    assert(id < reserving_priority.size());
     return reserving_priority[id];
   };
   [[nodiscard]] const PriorityList &get_reserving_priorities() const {
     return reserving_priority;
   }
   [[nodiscard]] priority_t get_launching_priority(taskid_t id) const {
+    assert(id < launching_priority.size());
     return launching_priority[id];
   };
   [[nodiscard]] const PriorityList &get_launching_priorities() const {
     return launching_priority;
   }
 
-  [[nodiscard]] bool data_task_existed(taskid_t id) const {
-    return existed[id];
+  [[nodiscard]] bool data_task_existed(taskid_t offset) const {
+    assert(0 <= offset && offset < existed.size());
+    return existed[offset];
   }
 
   friend class TaskManager;
@@ -120,7 +124,7 @@ public:
 
   TaskRecords() = default;
   TaskRecords(std::size_t n_tasks) {
-    state_times.resize(n_tasks * n_tracked_states);
+    state_times.resize(n_tasks * n_tracked_states, 0);
   }
 
   void record_mapped(taskid_t id, timecount_t time);
@@ -149,8 +153,7 @@ public:
 
   bool initialized = false;
 
-  TaskManager(Tasks &tasks)
-      : tasks(tasks), state(tasks.size()), records(tasks.size()){};
+  TaskManager(Tasks &tasks) : tasks(tasks){};
   [[nodiscard]] std::size_t size() const { return tasks.size(); }
 
   void initialize(bool create_data_tasks = false) {
@@ -168,11 +171,14 @@ public:
   [[nodiscard]] const TaskRecords &get_records() const { return records; }
   [[nodiscard]] const Tasks &get_tasks() const { return tasks; }
 
+  void set_state(taskid_t id, TaskState _state) { state.set_state(id, _state); }
+
   void set_mapping(taskid_t id, devid_t devid);
   const TaskIDList &notify_mapped(taskid_t id, timecount_t time);
   const TaskIDList &notify_reserved(taskid_t id, timecount_t time);
   void notify_launched(taskid_t id, timecount_t time);
   const TaskIDList &notify_completed(taskid_t id, timecount_t time);
+  const TaskIDList &notify_data_completed(taskid_t id, timecount_t time);
 
   [[nodiscard]] const Variant &get_task_variant(taskid_t id,
                                                 DeviceType arch) const {
@@ -198,7 +204,7 @@ private:
 public:
   TaskPrinter(TaskManager &tm) : tm(tm) {}
 
-  Color get_task_color(taskid_t id);
+  [[nodiscard]] Color get_task_color(taskid_t id) const;
 
   template <typename DependencyList>
   Table make_list_table(DependencyList &dependencies);

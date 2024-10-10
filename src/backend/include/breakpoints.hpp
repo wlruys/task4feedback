@@ -15,8 +15,6 @@ private:
   volatile bool breakpoint_status = false;
 
   static bool check_task(TaskIDList &tasks, taskid_t task) {
-    std::cout << "Checking task " << task << " in list" << std::endl;
-    std::cout << "Task list size: " << tasks.size() << std::endl;
     for (auto t : tasks) {
       std::cout << t << " ";
     }
@@ -26,7 +24,6 @@ private:
       return false;
     }
     bool found = std::find(tasks.begin(), tasks.end(), task) != tasks.end();
-    std::cout << "Task " << task << " found: " << found << std::endl;
 
     if (found) {
       // Remove task from list
@@ -55,17 +52,10 @@ public:
   void reset_breakpoint() { breakpoint_status = false; }
 
   bool check_task_breakpoint(EventType type, taskid_t task) {
-    std::cout << "Checking breakpoint for task " << task << " at event " << type
-              << std::endl;
     bool is_breakpoint = check_event(breakpoints, type);
-
-    std::cout << "Event " << type
-              << " has possible breakpoint: " << is_breakpoint << std::endl;
     if (is_breakpoint) {
       is_breakpoint = check_task(breakpoints.at(type), task);
     }
-    std::cout << "Task " << task << " has breakpoint: " << is_breakpoint
-              << std::endl;
     if (is_breakpoint) {
       breakpoint_status = true;
     }
@@ -81,8 +71,6 @@ public:
   }
 
   void add_breakpoint(EventType type, taskid_t task) {
-    std::cout << "Adding breakpoint for task " << task << " at event " << type
-              << std::endl;
     if (!check_event(breakpoints, type)) {
       breakpoints[type] = TaskIDList();
     }

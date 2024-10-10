@@ -4,6 +4,9 @@
 #include "events.hpp"
 #include "scheduler.hpp"
 #include "settings.hpp"
+// #include "spdlog/cfg/env.h" // support for loading levels from the
+// environment variable #include "spdlog/fmt/ostr.h" // support for user defined
+// types #include "spdlog/sinks/stdout_color_sinks.h"
 #include <cstddef>
 
 enum class ExecutionState {
@@ -67,14 +70,18 @@ public:
   Mapper &mapper;
 
   bool initialized = false;
-  volatile bool use_python_mapper = true;
+  volatile bool use_python_mapper = false;
 
   ExecutionState last_state = ExecutionState::NONE;
   Event last_event = Event(EventType::MAPPER, 0, TaskIDList());
 
   Simulator(Tasks &tasks, Devices &devices, Mapper &mapper_)
       : event_manager(EventManager()), scheduler(Scheduler(tasks, devices)),
-        mapper(mapper_) {}
+        mapper(mapper_) {
+    // auto new_logger = spdlog::stdout_color_mt("console");
+    // spdlog::set_default_logger(new_logger);
+    // spdlog::set_level(spdlog::level::debug);
+  }
 
   void set_use_python_mapper(bool use_python_mapper_) {
     use_python_mapper = use_python_mapper_;
@@ -145,6 +152,7 @@ public:
       if (scheduler.is_complete()) {
         return ExecutionState::COMPLETE;
       }
+      // spdlog::critical("No more events and not complete.");
       return ExecutionState::ERROR;
     }
 
@@ -159,10 +167,12 @@ public:
 
     if (!initialized) {
       last_state = ExecutionState::ERROR;
+      // spdlog::critical("Simulator not initialized.");
       return ExecutionState::ERROR;
     }
 
     if (last_state == ExecutionState::ERROR) {
+      // spdlog::critical("Simulator in error state.");
       return ExecutionState::ERROR;
     }
 
@@ -171,6 +181,7 @@ public:
     }
 
     if (last_state == ExecutionState::PYTHON_MAPPING) {
+      // spdlog::debug("Python Mapping has not been completed.");
       return ExecutionState::ERROR;
     }
 

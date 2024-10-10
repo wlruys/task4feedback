@@ -6,6 +6,7 @@ def generate_clangd_config(output_file):
     current_dir = os.getcwd()
     tabulate_path = os.path.join(current_dir, "external", "tabulate", "include")
     doctest_path = os.path.join(current_dir, "external", "doctest")
+    spdlog_path = os.path.join(current_dir, "external")
     backend_path = os.path.join(current_dir, "src", "backend")
     backend_inc_path = os.path.join(current_dir, "src", "backend", "include")
 
@@ -23,6 +24,7 @@ def generate_clangd_config(output_file):
                 f"-I{doctest_path}",
                 f"-I{backend_path}",
                 f"-I{backend_inc_path}",
+                f"-I{spdlog_path}",
             ]
         },
         "Diagnostics": {

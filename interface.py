@@ -1,5 +1,6 @@
 from task4feedback.fastsim.simulator import (
     PyTasks,
+    PyData,
     PyDevices,
     PySimulator,
     PyAction,
@@ -100,7 +101,7 @@ def calculate_critical_path(G, num_gpus):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--blocks", type=int, default=20)
+parser.add_argument("--blocks", type=int, default=3)
 parser.add_argument("--devices", type=int, default=1)
 parser.add_argument("--vcus", type=int, default=100)
 args = parser.parse_args()
@@ -143,6 +144,20 @@ def create_task_ids(tasks):
         ids_to_tasks[i] = task
 
     return tasks_to_ids, ids_to_tasks
+
+
+def build_c_data(data):
+    n_data = len(data)
+
+    data_to_ids, ids_to_data = create_data_ids(data)
+
+    d = PyData(n_data)
+
+    for data_name, data in data.items():
+        id = data_to_ids[data_name]
+        d.create_data(id, str(data_name), 1e8)
+
+    return d
 
 
 def build_c_graph(tasks):
@@ -224,11 +239,11 @@ end_t = time.perf_counter()
 print(f"Init Time: {end_t - start_t}")
 # simulator.add_task_breakpoint(PyEventType.COMPLETER, 1)
 # simulator.add_task_breakpoint(PyEventType.COMPLETER, 4)
-# start_t = time.perf_counter()
-# run_simulator(simulator)
-# end_t = time.perf_counter()
-# print(f"Time: {end_t - start_t}")
-# print(f"Simulator Time: {simulator.get_current_time()}")
+start_t = time.perf_counter()
+run_simulator(simulator)
+end_t = time.perf_counter()
+print(f"Time: {end_t - start_t}")
+print(f"Simulator Time: {simulator.get_current_time()}")
 
 # start_t = time.perf_counter()
 # exit_flag = simulator.run()
@@ -237,38 +252,38 @@ print(f"Init Time: {end_t - start_t}")
 # print(f"Simulator Time {simulator.get_current_time()}")
 # print(f"Simulator Exit {exit_flag}")
 
-for i in range(pytasks.n_tasks()):
+# for i in range(pytasks.n_tasks()):
 
-    if pytasks.is_compute(i):
-        name = pytasks.get_name(i)
-        depth = pytasks.get_depth(i)
-        dependencies = pytasks.get_dependencies(i)
-        dependencies = [pytasks.get_name(dep) for dep in dependencies]
-        dependents = pytasks.get_dependents(i)
-        dependents = [pytasks.get_name(dep) for dep in dependents]
-        print(f"Task {name} Depth {depth}")
-        print(f"- Dependencies {dependencies}")
-        print(f"- Dependents {dependents}")
+#     if pytasks.is_compute(i):
+#         name = pytasks.get_name(i)
+#         depth = pytasks.get_depth(i)
+#         dependencies = pytasks.get_dependencies(i)
+#         dependencies = [pytasks.get_name(dep) for dep in dependencies]
+#         dependents = pytasks.get_dependents(i)
+#         dependents = [pytasks.get_name(dep) for dep in dependents]
+#         print(f"Task {name} Depth {depth}")
+#         print(f"- Dependencies {dependencies}")
+#         print(f"- Dependents {dependents}")
 
-        read_set = pytasks.get_read_set(i)
-        write_set = pytasks.get_write_set(i)
-        print(f"- Read Set {pytasks.get_read_set(i)}")
-        print(f"- Write Set {pytasks.get_write_set(i)}")
-        data_dependencies = pytasks.get_data_dependencies(i)
-        data_dependencies = [pytasks.get_name(dep) for dep in data_dependencies]
-        print(f"- Data Dependencies {data_dependencies}")
+#         read_set = pytasks.get_read_set(i)
+#         write_set = pytasks.get_write_set(i)
+#         print(f"- Read Set {pytasks.get_read_set(i)}")
+#         print(f"- Write Set {pytasks.get_write_set(i)}")
+#         data_dependencies = pytasks.get_data_dependencies(i)
+#         data_dependencies = [pytasks.get_name(dep) for dep in data_dependencies]
+#         print(f"- Data Dependencies {data_dependencies}")
 
-        data_dependents = pytasks.get_data_dependents(i)
-        data_dependents = [pytasks.get_name(dep) for dep in data_dependents]
+#         data_dependents = pytasks.get_data_dependents(i)
+#         data_dependents = [pytasks.get_name(dep) for dep in data_dependents]
 
-        print(f"- Data Dependents {data_dependents}")
-    else:
-        name = pytasks.get_name(i)
-        dependencies = pytasks.get_dependencies(i)
-        dependencies = [pytasks.get_name(dep) for dep in dependencies]
-        dependents = pytasks.get_dependents(i)
-        dependents = [pytasks.get_name(dep) for dep in dependents]
-        print(f"Task {name}")
-        print(f"- Dependencies {dependencies}")
-        print(f"- Dependents {dependents}")
-        print(f"- DataID {pytasks.get_data_id(i)}")
+#         print(f"- Data Dependents {data_dependents}")
+#     else:
+#         name = pytasks.get_name(i)
+#         dependencies = pytasks.get_dependencies(i)
+#         dependencies = [pytasks.get_name(dep) for dep in dependencies]
+#         dependents = pytasks.get_dependents(i)
+#         dependents = [pytasks.get_name(dep) for dep in dependents]
+#         print(f"Task {name}")
+#         print(f"- Dependencies {dependencies}")
+#         print(f"- Dependents {dependents}")
+#         print(f"- DataID {pytasks.get_data_id(i)}")

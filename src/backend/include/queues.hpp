@@ -1,4 +1,5 @@
 #pragma once
+#include "settings.hpp"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -140,7 +141,9 @@ public:
       : gen(seed), dist(min, max) {}
 
   void push(T value) { pq.push(make_element(value)); }
-  void push(T value, int priority) { pq.push(make_element(value, priority)); }
+  void push(T value, priority_t priority) {
+    pq.push(make_element(value, priority));
+  }
   void push(Element<T> element) { pq.push(element); }
   void push_random(T value) { pq.push(make_element(value, dist(gen))); }
   [[nodiscard]] const T &top() const { return pq.top().value; }

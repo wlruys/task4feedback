@@ -27,20 +27,34 @@ public:
   [[nodiscard]] vcu_t get_vcu(devid_t id) const { return vcu[id]; }
   [[nodiscard]] mem_t get_mem(devid_t id) const { return mem[id]; }
 
-  void add_vcu(devid_t id, vcu_t vcu_) { vcu[id] += vcu_; }
-  void add_mem(devid_t id, mem_t m) { mem[id] += m; }
-
-  void remove_vcu(devid_t id, vcu_t vcu_) { vcu[id] -= vcu_; }
-  void remove_mem(devid_t id, mem_t m) { mem[id] -= m; }
-
-  void add_resources(devid_t id, const Resources &r) {
-    add_vcu(id, r.vcu);
-    add_mem(id, r.mem);
+  vcu_t add_vcu(devid_t id, vcu_t vcu_) {
+    vcu[id] += vcu_;
+    return vcu[id];
+  }
+  mem_t add_mem(devid_t id, mem_t m) {
+    mem[id] += m;
+    return mem[id];
   }
 
-  void remove_resources(devid_t id, const Resources &r) {
+  vcu_t remove_vcu(devid_t id, vcu_t vcu_) {
+    vcu[id] -= vcu_;
+    return vcu[id];
+  }
+  mem_t remove_mem(devid_t id, mem_t m) {
+    mem[id] -= m;
+    return mem[id];
+  }
+
+  Resources add_resources(devid_t id, const Resources &r) {
+    add_vcu(id, r.vcu);
+    add_mem(id, r.mem);
+    return {vcu[id], mem[id]};
+  }
+
+  Resources remove_resources(devid_t id, const Resources &r) {
     remove_vcu(id, r.vcu);
     remove_mem(id, r.mem);
+    return {vcu[id], mem[id]};
   }
 
   [[nodiscard]] vcu_t overflow_vcu(devid_t id, vcu_t query, vcu_t max) const {

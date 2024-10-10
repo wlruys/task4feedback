@@ -5,8 +5,9 @@
 import cython 
 
 from graph cimport GraphManager
-from settings cimport taskid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t, copy_t
+from settings cimport taskid_t, dataid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t, copy_t
 from tasks cimport Tasks, Variant, TaskState, TaskStatus
+from data cimport Data 
 from cython.operator cimport dereference as deref, preincrement as inc
 from libcpp.utility cimport move
 from libcpp.string cimport string
@@ -188,7 +189,42 @@ cdef class PyDevices:
 
     def __dealloc__(self):
         del self.devices
-    
+
+
+cdef class PyData:
+    cdef Data* data
+
+    def __cinit__(self, num_blocks: int):
+        self.data = new Data(num_blocks)
+
+    def add_block(self, dataid_t id, mem_t size, devid_t location, str pyname):
+        cname = pyname.encode('utf-8')
+        self.data.add_block(id, size, location, cname)
+
+    def set_size(self, dataid_t id, mem_t size):
+        self.data.set_size(id, size)
+
+    def set_location(self, dataid_t id, devid_t location):
+        self.data.set_location(id, location)
+
+    def set_name(self, dataid_t id, str pyname):
+        cname = pyname.encode('utf-8')
+        self.data.set_name(id, cname)
+
+    def get_size(self, dataid_t id):
+        return self.data.get_size(id)
+
+    def get_location(self, dataid_t id):
+        return self.data.get_location(id)
+
+    def get_name(self, dataid_t id):
+        cdef string s = self.data.get_name(id)
+        py_s = s.decode('utf-8')
+        return py_s
+
+    def __dealloc__(self):
+        del self.data
+
 
 cdef class PyTasks:
     cdef Tasks* tasks
@@ -316,9 +352,6 @@ cdef class PyStaticMapper(PyMapper):
         for priority in priorities:
             priority_list.push_back(priority)
         (<StaticMapper*>self.mapper).set_reserving_priorities(priority_list)
-
-    def __dealloc__(self):
-        pass
 
 cdef class PySimulator:
     cdef PyTasks pytasks

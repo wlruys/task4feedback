@@ -279,7 +279,7 @@ void GraphManager::populate_data_dependencies(TaskIDList &sorted,
   for (auto task_id : sorted) {
     auto &task = tasks.get_compute_task(task_id);
     create_data_tasks(writers, task, tasks);
-    add_missing_writer_dependencies(writers, task, tasks);
+    // add_missing_writer_dependencies(writers, task, tasks);
     update_writers(writers, task.get_write(), task_id);
   }
 }

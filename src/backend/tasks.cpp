@@ -10,6 +10,16 @@ std::vector<DeviceType> ComputeTask::get_supported_architectures() const {
   return supported_architectures;
 }
 
+std::vector<Variant> ComputeTask::get_variant_vector() const {
+  std::vector<Variant> variant_vector;
+  for (const auto &variant : variants) {
+    if (variant.arch != DeviceType::NONE) {
+      variant_vector.push_back(variant);
+    }
+  }
+  return variant_vector;
+}
+
 // Tasks
 
 Tasks::Tasks(taskid_t num_compute_tasks)
@@ -49,6 +59,8 @@ void Tasks::create_data_task(ComputeTask &task, bool has_writer,
   task_names.emplace_back(compute_task_name + "_data[" +
                           std::to_string(data_id) + "]");
   data_task.set_data_id(data_id);
+  data_task.set_compute_task(task.id);
+
   if (has_writer) {
     data_task.add_dependency(writer_id);
     auto &writer_task = get_compute_task(writer_id);
@@ -61,6 +73,7 @@ void Tasks::create_data_task(ComputeTask &task, bool has_writer,
 
 void Tasks::create_compute_task(taskid_t id, std::string name,
                                 TaskIDList dependencies) {
+  assert(id < num_compute_tasks);
   task_names[id] = std::move(name);
   ComputeTask task(id);
   task.set_dependencies(std::move(dependencies));
@@ -141,9 +154,9 @@ const TaskIDList &Tasks::get_data_dependents(taskid_t id) const {
 }
 
 std::size_t Tasks::get_depth(taskid_t id) const {
-  return get_compute_task(id).depth;
+  return get_compute_task(id).get_depth();
 }
 
 dataid_t Tasks::get_data_id(taskid_t id) const {
-  return get_data_task(id).data_id;
+  return get_data_task(id).get_data_id();
 }

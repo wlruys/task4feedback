@@ -5,10 +5,14 @@ project(${SKBUILD_PROJECT_NAME} LANGUAGES C CXX)
 
 set(3RD_PARTY_DIR ${PROJECT_SOURCE_DIR}/external)
 
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+# set(CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} -fsanitize=address")
+
 set(CMAKE_VERBOSE_MAKEFILE ON)
 include(CTest)
 
 include_directories(${3RD_PARTY_DIR}/tabulate/include)
+include_directories(${3RD_PARTY_DIR})
 
 find_package(
   Python

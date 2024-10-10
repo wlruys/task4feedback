@@ -32,6 +32,9 @@ bool TaskStateInfo::is_mappable(taskid_t id) const {
 }
 
 bool TaskStateInfo::is_reservable(taskid_t id) const {
+  std::cout << "Checking if task " << id << " is reservable" << std::endl;
+  std::cout << "Unreserved: " << counts[id].unreserved << std::endl;
+  std::cout << "State: " << this->get_state(id) << std::endl;
   return counts[id].unreserved == 0 && this->get_state(id) == TaskState::MAPPED;
 }
 
@@ -143,7 +146,10 @@ timecount_t TaskRecords::get_completed_time(taskid_t id) const {
 void TaskManager::initialize_state() {
   const auto &const_tasks = this->tasks;
 
+  std::cout << "Initializing state" << std::endl;
+  std::cout << "Tasks size: " << tasks.size() << std::endl;
   state = TaskStateInfo(tasks.size());
+  records = TaskRecords(tasks.size());
 
   const auto &compute_tasks = const_tasks.get_compute_tasks();
   for (const auto &task : compute_tasks) {
@@ -152,6 +158,20 @@ void TaskManager::initialize_state() {
     state.set_state(id, TaskState::SPAWNED);
     state.set_unmapped(id, n_deps);
     state.set_unreserved(id, n_deps);
+
+    auto n_data_deps =
+        static_cast<depcount_t>(task.get_data_dependencies().size());
+    auto n_total_deps = n_deps + n_data_deps;
+
+    state.set_incomplete(id, n_total_deps);
+  }
+
+  for (const auto &task : const_tasks.get_data_tasks()) {
+    taskid_t id = task.id;
+    auto n_deps = static_cast<depcount_t>(task.get_dependencies().size());
+    state.set_state(id, TaskState::SPAWNED);
+    state.set_unmapped(id, 0);
+    state.set_unreserved(id, 0);
     state.set_incomplete(id, n_deps);
   }
 }
@@ -172,6 +192,8 @@ const TaskIDList &TaskManager::notify_mapped(taskid_t id, timecount_t time) {
   for (auto dependent_id : task_objects.get_dependents(id)) {
     if (state.decrement_unmapped(dependent_id)) {
       task_buffer.push_back(dependent_id);
+      assert(state.get_state(dependent_id) == TaskState::SPAWNED);
+      assert(task_objects.is_compute(dependent_id));
     }
   }
 
@@ -190,6 +212,8 @@ const TaskIDList &TaskManager::notify_reserved(taskid_t id, timecount_t time) {
   for (auto dependent_id : task_objects.get_dependents(id)) {
     if (state.decrement_unreserved(dependent_id)) {
       task_buffer.push_back(dependent_id);
+      assert(state.get_state(dependent_id) == TaskState::MAPPED);
+      assert(task_objects.is_compute(dependent_id));
     }
   }
 
@@ -213,6 +237,25 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
   for (auto dependent_id : task_objects.get_dependents(id)) {
     if (state.decrement_incomplete(dependent_id)) {
       task_buffer.push_back(dependent_id);
+      assert(state.get_state(dependent_id) == TaskState::RESERVED);
+      assert(task_objects.is_compute(dependent_id));
+    }
+  }
+
+  return task_buffer;
+}
+
+const TaskIDList &TaskManager::notify_data_completed(taskid_t id,
+                                                     timecount_t time) {
+  const auto &task_objects = get_tasks();
+  // clear task_buffer
+  task_buffer.clear();
+
+  for (auto dependent_id : task_objects.get_data_dependents(id)) {
+    if (state.decrement_incomplete(dependent_id)) {
+      task_buffer.push_back(dependent_id);
+      assert(state.get_state(dependent_id) == TaskState::RESERVED);
+      assert(task_objects.is_data(dependent_id));
     }
   }
 
@@ -221,7 +264,7 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
 
 // TaskPrinter
 
-Color TaskPrinter::get_task_color(taskid_t id) {
+Color TaskPrinter::get_task_color(taskid_t id) const {
   auto task_state = tm.state.get_state(id);
   if (task_state == TaskState::SPAWNED && !tm.state.is_mappable(id)) {
     return Color::white;
