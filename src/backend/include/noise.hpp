@@ -1,5 +1,6 @@
 #pragma once
 #include "devices.hpp"
+#include "macros.hpp"
 #include "tasks.hpp"
 #include <fstream>
 #include <random>
@@ -17,6 +18,8 @@ protected:
 
   [[nodiscard]] virtual timecount_t sample_duration(taskid_t task_id,
                                                     DeviceType arch) const {
+    MONUnusedParameter(task_id);
+    MONUnusedParameter(arch);
     return 0;
   };
 
@@ -192,6 +195,8 @@ class LognormalTaskNoise : public TaskNoise {
 
 protected:
   [[nodiscard]] double get_stddev(taskid_t task_id, DeviceType arch) const {
+    MONUnusedParameter(task_id);
+    MONUnusedParameter(arch);
     const double stddev = 2;
     return stddev;
   }

@@ -64,7 +64,7 @@ TEST_CASE_FIXTURE(LognormalTaskNoiseFixture,
   noise.generate();
   noise.dump_to_binary("test_noise.bin");
 
-  LognormalTaskNoise loaded_noise(tasks, seed);
+  LognormalTaskNoise loaded_noise(tasks, 2);
   loaded_noise.load_from_binary("test_noise.bin");
 
   for (taskid_t i = 0; i < tasks.compute_size(); ++i) {

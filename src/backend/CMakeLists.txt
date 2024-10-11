@@ -13,6 +13,7 @@ set(BACKEND_HDR
     breakpoints.hpp
     data_manager.hpp
     device_manager.hpp 
+    communication_manager.hpp
     devices.hpp 
     event_manager.hpp
     events.hpp

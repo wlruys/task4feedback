@@ -449,6 +449,18 @@ public:
     return local_size;
   }
 
+  mem_t local_size_mapped(DataIDList &list, devid_t device_id) {
+    return local_size(list, mapped_locations, device_id);
+  }
+
+  mem_t local_size_reserved(DataIDList &list, devid_t device_id) {
+    return local_size(list, reserved_locations, device_id);
+  }
+
+  mem_t local_size_launched(DataIDList &list, devid_t device_id) {
+    return local_size(list, launched_locations, device_id);
+  }
+
   mem_t shared_size(DataIDList &list1, DataIDList &list2) {
     mem_t shared_size = 0;
     for (auto data_id : list1) {

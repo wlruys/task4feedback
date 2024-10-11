@@ -1,5 +1,6 @@
 #pragma once
 #include "graph.hpp"
+#include "macros.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
 #include "tasks.hpp"

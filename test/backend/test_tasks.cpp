@@ -10,11 +10,15 @@
 
 struct TestFixture {
   Tasks tasks;
+  Data data;
   Devices devices;
+  Topology topology;
   Simulator simulator;
   StaticMapper mapper;
 
-  TestFixture() : tasks(3), devices(2), simulator(tasks, devices, mapper) {
+  TestFixture()
+      : tasks(3), data(0), devices(2), topology(2),
+        simulator(tasks, data, devices, topology, mapper) {
     // Create compute tasks
     tasks.create_compute_task(0, "Task0", {});
     tasks.create_compute_task(1, "Task1", {0});
@@ -160,12 +164,15 @@ TEST_CASE_FIXTURE(TestFixture, "Tasks: Data Dependencies") {
 
 struct WriteDependencyFixture {
   Tasks tasks;
+  Data data;
   Devices devices;
+  Topology topology;
   Simulator simulator;
   StaticMapper mapper;
 
   WriteDependencyFixture()
-      : tasks(7), devices(2), simulator(tasks, devices, mapper) {
+      : tasks(7), data(0), devices(2), topology(2),
+        simulator(tasks, data, devices, topology, mapper) {
     // Create compute tasks
     tasks.create_compute_task(0, "Task0", {});
     tasks.create_compute_task(1, "Task1", {0});

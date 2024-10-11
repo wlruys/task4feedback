@@ -9,7 +9,7 @@ from settings cimport taskid_t, dataid_t, TaskIDList, DataIDList, DeviceIDList, 
 from tasks cimport Tasks, Variant, TaskState, TaskStatus
 from data cimport Data 
 from noise cimport TaskNoise, ExternalTaskNoise, LognormalTaskNoise, esf_t
-
+from communication cimport Topology
 from cython.operator cimport dereference as deref, preincrement as inc
 from libcpp.utility cimport move
 from libcpp.string cimport string
@@ -172,9 +172,14 @@ cdef class PyAction:
 
 cdef class PyDevices:
     cdef Devices* devices
+    cdef uint64_t n
 
     def __cinit__(self, n: int):
         self.devices = new Devices(n)
+        self.n = n 
+
+    def size(self):
+        return self.n
 
     def create_device(self, devid_t id, str pyname, DeviceType arch, vcu_t vcus, mem_t mem):
         cname = pyname.encode('utf-8')
@@ -194,6 +199,33 @@ cdef class PyDevices:
 
     def __dealloc__(self):
         del self.devices
+
+cdef class PyTopology:
+    cdef Topology* topology
+
+    def __cinit__(self, n: int):
+        self.topology = new Topology(n)
+
+    def set_bandwidth(self, devid_t src, devid_t dst, mem_t bandwidth):
+        self.topology.set_bandwidth(src, dst, bandwidth)
+
+    def set_max_connections(self, devid_t src, devid_t dst, uint8_t max_links):
+        self.topology.set_max_connections(src, dst, max_links)
+
+    def set_latency(self, devid_t src, devid_t dst, timecount_t latency):
+        self.topology.set_latency(src, dst, latency)
+
+    def get_latency(self, devid_t src, devid_t dst):
+        return self.topology.get_latency(src, dst)
+
+    def get_bandwidth(self, devid_t src, devid_t dst):
+        return self.topology.get_bandwidth(src, dst)
+
+    def get_max_connections(self, devid_t src, devid_t dst):
+        return self.topology.get_max_connections(src, dst)
+
+
+
 
 cdef class PyData:
     cdef Data* data
@@ -362,6 +394,7 @@ cdef class PyExternalNoise(PyTaskNoise):
         self.noise = new ExternalTaskNoise(deref(tasks.tasks), seed)
         self.cfunc = None 
 
+
     def __dealloc__(self):
         if self.cfunc is not None:
             Py_DECREF(self._sample_func_keeper)
@@ -371,6 +404,8 @@ cdef class PyExternalNoise(PyTaskNoise):
         cdef unsigned long long f_temp = cf.address 
         cdef esf_t f = <esf_t> f_temp
         self.cfunc = cf
+        if self.cfunc is not None:
+            Py_DECREF(self.cfunc)
         Py_INCREF(self.cfunc)
         (<ExternalTaskNoise*>self.noise).set_function(f)
 
@@ -421,16 +456,20 @@ cdef class PyStaticMapper(PyMapper):
 
 cdef class PySimulator:
     cdef PyTasks pytasks
+    cdef PyData pydata 
     cdef PyDevices pydevices
+    cdef PyTopology pytopology
     cdef PyMapper pymapper 
     cdef Simulator* simulator
 
-    def __cinit__(self, PyTasks tasks, PyDevices devices, PyMapper mapper):
+    def __cinit__(self, PyTasks tasks, PyData data, PyDevices devices, PyTopology topology, PyMapper mapper):
         self.pytasks = tasks
+        self.pydata = data
         self.pydevices = devices
+        self.pytopology = topology
         self.pymapper = mapper
 
-        self.simulator = new Simulator(deref(tasks.tasks), deref(devices.devices), deref(mapper.mapper))
+        self.simulator = new Simulator(deref(tasks.tasks), deref(data.data), deref(devices.devices), deref(topology.topology), deref(mapper.mapper))
 
     def initialize(self, unsigned int seed, bool create_data_tasks = 0):
         self.simulator.initialize(seed, create_data_tasks)

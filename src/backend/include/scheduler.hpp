@@ -2,15 +2,18 @@
 
 #include "action.hpp"
 #include "breakpoints.hpp"
+#include "communication_manager.hpp"
 #include "device_manager.hpp"
 #include "event_manager.hpp"
 #include "events.hpp"
 #include "graph.hpp"
 #include "iterator.hpp"
+#include "macros.hpp"
 #include "queues.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
 // #include "spdlog/spdlog.h"
+#include "data_manager.hpp"
 #include "task_manager.hpp"
 #include "tasks.hpp"
 #include <cassert>
@@ -199,6 +202,8 @@ protected:
   timecount_t global_time = 0;
   TaskManager task_manager;
   DeviceManager device_manager;
+  DataManager data_manager;
+  CommunicationManager communication_manager;
 
   [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id,
                                                       devid_t device_id) const;
@@ -227,9 +232,11 @@ protected:
 public:
   TaskCountInfo counts;
   TaskCostInfo costs;
-  SchedulerState(Tasks &tasks, Devices &devices)
+  SchedulerState(Tasks &tasks, Data &data, Devices &devices, Topology &topology)
       : task_manager(TaskManager(tasks)),
-        device_manager(DeviceManager(devices)), counts(devices.size()),
+        device_manager(DeviceManager(devices)),
+        data_manager(data, device_manager),
+        communication_manager(topology, devices), counts(devices.size()),
         costs(tasks.size(), devices.size()) {}
 
   void update_time(timecount_t time) {
@@ -316,18 +323,26 @@ concept TransitionConditionConcept = requires(T t, SchedulerState &state,
 class TransitionConditions {
 public:
   bool should_map(SchedulerState &state, SchedulerQueues &queues) {
+    MONUnusedParameter(state);
+    MONUnusedParameter(queues);
     return true;
   }
 
   bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
+    MONUnusedParameter(state);
+    MONUnusedParameter(queues);
     return true;
   }
 
   bool should_launch(SchedulerState &state, SchedulerQueues &queues) {
+    MONUnusedParameter(state);
+    MONUnusedParameter(queues);
     return true;
   }
 
   bool should_launch_data(SchedulerState &state, SchedulerQueues &queues) {
+    MONUnusedParameter(state);
+    MONUnusedParameter(queues);
     return true;
   }
 };
@@ -348,6 +363,7 @@ public:
         reserved_launched_gap(reserved_launched_gap_) {}
 
   bool should_map(SchedulerState &state, SchedulerQueues &queues) const {
+    MONUnusedParameter(queues);
     auto n_mapped = state.counts.n_mapped();
     auto n_reserved = state.counts.n_reserved();
     assert(n_mapped >= n_reserved);
@@ -357,6 +373,7 @@ public:
   }
 
   bool should_reserve(SchedulerState &state, SchedulerQueues &queues) const {
+    MONUnusedParameter(queues);
     auto n_reserved = state.counts.n_reserved();
     auto n_launched = state.counts.n_launched();
     assert(n_reserved >= n_launched);
@@ -402,8 +419,9 @@ public:
   bool initialized = false;
   BreakpointManager breakpoints;
 
-  Scheduler(Tasks &tasks, Devices &devices)
-      : state(tasks, devices), queues(SchedulerQueues(devices.size())) {
+  Scheduler(Tasks &tasks, Data &data, Devices &devices, Topology &topology)
+      : state(tasks, data, devices, topology),
+        queues(SchedulerQueues(devices.size())) {
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
     event_buffer.reserve(INITIAL_EVENT_BUFFER_SIZE);
@@ -584,6 +602,7 @@ protected:
 public:
   Mapper() = default;
   virtual Action map_task(taskid_t task_id, const SchedulerState &state) {
+    MONUnusedParameter(state);
     return Action(task_id, 0);
   }
 
@@ -709,6 +728,7 @@ public:
   StaticActionMapper(ActionList actions_) : actions(std::move(actions_)) {}
 
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    MONUnusedParameter(state);
     return actions[task_id];
   }
 };

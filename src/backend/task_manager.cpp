@@ -247,6 +247,7 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
 
 const TaskIDList &TaskManager::notify_data_completed(taskid_t id,
                                                      timecount_t time) {
+  MONUnusedParameter(time);
   const auto &task_objects = get_tasks();
   // clear task_buffer
   task_buffer.clear();

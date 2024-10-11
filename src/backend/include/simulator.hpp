@@ -1,5 +1,6 @@
 #pragma once
 #include "action.hpp"
+#include "communication_manager.hpp"
 #include "event_manager.hpp"
 #include "events.hpp"
 #include "scheduler.hpp"
@@ -75,9 +76,10 @@ public:
   ExecutionState last_state = ExecutionState::NONE;
   Event last_event = Event(EventType::MAPPER, 0, TaskIDList());
 
-  Simulator(Tasks &tasks, Devices &devices, Mapper &mapper_)
-      : event_manager(EventManager()), scheduler(Scheduler(tasks, devices)),
-        mapper(mapper_) {
+  Simulator(Tasks &tasks, Data &data, Devices &devices, Topology &topology,
+            Mapper &mapper_)
+      : event_manager(EventManager()),
+        scheduler(Scheduler(tasks, data, devices, topology)), mapper(mapper_) {
     // auto new_logger = spdlog::stdout_color_mt("console");
     // spdlog::set_default_logger(new_logger);
     // spdlog::set_level(spdlog::level::debug);

@@ -1,5 +1,6 @@
 #include "scheduler.hpp"
 #include "event_manager.hpp"
+#include "macros.hpp"
 #include "settings.hpp"
 #include "task_manager.hpp"
 
@@ -63,16 +64,19 @@ SchedulerState::request_launch_resources(taskid_t task_id,
 
 void SchedulerState::map_resources(taskid_t task_id, devid_t device_id,
                                    const Resources &requested) {
+  MONUnusedParameter(task_id);
   device_manager.add_resources<TaskState::MAPPED>(device_id, requested);
 }
 
 void SchedulerState::reserve_resources(taskid_t task_id, devid_t device_id,
                                        const Resources &requested) {
+  MONUnusedParameter(task_id);
   device_manager.add_resources<TaskState::RESERVED>(device_id, requested);
 }
 
 void SchedulerState::launch_resources(taskid_t task_id, devid_t device_id,
                                       const Resources &requested) {
+  MONUnusedParameter(task_id);
   device_manager.add_resources<TaskState::LAUNCHED>(device_id, requested);
 }
 
@@ -720,7 +724,10 @@ void Scheduler::launch_tasks(Event &launch_event, EventManager &event_manager) {
 }
 
 // TODO(wlr): implement eviction event
-void Scheduler::evict(Event &eviction_event, EventManager &event_manager) {}
+void Scheduler::evict(Event &eviction_event, EventManager &event_manager) {
+  MONUnusedParameter(eviction_event);
+  MONUnusedParameter(event_manager);
+}
 
 void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
   auto &s = this->state;

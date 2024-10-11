@@ -6,13 +6,15 @@ from settings cimport taskid_t, TaskIDList, DataIDList, DeviceIDList, PriorityLi
 
 from tasks cimport Tasks
 from devices cimport Devices
+from communication cimport Topology
+from data cimport Data
 
 import cython
 cimport cython
 
 from libcpp.vector cimport vector 
 from cython.operator cimport dereference as deref, preincrement as inc
-from libc.stdint cimport int64_t, int32_t, uint32_t, uint64_t 
+from libc.stdint cimport uint8_t, int64_t, int32_t, uint32_t, uint64_t 
 from libcpp.string cimport string
 from libcpp.utility cimport move
 from libc.stddef cimport size_t
@@ -58,7 +60,7 @@ cdef extern from "include/simulator.hpp":
         PYTHON_MAPPING,
         ERROR
     cdef cppclass Simulator:
-        Simulator(Tasks& tasks, Devices& devices, Mapper& mapper)
+        Simulator(Tasks& tasks, Data& data, Devices& devices, Topology& topology, Mapper& mapper)
         void initialize(unsigned int seed, bool create_data_tasks)
         ExecutionState run()
         timecount_t get_current_time()

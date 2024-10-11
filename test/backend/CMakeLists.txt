@@ -7,7 +7,8 @@ include(${3RD_PARTY_DIR}/doctest/doctest.cmake)
 list(APPEND SIMULATOR_UNITTESTS
   test_queue
   test_tasks
-  test_noise
+  test_task_noise
+  test_comm_noise
 )
 
 foreach(unittest IN LISTS SIMULATOR_UNITTESTS)

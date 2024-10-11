@@ -2,6 +2,7 @@ from task4feedback.fastsim.simulator import (
     PyTasks,
     PyData,
     PyDevices,
+    PyTopology,
     PySimulator,
     PyAction,
     PyExecutionState,
@@ -155,7 +156,10 @@ def build_c_data(data):
 
     for data_name, data in data.items():
         id = data_to_ids[data_name]
-        d.create_data(id, str(data_name), 1e8)
+        name = str(data_name)
+        size = data.size
+        location = 0
+        d.create_block(id, size, location, name)
 
     return d
 
@@ -206,6 +210,17 @@ def build_devices():
     return d
 
 
+def build_topology(devices):
+    t = PyTopology(devices.size())
+
+    for i in range(devices.size()):
+        for j in range(devices.size()):
+            t.set_bandwidth(i, j, 100)
+            t.set_max_connections(i, j, 1)
+            t.set_latency(i, j, 1)
+    return t
+
+
 def run_simulator(simulator):
     flag = 1
     while flag == 1:
@@ -228,10 +243,12 @@ def run_simulator(simulator):
     print("Exit Flag", flag)
 
 
+pydata = build_c_data(data)
 pytasks = build_c_graph(tasks)
-pyydevices = build_devices()
+pydevices = build_devices()
+pytopology = build_topology(pydevices)
 pymapper = PyStaticMapper()
-simulator = PySimulator(pytasks, pyydevices, pymapper)
+simulator = PySimulator(pytasks, pydata, pydevices, pytopology, pymapper)
 
 start_t = time.perf_counter()
 simulator.initialize(0, True)
