@@ -198,7 +198,8 @@ public:
     }
   }
 
-  template <TaskState State> Resources get_resources(devid_t id) const {
+  template <TaskState State>
+  [[nodiscard]] Resources get_resources(devid_t id) const {
     auto &resources = get_resources<State>();
     return {resources.get_vcu(id), resources.get_mem(id)};
   }

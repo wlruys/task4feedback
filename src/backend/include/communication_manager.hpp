@@ -1,5 +1,4 @@
 #pragma once
-
 #include "device_manager.hpp"
 #include "devices.hpp"
 #include "macros.hpp"
@@ -350,7 +349,7 @@ class CommunicationManager {
   Topology &topology;
   Devices &devices;
 
-  std::size_t get_device_type_idx(devid_t device_id) const {
+  [[nodiscard]] std::size_t get_device_type_idx(devid_t device_id) const {
     return static_cast<std::size_t>(devices.get_type(device_id));
   }
 
@@ -439,10 +438,10 @@ public:
     return size / get_bandwidth(src, dst);
   }
 
-  SourceRequest get_best_source(devid_t dst,
-                                DeviceIDList &possible_sources) const {
+  SourceRequest
+  get_best_available_source(devid_t dst, DeviceIDList &possible_sources) const {
     // Return the source with the highest bandwidth
-    // Device and connection must be available
+    // If no source is available, return found=false
 
     bool found = false;
     devid_t best_source = 0;

@@ -5,13 +5,18 @@
 
 // TaskStateInfo
 
-TaskStateInfo::TaskStateInfo(std::size_t n) {
+TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
+  auto n = tasks.size();
+  n_compute_tasks = tasks.compute_size();
+  n_data_tasks = tasks.data_size();
   state.resize(n, TaskState::SPAWNED);
   counts.resize(n, DepCount());
   mapping.resize(n, 0);
   mapping_priority.resize(n, 0);
   reserving_priority.resize(n, 0);
   launching_priority.resize(n, 0);
+  existed.resize(n, false);
+  sources.resize(n, 0);
 }
 
 TaskStatus TaskStateInfo::get_status(taskid_t id) const {
@@ -148,8 +153,8 @@ void TaskManager::initialize_state() {
 
   std::cout << "Initializing state" << std::endl;
   std::cout << "Tasks size: " << tasks.size() << std::endl;
-  state = TaskStateInfo(tasks.size());
-  records = TaskRecords(tasks.size());
+  state = TaskStateInfo(tasks);
+  records = TaskRecords(tasks);
 
   const auto &compute_tasks = const_tasks.get_compute_tasks();
   for (const auto &task : compute_tasks) {

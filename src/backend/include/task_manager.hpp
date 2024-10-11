@@ -13,6 +13,9 @@ protected:
   std::vector<TaskState> state;
   std::vector<DepCount> counts;
   std::vector<bool> existed;
+  std::vector<devid_t> sources;
+  std::size_t n_compute_tasks;
+  std::size_t n_data_tasks;
 
   void set_state(taskid_t id, TaskState _state) { state[id] = _state; }
   void set_unmapped(taskid_t id, depcount_t count);
@@ -24,6 +27,9 @@ protected:
   bool decrement_incomplete(taskid_t id);
 
   void set_data_task_existed(taskid_t id) { existed[id] = true; }
+  void set_data_task_source(taskid_t id, devid_t source) {
+    sources[id] = source;
+  }
 
 public:
   // Store the task state
@@ -37,7 +43,7 @@ public:
   std::vector<TaskIDList> eviction_dependents;
 
   TaskStateInfo() = default;
-  TaskStateInfo(std::size_t n_tasks);
+  TaskStateInfo(const Tasks &tasks);
 
   [[nodiscard]] TaskState get_state(taskid_t id) const { return state[id]; }
 
@@ -124,8 +130,8 @@ public:
   std::vector<timecount_t> state_times;
 
   TaskRecords() = default;
-  TaskRecords(std::size_t n_tasks) {
-    state_times.resize(n_tasks * n_tracked_states, 0);
+  TaskRecords(const Tasks &tasks) {
+    state_times.resize(tasks.size() * n_tracked_states, 0);
   }
 
   void record_mapped(taskid_t id, timecount_t time);

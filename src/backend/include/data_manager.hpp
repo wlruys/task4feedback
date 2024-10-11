@@ -1,5 +1,6 @@
 #pragma once
 
+#include "communication_manager.hpp"
 #include "device_manager.hpp"
 #include "devices.hpp"
 #include "resources.hpp"
@@ -147,6 +148,62 @@ public:
 
   BlockLocation &operator[](dataid_t data_id) {
     return block_locations[data_id];
+  }
+};
+
+struct MovementPair {
+  dataid_t data_id = 0;
+  devid_t destination = 0;
+
+  MovementPair() = default;
+
+  MovementPair(dataid_t data_id, devid_t destination)
+      : data_id(data_id), destination(destination) {}
+
+  bool operator==(const MovementPair &other) const {
+    return data_id == other.data_id && destination == other.destination;
+  }
+
+  // Hash function for MovementPair
+  struct Hash {
+    std::size_t operator()(const MovementPair &pair) const {
+      // NOTE(wlr): I have no idea what the collision rate of this is
+      //            Keep this in mind if something starts failing
+      return std::hash<dataid_t>()(pair.data_id) ^
+             std::hash<devid_t>()(pair.destination);
+    }
+  };
+
+  bool operator<(const MovementPair &other) const {
+    return data_id < other.data_id ||
+           (data_id == other.data_id && destination < other.destination);
+  }
+};
+
+class MovementManager {
+protected:
+  std::unordered_map<MovementPair, timecount_t, MovementPair::Hash>
+      movement_times;
+
+public:
+  MovementManager() = default;
+
+  bool is_moving(dataid_t data_id, devid_t destination) const {
+    return movement_times.find({data_id, destination}) != movement_times.end();
+  }
+
+  [[nodiscard]] timecount_t get_time(dataid_t data_id,
+                                     devid_t destination) const {
+    auto it = movement_times.find({data_id, destination});
+    return it == movement_times.end() ? 0 : it->second;
+  }
+
+  void set_completion(dataid_t data_id, devid_t destination, timecount_t time) {
+    movement_times[{data_id, destination}] = time;
+  }
+
+  void remove(dataid_t data_id, devid_t destination) {
+    movement_times.erase({data_id, destination});
   }
 };
 
@@ -319,21 +376,23 @@ class DataManager {
 protected:
   Data &data;
   DeviceManager &device_manager;
+  CommunicationManager &communication_manager;
   LocationManager mapped_locations;
   LocationManager reserved_locations;
   LocationManager launched_locations;
+  MovementManager movement_manager;
   DataCounts counts;
 
-  static bool check_valid(DataIDList &list, LocationManager &locations,
-                          devid_t device_id) {
+  static bool check_valid(const DataIDList &list,
+                          const LocationManager &locations, devid_t device_id) {
     return std::ranges::all_of(list, [&](auto data_id) {
       return !locations.is_invalid(data_id, device_id);
     });
   }
 
-  static void read_update(dataid_t data_id, devid_t device_id,
+  static bool read_update(dataid_t data_id, devid_t device_id,
                           LocationManager &locations) {
-    locations[data_id].validate(device_id);
+    return locations[data_id].validate(device_id);
   }
 
   static auto write_update(dataid_t data_id, devid_t device_id,
@@ -342,56 +401,11 @@ protected:
     return updated_ids;
   }
 
-  void read_update_mapped(DataIDList &list, devid_t device_id) {
-    for (auto data_id : list) {
-      read_update(data_id, device_id, mapped_locations);
-    }
-  }
-
-  void write_update_mapped(DataIDList &list, devid_t device_id) {
-    for (auto data_id : list) {
-      write_update(data_id, device_id, mapped_locations);
-    }
-  }
-
-  void read_update_reserved(DataIDList &list, devid_t device_id) {
-    for (auto data_id : list) {
-      read_update(data_id, device_id, reserved_locations);
-    }
-  }
-
-  void write_update_reserved(DataIDList &list, devid_t device_id) {
-    for (auto data_id : list) {
-      write_update(data_id, device_id, reserved_locations);
-    }
-  }
-
-  void read_update_launched(DataIDList &list, devid_t device_id) {
-    for (auto data_id : list) {
-      read_update(data_id, device_id, launched_locations);
-    }
-  }
-
-  void remove_memory(DeviceIDList &device_list, devid_t device_id) {
-    for (auto device : device_list) {
-      auto size = data.get_size(device);
-      device_manager.remove_mem<TaskState::MAPPED>(device_id, size);
-      device_manager.remove_mem<TaskState::RESERVED>(device_id, size);
-      device_manager.remove_mem<TaskState::LAUNCHED>(device_id, size);
-    }
-  }
-
-  void write_update_launched(DataIDList &list, devid_t device_id) {
-    for (auto data_id : list) {
-      auto updated_devices =
-          write_update(data_id, device_id, launched_locations);
-      remove_memory(updated_devices, device_id);
-    }
-  }
-
 public:
-  DataManager(Data &data_, DeviceManager &device_manager_)
+  DataManager(Data &data_, DeviceManager &device_manager_,
+              CommunicationManager &communication_manager_)
       : data(data_), device_manager(device_manager_),
+        communication_manager(communication_manager_),
         mapped_locations(data.size(), device_manager_.size()),
         reserved_locations(data.size(), device_manager_.size()),
         launched_locations(data.size(), device_manager_.size()),
@@ -426,20 +440,21 @@ public:
 
   [[nodiscard]] const DataCounts &get_counts() const { return counts; }
 
-  bool check_valid_mapped(DataIDList &list, devid_t device_id) {
+  bool check_valid_mapped(const DataIDList &list, devid_t device_id) const {
     return check_valid(list, mapped_locations, device_id);
   }
 
-  bool check_valid_reserved(DataIDList &list, devid_t device_id) {
+  bool check_valid_reserved(const DataIDList &list, devid_t device_id) const {
     return check_valid(list, reserved_locations, device_id);
   }
 
-  bool check_valid_launched(DataIDList &list, devid_t device_id) {
+  bool check_valid_launched(const DataIDList &list, devid_t device_id) const {
     return check_valid(list, launched_locations, device_id);
   }
 
-  mem_t local_size(DataIDList &list, LocationManager &locations,
-                   devid_t device_id) {
+  [[nodiscard]] mem_t local_size(const DataIDList &list,
+                                 const LocationManager &locations,
+                                 devid_t device_id) const {
     mem_t local_size = 0;
     for (auto data_id : list) {
       if (locations.is_valid(data_id, device_id)) {
@@ -449,16 +464,42 @@ public:
     return local_size;
   }
 
-  mem_t local_size_mapped(DataIDList &list, devid_t device_id) {
+  mem_t local_size_mapped(const DataIDList &list, devid_t device_id) const {
     return local_size(list, mapped_locations, device_id);
   }
 
-  mem_t local_size_reserved(DataIDList &list, devid_t device_id) {
+  mem_t local_size_reserved(const DataIDList &list, devid_t device_id) const {
     return local_size(list, reserved_locations, device_id);
   }
 
-  mem_t local_size_launched(DataIDList &list, devid_t device_id) {
+  mem_t local_size_launched(const DataIDList &list, devid_t device_id) const {
     return local_size(list, launched_locations, device_id);
+  }
+
+  [[nodiscard]] mem_t non_local_size(const DataIDList &list,
+                                     const LocationManager &locations,
+                                     devid_t device_id) const {
+    mem_t non_local_size = 0;
+    for (auto data_id : list) {
+      if (locations.is_invalid(data_id, device_id)) {
+        non_local_size += data.get_size(data_id);
+      }
+    }
+    return non_local_size;
+  }
+
+  mem_t non_local_size_mapped(const DataIDList &list, devid_t device_id) const {
+    return non_local_size(list, mapped_locations, device_id);
+  }
+
+  mem_t non_local_size_reserved(const DataIDList &list,
+                                devid_t device_id) const {
+    return non_local_size(list, reserved_locations, device_id);
+  }
+
+  mem_t non_local_size_launched(const DataIDList &list,
+                                devid_t device_id) const {
+    return non_local_size(list, launched_locations, device_id);
   }
 
   mem_t shared_size(DataIDList &list1, DataIDList &list2) {
@@ -469,5 +510,119 @@ public:
       }
     }
     return shared_size;
+  }
+
+  void read_update_mapped(const DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      read_update(data_id, device_id, mapped_locations);
+    }
+    // Memory change is handled by task request in mapper
+  }
+
+  void write_update_mapped(const DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      write_update(data_id, device_id, mapped_locations);
+    }
+    // Memory change is handled by task complete
+  }
+
+  void read_update_reserved(const DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      read_update(data_id, device_id, reserved_locations);
+    }
+    // Memory change is handeled by task request in reserver
+  }
+
+  void write_update_reserved(const DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      write_update(data_id, device_id, reserved_locations);
+    }
+    // Memory change is handled by task complete
+  }
+
+  void add_memory(dataid_t data_id, devid_t device_id) {
+    device_manager.add_mem<TaskState::LAUNCHED>(device_id,
+                                                data.get_size(data_id));
+  }
+
+  void read_update_launched(const DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      bool changed = read_update(data_id, device_id, launched_locations);
+      if (changed) {
+        add_memory(data_id, device_id);
+      }
+    }
+  }
+
+  SourceRequest request_source(dataid_t data_id, devid_t destination) {
+    auto valid_locations = launched_locations.get_valid_locations(data_id);
+    SourceRequest req = communication_manager.get_best_available_source(
+        destination, valid_locations);
+
+    if (!req.found) {
+      return req;
+    }
+
+    communication_manager.increase_active_links(req.source, destination);
+
+    return req;
+  }
+
+  timecount_t start_move(dataid_t data_id, devid_t source,
+                         devid_t destination) {
+    assert(launched_locations.is_valid(data_id, source));
+
+    bool is_moving = movement_manager.is_moving(data_id, destination);
+    if (is_moving) {
+      return movement_manager.get_time(data_id, destination);
+    }
+
+    if (launched_locations.is_valid(data_id, destination)) {
+      return 0;
+    }
+
+    add_memory(data_id, destination);
+
+    timecount_t completion_time = communication_manager.ideal_time_to_transfer(
+        data.get_size(data_id), source, destination);
+
+    movement_manager.set_completion(data_id, destination, completion_time);
+
+    return completion_time;
+  }
+
+  void complete_move(dataid_t data_id, devid_t source, devid_t destination,
+                     bool existed) {
+    if (!existed) {
+      // NOTE(wlr): I'm not 100% sure about the source check
+      // Could something that starts at the same time as the move completes be a
+      // problem?
+      assert(launched_locations.is_valid(data_id, source));
+      assert(launched_locations.is_valid(data_id, destination));
+      return;
+    }
+
+    assert(movement_manager.is_moving(data_id, destination));
+    launched_locations.set_valid(data_id, destination);
+    movement_manager.remove(data_id, destination);
+
+    communication_manager.decrease_active_links(source, destination);
+  }
+
+  void remove_memory(const DeviceIDList &device_list, devid_t device_id) {
+    for (auto device : device_list) {
+      auto size = data.get_size(device);
+      device_manager.remove_mem<TaskState::MAPPED>(device_id, size);
+      device_manager.remove_mem<TaskState::RESERVED>(device_id, size);
+      device_manager.remove_mem<TaskState::LAUNCHED>(device_id, size);
+    }
+  }
+
+  void write_update_launched(const DataIDList &list, devid_t device_id) {
+    for (auto data_id : list) {
+      auto updated_devices =
+          write_update(data_id, device_id, launched_locations);
+      remove_memory(updated_devices, device_id);
+    }
   }
 };

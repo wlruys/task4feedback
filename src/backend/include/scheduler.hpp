@@ -202,8 +202,8 @@ protected:
   timecount_t global_time = 0;
   TaskManager task_manager;
   DeviceManager device_manager;
-  DataManager data_manager;
   CommunicationManager communication_manager;
+  DataManager data_manager;
 
   [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id,
                                                       devid_t device_id) const;
@@ -235,9 +235,9 @@ public:
   SchedulerState(Tasks &tasks, Data &data, Devices &devices, Topology &topology)
       : task_manager(TaskManager(tasks)),
         device_manager(DeviceManager(devices)),
-        data_manager(data, device_manager),
-        communication_manager(topology, devices), counts(devices.size()),
-        costs(tasks.size(), devices.size()) {}
+        communication_manager(topology, devices),
+        data_manager(data, device_manager, communication_manager),
+        counts(devices.size()), costs(tasks.size(), devices.size()) {}
 
   void update_time(timecount_t time) {
     global_time = std::max(global_time, time);

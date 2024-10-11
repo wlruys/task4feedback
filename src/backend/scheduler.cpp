@@ -28,8 +28,15 @@ const Resources &SchedulerState::get_task_resources(taskid_t task_id) const {
 
 ResourceRequest SchedulerState::request_map_resources(taskid_t task_id,
                                                       devid_t device_id) const {
+
   const Resources &task_resources = get_task_resources(task_id, device_id);
-  Resources requested = task_resources;
+  const auto &task = task_manager.get_tasks().get_compute_task(task_id);
+  mem_t non_local_mem =
+      data_manager.non_local_size_mapped(task.get_read(), device_id);
+  non_local_mem += data_manager.non_local_size(task.get_write(), device_id);
+
+  Resources requested = {task_resources.vcu,
+                         task_resources.mem + non_local_mem};
   Resources missing;
   return {requested, missing};
 }
@@ -45,8 +52,15 @@ bool SchedulerState::is_compute_task(taskid_t task_id) const {
 ResourceRequest
 SchedulerState::request_reserve_resources(taskid_t task_id,
                                           devid_t device_id) const {
+  const auto &task = task_manager.get_tasks().get_compute_task(task_id);
+
   const Resources &task_resources = get_task_resources(task_id, device_id);
-  Resources requested = task_resources;
+  mem_t non_local_mem =
+      data_manager.non_local_size_reserved(task.get_read(), device_id);
+  non_local_mem +=
+      data_manager.non_local_size_reserved(task.get_write(), device_id);
+  Resources requested = {task_resources.vcu,
+                         task_resources.mem + non_local_mem};
   auto missing_mem = device_manager.overflow_mem<TaskState::RESERVED>(
       device_id, requested.mem);
   return {requested, Resources(0, missing_mem)};
@@ -55,8 +69,13 @@ SchedulerState::request_reserve_resources(taskid_t task_id,
 ResourceRequest
 SchedulerState::request_launch_resources(taskid_t task_id,
                                          devid_t device_id) const {
+  const auto &task = task_manager.get_tasks().get_compute_task(task_id);
   const Resources &task_resources = get_task_resources(task_id, device_id);
-  Resources requested = task_resources;
+  mem_t non_local_mem =
+      data_manager.non_local_size_reserved(task.get_read(), device_id);
+  assert(non_local_mem == 0);
+  Resources requested = {task_resources.vcu,
+                         task_resources.mem + non_local_mem};
   auto missing_vcu = device_manager.overflow_vcu<TaskState::LAUNCHED>(
       device_id, requested.vcu);
   return {requested, Resources(missing_vcu, 0)};
@@ -377,6 +396,13 @@ const TaskIDList &Scheduler::map_task(Action &action) {
   auto [requested, missing] = s.request_map_resources(task_id, chosen_device);
   s.map_resources(task_id, chosen_device, requested);
 
+  // Update data locations
+  const ComputeTask &task =
+      s.task_manager.get_tasks().get_compute_task(task_id);
+  s.data_manager.read_update_mapped(task.get_read(), chosen_device);
+  s.data_manager.read_update_mapped(task.get_write(), chosen_device);
+  s.data_manager.write_update_mapped(task.get_write(), chosen_device);
+
   // Notify dependents and enqueue newly mappable tasks
   const auto &newly_mappable_tasks = s.notify_mapped(task_id);
   success_count += 1;
@@ -503,6 +529,13 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
   // Update reserved resources
   s.reserve_resources(task_id, device_id, requested);
 
+  // Update data locations
+  const ComputeTask &task =
+      s.task_manager.get_tasks().get_compute_task(task_id);
+  s.data_manager.read_update_reserved(task.get_read(), device_id);
+  s.data_manager.read_update_reserved(task.get_write(), device_id);
+  s.data_manager.write_update_reserved(task.get_write(), device_id);
+
   const auto &newly_reservable_tasks = s.notify_reserved(task_id);
 
   success_count += 1;
@@ -588,6 +621,16 @@ bool Scheduler::launch_task(taskid_t task_id, devid_t device_id) {
   assert(s.get_mapping(task_id) == device_id);
   assert(s.is_compute_task(task_id));
 
+  // Update data locations for WRITE data (create them here)
+  const auto &task = s.task_manager.get_tasks().get_compute_task(task_id);
+  s.data_manager.read_update_launched(task.get_write(), device_id);
+  s.data_manager.write_update_launched(task.get_write(), device_id);
+
+  // All READ data should already be here (prefetched by data tasks)
+  s.data_manager.check_valid_launched(task.get_read(), device_id);
+
+  // This should be equivalent to get_task_resources (non_local_mem = 0)
+  // Calling this with an assert as an extra sanity check
   const auto [requested, missing] =
       s.request_launch_resources(task_id, device_id);
 
@@ -612,17 +655,29 @@ bool Scheduler::launch_task(taskid_t task_id, devid_t device_id) {
   return true;
 }
 
-bool Scheduler::launch_data_task(taskid_t task_id, devid_t device_id) {
+bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id) {
   auto &s = this->state;
   // spdlog::debug("Attempting to launch data task {} at time {}",
   //               s.get_task_name(task_id), s.global_time);
 
   assert(s.is_launchable(task_id));
-  assert(s.get_mapping(task_id) == device_id);
+  assert(s.get_mapping(task_id) == destination_id);
 
   // spdlog::debug("Launching data task {} at time {}",
   // s.get_task_name(task_id),
   //               s.global_time);
+
+  const auto &task = s.task_manager.get_tasks().get_data_task(task_id);
+  const dataid_t data_id = task.get_data_id();
+
+  auto [found, source_id] =
+      s.data_manager.request_source(data_id, destination_id);
+
+  if (!found) {
+    return false;
+  }
+
+  s.data_manager.start_move(data_id, source_id, destination_id);
 
   // Record launching time
   s.notify_launched(task_id);
