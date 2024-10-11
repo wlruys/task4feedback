@@ -559,11 +559,12 @@ public:
 
   SourceRequest request_source(dataid_t data_id, devid_t destination) {
     auto valid_locations = launched_locations.get_valid_locations(data_id);
-    std::cout << "Valid locations: " << valid_locations.size() << std::endl;
-    for (auto loc : valid_locations) {
-      std::cout << loc << " ";
+    assert(!valid_locations.empty());
+
+    if (launched_locations.is_valid(data_id, destination)) {
+      return {true, destination};
     }
-    std::cout << std::endl;
+
     SourceRequest req = communication_manager.get_best_available_source(
         destination, valid_locations);
 
@@ -571,7 +572,7 @@ public:
       return req;
     }
 
-    communication_manager.increase_active_links(req.source, destination);
+    communication_manager.reserve_connection(req.source, destination);
 
     return req;
   }
@@ -614,7 +615,7 @@ public:
     launched_locations.set_valid(data_id, destination);
     movement_manager.remove(data_id, destination);
 
-    communication_manager.decrease_active_links(source, destination);
+    communication_manager.release_connection(source, destination);
   }
 
   void remove_memory(const DeviceIDList &device_list, devid_t device_id) {

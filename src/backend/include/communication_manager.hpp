@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdint>
 #include <fstream>
+#include <iostream>
 #include <random>
 #include <sys/types.h>
 #include <unordered_map>
@@ -380,12 +381,16 @@ public:
     increase_incoming(dst);
     increase_outgoing(src);
     increase_active_links(src, dst);
+    std::cout << "+Active links: " << static_cast<int>(get_active(src, dst))
+              << std::endl;
   }
 
   void release_connection(devid_t src, devid_t dst) {
     decrease_incoming(dst);
     decrease_outgoing(src);
     decrease_active_links(src, dst);
+    std::cout << "-Active links: " << static_cast<int>(get_active(src, dst))
+              << std::endl;
   }
 
   [[nodiscard]] copy_t get_active(devid_t src, devid_t dst) const {
@@ -417,6 +422,18 @@ public:
   }
 
   [[nodiscard]] bool check_connection(devid_t src, devid_t dst) const {
+
+    std::cout << "Checking connection between " << src << " and " << dst
+              << std::endl;
+    std::cout << "Device available: " << is_device_available(src) << " "
+              << is_device_available(dst) << std::endl;
+    std::cout << "Link available: " << is_link_available(src, dst) << std::endl;
+    std::cout << "Active links: " << static_cast<int>(get_active(src, dst))
+              << std::endl;
+    std::cout << "Max links: "
+              << static_cast<int>(topology.get_max_connections(src, dst))
+              << std::endl;
+
     return is_device_available(src) && is_device_available(dst) &&
            is_link_available(src, dst);
   }
@@ -450,7 +467,7 @@ public:
     for (auto src : possible_sources) {
       if (check_connection(src, dst)) {
         auto bandwidth = get_available_bandwidth(src, dst);
-        if (bandwidth > best_bandwidth) {
+        if (bandwidth >= best_bandwidth) {
           best_bandwidth = bandwidth;
           best_source = src;
           found = true;
