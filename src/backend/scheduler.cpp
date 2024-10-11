@@ -62,8 +62,10 @@ SchedulerState::request_reserve_resources(taskid_t task_id,
       data_manager.non_local_size_reserved(task.get_write(), device_id);
   Resources requested = {task_resources.vcu,
                          task_resources.mem + non_local_mem};
+  std::cout << "Requested: " << requested << std::endl;
   auto missing_mem = device_manager.overflow_mem<TaskState::RESERVED>(
       device_id, requested.mem);
+  std::cout << "Missing mem: " << missing_mem << std::endl;
   return {requested, Resources(0, missing_mem)};
 }
 
@@ -663,6 +665,9 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id) {
   // spdlog::debug("Attempting to launch data task {} at time {}",
   //               s.get_task_name(task_id), s.global_time);
 
+  std::cout << "Attempting to launch data task " << s.get_task_name(task_id)
+            << " at time " << s.global_time << std::endl;
+
   assert(s.is_launchable(task_id));
   assert(s.get_mapping(task_id) == destination_id);
 
@@ -675,6 +680,10 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id) {
 
   auto [found, source_id] =
       s.data_manager.request_source(data_id, destination_id);
+  std::cout << "Data ID: " << data_id << std::endl;
+  std::cout << "Found: " << found << std::endl;
+  std::cout << "Source ID: " << source_id << std::endl;
+  std::cout << "Destination ID: " << destination_id << std::endl;
 
   if (!found) {
     return false;
@@ -824,6 +833,9 @@ void Scheduler::complete_task(Event &complete_event,
 
   // spdlog::debug("Completing task {} at time {}", s.get_task_name(task_id),
   //               s.global_time);
+
+  std::cout << "Completing task " << s.get_task_name(task_id) << " at time "
+            << s.global_time << std::endl;
 
   if (s.is_compute_task(task_id)) {
     complete_compute_task(task_id, device_id);

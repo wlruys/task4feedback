@@ -247,6 +247,9 @@ public:
 
   void initialize(bool create_data_tasks = false) {
     task_manager.initialize(create_data_tasks);
+    device_manager.initialize();
+    communication_manager.initialize();
+    data_manager.initialize();
   }
 
   [[nodiscard]] bool is_complete() const {

@@ -415,6 +415,8 @@ public:
     for (dataid_t i = 0; i < data.size(); i++) {
       auto initial_location = data.get_location(i);
       mapped_locations.set_valid(i, initial_location);
+      reserved_locations.set_valid(i, initial_location);
+      launched_locations.set_valid(i, initial_location);
       device_manager.add_mem<TaskState::MAPPED>(initial_location,
                                                 data.get_size(i));
       device_manager.add_mem<TaskState::RESERVED>(initial_location,
@@ -556,6 +558,11 @@ public:
 
   SourceRequest request_source(dataid_t data_id, devid_t destination) {
     auto valid_locations = launched_locations.get_valid_locations(data_id);
+    std::cout << "Valid locations: " << valid_locations.size() << std::endl;
+    for (auto loc : valid_locations) {
+      std::cout << loc << " ";
+    }
+    std::cout << std::endl;
     SourceRequest req = communication_manager.get_best_available_source(
         destination, valid_locations);
 

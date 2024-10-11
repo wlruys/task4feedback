@@ -360,6 +360,7 @@ public:
     outgoing.resize(devices.size(), 0);
     active_links.resize(devices.size() * devices.size(), 0);
   }
+  void initialize() {}
 
   void increase_incoming(devid_t device_id) { incoming[device_id] += 1; }
   void decrease_incoming(devid_t device_id) { incoming[device_id] -= 1; }

@@ -37,9 +37,6 @@ bool TaskStateInfo::is_mappable(taskid_t id) const {
 }
 
 bool TaskStateInfo::is_reservable(taskid_t id) const {
-  std::cout << "Checking if task " << id << " is reservable" << std::endl;
-  std::cout << "Unreserved: " << counts[id].unreserved << std::endl;
-  std::cout << "State: " << this->get_state(id) << std::endl;
   return counts[id].unreserved == 0 && this->get_state(id) == TaskState::MAPPED;
 }
 

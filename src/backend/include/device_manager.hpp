@@ -168,6 +168,8 @@ public:
     resize(n_devices);
   };
 
+  void initialize() {}
+
   [[nodiscard]] std::size_t size() const { return devices.size(); }
 
   [[nodiscard]] const Devices &get_devices() const { return devices; }
