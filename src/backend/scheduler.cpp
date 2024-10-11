@@ -676,8 +676,12 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id) {
   if (!found) {
     return false;
   }
+  s.task_manager.set_source(task_id, source_id);
+  auto duration = s.data_manager.start_move(data_id, source_id, destination_id);
 
-  s.data_manager.start_move(data_id, source_id, destination_id);
+  if (duration > 0) {
+    s.task_manager.set_existed(task_id);
+  }
 
   // Record launching time
   s.notify_launched(task_id);
@@ -797,9 +801,13 @@ void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
   //               newly_launchable_data_tasks.size());
 }
 
-void Scheduler::complete_data_task(taskid_t task_id, devid_t device_id) {
+void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
   auto &s = this->state;
-  s.counts.count_data_completed(device_id);
+  s.counts.count_data_completed(destination_id);
+
+  auto source_id = s.task_manager.get_source(task_id);
+  auto existed = s.task_manager.get_existed(task_id);
+  s.data_manager.complete_move(task_id, source_id, destination_id, existed);
 }
 
 void Scheduler::complete_task(Event &complete_event,

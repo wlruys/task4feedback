@@ -26,9 +26,11 @@ protected:
   bool decrement_unreserved(taskid_t id);
   bool decrement_incomplete(taskid_t id);
 
-  void set_data_task_existed(taskid_t id) { existed[id] = true; }
+  void set_data_task_existed(taskid_t id) {
+    existed[id - n_compute_tasks] = true;
+  }
   void set_data_task_source(taskid_t id, devid_t source) {
-    sources[id] = source;
+    sources[id - n_compute_tasks] = source;
   }
 
 public:
@@ -105,10 +107,19 @@ public:
     return launching_priority;
   }
 
-  [[nodiscard]] bool data_task_existed(taskid_t offset) const {
+  [[nodiscard]] bool get_data_task_existed(taskid_t id) const {
+    const auto offset = id - n_compute_tasks;
     assert(0 <= offset && offset < existed.size());
     return existed[offset];
   }
+
+  [[nodiscard]] devid_t get_data_task_source(taskid_t id) const {
+    const auto offset = id - n_compute_tasks;
+    assert(0 <= offset && offset < sources.size());
+    return sources[offset];
+  }
+
+  [[nodiscard]] std::size_t size() const { return state.size(); }
 
   friend class TaskManager;
 };
@@ -181,6 +192,15 @@ public:
   void set_state(taskid_t id, TaskState _state) { state.set_state(id, _state); }
 
   void set_mapping(taskid_t id, devid_t devid);
+  void set_source(taskid_t id, devid_t source) {
+    state.set_data_task_source(id, source);
+  }
+  void set_existed(taskid_t id) { state.set_data_task_existed(id); }
+
+  devid_t get_source(taskid_t id) { return state.get_data_task_source(id); }
+
+  bool get_existed(taskid_t id) { return state.get_data_task_existed(id); }
+
   const TaskIDList &notify_mapped(taskid_t id, timecount_t time);
   const TaskIDList &notify_reserved(taskid_t id, timecount_t time);
   void notify_launched(taskid_t id, timecount_t time);
