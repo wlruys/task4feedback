@@ -35,7 +35,7 @@ from time import perf_counter as clock
 
 
 parser = argparse.ArgumentParser(prog="Cholesky")
-parser.add_argument("-t", "--time", type=int, help="time", default=34708)
+parser.add_argument("-t", "--time", type=int, help="time", default=1000)
 parser.add_argument(
     "-m",
     "--mode",
@@ -55,7 +55,7 @@ parser.add_argument(
     help="the number of episodes (-1 for inifite loop)",
     default=-1,
 )
-parser.add_argument("-b", "--block", type=int, help="bxb blocks", default=15)
+parser.add_argument("-b", "--block", type=int, help="bxb blocks", default=3)
 parser.add_argument(
     "-o",
     "--sort",
@@ -97,7 +97,7 @@ parser.add_argument(
 parser.add_argument("-g", "--gpus", type=int, help="number of gpus", default=4)
 parser.add_argument("-pb", "--p2p", type=str, help="P2P bandwidth (GB/s)", default="10")
 parser.add_argument(
-    "-dd", "--data_size", type=float, help="per-task data size (GB/s)", default="1"
+    "-dd", "--data_size", type=float, help="per-task data size (GB/s)", default="0"
 )
 parser.add_argument(
     "-d",
@@ -181,9 +181,9 @@ def test_data():
         num_gpus=args.gpus,
         data_size=sizes,
     )
-    data_config = CholeskyDataGraphConfig()
-    data_config.initial_sizes = sizes
-    data_config.data_size = args.data_size
+    data_config = NoDataGraphConfig()
+    # data_config.initial_sizes = sizes
+    # data_config.data_size = args.data_size
 
     if args.distribution == "rr":
         data_config.initial_placement = placer.rr_gpu_placement
@@ -226,7 +226,10 @@ def test_data():
         topology = TopologyManager().generate("frontera", config=topo_config)
         G = build_networkx_graph_from_infos(tasks)
         print_graph_info(G)
-        calculate_critical_path(G, args.gpus)
+        calculate_critical_path(G, 1000)
+        import sys
+
+        sys.exit()
         mapper_mode = args.mode
         if args.mode == "testing" or args.mode == "training":
             mapper_mode = "rl"

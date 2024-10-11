@@ -8,6 +8,8 @@ from graph cimport GraphManager
 from settings cimport taskid_t, dataid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t, copy_t
 from tasks cimport Tasks, Variant, TaskState, TaskStatus
 from data cimport Data 
+from noise cimport TaskNoise, ExternalTaskNoise, LognormalTaskNoise, esf_t
+
 from cython.operator cimport dereference as deref, preincrement as inc
 from libcpp.utility cimport move
 from libcpp.string cimport string
@@ -16,6 +18,9 @@ import numpy as np
 cimport numpy as np
 from libcpp.vector cimport vector
 from libcpp cimport bool
+from numba.core.ccallback import CFunc 
+from cpython cimport Py_INCREF, Py_DECREF
+
 class PyTaskState(IntEnum):
     SPAWNED = <int>TaskState.SPAWNED,
     MAPPED = <int>TaskState.MAPPED,
@@ -190,7 +195,6 @@ cdef class PyDevices:
     def __dealloc__(self):
         del self.devices
 
-
 cdef class PyData:
     cdef Data* data
 
@@ -318,6 +322,68 @@ cdef class PyTasks:
 
     def __dealloc__(self):
         del self.tasks
+
+
+cdef class PyTaskNoise:
+    cdef TaskNoise* noise
+    cdef PyTasks tasks
+
+    def __cinit__(self, PyTasks tasks, unsigned int seed):
+        self.tasks = tasks
+        self.noise = new TaskNoise(deref(tasks.tasks), seed)
+
+    def __dealloc__(self):
+        del self.noise
+
+    def get(self, taskid_t task_id, arch):
+        #cdef DeviceType carch = convert_py_device_type(arch)
+        return self.noise.get(task_id, arch)
+
+    def set(self, taskid_t task_id, arch, timecount_t noise):
+        #cdef DeviceType carch = convert_py_device_type(arch)
+        self.noise.set(task_id, arch, noise)
+
+    def generate(self):
+        self.noise.generate()
+
+    def dump_to_binary(self, str filename):
+        cname = filename.encode('utf-8')
+        self.noise.dump_to_binary(cname)
+
+    def load_from_binary(self, str filename):
+        cname = filename.encode('utf-8')
+        self.noise.load_from_binary(cname)
+ 
+cdef class PyExternalNoise(PyTaskNoise):
+    cdef object cfunc 
+
+    def __cinit__(self, PyTasks tasks, unsigned int seed):
+        self.tasks = tasks
+        self.noise = new ExternalTaskNoise(deref(tasks.tasks), seed)
+        self.cfunc = None 
+
+    def __dealloc__(self):
+        if self.cfunc is not None:
+            Py_DECREF(self._sample_func_keeper)
+        del self.noise
+
+    def set_function(self, cf):
+        cdef unsigned long long f_temp = cf.address 
+        cdef esf_t f = <esf_t> f_temp
+        self.cfunc = cf
+        Py_INCREF(self.cfunc)
+        (<ExternalTaskNoise*>self.noise).set_function(f)
+
+
+
+cdef class PyLognormalNoise(PyTaskNoise):
+
+    def __cinit__(self, PyTasks tasks, unsigned int seed):
+        self.tasks = tasks
+        self.noise = new LognormalTaskNoise(deref(tasks.tasks), seed)
+
+    def __dealloc__(self):
+        del self.noise
 
 
 cdef class PyMapper:

@@ -4,6 +4,7 @@
 #include <fstream>
 #include <random>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 class TaskNoise {
@@ -11,13 +12,33 @@ protected:
   using noise_t = double;
   Tasks &tasks;
   unsigned int seed = 0;
-  std::mt19937 gen;
+  mutable std::mt19937 gen;
   std::vector<timecount_t> task_durations;
 
   [[nodiscard]] virtual timecount_t sample_duration(taskid_t task_id,
-                                                    DeviceType arch) const = 0;
+                                                    DeviceType arch) const {
+    return 0;
+  };
+
+  static uint64_t calculate_checksum(const std::vector<timecount_t> &data) {
+    const uint64_t prime = 0x100000001B3ull; // FNV prime
+    uint64_t hash = 0xcbf29ce484222325ull;   // FNV offset basis
+
+    const char *byte_data = reinterpret_cast<const char *>(data.data());
+    size_t byte_count = data.size() * sizeof(timecount_t);
+
+    for (size_t i = 0; i < byte_count; ++i) {
+      hash ^= static_cast<uint64_t>(byte_data[i]);
+      hash *= prime;
+    }
+
+    return hash;
+  }
 
 public:
+  static constexpr uint32_t FILE_VERSION = 1;
+  static constexpr size_t BUFFER_SIZE = 8192; // 8 KB buffer, adjust as needed
+
   TaskNoise(Tasks &tasks_, unsigned int seed_ = 0)
       : tasks(tasks_), seed(seed_), gen(seed_),
         task_durations(tasks.compute_size() * num_device_types) {}
@@ -35,6 +56,16 @@ public:
   void set(std::vector<timecount_t> values_) {
     task_durations = std::move(values_);
   }
+
+  [[nodiscard]] timecount_t operator()(taskid_t task_id,
+                                       DeviceType arch) const {
+    return get(task_id, arch);
+  }
+
+  void operator()(taskid_t task_id, DeviceType arch, timecount_t value) {
+    set(task_id, arch, value);
+  }
+
   virtual void generate() {
     for (taskid_t task_id = 0; task_id < tasks.compute_size(); task_id++) {
       for (std::size_t i = 0; i < num_device_types; i++) {
@@ -43,42 +74,142 @@ public:
       }
     }
   }
-
   void dump_to_binary(const std::string &filename) const {
     std::ofstream file(filename, std::ios::binary);
-    for (const auto &duration : task_durations) {
-      file.write(reinterpret_cast<const char *>(&duration),
-                 sizeof(timecount_t));
+    if (!file) {
+      throw std::runtime_error("Unable to open file for writing: " + filename);
+    }
+
+    // Set up buffering
+    std::array<char, BUFFER_SIZE> buffer;
+    file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+
+    // Write header
+    file.write("TASK", 4);
+    file.write(reinterpret_cast<const char *>(&FILE_VERSION),
+               sizeof(FILE_VERSION));
+
+    // Write data size
+    uint64_t data_size = task_durations.size();
+    file.write(reinterpret_cast<const char *>(&data_size), sizeof(data_size));
+
+    // Write data
+    const char *data_ptr =
+        reinterpret_cast<const char *>(task_durations.data());
+    size_t remaining = task_durations.size() * sizeof(timecount_t);
+    while (remaining > 0) {
+      size_t chunk_size = std::min(remaining, BUFFER_SIZE);
+      file.write(data_ptr, static_cast<std::streamsize>(chunk_size));
+      data_ptr += chunk_size;
+      remaining -= chunk_size;
+    }
+
+    // Write checksum
+    uint64_t checksum = calculate_checksum(task_durations);
+    file.write(reinterpret_cast<const char *>(&checksum), sizeof(checksum));
+
+    if (file.fail()) {
+      throw std::runtime_error("Error writing to file: " + filename);
     }
   }
 
   void load_from_binary(const std::string &filename) {
-    std::ifstream file(filename, std::ios::binary | std::ios::ate);
-    const std::size_t size = static_cast<std::size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    task_durations.resize(size / sizeof(timecount_t));
-    file.read(reinterpret_cast<char *>(task_durations.data()),
-              static_cast<std::streamsize>(size));
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+      throw std::runtime_error("Unable to open file for reading: " + filename);
+    }
+
+    // Set up buffering
+    std::array<char, BUFFER_SIZE> buffer;
+    file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+
+    // Read and verify header
+    std::array<char, 4> header;
+    file.read(header.data(), header.size());
+    if (std::string(header.data(), header.size()) != "TASK") {
+      throw std::runtime_error("Invalid file format");
+    }
+
+    uint32_t version;
+    file.read(reinterpret_cast<char *>(&version), sizeof(version));
+    if (version != FILE_VERSION) {
+      throw std::runtime_error("Unsupported file version");
+    }
+
+    // Read data size
+    uint64_t data_size;
+    file.read(reinterpret_cast<char *>(&data_size), sizeof(data_size));
+
+    // Read data
+    task_durations.resize(data_size);
+    char *data_ptr = reinterpret_cast<char *>(task_durations.data());
+    size_t remaining = data_size * sizeof(timecount_t);
+    while (remaining > 0) {
+      size_t chunk_size = std::min(remaining, BUFFER_SIZE);
+      file.read(data_ptr, static_cast<std::streamsize>(chunk_size));
+      data_ptr += chunk_size;
+      remaining -= chunk_size;
+    }
+
+    // Read and verify checksum
+    uint64_t stored_checksum;
+    uint64_t calculated_checksum;
+    file.read(reinterpret_cast<char *>(&stored_checksum),
+              sizeof(stored_checksum));
+    calculated_checksum = calculate_checksum(task_durations);
+
+    if (stored_checksum != calculated_checksum) {
+      throw std::runtime_error("Checksum mismatch - file may be corrupted");
+    }
+
+    if (file.fail()) {
+      throw std::runtime_error("Error reading from file: " + filename);
+    }
   }
+};
+
+using esf_t = double (*)(uint64_t, uint64_t);
+
+class ExternalTaskNoise : public TaskNoise {
+protected:
+  // function pointer
+  esf_t extern_function;
+
+  [[nodiscard]] timecount_t sample_duration(taskid_t task_id,
+                                            DeviceType arch) const override {
+    return static_cast<timecount_t>(extern_function(
+        static_cast<uint64_t>(task_id), static_cast<uint64_t>(arch)));
+  }
+
+public:
+  ExternalTaskNoise(Tasks &tasks_, unsigned int seed_ = 0)
+      : TaskNoise(tasks_, seed_) {}
+
+  void set_function(esf_t f) { extern_function = f; }
 };
 
 class LognormalTaskNoise : public TaskNoise {
 
 protected:
   [[nodiscard]] double get_stddev(taskid_t task_id, DeviceType arch) const {
-    const double stddev = 0.2;
+    const double stddev = 2;
     return stddev;
   }
 
   [[nodiscard]] timecount_t sample_duration(taskid_t task_id,
                                             DeviceType arch) const override {
-    const timecount_t mean =
-        tasks.get_variant(task_id, arch).get_execution_time();
-    const noise_t stddev = get_stddev(task_id, arch);
-    const noise_t offset = exp(stddev * stddev / 2);
-    std::lognormal_distribution<noise_t> dist(0, stddev);
-    const noise_t v = dist(gen);
-    return static_cast<timecount_t>((v - offset) * static_cast<noise_t>(mean));
+    const auto mean = static_cast<double>(
+        tasks.get_variant(task_id, arch).get_execution_time());
+    const double stddev = get_stddev(task_id, arch);
+
+    const double u =
+        std::log(mean * mean / std::sqrt(mean * mean + stddev * stddev));
+    const double s = std::log(1 + (stddev * stddev) / (mean * mean));
+
+    std::lognormal_distribution<noise_t> dist(u, s);
+    const noise_t duration = dist(gen);
+    std::cout << "duration: " << duration << std::endl;
+    return static_cast<timecount_t>(duration);
   }
 
 public:
