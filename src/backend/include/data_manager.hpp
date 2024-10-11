@@ -38,7 +38,8 @@ public:
     data_names[id] = std::move(name);
   }
 
-  void add_block(dataid_t id, mem_t size, devid_t location, std::string name) {
+  void create_block(dataid_t id, mem_t size, devid_t location,
+                    std::string name) {
     set_size(id, size);
     set_location(id, location);
     set_name(id, std::move(name));

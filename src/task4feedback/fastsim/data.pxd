@@ -21,7 +21,7 @@ cdef extern from "include/data_manager.hpp":
         Data()
         Data(size_t num_blocks)
 
-        void add_block(dataid_t id, mem_t size, devid_t location, string name)
+        void create_block(dataid_t id, mem_t size, devid_t location, string name)
         void set_size(dataid_t id, mem_t size)
         void set_location(dataid_t id, devid_t location)
         void set_name(dataid_t id, string name)

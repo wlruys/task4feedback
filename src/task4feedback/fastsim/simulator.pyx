@@ -197,9 +197,9 @@ cdef class PyData:
     def __cinit__(self, num_blocks: int):
         self.data = new Data(num_blocks)
 
-    def add_block(self, dataid_t id, mem_t size, devid_t location, str pyname):
+    def create_block(self, dataid_t id, mem_t size, devid_t location, str pyname):
         cname = pyname.encode('utf-8')
-        self.data.add_block(id, size, location, cname)
+        self.data.create_block(id, size, location, cname)
 
     def set_size(self, dataid_t id, mem_t size):
         self.data.set_size(id, size)
