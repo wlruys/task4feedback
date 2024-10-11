@@ -33,7 +33,8 @@ ResourceRequest SchedulerState::request_map_resources(taskid_t task_id,
   const auto &task = task_manager.get_tasks().get_compute_task(task_id);
   mem_t non_local_mem =
       data_manager.non_local_size_mapped(task.get_read(), device_id);
-  non_local_mem += data_manager.non_local_size(task.get_write(), device_id);
+  non_local_mem +=
+      data_manager.non_local_size_mapped(task.get_write(), device_id);
 
   Resources requested = {task_resources.vcu,
                          task_resources.mem + non_local_mem};
@@ -72,7 +73,9 @@ SchedulerState::request_launch_resources(taskid_t task_id,
   const auto &task = task_manager.get_tasks().get_compute_task(task_id);
   const Resources &task_resources = get_task_resources(task_id, device_id);
   mem_t non_local_mem =
-      data_manager.non_local_size_reserved(task.get_read(), device_id);
+      data_manager.non_local_size_launched(task.get_read(), device_id);
+  non_local_mem +=
+      data_manager.non_local_size_launched(task.get_write(), device_id);
   assert(non_local_mem == 0);
   Resources requested = {task_resources.vcu,
                          task_resources.mem + non_local_mem};
