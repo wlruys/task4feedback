@@ -111,6 +111,15 @@ public:
     }
     return updated;
   }
+
+  friend std::ostream &operator<<(std::ostream &os, const BlockLocation &bl) {
+    os << "[";
+    for (devid_t i = 0; i < bl.locations.size(); i++) {
+      os << (bl.is_valid(i) ? "1" : "0");
+    }
+    os << "]";
+    return os;
+  }
 };
 
 class LocationManager {
@@ -148,6 +157,10 @@ public:
   }
 
   BlockLocation &operator[](dataid_t data_id) {
+    return block_locations[data_id];
+  }
+
+  const BlockLocation &operator[](dataid_t data_id) const {
     return block_locations[data_id];
   }
 };
@@ -398,6 +411,9 @@ protected:
 
   static auto write_update(dataid_t data_id, devid_t device_id,
                            LocationManager &locations) {
+    std::cout << "write_update" << std::endl;
+    std::cout << "Invalidating data " << data_id << " on all devices except "
+              << device_id << std::endl;
     auto updated_ids = locations[data_id].invalidate_except(device_id);
     return updated_ids;
   }
@@ -544,6 +560,9 @@ public:
   }
 
   void add_memory(dataid_t data_id, devid_t device_id) {
+
+    std::cout << "Adding memory for data " << data_id << " on device "
+              << device_id << std::endl;
     device_manager.add_mem<TaskState::LAUNCHED>(device_id,
                                                 data.get_size(data_id));
   }
@@ -618,12 +637,15 @@ public:
     communication_manager.release_connection(source, destination);
   }
 
-  void remove_memory(const DeviceIDList &device_list, devid_t device_id) {
+  void remove_memory(const DeviceIDList &device_list, dataid_t data_id) {
     for (auto device : device_list) {
-      auto size = data.get_size(device);
-      device_manager.remove_mem<TaskState::MAPPED>(device_id, size);
-      device_manager.remove_mem<TaskState::RESERVED>(device_id, size);
-      device_manager.remove_mem<TaskState::LAUNCHED>(device_id, size);
+      auto size = data.get_size(data_id);
+
+      std::cout << "Removing memory for data " << data_id << " on device "
+                << device << std::endl;
+      device_manager.remove_mem<TaskState::MAPPED>(device, size);
+      device_manager.remove_mem<TaskState::RESERVED>(device, size);
+      device_manager.remove_mem<TaskState::LAUNCHED>(device, size);
     }
   }
 

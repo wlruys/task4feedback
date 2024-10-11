@@ -9,6 +9,7 @@ list(APPEND SIMULATOR_UNITTESTS
   test_tasks
   test_task_noise
   test_comm_noise
+  test_scheduler
 )
 
 foreach(unittest IN LISTS SIMULATOR_UNITTESTS)

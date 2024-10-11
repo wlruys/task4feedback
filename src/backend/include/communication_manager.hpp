@@ -448,12 +448,16 @@ public:
 
   [[nodiscard]] mem_t time_to_transfer(mem_t size, devid_t src,
                                        devid_t dst) const {
-    return size / get_available_bandwidth(src, dst);
+    const auto bw = static_cast<double>(get_bandwidth(src, dst));
+    const auto s = static_cast<double>(size);
+    return static_cast<mem_t>(s / bw);
   }
 
   [[nodiscard]] mem_t ideal_time_to_transfer(mem_t size, devid_t src,
                                              devid_t dst) const {
-    return size / get_bandwidth(src, dst);
+    const auto bw = static_cast<double>(get_bandwidth(src, dst));
+    const auto s = static_cast<double>(size);
+    return static_cast<mem_t>(s / bw);
   }
 
   SourceRequest

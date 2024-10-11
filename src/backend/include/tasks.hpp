@@ -7,6 +7,7 @@
 #include <cassert>
 #include <iostream>
 #include <ostream>
+#include <set>
 #include <string>
 #include <tabulate/table.hpp>
 #include <tabulate/tabulate.hpp>
@@ -159,6 +160,7 @@ protected:
 
   DataIDList read;
   DataIDList write;
+  DataIDList unique;
 
   VariantList variants;
 
@@ -206,6 +208,19 @@ public:
   [[nodiscard]] const TaskIDList &get_data_dependents() const {
     return data_dependents;
   }
+
+  void find_unique_data() {
+    std::set<dataid_t> unique_set;
+    for (auto data_id : read) {
+      unique_set.insert(data_id);
+    }
+    for (auto data_id : write) {
+      unique_set.insert(data_id);
+    }
+    unique.assign(unique_set.begin(), unique_set.end());
+  }
+
+  [[nodiscard]] const DataIDList &get_unique() const { return unique; }
 };
 
 class DataTask : public Task {

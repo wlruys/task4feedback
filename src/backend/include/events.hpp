@@ -58,10 +58,19 @@ public:
   [[nodiscard]] const TaskIDList &get_tasks() { return tasks; }
 
   [[nodiscard]] bool operator<(const Event &other) const {
+
+    if (time == other.time) {
+      // larger events are processed last
+      return type < other.type;
+    }
+
     return time < other.time;
   }
 
   [[nodiscard]] bool operator>(const Event &other) const {
+    if (time == other.time) {
+      return type > other.type;
+    }
     return time > other.time;
   }
 };

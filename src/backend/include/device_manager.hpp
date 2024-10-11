@@ -206,12 +206,12 @@ public:
     return {resources.get_vcu(id), resources.get_mem(id)};
   }
 
-  template <TaskState State> mem_t get_mem(devid_t id) {
+  template <TaskState State> mem_t get_mem(devid_t id) const {
     auto &resources = get_resources<State>();
     return resources.get_mem(id);
   }
 
-  template <TaskState State> vcu_t get_vcu(devid_t id) {
+  template <TaskState State> vcu_t get_vcu(devid_t id) const {
     auto &resources = get_resources<State>();
     return resources.get_vcu(id);
   }

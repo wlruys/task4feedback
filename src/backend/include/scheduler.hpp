@@ -310,6 +310,14 @@ public:
     return device_manager;
   }
 
+  [[nodiscard]] const CommunicationManager &get_communication_manager() const {
+    return communication_manager;
+  }
+
+  [[nodiscard]] const DataManager &get_data_manager() const {
+    return data_manager;
+  }
+
   friend class Scheduler;
   friend class TransitionConstraints;
 };
@@ -460,8 +468,10 @@ public:
 
   SuccessPair reserve_task(taskid_t task_id, devid_t device_id);
   void reserve_tasks(Event &reserve_event, EventManager &event_manager);
-  bool launch_task(taskid_t task_id, devid_t device_id);
-  bool launch_data_task(taskid_t task_id, devid_t device_id);
+  bool launch_compute_task(taskid_t task_id, devid_t device_id,
+                           EventManager &event_manager);
+  bool launch_data_task(taskid_t task_id, devid_t device_id,
+                        EventManager &event_manager);
   void launch_tasks(Event &launch_event, EventManager &event_manager);
   void evict(Event &eviction_event, EventManager &event_manager);
 
@@ -640,7 +650,7 @@ public:
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     fill_device_targets(task_id, state);
     devid_t device_id = choose_random_device(device_buffer);
-    return Action(task_id, device_id);
+    return Action(task_id, 0, device_id);
   }
 };
 
@@ -654,7 +664,7 @@ public:
     fill_device_targets(task_id, state);
     devid_t device_id = device_buffer[device_index];
     device_index = (device_index + 1) % device_buffer.size();
-    return Action(task_id, device_id);
+    return Action(task_id, 0, device_id);
   }
 };
 
@@ -705,6 +715,8 @@ public:
     priority_t lp = 0;
 
     if (!mapping.empty()) {
+      std::cout << "mapping task " << task_id << " to device "
+                << mapping[task_id % mapping.size()] << std::endl;
       device_id = mapping[task_id % mapping.size()];
     }
     if (!reserving_priorities.empty()) {
@@ -719,7 +731,7 @@ public:
     assert(rp >= 0);
     assert(lp >= 0);
 
-    return Action(task_id, device_id, rp, lp);
+    return Action(task_id, 0, device_id, rp, lp);
   }
 };
 

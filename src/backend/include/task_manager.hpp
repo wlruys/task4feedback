@@ -69,7 +69,10 @@ public:
     return counts[id].incomplete;
   }
 
-  void set_mapping(taskid_t id, devid_t devid) { mapping[id] = devid; }
+  void set_mapping(taskid_t id, devid_t devid) {
+    assert(id < n_compute_tasks);
+    mapping[id] = devid;
+  }
   void set_mapping_priority(taskid_t id, priority_t p);
   void set_mapping_priority(PriorityList &ps) {
     mapping_priority = std::move(ps);
