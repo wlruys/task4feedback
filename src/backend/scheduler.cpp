@@ -817,9 +817,14 @@ void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
   auto &s = this->state;
   s.counts.count_data_completed(destination_id);
 
+  std::cout << "Completing data task " << s.get_task_name(task_id)
+            << " at time " << s.global_time << std::endl;
+
   auto source_id = s.task_manager.get_source(task_id);
   auto existed = s.task_manager.get_existed(task_id);
-  s.data_manager.complete_move(task_id, source_id, destination_id, existed);
+  auto data_id =
+      s.task_manager.get_tasks().get_data_task(task_id).get_data_id();
+  s.data_manager.complete_move(data_id, source_id, destination_id, existed);
 }
 
 void Scheduler::complete_task(Event &complete_event,

@@ -118,8 +118,9 @@ protected:
   std::vector<BlockLocation> block_locations;
 
 public:
-  LocationManager(std::size_t num_data, std::size_t num_devices)
-      : block_locations(num_data, BlockLocation(num_devices)) {}
+  LocationManager(std::size_t num_data, std::size_t num_devices) {
+    block_locations.resize(num_data, BlockLocation(num_devices));
+  }
 
   void set_valid(dataid_t data_id, devid_t device_id) {
     block_locations[data_id].set_valid(device_id);
