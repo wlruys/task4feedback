@@ -43,9 +43,9 @@ public:
 
   vcu_t add_vcu(devid_t id, vcu_t vcu_) {
     assert(id < vcu.size());
-    std::cout << "+id: " << id << std::endl;
-    std::cout << "vcu[id]: " << vcu[id] << std::endl;
-    std::cout << "vcu_: " << vcu_ << std::endl;
+    // std::cout << "+id: " << id << std::endl;
+    // std::cout << "vcu[id]: " << vcu[id] << std::endl;
+    // std::cout << "vcu_: " << vcu_ << std::endl;
     vcu[id] += vcu_;
     return vcu[id];
   }
@@ -60,9 +60,9 @@ public:
 
   vcu_t remove_vcu(devid_t id, vcu_t vcu_) {
     assert(id < vcu.size());
-    std::cout << "-id: " << id << std::endl;
-    std::cout << "vcu[id]: " << vcu[id] << std::endl;
-    std::cout << "vcu_: " << vcu_ << std::endl;
+    // std::cout << "-id: " << id << std::endl;
+    // std::cout << "vcu[id]: " << vcu[id] << std::endl;
+    // std::cout << "vcu_: " << vcu_ << std::endl;
     assert(vcu[id] >= vcu_);
     vcu[id] -= vcu_;
     return vcu[id];

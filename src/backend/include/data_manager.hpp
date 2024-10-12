@@ -686,7 +686,7 @@ public:
     for (auto data_id : list) {
       auto updated_devices =
           write_update(data_id, device_id, launched_locations);
-      remove_memory(updated_devices, device_id);
+      remove_memory(updated_devices, data_id);
     }
   }
 };

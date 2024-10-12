@@ -383,8 +383,8 @@ const TaskIDList &Scheduler::map_task(Action &action) {
   taskid_t task_id = action.task_id;
   devid_t chosen_device = action.device;
 
-  SPDLOG_TRACE("Mapping task {} to device {}", s.get_task_name(task_id),
-               s.get_device_name(chosen_device));
+  SPDLOG_DEBUG("Mapping task {} to device {}", s.get_task_name(task_id),
+               chosen_device);
 
   assert(s.is_mappable(task_id));
   assert(s.is_compute_task(task_id));
@@ -657,15 +657,26 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
 
   const auto &task = s.task_manager.get_tasks().get_compute_task(task_id);
 
+  SPDLOG_DEBUG("Launching compute task {} at time {} on device {}",
+               s.get_task_name(task_id), s.global_time, device_id);
+
+  std::cout << "Has read data: " << std::endl;
+  for (auto data_id : task.get_read()) {
+    std::cout << data_id << " ";
+  }
+  std::cout << std::endl;
+  std::cout << "Has write data: " << std::endl;
+  for (auto data_id : task.get_write()) {
+    std::cout << data_id << " ";
+  }
+  std::cout << std::endl;
+
   // Update data locations for WRITE data (create them here)
   s.data_manager.read_update_launched(task.get_write(), device_id);
   s.data_manager.write_update_launched(task.get_write(), device_id);
 
   // All READ data should already be here (prefetched by data tasks)
   s.data_manager.check_valid_launched(task.get_read(), device_id);
-
-  SPDLOG_DEBUG("Launching compute task {} at time {} on device {}",
-               s.get_task_name(task_id), s.global_time, device_id);
 
   // Update launched resources
   s.launch_resources(task_id, device_id, requested);
@@ -709,8 +720,8 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
 
   if (!duration.is_virtual) {
     SPDLOG_DEBUG("Data task {} moving from {} to {} at time {}",
-                 s.get_task_name(task_id), s.get_device_name(source_id),
-                 s.get_device_name(destination_id), s.global_time);
+                 s.get_task_name(task_id), source_id, destination_id,
+                 s.global_time);
     s.task_manager.set_existed(task_id);
   } else {
     SPDLOG_DEBUG("Data task {} is virtual at time {}", s.get_task_name(task_id),

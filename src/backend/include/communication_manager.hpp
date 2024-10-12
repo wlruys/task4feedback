@@ -368,17 +368,36 @@ public:
   }
   void initialize() {}
 
-  void increase_incoming(devid_t device_id) { incoming[device_id] += 1; }
-  void decrease_incoming(devid_t device_id) { incoming[device_id] -= 1; }
+  void increase_incoming(devid_t device_id) {
+    assert(device_id < devices.get().size());
+    incoming[device_id] += 1;
+  }
+  void decrease_incoming(devid_t device_id) {
+    assert(device_id < devices.get().size());
+    assert(incoming[device_id] >= 1);
+    incoming[device_id] -= 1;
+  }
 
-  void increase_outgoing(devid_t device_id) { outgoing[device_id] += 1; }
-  void decrease_outgoing(devid_t device_id) { outgoing[device_id] -= 1; }
+  void increase_outgoing(devid_t device_id) {
+    assert(device_id < devices.get().size());
+    outgoing[device_id] += 1;
+  }
+  void decrease_outgoing(devid_t device_id) {
+    assert(device_id < devices.get().size());
+    assert(outgoing[device_id] >= 1);
+    outgoing[device_id] -= 1;
+  }
 
   void increase_active_links(devid_t src, devid_t dst) {
+    assert(src < devices.get().size());
+    assert(dst < devices.get().size());
     active_links[src * devices.get().size() + dst] += 1;
   }
 
   void decrease_active_links(devid_t src, devid_t dst) {
+    assert(src < devices.get().size());
+    assert(dst < devices.get().size());
+    assert(active_links[src * devices.get().size() + dst] >= 1);
     active_links[src * devices.get().size() + dst] -= 1;
   }
 
