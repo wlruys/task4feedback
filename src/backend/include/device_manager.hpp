@@ -22,26 +22,57 @@ public:
 
   DeviceResources(std::size_t n) { resize(n); }
 
+  DeviceResources(const DeviceResources &other) {
+    vcu = other.vcu;
+    mem = other.mem;
+  }
+
+  DeviceResources &operator=(const DeviceResources &other) = default;
+
   void set_vcu(devid_t id, vcu_t vcu_) { vcu[id] = vcu_; }
   void set_mem(devid_t id, mem_t m) { mem[id] = m; }
 
-  [[nodiscard]] vcu_t get_vcu(devid_t id) const { return vcu[id]; }
-  [[nodiscard]] mem_t get_mem(devid_t id) const { return mem[id]; }
+  [[nodiscard]] vcu_t get_vcu(devid_t id) const {
+    assert(id < vcu.size());
+    return vcu[id];
+  }
+  [[nodiscard]] mem_t get_mem(devid_t id) const {
+    assert(id < mem.size());
+    return mem[id];
+  }
 
   vcu_t add_vcu(devid_t id, vcu_t vcu_) {
+    assert(id < vcu.size());
+    std::cout << "+id: " << id << std::endl;
+    std::cout << "vcu[id]: " << vcu[id] << std::endl;
+    std::cout << "vcu_: " << vcu_ << std::endl;
     vcu[id] += vcu_;
     return vcu[id];
   }
   mem_t add_mem(devid_t id, mem_t m) {
+    assert(id < mem.size());
+    std::cout << "+id: " << id << std::endl;
+    std::cout << "mem[id]: " << mem[id] << std::endl;
+    std::cout << "m: " << m << std::endl;
     mem[id] += m;
     return mem[id];
   }
 
   vcu_t remove_vcu(devid_t id, vcu_t vcu_) {
+    assert(id < vcu.size());
+    std::cout << "-id: " << id << std::endl;
+    std::cout << "vcu[id]: " << vcu[id] << std::endl;
+    std::cout << "vcu_: " << vcu_ << std::endl;
+    assert(vcu[id] >= vcu_);
     vcu[id] -= vcu_;
     return vcu[id];
   }
   mem_t remove_mem(devid_t id, mem_t m) {
+    assert(id < mem.size());
+    std::cout << "-id: " << id << std::endl;
+    std::cout << "mem[id]: " << mem[id] << std::endl;
+    std::cout << "m: " << m << std::endl;
+    assert(mem[id] >= m);
     mem[id] -= m;
     return mem[id];
   }
@@ -168,6 +199,10 @@ public:
     std::size_t n_devices = devices.get().size();
     resize(n_devices);
   };
+
+  DeviceManager(const DeviceManager &other) = default;
+
+  DeviceManager &operator=(const DeviceManager &other) = default;
 
   void initialize() {}
 

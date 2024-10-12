@@ -21,6 +21,8 @@ cdef extern from "include/noise.hpp":
         TaskNoise(Tasks& tasks, unsigned int seed)
         timecount_t get(taskid_t task_id, DeviceType arch)
         void set(taskid_t task_id, DeviceType arch, timecount_t noise)
+        void set(vector[timecount_t] noise)
+        void lock()
         void generate()
         void dump_to_binary(const string filename)
         void load_from_binary(const string filename)

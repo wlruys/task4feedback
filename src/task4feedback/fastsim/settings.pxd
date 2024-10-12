@@ -31,7 +31,7 @@ cdef extern from "include/devices.hpp":
         GPU
 
 cdef extern from "include/resources.hpp":
-    ctypedef uint16_t vcu_t
+    ctypedef uint64_t vcu_t
     ctypedef uint64_t mem_t
     ctypedef uint64_t timecount_t
 

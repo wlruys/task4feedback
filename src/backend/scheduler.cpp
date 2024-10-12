@@ -533,9 +533,9 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
       s.request_reserve_resources(task_id, device_id);
 
   if (missing.mem > 0) {
-    SPDLOG_DEBUG("Task {} missing {} memory at time {} on device {}",
-                 s.get_task_name(task_id), missing.mem, s.global_time,
-                 device_id);
+    SPDLOG_DEBUG("Task {} requested {} memory but missing {} memory at time {}",
+                 s.get_task_name(task_id), requested.mem, missing.mem,
+                 s.global_time);
     return {false, nullptr};
   }
 
@@ -649,8 +649,9 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
       s.request_launch_resources(task_id, device_id);
 
   if (missing.vcu > 0) {
-    SPDLOG_DEBUG("Task {} missing {} VCU at time {}", s.get_task_name(task_id),
-                 missing.vcu, s.global_time);
+    SPDLOG_DEBUG("Task {} requested {} VCU but missing {} VCU at time {}",
+                 s.get_task_name(task_id), requested.vcu, missing.vcu,
+                 s.global_time);
     return false;
   }
 

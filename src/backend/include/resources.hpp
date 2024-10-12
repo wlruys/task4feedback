@@ -8,7 +8,7 @@
 enum class ResourceType { VCUS = 0, MEM = 1, TIME = 2 };
 constexpr std::size_t num_resource_types = 3;
 
-using vcu_t = uint16_t;
+using vcu_t = uint64_t;
 using mem_t = uint64_t;
 using timecount_t = uint64_t;
 using copy_t = uint8_t;

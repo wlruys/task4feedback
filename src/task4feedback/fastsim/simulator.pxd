@@ -80,5 +80,6 @@ cdef extern from "include/simulator.hpp":
         void add_task_breakpoint(EventType event_type, taskid_t task_id)
         void add_time_breakpoint(timecount_t time)
         void set_use_python_mapper(bool use_python_mapper)
+        void set_mapper(Mapper& mapper)
 
 

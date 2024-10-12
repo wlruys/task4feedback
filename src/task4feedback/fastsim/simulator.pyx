@@ -178,7 +178,8 @@ cdef class PyDevices:
 
     def __cinit__(self, n: int):
         self.devices = new Devices(n)
-        self.n = n 
+        self.n = n
+        print("Created Devices")
 
     def size(self):
         return self.n
@@ -201,12 +202,14 @@ cdef class PyDevices:
 
     def __dealloc__(self):
         del self.devices
+        print("Deleted Devices")
 
 cdef class PyTopology:
     cdef Topology* topology
 
     def __cinit__(self, n: int):
         self.topology = new Topology(n)
+        print("Created Topology")
 
     def set_bandwidth(self, devid_t src, devid_t dst, mem_t bandwidth):
         self.topology.set_bandwidth(src, dst, bandwidth)
@@ -226,6 +229,10 @@ cdef class PyTopology:
     def get_max_connections(self, devid_t src, devid_t dst):
         return self.topology.get_max_connections(src, dst)
 
+    def __dealloc__(self):
+        del self.topology
+        print(("Deleted Topology"))
+
 
 
 
@@ -234,6 +241,7 @@ cdef class PyData:
 
     def __cinit__(self, num_blocks: int):
         self.data = new Data(num_blocks)
+        print("Created Data")
 
     def create_block(self, dataid_t id, mem_t size, devid_t location, str pyname):
         cname = pyname.encode('utf-8')
@@ -262,6 +270,7 @@ cdef class PyData:
 
     def __dealloc__(self):
         del self.data
+        print("Deleted Data")
 
 
 cdef class PyTasks:
@@ -269,6 +278,7 @@ cdef class PyTasks:
 
     def __cinit__(self, n: int):
         self.tasks = new Tasks(n)
+        print("Created Tasks")
 
     def n_compute_tasks(self):
         return deref(self.tasks).compute_size()
@@ -356,13 +366,14 @@ cdef class PyTasks:
 
     def __dealloc__(self):
         del self.tasks
+        print("Deleted Tasks")
 
 
 cdef class PyTaskNoise:
     cdef PyTasks tasks
     cdef TaskNoise* noise
 
-    def __cinit__(self, PyTasks tasks, unsigned int seed):
+    def __cinit__(self, PyTasks tasks, unsigned int seed = 0):
         self.tasks = tasks
         self.noise = new TaskNoise(deref(tasks.tasks), seed)
 
@@ -377,6 +388,18 @@ cdef class PyTaskNoise:
         #cdef DeviceType carch = convert_py_device_type(arch)
         self.noise.set(task_id, arch, noise)
 
+    def set_vector(self, timecount_t[:, :] noise):
+        cdef int n = noise.shape[0]
+        cdef int m = noise.shape[1]
+        cdef vector[timecount_t] noise_vector
+        for i in range(n):
+            for j in range(m):
+                noise_vector.push_back(noise[i, j])
+        self.noise.set(noise_vector)
+
+    def lock(self):
+        self.noise.lock()
+
     def generate(self):
         self.noise.generate()
 
@@ -388,10 +411,10 @@ cdef class PyTaskNoise:
         cname = filename.encode('utf-8')
         self.noise.load_from_binary(cname)
  
-cdef class PyExternalNoise(PyTaskNoise):
+cdef class PyExternalTaskNoise(PyTaskNoise):
     cdef object cfunc 
 
-    def __cinit__(self, PyTasks tasks, unsigned int seed):
+    def __cinit__(self, PyTasks tasks, unsigned int seed = 0):
         self.tasks = tasks
         self.noise = new ExternalTaskNoise(deref(tasks.tasks), seed)
         self.cfunc = None 
@@ -413,21 +436,18 @@ cdef class PyExternalNoise(PyTaskNoise):
 
 
 
-cdef class PyLognormalNoise(PyTaskNoise):
+cdef class PyLognormalTaskNoise(PyTaskNoise):
 
-    def __cinit__(self, PyTasks tasks, unsigned int seed):
+    def __cinit__(self, PyTasks tasks, unsigned int seed = 0):
         self.tasks = tasks
         self.noise = new LognormalTaskNoise(deref(tasks.tasks), seed)
-
-    def __dealloc__(self):
-        del self.noise
 
 
 cdef class PyCommunicationNoise:
     cdef CommunicationNoise* noise
     cdef PyTopology topology
 
-    def __cinit__(self, PyTopology topology, unsigned int seed):
+    def __cinit__(self, PyTopology topology, unsigned int seed = 0):
         self.topology = topology
         self.noise = new CommunicationNoise(deref(topology.topology), seed)
 
@@ -457,9 +477,11 @@ cdef class PyMapper:
 
     def __cinit__(self):
         self.mapper = new Mapper()
+        print("Created Mapper")
 
     def __dealloc__(self):
         del self.mapper
+        print("Deleted Mapper")
 
 
 cdef class PyStaticMapper(PyMapper):
@@ -524,6 +546,9 @@ cdef class PySimulator:
 
     def get_current_time(self):
         return self.simulator.get_current_time()
+
+    def set_mapper(self, PyMapper mapper):
+        self.simulator.set_mapper(deref(mapper.mapper))
 
     def get_mappable_candidates(self):
         cdef TaskIDList candidates = deref(self.simulator).get_mappable_candidates()
