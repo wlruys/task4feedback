@@ -15,11 +15,6 @@ private:
   volatile bool breakpoint_status = false;
 
   static bool check_task(TaskIDList &tasks, taskid_t task) {
-    for (auto t : tasks) {
-      std::cout << t << " ";
-    }
-    std::cout << std::endl;
-
     if (tasks.empty()) {
       return false;
     }
@@ -78,4 +73,9 @@ public:
   }
 
   void add_time_breakpoint(timecount_t time) { max_time = time; }
+
+  void clear() {
+    breakpoints.clear();
+    reset_breakpoint();
+  }
 };

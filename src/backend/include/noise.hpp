@@ -3,6 +3,7 @@
 #include "macros.hpp"
 #include "tasks.hpp"
 #include <fstream>
+#include <functional>
 #include <random>
 #include <unordered_map>
 #include <utility>
@@ -11,16 +12,17 @@
 class TaskNoise {
 protected:
   using noise_t = double;
-  Tasks &tasks;
+  std::reference_wrapper<Tasks> tasks;
   unsigned int seed = 0;
   mutable std::mt19937 gen;
   std::vector<timecount_t> task_durations;
 
   [[nodiscard]] virtual timecount_t sample_duration(taskid_t task_id,
                                                     DeviceType arch) const {
-    MONUnusedParameter(task_id);
-    MONUnusedParameter(arch);
-    return 0;
+    const auto &ctasks = tasks.get();
+    const auto &task = ctasks.get_compute_task(task_id);
+    const auto &variant = task.get_variant(arch);
+    return variant.get_true_execution_time();
   };
 
   static uint64_t calculate_checksum(const std::vector<timecount_t> &data) {
@@ -41,10 +43,11 @@ protected:
 public:
   static constexpr uint32_t FILE_VERSION = 1;
   static constexpr size_t BUFFER_SIZE = 8192; // 8 KB buffer, adjust as needed
+  bool generated = false;
 
   TaskNoise(Tasks &tasks_, unsigned int seed_ = 0)
       : tasks(tasks_), seed(seed_), gen(seed_),
-        task_durations(tasks.compute_size() * num_device_types) {}
+        task_durations(tasks.get().compute_size() * num_device_types) {}
 
   [[nodiscard]] timecount_t get(taskid_t task_id, DeviceType arch) const {
     return task_durations[task_id * num_device_types +
@@ -58,7 +61,10 @@ public:
 
   void set(std::vector<timecount_t> values_) {
     task_durations = std::move(values_);
+    generated = true;
   }
+
+  void lock() { generated = true; }
 
   [[nodiscard]] timecount_t operator()(taskid_t task_id,
                                        DeviceType arch) const {
@@ -70,12 +76,14 @@ public:
   }
 
   virtual void generate() {
-    for (taskid_t task_id = 0; task_id < tasks.compute_size(); task_id++) {
+    for (taskid_t task_id = 0; task_id < tasks.get().compute_size();
+         task_id++) {
       for (std::size_t i = 0; i < num_device_types; i++) {
         set(task_id, static_cast<DeviceType>(i),
             sample_duration(task_id, static_cast<DeviceType>(i)));
       }
     }
+    generated = true;
   }
   void dump_to_binary(const std::string &filename) const {
     std::ofstream file(filename, std::ios::binary);
@@ -168,6 +176,7 @@ public:
     if (file.fail()) {
       throw std::runtime_error("Error reading from file: " + filename);
     }
+    generated = true;
   }
 };
 
@@ -204,7 +213,7 @@ protected:
   [[nodiscard]] timecount_t sample_duration(taskid_t task_id,
                                             DeviceType arch) const override {
     const auto mean = static_cast<double>(
-        tasks.get_variant(task_id, arch).get_execution_time());
+        tasks.get().get_variant(task_id, arch).get_true_execution_time());
     const double stddev = get_stddev(task_id, arch);
 
     const double u =
@@ -213,7 +222,6 @@ protected:
 
     std::lognormal_distribution<noise_t> dist(u, s);
     const noise_t duration = dist(gen);
-    std::cout << "duration: " << duration << std::endl;
     return static_cast<timecount_t>(duration);
   }
 

@@ -10,15 +10,23 @@
 
 struct TestFixture {
   Tasks tasks;
-  Data data;
   Devices devices;
   Topology topology;
-  Simulator simulator;
+  Data data;
   StaticMapper mapper;
+  TaskNoise task_noise;
+  CommunicationNoise comm_noise;
+  SchedulerInput input;
+  Simulator simulator;
+  constexpr static std::size_t num_devices = 4;
+  constexpr static std::size_t num_tasks = 3;
+  constexpr static unsigned int seed = 42;
 
   TestFixture()
-      : tasks(3), data(0), devices(2), topology(2),
-        simulator(tasks, data, devices, topology, mapper) {
+      : tasks(num_tasks), devices(num_devices), topology(num_devices),
+        data(num_tasks), task_noise(tasks, seed), comm_noise(topology),
+        input(tasks, data, devices, topology, mapper, task_noise, comm_noise),
+        simulator(input) {
     // Create compute tasks
     tasks.create_compute_task(0, "Task0", {});
     tasks.create_compute_task(1, "Task1", {0});
@@ -79,25 +87,25 @@ TEST_CASE_FIXTURE(TestFixture, "Tasks: Variant") {
   CHECK(variants[0].get_arch() == DeviceType::CPU);
   CHECK(variants[0].get_vcus() == 1);
   CHECK(variants[0].get_mem() == 1024);
-  CHECK(variants[0].get_execution_time() == 10);
+  CHECK(variants[0].get_true_execution_time() == 10);
 
   variants = tasks.get_variant_vector(1);
   CHECK(variants.size() == 1);
   CHECK(variants[0].get_arch() == DeviceType::GPU);
   CHECK(variants[0].get_vcus() == 2);
   CHECK(variants[0].get_mem() == 2048);
-  CHECK(variants[0].get_execution_time() == 20);
+  CHECK(variants[0].get_true_execution_time() == 20);
 
   variants = tasks.get_variant_vector(2);
   CHECK(variants.size() == 2);
   CHECK(variants[0].get_arch() == DeviceType::CPU);
   CHECK(variants[0].get_vcus() == 4);
   CHECK(variants[0].get_mem() == 8192);
-  CHECK(variants[0].get_execution_time() == 40);
+  CHECK(variants[0].get_true_execution_time() == 40);
   CHECK(variants[1].get_arch() == DeviceType::GPU);
   CHECK(variants[1].get_vcus() == 3);
   CHECK(variants[1].get_mem() == 4096);
-  CHECK(variants[1].get_execution_time() == 30);
+  CHECK(variants[1].get_true_execution_time() == 30);
 }
 
 TEST_CASE_FIXTURE(TestFixture, "Tasks: Data Dependencies") {
@@ -129,7 +137,7 @@ TEST_CASE_FIXTURE(TestFixture, "Tasks: Data Dependencies") {
   CHECK(write_data[0] == 3);
 
   // Initialize data graph
-  simulator.initialize(0, true);
+  simulator.initialize(true);
 
   // Check data tasks
   CHECK(tasks.size() == 6);
@@ -164,15 +172,23 @@ TEST_CASE_FIXTURE(TestFixture, "Tasks: Data Dependencies") {
 
 struct WriteDependencyFixture {
   Tasks tasks;
-  Data data;
   Devices devices;
   Topology topology;
-  Simulator simulator;
+  Data data;
   StaticMapper mapper;
+  TaskNoise task_noise;
+  CommunicationNoise comm_noise;
+  SchedulerInput input;
+  Simulator simulator;
+  constexpr static std::size_t num_devices = 2;
+  constexpr static std::size_t num_tasks = 7;
+  constexpr static unsigned int seed = 42;
 
   WriteDependencyFixture()
-      : tasks(7), data(0), devices(2), topology(2),
-        simulator(tasks, data, devices, topology, mapper) {
+      : tasks(num_tasks), devices(num_devices), topology(num_devices),
+        data(num_tasks), task_noise(tasks, seed), comm_noise(topology),
+        input(tasks, data, devices, topology, mapper, task_noise, comm_noise),
+        simulator(input) {
     // Create compute tasks
     tasks.create_compute_task(0, "Task0", {});
     tasks.create_compute_task(1, "Task1", {0});
@@ -207,7 +223,7 @@ struct WriteDependencyFixture {
 TEST_CASE_FIXTURE(WriteDependencyFixture, "Tasks: Data Dependencies 2") {
 
   // Initialize data graph
-  simulator.initialize(0, true);
+  simulator.initialize(true);
 
   // Check data tasks
   CHECK(tasks.size() == 18);

@@ -5,8 +5,10 @@
 #include "devices.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
+#include "spdlog/spdlog.h"
 #include "tasks.hpp"
 #include <algorithm>
+#include <functional>
 #include <unordered_map>
 
 enum class DataState {
@@ -31,11 +33,16 @@ public:
   [[nodiscard]] std::size_t size() const { return sizes.size(); }
   [[nodiscard]] bool empty() const { return size() == 0; }
 
-  void set_size(dataid_t id, mem_t size) { sizes[id] = size; }
+  void set_size(dataid_t id, mem_t size) {
+    assert(id < sizes.size());
+    sizes[id] = size;
+  }
   void set_location(dataid_t id, devid_t location) {
+    assert(location < initial_location.size());
     initial_location[id] = location;
   }
   void set_name(dataid_t id, std::string name) {
+    assert(id < data_names.size());
     data_names[id] = std::move(name);
   }
 
@@ -386,11 +393,16 @@ public:
   }
 };
 
+struct MovementStatus {
+  bool is_virtual = false;
+  timecount_t duration = 0;
+};
+
 class DataManager {
 protected:
-  Data &data;
-  DeviceManager &device_manager;
-  CommunicationManager &communication_manager;
+  std::reference_wrapper<Data> data;
+  std::reference_wrapper<DeviceManager> device_manager;
+  std::reference_wrapper<CommunicationManager> communication_manager;
   LocationManager mapped_locations;
   LocationManager reserved_locations;
   LocationManager launched_locations;
@@ -411,9 +423,6 @@ protected:
 
   static auto write_update(dataid_t data_id, devid_t device_id,
                            LocationManager &locations) {
-    std::cout << "write_update" << std::endl;
-    std::cout << "Invalidating data " << data_id << " on all devices except "
-              << device_id << std::endl;
     auto updated_ids = locations[data_id].invalidate_except(device_id);
     return updated_ids;
   }
@@ -423,23 +432,23 @@ public:
               CommunicationManager &communication_manager_)
       : data(data_), device_manager(device_manager_),
         communication_manager(communication_manager_),
-        mapped_locations(data.size(), device_manager_.size()),
-        reserved_locations(data.size(), device_manager_.size()),
-        launched_locations(data.size(), device_manager_.size()),
+        mapped_locations(data.get().size(), device_manager_.size()),
+        reserved_locations(data.get().size(), device_manager_.size()),
+        launched_locations(data.get().size(), device_manager_.size()),
         counts(device_manager_.size()) {}
 
   void initialize() {
-    for (dataid_t i = 0; i < data.size(); i++) {
-      auto initial_location = data.get_location(i);
+    for (dataid_t i = 0; i < data.get().size(); i++) {
+      auto initial_location = data.get().get_location(i);
       mapped_locations.set_valid(i, initial_location);
       reserved_locations.set_valid(i, initial_location);
       launched_locations.set_valid(i, initial_location);
-      device_manager.add_mem<TaskState::MAPPED>(initial_location,
-                                                data.get_size(i));
-      device_manager.add_mem<TaskState::RESERVED>(initial_location,
-                                                  data.get_size(i));
-      device_manager.add_mem<TaskState::LAUNCHED>(initial_location,
-                                                  data.get_size(i));
+      device_manager.get().add_mem<TaskState::MAPPED>(initial_location,
+                                                      data.get().get_size(i));
+      device_manager.get().add_mem<TaskState::RESERVED>(initial_location,
+                                                        data.get().get_size(i));
+      device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location,
+                                                        data.get().get_size(i));
     }
   }
 
@@ -477,7 +486,7 @@ public:
     mem_t local_size = 0;
     for (auto data_id : list) {
       if (locations.is_valid(data_id, device_id)) {
-        local_size += data.get_size(data_id);
+        local_size += data.get().get_size(data_id);
       }
     }
     return local_size;
@@ -501,7 +510,7 @@ public:
     mem_t non_local_size = 0;
     for (auto data_id : list) {
       if (locations.is_invalid(data_id, device_id)) {
-        non_local_size += data.get_size(data_id);
+        non_local_size += data.get().get_size(data_id);
       }
     }
     return non_local_size;
@@ -525,7 +534,7 @@ public:
     mem_t shared_size = 0;
     for (auto data_id : list1) {
       if (std::find(list2.begin(), list2.end(), data_id) != list2.end()) {
-        shared_size += data.get_size(data_id);
+        shared_size += data.get().get_size(data_id);
       }
     }
     return shared_size;
@@ -560,11 +569,10 @@ public:
   }
 
   void add_memory(dataid_t data_id, devid_t device_id) {
-
-    std::cout << "Adding memory for data " << data_id << " on device "
-              << device_id << std::endl;
-    device_manager.add_mem<TaskState::LAUNCHED>(device_id,
-                                                data.get_size(data_id));
+    SPDLOG_DEBUG("Adding data block {} to device {} with size {}", data_id,
+                 device_id, data.get().get_size(data_id));
+    device_manager.get().add_mem<TaskState::LAUNCHED>(
+        device_id, data.get().get_size(data_id));
   }
 
   void read_update_launched(const DataIDList &list, devid_t device_id) {
@@ -584,68 +592,93 @@ public:
       return {true, destination};
     }
 
-    SourceRequest req = communication_manager.get_best_available_source(
+    SPDLOG_DEBUG("Requesting source for data block {} to device {}", data_id,
+                 destination);
+    SPDLOG_DEBUG("Number of valid locations: {}", valid_locations.size());
+
+    SourceRequest req = communication_manager.get().get_best_available_source(
         destination, valid_locations);
-
-    if (!req.found) {
-      return req;
-    }
-
-    communication_manager.reserve_connection(req.source, destination);
 
     return req;
   }
 
-  timecount_t start_move(dataid_t data_id, devid_t source,
-                         devid_t destination) {
+  MovementStatus start_move(dataid_t data_id, devid_t source,
+                            devid_t destination) {
     assert(launched_locations.is_valid(data_id, source));
 
     bool is_moving = movement_manager.is_moving(data_id, destination);
     if (is_moving) {
-      return movement_manager.get_time(data_id, destination);
+      SPDLOG_DEBUG("Data block {} already moving to device {}", data_id,
+                   destination);
+      return {true, movement_manager.get_time(data_id, destination)};
     }
 
     if (launched_locations.is_valid(data_id, destination)) {
-      return 0;
+      SPDLOG_DEBUG("Data block {} already at device {}", data_id, destination);
+      return {true, 0};
     }
+
+    SPDLOG_DEBUG("Starting move of data block {} from device {} to device {}",
+                 data_id, source, destination);
 
     add_memory(data_id, destination);
 
-    timecount_t completion_time = communication_manager.ideal_time_to_transfer(
-        data.get_size(data_id), source, destination);
+    timecount_t duration = communication_manager.get().ideal_time_to_transfer(
+        data.get().get_size(data_id), source, destination);
 
-    movement_manager.set_completion(data_id, destination, completion_time);
+    if (duration == 0) {
+      SPDLOG_DEBUG("Block moving instantly from {} to {}. Check bandwidth.",
+                   source, destination);
+      return {true, 0};
+    }
 
-    return completion_time;
+    movement_manager.set_completion(data_id, destination, duration);
+    communication_manager.get().reserve_connection(source, destination);
+
+    return {false, duration};
   }
 
   void complete_move(dataid_t data_id, devid_t source, devid_t destination,
                      bool existed) {
+
+    SPDLOG_DEBUG("Completing move of data block {} from device {} to device {}",
+                 data_id, source, destination);
+
     if (!existed) {
-      // NOTE(wlr): I'm not 100% sure about the source check
-      // Could something that starts at the same time as the move completes be a
-      // problem?
-      assert(launched_locations.is_valid(data_id, source));
-      assert(launched_locations.is_valid(data_id, destination));
+      SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
+                   "device {}",
+                   data_id, source, destination);
+
+      if (movement_manager.is_moving(data_id, destination)) {
+        SPDLOG_DEBUG(
+            "Virtual move of data block {} from device {} to device {} "
+            "beat the real move",
+            data_id, source, destination);
+        // Update will happen in the real move
+      } else {
+        // NOTE(wlr): I'm not 100% sure about the source check
+        // Could something that starts at the same time as the move completes be
+        // a problem?
+        assert(launched_locations.is_valid(data_id, source));
+        assert(launched_locations.is_valid(data_id, destination));
+      }
       return;
     }
 
     assert(movement_manager.is_moving(data_id, destination));
     launched_locations.set_valid(data_id, destination);
     movement_manager.remove(data_id, destination);
-
-    communication_manager.release_connection(source, destination);
+    communication_manager.get().release_connection(source, destination);
   }
 
   void remove_memory(const DeviceIDList &device_list, dataid_t data_id) {
     for (auto device : device_list) {
-      auto size = data.get_size(data_id);
-
-      std::cout << "Removing memory for data " << data_id << " on device "
-                << device << std::endl;
-      device_manager.remove_mem<TaskState::MAPPED>(device, size);
-      device_manager.remove_mem<TaskState::RESERVED>(device, size);
-      device_manager.remove_mem<TaskState::LAUNCHED>(device, size);
+      auto size = data.get().get_size(data_id);
+      SPDLOG_DEBUG("Removing data block {} from device {} with size {}",
+                   data_id, device, size);
+      device_manager.get().remove_mem<TaskState::MAPPED>(device, size);
+      device_manager.get().remove_mem<TaskState::RESERVED>(device, size);
+      device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size);
     }
   }
 

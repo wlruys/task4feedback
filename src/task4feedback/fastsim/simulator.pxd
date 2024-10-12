@@ -6,8 +6,9 @@ from settings cimport taskid_t, TaskIDList, DataIDList, DeviceIDList, PriorityLi
 
 from tasks cimport Tasks
 from devices cimport Devices
-from communication cimport Topology
+from communication cimport Topology, CommunicationNoise
 from data cimport Data
+from noise cimport TaskNoise 
 
 import cython
 cimport cython
@@ -45,12 +46,21 @@ cdef extern from "include/scheduler.hpp":
     cdef cppclass Mapper:
         pass 
 
+    cdef cppclass SchedulerInput:
+        SchedulerInput(Tasks &tasks, Data &data, Devices &devices, Topology &topology,
+                 Mapper &mapper, TaskNoise &task_noise,
+                 CommunicationNoise &comm_noise)
+
+    
+
     cdef cppclass StaticMapper(Mapper):
         void set_mapping(DeviceIDList& devices)
         void set_launching_priorities(PriorityList& priorities)
         void set_reserving_priorities(PriorityList& priorities)
 
 cdef extern from "include/simulator.hpp":
+
+    cdef void logger_setup()
 
     cpdef enum class ExecutionState(int):
         NONE,
@@ -60,13 +70,15 @@ cdef extern from "include/simulator.hpp":
         PYTHON_MAPPING,
         ERROR
     cdef cppclass Simulator:
-        Simulator(Tasks& tasks, Data& data, Devices& devices, Topology& topology, Mapper& mapper)
-        void initialize(unsigned int seed, bool create_data_tasks)
+        Simulator(Simulator&)
+        Simulator(SchedulerInput& input)
+        void initialize(bool create_data_tasks)
         ExecutionState run()
         timecount_t get_current_time()
         TaskIDList get_mappable_candidates()
         void map_tasks(ActionList& actions)
         void add_task_breakpoint(EventType event_type, taskid_t task_id)
         void add_time_breakpoint(timecount_t time)
+        void set_use_python_mapper(bool use_python_mapper)
 
 

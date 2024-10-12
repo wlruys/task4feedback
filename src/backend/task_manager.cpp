@@ -146,10 +146,7 @@ timecount_t TaskRecords::get_completed_time(taskid_t id) const {
 
 // Task Manager
 void TaskManager::initialize_state() {
-  const auto &const_tasks = this->tasks;
-
-  std::cout << "Initializing state" << std::endl;
-  std::cout << "Tasks size: " << tasks.size() << std::endl;
+  const auto &const_tasks = this->tasks.get();
   state = TaskStateInfo(tasks);
   records = TaskRecords(tasks);
 
@@ -268,22 +265,23 @@ const TaskIDList &TaskManager::notify_data_completed(taskid_t id,
 // TaskPrinter
 
 Color TaskPrinter::get_task_color(taskid_t id) const {
-  auto task_state = tm.state.get_state(id);
-  if (task_state == TaskState::SPAWNED && !tm.state.is_mappable(id)) {
+  const auto _tm = tm.get();
+  auto task_state = _tm.state.get_state(id);
+  if (task_state == TaskState::SPAWNED && !_tm.state.is_mappable(id)) {
     return Color::white;
   }
   if (task_state == TaskState::SPAWNED) {
     return Color::blue;
   }
 
-  if (task_state == TaskState::MAPPED && !tm.state.is_reservable(id)) {
+  if (task_state == TaskState::MAPPED && !_tm.state.is_reservable(id)) {
     return Color::cyan;
   }
   if (task_state == TaskState::MAPPED) {
     return Color::magenta;
   }
 
-  if (task_state == TaskState::RESERVED && !tm.state.is_launchable(id)) {
+  if (task_state == TaskState::RESERVED && !_tm.state.is_launchable(id)) {
     return Color::yellow;
   }
   if (task_state == TaskState::RESERVED) {
@@ -341,7 +339,7 @@ Table TaskPrinter::make_list_table_named(DependencyList &dependencies,
   std::vector<Color> colors;
   deps.emplace_back(name);
   for (auto dep : dependencies) {
-    std::string dep_name = tm.tasks.get_name(dep);
+    std::string dep_name = tm.get().tasks.get().get_name(dep);
     deps.emplace_back(dep_name);
     colors.push_back(get_task_color(dep));
   }
@@ -392,7 +390,7 @@ Table TaskPrinter::make_variant_table(Variant v) {
 
   value_row.emplace_back(std::to_string(v.get_vcus()));
   value_row.emplace_back(std::to_string(v.get_mem()));
-  value_row.emplace_back(std::to_string(v.get_execution_time()));
+  value_row.emplace_back(std::to_string(v.get_true_execution_time()));
 
   variant_table.add_row(header_row);
   variant_table.add_row(value_row);
@@ -428,13 +426,15 @@ Table TaskPrinter::make_status_table(taskid_t id) {
   Table::Row_t header_row = {"ID",       "Name",       "State",     "Status",
                              "Unmapped", "Unreserved", "Incomplete"};
 
+  const auto &_tm = this->tm.get();
+
   Table::Row_t value_row = {std::to_string(id),
-                            tm.tasks.get_name(id),
-                            to_string(tm.state.get_state(id)),
-                            to_string(tm.state.get_status(id)),
-                            std::to_string(tm.state.get_unmapped(id)),
-                            std::to_string(tm.state.get_unreserved(id)),
-                            std::to_string(tm.state.get_incomplete(id))};
+                            _tm.tasks.get().get_name(id),
+                            to_string(_tm.state.get_state(id)),
+                            to_string(_tm.state.get_status(id)),
+                            std::to_string(_tm.state.get_unmapped(id)),
+                            std::to_string(_tm.state.get_unreserved(id)),
+                            std::to_string(_tm.state.get_incomplete(id))};
 
   status_table.add_row(header_row);
   status_table.add_row(value_row);
@@ -448,7 +448,7 @@ Table TaskPrinter::wrap_tables(
   Table table;
 
   Table::Row_t task_name;
-  task_name.emplace_back("Task " + tm.tasks.get_name(id));
+  task_name.emplace_back("Task " + tm.get().get_tasks().get_name(id));
   table.add_row(task_name);
 
   for (const auto &generator : generators) {
@@ -467,7 +467,7 @@ void TaskPrinter::print_tables(
   Table table;
 
   Table::Row_t task_name;
-  task_name.emplace_back("Task " + tm.tasks.get_name(id));
+  task_name.emplace_back("Task " + tm.get().get_tasks().get_name(id));
   table.add_row(task_name);
   table.format()
       .font_color(get_task_color(id))
@@ -511,21 +511,22 @@ void TaskManager::print_task(taskid_t id) {
   };
 
   auto dependency_table_generator = [&](taskid_t id) {
-    return printer.make_list_table_named(tasks.get_dependencies(id),
+    return printer.make_list_table_named(tasks.get().get_dependencies(id),
                                          "Dependencies");
   };
 
   auto dependent_table_generator = [&](taskid_t id) {
-    return printer.make_list_table_named(tasks.get_dependents(id),
+    return printer.make_list_table_named(tasks.get().get_dependents(id),
                                          "Dependents");
   };
 
   auto data_table_generator = [&](taskid_t id) {
-    return printer.make_data_table(tasks.get_read(id), tasks.get_write(id));
+    return printer.make_data_table(tasks.get().get_read(id),
+                                   tasks.get().get_write(id));
   };
 
   auto variant_table_generator = [&](taskid_t id) {
-    return printer.make_variant_tables(tasks.get_variants(id));
+    return printer.make_variant_tables(tasks.get().get_variants(id));
   };
 
   printer.print_tables({status_table_generator, dependency_table_generator,

@@ -4,11 +4,13 @@
 #include "macros.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
+#include "spdlog/spdlog.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <random>
 #include <sys/types.h>
@@ -100,7 +102,7 @@ protected:
       record;
   unsigned int seed = 0;
   mutable std::mt19937 gen;
-  Topology &topology;
+  std::reference_wrapper<Topology> topology;
 
   struct request_high_precision {
     uint64_t data_task_id;
@@ -132,8 +134,9 @@ protected:
 
   [[nodiscard]] virtual CommunicationStats
   sample_stats(const CommunicationRequest &req) const {
-    MONUnusedParameter(req);
-    return {0, 0};
+    auto bw = topology.get().get_bandwidth(req.source, req.destination);
+    auto latency = topology.get().get_latency(req.source, req.destination);
+    return {bw, latency};
   };
 
   static uint64_t calculate_checksum(
@@ -313,8 +316,8 @@ class UniformCommunicationNoise : public CommunicationNoise {
 protected:
   CommunicationStats
   sample_stats(const CommunicationRequest &req) const override {
-    auto mean_bw = topology.get_bandwidth(req.source, req.destination);
-    auto mean_latency = topology.get_latency(req.source, req.destination);
+    auto mean_bw = topology.get().get_bandwidth(req.source, req.destination);
+    auto mean_latency = topology.get().get_latency(req.source, req.destination);
 
     std::uniform_int_distribution<timecount_t> latency_dist(
         mean_latency - mean_latency / 2, mean_latency + mean_latency / 2);
@@ -347,16 +350,18 @@ class CommunicationManager {
   std::vector<copy_t> incoming;
   std::vector<copy_t> outgoing;
   std::vector<copy_t> active_links;
-  Topology &topology;
-  Devices &devices;
+  std::reference_wrapper<Topology> topology;
+  std::reference_wrapper<Devices> devices;
+  std::reference_wrapper<CommunicationNoise> noise;
 
   [[nodiscard]] std::size_t get_device_type_idx(devid_t device_id) const {
-    return static_cast<std::size_t>(devices.get_type(device_id));
+    return static_cast<std::size_t>(devices.get().get_type(device_id));
   }
 
 public:
-  CommunicationManager(Topology &topology, Devices &devices)
-      : topology(topology), devices(devices) {
+  CommunicationManager(Topology &topology, Devices &devices,
+                       CommunicationNoise &noise)
+      : topology(topology), devices(devices), noise(noise) {
     incoming.resize(devices.size(), 0);
     outgoing.resize(devices.size(), 0);
     active_links.resize(devices.size() * devices.size(), 0);
@@ -370,31 +375,27 @@ public:
   void decrease_outgoing(devid_t device_id) { outgoing[device_id] -= 1; }
 
   void increase_active_links(devid_t src, devid_t dst) {
-    active_links[src * devices.size() + dst] += 1;
+    active_links[src * devices.get().size() + dst] += 1;
   }
 
   void decrease_active_links(devid_t src, devid_t dst) {
-    active_links[src * devices.size() + dst] -= 1;
+    active_links[src * devices.get().size() + dst] -= 1;
   }
 
   void reserve_connection(devid_t src, devid_t dst) {
     increase_incoming(dst);
     increase_outgoing(src);
     increase_active_links(src, dst);
-    std::cout << "+Active links: " << static_cast<int>(get_active(src, dst))
-              << std::endl;
   }
 
   void release_connection(devid_t src, devid_t dst) {
     decrease_incoming(dst);
     decrease_outgoing(src);
     decrease_active_links(src, dst);
-    std::cout << "-Active links: " << static_cast<int>(get_active(src, dst))
-              << std::endl;
   }
 
   [[nodiscard]] copy_t get_active(devid_t src, devid_t dst) const {
-    return active_links[src * devices.size() + dst];
+    return active_links[src * devices.get().size() + dst];
   }
 
   [[nodiscard]] copy_t get_incoming(devid_t device_id) const {
@@ -417,47 +418,46 @@ public:
 
   [[nodiscard]] bool is_link_available(devid_t src, devid_t dst) const {
     auto used = get_active(src, dst);
-    auto available = topology.get_max_connections(src, dst);
+    auto available = topology.get().get_max_connections(src, dst);
     return used <= available;
   }
 
   [[nodiscard]] bool check_connection(devid_t src, devid_t dst) const {
-
-    std::cout << "Checking connection between " << src << " and " << dst
-              << std::endl;
-    std::cout << "Device available: " << is_device_available(src) << " "
-              << is_device_available(dst) << std::endl;
-    std::cout << "Link available: " << is_link_available(src, dst) << std::endl;
-    std::cout << "Active links: " << static_cast<int>(get_active(src, dst))
-              << std::endl;
-    std::cout << "Max links: "
-              << static_cast<int>(topology.get_max_connections(src, dst))
-              << std::endl;
-
+    const bool src_available = is_device_available(src);
+    const bool dst_available = is_device_available(dst);
+    const bool link_available = is_link_available(src, dst);
+    SPDLOG_DEBUG("Check connection: src={}, dst={}, src_available={}, "
+                 "dst_available={}, link_available={}",
+                 src, dst, src_available, dst_available, link_available);
     return is_device_available(src) && is_device_available(dst) &&
            is_link_available(src, dst);
   }
 
   [[nodiscard]] mem_t get_bandwidth(devid_t src, devid_t dst) const {
-    return topology.get_bandwidth(src, dst);
+    return topology.get().get_bandwidth(src, dst);
   }
 
   [[nodiscard]] mem_t get_available_bandwidth(devid_t src, devid_t dst) const {
     return get_bandwidth(src, dst);
   }
 
-  [[nodiscard]] mem_t time_to_transfer(mem_t size, devid_t src,
-                                       devid_t dst) const {
-    const auto bw = static_cast<double>(get_bandwidth(src, dst));
+  [[nodiscard]] timecount_t time_to_transfer(taskid_t data_task_id, mem_t size,
+                                             devid_t src, devid_t dst) const {
+    auto [latency, bandwidth] = noise.get()({data_task_id, src, dst, size});
+    const auto bw = static_cast<double>(bandwidth);
     const auto s = static_cast<double>(size);
-    return static_cast<mem_t>(s / bw);
+    timecount_t time = latency + static_cast<timecount_t>(s / bw);
+    return std::max(time, static_cast<timecount_t>(1));
   }
 
-  [[nodiscard]] mem_t ideal_time_to_transfer(mem_t size, devid_t src,
-                                             devid_t dst) const {
+  [[nodiscard]] timecount_t ideal_time_to_transfer(mem_t size, devid_t src,
+                                                   devid_t dst) const {
     const auto bw = static_cast<double>(get_bandwidth(src, dst));
+    const auto latency =
+        static_cast<timecount_t>(topology.get().get_latency(src, dst));
     const auto s = static_cast<double>(size);
-    return static_cast<mem_t>(s / bw);
+    auto time = latency + static_cast<timecount_t>(s / bw);
+    return std::max(time, static_cast<timecount_t>(1));
   }
 
   SourceRequest
@@ -471,11 +471,30 @@ public:
     for (auto src : possible_sources) {
       if (check_connection(src, dst)) {
         auto bandwidth = get_available_bandwidth(src, dst);
-        if (bandwidth >= best_bandwidth) {
+        if (bandwidth > best_bandwidth) {
           best_bandwidth = bandwidth;
           best_source = src;
           found = true;
         }
+      }
+    }
+    return {found, best_source};
+  }
+
+  SourceRequest get_best_source(devid_t dst,
+                                DeviceIDList &possible_source) const {
+    // Return the source with the highest bandwidth
+    // If no source is available, return found=false
+
+    bool found = false;
+    devid_t best_source = 0;
+    mem_t best_bandwidth = 0;
+    for (auto src : possible_source) {
+      auto bandwidth = get_available_bandwidth(src, dst);
+      if (bandwidth > best_bandwidth) {
+        best_bandwidth = bandwidth;
+        best_source = src;
+        found = true;
       }
     }
     return {found, best_source};

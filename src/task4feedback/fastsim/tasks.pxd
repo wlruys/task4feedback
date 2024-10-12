@@ -35,7 +35,7 @@ cdef extern from "include/tasks.hpp":
         DeviceType get_arch() const
         vcu_t get_vcus() const
         mem_t get_mem() const
-        timecount_t get_execution_time() const
+        timecount_t get_true_execution_time() const
 
 
 

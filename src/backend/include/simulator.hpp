@@ -5,10 +5,18 @@
 #include "events.hpp"
 #include "scheduler.hpp"
 #include "settings.hpp"
-// #include "spdlog/cfg/env.h" // support for loading levels from the
-// environment variable #include "spdlog/fmt/ostr.h" // support for user defined
-// types #include "spdlog/sinks/stdout_color_sinks.h"
+#include "spdlog/cfg/env.h"
+#include "spdlog/fmt/ostr.h"
+#include "spdlog/sinks/stdout_color_sinks.h"
+#include "spdlog/spdlog.h"
 #include <cstddef>
+#include <functional>
+
+void logger_setup() {
+  auto new_logger = spdlog::stdout_color_mt("console");
+  spdlog::set_default_logger(new_logger);
+  spdlog::set_level(spdlog::level::debug);
+}
 
 enum class ExecutionState {
   NONE = 0,
@@ -61,14 +69,14 @@ protected:
       return ExecutionState::PYTHON_MAPPING;
     }
     // otherwise just run the mapper from C++
-    scheduler.map_tasks(event, event_manager, mapper);
+    scheduler.map_tasks(event, event_manager, mapper.get());
     return ExecutionState::RUNNING;
   }
 
 public:
   EventManager event_manager;
   Scheduler scheduler;
-  Mapper &mapper;
+  std::reference_wrapper<Mapper> mapper;
 
   bool initialized = false;
   volatile bool use_python_mapper = false;
@@ -76,14 +84,9 @@ public:
   ExecutionState last_state = ExecutionState::NONE;
   Event last_event = Event(EventType::MAPPER, 0, TaskIDList());
 
-  Simulator(Tasks &tasks, Data &data, Devices &devices, Topology &topology,
-            Mapper &mapper_)
-      : event_manager(EventManager()),
-        scheduler(Scheduler(tasks, data, devices, topology)), mapper(mapper_) {
-    // auto new_logger = spdlog::stdout_color_mt("console");
-    // spdlog::set_default_logger(new_logger);
-    // spdlog::set_level(spdlog::level::debug);
-  }
+  Simulator(SchedulerInput &input)
+      : event_manager(EventManager()), scheduler(Scheduler(input)),
+        mapper(input.mapper) {}
 
   void set_use_python_mapper(bool use_python_mapper_) {
     use_python_mapper = use_python_mapper_;
@@ -91,9 +94,9 @@ public:
 
   void set_mapper(Mapper &mapper_) { mapper = mapper_; }
 
-  void initialize(unsigned int seed, bool create_data_tasks = false) {
+  void initialize(bool create_data_tasks = false) {
     add_initial_event();
-    scheduler.initialize(seed, create_data_tasks);
+    scheduler.initialize(create_data_tasks);
     initialized = true;
   }
 

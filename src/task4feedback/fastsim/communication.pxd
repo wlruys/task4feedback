@@ -2,7 +2,7 @@
 #cython: embedsignature=True
 #cython: language=c++
 
-from settings cimport taskid_t, dataid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t
+from settings cimport taskid_t, timecount_t, dataid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t
 
 import cython
 cimport cython
@@ -26,5 +26,27 @@ cdef extern from "include/communication_manager.hpp":
         void get_bandwidth(devid_t src, devid_t dst) const
         void get_max_connections(devid_t src, devid_t dst) const
         
+    cdef cppclass CommunicationStats:
+        timecount_t latency
+        mem_t bandwidth
+        CommunicationStats()
+        CommunicationStats(timecount_t latency, mem_t bandwidth)
 
+    cdef cppclass CommunicationRequest:
+        taskid_t data_task_id 
+        devid_t source 
+        devid_t destination
+        mem_t size
+        CommunicationRequest()
+        CommunicationRequest(taskid_t data_task_id, devid_t source, devid_t destination, mem_t size)
+
+    cdef cppclass CommunicationNoise:
+        CommunicationNoise(Topology& topology, unsigned int seed)
+        CommunicationStats get(const CommunicationRequest& request)
+        void set(const CommunicationRequest& request, const CommunicationStats& stats)
+        void dump_to_binary(const string filename)
+        void load_from_binary(const string filename)
+
+    cdef cppclass UniformCommunicationNoise(CommunicationNoise):
+        UniformCommunicationNoise(Topology& topology, unsigned int seed)
 

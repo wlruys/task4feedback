@@ -17,8 +17,17 @@ protected:
   Topology topology;
   Data data;
   RandomMapper mapper;
+  TaskNoise task_noise;
+  CommunicationNoise comm_noise;
+  SchedulerInput input;
+  constexpr static std::size_t num_devices = 2;
+  constexpr static std::size_t num_tasks = 3;
+  constexpr static unsigned int seed = 42;
 
-  SimulatorFixture() : tasks(3), devices(2), topology(2) {
+  SimulatorFixture()
+      : tasks(num_tasks), devices(num_devices), topology(num_devices),
+        data(num_tasks), task_noise(tasks, seed), comm_noise(topology),
+        input(tasks, data, devices, topology, mapper, task_noise, comm_noise) {
 
     // Initialize tasks
     tasks.create_compute_task(0, "Task0", {});
@@ -45,24 +54,24 @@ protected:
 };
 
 TEST_CASE_FIXTURE(SimulatorFixture, "Scheduler initialization") {
-  auto simulator = Simulator(tasks, data, devices, topology, mapper);
+  auto simulator = Simulator(input);
   CHECK(!simulator.initialized);
-  simulator.initialize(42, false);
+  simulator.initialize(false);
   CHECK(simulator.initialized);
   CHECK_EQ(simulator.scheduler.get_queues().n_mappable(), 1);
 }
 
 TEST_CASE_FIXTURE(SimulatorFixture, "Scheduler initialization") {
-  auto simulator = Simulator(tasks, data, devices, topology, mapper);
-  simulator.initialize(42, false);
+  auto simulator = Simulator(input);
+  simulator.initialize(false);
   auto state = simulator.run();
   CHECK_EQ(state, ExecutionState::COMPLETE);
 }
 
 TEST_CASE_FIXTURE(SimulatorFixture, "Breakpoints") {
 
-  auto simulator = Simulator(tasks, data, devices, topology, mapper);
-  simulator.initialize(42, false);
+  auto simulator = Simulator(input);
+  simulator.initialize(false);
 
   // Set a breakpoint for task 0 at the MAPPER event
   simulator.add_task_breakpoint(EventType::MAPPER, 0);
@@ -79,6 +88,38 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Breakpoints") {
   // Continue execution
   state = simulator.run();
   CHECK_EQ(state, ExecutionState::COMPLETE);
+}
+
+TEST_CASE_FIXTURE(SimulatorFixture, "Copy") {
+
+  auto simulator = Simulator(input);
+  simulator.initialize(false);
+
+  // Set a breakpoint for task 0 at the MAPPER event
+  simulator.add_task_breakpoint(EventType::COMPLETER, 0);
+
+  auto state = simulator.run();
+  CHECK_EQ(state, ExecutionState::BREAKPOINT);
+
+  Simulator sim2(simulator);
+  const timecount_t copy_time = simulator.get_current_time();
+  const timecount_t copy_time2 = sim2.get_current_time();
+  CHECK_EQ(copy_time, copy_time2);
+
+  state = simulator.run();
+  CHECK_EQ(state, ExecutionState::COMPLETE);
+
+  const timecount_t finish_time = simulator.get_current_time();
+  const timecount_t frozen_time = sim2.get_current_time();
+
+  CHECK(finish_time != frozen_time);
+
+  state = sim2.run();
+  CHECK_EQ(state, ExecutionState::COMPLETE);
+
+  const timecount_t finish_time2 = sim2.get_current_time();
+
+  CHECK_EQ(finish_time, finish_time2);
 }
 
 TEST_CASE_FIXTURE(SimulatorFixture, "Data movement and memory costs") {
@@ -105,8 +146,10 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Data movement and memory costs") {
   StaticMapper static_mapper({0, 1});
 
   // Reinitialize simulator with new configuration
-  auto simulator = Simulator(tasks, data, devices, topology, static_mapper);
-  simulator.initialize(42, true);
+  input = SchedulerInput(tasks, data, devices, topology, static_mapper,
+                         task_noise, comm_noise);
+  auto simulator = Simulator(input);
+  simulator.initialize(true);
 
   const auto &scheduler_state = simulator.scheduler.get_state();
   const auto &data_manager = scheduler_state.get_data_manager();
@@ -294,6 +337,248 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Data movement and memory costs") {
   CHECK(data_manager.check_valid_launched({1}, 1));
 }
 
+TEST_CASE_FIXTURE(SimulatorFixture, "Copy: Data Movement and Memory Costs") {
+  // Reset tasks with specific data dependencies
+  auto tasks = Tasks(2);
+  tasks.create_compute_task(0, "Task0", {});
+  tasks.create_compute_task(1, "Task1", {0});
+
+  tasks.add_variant(0, DeviceType::CPU, 1, 1024, 100);
+  tasks.add_variant(1, DeviceType::GPU, 1, 2048, 50);
+
+  DataIDList read_data = {0};
+  DataIDList write_data = {1};
+  tasks.set_read(0, {0});
+  tasks.set_write(0, {0});
+  tasks.set_read(1, {1});
+
+  // Reset data
+  auto data = Data(2);
+  data.create_block(0, 1024, 0, "Input");
+  data.create_block(1, 2048, 0, "Output");
+
+  // Use StaticMapper instead of RandomMapper
+  StaticMapper static_mapper({0, 1});
+
+  // Reinitialize simulator with new configuration
+  input = SchedulerInput(tasks, data, devices, topology, static_mapper,
+                         task_noise, comm_noise);
+  auto simulator = Simulator(input);
+  simulator.initialize(true);
+
+  const auto &scheduler_state = simulator.scheduler.get_state();
+  const auto &data_manager = scheduler_state.get_data_manager();
+  const auto &device_manager = scheduler_state.get_device_manager();
+
+  // Check memory usage at init
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(1), 0);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(1), 0);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(1), 0);
+
+  CHECK(data_manager.check_valid_mapped({0}, 0));
+  CHECK(data_manager.check_valid_reserved({0}, 0));
+  CHECK(data_manager.check_valid_launched({0}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 0));
+  CHECK(data_manager.check_valid_reserved({1}, 0));
+  CHECK(data_manager.check_valid_launched({1}, 0));
+
+  simulator.add_task_breakpoint(EventType::MAPPER, 0);
+  auto state = simulator.run();
+  CHECK_EQ(state, ExecutionState::BREAKPOINT);
+
+  // Check memory usage at mapping task 0
+
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(0), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(1), 0);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(1), 0);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(1), 0);
+
+  CHECK(data_manager.check_valid_mapped({0}, 0));
+  CHECK(data_manager.check_valid_reserved({0}, 0));
+  CHECK(data_manager.check_valid_launched({0}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 0));
+  CHECK(data_manager.check_valid_reserved({1}, 0));
+  CHECK(data_manager.check_valid_launched({1}, 0));
+
+  simulator.add_task_breakpoint(EventType::MAPPER, 1);
+  state = simulator.run();
+  CHECK_EQ(state, ExecutionState::BREAKPOINT);
+
+  // Check memory usage at mapping task 1
+
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(0), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(1), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(1), 0);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(1), 0);
+
+  CHECK(data_manager.check_valid_mapped({0}, 0));
+  CHECK(data_manager.check_valid_reserved({0}, 0));
+  CHECK(data_manager.check_valid_launched({0}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 0));
+  CHECK(data_manager.check_valid_reserved({1}, 0));
+  CHECK(data_manager.check_valid_launched({1}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 1));
+
+  simulator.add_task_breakpoint(EventType::RESERVER, 0);
+  state = simulator.run();
+  CHECK_EQ(state, ExecutionState::BREAKPOINT);
+
+  // Check memory usage at reserving task 0
+
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(0), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(1), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(0), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(1), 0);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(1), 0);
+
+  CHECK(data_manager.check_valid_mapped({0}, 0));
+  CHECK(data_manager.check_valid_reserved({0}, 0));
+  CHECK(data_manager.check_valid_launched({0}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 0));
+  CHECK(data_manager.check_valid_reserved({1}, 0));
+  CHECK(data_manager.check_valid_launched({1}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 1));
+
+  simulator.add_task_breakpoint(EventType::RESERVER, 1);
+  state = simulator.run();
+  CHECK_EQ(state, ExecutionState::BREAKPOINT);
+
+  // Check memory usage at reserving task 1
+
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(0), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(1), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(0), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(1), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(1), 0);
+
+  CHECK(data_manager.check_valid_mapped({0}, 0));
+  CHECK(data_manager.check_valid_reserved({0}, 0));
+  CHECK(data_manager.check_valid_launched({0}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 0));
+  CHECK(data_manager.check_valid_reserved({1}, 0));
+  CHECK(data_manager.check_valid_launched({1}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 1));
+  CHECK(data_manager.check_valid_reserved({1}, 1));
+
+  // Check memory usage at launching task 0
+  simulator.add_task_breakpoint(EventType::LAUNCHER, 0);
+  state = simulator.run();
+  CHECK_EQ(state, ExecutionState::BREAKPOINT);
+  auto simulator2(simulator);
+  auto state2 = simulator2.run();
+  CHECK_EQ(state2, ExecutionState::COMPLETE);
+
+  const auto device_manager2 =
+      simulator2.scheduler.get_state().get_device_manager();
+  const auto data_manager2 =
+      simulator2.scheduler.get_state().get_data_manager();
+
+  CHECK_EQ(device_manager2.get_mem<TaskState::MAPPED>(0), 3072);
+  CHECK_EQ(device_manager2.get_mem<TaskState::MAPPED>(1), 2048);
+  CHECK_EQ(device_manager2.get_mem<TaskState::RESERVED>(0), 3072);
+  CHECK_EQ(device_manager2.get_mem<TaskState::RESERVED>(1), 2048);
+  CHECK_EQ(device_manager2.get_mem<TaskState::LAUNCHED>(0), 3072);
+  CHECK_EQ(device_manager2.get_mem<TaskState::LAUNCHED>(1), 2048);
+
+  CHECK(data_manager2.check_valid_mapped({0}, 0));
+  CHECK(data_manager2.check_valid_reserved({0}, 0));
+  CHECK(data_manager2.check_valid_launched({0}, 0));
+
+  CHECK(data_manager2.check_valid_mapped({1}, 0));
+  CHECK(data_manager2.check_valid_reserved({1}, 0));
+  CHECK(data_manager2.check_valid_launched({1}, 0));
+
+  CHECK(data_manager2.check_valid_mapped({1}, 1));
+  CHECK(data_manager2.check_valid_reserved({1}, 1));
+  CHECK(data_manager2.check_valid_launched({1}, 1));
+
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(0), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(1), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(0), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(1), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(0), 4096);
+
+  // The data movement task 0 -> 1 should have started at this point
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(1), 2048);
+
+  CHECK(data_manager.check_valid_mapped({0}, 0));
+  CHECK(data_manager.check_valid_reserved({0}, 0));
+  CHECK(data_manager.check_valid_launched({0}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 0));
+  CHECK(data_manager.check_valid_reserved({1}, 0));
+  CHECK(data_manager.check_valid_launched({1}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 1));
+  CHECK(data_manager.check_valid_reserved({1}, 1));
+
+  simulator.add_task_breakpoint(EventType::LAUNCHER, 1);
+  state = simulator.run();
+  CHECK_EQ(state, ExecutionState::BREAKPOINT);
+
+  // Check memory usage at launching task 1
+  // Task 0 completes before task 1 starts
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(1), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(1), 4096);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(1), 4096);
+
+  CHECK(data_manager.check_valid_mapped({0}, 0));
+  CHECK(data_manager.check_valid_reserved({0}, 0));
+  CHECK(data_manager.check_valid_launched({0}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 0));
+  CHECK(data_manager.check_valid_reserved({1}, 0));
+  CHECK(data_manager.check_valid_launched({1}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 1));
+  CHECK(data_manager.check_valid_reserved({1}, 1));
+  CHECK(data_manager.check_valid_launched({1}, 1));
+
+  state = simulator.run();
+
+  CHECK_EQ(state, ExecutionState::COMPLETE);
+
+  // Check memory usage at end
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::MAPPED>(1), 2048);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::RESERVED>(1), 2048);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(0), 3072);
+  CHECK_EQ(device_manager.get_mem<TaskState::LAUNCHED>(1), 2048);
+
+  CHECK(data_manager.check_valid_mapped({0}, 0));
+  CHECK(data_manager.check_valid_reserved({0}, 0));
+  CHECK(data_manager.check_valid_launched({0}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 0));
+  CHECK(data_manager.check_valid_reserved({1}, 0));
+  CHECK(data_manager.check_valid_launched({1}, 0));
+
+  CHECK(data_manager.check_valid_mapped({1}, 1));
+  CHECK(data_manager.check_valid_reserved({1}, 1));
+  CHECK(data_manager.check_valid_launched({1}, 1));
+}
+
 TEST_CASE_FIXTURE(SimulatorFixture, "Error scenario: Circular dependency") {
   // Reset tasks with circular dependency
   auto tasks = Tasks(2);
@@ -304,8 +589,10 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Error scenario: Circular dependency") {
   tasks.add_variant(1, DeviceType::CPU, 1, 1024, 100);
 
   // Reinitialize simulator with new configuration
-  auto simulator = Simulator(tasks, data, devices, topology, mapper);
-  simulator.initialize(42, false);
+  input = SchedulerInput(tasks, data, devices, topology, mapper, task_noise,
+                         comm_noise);
+  auto simulator = Simulator(input);
+  simulator.initialize(false);
 
   auto state = simulator.run();
   CHECK_EQ(state, ExecutionState::ERROR);
@@ -348,8 +635,10 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Graph with multiple data dependencies") {
   auto static_mapper = StaticMapper({0, 1, 0, 1, 0});
 
   // Reinitialize simulator with new configuration
-  auto simulator = Simulator(tasks, data, devices, topology, static_mapper);
-  simulator.initialize(42, true);
+  input = SchedulerInput(tasks, data, devices, topology, static_mapper,
+                         task_noise, comm_noise);
+  auto simulator = Simulator(input);
+  simulator.initialize(true);
 
   const auto &scheduler_state = simulator.scheduler.get_state();
   const auto &data_manager = scheduler_state.get_data_manager();

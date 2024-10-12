@@ -3,6 +3,7 @@
 #include "settings.hpp"
 #include "tasks.hpp"
 #include <cassert>
+#include <functional>
 
 class DeviceManager;
 
@@ -154,27 +155,28 @@ protected:
     launched.resize(n_devices);
   }
 
-  Devices &get_devices() { return devices; }
+  [[nodiscard]] Devices &get_devices() { return devices.get(); }
 
 public:
-  Devices &devices;
+  std::reference_wrapper<Devices> devices;
 
   DeviceResources mapped;
   DeviceResources reserved;
   DeviceResources launched;
 
   DeviceManager(Devices &devices_) : devices(devices_) {
-    std::size_t n_devices = devices.size();
+    std::size_t n_devices = devices.get().size();
     resize(n_devices);
   };
 
   void initialize() {}
 
-  [[nodiscard]] std::size_t size() const { return devices.size(); }
+  [[nodiscard]] std::size_t size() const { return devices.get().size(); }
 
   [[nodiscard]] const Devices &get_devices() const { return devices; }
 
-  template <TaskState State> const DeviceResources &get_resources() const {
+  template <TaskState State>
+  [[nodiscard]] const DeviceResources &get_resources() const {
     if constexpr (State == TaskState::MAPPED) {
       return mapped;
     } else if constexpr (State == TaskState::RESERVED) {
@@ -206,12 +208,12 @@ public:
     return {resources.get_vcu(id), resources.get_mem(id)};
   }
 
-  template <TaskState State> mem_t get_mem(devid_t id) const {
+  template <TaskState State> [[nodiscard]] mem_t get_mem(devid_t id) const {
     auto &resources = get_resources<State>();
     return resources.get_mem(id);
   }
 
-  template <TaskState State> vcu_t get_vcu(devid_t id) const {
+  template <TaskState State> [[nodiscard]] vcu_t get_vcu(devid_t id) const {
     auto &resources = get_resources<State>();
     return resources.get_vcu(id);
   }
@@ -236,27 +238,31 @@ public:
     resources.add_vcu(id, vcu_);
   }
 
-  template <TaskState State> bool can_fit_mem(devid_t id, mem_t mem_) const {
+  template <TaskState State>
+  [[nodiscard]] bool can_fit_mem(devid_t id, mem_t mem_) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get_max_resources(id);
+    const auto &device_max_resources = devices.get().get_max_resources(id);
     return state_resources.fit_mem(id, mem_, device_max_resources.mem);
   }
 
-  template <TaskState State> bool can_fit_vcu(devid_t id, vcu_t vcu_) const {
+  template <TaskState State>
+  [[nodiscard]] bool can_fit_vcu(devid_t id, vcu_t vcu_) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get_max_resources(id);
+    const auto &device_max_resources = devices.get().get_max_resources(id);
     return state_resources.fit_vcu(id, vcu_, device_max_resources.vcu);
   }
 
-  template <TaskState State> mem_t overflow_mem(devid_t id, mem_t mem_) const {
+  template <TaskState State>
+  [[nodiscard]] mem_t overflow_mem(devid_t id, mem_t mem_) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get_max_resources(id);
+    const auto &device_max_resources = devices.get().get_max_resources(id);
     return state_resources.overflow_mem(id, mem_, device_max_resources.mem);
   }
 
-  template <TaskState State> vcu_t overflow_vcu(devid_t id, vcu_t vcu_) const {
+  template <TaskState State>
+  [[nodiscard]] vcu_t overflow_vcu(devid_t id, vcu_t vcu_) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get_max_resources(id);
+    const auto &device_max_resources = devices.get().get_max_resources(id);
     return state_resources.overflow_vcu(id, vcu_, device_max_resources.vcu);
   }
 
@@ -273,9 +279,10 @@ public:
   }
 
   template <TaskState State>
-  Resources overflow_resources(devid_t id, const Resources &r) const {
+  [[nodiscard]] Resources overflow_resources(devid_t id,
+                                             const Resources &r) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get_max_resources(id);
+    const auto &device_max_resources = devices.get().get_max_resources(id);
     return state_resources.overflow_resources(id, r, device_max_resources);
   }
 };

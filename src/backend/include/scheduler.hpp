@@ -3,20 +3,22 @@
 #include "action.hpp"
 #include "breakpoints.hpp"
 #include "communication_manager.hpp"
+#include "data_manager.hpp"
 #include "device_manager.hpp"
 #include "event_manager.hpp"
 #include "events.hpp"
 #include "graph.hpp"
 #include "iterator.hpp"
 #include "macros.hpp"
+#include "noise.hpp"
 #include "queues.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
-// #include "spdlog/spdlog.h"
-#include "data_manager.hpp"
+#include "spdlog/spdlog.h"
 #include "task_manager.hpp"
 #include "tasks.hpp"
 #include <cassert>
+#include <functional>
 #include <random>
 #include <utility>
 
@@ -47,9 +49,12 @@ protected:
   void id_to_queue(taskid_t id, const TaskStateInfo &state);
 
 public:
-  SchedulerQueues(std::size_t num_devices)
-      : reservable(num_devices), launchable(num_devices),
-        data_launchable(num_devices) {}
+  SchedulerQueues(Devices &devices)
+      : reservable(devices.size()), launchable(devices.size()),
+        data_launchable(devices.size()) {}
+
+  SchedulerQueues(const SchedulerQueues &other) = default;
+  SchedulerQueues &operator=(const SchedulerQueues &other) = default;
 
   void push_mappable(taskid_t id, priority_t p);
   void push_mappable(const TaskIDList &ids, const PriorityList &ps);
@@ -124,34 +129,36 @@ public:
   void count_completed(devid_t device_id);
   void count_data_completed(devid_t device_id);
 
-  std::size_t n_active() const { return n_active_tasks; }
-  std::size_t n_mapped() const { return n_mapped_tasks; }
-  std::size_t n_reserved() const { return n_reserved_tasks; }
-  std::size_t n_launched() const { return n_launched_tasks; }
-  std::size_t n_completed() const { return n_completed_tasks; }
-  std::size_t n_data_completed() const { return n_data_completed_tasks; }
+  [[nodiscard]] std::size_t n_active() const { return n_active_tasks; }
+  [[nodiscard]] std::size_t n_mapped() const { return n_mapped_tasks; }
+  [[nodiscard]] std::size_t n_reserved() const { return n_reserved_tasks; }
+  [[nodiscard]] std::size_t n_launched() const { return n_launched_tasks; }
+  [[nodiscard]] std::size_t n_completed() const { return n_completed_tasks; }
+  [[nodiscard]] std::size_t n_data_completed() const {
+    return n_data_completed_tasks;
+  }
 
-  std::size_t n_active(devid_t device_id) const {
+  [[nodiscard]] std::size_t n_active(devid_t device_id) const {
     return per_device_mapped_tasks[device_id];
   }
 
-  std::size_t n_mapped(devid_t device_id) const {
+  [[nodiscard]] std::size_t n_mapped(devid_t device_id) const {
     return per_device_mapped_tasks[device_id];
   }
 
-  std::size_t n_reserved(devid_t device_id) const {
+  [[nodiscard]] std::size_t n_reserved(devid_t device_id) const {
     return per_device_reserved_tasks[device_id];
   }
 
-  std::size_t n_launched(devid_t device_id) const {
+  [[nodiscard]] std::size_t n_launched(devid_t device_id) const {
     return per_device_launched_tasks[device_id];
   }
 
-  std::size_t n_completed(devid_t device_id) const {
+  [[nodiscard]] std::size_t n_completed(devid_t device_id) const {
     return per_device_completed_tasks[device_id];
   }
 
-  std::size_t n_data_completed(devid_t device_id) const {
+  [[nodiscard]] std::size_t n_data_completed(devid_t device_id) const {
     return per_device_data_completed_tasks[device_id];
   }
 
@@ -180,21 +187,58 @@ public:
 
   void count_data_completed(devid_t device_id, timecount_t time);
 
-  // void eft(taskid_t task_id, devid_t device_id, timecount_t time);
-  // needs communicationManager
-
 protected:
   std::vector<timecount_t> per_device_mapped_time;
   std::vector<timecount_t> per_device_reserved_time;
   std::vector<timecount_t> per_device_launched_time;
   std::vector<timecount_t> per_device_completed_time;
   std::vector<timecount_t> per_device_data_completed_time;
-  std::vector<timecount_t> eft_task_times;
 };
 
 struct ResourceRequest {
   Resources requested;
   Resources missing;
+};
+
+class Mapper;
+
+struct SchedulerInput {
+  std::reference_wrapper<Tasks> tasks;
+  std::reference_wrapper<Data> data;
+  std::reference_wrapper<Devices> devices;
+  std::reference_wrapper<Topology> topology;
+  std::reference_wrapper<Mapper> mapper;
+  std::reference_wrapper<TaskNoise> task_noise;
+  std::reference_wrapper<CommunicationNoise> comm_noise;
+
+  SchedulerInput(Tasks &tasks, Data &data, Devices &devices, Topology &topology,
+                 Mapper &mapper, TaskNoise &task_noise,
+                 CommunicationNoise &comm_noise)
+      : tasks(tasks), data(data), devices(devices), topology(topology),
+        mapper(mapper), task_noise(task_noise), comm_noise(comm_noise) {}
+
+  SchedulerInput(const SchedulerInput &other) = default;
+
+  SchedulerInput &operator=(const SchedulerInput &other) = default;
+
+  // Shallow copy constructor
+  SchedulerInput(SchedulerInput &&other) noexcept
+      : tasks(other.tasks), data(other.data), devices(other.devices),
+        topology(other.topology), mapper(other.mapper),
+        task_noise(other.task_noise), comm_noise(other.comm_noise) {}
+
+  SchedulerInput &operator=(SchedulerInput &&other) noexcept {
+    if (this != &other) {
+      tasks = other.tasks;
+      data = other.data;
+      devices = other.devices;
+      topology = other.topology;
+      mapper = other.mapper;
+      task_noise = other.task_noise;
+      comm_noise = other.comm_noise;
+    }
+    return *this;
+  }
 };
 
 class SchedulerState {
@@ -232,12 +276,13 @@ protected:
 public:
   TaskCountInfo counts;
   TaskCostInfo costs;
-  SchedulerState(Tasks &tasks, Data &data, Devices &devices, Topology &topology)
-      : task_manager(TaskManager(tasks)),
-        device_manager(DeviceManager(devices)),
-        communication_manager(topology, devices),
-        data_manager(data, device_manager, communication_manager),
-        counts(devices.size()), costs(tasks.size(), devices.size()) {}
+  SchedulerState(SchedulerInput &input)
+      : task_manager(TaskManager(input.tasks, input.task_noise)),
+        device_manager(DeviceManager(input.devices)),
+        communication_manager(input.topology, input.devices, input.comm_noise),
+        data_manager(input.data, device_manager, communication_manager),
+        counts(input.devices.get().size()),
+        costs(input.tasks.get().size(), input.devices.get().size()) {}
 
   void update_time(timecount_t time) {
     global_time = std::max(global_time, time);
@@ -265,10 +310,11 @@ public:
   [[nodiscard]] const Resources &get_task_resources(taskid_t task_id) const;
 
   [[nodiscard]] const std::string &get_task_name(taskid_t task_id) const {
-    return task_manager.tasks.get_name(task_id);
+    const auto &tasks = task_manager.get_tasks();
+    return tasks.get_name(task_id);
   }
   [[nodiscard]] const std::string &get_device_name(devid_t device_id) const {
-    return device_manager.devices.get_name(device_id);
+    return device_manager.devices.get().get_name(device_id);
   }
 
   [[nodiscard]] bool is_compute_task(taskid_t task_id) const;
@@ -421,22 +467,20 @@ protected:
   DeviceIDList device_buffer;
   EventList event_buffer;
 
-  std::random_device rd;
-  std::mt19937 gen;
-
   void enqueue_data_tasks(taskid_t task_id);
 
 public:
   bool initialized = false;
   BreakpointManager breakpoints;
 
-  Scheduler(Tasks &tasks, Data &data, Devices &devices, Topology &topology)
-      : state(tasks, data, devices, topology),
-        queues(SchedulerQueues(devices.size())) {
+  Scheduler(SchedulerInput &input) : state(input), queues(input.devices) {
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
     event_buffer.reserve(INITIAL_EVENT_BUFFER_SIZE);
   }
+
+  Scheduler(const Scheduler &other) = default;
+  Scheduler &operator=(Scheduler &&other) = default;
 
   void set_transition_conditions(TransitionConditions &conditions_) {
     this->conditions = conditions_;
@@ -448,8 +492,7 @@ public:
     return GraphManager::initial_tasks(compute_tasks);
   }
 
-  void initialize(unsigned int seed, bool create_data_tasks = false) {
-    gen.seed(seed);
+  void initialize(bool create_data_tasks = false) {
     state.initialize(create_data_tasks);
     const auto &task_states = state.task_manager.state;
     auto initial_tasks = initially_mappable_tasks();
@@ -606,8 +649,8 @@ protected:
     assert(!device_buffer.empty());
   }
 
-  const DeviceIDList &get_devices_from_arch(DeviceType arch,
-                                            SchedulerState &state) {
+  static const DeviceIDList &get_devices_from_arch(DeviceType arch,
+                                                   SchedulerState &state) {
     const auto &devices = state.get_device_manager().get_devices();
     return devices.get_devices(arch);
   }
@@ -715,8 +758,6 @@ public:
     priority_t lp = 0;
 
     if (!mapping.empty()) {
-      std::cout << "mapping task " << task_id << " to device "
-                << mapping[task_id % mapping.size()] << std::endl;
       device_id = mapping[task_id % mapping.size()];
     }
     if (!reserving_priorities.empty()) {

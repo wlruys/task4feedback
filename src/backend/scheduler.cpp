@@ -1,4 +1,6 @@
 #include "scheduler.hpp"
+#include "data_manager.hpp"
+#include "devices.hpp"
 #include "event_manager.hpp"
 #include "macros.hpp"
 #include "settings.hpp"
@@ -9,21 +11,21 @@
 
 timecount_t SchedulerState::get_execution_time(taskid_t task_id) const {
   auto device_id = task_manager.state.get_mapping(task_id);
-  auto arch = device_manager.devices.get_type(device_id);
-  return task_manager.get_task_variant(task_id, arch).get_execution_time();
+  auto arch = device_manager.devices.get().get_type(device_id);
+  return task_manager.get_execution_time(task_id, arch);
 }
 
 const Resources &SchedulerState::get_task_resources(taskid_t task_id,
                                                     devid_t device_id) const {
   const Resources &task_resources = task_manager.get_task_resources(
-      task_id, device_manager.devices.get_type(device_id));
+      task_id, device_manager.devices.get().get_type(device_id));
   return task_resources;
 }
 
 const Resources &SchedulerState::get_task_resources(taskid_t task_id) const {
   devid_t device_id = task_manager.state.get_mapping(task_id);
   const Resources &task_resources = task_manager.get_task_resources(
-      task_id, device_manager.devices.get_type(device_id));
+      task_id, device_manager.devices.get().get_type(device_id));
   return task_resources;
 }
 
@@ -41,11 +43,13 @@ ResourceRequest SchedulerState::request_map_resources(taskid_t task_id,
 }
 
 bool SchedulerState::is_data_task(taskid_t task_id) const {
-  return task_manager.tasks.is_data(task_id);
+  const auto &tasks = task_manager.get_tasks();
+  return tasks.is_data(task_id);
 }
 
 bool SchedulerState::is_compute_task(taskid_t task_id) const {
-  return task_manager.tasks.is_compute(task_id);
+  const auto &tasks = task_manager.get_tasks();
+  return tasks.is_compute(task_id);
 }
 
 ResourceRequest
@@ -58,17 +62,14 @@ SchedulerState::request_reserve_resources(taskid_t task_id,
       data_manager.non_local_size_reserved(task.get_unique(), device_id);
   Resources requested = {task_resources.vcu,
                          task_resources.mem + non_local_mem};
-  std::cout << "Requested: " << requested << std::endl;
   auto missing_mem = device_manager.overflow_mem<TaskState::RESERVED>(
       device_id, requested.mem);
-  std::cout << "Missing mem: " << missing_mem << std::endl;
   return {requested, Resources(0, missing_mem)};
 }
 
 ResourceRequest
 SchedulerState::request_launch_resources(taskid_t task_id,
                                          devid_t device_id) const {
-  const auto &task = task_manager.get_tasks().get_compute_task(task_id);
   const Resources &task_resources = get_task_resources(task_id, device_id);
   // mem_t non_local_mem =
   //     data_manager.non_local_size_launched(task.get_read(), device_id);
@@ -332,7 +333,7 @@ void TaskCountInfo::count_data_completed(devid_t device_id) {
 TaskCostInfo::TaskCostInfo(std::size_t n_tasks, std::size_t n_devices)
     : per_device_mapped_time(n_devices), per_device_reserved_time(n_devices),
       per_device_launched_time(n_devices), per_device_completed_time(n_devices),
-      per_device_data_completed_time(n_devices), eft_task_times(n_tasks) {}
+      per_device_data_completed_time(n_devices) {}
 
 void TaskCostInfo::count_mapped(devid_t device_id, timecount_t time) {
   per_device_mapped_time[device_id] += time;
@@ -382,6 +383,9 @@ const TaskIDList &Scheduler::map_task(Action &action) {
   taskid_t task_id = action.task_id;
   devid_t chosen_device = action.device;
 
+  SPDLOG_TRACE("Mapping task {} to device {}", s.get_task_name(task_id),
+               s.get_device_name(chosen_device));
+
   assert(s.is_mappable(task_id));
   assert(s.is_compute_task(task_id));
 
@@ -410,14 +414,10 @@ const TaskIDList &Scheduler::map_task(Action &action) {
 
   breakpoints.check_task_breakpoint(EventType::MAPPER, task_id);
 
-  std::cout << "Mapped task " << state.get_task_name(task_id) << " to device"
-            << state.device_manager.devices.get_name(chosen_device)
-            << std::endl;
-
   // Check if the mapped task is reservable, and if so, enqueue it
   if (s.is_reservable(task_id)) {
-    // std::cout << "Task " << state.get_task_name(task_id)
-    //           << " is reservable at time " << s.global_time << std::endl;
+    SPDLOG_DEBUG("Task {} is reservable at time {}", s.get_task_name(task_id),
+                 s.global_time);
     push_reservable(task_id, chosen_device);
   }
 
@@ -461,14 +461,15 @@ void Scheduler::map_tasks(Event &map_event, EventManager &event_manager,
   auto &s = this->state;
   auto &task_states = state.task_manager.state;
 
-  // spdlog::info("Mapping tasks at time {}", s.global_time);
-  // spdlog::debug("Mappable Queue Size: {}", queues.mappable.size());
+  SPDLOG_DEBUG("Starting mapper at time {}", s.global_time);
+  SPDLOG_DEBUG("Mappable Queue Size: {}", queues.mappable.size());
   bool break_flag = false;
 
   while (queues.has_mappable() && conditions.should_map(s, queues)) {
 
     if (is_breakpoint()) {
       break_flag = true;
+      SPDLOG_DEBUG("Breaking from mapper at time {}", s.global_time);
       break;
     }
 
@@ -503,15 +504,15 @@ void Scheduler::enqueue_data_tasks(taskid_t id) {
 
   const auto &data_dependencies = tasks.get_data_dependencies(id);
 
-  // spdlog::debug("Enqueueing {} data tasks for task {}",
-  //               data_dependencies.size(), s.get_task_name(id));
+  SPDLOG_DEBUG("Enqueueing {} data tasks for task {}", data_dependencies.size(),
+               s.get_task_name(id));
 
   for (auto data_task_id : data_dependencies) {
     assert(tasks.is_data(data_task_id));
     task_manager.set_state(data_task_id, TaskState::RESERVED);
     if (s.is_launchable(data_task_id)) {
-      // spdlog::debug("New data task {} is launchable",
-      //               s.get_task_name(data_task_id));
+      SPDLOG_DEBUG("Data task {} is launchable at time {}",
+                   s.get_task_name(data_task_id), s.global_time);
       push_launchable_data(data_task_id);
     }
   }
@@ -524,19 +525,22 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
   assert(s.is_reservable(task_id));
   assert(s.get_mapping(task_id) == device_id);
 
-  // spdlog::debug("Attempting to reserve task {} at time {}",
-  //               s.get_task_name(task_id), s.global_time);
+  SPDLOG_DEBUG("Attempting to reserve task {} at time {} on device {}",
+               s.get_task_name(task_id), s.global_time, device_id);
 
   // Get total required task memory
   const auto [requested, missing] =
       s.request_reserve_resources(task_id, device_id);
 
   if (missing.mem > 0) {
+    SPDLOG_DEBUG("Task {} missing {} memory at time {} on device {}",
+                 s.get_task_name(task_id), missing.mem, s.global_time,
+                 device_id);
     return {false, nullptr};
   }
 
-  // spdlog::debug("Reserving task {} at time {}", s.get_task_name(task_id),
-  //               s.global_time);
+  SPDLOG_DEBUG("Reserving task {} at time {} on device {}",
+               s.get_task_name(task_id), s.global_time, device_id);
 
   // Update reserved resources
   s.reserve_resources(task_id, device_id, requested);
@@ -557,9 +561,8 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
 
   // Check if the reserved task is launchable, and if so, enqueue it
   if (s.is_launchable(task_id)) {
-    // spdlog::debug("Task {} is launchable at time {}",
-    // s.get_task_name(task_id),
-    //               s.global_time);
+    SPDLOG_DEBUG("Task {} is launchable at time {}", s.get_task_name(task_id),
+                 s.global_time);
     push_launchable(task_id, device_id);
   }
 
@@ -576,10 +579,9 @@ void Scheduler::reserve_tasks(Event &reserve_event,
   reservable.reset();
   reservable.current_or_next_active();
 
-  // spdlog::debug("Reserving tasks at time {}", s.global_time);
-  // spdlog::debug("Reservable Queue Size: {}",
-  //               queues.reservable.total_active_size());
-
+  SPDLOG_DEBUG("Reserving tasks at time {}", s.global_time);
+  SPDLOG_DEBUG("Reservable Queue Size: {}",
+               queues.reservable.total_active_size());
   bool break_flag = false;
 
   while (queues.has_active_reservable() &&
@@ -587,6 +589,7 @@ void Scheduler::reserve_tasks(Event &reserve_event,
 
     if (is_breakpoint()) {
       break_flag = true;
+      SPDLOG_DEBUG("Breaking from reserver at time {}", s.global_time);
       break;
     }
 
@@ -603,9 +606,6 @@ void Scheduler::reserve_tasks(Event &reserve_event,
       reservable.next();
       continue;
     }
-
-    std::cout << "Reserving task " << s.get_task_name(task_id) << " at time "
-              << s.global_time << std::endl;
 
     reservable.pop();
 
@@ -637,12 +637,9 @@ void Scheduler::reserve_tasks(Event &reserve_event,
 bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
                                     EventManager &event_manager) {
   auto &s = this->state;
-  // spdlog::debug("Attempting to launch task {} at time {}",
-  //               s.get_task_name(task_id), s.global_time);
 
-  std::cout << "Attempting to launch task " << s.get_task_name(task_id)
-            << " at time " << s.global_time << " on device " << device_id
-            << std::endl;
+  SPDLOG_DEBUG("Attempting to launch compute task {} at time {} on device {}",
+               s.get_task_name(task_id), s.global_time, device_id);
 
   assert(s.is_launchable(task_id));
   assert(s.get_mapping(task_id) == device_id);
@@ -652,19 +649,12 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
       s.request_launch_resources(task_id, device_id);
 
   if (missing.vcu > 0) {
+    SPDLOG_DEBUG("Task {} missing {} VCU at time {}", s.get_task_name(task_id),
+                 missing.vcu, s.global_time);
     return false;
   }
 
-  std::cout << "Launching task " << s.get_task_name(task_id) << " at time "
-            << s.global_time << std::endl;
-
   const auto &task = s.task_manager.get_tasks().get_compute_task(task_id);
-
-  for (auto data_id : task.get_read()) {
-    std::cout << "Data ID: " << data_id << std::endl;
-    std::cout << "BEFORE L: "
-              << s.data_manager.get_launched_locations()[data_id] << std::endl;
-  }
 
   // Update data locations for WRITE data (create them here)
   s.data_manager.read_update_launched(task.get_write(), device_id);
@@ -673,14 +663,8 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
   // All READ data should already be here (prefetched by data tasks)
   s.data_manager.check_valid_launched(task.get_read(), device_id);
 
-  for (auto data_id : task.get_read()) {
-    std::cout << "Data ID: " << data_id << std::endl;
-    std::cout << "BEFORE L: "
-              << s.data_manager.get_launched_locations()[data_id] << std::endl;
-  }
-
-  // spdlog::debug("Launching task {} at time {}", s.get_task_name(task_id),
-  //               s.global_time);
+  SPDLOG_DEBUG("Launching compute task {} at time {} on device {}",
+               s.get_task_name(task_id), s.global_time, device_id);
 
   // Update launched resources
   s.launch_resources(task_id, device_id, requested);
@@ -702,37 +686,34 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
 bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
                                  EventManager &event_manager) {
   auto &s = this->state;
-  // spdlog::debug("Attempting to launch data task {} at time {}",
-  //               s.get_task_name(task_id), s.global_time);
 
-  std::cout << "Attempting to launch data task " << s.get_task_name(task_id)
-            << " at time " << s.global_time << " on device " << destination_id
-            << std::endl;
+  SPDLOG_DEBUG("Attempting to launch data task {} at time {} on device {}",
+               s.get_task_name(task_id), s.global_time, destination_id);
 
   assert(s.is_launchable(task_id));
-
-  // spdlog::debug("Launching data task {} at time {}",
-  // s.get_task_name(task_id),
-  //               s.global_time);
 
   const auto &task = s.task_manager.get_tasks().get_data_task(task_id);
   const dataid_t data_id = task.get_data_id();
 
   auto [found, source_id] =
       s.data_manager.request_source(data_id, destination_id);
-  std::cout << "Data ID: " << data_id << std::endl;
-  std::cout << "Found: " << found << std::endl;
-  std::cout << "Source ID: " << source_id << std::endl;
-  std::cout << "Destination ID: " << destination_id << std::endl;
 
   if (!found) {
+    SPDLOG_DEBUG("Data task {} missing available source at time {}",
+                 s.get_task_name(task_id), s.global_time);
     return false;
   }
   s.task_manager.set_source(task_id, source_id);
   auto duration = s.data_manager.start_move(data_id, source_id, destination_id);
 
-  if (duration > 0) {
+  if (!duration.is_virtual) {
+    SPDLOG_DEBUG("Data task {} moving from {} to {} at time {}",
+                 s.get_task_name(task_id), s.get_device_name(source_id),
+                 s.get_device_name(destination_id), s.global_time);
     s.task_manager.set_existed(task_id);
+  } else {
+    SPDLOG_DEBUG("Data task {} is virtual at time {}", s.get_task_name(task_id),
+                 s.global_time);
   }
 
   // Record launching time
@@ -741,7 +722,7 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
   breakpoints.check_task_breakpoint(EventType::LAUNCHER, task_id);
 
   // Create completion event
-  timecount_t completion_time = s.global_time + duration;
+  timecount_t completion_time = s.global_time + duration.duration;
   event_manager.create_event(EventType::COMPLETER, completion_time,
                              TaskIDList({task_id}));
 
@@ -758,20 +739,16 @@ void Scheduler::launch_tasks(Event &launch_event, EventManager &event_manager) {
   launchable.reset();
   launchable.current_or_next_active();
 
-  // spdlog::debug("Launching tasks at time {}", s.global_time);
-  // spdlog::debug("Launchable Queue Size: {}",
-  //               queues.launchable.total_active_size());
-
-  std::cout << "Launching tasks at time " << s.global_time << std::endl;
-  std::cout << "Launchable Queue Size: "
-            << queues.launchable.total_active_size() << std::endl;
-
+  SPDLOG_DEBUG("Launching tasks at time {}", s.global_time);
+  SPDLOG_DEBUG("Launchable Queue Size: {}",
+               queues.launchable.total_active_size());
   bool break_flag = false;
 
   while (queues.has_active_launchable() &&
          conditions.should_launch(s, queues)) {
 
     if (is_breakpoint()) {
+      SPDLOG_DEBUG("Breaking from launcher at time {}", s.global_time);
       break_flag = true;
       break;
     }
@@ -801,9 +778,9 @@ void Scheduler::launch_tasks(Event &launch_event, EventManager &event_manager) {
     return;
   }
 
-  // TODO(wlr): Launch data tasks (queues.data_launchable)
-  // spdlog::debug("Data Launchable Queue Size: {}",
-  //               queues.data_launchable.total_active_size());
+  SPDLOG_DEBUG("Launching data tasks at time {}", s.global_time);
+  SPDLOG_DEBUG("Data Launchable Queue Size: {}",
+               queues.data_launchable.total_active_size());
 
   auto &data_launchable = queues.data_launchable;
   data_launchable.reset();
@@ -813,6 +790,7 @@ void Scheduler::launch_tasks(Event &launch_event, EventManager &event_manager) {
          conditions.should_launch_data(s, queues)) {
 
     if (is_breakpoint()) {
+      SPDLOG_DEBUG("Breaking from data launcher at time {}", s.global_time);
       break_flag = true;
       break;
     }
@@ -846,8 +824,6 @@ void Scheduler::launch_tasks(Event &launch_event, EventManager &event_manager) {
   scheduler_event_count -= 1;
 
   if (scheduler_event_count == 0 and success_count > 0) {
-    // std::cout << "Launcher is creating a new mapper event at time "
-    //           << s.global_time << std::endl;
     event_manager.create_event(EventType::MAPPER,
                                s.global_time + SCHEDULER_TIME_GAP + TIME_TO_MAP,
                                TaskIDList());
@@ -864,6 +840,9 @@ void Scheduler::evict(Event &eviction_event, EventManager &event_manager) {
 void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
   auto &s = this->state;
 
+  SPDLOG_DEBUG("Completing compute task {} at time {} on device {}",
+               s.get_task_name(task_id), s.global_time, device_id);
+
   // Free mapped, reserved, and launched resources
   s.free_resources(task_id);
   s.counts.count_completed(device_id);
@@ -878,26 +857,14 @@ void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
   auto &s = this->state;
   s.counts.count_data_completed(destination_id);
 
-  std::cout << "Completing data task " << s.get_task_name(task_id)
-            << " at time " << s.global_time << " on device " << destination_id
-            << std::endl;
+  SPDLOG_DEBUG("Completing data task {} at time {} on device {}",
+               s.get_task_name(task_id), s.global_time, destination_id);
 
   auto source_id = s.task_manager.get_source(task_id);
   auto existed = s.task_manager.get_existed(task_id);
   auto data_id =
       s.task_manager.get_tasks().get_data_task(task_id).get_data_id();
-
-  std::cout << "Source ID: " << source_id << std::endl;
-  std::cout << "Destination ID: " << destination_id << std::endl;
-  std::cout << "Data ID: " << data_id << std::endl;
-  std::cout << "Existed: " << existed << std::endl;
-
-  std::cout << "BEFORE C: " << s.data_manager.get_launched_locations()[data_id]
-            << std::endl;
   s.data_manager.complete_move(data_id, source_id, destination_id, existed);
-
-  std::cout << "AFTER C: " << s.data_manager.get_launched_locations()[data_id]
-            << std::endl;
 }
 
 void Scheduler::complete_task(Event &complete_event,
@@ -907,12 +874,6 @@ void Scheduler::complete_task(Event &complete_event,
 
   auto &s = this->state;
   taskid_t task_id = complete_event.get_tasks().front();
-
-  // spdlog::debug("Completing task {} at time {}", s.get_task_name(task_id),
-  //               s.global_time);
-
-  std::cout << "Completing task " << s.get_task_name(task_id) << " at time "
-            << s.global_time << std::endl;
 
   if (s.is_compute_task(task_id)) {
     devid_t device_id = s.get_mapping(task_id);

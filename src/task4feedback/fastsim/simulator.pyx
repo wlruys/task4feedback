@@ -9,7 +9,7 @@ from settings cimport taskid_t, dataid_t, TaskIDList, DataIDList, DeviceIDList, 
 from tasks cimport Tasks, Variant, TaskState, TaskStatus
 from data cimport Data 
 from noise cimport TaskNoise, ExternalTaskNoise, LognormalTaskNoise, esf_t
-from communication cimport Topology
+from communication cimport Topology, CommunicationNoise, CommunicationRequest, CommunicationStats
 from cython.operator cimport dereference as deref, preincrement as inc
 from libcpp.utility cimport move
 from libcpp.string cimport string
@@ -160,6 +160,8 @@ cdef convert_devid_list_to_numpy(DeviceIDList devid_list, copy: bool = False):
 
     return result
 
+cpdef start_logger():
+    logger_setup()
 
 cdef class PyAction:
     cdef Action* action
@@ -325,12 +327,12 @@ cdef class PyTasks:
             result[i, 0] = <uint64_t>variants[i].get_arch()
             result[i, 1] = <uint64_t>variants[i].get_vcus()
             result[i, 2] = <uint64_t>variants[i].get_mem()
-            result[i, 3] = <uint64_t>variants[i].get_execution_time()
+            result[i, 3] = <uint64_t>variants[i].get_true_execution_time()
         return result
 
     def get_variant(self, taskid_t taskid, DeviceType arch):
         cdef Variant variant = deref(self.tasks).get_variant(taskid, arch)
-        return variant.get_vcus(), variant.get_mem(), variant.get_execution_time()
+        return variant.get_vcus(), variant.get_mem(), variant.get_true_execution_time()
 
     def get_name(self, taskid_t taskid):
         cdef string s = deref(self.tasks).get_name(taskid)
@@ -357,8 +359,8 @@ cdef class PyTasks:
 
 
 cdef class PyTaskNoise:
-    cdef TaskNoise* noise
     cdef PyTasks tasks
+    cdef TaskNoise* noise
 
     def __cinit__(self, PyTasks tasks, unsigned int seed):
         self.tasks = tasks
@@ -421,6 +423,35 @@ cdef class PyLognormalNoise(PyTaskNoise):
         del self.noise
 
 
+cdef class PyCommunicationNoise:
+    cdef CommunicationNoise* noise
+    cdef PyTopology topology
+
+    def __cinit__(self, PyTopology topology, unsigned int seed):
+        self.topology = topology
+        self.noise = new CommunicationNoise(deref(topology.topology), seed)
+
+    def __dealloc__(self):
+        del self.noise
+
+    def get(self, taskid_t data_task_id, devid_t source, devid_t destination):
+        cdef CommunicationRequest request = CommunicationRequest(data_task_id, source, destination, 0)
+        cdef CommunicationStats stats = self.noise.get(request)
+        return stats.latency, stats.bandwidth
+
+    def set(self, taskid_t data_task_id, devid_t source, devid_t destination, timecount_t latency, mem_t bandwidth):
+        cdef CommunicationRequest request = CommunicationRequest(data_task_id, source, destination, 0)
+        cdef CommunicationStats stats = CommunicationStats(latency, bandwidth)
+        self.noise.set(request, stats)
+
+    def dump_to_binary(self, str filename):
+        cname = filename.encode('utf-8')
+        self.noise.dump_to_binary(cname)
+
+    def load_from_binary(self, str filename):
+        cname = filename.encode('utf-8')
+        self.noise.load_from_binary(cname)
+
 cdef class PyMapper:
     cdef Mapper* mapper
 
@@ -454,25 +485,38 @@ cdef class PyStaticMapper(PyMapper):
             priority_list.push_back(priority)
         (<StaticMapper*>self.mapper).set_reserving_priorities(priority_list)
 
+
+cdef class PySchedulerInput:
+    cdef SchedulerInput* input 
+
+    def __cinit__(self, PyTasks tasks, PyData data, PyDevices devices, PyTopology topology, PyMapper mapper, PyTaskNoise task_noise, PyCommunicationNoise comm_noise):
+        self.input = new SchedulerInput(deref(tasks.tasks), deref(data.data), deref(devices.devices), deref(topology.topology), deref(mapper.mapper), deref(task_noise.noise), deref(comm_noise.noise))
+
+    def __dealloc__(self):
+        del self.input
+
 cdef class PySimulator:
-    cdef PyTasks pytasks
-    cdef PyData pydata 
-    cdef PyDevices pydevices
-    cdef PyTopology pytopology
-    cdef PyMapper pymapper 
+    cdef PySchedulerInput input 
     cdef Simulator* simulator
 
-    def __cinit__(self, PyTasks tasks, PyData data, PyDevices devices, PyTopology topology, PyMapper mapper):
-        self.pytasks = tasks
-        self.pydata = data
-        self.pydevices = devices
-        self.pytopology = topology
-        self.pymapper = mapper
+    def __cinit__(self, input):
+        if isinstance(input, PySchedulerInput):
+            self.input = input 
+            self.simulator = new Simulator(deref((<PySchedulerInput>input).input))
+        elif isinstance(input, PySimulator):
+            self.simulator = new Simulator(deref((<PySimulator>input).simulator))
+        else:
+            raise ValueError("Input must be a PySchedulerInput or PySimulator")
 
-        self.simulator = new Simulator(deref(tasks.tasks), deref(data.data), deref(devices.devices), deref(topology.topology), deref(mapper.mapper))
+    def copy(self):
+        cdef PySimulator new_simulator = PySimulator(self)
+        return new_simulator
 
-    def initialize(self, unsigned int seed, bool create_data_tasks = 0):
-        self.simulator.initialize(seed, create_data_tasks)
+    cdef create(self):
+        self.simulator = new Simulator(deref(self.input.input))
+
+    def initialize(self, bool create_data_tasks = 0):
+        self.simulator.initialize(create_data_tasks)
 
     def run(self):
         cdef ExecutionState stop_reason = self.simulator.run()
@@ -503,6 +547,9 @@ cdef class PySimulator:
 
     def add_time_breakpoint(self, timecount_t time):
         self.simulator.add_time_breakpoint(time)
+
+    def use_python_mapper(self, bool use_python_mapper):
+        self.simulator.set_use_python_mapper(use_python_mapper)
 
     def __dealloc__(self):
         del self.simulator  

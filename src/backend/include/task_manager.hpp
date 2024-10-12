@@ -1,10 +1,12 @@
 #pragma once
 #include "graph.hpp"
 #include "macros.hpp"
+#include "noise.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
 #include "tasks.hpp"
 #include <ctime>
+#include <functional>
 
 class TaskManager;
 
@@ -46,6 +48,9 @@ public:
 
   TaskStateInfo() = default;
   TaskStateInfo(const Tasks &tasks);
+
+  TaskStateInfo(const TaskStateInfo &other) = default;
+  TaskStateInfo &operator=(const TaskStateInfo &other) = default;
 
   [[nodiscard]] TaskState get_state(taskid_t id) const { return state[id]; }
 
@@ -148,6 +153,9 @@ public:
     state_times.resize(tasks.size() * n_tracked_states, 0);
   }
 
+  TaskRecords(const TaskRecords &other) = default;
+  TaskRecords &operator=(const TaskRecords &other) = default;
+
   void record_mapped(taskid_t id, timecount_t time);
   void record_reserved(taskid_t id, timecount_t time);
   void record_launched(taskid_t id, timecount_t time);
@@ -166,20 +174,26 @@ private:
   void initialize_state();
 
 public:
-  Tasks &tasks;
+  std::reference_wrapper<Tasks> tasks;
   TaskStateInfo state;
   TaskRecords records;
+  std::reference_wrapper<TaskNoise> noise;
 
   TaskIDList task_buffer;
 
   bool initialized = false;
 
-  TaskManager(Tasks &tasks) : tasks(tasks){};
-  [[nodiscard]] std::size_t size() const { return tasks.size(); }
+  TaskManager(Tasks &tasks, TaskNoise &noise) : tasks(tasks), noise(noise){};
+  [[nodiscard]] std::size_t size() const { return tasks.get().size(); }
+
+  TaskManager(const TaskManager &other) = default;
 
   void initialize(bool create_data_tasks = false) {
     task_buffer.reserve(TASK_MANAGER_TASK_BUFFER_SIZE);
     GraphManager::finalize(tasks, create_data_tasks);
+    if (!noise.get().generated) {
+      noise.get().generate();
+    }
     initialize_state();
     initialized = true;
   }
@@ -212,7 +226,7 @@ public:
 
   [[nodiscard]] const Variant &get_task_variant(taskid_t id,
                                                 DeviceType arch) const {
-    return tasks.get_variant(id, arch);
+    return tasks.get().get_variant(id, arch);
   }
   [[nodiscard]] const Resources &get_task_resources(taskid_t id,
                                                     DeviceType arch) const {
@@ -224,12 +238,19 @@ public:
     return get_task_resources(id, arch);
   }
 
+  [[nodiscard]] timecount_t get_execution_time(taskid_t task_id,
+                                               DeviceType arch) const {
+    const auto &ctasks = get_tasks();
+    assert(ctasks.is_compute(task_id));
+    return noise.get()(task_id, arch);
+  }
+
   void print_task(taskid_t id);
 };
 
 class TaskPrinter {
 private:
-  TaskManager &tm;
+  std::reference_wrapper<TaskManager> tm;
 
 public:
   TaskPrinter(TaskManager &tm) : tm(tm) {}
