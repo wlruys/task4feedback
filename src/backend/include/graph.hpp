@@ -6,7 +6,7 @@
 
 struct Writer {
   bool found = false;
-  taskid_t task_id;
+  taskid_t task_id = 0;
 };
 
 class GraphManager {

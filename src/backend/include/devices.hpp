@@ -29,7 +29,7 @@ inline std::ostream &operator<<(std::ostream &os, const DeviceType &arch) {
 
 class Device {
 public:
-  devid_t id;
+  devid_t id = 0;
   DeviceType arch = DeviceType::NONE;
   Resources max_resources;
 

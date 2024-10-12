@@ -74,12 +74,12 @@ public:
   [[nodiscard]] bool has_mappable() const { return !mappable.empty(); }
 
   [[nodiscard]] std::size_t n_reservable(devid_t device) const {
-    const auto &device_queue = reservable[device];
+    const auto &device_queue = reservable.at(device);
     return device_queue.size();
   }
 
   [[nodiscard]] bool has_reservable(devid_t device) const {
-    const auto &device_queue = reservable[device];
+    const auto &device_queue = reservable.at(device);
     return !device_queue.empty();
   }
 
@@ -88,11 +88,11 @@ public:
   }
 
   [[nodiscard]] std::size_t n_launchable(devid_t device) const {
-    const auto &device_queue = launchable[device];
+    const auto &device_queue = launchable.at(device);
     return device_queue.size();
   }
   [[nodiscard]] bool has_launchable(devid_t device) const {
-    const auto &device_queue = launchable[device];
+    const auto &device_queue = launchable.at(device);
     return !device_queue.empty();
   }
 
@@ -101,11 +101,11 @@ public:
   }
 
   [[nodiscard]] std::size_t n_data_launchable(devid_t device) const {
-    const auto &device_queue = data_launchable[device];
+    const auto &device_queue = data_launchable.at(device);
     return device_queue.size();
   }
   [[nodiscard]] bool has_data_launchable(devid_t device) const {
-    const auto &device_queue = data_launchable[device];
+    const auto &device_queue = data_launchable.at(device);
     return !device_queue.empty();
   }
 
@@ -139,27 +139,27 @@ public:
   }
 
   [[nodiscard]] std::size_t n_active(devid_t device_id) const {
-    return per_device_mapped_tasks[device_id];
+    return per_device_mapped_tasks.at(device_id);
   }
 
   [[nodiscard]] std::size_t n_mapped(devid_t device_id) const {
-    return per_device_mapped_tasks[device_id];
+    return per_device_mapped_tasks.at(device_id);
   }
 
   [[nodiscard]] std::size_t n_reserved(devid_t device_id) const {
-    return per_device_reserved_tasks[device_id];
+    return per_device_reserved_tasks.at(device_id);
   }
 
   [[nodiscard]] std::size_t n_launched(devid_t device_id) const {
-    return per_device_launched_tasks[device_id];
+    return per_device_launched_tasks.at(device_id);
   }
 
   [[nodiscard]] std::size_t n_completed(devid_t device_id) const {
-    return per_device_completed_tasks[device_id];
+    return per_device_completed_tasks.at(device_id);
   }
 
   [[nodiscard]] std::size_t n_data_completed(devid_t device_id) const {
-    return per_device_data_completed_tasks[device_id];
+    return per_device_data_completed_tasks.at(device_id);
   }
 
 protected:
@@ -196,8 +196,8 @@ protected:
 };
 
 struct ResourceRequest {
-  Resources requested;
-  Resources missing;
+  Resources requested{0, 0};
+  Resources missing{0, 0};
 };
 
 class Mapper;
@@ -283,6 +283,13 @@ public:
         data_manager(input.data, device_manager, communication_manager),
         counts(input.devices.get().size()),
         costs(input.tasks.get().size(), input.devices.get().size()) {}
+
+  SchedulerState(const SchedulerState &other)
+      : global_time(other.global_time), task_manager(other.task_manager),
+        device_manager(other.device_manager),
+        communication_manager(other.communication_manager),
+        data_manager(other.data_manager, device_manager, communication_manager),
+        counts(other.counts), costs(other.costs) {}
 
   void update_time(timecount_t time) {
     global_time = std::max(global_time, time);
@@ -480,7 +487,6 @@ public:
   }
 
   Scheduler(const Scheduler &other) = default;
-  Scheduler &operator=(Scheduler &&other) = default;
 
   void set_transition_conditions(TransitionConditions &conditions_) {
     this->conditions = conditions_;
@@ -572,7 +578,7 @@ public:
     const auto &ps = state.task_manager.state.get_reserving_priorities();
     for (auto id : ids) {
       assert(ps.size() > id);
-      queues.push_reservable(id, ps[id],
+      queues.push_reservable(id, ps.at(id),
                              state.task_manager.state.get_mapping(id));
     }
   }
@@ -586,7 +592,7 @@ public:
     const auto &ps = state.task_manager.state.get_launching_priorities();
     for (auto id : ids) {
       assert(ps.size() > id);
-      queues.push_launchable(id, ps[id],
+      queues.push_launchable(id, ps.at(id),
                              state.task_manager.state.get_mapping(id));
     }
   }
@@ -679,13 +685,13 @@ protected:
 
   DeviceType choose_random_architecture(std::vector<DeviceType> &arch_buffer) {
     std::uniform_int_distribution<std::size_t> dist(0, arch_buffer.size() - 1);
-    return arch_buffer[dist(gen)];
+    return arch_buffer.at(dist(gen));
   }
 
   devid_t choose_random_device(DeviceIDList &device_buffer) {
     std::uniform_int_distribution<std::size_t> dist(0,
                                                     device_buffer.size() - 1);
-    return device_buffer[dist(gen)];
+    return device_buffer.at(dist(gen));
   }
 
 public:
@@ -758,19 +764,17 @@ public:
     priority_t lp = 0;
 
     if (!mapping.empty()) {
-      device_id = mapping[task_id % mapping.size()];
+      device_id = mapping.at(task_id % mapping.size());
     }
     if (!reserving_priorities.empty()) {
-      rp = reserving_priorities[task_id % reserving_priorities.size()];
+      rp = reserving_priorities.at(task_id % reserving_priorities.size());
     }
     if (!launching_priorities.empty()) {
-      lp = launching_priorities[task_id % launching_priorities.size()];
+      lp = launching_priorities.at(task_id % launching_priorities.size());
     }
 
     assert(check_supported_architecture(device_id, task_id, state));
     assert(device_id < state.get_device_manager().size());
-    assert(rp >= 0);
-    assert(lp >= 0);
 
     return Action(task_id, 0, device_id, rp, lp);
   }
@@ -785,6 +789,6 @@ public:
 
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     MONUnusedParameter(state);
-    return actions[task_id];
+    return actions.at(task_id);
   }
 };

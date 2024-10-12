@@ -14,7 +14,7 @@ class TaskStateInfo {
 protected:
   std::vector<TaskState> state;
   std::vector<DepCount> counts;
-  std::vector<bool> existed;
+  std::vector<bool> is_virtual;
   std::vector<devid_t> sources;
   std::size_t n_compute_tasks;
   std::size_t n_data_tasks;
@@ -28,11 +28,13 @@ protected:
   bool decrement_unreserved(taskid_t id);
   bool decrement_incomplete(taskid_t id);
 
-  void set_data_task_existed(taskid_t id) {
-    existed[id - n_compute_tasks] = true;
+  void set_data_task_virtual(taskid_t id) {
+    assert(id >= n_compute_tasks);
+    is_virtual.at(id - n_compute_tasks) = true;
   }
   void set_data_task_source(taskid_t id, devid_t source) {
-    sources[id - n_compute_tasks] = source;
+    assert(id >= n_compute_tasks);
+    sources.at(id - n_compute_tasks) = source;
   }
 
 public:
@@ -52,7 +54,7 @@ public:
   TaskStateInfo(const TaskStateInfo &other) = default;
   TaskStateInfo &operator=(const TaskStateInfo &other) = default;
 
-  [[nodiscard]] TaskState get_state(taskid_t id) const { return state[id]; }
+  [[nodiscard]] TaskState get_state(taskid_t id) const { return state.at(id); }
 
   [[nodiscard]] TaskStatus get_status(taskid_t id) const;
 
@@ -65,18 +67,18 @@ public:
   [[nodiscard]] bool is_launched(taskid_t id) const;
 
   [[nodiscard]] depcount_t get_unmapped(taskid_t id) const {
-    return counts[id].unmapped;
+    return counts.at(id).unmapped;
   }
   [[nodiscard]] depcount_t get_unreserved(taskid_t id) const {
-    return counts[id].unreserved;
+    return counts.at(id).unreserved;
   }
   [[nodiscard]] depcount_t get_incomplete(taskid_t id) const {
-    return counts[id].incomplete;
+    return counts.at(id).incomplete;
   }
 
   void set_mapping(taskid_t id, devid_t devid) {
     assert(id < n_compute_tasks);
-    mapping[id] = devid;
+    mapping.at(id) = devid;
   }
   void set_mapping_priority(taskid_t id, priority_t p);
   void set_mapping_priority(PriorityList &ps) {
@@ -95,36 +97,36 @@ public:
   [[nodiscard]] devid_t get_mapping(taskid_t id) const { return mapping[id]; };
   [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const {
     assert(id < mapping_priority.size());
-    return mapping_priority[id];
+    return mapping_priority.at(id);
   };
   [[nodiscard]] const PriorityList &get_mapping_priorities() const {
     return mapping_priority;
   }
   [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const {
     assert(id < reserving_priority.size());
-    return reserving_priority[id];
+    return reserving_priority.at(id);
   };
   [[nodiscard]] const PriorityList &get_reserving_priorities() const {
     return reserving_priority;
   }
   [[nodiscard]] priority_t get_launching_priority(taskid_t id) const {
     assert(id < launching_priority.size());
-    return launching_priority[id];
+    return launching_priority.at(id);
   };
   [[nodiscard]] const PriorityList &get_launching_priorities() const {
     return launching_priority;
   }
 
-  [[nodiscard]] bool get_data_task_existed(taskid_t id) const {
+  [[nodiscard]] bool get_data_task_virtual(taskid_t id) const {
+    assert(id >= n_compute_tasks);
     const auto offset = id - n_compute_tasks;
-    assert(0 <= offset && offset < existed.size());
-    return existed[offset];
+    return is_virtual.at(offset);
   }
 
   [[nodiscard]] devid_t get_data_task_source(taskid_t id) const {
+    assert(id >= n_compute_tasks);
     const auto offset = id - n_compute_tasks;
-    assert(0 <= offset && offset < sources.size());
-    return sources[offset];
+    return sources.at(offset);
   }
 
   [[nodiscard]] std::size_t size() const { return state.size(); }
@@ -175,9 +177,9 @@ private:
 
 public:
   std::reference_wrapper<Tasks> tasks;
+  std::reference_wrapper<TaskNoise> noise;
   TaskStateInfo state;
   TaskRecords records;
-  std::reference_wrapper<TaskNoise> noise;
 
   TaskIDList task_buffer;
 
@@ -212,11 +214,15 @@ public:
   void set_source(taskid_t id, devid_t source) {
     state.set_data_task_source(id, source);
   }
-  void set_existed(taskid_t id) { state.set_data_task_existed(id); }
+  void set_virtual(taskid_t id) { state.set_data_task_virtual(id); }
 
-  devid_t get_source(taskid_t id) { return state.get_data_task_source(id); }
+  [[nodiscard]] devid_t get_source(taskid_t id) const {
+    return state.get_data_task_source(id);
+  }
 
-  bool get_existed(taskid_t id) { return state.get_data_task_existed(id); }
+  [[nodiscard]] bool is_virtual(taskid_t id) const {
+    return state.get_data_task_virtual(id);
+  }
 
   const TaskIDList &notify_mapped(taskid_t id, timecount_t time);
   const TaskIDList &notify_reserved(taskid_t id, timecount_t time);
@@ -242,7 +248,7 @@ public:
                                                DeviceType arch) const {
     const auto &ctasks = get_tasks();
     assert(ctasks.is_compute(task_id));
-    return noise.get()(task_id, arch);
+    return noise.get().get(task_id, arch);
   }
 
   void print_task(taskid_t id);

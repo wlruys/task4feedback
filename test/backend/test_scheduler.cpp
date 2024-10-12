@@ -481,13 +481,14 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Copy: Data Movement and Memory Costs") {
   simulator.add_task_breakpoint(EventType::LAUNCHER, 0);
   state = simulator.run();
   CHECK_EQ(state, ExecutionState::BREAKPOINT);
-  auto simulator2(simulator);
+  std::cout << "COPY POINT" << std::endl;
+  auto simulator2 = Simulator(simulator);
   auto state2 = simulator2.run();
   CHECK_EQ(state2, ExecutionState::COMPLETE);
 
-  const auto device_manager2 =
+  const auto &device_manager2 =
       simulator2.scheduler.get_state().get_device_manager();
-  const auto data_manager2 =
+  const auto &data_manager2 =
       simulator2.scheduler.get_state().get_data_manager();
 
   CHECK_EQ(device_manager2.get_mem<TaskState::MAPPED>(0), 3072);
@@ -529,6 +530,7 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Copy: Data Movement and Memory Costs") {
   CHECK(data_manager.check_valid_mapped({1}, 1));
   CHECK(data_manager.check_valid_reserved({1}, 1));
 
+  std::cout << "RESUMING ORIGINAL" << std::endl;
   simulator.add_task_breakpoint(EventType::LAUNCHER, 1);
   state = simulator.run();
   CHECK_EQ(state, ExecutionState::BREAKPOINT);
@@ -600,14 +602,15 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Error scenario: Circular dependency") {
 
 TEST_CASE_FIXTURE(SimulatorFixture, "Graph with multiple data dependencies") {
   // Reset tasks with complex dependencies
-  auto tasks = Tasks(5);
+  const std::size_t n_tasks = 5;
+  auto tasks = Tasks(n_tasks);
   tasks.create_compute_task(0, "Task0", {});
   tasks.create_compute_task(1, "Task1", {0});
   tasks.create_compute_task(2, "Task2", {0});
   tasks.create_compute_task(3, "Task3", {1, 2});
   tasks.create_compute_task(4, "Task4", {3});
 
-  for (int i = 0; i < 5; ++i) {
+  for (std::size_t i = 0; i < n_tasks; ++i) {
     tasks.add_variant(i, DeviceType::CPU, 1, 100, 100);
     tasks.add_variant(i, DeviceType::GPU, 1, 200, 50);
   }
@@ -626,19 +629,30 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Graph with multiple data dependencies") {
 
   tasks.set_read(4, {6});
 
+  std::cout << "Created tasks" << std::endl;
+
   // Reset data
-  data = Data(7);
-  for (int i = 0; i < 7; ++i) {
+  const std::size_t n_data = 7;
+  auto data = Data(n_data);
+  for (std::size_t i = 0; i < n_data; ++i) {
     data.create_block(i, 1, 0, "Data" + std::to_string(i));
   }
 
+  std::cout << "Created data" << std::endl;
+
   auto static_mapper = StaticMapper({0, 1, 0, 1, 0});
+
+  std::cout << "Created mapper" << std::endl;
+  auto task_noise = TaskNoise(tasks, seed);
 
   // Reinitialize simulator with new configuration
   input = SchedulerInput(tasks, data, devices, topology, static_mapper,
                          task_noise, comm_noise);
   auto simulator = Simulator(input);
+
+  std::cout << "Created simulator" << std::endl;
   simulator.initialize(true);
+  std::cout << "Initialized simulator" << std::endl;
 
   const auto &scheduler_state = simulator.scheduler.get_state();
   const auto &data_manager = scheduler_state.get_data_manager();

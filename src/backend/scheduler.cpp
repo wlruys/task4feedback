@@ -201,7 +201,7 @@ void SchedulerQueues::push_mappable(const TaskIDList &ids,
   assert(ps.size() > ids.size());
   for (auto id : ids) {
     assert(ps.size() > id);
-    push_mappable(id, ps[id]);
+    push_mappable(id, ps.at(id));
   }
 }
 
@@ -214,7 +214,7 @@ void SchedulerQueues::push_reservable(const TaskIDList &ids,
                                       const PriorityList &ps, devid_t device) {
   assert(ps.size() > ids.size());
   for (auto id : ids) {
-    push_reservable(id, ps[id], device);
+    push_reservable(id, ps.at(id), device);
   }
 }
 
@@ -227,7 +227,7 @@ void SchedulerQueues::push_launchable(const TaskIDList &ids,
                                       const PriorityList &ps, devid_t device) {
   assert(ps.size() > ids.size());
   for (auto id : ids) {
-    push_launchable(id, ps[id], device);
+    push_launchable(id, ps.at(id), device);
   }
 }
 
@@ -241,7 +241,7 @@ void SchedulerQueues::push_launchable_data(const TaskIDList &ids,
                                            devid_t device) {
   assert(ps.size() > ids.size());
   for (auto id : ids) {
-    push_launchable_data(id, ps[id], device);
+    push_launchable_data(id, ps.at(id), device);
   }
 }
 
@@ -294,33 +294,40 @@ TaskCountInfo::TaskCountInfo(std::size_t n_devices)
 void TaskCountInfo::count_mapped(devid_t device_id) {
   n_active_tasks += 1;
   n_mapped_tasks += 1;
-  per_device_mapped_tasks[device_id] += 1;
+  per_device_mapped_tasks.at(device_id) += 1;
 }
 
 void TaskCountInfo::count_reserved(devid_t device_id) {
   n_reserved_tasks += 1;
-  per_device_reserved_tasks[device_id] += 1;
+  per_device_reserved_tasks.at(device_id) += 1;
 }
 
 void TaskCountInfo::count_launched(devid_t device_id) {
   n_launched_tasks += 1;
-  per_device_launched_tasks[device_id] += 1;
+  per_device_launched_tasks.at(device_id) += 1;
 }
 
 void TaskCountInfo::count_completed(devid_t device_id) {
+  assert(n_active_tasks >= 1);
   n_active_tasks -= 1;
 
+  assert(n_mapped_tasks >= 1);
   n_mapped_tasks -= 1;
-  per_device_mapped_tasks[device_id] -= 1;
+  assert(per_device_mapped_tasks.at(device_id) >= 1);
+  per_device_mapped_tasks.at(device_id) -= 1;
 
+  assert(n_reserved_tasks >= 1);
   n_reserved_tasks -= 1;
-  per_device_reserved_tasks[device_id] -= 1;
+  assert(per_device_reserved_tasks.at(device_id) >= 1);
+  per_device_reserved_tasks.at(device_id) -= 1;
 
+  assert(n_launched_tasks >= 1);
   n_launched_tasks -= 1;
-  per_device_launched_tasks[device_id] -= 1;
+  assert(per_device_launched_tasks.at(device_id) >= 1);
+  per_device_launched_tasks.at(device_id) -= 1;
 
   n_completed_tasks += 1;
-  per_device_completed_tasks[device_id] += 1;
+  per_device_completed_tasks.at(device_id) += 1;
 }
 
 void TaskCountInfo::count_data_completed(devid_t device_id) {
@@ -336,26 +343,26 @@ TaskCostInfo::TaskCostInfo(std::size_t n_tasks, std::size_t n_devices)
       per_device_data_completed_time(n_devices) {}
 
 void TaskCostInfo::count_mapped(devid_t device_id, timecount_t time) {
-  per_device_mapped_time[device_id] += time;
+  per_device_mapped_time.at(device_id) += time;
 }
 
 void TaskCostInfo::count_reserved(devid_t device_id, timecount_t time) {
-  per_device_reserved_time[device_id] += time;
+  per_device_reserved_time.at(device_id) += time;
 }
 
 void TaskCostInfo::count_launched(devid_t device_id, timecount_t time) {
-  per_device_launched_time[device_id] += time;
+  per_device_launched_time.at(device_id) += time;
 }
 
 void TaskCostInfo::count_completed(devid_t device_id, timecount_t time) {
-  per_device_mapped_time[device_id] -= time;
-  per_device_reserved_time[device_id] -= time;
-  per_device_launched_time[device_id] -= time;
-  per_device_completed_time[device_id] += time;
+  per_device_mapped_time.at(device_id) -= time;
+  per_device_reserved_time.at(device_id) -= time;
+  per_device_launched_time.at(device_id) -= time;
+  per_device_completed_time.at(device_id) += time;
 }
 
 void TaskCostInfo::count_data_completed(devid_t device_id, timecount_t time) {
-  per_device_data_completed_time[device_id] += time;
+  per_device_data_completed_time.at(device_id) += time;
 }
 
 // TransitionConstraints
@@ -660,17 +667,6 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
   SPDLOG_DEBUG("Launching compute task {} at time {} on device {}",
                s.get_task_name(task_id), s.global_time, device_id);
 
-  std::cout << "Has read data: " << std::endl;
-  for (auto data_id : task.get_read()) {
-    std::cout << data_id << " ";
-  }
-  std::cout << std::endl;
-  std::cout << "Has write data: " << std::endl;
-  for (auto data_id : task.get_write()) {
-    std::cout << data_id << " ";
-  }
-  std::cout << std::endl;
-
   // Update data locations for WRITE data (create them here)
   s.data_manager.read_update_launched(task.get_write(), device_id);
   s.data_manager.write_update_launched(task.get_write(), device_id);
@@ -718,13 +714,13 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
   s.task_manager.set_source(task_id, source_id);
   auto duration = s.data_manager.start_move(data_id, source_id, destination_id);
 
-  if (!duration.is_virtual) {
+  if (duration.is_virtual) {
+    SPDLOG_DEBUG("Data task {} is virtual at time {}", s.get_task_name(task_id),
+                 s.global_time);
+    s.task_manager.set_virtual(task_id);
+  } else {
     SPDLOG_DEBUG("Data task {} moving from {} to {} at time {}",
                  s.get_task_name(task_id), source_id, destination_id,
-                 s.global_time);
-    s.task_manager.set_existed(task_id);
-  } else {
-    SPDLOG_DEBUG("Data task {} is virtual at time {}", s.get_task_name(task_id),
                  s.global_time);
   }
 
@@ -873,10 +869,10 @@ void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
                s.get_task_name(task_id), s.global_time, destination_id);
 
   auto source_id = s.task_manager.get_source(task_id);
-  auto existed = s.task_manager.get_existed(task_id);
+  auto is_virtual = s.task_manager.is_virtual(task_id);
   auto data_id =
       s.task_manager.get_tasks().get_data_task(task_id).get_data_id();
-  s.data_manager.complete_move(data_id, source_id, destination_id, existed);
+  s.data_manager.complete_move(data_id, source_id, destination_id, is_virtual);
 }
 
 void Scheduler::complete_task(Event &complete_event,

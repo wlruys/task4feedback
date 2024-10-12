@@ -171,15 +171,15 @@ public:
   ComputeTask(taskid_t id) { this->id = id; }
 
   void add_variant(DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time) {
-    variants[static_cast<std::size_t>(arch)] = Variant(arch, vcu, mem, time);
+    variants.at(static_cast<std::size_t>(arch)) = Variant(arch, vcu, mem, time);
   }
 
   Variant &get_variant(DeviceType arch) {
-    return variants[static_cast<std::size_t>(arch)];
+    return variants.at(static_cast<std::size_t>(arch));
   }
 
   [[nodiscard]] const Variant &get_variant(DeviceType arch) const {
-    return variants[static_cast<std::size_t>(arch)];
+    return variants.at(static_cast<std::size_t>(arch));
   }
 
   [[nodiscard]] const VariantList &get_variants() const { return variants; }
@@ -352,11 +352,11 @@ public:
 
   [[nodiscard]] const ComputeTask &get_compute_task(taskid_t id) const {
     assert(id < num_compute_tasks);
-    return compute_tasks[id];
+    return compute_tasks.at(id);
   }
   [[nodiscard]] const DataTask &get_data_task(taskid_t id) const {
     assert(id >= num_compute_tasks);
-    return data_tasks[id - num_compute_tasks];
+    return data_tasks.at(id - num_compute_tasks);
   }
 
   [[nodiscard]] const TaskIDList &get_dependencies(taskid_t id) const;
@@ -377,7 +377,7 @@ public:
   [[nodiscard]] dataid_t get_data_id(taskid_t id) const;
 
   [[nodiscard]] std::string const &get_name(taskid_t id) const {
-    return task_names[id];
+    return task_names.at(id);
   }
 
   [[nodiscard]] std::vector<DeviceType>

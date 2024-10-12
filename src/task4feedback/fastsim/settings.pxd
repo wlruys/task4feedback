@@ -15,7 +15,7 @@ cdef extern from "include/settings.hpp":
     ctypedef uint64_t taskid_t 
     ctypedef uint64_t dataid_t
     ctypedef uint64_t devid_t
-    ctypedef uint32_t copy_t
+    ctypedef uint64_t copy_t
 
 
     ctypedef uint64_t depcount_t

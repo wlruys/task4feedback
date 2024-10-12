@@ -35,15 +35,15 @@ public:
 
   void set_size(dataid_t id, mem_t size) {
     assert(id < sizes.size());
-    sizes[id] = size;
+    sizes.at(id) = size;
   }
   void set_location(dataid_t id, devid_t location) {
     assert(location < initial_location.size());
-    initial_location[id] = location;
+    initial_location.at(id) = location;
   }
   void set_name(dataid_t id, std::string name) {
     assert(id < data_names.size());
-    data_names[id] = std::move(name);
+    data_names.at(id) = std::move(name);
   }
 
   void create_block(dataid_t id, mem_t size, devid_t location,
@@ -55,10 +55,10 @@ public:
 
   [[nodiscard]] mem_t get_size(dataid_t id) const { return sizes[id]; }
   [[nodiscard]] devid_t get_location(dataid_t id) const {
-    return initial_location[id];
+    return initial_location.at(id);
   }
   [[nodiscard]] const std::string &get_name(dataid_t id) const {
-    return data_names[id];
+    return data_names.at(id);
   }
 
   friend class DataManager;
@@ -76,7 +76,7 @@ public:
   void set_invalid(devid_t device_id) { locations[device_id] = false; }
 
   [[nodiscard]] bool is_valid(devid_t device_id) const {
-    return locations[device_id];
+    return locations.at(device_id);
   }
 
   [[nodiscard]] bool is_invalid(devid_t device_id) const {
@@ -139,36 +139,38 @@ public:
   }
 
   void set_valid(dataid_t data_id, devid_t device_id) {
-    block_locations[data_id].set_valid(device_id);
+    block_locations.at(data_id).set_valid(device_id);
   }
 
   void set_invalid(dataid_t data_id, devid_t device_id) {
-    block_locations[data_id].set_invalid(device_id);
+    block_locations.at(data_id).set_invalid(device_id);
   }
 
   [[nodiscard]] bool is_valid(dataid_t data_id, devid_t device_id) const {
-    return block_locations[data_id].is_valid(device_id);
+    return block_locations.at(data_id).is_valid(device_id);
   }
 
   [[nodiscard]] bool is_invalid(dataid_t data_id, devid_t device_id) const {
-    return block_locations[data_id].is_invalid(device_id);
+    return block_locations.at(data_id).is_invalid(device_id);
   }
 
   [[nodiscard]] std::size_t count_valid(dataid_t data_id) const {
-    return block_locations[data_id].count_valid();
+    return block_locations.at(data_id).count_valid();
   }
 
   [[nodiscard]] std::vector<devid_t>
   get_valid_locations(dataid_t data_id) const {
-    return block_locations[data_id].get_valid_locations();
+    return block_locations.at(data_id).get_valid_locations();
   }
 
+  BlockLocation &at(dataid_t data_id) { return block_locations.at(data_id); }
+
   BlockLocation &operator[](dataid_t data_id) {
-    return block_locations[data_id];
+    return block_locations.at(data_id);
   }
 
   const BlockLocation &operator[](dataid_t data_id) const {
-    return block_locations[data_id];
+    return block_locations.at(data_id);
   }
 };
 
@@ -240,7 +242,7 @@ protected:
   static bool increment(DataCount &counts, dataid_t data_id) {
     auto it = counts.find(data_id);
     if (it == counts.end()) {
-      counts[data_id] = 1;
+      counts.at(data_id) = 1;
       return true;
     }
     it->second++;
@@ -341,55 +343,55 @@ public:
   DataCounts(std::size_t n_devices) : device_counts(n_devices) {}
 
   bool increment_mapped(dataid_t data_id, devid_t device_id) {
-    return device_counts[device_id].increment_mapped(data_id);
+    return device_counts.at(device_id).increment_mapped(data_id);
   }
 
   bool increment_reserved(dataid_t data_id, devid_t device_id) {
-    return device_counts[device_id].increment_reserved(data_id);
+    return device_counts.at(device_id).increment_reserved(data_id);
   }
 
   bool increment_launched(dataid_t data_id, devid_t device_id) {
-    return device_counts[device_id].increment_launched(data_id);
+    return device_counts.at(device_id).increment_launched(data_id);
   }
 
   bool increment_moving(dataid_t data_id, devid_t device_id) {
-    return device_counts[device_id].increment_moving(data_id);
+    return device_counts.at(device_id).increment_moving(data_id);
   }
 
   bool decrement_mapped(dataid_t data_id, devid_t device_id) {
-    return device_counts[device_id].decrement_mapped(data_id);
+    return device_counts.at(device_id).decrement_mapped(data_id);
   }
 
   bool decrement_reserved(dataid_t data_id, devid_t device_id) {
-    return device_counts[device_id].decrement_reserved(data_id);
+    return device_counts.at(device_id).decrement_reserved(data_id);
   }
 
   bool decrement_launched(dataid_t data_id, devid_t device_id) {
-    return device_counts[device_id].decrement_launched(data_id);
+    return device_counts.at(device_id).decrement_launched(data_id);
   }
 
   bool decrement_moving(dataid_t data_id, devid_t device_id) {
-    return device_counts[device_id].decrement_moving(data_id);
+    return device_counts.at(device_id).decrement_moving(data_id);
   }
 
   [[nodiscard]] std::size_t count_mapped(dataid_t data_id,
                                          devid_t device_id) const {
-    return device_counts[device_id].count_mapped(data_id);
+    return device_counts.at(device_id).count_mapped(data_id);
   }
 
   [[nodiscard]] std::size_t count_reserved(dataid_t data_id,
                                            devid_t device_id) const {
-    return device_counts[device_id].count_reserved(data_id);
+    return device_counts.at(device_id).count_reserved(data_id);
   }
 
   [[nodiscard]] std::size_t count_launched(dataid_t data_id,
                                            devid_t device_id) const {
-    return device_counts[device_id].count_launched(data_id);
+    return device_counts.at(device_id).count_launched(data_id);
   }
 
   [[nodiscard]] std::size_t count_moving(dataid_t data_id,
                                          devid_t device_id) const {
-    return device_counts[device_id].count_moving(data_id);
+    return device_counts.at(device_id).count_moving(data_id);
   }
 };
 
@@ -418,7 +420,7 @@ protected:
 
   static bool read_update(dataid_t data_id, devid_t device_id,
                           LocationManager &locations) {
-    return locations[data_id].validate(device_id);
+    return locations.at(data_id).validate(device_id);
   }
 
   static auto write_update(dataid_t data_id, devid_t device_id,
@@ -436,6 +438,18 @@ public:
         reserved_locations(data.get().size(), device_manager_.size()),
         launched_locations(data.get().size(), device_manager_.size()),
         counts(device_manager_.size()) {}
+
+  DataManager(const DataManager &o_, DeviceManager &device_manager_,
+              CommunicationManager &communication_manager_)
+      : data(o_.data), device_manager(device_manager_),
+        communication_manager(communication_manager_),
+        mapped_locations(o_.mapped_locations),
+        reserved_locations(o_.reserved_locations),
+        launched_locations(o_.launched_locations),
+        movement_manager(o_.movement_manager), counts(o_.counts) {}
+
+  DataManager(const DataManager &o_) = delete;
+  DataManager &operator=(const DataManager &o_) = delete;
 
   void initialize() {
     for (dataid_t i = 0; i < data.get().size(); i++) {
@@ -627,24 +641,23 @@ public:
         data.get().get_size(data_id), source, destination);
 
     if (duration == 0) {
-      SPDLOG_DEBUG("Block moving instantly from {} to {}. Check bandwidth.",
-                   source, destination);
-      return {true, 0};
+      assert(source != destination);
+      SPDLOG_DEBUG(
+          "Block moving instantly from {} to {}. Check bandwidth settings.",
+          source, destination);
     }
 
     movement_manager.set_completion(data_id, destination, duration);
+
     communication_manager.get().reserve_connection(source, destination);
 
     return {false, duration};
   }
 
   void complete_move(dataid_t data_id, devid_t source, devid_t destination,
-                     bool existed) {
+                     bool is_virtual) {
 
-    SPDLOG_DEBUG("Completing move of data block {} from device {} to device {}",
-                 data_id, source, destination);
-
-    if (!existed) {
+    if (is_virtual) {
       SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
                    "device {}",
                    data_id, source, destination);
@@ -665,9 +678,14 @@ public:
       return;
     }
 
+    SPDLOG_DEBUG(
+        "Completing real move of data block {} from device {} to device {}",
+        data_id, source, destination);
+
     assert(movement_manager.is_moving(data_id, destination));
     launched_locations.set_valid(data_id, destination);
     movement_manager.remove(data_id, destination);
+
     communication_manager.get().release_connection(source, destination);
   }
 

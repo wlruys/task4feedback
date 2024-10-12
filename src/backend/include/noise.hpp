@@ -50,13 +50,13 @@ public:
         task_durations(tasks.get().compute_size() * num_device_types) {}
 
   [[nodiscard]] timecount_t get(taskid_t task_id, DeviceType arch) const {
-    return task_durations[task_id * num_device_types +
-                          static_cast<std::size_t>(arch)];
+    return task_durations.at(task_id * num_device_types +
+                             static_cast<std::size_t>(arch));
   }
 
   void set(taskid_t task_id, DeviceType arch, timecount_t value) {
-    task_durations[task_id * num_device_types +
-                   static_cast<std::size_t>(arch)] = value;
+    task_durations.at(task_id * num_device_types +
+                      static_cast<std::size_t>(arch)) = value;
   }
 
   void set(std::vector<timecount_t> values_) {

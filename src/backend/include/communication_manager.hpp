@@ -18,15 +18,15 @@
 #include <vector>
 
 struct CommunicationStats {
-  timecount_t latency;
-  mem_t bandwidth;
+  timecount_t latency = 0;
+  mem_t bandwidth = 0;
 };
 
 struct CommunicationRequest {
-  taskid_t data_task_id;
-  devid_t source;
-  devid_t destination;
-  mem_t size;
+  taskid_t data_task_id = 0;
+  devid_t source = 0;
+  devid_t destination = 0;
+  mem_t size = 0;
 
   bool operator==(const CommunicationRequest &other) const {
     return data_task_id == other.data_task_id && source == other.source &&
@@ -57,8 +57,8 @@ struct CommunicationRequest {
 class Topology {
   std::vector<timecount_t> latency;
   std::vector<mem_t> bandwidths;
-  std::vector<uint8_t> links;
-  std::size_t num_devices;
+  std::vector<copy_t> links;
+  std::size_t num_devices = 0;
 
 public:
   Topology(std::size_t num_devices)
@@ -67,31 +67,31 @@ public:
         num_devices(num_devices) {}
 
   void set_bandwidth(devid_t src, devid_t dst, mem_t bandwidth) {
-    bandwidths[src * num_devices + dst] = bandwidth;
+    bandwidths.at(src * num_devices + dst) = bandwidth;
   }
 
   void set_max_connections(devid_t src, devid_t dst, uint8_t max_links) {
-    links[src * num_devices + dst] = max_links;
+    links.at(src * num_devices + dst) = max_links;
   }
 
   void set_latency(devid_t src, devid_t dst, timecount_t latency_) {
-    latency[src * num_devices + dst] = latency_;
+    latency.at(src * num_devices + dst) = latency_;
   }
 
   [[nodiscard]] timecount_t get_latency(devid_t src, devid_t dst) const {
-    return latency[src * num_devices + dst];
+    return latency.at(src * num_devices + dst);
   }
 
   [[nodiscard]] mem_t get_bandwidth(devid_t src, devid_t dst) const {
-    return bandwidths[src * num_devices + dst];
+    return bandwidths.at(src * num_devices + dst);
   }
 
   [[nodiscard]] bool is_connected(devid_t src, devid_t dst) const {
-    return links[src * num_devices + dst] > 0;
+    return links.at(src * num_devices + dst) > 0;
   }
 
-  [[nodiscard]] uint8_t get_max_connections(devid_t src, devid_t dst) const {
-    return links[src * num_devices + dst];
+  [[nodiscard]] copy_t get_max_connections(devid_t src, devid_t dst) const {
+    return links.at(src * num_devices + dst);
   }
 };
 
@@ -105,10 +105,10 @@ protected:
   std::reference_wrapper<Topology> topology;
 
   struct request_high_precision {
-    uint64_t data_task_id;
-    uint64_t source;
-    uint64_t destination;
-    uint64_t size;
+    uint64_t data_task_id = 0;
+    uint64_t source = 0;
+    uint64_t destination = 0;
+    uint64_t size = 0;
 
     request_high_precision() = default;
 
@@ -121,8 +121,8 @@ protected:
   };
 
   struct stats_high_precision {
-    uint64_t latency;
-    uint64_t bandwidth;
+    uint64_t latency = 0;
+    uint64_t bandwidth = 0;
 
     stats_high_precision() = default;
 
@@ -186,7 +186,7 @@ public:
       return it->second;
     }
     set(req, sample_stats(req));
-    return record.at(req);
+    return record[req];
   }
 
   void set(const CommunicationRequest &req, const CommunicationStats &stats) {
@@ -341,64 +341,54 @@ constexpr std::array<copy_t, num_device_types> max_outgoing_copies = {4, 1};
 constexpr std::array<copy_t, num_device_types> max_total_copies = {4, 2};
 
 struct SourceRequest {
-  bool found;
-  devid_t source;
+  bool found = false;
+  devid_t source = 0;
 };
 
 class CommunicationManager {
-
+  std::reference_wrapper<Devices> devices;
+  std::reference_wrapper<Topology> topology;
+  std::reference_wrapper<CommunicationNoise> noise;
   std::vector<copy_t> incoming;
   std::vector<copy_t> outgoing;
   std::vector<copy_t> active_links;
-  std::reference_wrapper<Topology> topology;
-  std::reference_wrapper<Devices> devices;
-  std::reference_wrapper<CommunicationNoise> noise;
 
   [[nodiscard]] std::size_t get_device_type_idx(devid_t device_id) const {
     return static_cast<std::size_t>(devices.get().get_type(device_id));
   }
 
 public:
-  CommunicationManager(Topology &topology, Devices &devices,
-                       CommunicationNoise &noise)
-      : topology(topology), devices(devices), noise(noise) {
-    incoming.resize(devices.size(), 0);
-    outgoing.resize(devices.size(), 0);
-    active_links.resize(devices.size() * devices.size(), 0);
-  }
+  CommunicationManager(Topology &topology_, Devices &devices_,
+                       CommunicationNoise &noise_)
+      : devices(devices_), topology(topology_), noise(noise_),
+        incoming(devices_.size(), 0), outgoing(devices_.size(), 0),
+        active_links(devices_.size() * devices_.size(), 0) {}
+
+  CommunicationManager(const CommunicationManager &c) = default;
+
+  CommunicationManager &operator=(const CommunicationManager &c) = default;
+
   void initialize() {}
 
-  void increase_incoming(devid_t device_id) {
-    assert(device_id < devices.get().size());
-    incoming[device_id] += 1;
-  }
+  void increase_incoming(devid_t device_id) { incoming.at(device_id) += 1; }
   void decrease_incoming(devid_t device_id) {
-    assert(device_id < devices.get().size());
     assert(incoming[device_id] >= 1);
-    incoming[device_id] -= 1;
+    incoming.at(device_id) -= 1;
   }
 
-  void increase_outgoing(devid_t device_id) {
-    assert(device_id < devices.get().size());
-    outgoing[device_id] += 1;
-  }
+  void increase_outgoing(devid_t device_id) { outgoing.at(device_id) += 1; }
   void decrease_outgoing(devid_t device_id) {
-    assert(device_id < devices.get().size());
     assert(outgoing[device_id] >= 1);
-    outgoing[device_id] -= 1;
+    outgoing.at(device_id) -= 1;
   }
 
   void increase_active_links(devid_t src, devid_t dst) {
-    assert(src < devices.get().size());
-    assert(dst < devices.get().size());
-    active_links[src * devices.get().size() + dst] += 1;
+    active_links.at(src * devices.get().size() + dst) += 1;
   }
 
   void decrease_active_links(devid_t src, devid_t dst) {
-    assert(src < devices.get().size());
-    assert(dst < devices.get().size());
     assert(active_links[src * devices.get().size() + dst] >= 1);
-    active_links[src * devices.get().size() + dst] -= 1;
+    active_links.at(src * devices.get().size() + dst) -= 1;
   }
 
   void reserve_connection(devid_t src, devid_t dst) {
@@ -414,24 +404,24 @@ public:
   }
 
   [[nodiscard]] copy_t get_active(devid_t src, devid_t dst) const {
-    return active_links[src * devices.get().size() + dst];
+    return active_links.at(src * devices.get().size() + dst);
   }
 
   [[nodiscard]] copy_t get_incoming(devid_t device_id) const {
-    return incoming[device_id];
+    return incoming.at(device_id);
   }
 
   [[nodiscard]] copy_t get_outgoing(devid_t device_id) const {
-    return outgoing[device_id];
+    return outgoing.at(device_id);
   }
 
   [[nodiscard]] copy_t get_total_usage(devid_t device_id) const {
-    return incoming[device_id] + outgoing[device_id];
+    return incoming.at(device_id) + outgoing.at(device_id);
   }
 
   [[nodiscard]] bool is_device_available(devid_t device_id) const {
     auto used = get_total_usage(device_id);
-    auto available = max_total_copies[get_device_type_idx(device_id)];
+    auto available = max_total_copies.at(get_device_type_idx(device_id));
     return used <= available;
   }
 
@@ -462,7 +452,7 @@ public:
 
   [[nodiscard]] timecount_t time_to_transfer(taskid_t data_task_id, mem_t size,
                                              devid_t src, devid_t dst) const {
-    auto [latency, bandwidth] = noise.get()({data_task_id, src, dst, size});
+    auto [latency, bandwidth] = noise.get().get({data_task_id, src, dst, size});
     const auto bw = static_cast<double>(bandwidth);
     const auto s = static_cast<double>(size);
     timecount_t time = latency + static_cast<timecount_t>(s / bw);

@@ -20,7 +20,7 @@ public:
 
   DeviceResources() = default;
 
-  DeviceResources(std::size_t n) { resize(n); }
+  DeviceResources(std::size_t n) : vcu(n, 0), mem(n, 0) {}
 
   DeviceResources(const DeviceResources &other) {
     vcu = other.vcu;
@@ -34,63 +34,51 @@ public:
 
   [[nodiscard]] vcu_t get_vcu(devid_t id) const {
     assert(id < vcu.size());
-    return vcu[id];
+    return vcu.at(id);
   }
   [[nodiscard]] mem_t get_mem(devid_t id) const {
     assert(id < mem.size());
-    return mem[id];
+    return mem.at(id);
   }
 
   vcu_t add_vcu(devid_t id, vcu_t vcu_) {
     assert(id < vcu.size());
-    // std::cout << "+id: " << id << std::endl;
-    // std::cout << "vcu[id]: " << vcu[id] << std::endl;
-    // std::cout << "vcu_: " << vcu_ << std::endl;
-    vcu[id] += vcu_;
-    return vcu[id];
+    vcu.at(id) += vcu_;
+    return vcu.at(id);
   }
   mem_t add_mem(devid_t id, mem_t m) {
     assert(id < mem.size());
-    std::cout << "+id: " << id << std::endl;
-    std::cout << "mem[id]: " << mem[id] << std::endl;
-    std::cout << "m: " << m << std::endl;
-    mem[id] += m;
-    return mem[id];
+    mem.at(id) += m;
+    return mem.at(id);
   }
 
   vcu_t remove_vcu(devid_t id, vcu_t vcu_) {
     assert(id < vcu.size());
-    // std::cout << "-id: " << id << std::endl;
-    // std::cout << "vcu[id]: " << vcu[id] << std::endl;
-    // std::cout << "vcu_: " << vcu_ << std::endl;
-    assert(vcu[id] >= vcu_);
-    vcu[id] -= vcu_;
-    return vcu[id];
+    assert(vcu.at(id) >= vcu_);
+    vcu.at(id) -= vcu_;
+    return vcu.at(id);
   }
   mem_t remove_mem(devid_t id, mem_t m) {
     assert(id < mem.size());
-    std::cout << "-id: " << id << std::endl;
-    std::cout << "mem[id]: " << mem[id] << std::endl;
-    std::cout << "m: " << m << std::endl;
-    assert(mem[id] >= m);
-    mem[id] -= m;
-    return mem[id];
+    assert(mem.at(id) >= m);
+    mem.at(id) -= m;
+    return mem.at(id);
   }
 
   Resources add_resources(devid_t id, const Resources &r) {
     add_vcu(id, r.vcu);
     add_mem(id, r.mem);
-    return {vcu[id], mem[id]};
+    return {vcu.at(id), mem.at(id)};
   }
 
   Resources remove_resources(devid_t id, const Resources &r) {
     remove_vcu(id, r.vcu);
     remove_mem(id, r.mem);
-    return {vcu[id], mem[id]};
+    return {vcu.at(id), mem.at(id)};
   }
 
   [[nodiscard]] vcu_t overflow_vcu(devid_t id, vcu_t query, vcu_t max) const {
-    const vcu_t request = vcu[id] + query;
+    const vcu_t request = vcu.at(id) + query;
     if (request <= max) {
       return 0;
     }
@@ -98,7 +86,7 @@ public:
   }
 
   [[nodiscard]] mem_t overflow_mem(devid_t id, mem_t query, mem_t max) const {
-    const mem_t request = mem[id] + query;
+    const mem_t request = mem.at(id) + query;
     if (request <= max) {
       return 0;
     }
@@ -145,34 +133,34 @@ public:
   Devices(std::size_t n_devices) { resize(n_devices); }
 
   [[nodiscard]] const Device &get_device(devid_t id) const {
-    return devices[id];
+    return devices.at(id);
   }
 
   [[nodiscard]] std::string &get_name(devid_t id) { return device_names[id]; }
   [[nodiscard]] const std::string &get_name(devid_t id) const {
-    return device_names[id];
+    return device_names.at(id);
   }
 
   [[nodiscard]] std::size_t size() const { return devices.size(); }
 
   [[nodiscard]] const DeviceIDList &get_devices(DeviceType type) const {
-    return type_map[static_cast<std::size_t>(type)];
+    return type_map.at(static_cast<std::size_t>(type));
   }
 
   [[nodiscard]] const Resources &get_max_resources(devid_t id) const {
-    return devices[id].max_resources;
+    return devices.at(id).max_resources;
   }
 
   [[nodiscard]] DeviceType get_type(devid_t id) const {
-    return devices[id].arch;
+    return devices.at(id).arch;
   }
 
   void create_device(devid_t id, std::string name, DeviceType arch, vcu_t vcu,
                      mem_t mem) {
     assert(id < devices.size());
-    devices[id] = Device(id, arch, vcu, mem);
-    type_map[static_cast<std::size_t>(arch)].push_back(id);
-    device_names[id] = std::move(name);
+    devices.at(id) = Device(id, arch, vcu, mem);
+    type_map.at(static_cast<std::size_t>(arch)).push_back(id);
+    device_names.at(id) = std::move(name);
   }
 
   friend class DeviceManager;
@@ -195,10 +183,9 @@ public:
   DeviceResources reserved;
   DeviceResources launched;
 
-  DeviceManager(Devices &devices_) : devices(devices_) {
-    std::size_t n_devices = devices.get().size();
-    resize(n_devices);
-  };
+  DeviceManager(Devices &devices_)
+      : devices(devices_), mapped(devices_.size()), reserved(devices_.size()),
+        launched(devices_.size()){};
 
   DeviceManager(const DeviceManager &other) = default;
 

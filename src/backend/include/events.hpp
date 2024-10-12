@@ -44,13 +44,13 @@ inline std::ostream &operator<<(std::ostream &os, const EventType &type) {
 
 class Event {
 protected:
-  EventType type;
-  timecount_t time;
+  EventType type = EventType::MAPPER;
+  timecount_t time = 0;
   TaskIDList tasks;
 
 public:
   Event(EventType type, timecount_t time, TaskIDList tasks)
-      : type{type}, time{time}, tasks{std::move(tasks)} {}
+      : type(type), time(time), tasks(std::move(tasks)) {}
 
   [[nodiscard]] EventType get_type() const { return type; }
   [[nodiscard]] timecount_t get_time() const { return time; }
@@ -60,8 +60,9 @@ public:
   [[nodiscard]] bool operator<(const Event &other) const {
 
     if (time == other.time) {
-      // larger events are processed last
-      return type < other.type;
+      // larger events are processed first
+      // Always process COMPLETER events before scheduler events
+      return type > other.type;
     }
 
     return time < other.time;
@@ -69,7 +70,7 @@ public:
 
   [[nodiscard]] bool operator>(const Event &other) const {
     if (time == other.time) {
-      return type > other.type;
+      return type < other.type;
     }
     return time > other.time;
   }

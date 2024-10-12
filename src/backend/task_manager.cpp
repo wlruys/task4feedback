@@ -15,7 +15,7 @@ TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
   mapping_priority.resize(n, 0);
   reserving_priority.resize(n, 0);
   launching_priority.resize(n, 0);
-  existed.resize(n, false);
+  is_virtual.resize(n, false);
   sources.resize(n, 0);
 }
 

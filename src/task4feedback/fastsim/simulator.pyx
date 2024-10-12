@@ -214,7 +214,7 @@ cdef class PyTopology:
     def set_bandwidth(self, devid_t src, devid_t dst, mem_t bandwidth):
         self.topology.set_bandwidth(src, dst, bandwidth)
 
-    def set_max_connections(self, devid_t src, devid_t dst, uint8_t max_links):
+    def set_max_connections(self, devid_t src, devid_t dst, copy_t max_links):
         self.topology.set_max_connections(src, dst, max_links)
 
     def set_latency(self, devid_t src, devid_t dst, timecount_t latency):

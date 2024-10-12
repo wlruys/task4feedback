@@ -11,7 +11,7 @@ constexpr std::size_t num_resource_types = 3;
 using vcu_t = uint64_t;
 using mem_t = uint64_t;
 using timecount_t = uint64_t;
-using copy_t = uint8_t;
+using copy_t = uint64_t;
 
 constexpr mem_t BYTES_IN_POWER = 1024;
 
