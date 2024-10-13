@@ -61,6 +61,10 @@ public:
     return data_names.at(id);
   }
 
+  [[nodiscard]] auto get_sizes() const { return sizes; }
+  [[nodiscard]] auto get_locations() const { return initial_location; }
+  [[nodiscard]] auto get_names() const { return data_names; }
+
   friend class DataManager;
 };
 
