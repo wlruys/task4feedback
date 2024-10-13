@@ -599,3 +599,96 @@ cdef class PySimulator:
 
     def __dealloc__(self):
         del self.simulator  
+
+
+cdef class PyObserver:
+    cdef Observer* observer
+
+    def __cinit__(self, PySimulator simulator):
+        self.observer = new Observer(deref(simulator.simulator))
+
+    def preprocess_global(self):
+        self.observer.preprocess_global()
+
+    def get_active_tasks(self):
+        cdef TaskIDList tasks = self.observer.get_active_tasks()
+        return convert_taskid_list_to_numpy(tasks, copy=True)
+
+    def get_k_hop_tasks(self):
+        cdef TaskIDList tasks = self.observer.get_k_hop_tasks()
+        return convert_taskid_list_to_numpy(tasks, copy=True)
+
+    def get_task_features(self, taskid_t task_id):
+        cdef vector[double] features = self.observer.get_task_features(task_id)
+        cdef np.ndarray[np.float64_t, ndim=1] result
+        cdef np.npy_intp n = features.size()
+        result = np.PyArray_SimpleNew(1, &n, np.NPY_FLOAT64)
+        for i in range(n):
+            result[i] = features[i]
+        return result
+
+    def get_data_features(self, dataid_t data_id):
+        cdef vector[double] features = self.observer.get_data_features(data_id)
+        cdef np.ndarray[np.float64_t, ndim=1] result
+        cdef np.npy_intp n = features.size()
+        result = np.PyArray_SimpleNew(1, &n, np.NPY_FLOAT64)
+        for i in range(n):
+            result[i] = features[i]
+        return result
+
+    def get_device_features(self, devid_t device_id):
+        cdef vector[double] features = self.observer.get_device_features(device_id)
+        cdef np.ndarray[np.float64_t, ndim=1] result
+        cdef np.npy_intp n = features.size()
+        result = np.PyArray_SimpleNew(1, &n, np.NPY_FLOAT64)
+        for i in range(n):
+            result[i] = features[i]
+        return result
+
+    def get_task_data_features(self, taskid_t task_id, dataid_t data_id):
+        cdef vector[double] features = self.observer.get_task_data_features(task_id, data_id)
+        cdef np.ndarray[np.float64_t, ndim=1] result
+        cdef np.npy_intp n = features.size()
+        result = np.PyArray_SimpleNew(1, &n, np.NPY_FLOAT64)
+        for i in range(n):
+            result[i] = features[i]
+        return result
+
+    def get_task_device_features(self, taskid_t task_id, devid_t device_id):
+        cdef vector[double] features = self.observer.get_task_device_features(task_id, device_id)
+        cdef np.ndarray[np.float64_t, ndim=1] result
+        cdef np.npy_intp n = features.size()
+        result = np.PyArray_SimpleNew(1, &n, np.NPY_FLOAT64)
+        for i in range(n):
+            result[i] = features[i]
+        return result
+
+    def get_task_data_edges(self, taskid_t task_id):
+        cdef TaskDataEdges edges = self.observer.get_task_data_edges(task_id)
+        cdef np.ndarray[np.uint64_t, ndim=1] tasks 
+        cdef np.ndarray[np.uint64_t, ndim=1] data
+
+        tasks = convert_taskid_list_to_numpy(edges.task_id, copy=True)
+        data = convert_dataid_list_to_numpy(edges.data_ids, copy=True)
+
+        return tasks, data
+
+    def get_task_device_edges(self, taskid_t task_id):
+        cdef TaskDeviceEdges edges = self.observer.get_task_device_edges(task_id)
+        cdef np.ndarray[np.uint64_t, ndim=1] tasks 
+        cdef np.ndarray[np.uint64_t, ndim=1] devices
+
+        tasks = convert_taskid_list_to_numpy(edges.task_id, copy=True)
+        devices = convert_devid_list_to_numpy(edges.device_ids, copy=True)
+
+        return tasks, devices
+
+    def get_data_device_edges(self, dataid_t data_id):
+        cdef DataDeviceEdges edges = self.observer.get_data_device_edges(data_id)
+        cdef np.ndarray[np.uint64_t, ndim=1] data 
+        cdef np.ndarray[np.uint64_t, ndim=1] devices
+
+        data = convert_dataid_list_to_numpy(edges.data_id, copy=True)
+        devices = convert_devid_list_to_numpy(edges.device_ids, copy=True)
+
+        return data, devices

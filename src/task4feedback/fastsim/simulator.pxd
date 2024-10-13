@@ -2,7 +2,7 @@
 #cython: embedsignature=True
 #cython: language=c++
 
-from settings cimport taskid_t, TaskIDList, DataIDList, DeviceIDList, PriorityList, DeviceType, devid_t, priority_t, depcount_t, vcu_t, mem_t, timecount_t
+from settings cimport dataid_t, taskid_t, TaskIDList, DataIDList, DeviceIDList, PriorityList, DeviceType, devid_t, priority_t, depcount_t, vcu_t, mem_t, timecount_t
 
 from tasks cimport Tasks
 from devices cimport Devices
@@ -82,4 +82,36 @@ cdef extern from "include/simulator.hpp":
         void set_use_python_mapper(bool use_python_mapper)
         void set_mapper(Mapper& mapper)
 
+
+
+cdef extern from "include/observer.hpp":
+
+    cdef cppclass TaskDataEdges:
+        TaskIDList task_id
+        DataIDList data_ids
+
+    cdef cppclass TaskDeviceEdges:
+        TaskIDList task_id
+        DeviceIDList device_ids
+
+    cdef cppclass DataDeviceEdges:
+        DataIDList data_id
+        DeviceIDList device_ids
+    
+
+    cdef cppclass Observer:
+        Observer(Simulator& simulator)
+        preprocess_global()
+        TaskIDList get_active_tasks()
+        TaskIDList get_k_hop_tasks()
+        vector[double] get_task_features(taskid_t task_id)
+        vector[double] get_data_features(dataid_t data_id)
+        vector[double] get_device_features(devid_t device_id)
+        vector[double] get_task_data_features(taskid_t task_id, dataid_t data_id)
+        vector[double] get_task_device_features(taskid_t task_id, devid_t device_id)
+        TaskDataEdges get_task_data_edges(taskid_t task_id)
+        TaskDeviceEdges get_task_device_edges(taskid_t task_id)
+        DataDeviceEdges get_data_device_edges(dataid_t data_id)
+
+    
 

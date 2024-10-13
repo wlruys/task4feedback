@@ -322,23 +322,26 @@ TaskCountInfo::TaskCountInfo(std::size_t n_devices)
       per_device_completed_tasks(n_devices),
       per_device_data_completed_tasks(n_devices) {}
 
-void TaskCountInfo::count_mapped(devid_t device_id) {
+void TaskCountInfo::count_mapped(taskid_t task_id, devid_t device_id) {
   n_active_tasks += 1;
   n_mapped_tasks += 1;
   per_device_mapped_tasks.at(device_id) += 1;
+
+  // add to active_tasks set
+  active_tasks.insert(task_id);
 }
 
-void TaskCountInfo::count_reserved(devid_t device_id) {
+void TaskCountInfo::count_reserved(taskid_t task_id, devid_t device_id) {
   n_reserved_tasks += 1;
   per_device_reserved_tasks.at(device_id) += 1;
 }
 
-void TaskCountInfo::count_launched(devid_t device_id) {
+void TaskCountInfo::count_launched(taskid_t task_id, devid_t device_id) {
   n_launched_tasks += 1;
   per_device_launched_tasks.at(device_id) += 1;
 }
 
-void TaskCountInfo::count_completed(devid_t device_id) {
+void TaskCountInfo::count_completed(taskid_t task_id, devid_t device_id) {
   assert(n_active_tasks >= 1);
   n_active_tasks -= 1;
 
@@ -359,9 +362,12 @@ void TaskCountInfo::count_completed(devid_t device_id) {
 
   n_completed_tasks += 1;
   per_device_completed_tasks.at(device_id) += 1;
+
+  // remove from active_tasks set
+  active_tasks.erase(task_id);
 }
 
-void TaskCountInfo::count_data_completed(devid_t device_id) {
+void TaskCountInfo::count_data_completed(taskid_t task_id, devid_t device_id) {
   n_data_completed_tasks += 1;
   per_device_data_completed_tasks[device_id] += 1;
 }
@@ -453,7 +459,7 @@ const TaskIDList &Scheduler::map_task(Action &action) {
   // Notify dependents and enqueue newly mappable tasks
   const auto &newly_mappable_tasks = s.notify_mapped(task_id);
   success_count += 1;
-  state.counts.count_mapped(chosen_device);
+  state.counts.count_mapped(task_id, chosen_device);
   state.update_mapped_cost(task_id, chosen_device);
 
   breakpoints.check_task_breakpoint(EventType::MAPPER, task_id);
@@ -600,7 +606,7 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
 
   success_count += 1;
   enqueue_data_tasks(task_id);
-  s.counts.count_reserved(device_id);
+  s.counts.count_reserved(task_id, device_id);
   s.update_reserved_cost(task_id, device_id);
   breakpoints.check_task_breakpoint(EventType::RESERVER, task_id);
 
@@ -718,7 +724,7 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
   // Record launching time
   s.notify_launched(task_id);
   success_count += 1;
-  s.counts.count_launched(device_id);
+  s.counts.count_launched(task_id, device_id);
   s.update_launched_cost(task_id, device_id);
 
   breakpoints.check_task_breakpoint(EventType::LAUNCHER, task_id);
@@ -893,7 +899,7 @@ void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
 
   // Free mapped, reserved, and launched resources
   s.free_resources(task_id);
-  s.counts.count_completed(device_id);
+  s.counts.count_completed(task_id, device_id);
   s.update_completed_cost(task_id, device_id);
 
   const auto &newly_launchable_data_tasks = s.notify_data_completed(task_id);
@@ -904,7 +910,7 @@ void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
 
 void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
   auto &s = this->state;
-  s.counts.count_data_completed(destination_id);
+  s.counts.count_data_completed(task_id, destination_id);
 
   SPDLOG_DEBUG("Completing data task {} at time {} on device {}",
                s.get_task_name(task_id), s.global_time, destination_id);

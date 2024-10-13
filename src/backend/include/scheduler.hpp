@@ -20,6 +20,8 @@
 #include <cassert>
 #include <functional>
 #include <random>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #define TIME_TO_MAP 0
@@ -121,13 +123,21 @@ public:
 
 class TaskCountInfo {
 public:
-  TaskCountInfo(std::size_t n_devices);
-  void count_mapped(devid_t device_id);
-  void count_reserved(devid_t device_id);
-  void count_launched(devid_t device_id);
+  std::unordered_set<taskid_t> active_tasks;
 
-  void count_completed(devid_t device_id);
-  void count_data_completed(devid_t device_id);
+  TaskCountInfo(std::size_t n_devices);
+  void count_mapped(taskid_t task_id, devid_t device_id);
+  void count_reserved(taskid_t task_id, devid_t device_id);
+  void count_launched(taskid_t task_id, devid_t device_id);
+
+  void count_completed(taskid_t task_id, devid_t device_id);
+  void count_data_completed(taskid_t task_id, devid_t device_id);
+
+  auto get_active_task_list() const {
+    return TaskIDList(active_tasks.begin(), active_tasks.end());
+  }
+
+  auto get_active_tasks() const { return active_tasks; }
 
   [[nodiscard]] std::size_t n_active() const { return n_active_tasks; }
   [[nodiscard]] std::size_t n_mapped() const { return n_mapped_tasks; }
@@ -588,8 +598,6 @@ public:
 
   void push_mappable(taskid_t id) {
     priority_t p = state.task_manager.noise.get().get_priority(id);
-    std::cout << "Pushing mappable task " << id << " with priority " << p
-              << std::endl;
     queues.push_mappable(id, p);
   }
 
