@@ -388,6 +388,10 @@ cdef class PyTaskNoise:
         #cdef DeviceType carch = convert_py_device_type(arch)
         self.noise.set(task_id, arch, noise)
 
+    def set(self, taskid_t task_id, priority_t p):
+        self.noise.set_priority(task_id, p)
+
+
     def set_vector(self, timecount_t[:, :] noise):
         cdef int n = noise.shape[0]
         cdef int m = noise.shape[1]
@@ -397,11 +401,20 @@ cdef class PyTaskNoise:
                 noise_vector.push_back(noise[i, j])
         self.noise.set(noise_vector)
 
+    def set_priority_vector(self, priority_t[:] noise):
+        cdef PriorityList priority_list
+        for p in noise:
+            priority_list.push_back(p)
+        self.noise.set_priority(priority_list)
+
     def lock(self):
         self.noise.lock()
 
-    def generate(self):
+    def generate_durations(self):
         self.noise.generate()
+
+    def generate_priorities(self):
+        self.noise.generate_priority()
 
     def dump_to_binary(self, str filename):
         cname = filename.encode('utf-8')
@@ -410,6 +423,14 @@ cdef class PyTaskNoise:
     def load_from_binary(self, str filename):
         cname = filename.encode('utf-8')
         self.noise.load_from_binary(cname)
+
+    def dump_priority_to_binary(self, str filename):
+        cname = filename.encode('utf-8')
+        self.noise.dump_priorities_to_binary(cname)
+
+    def load_priority_from_binary(self, str filename):
+        cname = filename.encode('utf-8')
+        self.noise.load_priorities_from_binary(cname)
  
 cdef class PyExternalTaskNoise(PyTaskNoise):
     cdef object cfunc 

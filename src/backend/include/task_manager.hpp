@@ -41,7 +41,7 @@ public:
   // Store the task state
   std::vector<devid_t> mapping;
 
-  PriorityList mapping_priority;
+  // PriorityList mapping_priority;
   PriorityList reserving_priority;
   PriorityList launching_priority;
 
@@ -80,10 +80,10 @@ public:
     assert(id < n_compute_tasks);
     mapping.at(id) = devid;
   }
-  void set_mapping_priority(taskid_t id, priority_t p);
-  void set_mapping_priority(PriorityList &ps) {
-    mapping_priority = std::move(ps);
-  }
+  // void set_mapping_priority(taskid_t id, priority_t p);
+  // void set_mapping_priority(PriorityList &ps) {
+  //   mapping_priority = std::move(ps);
+  // }
 
   void set_reserving_priority(taskid_t id, priority_t p);
   void set_reserving_priority(PriorityList &ps) {
@@ -95,13 +95,13 @@ public:
   }
 
   [[nodiscard]] devid_t get_mapping(taskid_t id) const { return mapping[id]; };
-  [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const {
-    assert(id < mapping_priority.size());
-    return mapping_priority.at(id);
-  };
-  [[nodiscard]] const PriorityList &get_mapping_priorities() const {
-    return mapping_priority;
-  }
+  // [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const {
+  //   assert(id < mapping_priority.size());
+  //   return mapping_priority.at(id);
+  // };
+  // [[nodiscard]] const PriorityList &get_mapping_priorities() const {
+  //   return mapping_priority;
+  // }
   [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const {
     assert(id < reserving_priority.size());
     return reserving_priority.at(id);
@@ -193,16 +193,13 @@ public:
   void initialize(bool create_data_tasks = false) {
     task_buffer.reserve(TASK_MANAGER_TASK_BUFFER_SIZE);
     GraphManager::finalize(tasks, create_data_tasks);
-    if (!noise.get().generated) {
-      noise.get().generate();
-    }
     initialize_state();
     initialized = true;
   }
 
-  void set_mapping_priority(PriorityList &ps) {
-    state.set_mapping_priority(ps);
-  }
+  // void set_mapping_priority(PriorityList &ps) {
+  //   state.set_mapping_priority(ps);
+  // }
 
   [[nodiscard]] const TaskStateInfo &get_state() const { return state; }
   [[nodiscard]] const TaskRecords &get_records() const { return records; }

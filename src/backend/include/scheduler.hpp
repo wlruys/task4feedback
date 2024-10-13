@@ -44,9 +44,9 @@ protected:
   DeviceQueue launchable;
   DeviceQueue data_launchable;
 
-  static TaskType id_to_type(taskid_t id, const Tasks &tasks);
+  // static TaskType id_to_type(taskid_t id, const Tasks &tasks);
 
-  void id_to_queue(taskid_t id, const TaskStateInfo &state);
+  // void id_to_queue(taskid_t id, const TaskStateInfo &state);
 
 public:
   SchedulerQueues(Devices &devices)
@@ -113,8 +113,8 @@ public:
     return data_launchable.total_active_size() > 0;
   }
 
-  void populate(const TaskManager &task_manager);
-  void populate(const TaskIDList &ids, const TaskManager &task_manager);
+  // void populate(const TaskManager &task_manager);
+  // void populate(const TaskIDList &ids, const TaskManager &task_manager);
 
   friend class Scheduler;
 };
@@ -527,9 +527,8 @@ public:
 
   void initialize(bool create_data_tasks = false) {
     state.initialize(create_data_tasks);
-    const auto &task_states = state.task_manager.state;
     auto initial_tasks = initially_mappable_tasks();
-    queues.push_mappable(initial_tasks, task_states.get_mapping_priorities());
+    queues.push_mappable(initial_tasks, state.get_mapping_priorities());
     set_transition_conditions(RangeTransitionConditions(128, 128, 64));
     initialized = true;
   }
@@ -588,12 +587,14 @@ public:
   [[nodiscard]] const SchedulerQueues &get_queues() const { return queues; }
 
   void push_mappable(taskid_t id) {
-    priority_t p = state.task_manager.state.get_mapping_priority(id);
+    priority_t p = state.task_manager.noise.get().get_priority(id);
+    std::cout << "Pushing mappable task " << id << " with priority " << p
+              << std::endl;
     queues.push_mappable(id, p);
   }
 
   void push_mappable(const TaskIDList &ids) {
-    const auto &ps = state.task_manager.state.get_mapping_priorities();
+    const auto &ps = state.task_manager.noise.get().get_priorities();
     queues.push_mappable(ids, ps);
   }
 

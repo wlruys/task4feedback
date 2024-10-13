@@ -12,7 +12,7 @@ TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
   state.resize(n, TaskState::SPAWNED);
   counts.resize(n, DepCount());
   mapping.resize(n_compute_tasks, 0);
-  mapping_priority.resize(n, 0);
+  // mapping_priority.resize(n, 0);
   reserving_priority.resize(n, 0);
   launching_priority.resize(n, 0);
   is_virtual.resize(n, false);
@@ -78,9 +78,9 @@ bool TaskStateInfo::decrement_incomplete(taskid_t id) {
   return (counts[id].incomplete == 0) && (state[id] == TaskState::RESERVED);
 }
 
-void TaskStateInfo::set_mapping_priority(taskid_t id, priority_t priority) {
-  mapping_priority[id] = priority;
-}
+// void TaskStateInfo::set_mapping_priority(taskid_t id, priority_t priority) {
+//   mapping_priority[id] = priority;
+// }
 
 void TaskStateInfo::set_reserving_priority(taskid_t id, priority_t priority) {
   reserving_priority[id] = priority;

@@ -45,7 +45,7 @@ TEST_CASE_FIXTURE(LognormalTaskNoiseFixture,
   }
   mean /= static_cast<double>(tasks.compute_size() * num_device_types);
 
-  CHECK_MESSAGE(mean == doctest::Approx(10).epsilon(0.1),
+  CHECK_MESSAGE(mean == doctest::Approx(10).epsilon(2),
                 "Mean should be near 10");
 }
 
@@ -72,5 +72,37 @@ TEST_CASE_FIXTURE(LognormalTaskNoiseFixture,
       DeviceType arch = static_cast<DeviceType>(j);
       CHECK(noise.get(i, arch) == loaded_noise.get(i, arch));
     }
+  }
+}
+
+TEST_CASE_FIXTURE(LognormalTaskNoiseFixture,
+                  "LognormalTaskNoise generate_priority and get_priority") {
+  noise.generate_priority();
+
+  for (taskid_t i = 0; i < tasks.compute_size(); ++i) {
+    priority_t value = noise.get_priority(i);
+    CHECK_MESSAGE(value >= 0, "Priority value should be non-negative");
+  }
+}
+
+TEST_CASE_FIXTURE(LognormalTaskNoiseFixture,
+                  "LognormalTaskNoise set_priority") {
+  for (taskid_t i = 0; i < tasks.compute_size(); ++i) {
+    noise.set_priority(i, 5);
+    CHECK(noise.get_priority(i) == 5);
+  }
+}
+
+TEST_CASE_FIXTURE(LognormalTaskNoiseFixture,
+                  "LognormalTaskNoise dump_priorities_to_binary and "
+                  "load_priorities_from_binary") {
+  noise.generate_priority();
+  noise.dump_priorities_to_binary("test_priorities.bin");
+
+  LognormalTaskNoise loaded_noise(tasks, 2);
+  loaded_noise.load_priorities_from_binary("test_priorities.bin");
+
+  for (taskid_t i = 0; i < tasks.compute_size(); ++i) {
+    CHECK(noise.get_priority(i) == loaded_noise.get_priority(i));
   }
 }

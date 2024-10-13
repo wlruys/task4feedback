@@ -2,7 +2,7 @@
 #cython: embedsignature=True
 #cython: language=c++
 
-from settings cimport taskid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t
+from settings cimport taskid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t, priority_t
 
 import cython
 cimport cython
@@ -22,27 +22,21 @@ cdef extern from "include/noise.hpp":
         timecount_t get(taskid_t task_id, DeviceType arch)
         void set(taskid_t task_id, DeviceType arch, timecount_t noise)
         void set(vector[timecount_t] noise)
+        void set_priority(taskid_t task_id, priority_t p)
+        void set_priority(vector[priority_t] noise)
         void lock()
         void generate()
+        void generate_priority()
         void dump_to_binary(const string filename)
         void load_from_binary(const string filename)
+        void dump_priorities_to_binary(const string filename)
+        void load_priorities_from_binary(const string filename)
 
         
 
     cdef cppclass ExternalTaskNoise(TaskNoise):
         ExternalTaskNoise(Tasks& tasks, unsigned int seed)
-        timecount_t get(taskid_t task_id, DeviceType arch)
-        void set(taskid_t task_id, DeviceType arch, timecount_t noise)
-        void generate()
-        void dump_to_binary(const string filename)
-        void load_from_binary(const string filename)
         void set_function(esf_t function)
-
 
     cdef cppclass LognormalTaskNoise(TaskNoise):
         LognormalTaskNoise(Tasks& tasks, unsigned int seed)
-        timecount_t get(taskid_t task_id, DeviceType arch)
-        void set(taskid_t task_id, DeviceType arch, timecount_t noise)
-        void generate()
-        void dump_to_binary(const string filename)
-        void load_from_binary(const string filename)
