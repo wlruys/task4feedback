@@ -21,12 +21,13 @@ protected:
   CommunicationNoise comm_noise;
   SchedulerInput input;
   constexpr static std::size_t num_devices = 2;
+  constexpr static std::size_t num_data = 3;
   constexpr static std::size_t num_tasks = 3;
   constexpr static unsigned int seed = 42;
 
   SimulatorFixture()
       : tasks(num_tasks), devices(num_devices), topology(num_devices),
-        data(num_tasks), task_noise(tasks, seed), comm_noise(topology),
+        data(num_data), task_noise(tasks, seed), comm_noise(topology),
         input(tasks, data, devices, topology, mapper, task_noise, comm_noise) {
 
     // Initialize tasks
@@ -93,7 +94,7 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Breakpoints") {
 TEST_CASE_FIXTURE(SimulatorFixture, "Copy") {
 
   auto simulator = Simulator(input);
-  simulator.initialize(false);
+  simulator.initialize(true);
 
   // Set a breakpoint for task 0 at the MAPPER event
   simulator.add_task_breakpoint(EventType::COMPLETER, 0);

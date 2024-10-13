@@ -104,7 +104,7 @@ public:
 
   [[nodiscard]] const Resources &get_resources() const { return resources; }
 
-  [[nodiscard]] timecount_t get_true_execution_time() const { return time; }
+  [[nodiscard]] timecount_t get_observed_time() const { return time; }
 };
 
 using VariantList = std::array<Variant, num_device_types>;

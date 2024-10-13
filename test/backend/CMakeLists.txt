@@ -7,6 +7,7 @@ include(${3RD_PARTY_DIR}/doctest/doctest.cmake)
 list(APPEND SIMULATOR_UNITTESTS
   test_queue
   test_tasks
+  test_eft
   test_task_noise
   test_comm_noise
   test_scheduler

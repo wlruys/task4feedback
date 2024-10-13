@@ -452,6 +452,11 @@ public:
 
   [[nodiscard]] timecount_t time_to_transfer(taskid_t data_task_id, mem_t size,
                                              devid_t src, devid_t dst) const {
+
+    if (src == dst) {
+      return 0;
+    }
+
     auto [latency, bandwidth] = noise.get().get({data_task_id, src, dst, size});
     const auto bw = static_cast<double>(bandwidth);
     const auto s = static_cast<double>(size);
@@ -461,16 +466,26 @@ public:
 
   [[nodiscard]] timecount_t ideal_time_to_transfer(mem_t size, devid_t src,
                                                    devid_t dst) const {
+
+    if (src == dst) {
+      return 0;
+    }
+
     const auto bw = static_cast<double>(get_bandwidth(src, dst));
     const auto latency =
         static_cast<timecount_t>(topology.get().get_latency(src, dst));
     const auto s = static_cast<double>(size);
     auto time = latency + static_cast<timecount_t>(s / bw);
+
+    SPDLOG_DEBUG("Calculating ideal time to transfer {} bytes from device {} "
+                 "to device {} with bandwidth {} and latency {}",
+                 size, src, dst, bw, latency);
     return std::max(time, static_cast<timecount_t>(1));
   }
 
-  SourceRequest
-  get_best_available_source(devid_t dst, DeviceIDList &possible_sources) const {
+  [[nodiscard]] SourceRequest
+  get_best_available_source(devid_t dst,
+                            const DeviceIDList &possible_sources) const {
     // Return the source with the highest bandwidth
     // If no source is available, return found=false
 
@@ -478,6 +493,11 @@ public:
     devid_t best_source = 0;
     mem_t best_bandwidth = 0;
     for (auto src : possible_sources) {
+
+      if (src == dst) {
+        return {true, src};
+      }
+
       if (check_connection(src, dst)) {
         auto bandwidth = get_available_bandwidth(src, dst);
         if (bandwidth > best_bandwidth) {
@@ -490,8 +510,8 @@ public:
     return {found, best_source};
   }
 
-  SourceRequest get_best_source(devid_t dst,
-                                DeviceIDList &possible_source) const {
+  [[nodiscard]] SourceRequest
+  get_best_source(devid_t dst, const DeviceIDList &possible_source) const {
     // Return the source with the highest bandwidth
     // If no source is available, return found=false
 
@@ -499,6 +519,11 @@ public:
     devid_t best_source = 0;
     mem_t best_bandwidth = 0;
     for (auto src : possible_source) {
+
+      if (src == dst) {
+        return {true, src};
+      }
+
       auto bandwidth = get_available_bandwidth(src, dst);
       if (bandwidth > best_bandwidth) {
         best_bandwidth = bandwidth;
@@ -508,4 +533,6 @@ public:
     }
     return {found, best_source};
   }
+
+  friend class SchedulerState;
 };

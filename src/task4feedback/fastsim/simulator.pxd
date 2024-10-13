@@ -67,7 +67,7 @@ cdef extern from "include/simulator.hpp":
         RUNNING,
         COMPLETE,
         BREAKPOINT,
-        PYTHON_MAPPING,
+        EXTERNAL_MAPPING,
         ERROR
     cdef cppclass Simulator:
         Simulator(Simulator&)

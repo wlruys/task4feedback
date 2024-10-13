@@ -390,7 +390,7 @@ Table TaskPrinter::make_variant_table(Variant v) {
 
   value_row.emplace_back(std::to_string(v.get_vcus()));
   value_row.emplace_back(std::to_string(v.get_mem()));
-  value_row.emplace_back(std::to_string(v.get_true_execution_time()));
+  value_row.emplace_back(std::to_string(v.get_observed_time()));
 
   variant_table.add_row(header_row);
   variant_table.add_row(value_row);

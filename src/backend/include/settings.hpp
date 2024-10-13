@@ -24,6 +24,8 @@ using DeviceIDLinkedList = std::list<devid_t>;
 
 using PriorityList = std::vector<priority_t>;
 
+class SchedulerState;
+
 template <typename T> void print(std::vector<T> vec) {
   for (auto &elem : vec) {
     std::cout << elem << " ";

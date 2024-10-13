@@ -252,6 +252,8 @@ public:
   }
 
   void print_task(taskid_t id);
+
+  friend class SchedulerState;
 };
 
 class TaskPrinter {

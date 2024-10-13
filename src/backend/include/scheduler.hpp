@@ -187,6 +187,23 @@ public:
 
   void count_data_completed(devid_t device_id, timecount_t time);
 
+  [[nodiscard]] timecount_t get_mapped_time(devid_t device_id) const {
+    return per_device_mapped_time.at(device_id);
+  }
+  [[nodiscard]] timecount_t get_reserved_time(devid_t device_id) const {
+    return per_device_reserved_time.at(device_id);
+  }
+  [[nodiscard]] timecount_t get_launched_time(devid_t device_id) const {
+    return per_device_launched_time.at(device_id);
+  }
+
+  [[nodiscard]] timecount_t get_completed_time(devid_t device_id) const {
+    return per_device_completed_time.at(device_id);
+  }
+  [[nodiscard]] timecount_t get_data_completed_time(devid_t device_id) const {
+    return per_device_data_completed_time.at(device_id);
+  }
+
 protected:
   std::vector<timecount_t> per_device_mapped_time;
   std::vector<timecount_t> per_device_reserved_time;
@@ -348,6 +365,11 @@ public:
   void set_reserving_priority(taskid_t task_id, priority_t priority);
   void set_launching_priority(taskid_t task_id, priority_t priority);
 
+  void update_mapped_cost(taskid_t task_id, devid_t device_id);
+  void update_reserved_cost(taskid_t task_id, devid_t device_id);
+  void update_launched_cost(taskid_t task_id, devid_t device_id);
+  void update_completed_cost(taskid_t task_id, devid_t device_id);
+
   [[nodiscard]] timecount_t get_execution_time(taskid_t task_id) const;
 
   [[nodiscard]] timecount_t get_global_time() const {
@@ -420,19 +442,24 @@ class RangeTransitionConditions : public TransitionConditions {
 public:
   std::size_t mapped_reserved_gap = 1;
   std::size_t reserved_launched_gap = 1;
+  std::size_t total_in_flight = 1;
 
   RangeTransitionConditions(std::size_t mapped_launched_gap_,
-                            std::size_t reserved_launched_gap_)
+                            std::size_t reserved_launched_gap_,
+                            std::size_t total_in_flight_)
       : mapped_reserved_gap(mapped_launched_gap_),
-        reserved_launched_gap(reserved_launched_gap_) {}
+        reserved_launched_gap(reserved_launched_gap_),
+        total_in_flight(total_in_flight_) {}
 
   bool should_map(SchedulerState &state, SchedulerQueues &queues) const {
     MONUnusedParameter(queues);
+
     auto n_mapped = state.counts.n_mapped();
     auto n_reserved = state.counts.n_reserved();
     assert(n_mapped >= n_reserved);
 
-    const bool flag = (n_mapped - n_reserved) < mapped_reserved_gap;
+    bool flag = (n_mapped - n_reserved) <= mapped_reserved_gap;
+    flag = flag && (n_mapped <= total_in_flight);
     return flag;
   }
 
@@ -442,7 +469,7 @@ public:
     auto n_launched = state.counts.n_launched();
     assert(n_reserved >= n_launched);
 
-    const bool flag = (n_reserved - n_launched) < reserved_launched_gap;
+    bool flag = (n_reserved - n_launched) <= reserved_launched_gap;
     return flag;
   }
 };
@@ -488,7 +515,7 @@ public:
 
   Scheduler(const Scheduler &other) = default;
 
-  void set_transition_conditions(TransitionConditions &conditions_) {
+  void set_transition_conditions(TransitionConditions conditions_) {
     this->conditions = conditions_;
   }
 
@@ -503,6 +530,7 @@ public:
     const auto &task_states = state.task_manager.state;
     auto initial_tasks = initially_mappable_tasks();
     queues.push_mappable(initial_tasks, task_states.get_mapping_priorities());
+    set_transition_conditions(RangeTransitionConditions(128, 128, 64));
     initialized = true;
   }
 
@@ -663,6 +691,12 @@ protected:
 
 public:
   Mapper() = default;
+
+  void initialize() {
+    device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
+    arch_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
+  }
+
   virtual Action map_task(taskid_t task_id, const SchedulerState &state) {
     MONUnusedParameter(state);
     return Action(task_id, 0);
@@ -790,5 +824,171 @@ public:
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     MONUnusedParameter(state);
     return actions.at(task_id);
+  }
+};
+
+class EFTMapper : public Mapper {
+protected:
+  std::vector<timecount_t> finish_time_record;
+  std::vector<timecount_t> finish_time_buffer;
+
+  struct DeviceTime {
+    devid_t device_id;
+    timecount_t time;
+  };
+
+  void record_finish_time(taskid_t task_id, timecount_t time) {
+    finish_time_record.at(task_id) = time;
+  }
+
+  timecount_t time_for_transfer(dataid_t data_id, devid_t destination,
+                                const SchedulerState &state) {
+    // Get valid locations in mapped
+    const auto &data_manager = state.get_data_manager();
+    const auto &communication_manager = state.get_communication_manager();
+    const DeviceIDList valid_sources =
+        data_manager.get_valid_mapped_locations(data_id);
+    assert(!valid_sources.empty());
+    const mem_t data_size = data_manager.get_data().get_size(data_id);
+
+    SourceRequest req =
+        communication_manager.get_best_source(destination, valid_sources);
+    assert(req.found);
+
+    SPDLOG_DEBUG("Best source to transfer data {} to device {} is device {}",
+                 data_id, destination, req.source);
+    SPDLOG_DEBUG("It has bandwidth {}",
+                 communication_manager.get_bandwidth(req.source, destination));
+
+    return communication_manager.ideal_time_to_transfer(data_size, req.source,
+                                                        destination);
+  }
+
+  timecount_t get_finish_time(taskid_t task_id, devid_t device_id,
+                              timecount_t start_t,
+                              const SchedulerState &state) {
+    const auto &read_set =
+        state.get_task_manager().get_tasks().get_read(task_id);
+
+    const DeviceType arch =
+        state.get_device_manager().get_devices().get_device(device_id).arch;
+
+    timecount_t duration = state.get_task_manager()
+                               .get_tasks()
+                               .get_variant(task_id, arch)
+                               .get_observed_time();
+
+    timecount_t data_time = 0;
+
+    for (auto data_id : read_set) {
+      timecount_t transfer_time = time_for_transfer(data_id, device_id, state);
+      data_time += transfer_time;
+    }
+
+    return start_t + data_time + duration;
+  }
+
+  timecount_t virtual get_device_available_time(devid_t device_id,
+                                                const SchedulerState &state) {
+    timecount_t reserved_workload = state.costs.get_reserved_time(device_id);
+    return state.get_global_time() + reserved_workload;
+  }
+
+  timecount_t get_dependency_finish_time(taskid_t task_id,
+                                         const SchedulerState &state) {
+    const auto &tasks = state.get_task_manager().get_tasks();
+    const auto &dependencies = tasks.get_dependencies(task_id);
+
+    timecount_t max_time = 0;
+    for (auto dep_id : dependencies) {
+      timecount_t dep_time = finish_time_record.at(dep_id);
+      max_time = std::max(max_time, dep_time);
+    }
+
+    return max_time;
+  }
+
+  void fill_finish_time_buffer(taskid_t task_id, const SchedulerState &state) {
+    const auto &device_manager = state.get_device_manager();
+    const auto &devices = device_manager.get_devices();
+    finish_time_buffer.clear();
+
+    timecount_t dep_time = get_dependency_finish_time(task_id, state);
+
+    SPDLOG_DEBUG("Computing EFT for task {}", task_id);
+    SPDLOG_DEBUG("Dependency finish time is {}", dep_time);
+
+    for (devid_t device_id = 0; device_id < devices.size(); device_id++) {
+      timecount_t start_time = get_device_available_time(device_id, state);
+      SPDLOG_DEBUG("Device {} is available at {}", device_id, start_time);
+      start_time = std::max(start_time, dep_time);
+      timecount_t finish_time =
+          get_finish_time(task_id, device_id, start_time, state);
+      finish_time_buffer.push_back(finish_time);
+      SPDLOG_DEBUG("EFT for task {} on device {} is {}", task_id, device_id,
+                   finish_time);
+    }
+  }
+
+  DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
+    fill_finish_time_buffer(task_id, state);
+    auto min_time = std::numeric_limits<timecount_t>::max();
+    devid_t best_device = 0;
+
+    for (std::size_t i = 0; i < finish_time_buffer.size(); i++) {
+      if (finish_time_buffer.at(i) < min_time) {
+        min_time = finish_time_buffer.at(i);
+        best_device = i;
+      }
+    }
+
+    return {best_device, min_time};
+  }
+
+public:
+  EFTMapper(std::size_t n_tasks, std::size_t n_devices)
+      : finish_time_record(n_tasks, 0) {
+    finish_time_buffer.reserve(n_devices);
+  }
+
+  void initialize(std::size_t n_tasks, std::size_t n_devices) {
+    finish_time_record = std::vector<timecount_t>(n_tasks, 0);
+  }
+
+  Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    auto [best_device, min_time] = get_best_device(task_id, state);
+    record_finish_time(task_id, min_time);
+    return Action(task_id, 0, best_device);
+  }
+};
+
+class DequeueEFTMapper : public EFTMapper {
+protected:
+  std::vector<timecount_t> device_available_time_buffer;
+
+  timecount_t get_device_available_time(devid_t device_id,
+                                        const SchedulerState &state) override {
+    return device_available_time_buffer.at(device_id);
+  }
+
+  void set_device_available_time(devid_t device_id, timecount_t time) {
+    device_available_time_buffer.at(device_id) = time;
+  }
+
+public:
+  DequeueEFTMapper(std::size_t n_tasks, std::size_t n_devices)
+      : EFTMapper(n_tasks, n_devices), device_available_time_buffer(n_devices) {
+  }
+
+  void initialize(std::size_t n_tasks, std::size_t n_devices) {
+    EFTMapper::initialize(n_tasks, n_devices);
+    device_available_time_buffer = std::vector<timecount_t>(n_devices, 0);
+  }
+
+  Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    auto [best_device, min_time] = get_best_device(task_id, state);
+    record_finish_time(task_id, min_time);
+    set_device_available_time(best_device, min_time);
+    return Action(task_id, 0, best_device);
   }
 };

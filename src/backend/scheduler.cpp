@@ -5,6 +5,7 @@
 #include "macros.hpp"
 #include "settings.hpp"
 #include "task_manager.hpp"
+#include "tasks.hpp"
 #include <iostream>
 
 // SchedulerState
@@ -192,6 +193,35 @@ void SchedulerState::set_launching_priority(taskid_t task_id,
   task_manager.state.set_launching_priority(task_id, priority);
 }
 
+void SchedulerState::update_mapped_cost(taskid_t task_id, devid_t device_id) {
+  DeviceType arch = device_manager.devices.get().get_type(device_id);
+  timecount_t time =
+      task_manager.tasks.get().get_variant(task_id, arch).get_observed_time();
+
+  costs.count_mapped(device_id, time);
+}
+void SchedulerState::update_reserved_cost(taskid_t task_id, devid_t device_id) {
+  DeviceType arch = device_manager.devices.get().get_type(device_id);
+  timecount_t time =
+      task_manager.tasks.get().get_variant(task_id, arch).get_observed_time();
+
+  costs.count_reserved(device_id, time);
+}
+void SchedulerState::update_launched_cost(taskid_t task_id, devid_t device_id) {
+  DeviceType arch = device_manager.devices.get().get_type(device_id);
+  timecount_t time =
+      task_manager.tasks.get().get_variant(task_id, arch).get_observed_time();
+
+  costs.count_launched(device_id, time);
+}
+void SchedulerState::update_completed_cost(taskid_t task_id,
+                                           devid_t device_id) {
+  DeviceType arch = device_manager.devices.get().get_type(device_id);
+  timecount_t time =
+      task_manager.tasks.get().get_variant(task_id, arch).get_observed_time();
+  costs.count_completed(device_id, time);
+}
+
 // Scheduler Queues
 void SchedulerQueues::push_mappable(taskid_t id, priority_t p) {
   mappable.push(id, p);
@@ -355,9 +385,14 @@ void TaskCostInfo::count_launched(devid_t device_id, timecount_t time) {
 }
 
 void TaskCostInfo::count_completed(devid_t device_id, timecount_t time) {
+
+  assert(per_device_mapped_time.at(device_id) >= time);
   per_device_mapped_time.at(device_id) -= time;
+  assert(per_device_reserved_time.at(device_id) >= time);
   per_device_reserved_time.at(device_id) -= time;
+  assert(per_device_launched_time.at(device_id) >= time);
   per_device_launched_time.at(device_id) -= time;
+
   per_device_completed_time.at(device_id) += time;
 }
 
@@ -418,6 +453,7 @@ const TaskIDList &Scheduler::map_task(Action &action) {
   const auto &newly_mappable_tasks = s.notify_mapped(task_id);
   success_count += 1;
   state.counts.count_mapped(chosen_device);
+  state.update_mapped_cost(task_id, chosen_device);
 
   breakpoints.check_task_breakpoint(EventType::MAPPER, task_id);
 
@@ -564,6 +600,7 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
   success_count += 1;
   enqueue_data_tasks(task_id);
   s.counts.count_reserved(device_id);
+  s.update_reserved_cost(task_id, device_id);
   breakpoints.check_task_breakpoint(EventType::RESERVER, task_id);
 
   // Check if the reserved task is launchable, and if so, enqueue it
@@ -681,6 +718,8 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
   s.notify_launched(task_id);
   success_count += 1;
   s.counts.count_launched(device_id);
+  s.update_launched_cost(task_id, device_id);
+
   breakpoints.check_task_breakpoint(EventType::LAUNCHER, task_id);
 
   // Create completion event
@@ -854,6 +893,7 @@ void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
   // Free mapped, reserved, and launched resources
   s.free_resources(task_id);
   s.counts.count_completed(device_id);
+  s.update_completed_cost(task_id, device_id);
 
   const auto &newly_launchable_data_tasks = s.notify_data_completed(task_id);
   push_launchable_data(newly_launchable_data_tasks);

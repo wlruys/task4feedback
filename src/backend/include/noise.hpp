@@ -22,7 +22,7 @@ protected:
     const auto &ctasks = tasks.get();
     const auto &task = ctasks.get_compute_task(task_id);
     const auto &variant = task.get_variant(arch);
-    return variant.get_true_execution_time();
+    return variant.get_observed_time();
   };
 
   static uint64_t calculate_checksum(const std::vector<timecount_t> &data) {
@@ -213,7 +213,7 @@ protected:
   [[nodiscard]] timecount_t sample_duration(taskid_t task_id,
                                             DeviceType arch) const override {
     const auto mean = static_cast<double>(
-        tasks.get().get_variant(task_id, arch).get_true_execution_time());
+        tasks.get().get_variant(task_id, arch).get_observed_time());
     const double stddev = get_stddev(task_id, arch);
 
     const double u =

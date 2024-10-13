@@ -307,4 +307,5 @@ public:
     const auto &device_max_resources = devices.get().get_max_resources(id);
     return state_resources.overflow_resources(id, r, device_max_resources);
   }
+  friend class SchedulerState;
 };

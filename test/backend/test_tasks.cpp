@@ -87,25 +87,25 @@ TEST_CASE_FIXTURE(TestFixture, "Tasks: Variant") {
   CHECK(variants[0].get_arch() == DeviceType::CPU);
   CHECK(variants[0].get_vcus() == 1);
   CHECK(variants[0].get_mem() == 1024);
-  CHECK(variants[0].get_true_execution_time() == 10);
+  CHECK(variants[0].get_observed_time() == 10);
 
   variants = tasks.get_variant_vector(1);
   CHECK(variants.size() == 1);
   CHECK(variants[0].get_arch() == DeviceType::GPU);
   CHECK(variants[0].get_vcus() == 2);
   CHECK(variants[0].get_mem() == 2048);
-  CHECK(variants[0].get_true_execution_time() == 20);
+  CHECK(variants[0].get_observed_time() == 20);
 
   variants = tasks.get_variant_vector(2);
   CHECK(variants.size() == 2);
   CHECK(variants[0].get_arch() == DeviceType::CPU);
   CHECK(variants[0].get_vcus() == 4);
   CHECK(variants[0].get_mem() == 8192);
-  CHECK(variants[0].get_true_execution_time() == 40);
+  CHECK(variants[0].get_observed_time() == 40);
   CHECK(variants[1].get_arch() == DeviceType::GPU);
   CHECK(variants[1].get_vcus() == 3);
   CHECK(variants[1].get_mem() == 4096);
-  CHECK(variants[1].get_true_execution_time() == 30);
+  CHECK(variants[1].get_observed_time() == 30);
 }
 
 TEST_CASE_FIXTURE(TestFixture, "Tasks: Data Dependencies") {

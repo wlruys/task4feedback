@@ -598,7 +598,19 @@ public:
     }
   }
 
-  SourceRequest request_source(dataid_t data_id, devid_t destination) {
+  auto get_valid_mapped_locations(dataid_t data_id) const {
+    return mapped_locations.get_valid_locations(data_id);
+  }
+
+  auto get_valid_reserved_locations(dataid_t data_id) const {
+    return reserved_locations.get_valid_locations(data_id);
+  }
+
+  auto get_valid_launched_locations(dataid_t data_id) const {
+    return launched_locations.get_valid_locations(data_id);
+  }
+
+  SourceRequest request_source(dataid_t data_id, devid_t destination) const {
     auto valid_locations = launched_locations.get_valid_locations(data_id);
     assert(!valid_locations.empty());
 
@@ -707,4 +719,6 @@ public:
       remove_memory(updated_devices, data_id);
     }
   }
+
+  friend class SchedulerState;
 };

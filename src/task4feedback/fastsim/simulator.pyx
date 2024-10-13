@@ -55,7 +55,7 @@ class PyExecutionState(IntEnum):
     RUNNING = <int>ExecutionState.RUNNING,
     COMPLETE = <int>ExecutionState.COMPLETE,
     BREAKPOINT = <int>ExecutionState.BREAKPOINT,
-    PYTHON_MAPPING = <int>ExecutionState.PYTHON_MAPPING,
+    EXTERNAL_MAPPING = <int>ExecutionState.EXTERNAL_MAPPING,
     ERROR = <int>ExecutionState.ERROR 
 
     def __str__(self):
@@ -337,12 +337,12 @@ cdef class PyTasks:
             result[i, 0] = <uint64_t>variants[i].get_arch()
             result[i, 1] = <uint64_t>variants[i].get_vcus()
             result[i, 2] = <uint64_t>variants[i].get_mem()
-            result[i, 3] = <uint64_t>variants[i].get_true_execution_time()
+            result[i, 3] = <uint64_t>variants[i].get_observed_time()
         return result
 
     def get_variant(self, taskid_t taskid, DeviceType arch):
         cdef Variant variant = deref(self.tasks).get_variant(taskid, arch)
-        return variant.get_vcus(), variant.get_mem(), variant.get_true_execution_time()
+        return variant.get_vcus(), variant.get_mem(), variant.get_observed_time()
 
     def get_name(self, taskid_t taskid):
         cdef string s = deref(self.tasks).get_name(taskid)

@@ -23,7 +23,7 @@ enum class ExecutionState {
   RUNNING = 1,
   COMPLETE = 2,
   BREAKPOINT = 3,
-  PYTHON_MAPPING = 4,
+  EXTERNAL_MAPPING = 4,
   ERROR = 5,
 };
 constexpr std::size_t num_execution_states = 6;
@@ -42,8 +42,8 @@ inline std::string to_string(const ExecutionState &state) {
   case ExecutionState::BREAKPOINT:
     return "BREAKPOINT";
     break;
-  case ExecutionState::PYTHON_MAPPING:
-    return "PYTHON_MAPPING";
+  case ExecutionState::EXTERNAL_MAPPING:
+    return "EXTERNAL_MAPPING";
     break;
   case ExecutionState::ERROR:
     return "ERROR";
@@ -66,7 +66,7 @@ protected:
 
   ExecutionState dispatch_mapper(Event &event) {
     if (use_python_mapper) {
-      return ExecutionState::PYTHON_MAPPING;
+      return ExecutionState::EXTERNAL_MAPPING;
     }
     // otherwise just run the mapper from C++
     scheduler.map_tasks(event, event_manager, mapper.get());
@@ -185,7 +185,7 @@ public:
       return ExecutionState::COMPLETE;
     }
 
-    if (last_state == ExecutionState::PYTHON_MAPPING) {
+    if (last_state == ExecutionState::EXTERNAL_MAPPING) {
       // spdlog::debug("Python Mapping has not been completed.");
       return ExecutionState::ERROR;
     }
