@@ -11,6 +11,7 @@
 #include "spdlog/spdlog.h"
 #include <cstddef>
 #include <functional>
+#include <memory>
 
 void logger_setup() {
   auto new_logger = spdlog::stdout_color_mt("console");
@@ -103,8 +104,9 @@ public:
     initialized = true;
   }
 
-  void set_transition_conditions(TransitionConditions &conditions_) {
-    scheduler.set_transition_conditions(conditions_);
+  void
+  set_transition_conditions(std::shared_ptr<TransitionConditions> conditions_) {
+    scheduler.set_transition_conditions(std::move(conditions_));
   }
 
   ExecutionState handle_event(Event &event) {

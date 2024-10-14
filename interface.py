@@ -363,7 +363,7 @@ class StaticPythonMapper:
     def set_mapping(self, mapping: np.ndarray[np.uint64]):
         self.mapping = mapping
 
-    def map_tasks(self, candidates: list[int]) -> list[Action]:
+    def map_tasks(self, candidates: list[int], simulator) -> list[Action]:
         action_list = []
         for i, candidate in enumerate(candidates):
             device = self.mapping[candidate]
@@ -384,10 +384,15 @@ class RoundRobinPythonMapper(PythonMapper):
     def __init__(self, n_devices: int):
         self.n_devices = n_devices
 
-    def map_tasks(self, candidates: list[int]) -> list[Action]:
+    def map_tasks(self, candidates: list[int], simulator) -> list[Action]:
         action_list = []
-        # if len(candidates):
-        #     print("Mapping", candidates)
+
+        start_t = time.perf_counter()
+        local_graph = simulator.observer.local_graph_features(list(candidates))
+        end_t = time.perf_counter()
+        print("Local graph time", end_t - start_t)
+        print(local_graph)
+
         for i, candidate in enumerate(candidates):
             device = candidate % self.n_devices
             action_list.append(
@@ -415,99 +420,228 @@ class Observer:
     def get_k_hop_dependents(
         self, task_list: list[int], k: int
     ) -> np.ndarray[np.uint64]:
-        return self.observer.get_k_hop_tasks(task_list, k)
+        return self.observer.get_k_hop_dependents(task_list, k)
 
-    def id_map(self, l: list[int]):
-        m = {}
-        idx = 0
-        for o in l:
-            if o not in m:
-                m[o] = idx
-                idx += 1
-
-        return m
+    def get_k_hop_dependencies(
+        self, task_list: list[int], k: int
+    ) -> np.ndarray[np.uint64]:
+        return self.observer.get_k_hop_dependencies(task_list, k)
 
     def unique(self, task_list: list[int]):
         return list(set(task_list))
 
     def get_task_features(self, tasks: list[int]) -> np.ndarray[np.float64]:
+        """
+        Get task features
+
+        Args:
+            tasks (list[int]): List of task ids
+
+        Returns:
+            np.ndarray[np.float64]: Task features
+            - f[0]: normalized in_degree
+            - f[1]: normalized out_degree
+            - f[2]: is mapped
+            - f[3]: is reserved
+            - f[4]: is launched
+            - f[5]: is completed
+            - f[6]: is mapping candiate (to be set by user)
+        """
         return self.observer.get_task_features(tasks)
 
     def get_data_features(self, data: list[int]) -> np.ndarray[np.float64]:
+        """Get data features
+
+        Args:
+            data (list[int]): List of data ids
+
+        Returns:
+            np.ndarray[np.float64]: data features
+            - f[0]: normalized data size
+            - f[1+device_id]: data located on device_id on mapping table
+        """
         return self.observer.get_data_features(data)
 
     def get_device_features(self, devices: list[int]) -> np.ndarray[np.float64]:
+        """
+        Get device features
+
+        Args:
+            devices (list[int]): List of device ids
+
+        Returns:
+            np.ndarray[np.float64]: Device features
+            - f[0]: is cpu
+            - f[1]: is gpu
+            - f[2]: mapped memory (normalized across devices)
+            - f[3]: reserved memory (normalized across devices)
+            - f[4]: launched memory (normalized across devices)
+            - f[5]: mapped time (normalized across devices)
+            - f[6]: reserved time (normalized across devices)
+            - f[7]: launched time (normalized across devices)
+        """
         return self.observer.get_device_features(devices)
 
     def get_task_task_edges(
         self, source_tasks: list[int], target_tasks: list[int]
     ) -> tuple[
-        np.ndarray[np.uint64],
-        np.ndarray[np.uint64],
-        np.ndarray[np.uint64],
-        np.ndarray[np.uint64],
+        list[np.ndarray[np.uint64]],
         np.ndarray[np.float64],
     ]:
+        """
+        Get task to task edges (dependencies).
+
+        Args:
+            source_tasks (list[int]): List of task ids to search for dependencies of.
+            target_tasks (list[int]): List of task ids to find dependencies in.
+
+        Returns:
+            tuple: A tuple containing:
+                - Edges (list[np.ndarray[np.uint64]]): COO local ids.
+                - Features (np.ndarray[np.float64]): Feature matrix.
+                    - f[0]: Memory shared with target task / source task total memory.
+        """
         return self.observer.get_task_task_edges(source_tasks, target_tasks)
 
     def get_task_data_edges(self, tasks: list[int]) -> tuple[
         np.ndarray[np.uint64],
-        np.ndarray[np.uint64],
-        np.ndarray[np.uint64],
-        np.ndarray[np.uint64],
+        list[np.uint64],
         np.ndarray[np.float64],
     ]:
+        """Get task to data edges (data usage by task)
+
+        Args:
+            tasks (list[int]): List of task ids
+
+        Returns:
+            tuple: A tuple containing:
+            - Data ID Mapping (np.ndarray[np.uint64]): Local to global data id mapping.
+            - Edges (list[np.ndarray[np.uint64]]): COO local ids.
+            - Features (np.ndarray[np.float64]): Feature matrix.
+                - f[0]: data size / task total memory
+                - f[1]: is read access
+                - f[2]: is write access
+        """
         return self.observer.get_task_data_edges(tasks)
 
     def get_task_device_edges(self, tasks: list[int]) -> tuple[
         np.ndarray[np.uint64],
-        np.ndarray[np.uint64],
-        np.ndarray[np.uint64],
+        list[np.ndarray[np.uint64]],
         np.ndarray[np.float64],
     ]:
+        """
+        Get task to device edges (task supports variant on)
+
+        Args:
+            tasks (list[int]): List of task ids
+
+        Returns:
+            tuple: A tuple containing:
+            - Local to global device id mapping (np.ndarray[np.uint64]).
+            - Edge list (list[np.ndarray[np.uint64]]): COO format edge list using local ids.
+            - Edge features (np.ndarray[np.float64]): Edge features.
+                - f[0]: Duration (normalized by global task average duration on architecture).
+                - f[1]: Memory cost (normalized by global task average memory cost on architecture).
+        """
         return self.observer.get_task_device_edges(tasks)
 
     def get_data_device_edges(self, tasks: list[int]) -> tuple[
         np.ndarray[np.uint64],
         np.ndarray[np.uint64],
-        np.ndarray[np.uint64],
+        list[np.ndarray[np.uint64]],
         np.ndarray[np.float64],
     ]:
+        """
+        Get data to device edges (data located on device).
+
+        Args:
+            tasks (list[int]): List of task ids.
+
+        Returns:
+            tuple: A tuple containing:
+            - Local to global data id mapping (np.ndarray[np.uint64]).
+            - Local to global device id mapping (np.ndarray[np.uint64]).
+            - Edge list (list[np.ndarray[np.uint64]]): COO format edge list using local ids.
+            - Edge features (np.ndarray[np.float64]): Edge features.
+                - f[0]: 1 (constant, placeholder).
+        """
         return self.observer.get_data_device_edges(tasks)
 
-    def local_graph_features(self, candidate_tasks: list[int], devices: list[int]):
+    def local_graph_features(self, candidate_tasks: list[int]):
         active_tasks = self.observer.get_active_tasks()
-        k_hop_tasks = self.observer.get_k_hop_tasks(candidate_tasks, 1)
+        k_hop_tasks = self.get_k_hop_dependents(candidate_tasks, 1)
+
+        g = geom.data.HeteroData()
+        if not candidate_tasks:
+            return g
 
         all_tasks = np.concatenate([candidate_tasks, active_tasks, k_hop_tasks])
         all_tasks_list = list(all_tasks)
 
         task_features = self.get_task_features(all_tasks_list)
 
-        _, _, dep_s, dep_e, dep_features = self.get_task_task_edges(
-            candidate_tasks, all_tasks_list
+        g["task"].x = torch.tensor(task_features, dtype=torch.float)
+
+        dep_edges, dep_features = self.get_task_task_edges(
+            all_tasks_list, all_tasks_list
         )
+
+        g["tasks", "depends_on", "tasks"].edge_index = torch.tensor(
+            dep_edges, dtype=torch.long
+        )
+        g["tasks", "depends_on", "tasks"].edge_attr = torch.tensor(
+            dep_features, dtype=torch.float
+        )
+
+        vdevice2id, task_device_edges, task_device_features = (
+            self.get_task_device_edges(all_tasks_list)
+        )
+
+        devices = list(vdevice2id)
 
         device_features = self.get_device_features(devices)
+        g["devices"].x = torch.tensor(device_features, dtype=torch.float)
 
-        gtask_td, task_td, dev_td, td_features = self.get_task_device_edges(
-            candidate_tasks
+        g["task", "variant_on", "devices"].edge_index = torch.tensor(
+            task_device_edges, dtype=torch.long
+        )
+        g["task", "variant_on", "devices"].edge_attr = torch.tensor(
+            task_device_features, dtype=torch.float
         )
 
-        gdata_tda, data_dd, dev_dd, dd_features = self.get_data_device_edges(
-            candidate_tasks
+        data2id, task_data_edges, task_data_features = self.get_task_data_edges(
+            all_tasks_list
+        )
+        data_features = self.get_data_features(list(data2id))
+
+        g["data"].x = torch.tensor(data_features, dtype=torch.float)
+        g["task", "uses", "data"].edge_index = torch.tensor(
+            task_data_edges, dtype=torch.long
+        )
+        g["task", "uses", "data"].edge_attr = torch.tensor(
+            task_data_features, dtype=torch.float
         )
 
-        gtask_tda, gdata_tda, task_tda, data_tda, tda_features = (
-            self.get_task_data_edges(candidate_tasks)
+        data2id, ddevice2id, data_device_edges, data_device_features = (
+            self.get_data_device_edges(all_tasks_list)
         )
 
-        print("Task Data Edges")
-        print(gtask_tda)
-        print(gdata_tda)
+        # Get vdevice id from ddevice id
+        id2vdevice = {v: k for k, v in enumerate(ddevice2id)}
 
-    def test(self):
-        self.local_graph_features([0, 1], [0, 1, 2, 3])
+        def get_vdevice_id(ddevice_id):
+            return id2vdevice[ddevice2id[ddevice_id]]
+
+        data_device_edges[1] == np.vectorize(get_vdevice_id)(data_device_edges[1])
+
+        g["data", "located_on", "devices"].edge_index = torch.tensor(
+            data_device_edges, dtype=torch.long
+        )
+        g["data", "located_on", "devices"].edge_attr = torch.tensor(
+            data_device_features, dtype=torch.float
+        )
+
+        return g
 
 
 @dataclass
@@ -558,7 +692,7 @@ class Simulator:
 
             if sim_state == PyExecutionState.EXTERNAL_MAPPING:
                 candidates = self.simulator.get_mappable_candidates()
-                action_list = self.pymapper.map_tasks(candidates)
+                action_list = self.pymapper.map_tasks(candidates, self)
                 c_action_list = to_c_action_list(action_list)
                 self.simulator.map_tasks(c_action_list)
                 sim_state = PyExecutionState.RUNNING
@@ -771,7 +905,7 @@ latency = 1
 n_devices = args.devices
 devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
 
-start_logger()
+# start_logger()
 
 H = SimulatorHandler(tasks, data, devices, noise_type=TNoiseType.LOGNORMAL, seed=100)
 sim = H.create_simulator()
@@ -790,4 +924,3 @@ for i in range(samples):
     current_sim.set_python_mapper(RoundRobinPythonMapper(n_devices))
     state = current_sim.run()
     print(i, state, current_sim.get_current_time())
-    current_sim.observer.test()

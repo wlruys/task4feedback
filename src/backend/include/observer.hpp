@@ -5,6 +5,7 @@
 #include "simulator.hpp"
 #include <cstddef>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <span>
 #include <sys/types.h>
@@ -58,7 +59,6 @@ struct DataDeviceEdges : public Features {
 };
 
 struct TaskTaskEdges : public Features {
-  std::vector<uint64_t> dep2idx;
   std::vector<taskid_t> tasks;
   std::vector<taskid_t> deps;
 };
@@ -78,6 +78,8 @@ public:
   Observer(const Simulator &simulator) : state(simulator.get_state()) {}
 
   Observer(const SchedulerState &state) : state(state) {}
+
+  void read_state(const Simulator &simulator) { state = simulator.get_state(); }
 
   static double get_in_degree(const ComputeTask &task) {
     return static_cast<double>(task.get_dependencies().size());
@@ -240,8 +242,8 @@ public:
     return s.counts.get_active_task_list();
   }
 
-  [[nodiscard]] TaskIDList get_k_hop_tasks(const TaskIDList &initial,
-                                           int k) const {
+  [[nodiscard]] TaskIDList get_k_hop_dependents(const TaskIDList &initial,
+                                                int k) const {
     // NOTE(wlr): Sorry this is messy, I just wanted to get something running
 
     if (k <= 0) {
@@ -275,6 +277,54 @@ public:
 
         const auto &task = tasks.get_compute_task(current_task_id);
         for (const auto &dep_id : task.get_dependents()) {
+          if (visited.insert(dep_id).second) {
+            q.push(dep_id);
+            result.push_back(dep_id);
+          }
+        }
+      }
+
+      current_hop++;
+    }
+
+    return result;
+  }
+
+  [[nodiscard]] TaskIDList get_k_hop_dependencies(const TaskIDList &initial,
+                                                  int k) const {
+    // NOTE(wlr): Sorry this is messy, I just wanted to get something running
+
+    if (k <= 0) {
+      return {};
+    }
+
+    const auto &s = this->state.get();
+    const auto &task_manager = s.get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+
+    TaskIDList result;
+    result.reserve(initial.size());
+
+    std::unordered_set<taskid_t> visited;
+    std::queue<taskid_t> q;
+
+    for (const auto &task_id : initial) {
+      if (visited.insert(task_id).second) {
+        q.push(task_id);
+      }
+    }
+
+    int current_hop = 0;
+
+    while (!q.empty() && current_hop < k) {
+      std::size_t level_size = q.size();
+
+      for (std::size_t i = 0; i < level_size; ++i) {
+        taskid_t current_task_id = q.front();
+        q.pop();
+
+        const auto &task = tasks.get_compute_task(current_task_id);
+        for (const auto &dep_id : task.get_data_dependencies()) {
           if (visited.insert(dep_id).second) {
             q.push(dep_id);
             result.push_back(dep_id);
@@ -464,6 +514,7 @@ public:
 
     auto shared_mem = static_cast<double>(
         data_manager.shared_size(task.get_unique(), dep.get_unique()));
+
     features[0] = guarded_divide(shared_mem, total_mem_cost);
   }
 
@@ -489,12 +540,13 @@ public:
   auto get_unique_datamap(const TaskIDList &task_ids) {
     std::map<dataid_t, std::size_t> unique_map;
 
-    std::size_t counter = 0;
     for (auto task_id : task_ids) {
       const auto &task =
           state.get().get_task_manager().get_tasks().get_compute_task(task_id);
       for (auto data_id : task.get_unique()) {
-        unique_map[data_id] = counter++;
+        if (unique_map.find(data_id) == unique_map.end()) {
+          unique_map[data_id] = unique_map.size();
+        }
       }
     }
     return unique_map;
@@ -504,31 +556,34 @@ public:
                                     const TaskIDList &targets) {
     TaskTaskEdges edges;
 
-    std::unordered_map<taskid_t, std::size_t> target_index;
+    std::unordered_map<taskid_t, taskid_t> target_index;
     for (std::size_t i = 0; i < targets.size(); i++) {
       target_index[targets[i]] = i;
     }
-    constexpr int EXPECTED_DEGREE = 2;
-    edges.tasks.reserve(source.size() * EXPECTED_DEGREE);
-    edges.depends_on.reserve(source.size() * EXPECTED_DEGREE);
 
+    edges.tasks.reserve(source.size());
+    edges.deps.reserve(source.size());
+
+    taskid_t source_idx = 0;
     for (const auto &source_id : source) {
       const auto &source_task =
           state.get().get_task_manager().get_tasks().get_compute_task(
               source_id);
       for (const auto &dep_id : source_task.get_dependencies()) {
         if (target_index.find(dep_id) != target_index.end()) {
-          edges.tasks.push_back(source_id);
-          edges.depends_on.push_back(dep_id);
+          edges.tasks.push_back(source_idx);
+          edges.deps.push_back(target_index[dep_id]);
         }
       }
+      source_idx++;
     }
+
     edges.feature_dim = 1;
     edges.features.resize(edges.tasks.size() * edges.feature_dim);
     std::span<double> feature_span(edges.features);
     for (std::size_t i = 0; i < edges.tasks.size(); i++) {
       get_task_task_features(
-          edges.tasks[i], edges.depends_on[i],
+          source[edges.tasks[i]], targets[edges.deps[i]],
           feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
     }
 
@@ -538,22 +593,26 @@ public:
   TaskDataEdges get_task_data_edges(const TaskIDList &task_ids) {
     TaskDataEdges edges;
 
-    auto data_map = get_unique_datamap(task_ids);
+    std::unordered_map<dataid_t, std::size_t> data_map;
+
+    for (std::size_t i = 0; i < task_ids.size(); i++) {
+      const auto &task_id = task_ids[i];
+      const auto &task =
+          state.get().get_task_manager().get_tasks().get_compute_task(task_id);
+      for (auto data_id : task.get_unique()) {
+
+        if (data_map.find(data_id) == data_map.end()) {
+          data_map[data_id] = data_map.size();
+        }
+
+        edges.tasks.push_back(i);
+        edges.data.push_back(data_map[data_id]);
+      }
+    }
 
     edges.data2id.resize(data_map.size());
     for (const auto &data_id : data_map) {
       edges.data2id[data_id.second] = data_id.first;
-    }
-
-    std::size_t idx = 0;
-    for (const auto &task_id : task_ids) {
-      const auto &task =
-          state.get().get_task_manager().get_tasks().get_compute_task(task_id);
-      for (auto data_id : task.get_unique()) {
-        edges.tasks.push_back(idx);
-        edges.data.push_back(data_map[data_id]);
-      }
-      idx++;
     }
 
     edges.feature_dim = 3;
@@ -562,7 +621,7 @@ public:
 
     for (std::size_t i = 0; i < edges.tasks.size(); i++) {
       get_task_data_features(
-          task_ids[i], edges.data2id[i],
+          task_ids[edges.tasks[i]], edges.data2id[edges.data[i]],
           feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
     }
 
@@ -573,10 +632,9 @@ public:
     TaskDeviceEdges edges;
 
     std::map<devid_t, std::size_t> device_map;
-    size_t device_idx = 0;
 
-    std::size_t idx = 0;
-    for (const auto &task_id : task_ids) {
+    for (std::size_t i = 0; i < task_ids.size(); i++) {
+      const auto &task_id = task_ids[i];
       const auto &task =
           state.get().get_task_manager().get_tasks().get_compute_task(task_id);
       const auto &supported_architectures = task.get_supported_architectures();
@@ -585,14 +643,15 @@ public:
         const auto &device_ids =
             state.get().get_device_manager().get_devices().get_devices(arch);
         for (auto device_id : device_ids) {
-          edges.tasks.push_back(idx);
-          edges.devices.push_back(device_id);
+
           if (device_map.find(device_id) == device_map.end()) {
-            device_map[device_id] = device_idx++;
+            device_map[device_id] = device_map.size();
           }
+
+          edges.tasks.push_back(i);
+          edges.devices.push_back(device_map[device_id]);
         }
       }
-      idx++;
     }
 
     edges.device2id.resize(device_map.size());
@@ -606,7 +665,7 @@ public:
 
     for (std::size_t i = 0; i < edges.tasks.size(); i++) {
       get_task_device_features(
-          task_ids[i], edges.device2id[edges.devices[i]],
+          task_ids[edges.tasks[i]], edges.device2id[edges.devices[i]],
           feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
     }
 
@@ -623,14 +682,26 @@ public:
       edges.data2id[data_id.second] = data_id.first;
     }
 
+    std::map<devid_t, std::size_t> device_map;
+
     for (const auto &data_id : data_map) {
       const auto &valid_sources =
           state.get().get_data_manager().get_valid_mapped_locations(
               data_id.first);
       for (const auto &device_id : valid_sources) {
+
+        if (device_map.find(device_id) == device_map.end()) {
+          device_map[device_id] = device_map.size();
+        }
+
         edges.data.push_back(data_id.second);
-        edges.devices.push_back(device_id);
+        edges.devices.push_back(device_map[device_id]);
       }
+    }
+
+    edges.device2id.resize(device_map.size());
+    for (const auto &device_id : device_map) {
+      edges.device2id[device_id.second] = device_id.first;
     }
 
     edges.feature_dim = 1;
@@ -646,7 +717,6 @@ public:
   }
 
   TaskFeatures get_task_features(const TaskIDList &task_ids) {
-    std::cout << "task_ids.size(): " << task_ids.size() << std::endl;
     TaskFeatures features;
     features.feature_dim = 7;
     features.features.resize(task_ids.size() * features.feature_dim);
@@ -657,8 +727,6 @@ public:
       get_task_features(task_ids[i],
                         feature_span.subspan(start_i, features.feature_dim));
     }
-
-    print(features.features);
 
     return features;
   }

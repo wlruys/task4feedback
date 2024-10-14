@@ -31,8 +31,6 @@ protected:
     const auto &ctasks = tasks.get();
     const auto &task = ctasks.get_compute_task(task_id);
     const auto &variant = task.get_variant(arch);
-    std::cout << "Task " << task_id << " on device " << arch << " has duration "
-              << variant.get_observed_time() << std::endl;
     return variant.get_observed_time();
   };
 

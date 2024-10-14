@@ -19,6 +19,7 @@
 #include "tasks.hpp"
 #include <cassert>
 #include <functional>
+#include <memory>
 #include <random>
 #include <unordered_map>
 #include <unordered_set>
@@ -418,25 +419,29 @@ concept TransitionConditionConcept = requires(T t, SchedulerState &state,
 
 class TransitionConditions {
 public:
-  bool should_map(SchedulerState &state, SchedulerQueues &queues) {
+  virtual bool should_map(SchedulerState &state,
+                          SchedulerQueues &queues) const {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
+  virtual bool should_reserve(SchedulerState &state,
+                              SchedulerQueues &queues) const {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  bool should_launch(SchedulerState &state, SchedulerQueues &queues) {
+  virtual bool should_launch(SchedulerState &state,
+                             SchedulerQueues &queues) const {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  bool should_launch_data(SchedulerState &state, SchedulerQueues &queues) {
+  virtual bool should_launch_data(SchedulerState &state,
+                                  SchedulerQueues &queues) const {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
@@ -459,21 +464,24 @@ public:
                             std::size_t total_in_flight_)
       : mapped_reserved_gap(mapped_launched_gap_),
         reserved_launched_gap(reserved_launched_gap_),
-        total_in_flight(total_in_flight_) {}
+        total_in_flight(total_in_flight_) {
+    std::cout << "creating range transition conditions" << std::endl;
+  }
 
-  bool should_map(SchedulerState &state, SchedulerQueues &queues) const {
+  bool should_map(SchedulerState &state,
+                  SchedulerQueues &queues) const override {
     MONUnusedParameter(queues);
 
     auto n_mapped = state.counts.n_mapped();
     auto n_reserved = state.counts.n_reserved();
     assert(n_mapped >= n_reserved);
-
     bool flag = (n_mapped - n_reserved) <= mapped_reserved_gap;
     flag = flag && (n_mapped <= total_in_flight);
     return flag;
   }
 
-  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) const {
+  bool should_reserve(SchedulerState &state,
+                      SchedulerQueues &queues) const override {
     MONUnusedParameter(queues);
     auto n_reserved = state.counts.n_reserved();
     auto n_launched = state.counts.n_launched();
@@ -498,7 +506,7 @@ class Scheduler {
 protected:
   SchedulerState state;
   SchedulerQueues queues;
-  TransitionConditions conditions;
+  std::shared_ptr<TransitionConditions> conditions;
 
   std::size_t scheduler_event_count = 1;
   std::size_t success_count = 0;
@@ -525,8 +533,9 @@ public:
 
   Scheduler(const Scheduler &other) = default;
 
-  void set_transition_conditions(TransitionConditions conditions_) {
-    this->conditions = conditions_;
+  void
+  set_transition_conditions(std::shared_ptr<TransitionConditions> conditions_) {
+    this->conditions = std::move(conditions_);
   }
 
   TaskIDList initially_mappable_tasks() {
@@ -539,7 +548,8 @@ public:
     state.initialize(create_data_tasks);
     auto initial_tasks = initially_mappable_tasks();
     queues.push_mappable(initial_tasks, state.get_mapping_priorities());
-    set_transition_conditions(RangeTransitionConditions(128, 128, 64));
+    this->conditions =
+        std::make_shared<RangeTransitionConditions>(128, 128, 64);
     initialized = true;
   }
 

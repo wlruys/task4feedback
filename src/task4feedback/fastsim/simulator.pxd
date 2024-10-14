@@ -104,31 +104,31 @@ cdef extern from "include/observer.hpp":
         pass
 
     cdef cppclass TaskDataEdges(Features):
-        DataIDList data2id
-        TaskIDList tasks
-        DataIDList data
+        vector[uint64_t] data2id
+        vector[uint64_t] tasks
+        vector[uint64_t] data
 
     cdef cppclass TaskDeviceEdges(Features):
-        DeviceIDList device2id
-        TaskIDList tasks
-        DeviceIDList devices
+        vector[uint64_t] device2id
+        vector[uint64_t] tasks
+        vector[uint64_t] devices
 
-    cdef cppclass DataDeviceEdges(Features)
-        DataIDList data2id
-        DeviceIDList device2id 
-        DataIDList data
-        DeviceIDList devices
+    cdef cppclass DataDeviceEdges(Features):
+        vector[uint64_t] data2id
+        vector[uint64_t] device2id 
+        vector[uint64_t] data
+        vector[uint64_t] devices
 
     cdef cppclass TaskTaskEdges(Features):
-        TaskIDList dep2id 
-        TaskIDList tasks 
-        TaskIDList deps
+        vector[uint64_t] tasks 
+        vector[uint64_t] deps
 
     cdef cppclass Observer:
         Observer(Simulator& simulator)
         void global_features()
         TaskIDList get_active_tasks()
-        TaskIDList get_k_hop_tasks(const TaskIDList& initial, int k)
+        TaskIDList get_k_hop_dependents(const TaskIDList& initial, int k)
+        TaskIDList get_k_hop_dependencies(const TaskIDList& initial, int k)
         TaskFeatures get_task_features(const TaskIDList& task_ids)
         DataFeatures get_data_features(const TaskIDList& data_ids)
         DeviceFeatures get_device_features(const DeviceIDList& device_ids)
