@@ -548,7 +548,7 @@ public:
     return non_local_size(list, launched_locations, device_id);
   }
 
-  mem_t shared_size(DataIDList &list1, DataIDList &list2) {
+  mem_t shared_size(const DataIDList &list1, const DataIDList &list2) const {
     mem_t shared_size = 0;
     for (auto data_id : list1) {
       if (std::find(list2.begin(), list2.end(), data_id) != list2.end()) {

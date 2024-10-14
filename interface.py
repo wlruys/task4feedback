@@ -15,6 +15,7 @@ from task4feedback.fastsim.simulator import (
     PyLognormalTaskNoise,
     PyCommunicationNoise,
     PySchedulerInput,
+    PyObserver,
     start_logger,
 )
 from task4feedback.types import (
@@ -31,6 +32,9 @@ from task4feedback.graphs import *
 from dataclasses import dataclass, field
 import numpy as np
 from enum import IntEnum, Enum
+import torch
+
+import torch_geometric as geom
 
 
 class Phase(Enum):
@@ -38,6 +42,19 @@ class Phase(Enum):
     RESERVE = 1
     LAUNCH = 2
     COMPLETE = 3
+
+
+class TNoiseType:
+    NONE = 0
+    LOGNORMAL = 1
+    USER = 2
+
+
+class CMapperType:
+    STATIC = 0
+    ROUND_ROBIN = 1
+    EFT_RESERVED = 2
+    EFT_DEQUEUE = 3
 
 
 MAX_VCU = 1000
@@ -72,7 +89,8 @@ class DeviceHandle:
         for i, (device, (vcu, mem)) in enumerate(self.devices.devices.items()):
             name = str(device)
             arch = device.architecture.value
-            self.cdevices.create_device(i, name, arch, vcu, mem)
+            print(i, name)
+            self.cdevices.create_device(i, name, 0, vcu, mem)
             self.devices_to_ids[device] = i
             self.ids_to_devices[i] = device
 
@@ -134,8 +152,9 @@ class DataHandle:
             if not isinstance(location, Device):
                 location = location[0]
 
-            location_id = self.device_handle.get_device_id(location)
-            self.cdata.create_block(i, size, location_id, name)
+            # location_id = self.device_handle.get_device_id(location)
+            # print(location, location_id)
+            self.cdata.create_block(i, size, 0, name)
 
     def get_data_id(self, data_id: int) -> DataID:
         return self.ids_to_data[data_id]
@@ -241,14 +260,23 @@ class TaskNoise:
         self.tasks = tasks
         self.noise = PyTaskNoise(tasks.ctask, seed)
 
-    def generate(self):
-        return self.noise.generate()
+    def sample_durations(self):
+        return self.noise.generate_durations()
 
-    def dump(self, path: str):
+    def sample_priorities(self):
+        return self.noise.generate_priorities()
+
+    def dump_durations(self, path: str):
         self.noise.dump_to_binary(path)
 
-    def load(self, path: str):
+    def load_durations(self, path: str):
         self.noise.load_from_binary(path)
+
+    def dump_priorities(self, path: str):
+        self.noise.dump_priorities_to_binary(path)
+
+    def load_priorities(self, path: str):
+        self.noise.load_priorities_from_binary(path)
 
 
 class CNumbaTaskNoise(TaskNoise):
@@ -339,7 +367,15 @@ class StaticPythonMapper:
         action_list = []
         for i, candidate in enumerate(candidates):
             device = self.mapping[candidate]
-            action_list.append(Action(candidate, i, device, 0, 0))
+            action_list.append(
+                Action(
+                    candidate,
+                    i,
+                    device,
+                    0,
+                    0,
+                )
+            )
         return action_list
 
 
@@ -350,60 +386,141 @@ class RoundRobinPythonMapper(PythonMapper):
 
     def map_tasks(self, candidates: list[int]) -> list[Action]:
         action_list = []
+        # if len(candidates):
+        #     print("Mapping", candidates)
         for i, candidate in enumerate(candidates):
             device = candidate % self.n_devices
-            action_list.append(Action(candidate, i, device, 0, 0))
+            action_list.append(
+                Action(
+                    candidate,
+                    i,
+                    device,
+                    np.random.randint(0, 100),
+                    np.random.randint(0, 100),
+                )
+            )
             return action_list
+
+
+class Observer:
+    observer: PyObserver
+
+    def __init__(self, simulator: PySimulator):
+        self.observer = PyObserver(simulator)
+        self.observer.global_features()
+
+    def get_active_tasks(self) -> np.ndarray[np.uint64]:
+        return self.observer.get_active_tasks()
+
+    def get_k_hop_dependents(
+        self, task_list: list[int], k: int
+    ) -> np.ndarray[np.uint64]:
+        return self.observer.get_k_hop_tasks(task_list, k)
+
+    def id_map(self, l: list[int]):
+        m = {}
+        idx = 0
+        for o in l:
+            if o not in m:
+                m[o] = idx
+                idx += 1
+
+        return m
+
+    def unique(self, task_list: list[int]):
+        return list(set(task_list))
+
+    def get_task_features(self, tasks: list[int]) -> np.ndarray[np.float64]:
+        return self.observer.get_task_features(tasks)
+
+    def get_data_features(self, data: list[int]) -> np.ndarray[np.float64]:
+        return self.observer.get_data_features(data)
+
+    def get_device_features(self, devices: list[int]) -> np.ndarray[np.float64]:
+        return self.observer.get_device_features(devices)
+
+    def get_task_task_edges(
+        self, source_tasks: list[int], target_tasks: list[int]
+    ) -> tuple[
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.float64],
+    ]:
+        return self.observer.get_task_task_edges(source_tasks, target_tasks)
+
+    def get_task_data_edges(self, tasks: list[int]) -> tuple[
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.float64],
+    ]:
+        return self.observer.get_task_data_edges(tasks)
+
+    def get_task_device_edges(self, tasks: list[int]) -> tuple[
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.float64],
+    ]:
+        return self.observer.get_task_device_edges(tasks)
+
+    def get_data_device_edges(self, tasks: list[int]) -> tuple[
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.uint64],
+        np.ndarray[np.float64],
+    ]:
+        return self.observer.get_data_device_edges(tasks)
+
+    def local_graph_features(self, candidate_tasks: list[int], devices: list[int]):
+        active_tasks = self.observer.get_active_tasks()
+        k_hop_tasks = self.observer.get_k_hop_tasks(candidate_tasks, 1)
+
+        all_tasks = np.concatenate([candidate_tasks, active_tasks, k_hop_tasks])
+        all_tasks_list = list(all_tasks)
+
+        task_features = self.get_task_features(all_tasks_list)
+
+        _, _, dep_s, dep_e, dep_features = self.get_task_task_edges(
+            candidate_tasks, all_tasks_list
+        )
+
+        device_features = self.get_device_features(devices)
+
+        gtask_td, task_td, dev_td, td_features = self.get_task_device_edges(
+            candidate_tasks
+        )
+
+        gdata_tda, data_dd, dev_dd, dd_features = self.get_data_device_edges(
+            candidate_tasks
+        )
+
+        gtask_tda, gdata_tda, task_tda, data_tda, tda_features = (
+            self.get_task_data_edges(candidate_tasks)
+        )
+
+        print("Task Data Edges")
+        print(gtask_tda)
+        print(gdata_tda)
+
+    def test(self):
+        self.local_graph_features([0, 1], [0, 1, 2, 3])
 
 
 @dataclass
 class Simulator:
-    tasks: TaskMap
-    data: DataMap
-    devices: Devices
-    cmapper: CMapper = field(default_factory=StaticCMapper)
+    simulator: PySimulator
+    noise: TaskNoise
+    initialized: bool = False
     pymapper: PythonMapper = field(default_factory=StaticPythonMapper)
-    task_handle: Optional[TaskHandle] = None
-    task_noise: Optional[TaskNoise] = None
-    comm_noise: Optional[CommunicationNoise] = None
-    data_handle: Optional[DataHandle] = None
-    device_handle: Optional[DeviceHandle] = None
-    input: Optional[PySchedulerInput] = None
-    simulator: Optional[PySimulator] = None
+    cmapper: CMapper = field(default_factory=StaticCMapper)
+    observer: Observer = field(init=False)
 
     def __post_init__(self):
-        if self.device_handle is None:
-            self.device_handle = DeviceHandle(self.devices)
-
-        if self.data_handle is None:
-            self.data_handle = DataHandle(
-                self.device_handle, self.data, self.data_handle
-            )
-
-        if self.task_handle is None:
-            self.task_handle = TaskHandle(self.data_handle, self.tasks)
-
-        if self.task_noise is None:
-            self.task_noise = TaskNoise(self.task_handle)
-
-        if self.comm_noise is None:
-            self.comm_noise = CommunicationNoise(self.device_handle)
-
-        if self.input is None:
-            self.input = PySchedulerInput(
-                self.task_handle.ctask,
-                self.data_handle.cdata,
-                self.device_handle.cdevices,
-                self.device_handle.ctopology,
-                self.cmapper.mapper,
-                self.task_noise.noise,
-                self.comm_noise.noise,
-            )
-
-        if self.simulator is None:
-            self.simulator = PySimulator(self.input)
-
-        self.initialized = False
+        self.observer = Observer(self.simulator)
 
     def use_python_mapper(self, use: bool):
         if use:
@@ -414,6 +531,12 @@ class Simulator:
     def set_python_mapper(self, pymapper: PythonMapper):
         self.pymapper = pymapper
 
+    def enable_python_mapper(self):
+        self.simulator.use_python_mapper(True)
+
+    def disable_python_mapper(self):
+        self.simulator.use_python_mapper(False)
+
     def set_c_mapper(self, cmapper: CMapper):
         self.cmapper = cmapper
         self.simulator.set_mapper(cmapper.mapper)
@@ -421,27 +544,6 @@ class Simulator:
     def initialize(self, use_data: bool = True):
         self.simulator.initialize(use_data)
         self.initialized = True
-
-    def copy(self):
-        sim = Simulator(
-            self.tasks,
-            self.data,
-            self.devices,
-            self.cmapper,
-            self.pymapper,
-            self.task_handle,
-            self.task_noise,
-            self.comm_noise,
-            self.data_handle,
-            self.device_handle,
-            self.input,
-            self.simulator.copy(),
-        )
-        sim.initialized = True
-        return sim
-
-    def copy_bare(self):
-        return self.simulator.copy()
 
     def run(self) -> PyExecutionState:
         sim_state = PyExecutionState.RUNNING
@@ -454,7 +556,7 @@ class Simulator:
             if sim_state == PyExecutionState.ERROR:
                 return sim_state
 
-            if sim_state == PyExecutionState.PYTHON_MAPPING:
+            if sim_state == PyExecutionState.EXTERNAL_MAPPING:
                 candidates = self.simulator.get_mappable_candidates()
                 action_list = self.pymapper.map_tasks(candidates)
                 c_action_list = to_c_action_list(action_list)
@@ -481,24 +583,155 @@ class Simulator:
 
         self.simulator.add_task_breakpoint(etype, task_id)
 
+    def sample_durations(self):
+        self.noise.sample_durations()
 
-def uniform_connected_devices(n_gpus: int, mem: int, latency: int, bandwidth: int):
+    def sample_priorities(self):
+        self.noise.sample_priorities()
+
+
+@dataclass
+class SimulatorHandler:
+    tasks: TaskMap
+    data: DataMap
+    devices: Devices
+    noise_type: InitVar[TNoiseType] = TNoiseType.NONE
+    seed: InitVar[int] = 0
+    cmapper_type: InitVar[CMapperType] = CMapperType.STATIC
+    cmapper: Optional[CMapper] = None
+    pymapper: Optional[PythonMapper] = None
+    task_handle: Optional[TaskHandle] = None
+    task_noise: Optional[TaskNoise] = None
+    comm_noise: Optional[CommunicationNoise] = None
+    data_handle: Optional[DataHandle] = None
+    device_handle: Optional[DeviceHandle] = None
+    input: Optional[PySchedulerInput] = None
+
+    def __post_init__(
+        self,
+        noise_type: TNoiseType,
+        seed: int,
+        cmapper_type: CMapperType,
+    ):
+        if self.device_handle is None:
+            self.device_handle = DeviceHandle(self.devices)
+
+        if self.data_handle is None:
+            self.data_handle = DataHandle(
+                self.device_handle, self.data, self.data_handle
+            )
+
+        if self.task_handle is None:
+            self.task_handle = TaskHandle(self.data_handle, self.tasks)
+
+        if self.task_noise is None:
+            if noise_type == TNoiseType.NONE:
+                self.task_noise = TaskNoise(self.task_handle, seed)
+            elif noise_type == TNoiseType.LOGNORMAL:
+                self.task_noise = LognormalTaskNoise(self.task_handle, seed)
+            elif noise_type == TNoiseType.USER:
+                self.task_noise = CNumbaTaskNoise(self.task_handle, seed)
+            else:
+                raise ValueError("Invalid noise type")
+        if self.cmapper is None:
+            if cmapper_type == CMapperType.STATIC:
+                self.cmapper = StaticCMapper()
+            else:
+                raise ValueError("Invalid mapper type")
+
+        if self.comm_noise is None:
+            self.comm_noise = CommunicationNoise(self.device_handle)
+
+        if self.input is None:
+            self.input = PySchedulerInput(
+                self.task_handle.ctask,
+                self.data_handle.cdata,
+                self.device_handle.cdevices,
+                self.device_handle.ctopology,
+                self.cmapper.mapper,
+                self.task_noise.noise,
+                self.comm_noise.noise,
+            )
+
+    def set_noise(self, noise_type: TNoiseType, seed: int = 0):
+        if noise_type == TNoiseType.NONE:
+            self.task_noise = TaskNoise(self.task_handle)
+        elif noise_type == TNoiseType.LOGNORMAL:
+            self.task_noise = LognormalTaskNoise(self.task_handle)
+        elif noise_type == TNoiseType.USER:
+            self.task_noise = CNumbaTaskNoise(self.task_handle, seed)
+        else:
+            raise ValueError("Invalid noise type")
+
+        self.input = PySchedulerInput(
+            self.task_handle.ctask,
+            self.data_handle.cdata,
+            self.device_handle.cdevices,
+            self.device_handle.ctopology,
+            self.cmapper.mapper,
+            self.task_noise.noise,
+            self.comm_noise.noise,
+        )
+
+    def set_python_mapper(self, pymapper: PythonMapper):
+        self.pymapper = pymapper
+
+    def set_c_mapper(self, cmapper: CMapper):
+        self.cmapper = cmapper
+        self.input = PySchedulerInput(
+            self.task_handle.ctask,
+            self.data_handle.cdata,
+            self.device_handle.cdevices,
+            self.device_handle.ctopology,
+            self.cmapper.mapper,
+            self.task_noise.noise,
+            self.comm_noise.noise,
+        )
+
+    def create_simulator(self, use_python_mapper=False) -> Simulator:
+        internal_sim = PySimulator(self.input)
+        sim_wrapper = Simulator(
+            internal_sim, self.task_noise, False, self.pymapper, self.cmapper
+        )
+
+        if use_python_mapper:
+            sim_wrapper.enable_python_mapper()
+        else:
+            sim_wrapper.disable_python_mapper()
+
+        return sim_wrapper
+
+    def copy(self, simulator: Simulator) -> Simulator:
+        internal_sim = simulator.simulator.copy()
+        sim_wrapper = Simulator(
+            internal_sim,
+            simulator.noise,
+            simulator.initialized,
+            simulator.pymapper,
+            simulator.cmapper,
+        )
+
+        return sim_wrapper
+
+
+def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth: int):
     devices = Devices()
-    cpu = Device(Architecture.CPU, 0)
-    devices.add_device(cpu, mem)
+    n_gpus = n_devices
+    # cpu = Device(Architecture.CPU, 0)
+    # devices.add_device(cpu, mem)
     for i in range(n_gpus):
-        device = Device(Architecture.GPU, i)
-        devices.add_connection(cpu, device, latency, bandwidth)
-        devices.add_connection(device, cpu, latency, bandwidth)
-
-    for i in range(n_gpus):
-        device = Device(Architecture.GPU, i)
+        device = Device(Architecture.CPU, i)
         devices.add_device(device, mem)
+
+    # for i in range(n_gpus):
+    #     device = Device(Architecture.GPU, i)
+    #     devices.add_connection(cpu, device, latency, bandwidth)
+    #     devices.add_connection(device, cpu, latency, bandwidth)
 
     for i in range(n_gpus):
         for j in range(n_gpus):
-            device1 = Device(Architecture.GPU, i)
-            device2 = Device(Architecture.GPU, j)
+            device1 = Device(Architecture.CPU, i)
+            device2 = Device(Architecture.CPU, j)
             devices.add_connection(device1, device2, latency, bandwidth)
             devices.add_connection(device2, device1, latency, bandwidth)
 
@@ -538,23 +771,23 @@ latency = 1
 n_devices = args.devices
 devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
 
+start_logger()
 
-# start_logger()
-sim = Simulator(tasks, data, devices)
-sim.initialize(True)
+H = SimulatorHandler(tasks, data, devices, noise_type=TNoiseType.LOGNORMAL, seed=100)
+sim = H.create_simulator()
+sim.initialize(use_data=True)
+sim.sample_durations()
 sim.set_python_mapper(RoundRobinPythonMapper(n_devices))
 sim.cmapper.set_mapping(
     np.array([i % n_devices for i in range(len(tasks))], dtype=np.uint64)
 )
-sim.use_python_mapper(False)
+sim.enable_python_mapper()
 
-sim2 = sim.copy()
-
-state = sim2.run()
-print(state)
-print(sim2.get_current_time())
-print(sim.get_current_time())
-
-state = sim.run()
-print(state)
-print(sim.get_current_time())
+samples = 1
+for i in range(samples):
+    current_sim = H.copy(sim)
+    current_sim.sample_priorities()
+    current_sim.set_python_mapper(RoundRobinPythonMapper(n_devices))
+    state = current_sim.run()
+    print(i, state, current_sim.get_current_time())
+    current_sim.observer.test()

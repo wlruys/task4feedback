@@ -57,6 +57,10 @@ bool TaskStateInfo::is_launched(taskid_t id) const {
   return this->get_state(id) == TaskState::LAUNCHED;
 }
 
+bool TaskStateInfo::is_completed(taskid_t id) const {
+  return this->get_state(id) == TaskState::COMPLETED;
+}
+
 bool TaskStateInfo::decrement_unmapped(taskid_t id) {
   counts[id].unmapped--;
   assert(counts[id].unmapped >= 0);

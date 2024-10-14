@@ -15,7 +15,7 @@ from libcpp.string cimport string
 cdef extern from "include/device_manager.hpp":
 
     cdef cppclass Devices:
-        Devices(uint64_t n)
+        Devices(devid_t n)
         void create_device(devid_t id, string name, DeviceType arch, vcu_t vcus, mem_t mem)
         DeviceIDList& get_devices(DeviceType arch)
         DeviceType get_type(devid_t id)

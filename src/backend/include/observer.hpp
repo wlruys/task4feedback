@@ -2,8 +2,12 @@
 #include "devices.hpp"
 #include "scheduler.hpp"
 #include "settings.hpp"
+#include "simulator.hpp"
+#include <cstddef>
 #include <functional>
 #include <limits>
+#include <span>
+#include <sys/types.h>
 #include <unordered_map>
 
 struct NormalizationInfo {
@@ -26,45 +30,73 @@ struct NormalizationInfo {
   double stddev_data_size;
 };
 
-struct TaskDataEdges {
+struct Features {
+  std::vector<double> features;
+  std::size_t feature_dim;
+};
+
+struct TaskFeatures : public Features {};
+struct DataFeatures : public Features {};
+struct DeviceFeatures : public Features {};
+struct TaskDataEdges : public Features {
+  std::vector<uint64_t> data2id;
   std::vector<taskid_t> tasks;
   std::vector<dataid_t> data;
 };
 
-struct TaskDeviceEdges {
+struct TaskDeviceEdges : public Features {
+  std::vector<uint64_t> device2id;
   std::vector<taskid_t> tasks;
   std::vector<devid_t> devices;
 };
 
-struct DataDeviceEdges {
+struct DataDeviceEdges : public Features {
+  std::vector<uint64_t> device2id;
+  std::vector<uint64_t> data2id;
   std::vector<dataid_t> data;
   std::vector<devid_t> devices;
 };
+
+struct TaskTaskEdges : public Features {
+  std::vector<uint64_t> dep2idx;
+  std::vector<taskid_t> tasks;
+  std::vector<taskid_t> deps;
+};
+
+double guarded_divide(double a, double b) {
+  if (b == 0) {
+    return a;
+  }
+  return a / b;
+}
 
 class Observer {
 public:
-  std::reference_wrapper<SchedulerState> state;
+  std::reference_wrapper<const SchedulerState> state;
   NormalizationInfo graph_info;
 
-  Observer(SchedulerState &state) : state(state) {}
+  Observer(const Simulator &simulator) : state(simulator.get_state()) {}
 
-  double get_in_degree(const ComputeTask &task) {
+  Observer(const SchedulerState &state) : state(state) {}
+
+  static double get_in_degree(const ComputeTask &task) {
     return static_cast<double>(task.get_dependencies().size());
   }
 
-  double get_out_degree(const ComputeTask &task) {
+  static double get_out_degree(const ComputeTask &task) {
     return static_cast<double>(task.get_dependents().size());
   }
 
-  double get_duration(const ComputeTask &task, DeviceType arch) {
+  static double get_duration(const ComputeTask &task, DeviceType arch) {
     return static_cast<double>(task.get_variant(arch).get_observed_time());
   }
 
-  double get_task_memcost(const ComputeTask &task, DeviceType arch) {
+  static double get_task_memcost(const ComputeTask &task, DeviceType arch) {
     return static_cast<double>(task.get_variant(arch).get_mem());
   }
 
-  double get_task_data_memcost(const ComputeTask &task, const Data &data) {
+  static double get_task_data_memcost(const ComputeTask &task,
+                                      const Data &data) {
     double memcost = 0;
     for (const auto &data_id : task.get_unique()) {
       memcost += static_cast<double>(data.get_size(data_id));
@@ -195,73 +227,71 @@ public:
     SPDLOG_DEBUG("Stddev data size: {}", graph_info.stddev_data_size);
   }
 
-  void preprocess_global() {
+  void global_features() {
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
     const auto &tasks = task_manager.get_tasks();
-    const auto &device_manager = s.get_device_manager();
-    const auto &devices = s.get_device_manager().get_devices();
     const auto &data = s.get_data_manager().get_data();
     preprocess_global(tasks, data);
   }
 
-  TaskIDList get_active_tasks() {
+  [[nodiscard]] TaskIDList get_active_tasks() const {
     const auto &s = this->state.get();
     return s.counts.get_active_task_list();
   }
 
-  TaskIDList get_k_hop_tasks(const TaskIDList &initial, int k) {
-    // Follow task dependents k times to build graph
-    // TODO(wlr): Test impl is horribly inefficient sorry
+  [[nodiscard]] TaskIDList get_k_hop_tasks(const TaskIDList &initial,
+                                           int k) const {
+    // NOTE(wlr): Sorry this is messy, I just wanted to get something running
 
-    TaskIDList result;
-    std::unordered_set<taskid_t> to_visit;
-
-    const auto &s = this->state.get();
-    const auto &tasks = s.get_task_manager().get_tasks();
-
-    for (auto task_id : initial) {
-      to_visit.insert(task_id);
+    if (k <= 0) {
+      return {};
     }
 
-    while (to_visit.size() > 0 && k > 0) {
-      std::unordered_set<taskid_t> next_to_visit;
-      for (auto task_id : to_visit) {
-        result.push_back(task_id);
-        const auto &task = tasks.get_compute_task(task_id);
-        for (auto dep_id : task.get_dependencies()) {
-          next_to_visit.insert(dep_id);
+    const auto &s = this->state.get();
+    const auto &task_manager = s.get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+
+    TaskIDList result;
+    result.reserve(initial.size());
+
+    std::unordered_set<taskid_t> visited;
+    std::queue<taskid_t> q;
+
+    for (const auto &task_id : initial) {
+      if (visited.insert(task_id).second) {
+        q.push(task_id);
+      }
+    }
+
+    int current_hop = 0;
+
+    while (!q.empty() && current_hop < k) {
+      std::size_t level_size = q.size();
+
+      for (std::size_t i = 0; i < level_size; ++i) {
+        taskid_t current_task_id = q.front();
+        q.pop();
+
+        const auto &task = tasks.get_compute_task(current_task_id);
+        for (const auto &dep_id : task.get_dependents()) {
+          if (visited.insert(dep_id).second) {
+            q.push(dep_id);
+            result.push_back(dep_id);
+          }
         }
       }
-      to_visit = next_to_visit;
-      k--;
+
+      current_hop++;
     }
 
     return result;
   }
 
-  std::vector<double> get_task_features(taskid_t task_id) {
-    constexpr std::size_t FEATURE_LENGTH = 5;
-    std::vector<double> features(FEATURE_LENGTH);
+  void get_task_features(taskid_t task_id, std::span<double> features) const {
+    constexpr std::size_t FEATURE_LENGTH = 7;
+    assert(features.size() == FEATURE_LENGTH);
 
-    const auto &s = this->state.get();
-    const auto &task_manager = s.get_task_manager();
-    const auto &tasks = task_manager.get_tasks();
-
-    const auto &task = tasks.get_compute_task(task_id);
-
-    features[0] = get_in_degree(task) / graph_info.average_in_degree;
-    features[1] = get_out_degree(task) / graph_info.average_out_degree;
-
-    features[2] = static_cast<double>(task_manager.state.is_mapped(task_id));
-    features[3] = static_cast<double>(task_manager.state.is_reserved(task_id));
-    features[4] = static_cast<double>(task_manager.state.is_launched(task_id));
-    return features;
-  }
-
-  std::vector<double> get_variant_features(taskid_t task_id, DeviceType arch) {
-    constexpr std::size_t FEATURE_LENGTH = 2;
-    std::vector<double> features(FEATURE_LENGTH);
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
     const auto &tasks = task_manager.get_tasks();
@@ -269,76 +299,21 @@ public:
     const auto &task = tasks.get_compute_task(task_id);
 
     features[0] =
-        get_duration(task, arch) /
-        graph_info.average_duration.at(static_cast<std::size_t>(arch));
+        guarded_divide(get_in_degree(task), graph_info.average_in_degree);
     features[1] =
-        get_task_memcost(task, arch) /
-        graph_info.average_task_memcost.at(static_cast<std::size_t>(arch));
+        guarded_divide(get_out_degree(task), graph_info.average_out_degree);
 
-    return features;
+    features[2] = static_cast<double>(task_manager.state.is_mapped(task_id));
+    features[3] = static_cast<double>(task_manager.state.is_reserved(task_id));
+    features[4] = static_cast<double>(task_manager.state.is_launched(task_id));
+    features[5] = static_cast<double>(task_manager.state.is_completed(task_id));
+    features[6] = 0; // is mapping candidate (set in Python layer)
   }
 
-  std::vector<double> get_task_device_features(taskid_t task_id,
-                                               devid_t device_id) {
-    const auto &s = this->state.get();
-    const auto &devices = s.get_device_manager().get_devices();
-    const auto &device = devices.get_device(device_id);
-
-    DeviceType arch = device.arch;
-    return get_variant_features(task_id, arch);
-  }
-
-  std::vector<double> get_data_features(dataid_t data_id) {
-    const auto &s = this->state.get();
-    const auto &task_manager = s.get_task_manager();
-    const auto &tasks = task_manager.get_tasks();
-    const auto &device_manager = s.get_device_manager();
-    const auto &data_manager = s.get_data_manager();
-    const auto &devices = s.get_device_manager().get_devices();
-    const auto &data = s.get_data_manager().get_data();
-
-    const auto &data_size = data.get_size(data_id);
-
-    const std::size_t FEATURE_LENGTH = 1 + devices.size();
-    std::vector<double> features(FEATURE_LENGTH);
-
-    features[0] = static_cast<double>(data_size) / graph_info.average_data_size;
-    for (std::size_t i = 0; i < devices.size(); i++) {
-      features[i + 1] = static_cast<double>(
-          data_manager.get_mapped_locations().is_valid(data_id, i));
-    }
-    return features
-  }
-
-  std::vector<double> get_task_data_features(taskid_t task_id,
-                                             dataid_t data_id) {
-    const auto &s = this->state.get();
-    const auto &task_manager = s.get_task_manager();
-    const auto &tasks = task_manager.get_tasks();
-    const auto &data = s.get_data_manager().get_data();
-
-    const auto &task = tasks.get_compute_task(task_id);
-    const auto &data_size = data.get_size(data_id);
-
-    const std::size_t FEATURE_LENGTH = 3;
-    std::vector<double> features(FEATURE_LENGTH);
-
-    double task_data_memcost = get_task_data_memcost(task, data);
-    bool is_read = std::find(task.get_read().begin(), task.get_read().end(),
-                             data_id) != task.get_read().end();
-    bool is_write = std::find(task.get_write().begin(), task.get_write().end(),
-                              data_id) != task.get_write().end();
-
-    features[0] = static_cast<double>(data_size) / task_data_memcost;
-    features[1] = static_cast<double>(is_read);
-    features[2] = static_cast<double>(is_write);
-
-    return features;
-  }
-
-  std::vector<double> get_device_features(devid_t device_id) {
+  void get_device_features(devid_t device_id,
+                           std::span<double> features) const {
     constexpr std::size_t FEATURE_LENGTH = 8;
-    std::vector<double> features(FEATURE_LENGTH);
+    assert(features.size() == FEATURE_LENGTH);
 
     const auto &s = this->state.get();
     const auto &device_manager = s.get_device_manager();
@@ -351,31 +326,32 @@ public:
 
     double total_mapped_mem = 0;
     for (std::size_t i = 0; i < devices.size(); i++) {
-      total_mapped_mem += static_cast<double>(
-          device_manager.get_mem<TaskState::MAPPED>(device_id));
+      total_mapped_mem +=
+          static_cast<double>(device_manager.get_mem<TaskState::MAPPED>(i));
     }
 
     double total_reserved_mem = 0;
     for (std::size_t i = 0; i < devices.size(); i++) {
-      total_reserved_mem += static_cast<double>(
-          device_manager.get_mem<TaskState::RESERVED>(device_id));
+      total_reserved_mem +=
+          static_cast<double>(device_manager.get_mem<TaskState::RESERVED>(i));
     }
 
     double total_launched_mem = 0;
     for (std::size_t i = 0; i < devices.size(); i++) {
-      total_launched_mem += static_cast<double>(
-          device_manager.get_mem<TaskState::LAUNCHED>(device_id));
+      total_launched_mem +=
+          static_cast<double>(device_manager.get_mem<TaskState::LAUNCHED>(i));
     }
 
-    features[2] = static_cast<double>(
-                      device_manager.get_mem<TaskState::MAPPED>(device_id)) /
-                  total_mapped_mem;
-    features[3] = static_cast<double>(
-                      device_manager.get_mem<TaskState::RESERVED>(device_id)) /
-                  total_reserved_mem;
-    features[4] = static_cast<double>(
-                      device_manager.get_mem<TaskState::LAUNCHED>(device_id)) /
-                  total_launched_mem;
+    auto mapped_mem = static_cast<double>(
+        device_manager.get_mem<TaskState::MAPPED>(device_id));
+    auto reserved_mem = static_cast<double>(
+        device_manager.get_mem<TaskState::RESERVED>(device_id));
+    auto launched_mem = static_cast<double>(
+        device_manager.get_mem<TaskState::LAUNCHED>(device_id));
+
+    features[2] = guarded_divide(mapped_mem, total_mapped_mem);
+    features[3] = guarded_divide(reserved_mem, total_reserved_mem);
+    features[4] = guarded_divide(launched_mem, total_launched_mem);
 
     double total_mapped_time = 0;
     for (std::size_t i = 0; i < devices.size(); i++) {
@@ -391,14 +367,111 @@ public:
       total_launched_time += static_cast<double>(s.costs.get_launched_time(i));
     }
 
-    features[5] = static_cast<double>(s.costs.get_mapped_time(device_id)) /
-                  total_mapped_time;
-    features[6] = static_cast<double>(s.costs.get_reserved_time(device_id)) /
-                  total_reserved_time;
-    features[7] = static_cast<double>(s.costs.get_launched_time(device_id)) /
-                  total_launched_time;
+    auto mapped_time = static_cast<double>(s.costs.get_mapped_time(device_id));
+    auto reserved_time =
+        static_cast<double>(s.costs.get_reserved_time(device_id));
+    auto launched_time =
+        static_cast<double>(s.costs.get_launched_time(device_id));
 
-    return features;
+    features[5] = guarded_divide(mapped_time, total_mapped_time);
+    features[6] = guarded_divide(reserved_time, total_reserved_time);
+    features[7] = guarded_divide(launched_time, total_launched_time);
+  }
+
+  void get_data_features(dataid_t data_id, std::span<double> features) const {
+    const auto &s = this->state.get();
+
+    const auto &data_manager = s.get_data_manager();
+    const auto &devices = s.get_device_manager().get_devices();
+    const auto &data = s.get_data_manager().get_data();
+
+    const auto &data_size = static_cast<double>(data.get_size(data_id));
+
+    const std::size_t FEATURE_LENGTH = 1 + devices.size();
+    assert(features.size() == FEATURE_LENGTH);
+
+    features[0] = guarded_divide(data_size, graph_info.average_data_size);
+    for (std::size_t i = 0; i < devices.size(); i++) {
+      features[i + 1] = static_cast<double>(
+          data_manager.get_mapped_locations().is_valid(data_id, i));
+    }
+  }
+
+  void get_task_device_features(taskid_t task_id, devid_t device_id,
+                                std::span<double> features) {
+    constexpr std::size_t FEATURE_LENGTH = 2;
+    assert(features.size() == FEATURE_LENGTH);
+
+    const auto &s = this->state.get();
+    const auto &task =
+        s.get_task_manager().get_tasks().get_compute_task(task_id);
+    const auto &device =
+        s.get_device_manager().get_devices().get_device(device_id);
+
+    DeviceType arch = device.arch;
+
+    features[0] = guarded_divide(
+        get_duration(task, arch),
+        graph_info.average_duration.at(static_cast<std::size_t>(arch)));
+
+    features[1] = guarded_divide(
+        get_task_memcost(task, arch),
+        graph_info.average_task_memcost.at(static_cast<std::size_t>(arch)));
+  }
+
+  void get_task_data_features(taskid_t task_id, dataid_t data_id,
+                              std::span<double> features) const {
+    const auto &s = this->state.get();
+    const auto &task_manager = s.get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+    const auto &data = s.get_data_manager().get_data();
+
+    const auto &task = tasks.get_compute_task(task_id);
+    const auto data_size = static_cast<double>(data.get_size(data_id));
+
+    const std::size_t FEATURE_LENGTH = 3;
+    assert(features.size() == FEATURE_LENGTH);
+
+    double task_data_memcost = get_task_data_memcost(task, data);
+    bool is_read = std::find(task.get_read().begin(), task.get_read().end(),
+                             data_id) != task.get_read().end();
+    bool is_write = std::find(task.get_write().begin(), task.get_write().end(),
+                              data_id) != task.get_write().end();
+
+    features[0] = guarded_divide(data_size, task_data_memcost);
+    features[1] = static_cast<double>(is_read);
+    features[2] = static_cast<double>(is_write);
+  }
+
+  void get_task_task_features(taskid_t task_id, taskid_t dep_id,
+                              std::span<double> features) const {
+    const auto &s = this->state.get();
+    const auto &task_manager = s.get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+    const auto &data_manager = s.get_data_manager();
+
+    const auto &task = tasks.get_compute_task(task_id);
+    const auto &dep = tasks.get_compute_task(dep_id);
+
+    const std::size_t FEATURE_LENGTH = 1;
+    assert(features.size() == FEATURE_LENGTH);
+
+    double total_mem_cost = 0;
+    for (auto data_id : task.get_unique()) {
+      total_mem_cost +=
+          static_cast<double>(data_manager.get_data().get_size(data_id));
+    }
+
+    auto shared_mem = static_cast<double>(
+        data_manager.shared_size(task.get_unique(), dep.get_unique()));
+    features[0] = guarded_divide(shared_mem, total_mem_cost);
+  }
+
+  void get_data_device_features(dataid_t data_id, devid_t device_id,
+                                std::span<double> features) const {
+    const std::size_t FEATURE_LENGTH = 1;
+    assert(features.size() == FEATURE_LENGTH);
+    features[0] = 1.0;
   }
 
   std::size_t get_number_of_unique_data(taskid_t *ids, std::size_t n) {
@@ -427,23 +500,82 @@ public:
     return unique_map;
   }
 
+  TaskTaskEdges get_task_task_edges(const TaskIDList &source,
+                                    const TaskIDList &targets) {
+    TaskTaskEdges edges;
+
+    std::unordered_map<taskid_t, std::size_t> target_index;
+    for (std::size_t i = 0; i < targets.size(); i++) {
+      target_index[targets[i]] = i;
+    }
+    constexpr int EXPECTED_DEGREE = 2;
+    edges.tasks.reserve(source.size() * EXPECTED_DEGREE);
+    edges.depends_on.reserve(source.size() * EXPECTED_DEGREE);
+
+    for (const auto &source_id : source) {
+      const auto &source_task =
+          state.get().get_task_manager().get_tasks().get_compute_task(
+              source_id);
+      for (const auto &dep_id : source_task.get_dependencies()) {
+        if (target_index.find(dep_id) != target_index.end()) {
+          edges.tasks.push_back(source_id);
+          edges.depends_on.push_back(dep_id);
+        }
+      }
+    }
+    edges.feature_dim = 1;
+    edges.features.resize(edges.tasks.size() * edges.feature_dim);
+    std::span<double> feature_span(edges.features);
+    for (std::size_t i = 0; i < edges.tasks.size(); i++) {
+      get_task_task_features(
+          edges.tasks[i], edges.depends_on[i],
+          feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
+    }
+
+    return edges;
+  }
+
   TaskDataEdges get_task_data_edges(const TaskIDList &task_ids) {
     TaskDataEdges edges;
 
+    auto data_map = get_unique_datamap(task_ids);
+
+    edges.data2id.resize(data_map.size());
+    for (const auto &data_id : data_map) {
+      edges.data2id[data_id.second] = data_id.first;
+    }
+
+    std::size_t idx = 0;
     for (const auto &task_id : task_ids) {
       const auto &task =
           state.get().get_task_manager().get_tasks().get_compute_task(task_id);
-      for (const auto &data_id : task.get_unique()) {
-        edges.tasks.push_back(task_id);
-        edges.data.push_back(data_id);
+      for (auto data_id : task.get_unique()) {
+        edges.tasks.push_back(idx);
+        edges.data.push_back(data_map[data_id]);
       }
+      idx++;
     }
+
+    edges.feature_dim = 3;
+    edges.features.resize(edges.tasks.size() * edges.feature_dim);
+    std::span<double> feature_span(edges.features);
+
+    for (std::size_t i = 0; i < edges.tasks.size(); i++) {
+      get_task_data_features(
+          task_ids[i], edges.data2id[i],
+          feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
+    }
+
     return edges;
   }
 
   TaskDeviceEdges get_task_device_edges(const TaskIDList &task_ids) {
     TaskDeviceEdges edges;
 
+    std::map<devid_t, std::size_t> device_map;
+    size_t device_idx = 0;
+
+    std::size_t idx = 0;
     for (const auto &task_id : task_ids) {
       const auto &task =
           state.get().get_task_manager().get_tasks().get_compute_task(task_id);
@@ -453,103 +585,111 @@ public:
         const auto &device_ids =
             state.get().get_device_manager().get_devices().get_devices(arch);
         for (auto device_id : device_ids) {
-          edges.tasks.push_back(task_id);
+          edges.tasks.push_back(idx);
           edges.devices.push_back(device_id);
+          if (device_map.find(device_id) == device_map.end()) {
+            device_map[device_id] = device_idx++;
+          }
         }
       }
+      idx++;
     }
+
+    edges.device2id.resize(device_map.size());
+    for (const auto &device_id : device_map) {
+      edges.device2id[device_id.second] = device_id.first;
+    }
+
+    edges.feature_dim = 2;
+    edges.features.resize(edges.tasks.size() * edges.feature_dim);
+    std::span<double> feature_span(edges.features);
+
+    for (std::size_t i = 0; i < edges.tasks.size(); i++) {
+      get_task_device_features(
+          task_ids[i], edges.device2id[edges.devices[i]],
+          feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
+    }
+
     return edges;
   }
 
   DataDeviceEdges get_data_device_edges(const TaskIDList &task_ids) {
     DataDeviceEdges edges;
 
-    auto unique_map = get_unique_datamap(task_ids);
+    auto data_map = get_unique_datamap(task_ids);
 
-    for (const auto &data_id : unique_map) {
+    edges.data2id.resize(data_map.size());
+    for (const auto &data_id : data_map) {
+      edges.data2id[data_id.second] = data_id.first;
+    }
+
+    for (const auto &data_id : data_map) {
       const auto &valid_sources =
           state.get().get_data_manager().get_valid_mapped_locations(
               data_id.first);
       for (const auto &device_id : valid_sources) {
-        edges.data.push_back(data_id.first);
+        edges.data.push_back(data_id.second);
         edges.devices.push_back(device_id);
       }
     }
+
+    edges.feature_dim = 1;
+    edges.features.resize(edges.data.size() * edges.feature_dim);
+    std::span<double> feature_span(edges.features);
+    for (std::size_t i = 0; i < edges.data.size(); i++) {
+      get_data_device_features(
+          edges.data2id[edges.data[i]], edges.device2id[edges.devices[i]],
+          feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
+    }
+
     return edges;
   }
+
+  TaskFeatures get_task_features(const TaskIDList &task_ids) {
+    std::cout << "task_ids.size(): " << task_ids.size() << std::endl;
+    TaskFeatures features;
+    features.feature_dim = 7;
+    features.features.resize(task_ids.size() * features.feature_dim);
+    std::span<double> feature_span(features.features);
+
+    for (std::size_t i = 0; i < task_ids.size(); i++) {
+      auto start_i = i * features.feature_dim;
+      get_task_features(task_ids[i],
+                        feature_span.subspan(start_i, features.feature_dim));
+    }
+
+    print(features.features);
+
+    return features;
+  }
+
+  DeviceFeatures get_device_features(const DeviceIDList &device_ids) {
+    DeviceFeatures features;
+    features.feature_dim = 8;
+    features.features.resize(device_ids.size() * features.feature_dim);
+    std::span<double> feature_span(features.features);
+
+    for (std::size_t i = 0; i < device_ids.size(); i++) {
+      get_device_features(
+          device_ids[i],
+          feature_span.subspan(i * features.feature_dim, features.feature_dim));
+    }
+
+    return features;
+  }
+
+  DataFeatures get_data_features(const DataIDList &data_ids) {
+    DataFeatures features;
+    features.feature_dim = 1 + state.get().get_device_manager().size();
+    features.features.resize(data_ids.size() * features.feature_dim);
+    std::span<double> feature_span(features.features);
+
+    for (std::size_t i = 0; i < data_ids.size(); i++) {
+      get_data_features(
+          data_ids[i],
+          feature_span.subspan(i * features.feature_dim, features.feature_dim));
+    }
+
+    return features;
+  }
 };
-
-/*
-
-  void get_task_adjacency_matrix(taskid_t *ids, std::size_t n, double *matrix)
-  {
-    // Assume matrix is zeroed out
-    const auto &s = this->state.get();
-    const auto &task_manager = s.get_task_manager();
-    const auto &tasks = task_manager.get_tasks();
-    const auto &device_manager = s.get_device_manager();
-    const auto &devices = s.get_device_manager().get_devices();
-    const auto &data = s.get_data_manager().get_data();
-
-    std::unordered_map<taskid_t, std::size_t> task_index;
-    for (std::size_t i = 0; i < n; i++) {
-      task_index[ids[i]] = i;
-    }
-
-    for (std::size_t i = 0; i < n; i++) {
-      const auto &task = tasks.get_compute_task(ids[i]);
-      for (const auto &dep_id : task.get_dependencies()) {
-        if (task_index.find(dep_id) != task_index.end()) {
-          matrix[i * n + task_index[dep_id]] = 1;
-        }
-      }
-    }
-  }
-
-
-  void get_task_data_bipartite(taskid_t *ids, std::size_t n, double *matrix) {
-    const auto &s = this->state.get();
-    const auto &task_manager = s.get_task_manager();
-    const auto &tasks = task_manager.get_tasks();
-    const auto &device_manager = s.get_device_manager();
-    const auto &devices = s.get_device_manager().get_devices();
-    const auto &data = s.get_data_manager().get_data();
-
-    auto unique_map = get_unique_datamap(ids, n);
-
-    for (const auto &task : tasks.get_compute_tasks()) {
-      for (auto data_id : task.get_unique()) {
-        if (unique_map.find(data_id) != unique_map.end()) {
-          matrix[task.id * n + unique_map[data_id]] =
-              static_cast<double>(data.get_size(data_id));
-        }
-      }
-    }
-  }
-
-  void get_data_device_bipartite(taskid_t *task_ids, std::size_t n,
-                                 double *matrix) {
-    const auto &s = this->state.get();
-    const auto &task_manager = s.get_task_manager();
-    const auto &tasks = task_manager.get_tasks();
-    const auto &device_manager = s.get_device_manager();
-    const auto &data_manager = s.get_data_manager();
-    const auto &devices = s.get_device_manager().get_devices();
-    const auto &data = s.get_data_manager().get_data();
-
-    auto unique_map = get_unique_datamap(task_ids, n);
-
-    // Loop over all data_ids in unique_map and get valid mapped locations
-  from
-    // device_manager for each data_id
-    for (const auto &data_id : unique_map) {
-      const auto &valid_sources =
-          data_manager.get_valid_mapped_locations(data_id.first);
-      for (const auto &device_id : valid_sources) {
-        matrix[data_id.second * device_manager.size() + device_id] = 1;
-      }
-    }
-  }
-
-
-*/

@@ -594,6 +594,7 @@ public:
   void update_time(timecount_t time) { state.update_time(time); }
 
   [[nodiscard]] const SchedulerState &get_state() const { return state; }
+  [[nodiscard]] SchedulerState &get_state() { return state; }
   [[nodiscard]] const SchedulerQueues &get_queues() const { return queues; }
 
   void push_mappable(taskid_t id) {
@@ -738,7 +739,7 @@ protected:
   }
 
 public:
-  RandomMapper() = default;
+  RandomMapper(unsigned int seed = 0) : gen(seed) {}
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     fill_device_targets(task_id, state);
     devid_t device_id = choose_random_device(device_buffer);

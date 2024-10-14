@@ -95,6 +95,7 @@ public:
   void set_mapper(Mapper &mapper_) { mapper = mapper_; }
 
   const SchedulerState &get_state() const { return scheduler.get_state(); }
+  SchedulerState &get_state() { return scheduler.get_state(); }
 
   void initialize(bool create_data_tasks = false) {
     add_initial_event();

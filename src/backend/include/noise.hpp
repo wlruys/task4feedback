@@ -14,14 +14,16 @@ protected:
   using noise_t = double;
   std::reference_wrapper<Tasks> tasks;
   unsigned int seed = 0;
+  unsigned int pseed = 1000;
   mutable std::mt19937 gen;
+  mutable std::mt19937 pgen;
   std::vector<timecount_t> task_durations;
   std::vector<priority_t> mapping_priority;
 
   [[nodiscard]] virtual timecount_t sample_priority(taskid_t task_id) const {
     // generate uniform random number between 0 and max tasks - 1
     std::uniform_int_distribution<std::size_t> dist(0, tasks.get().size() - 1);
-    return dist(gen);
+    return dist(pgen);
   }
 
   [[nodiscard]] virtual timecount_t sample_duration(taskid_t task_id,
@@ -29,6 +31,8 @@ protected:
     const auto &ctasks = tasks.get();
     const auto &task = ctasks.get_compute_task(task_id);
     const auto &variant = task.get_variant(arch);
+    std::cout << "Task " << task_id << " on device " << arch << " has duration "
+              << variant.get_observed_time() << std::endl;
     return variant.get_observed_time();
   };
 
@@ -53,10 +57,13 @@ public:
   static constexpr size_t BUFFER_SIZE = 8192;
   bool generated = false;
 
-  TaskNoise(Tasks &tasks_, unsigned int seed_ = 0)
-      : tasks(tasks_), seed(seed_), gen(seed_),
+  TaskNoise(Tasks &tasks_, unsigned int seed_ = 0, unsigned int pseed = 1000)
+      : tasks(tasks_), seed(seed_), pseed(seed_), gen(seed_), pgen(pseed),
         task_durations(tasks.get().compute_size() * num_device_types, 0),
-        mapping_priority(tasks.get().compute_size(), 0) {}
+        mapping_priority(tasks.get().compute_size(), 0) {
+    generate_duration();
+    generate_priority();
+  }
 
   [[nodiscard]] timecount_t get(taskid_t task_id, DeviceType arch) const {
     return task_durations.at(task_id * num_device_types +
@@ -99,7 +106,7 @@ public:
     set(task_id, arch, value);
   }
 
-  virtual void generate() {
+  virtual void generate_duration() {
     for (taskid_t task_id = 0; task_id < tasks.get().compute_size();
          task_id++) {
       for (std::size_t i = 0; i < num_device_types; i++) {
@@ -115,6 +122,11 @@ public:
          task_id++) {
       set_priority(task_id, sample_priority(task_id));
     }
+  }
+
+  void generate() {
+    generate_duration();
+    generate_priority();
   }
 
   void dump_to_binary(const std::string &filename) const {
@@ -319,8 +331,9 @@ protected:
   }
 
 public:
-  ExternalTaskNoise(Tasks &tasks_, unsigned int seed_ = 0)
-      : TaskNoise(tasks_, seed_) {}
+  ExternalTaskNoise(Tasks &tasks_, unsigned int seed_ = 0,
+                    unsigned int pseed_ = 1000)
+      : TaskNoise(tasks_, seed_, pseed_) {}
 
   void set_function(esf_t f) { extern_function = f; }
 };
@@ -356,6 +369,7 @@ protected:
   }
 
 public:
-  LognormalTaskNoise(Tasks &tasks_, unsigned int seed_ = 0)
-      : TaskNoise(tasks_, seed_) {}
+  LognormalTaskNoise(Tasks &tasks_, unsigned int seed_ = 0,
+                     unsigned int pseed_ = 1000)
+      : TaskNoise(tasks_, seed_, pseed_) {}
 };

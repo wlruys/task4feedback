@@ -51,7 +51,8 @@ cdef extern from "include/scheduler.hpp":
                  Mapper &mapper, TaskNoise &task_noise,
                  CommunicationNoise &comm_noise)
 
-    
+    cdef cppclass SchedulerState:
+        pass 
 
     cdef cppclass StaticMapper(Mapper):
         void set_mapping(DeviceIDList& devices)
@@ -69,6 +70,7 @@ cdef extern from "include/simulator.hpp":
         BREAKPOINT,
         EXTERNAL_MAPPING,
         ERROR
+
     cdef cppclass Simulator:
         Simulator(Simulator&)
         Simulator(SchedulerInput& input)
@@ -81,37 +83,59 @@ cdef extern from "include/simulator.hpp":
         void add_time_breakpoint(timecount_t time)
         void set_use_python_mapper(bool use_python_mapper)
         void set_mapper(Mapper& mapper)
+        SchedulerState& get_state()
+
 
 
 
 cdef extern from "include/observer.hpp":
 
-    cdef cppclass TaskDataEdges:
-        TaskIDList task_id
-        DataIDList data_ids
+    cdef cppclass Features:
+        vector[double] features
+        size_t feature_dim
 
-    cdef cppclass TaskDeviceEdges:
-        TaskIDList task_id
-        DeviceIDList device_ids
+    cdef cppclass DataFeatures(Features):
+        pass
 
-    cdef cppclass DataDeviceEdges:
-        DataIDList data_id
-        DeviceIDList device_ids
-    
+    cdef cppclass TaskFeatures(Features):
+        pass
+
+    cdef cppclass DeviceFeatures(Features):
+        pass
+
+    cdef cppclass TaskDataEdges(Features):
+        DataIDList data2id
+        TaskIDList tasks
+        DataIDList data
+
+    cdef cppclass TaskDeviceEdges(Features):
+        DeviceIDList device2id
+        TaskIDList tasks
+        DeviceIDList devices
+
+    cdef cppclass DataDeviceEdges(Features)
+        DataIDList data2id
+        DeviceIDList device2id 
+        DataIDList data
+        DeviceIDList devices
+
+    cdef cppclass TaskTaskEdges(Features):
+        TaskIDList dep2id 
+        TaskIDList tasks 
+        TaskIDList deps
 
     cdef cppclass Observer:
         Observer(Simulator& simulator)
-        preprocess_global()
+        void global_features()
         TaskIDList get_active_tasks()
-        TaskIDList get_k_hop_tasks()
-        vector[double] get_task_features(taskid_t task_id)
-        vector[double] get_data_features(dataid_t data_id)
-        vector[double] get_device_features(devid_t device_id)
-        vector[double] get_task_data_features(taskid_t task_id, dataid_t data_id)
-        vector[double] get_task_device_features(taskid_t task_id, devid_t device_id)
-        TaskDataEdges get_task_data_edges(taskid_t task_id)
-        TaskDeviceEdges get_task_device_edges(taskid_t task_id)
-        DataDeviceEdges get_data_device_edges(dataid_t data_id)
+        TaskIDList get_k_hop_tasks(const TaskIDList& initial, int k)
+        TaskFeatures get_task_features(const TaskIDList& task_ids)
+        DataFeatures get_data_features(const TaskIDList& data_ids)
+        DeviceFeatures get_device_features(const DeviceIDList& device_ids)
+        TaskTaskEdges get_task_task_edges(const TaskIDList& source_tasks, const TaskIDList& target_tasks)
+        TaskDataEdges get_task_data_edges(const TaskIDList& task_ids)
+        TaskDeviceEdges get_task_device_edges(const TaskIDList& task_ids)
+        DataDeviceEdges get_data_device_edges(const TaskIDList& data_ids)
 
     
 

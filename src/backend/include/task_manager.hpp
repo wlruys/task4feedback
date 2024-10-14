@@ -65,6 +65,7 @@ public:
   [[nodiscard]] bool is_mapped(taskid_t id) const;
   [[nodiscard]] bool is_reserved(taskid_t id) const;
   [[nodiscard]] bool is_launched(taskid_t id) const;
+  [[nodiscard]] bool is_completed(taskid_t id) const;
 
   [[nodiscard]] depcount_t get_unmapped(taskid_t id) const {
     return counts.at(id).unmapped;

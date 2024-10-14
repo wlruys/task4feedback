@@ -18,7 +18,7 @@ cdef extern from "include/noise.hpp":
     ctypedef double (*esf_t)(uint64_t, uint64_t) noexcept nogil
 
     cdef cppclass TaskNoise:
-        TaskNoise(Tasks& tasks, unsigned int seed)
+        TaskNoise(Tasks& tasks, unsigned int seed, unsigned int pseed)
         timecount_t get(taskid_t task_id, DeviceType arch)
         void set(taskid_t task_id, DeviceType arch, timecount_t noise)
         void set(vector[timecount_t] noise)
@@ -26,6 +26,7 @@ cdef extern from "include/noise.hpp":
         void set_priority(vector[priority_t] noise)
         void lock()
         void generate()
+        void generate_duration()
         void generate_priority()
         void dump_to_binary(const string filename)
         void load_from_binary(const string filename)
@@ -35,8 +36,8 @@ cdef extern from "include/noise.hpp":
         
 
     cdef cppclass ExternalTaskNoise(TaskNoise):
-        ExternalTaskNoise(Tasks& tasks, unsigned int seed)
+        ExternalTaskNoise(Tasks& tasks, unsigned int seed, unsigned int pseed)
         void set_function(esf_t function)
 
     cdef cppclass LognormalTaskNoise(TaskNoise):
-        LognormalTaskNoise(Tasks& tasks, unsigned int seed)
+        LognormalTaskNoise(Tasks& tasks, unsigned int seed, unsigned int pseed)

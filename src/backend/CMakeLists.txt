@@ -14,6 +14,7 @@ set(BACKEND_HDR
     data_manager.hpp
     device_manager.hpp 
     communication_manager.hpp
+    observer.hpp
     devices.hpp 
     event_manager.hpp
     events.hpp
