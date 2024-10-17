@@ -588,50 +588,53 @@ class Observer:
         """
         return self.observer.get_data_device_edges(tasks)
 
+    def local_graph_features(self, candidate_tasks: np.ndarray[np.uint64]):
+        active_tasks = self.observer.get_active_tasks()
+        # print(active_tasks, active_tasks.dtype)
 
-def local_graph_features(self, candidate_tasks: np.ndarray[np.uint64]):
-    active_tasks = self.observer.get_active_tasks()
-    # print(active_tasks, active_tasks.dtype)
+        candidate_tasks = np.asarray(candidate_tasks, dtype=np.uint32)
 
-    candidate_tasks = np.asarray(candidate_tasks, dtype=np.uint32)
+        k_hop_tasks = self.get_k_hop_dependents(candidate_tasks, 1)
 
-    k_hop_tasks = self.get_k_hop_dependents(candidate_tasks, 1)
+        g = geom.data.HeteroData()
+        if len(candidate_tasks) == 0:
+            return g
 
-    g = geom.data.HeteroData()
-    if len(candidate_tasks) == 0:
+        all_tasks = np.concatenate([candidate_tasks, active_tasks, k_hop_tasks])
+
+        # task_features = self.get_task_features(all_tasks_list)
+        task_features = self.get_task_features(candidate_tasks)
+        g["task"].x = torch.from_numpy(task_features)
+
+        dep_edges, dep_features = self.get_task_task_edges(all_tasks, all_tasks)
+
+        g["tasks", "depends_on", "tasks"].edge_index = torch.from_numpy(dep_edges)
+        g["tasks", "depends_on", "tasks"].edge_attr = torch.from_numpy(dep_features)
+
+        vdevice2id, task_device_edges, task_device_features = (
+            self.get_task_device_edges(all_tasks)
+        )
+
+        device_features = self.get_device_features(vdevice2id)
+        g["devices"].x = torch.from_numpy(device_features)
+
+        g["task", "variant_on", "devices"].edge_index = torch.from_numpy(
+            task_device_edges
+        )
+        g["task", "variant_on", "devices"].edge_attr = torch.from_numpy(
+            task_device_features
+        )
+
+        data2id, task_data_edges, task_data_features = self.get_task_data_edges(
+            all_tasks
+        )
+        data_features = self.get_data_features(data2id)
+
+        g["data"].x = torch.from_numpy(data_features)
+        g["task", "uses", "data"].edge_index = torch.from_numpy(task_data_edges)
+        g["task", "uses", "data"].edge_attr = torch.from_numpy(task_data_features)
+
         return g
-
-    all_tasks = np.concatenate([candidate_tasks, active_tasks, k_hop_tasks])
-
-    # task_features = self.get_task_features(all_tasks_list)
-    task_features = self.get_task_features(candidate_tasks)
-    g["task"].x = torch.from_numpy(task_features)
-
-    dep_edges, dep_features = self.get_task_task_edges(all_tasks, all_tasks)
-
-    g["tasks", "depends_on", "tasks"].edge_index = torch.from_numpy(dep_edges)
-    g["tasks", "depends_on", "tasks"].edge_attr = torch.from_numpy(dep_features)
-
-    vdevice2id, task_device_edges, task_device_features = self.get_task_device_edges(
-        all_tasks
-    )
-
-    device_features = self.get_device_features(vdevice2id)
-    g["devices"].x = torch.from_numpy(device_features)
-
-    g["task", "variant_on", "devices"].edge_index = torch.from_numpy(task_device_edges)
-    g["task", "variant_on", "devices"].edge_attr = torch.from_numpy(
-        task_device_features
-    )
-
-    data2id, task_data_edges, task_data_features = self.get_task_data_edges(all_tasks)
-    data_features = self.get_data_features(data2id)
-
-    g["data"].x = torch.from_numpy(data_features)
-    g["task", "uses", "data"].edge_index = torch.from_numpy(task_data_edges)
-    g["task", "uses", "data"].edge_attr = torch.from_numpy(task_data_features)
-
-    return g
 
 
 @dataclass
