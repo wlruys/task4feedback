@@ -22,7 +22,7 @@ protected:
 
   [[nodiscard]] virtual timecount_t sample_priority(taskid_t task_id) const {
     // generate uniform random number between 0 and max tasks - 1
-    std::uniform_int_distribution<std::size_t> dist(0, tasks.get().size() - 1);
+    std::uniform_int_distribution<timecount_t> dist(0, tasks.get().size() - 1);
     return dist(pgen);
   }
 

@@ -20,6 +20,7 @@ cdef extern from "include/device_manager.hpp":
         DeviceIDList& get_devices(DeviceType arch)
         DeviceType get_type(devid_t id)
         const string get_name(devid_t id)
+        size_t size() const
 
 
 

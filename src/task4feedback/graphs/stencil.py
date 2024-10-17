@@ -1,8 +1,6 @@
 from .utilities import *
 from ..types import *
 
-from rich import print
-
 
 @dataclass(slots=True)
 class StencilDataGraphConfig(DataGraphConfig):

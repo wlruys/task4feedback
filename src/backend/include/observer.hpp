@@ -4,6 +4,7 @@
 #include "settings.hpp"
 #include "simulator.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -31,53 +32,67 @@ struct NormalizationInfo {
   double stddev_data_size;
 };
 
+using op_t = uint32_t;
+using f_t = float_t;
 struct Features {
-  std::vector<double> features;
-  std::size_t feature_dim;
+  f_t *features = nullptr;
+  std::size_t feature_dim = 0;
+  std::size_t feature_len = 0;
 };
 
 struct TaskFeatures : public Features {};
 struct DataFeatures : public Features {};
 struct DeviceFeatures : public Features {};
 struct TaskDataEdges : public Features {
-  std::vector<uint64_t> data2id;
-  std::vector<taskid_t> tasks;
-  std::vector<dataid_t> data;
+  op_t *data2id;
+  size_t data2id_len;
+  op_t *edges;
 };
 
 struct TaskDeviceEdges : public Features {
-  std::vector<uint64_t> device2id;
-  std::vector<taskid_t> tasks;
-  std::vector<devid_t> devices;
+  op_t *device2id;
+  size_t device2id_len;
+  op_t *edges;
 };
 
 struct DataDeviceEdges : public Features {
-  std::vector<uint64_t> device2id;
-  std::vector<uint64_t> data2id;
-  std::vector<dataid_t> data;
-  std::vector<devid_t> devices;
+  op_t *data2id;
+  size_t data2id_len;
+  op_t *device2id;
+  size_t device2id_len;
+  op_t *edges;
 };
 
 struct TaskTaskEdges : public Features {
-  std::vector<taskid_t> tasks;
-  std::vector<taskid_t> deps;
+  op_t *edges;
 };
 
-double guarded_divide(double a, double b) {
+f_t guarded_divide(double a, double b) {
   if (b == 0) {
-    return a;
+    return static_cast<f_t>(a);
   }
-  return a / b;
+  return static_cast<f_t>(a / b);
 }
 
 class Observer {
+private:
+  void reserve() {
+    source_list.reserve(1000);
+    target_list.reserve(1000);
+  }
+
 public:
   std::reference_wrapper<const SchedulerState> state;
   NormalizationInfo graph_info;
 
-  Observer(const Simulator &simulator) : state(simulator.get_state()) {}
+  std::vector<op_t> source_list;
+  std::vector<op_t> target_list;
 
-  Observer(const SchedulerState &state) : state(state) {}
+  Observer(const Simulator &simulator) : state(simulator.get_state()) {
+    reserve();
+  }
+
+  Observer(const SchedulerState &state) : state(state) { reserve(); }
 
   void read_state(const Simulator &simulator) { state = simulator.get_state(); }
 
@@ -133,11 +148,13 @@ public:
     for (const auto &task : tasks.get_compute_tasks()) {
       in_degree_sum += get_in_degree(task);
       in_degree_sum2 += get_in_degree(task) * get_in_degree(task);
-      max_in_degree = std::max(max_in_degree, task.get_dependencies().size());
+      max_in_degree =
+          std::max(max_in_degree, (uint32_t)task.get_dependencies().size());
 
       out_degree_sum += get_out_degree(task);
       out_degree_sum2 += get_out_degree(task) * get_out_degree(task);
-      max_out_degree = std::max(max_out_degree, task.get_dependents().size());
+      max_out_degree =
+          std::max(max_out_degree, (uint32_t)task.get_dependents().size());
 
       double task_data_memcost = get_task_data_memcost(task, data);
 
@@ -242,13 +259,15 @@ public:
     return s.counts.get_active_task_list();
   }
 
-  [[nodiscard]] TaskIDList get_k_hop_dependents(const TaskIDList &initial,
-                                                int k) const {
+  [[nodiscard]] TaskIDList get_k_hop_dependents(taskid_t *initial_tasks,
+                                                size_t n, int k) const {
     // NOTE(wlr): Sorry this is messy, I just wanted to get something running
 
     if (k <= 0) {
       return {};
     }
+
+    std::span initial(initial_tasks, n);
 
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
@@ -290,13 +309,15 @@ public:
     return result;
   }
 
-  [[nodiscard]] TaskIDList get_k_hop_dependencies(const TaskIDList &initial,
-                                                  int k) const {
+  [[nodiscard]] TaskIDList get_k_hop_dependencies(taskid_t *initial_tasks,
+                                                  size_t n, int k) const {
     // NOTE(wlr): Sorry this is messy, I just wanted to get something running
 
     if (k <= 0) {
       return {};
     }
+
+    std::span initial(initial_tasks, n);
 
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
@@ -338,7 +359,7 @@ public:
     return result;
   }
 
-  void get_task_features(taskid_t task_id, std::span<double> features) const {
+  void get_task_features(taskid_t task_id, std::span<f_t> features) const {
     constexpr std::size_t FEATURE_LENGTH = 7;
     assert(features.size() == FEATURE_LENGTH);
 
@@ -353,15 +374,14 @@ public:
     features[1] =
         guarded_divide(get_out_degree(task), graph_info.average_out_degree);
 
-    features[2] = static_cast<double>(task_manager.state.is_mapped(task_id));
-    features[3] = static_cast<double>(task_manager.state.is_reserved(task_id));
-    features[4] = static_cast<double>(task_manager.state.is_launched(task_id));
-    features[5] = static_cast<double>(task_manager.state.is_completed(task_id));
+    features[2] = static_cast<f_t>(task_manager.state.is_mapped(task_id));
+    features[3] = static_cast<f_t>(task_manager.state.is_reserved(task_id));
+    features[4] = static_cast<f_t>(task_manager.state.is_launched(task_id));
+    features[5] = static_cast<f_t>(task_manager.state.is_completed(task_id));
     features[6] = 0; // is mapping candidate (set in Python layer)
   }
 
-  void get_device_features(devid_t device_id,
-                           std::span<double> features) const {
+  void get_device_features(devid_t device_id, std::span<f_t> features) const {
     constexpr std::size_t FEATURE_LENGTH = 8;
     assert(features.size() == FEATURE_LENGTH);
 
@@ -371,8 +391,8 @@ public:
 
     const auto &device = devices.get_device(device_id);
 
-    features[0] = static_cast<double>(device.arch == DeviceType::CPU);
-    features[1] = static_cast<double>(device.arch == DeviceType::GPU);
+    features[0] = static_cast<f_t>(device.arch == DeviceType::CPU);
+    features[1] = static_cast<f_t>(device.arch == DeviceType::GPU);
 
     double total_mapped_mem = 0;
     for (std::size_t i = 0; i < devices.size(); i++) {
@@ -428,7 +448,7 @@ public:
     features[7] = guarded_divide(launched_time, total_launched_time);
   }
 
-  void get_data_features(dataid_t data_id, std::span<double> features) const {
+  void get_data_features(dataid_t data_id, std::span<f_t> features) const {
     const auto &s = this->state.get();
 
     const auto &data_manager = s.get_data_manager();
@@ -442,13 +462,13 @@ public:
 
     features[0] = guarded_divide(data_size, graph_info.average_data_size);
     for (std::size_t i = 0; i < devices.size(); i++) {
-      features[i + 1] = static_cast<double>(
+      features[i + 1] = static_cast<f_t>(
           data_manager.get_mapped_locations().is_valid(data_id, i));
     }
   }
 
   void get_task_device_features(taskid_t task_id, devid_t device_id,
-                                std::span<double> features) {
+                                std::span<f_t> features) {
     constexpr std::size_t FEATURE_LENGTH = 2;
     assert(features.size() == FEATURE_LENGTH);
 
@@ -470,7 +490,7 @@ public:
   }
 
   void get_task_data_features(taskid_t task_id, dataid_t data_id,
-                              std::span<double> features) const {
+                              std::span<f_t> features) const {
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
     const auto &tasks = task_manager.get_tasks();
@@ -489,12 +509,12 @@ public:
                               data_id) != task.get_write().end();
 
     features[0] = guarded_divide(data_size, task_data_memcost);
-    features[1] = static_cast<double>(is_read);
-    features[2] = static_cast<double>(is_write);
+    features[1] = static_cast<f_t>(is_read);
+    features[2] = static_cast<f_t>(is_write);
   }
 
   void get_task_task_features(taskid_t task_id, taskid_t dep_id,
-                              std::span<double> features) const {
+                              std::span<f_t> features) const {
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
     const auto &tasks = task_manager.get_tasks();
@@ -519,7 +539,7 @@ public:
   }
 
   void get_data_device_features(dataid_t data_id, devid_t device_id,
-                                std::span<double> features) const {
+                                std::span<f_t> features) const {
     const std::size_t FEATURE_LENGTH = 1;
     assert(features.size() == FEATURE_LENGTH);
     features[0] = 1.0;
@@ -537,7 +557,7 @@ public:
     return unique_set.size();
   }
 
-  auto get_unique_datamap(const TaskIDList &task_ids) {
+  auto get_unique_datamap(std::span<taskid_t> task_ids) {
     std::map<dataid_t, std::size_t> unique_map;
 
     for (auto task_id : task_ids) {
@@ -552,8 +572,10 @@ public:
     return unique_map;
   }
 
-  TaskTaskEdges get_task_task_edges(const TaskIDList &source,
-                                    const TaskIDList &targets) {
+  TaskTaskEdges get_task_task_edges(taskid_t *source_pointer, std::size_t n,
+                                    taskid_t *target_pointer, std::size_t m) {
+    std::span source(source_pointer, n);
+    std::span targets(target_pointer, m);
     TaskTaskEdges edges;
 
     std::unordered_map<taskid_t, taskid_t> target_index;
@@ -561,8 +583,8 @@ public:
       target_index[targets[i]] = i;
     }
 
-    edges.tasks.reserve(source.size());
-    edges.deps.reserve(source.size());
+    source_list.clear();
+    target_list.clear();
 
     taskid_t source_idx = 0;
     for (const auto &source_id : source) {
@@ -571,29 +593,47 @@ public:
               source_id);
       for (const auto &dep_id : source_task.get_dependencies()) {
         if (target_index.find(dep_id) != target_index.end()) {
-          edges.tasks.push_back(source_idx);
-          edges.deps.push_back(target_index[dep_id]);
+          source_list.push_back(source_idx);
+          target_list.push_back(target_index[dep_id]);
         }
       }
       source_idx++;
     }
 
     edges.feature_dim = 1;
-    edges.features.resize(edges.tasks.size() * edges.feature_dim);
-    std::span<double> feature_span(edges.features);
-    for (std::size_t i = 0; i < edges.tasks.size(); i++) {
+    edges.feature_len = source_list.size();
+
+    edges.edges =
+        static_cast<op_t *>(malloc(2 * edges.feature_len * sizeof(op_t)));
+
+    // fill COO edges row major (2 x N)
+    for (std::size_t i = 0; i < edges.feature_len; i++) {
+      edges.edges[i] = source_list[i];
+      edges.edges[i + edges.feature_len] = target_list[i];
+    }
+
+    edges.features = static_cast<f_t *>(
+        malloc(edges.feature_len * edges.feature_dim * sizeof(f_t)));
+
+    std::span<f_t> feature_span(edges.features,
+                                edges.feature_len * edges.feature_dim);
+    for (std::size_t i = 0; i < edges.feature_len; i++) {
       get_task_task_features(
-          source[edges.tasks[i]], targets[edges.deps[i]],
+          source[source_list[i]], targets[target_list[i]],
           feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
     }
 
     return edges;
   }
 
-  TaskDataEdges get_task_data_edges(const TaskIDList &task_ids) {
+  TaskDataEdges get_task_data_edges(taskid_t *task_ids_pointer, std::size_t n) {
+    std::span task_ids(task_ids_pointer, n);
     TaskDataEdges edges;
 
-    std::unordered_map<dataid_t, std::size_t> data_map;
+    std::unordered_map<dataid_t, uint32_t> data_map;
+
+    source_list.clear();
+    target_list.clear();
 
     for (std::size_t i = 0; i < task_ids.size(); i++) {
       const auto &task_id = task_ids[i];
@@ -605,33 +645,55 @@ public:
           data_map[data_id] = data_map.size();
         }
 
-        edges.tasks.push_back(i);
-        edges.data.push_back(data_map[data_id]);
+        source_list.push_back(i);
+        target_list.push_back(data_map[data_id]);
       }
     }
 
-    edges.data2id.resize(data_map.size());
+    edges.feature_dim = 3;
+    edges.feature_len = source_list.size();
+    edges.data2id_len = data_map.size();
+
+    edges.edges =
+        static_cast<op_t *>(malloc(2 * edges.feature_len * sizeof(op_t)));
+
+    // fill COO edges row major (2 x N)
+    for (std::size_t i = 0; i < edges.feature_len; i++) {
+      edges.edges[i] = source_list[i];
+      edges.edges[i + edges.feature_len] = target_list[i];
+    }
+
+    edges.data2id =
+        static_cast<op_t *>(malloc(edges.data2id_len * sizeof(op_t)));
+
     for (const auto &data_id : data_map) {
       edges.data2id[data_id.second] = data_id.first;
     }
 
-    edges.feature_dim = 3;
-    edges.features.resize(edges.tasks.size() * edges.feature_dim);
-    std::span<double> feature_span(edges.features);
+    edges.features = static_cast<f_t *>(
+        malloc(edges.feature_len * edges.feature_dim * sizeof(f_t)));
 
-    for (std::size_t i = 0; i < edges.tasks.size(); i++) {
+    std::span<f_t> feature_span(edges.features,
+                                edges.feature_len * edges.feature_dim);
+
+    for (std::size_t i = 0; i < edges.feature_len; i++) {
       get_task_data_features(
-          task_ids[edges.tasks[i]], edges.data2id[edges.data[i]],
+          task_ids[source_list[i]], edges.data2id[target_list[i]],
           feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
     }
 
     return edges;
   }
 
-  TaskDeviceEdges get_task_device_edges(const TaskIDList &task_ids) {
+  TaskDeviceEdges get_task_device_edges(taskid_t *task_ids_pointer,
+                                        std::size_t n) {
+    std::span task_ids(task_ids_pointer, n);
     TaskDeviceEdges edges;
 
-    std::map<devid_t, std::size_t> device_map;
+    std::map<devid_t, uint32_t> device_map;
+
+    source_list.clear();
+    target_list.clear();
 
     for (std::size_t i = 0; i < task_ids.size(); i++) {
       const auto &task_id = task_ids[i];
@@ -648,41 +710,66 @@ public:
             device_map[device_id] = device_map.size();
           }
 
-          edges.tasks.push_back(i);
-          edges.devices.push_back(device_map[device_id]);
+          source_list.push_back(i);
+          target_list.push_back(device_map[device_id]);
         }
       }
     }
 
-    edges.device2id.resize(device_map.size());
+    edges.device2id_len = device_map.size();
+    edges.feature_dim = 2;
+    edges.feature_len = source_list.size();
+
+    edges.edges =
+        static_cast<op_t *>(malloc(2 * edges.feature_len * sizeof(op_t)));
+
+    // fill COO edges row major (2 x N)
+    for (std::size_t i = 0; i < edges.feature_len; i++) {
+      edges.edges[i] = source_list[i];
+      edges.edges[i + edges.feature_len] = target_list[i];
+    }
+
+    edges.device2id =
+        static_cast<op_t *>(malloc(edges.device2id_len * sizeof(op_t)));
+
     for (const auto &device_id : device_map) {
       edges.device2id[device_id.second] = device_id.first;
     }
 
-    edges.feature_dim = 2;
-    edges.features.resize(edges.tasks.size() * edges.feature_dim);
-    std::span<double> feature_span(edges.features);
+    edges.features = static_cast<f_t *>(
+        malloc(edges.feature_len * edges.feature_dim * sizeof(f_t)));
 
-    for (std::size_t i = 0; i < edges.tasks.size(); i++) {
+    std::span<f_t> feature_span(edges.features,
+                                edges.feature_len * edges.feature_dim);
+
+    for (std::size_t i = 0; i < edges.feature_len; i++) {
       get_task_device_features(
-          task_ids[edges.tasks[i]], edges.device2id[edges.devices[i]],
+          task_ids[source_list[i]], edges.device2id[target_list[i]],
           feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
     }
 
     return edges;
   }
 
-  DataDeviceEdges get_data_device_edges(const TaskIDList &task_ids) {
+  DataDeviceEdges get_data_device_edges(taskid_t *task_ids_pointer,
+                                        std::size_t n) {
+    std::span task_ids(task_ids_pointer, n);
     DataDeviceEdges edges;
+
+    source_list.clear();
+    target_list.clear();
 
     auto data_map = get_unique_datamap(task_ids);
 
-    edges.data2id.resize(data_map.size());
+    edges.data2id_len = data_map.size();
+    edges.data2id =
+        static_cast<op_t *>(malloc(edges.data2id_len * sizeof(op_t)));
+
     for (const auto &data_id : data_map) {
       edges.data2id[data_id.second] = data_id.first;
     }
 
-    std::map<devid_t, std::size_t> device_map;
+    std::map<devid_t, uint32_t> device_map;
 
     for (const auto &data_id : data_map) {
       const auto &valid_sources =
@@ -694,33 +781,54 @@ public:
           device_map[device_id] = device_map.size();
         }
 
-        edges.data.push_back(data_id.second);
-        edges.devices.push_back(device_map[device_id]);
+        source_list.push_back(data_id.second);
+        target_list.push_back(device_map[device_id]);
       }
     }
 
-    edges.device2id.resize(device_map.size());
+    edges.device2id_len = device_map.size();
+    edges.device2id =
+        static_cast<op_t *>(malloc(edges.device2id_len * sizeof(op_t)));
     for (const auto &device_id : device_map) {
       edges.device2id[device_id.second] = device_id.first;
     }
 
     edges.feature_dim = 1;
-    edges.features.resize(edges.data.size() * edges.feature_dim);
-    std::span<double> feature_span(edges.features);
-    for (std::size_t i = 0; i < edges.data.size(); i++) {
+    edges.feature_len = source_list.size();
+
+    edges.edges =
+        static_cast<op_t *>(malloc(2 * edges.feature_len * sizeof(op_t)));
+
+    // fill COO edges row major (2 x N)
+
+    for (std::size_t i = 0; i < edges.feature_len; i++) {
+      edges.edges[i] = source_list[i];
+      edges.edges[i + edges.feature_len] = target_list[i];
+    }
+
+    edges.features = static_cast<f_t *>(
+        malloc(edges.feature_len * edges.feature_dim * sizeof(f_t)));
+    std::span<f_t> feature_span(edges.features,
+                                edges.feature_len * edges.feature_dim);
+    for (std::size_t i = 0; i < edges.feature_len; i++) {
       get_data_device_features(
-          edges.data2id[edges.data[i]], edges.device2id[edges.devices[i]],
+          edges.data2id[source_list[i]], edges.device2id[target_list[i]],
           feature_span.subspan(i * edges.feature_dim, edges.feature_dim));
     }
 
     return edges;
   }
 
-  TaskFeatures get_task_features(const TaskIDList &task_ids) {
+  TaskFeatures get_task_features(taskid_t *task_ids_pointer, std::size_t n) {
+    std::span task_ids(task_ids_pointer, n);
     TaskFeatures features;
     features.feature_dim = 7;
-    features.features.resize(task_ids.size() * features.feature_dim);
-    std::span<double> feature_span(features.features);
+    features.feature_len = task_ids.size();
+
+    features.features = static_cast<f_t *>(
+        malloc(features.feature_len * features.feature_dim * sizeof(f_t)));
+    std::span<f_t> feature_span(features.features,
+                                features.feature_len * features.feature_dim);
 
     for (std::size_t i = 0; i < task_ids.size(); i++) {
       auto start_i = i * features.feature_dim;
@@ -731,11 +839,17 @@ public:
     return features;
   }
 
-  DeviceFeatures get_device_features(const DeviceIDList &device_ids) {
+  DeviceFeatures get_device_features(const devid_t *device_ids_pointer,
+                                     std::size_t n) {
+    std::span device_ids(device_ids_pointer, n);
     DeviceFeatures features;
     features.feature_dim = 8;
-    features.features.resize(device_ids.size() * features.feature_dim);
-    std::span<double> feature_span(features.features);
+    features.feature_len = device_ids.size();
+
+    features.features = static_cast<f_t *>(
+        malloc(features.feature_len * features.feature_dim * sizeof(f_t)));
+    std::span<f_t> feature_span(features.features,
+                                features.feature_len * features.feature_dim);
 
     for (std::size_t i = 0; i < device_ids.size(); i++) {
       get_device_features(
@@ -746,11 +860,17 @@ public:
     return features;
   }
 
-  DataFeatures get_data_features(const DataIDList &data_ids) {
+  DataFeatures get_data_features(dataid_t *data_ids_pointer, std::size_t n) {
+    std::span data_ids(data_ids_pointer, n);
     DataFeatures features;
     features.feature_dim = 1 + state.get().get_device_manager().size();
-    features.features.resize(data_ids.size() * features.feature_dim);
-    std::span<double> feature_span(features.features);
+    features.feature_len = data_ids.size();
+
+    features.features = static_cast<f_t *>(
+        malloc(features.feature_len * features.feature_dim * sizeof(f_t)));
+
+    std::span<f_t> feature_span(features.features,
+                                features.feature_len * features.feature_dim);
 
     for (std::size_t i = 0; i < data_ids.size(); i++) {
       get_data_features(

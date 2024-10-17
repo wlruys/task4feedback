@@ -59,6 +59,14 @@ cdef extern from "include/scheduler.hpp":
         void set_launching_priorities(PriorityList& priorities)
         void set_reserving_priorities(PriorityList& priorities)
 
+    cdef cppclass EFTMapper(Mapper):
+        EFTMapper(size_t n_tasks, size_t n_devices)
+
+    cdef cppclass DequeueEFTMapper(Mapper):
+        DequeueEFTMapper(size_t n_tasks, size_t n_devices)
+
+    cdef cppclass Deque
+
 cdef extern from "include/simulator.hpp":
 
     cdef void logger_setup()
@@ -90,9 +98,12 @@ cdef extern from "include/simulator.hpp":
 
 cdef extern from "include/observer.hpp":
 
+    ctypedef uint32_t op_t 
+
     cdef cppclass Features:
-        vector[double] features
+        float* features
         size_t feature_dim
+        size_t feature_len 
 
     cdef cppclass DataFeatures(Features):
         pass
@@ -104,38 +115,38 @@ cdef extern from "include/observer.hpp":
         pass
 
     cdef cppclass TaskDataEdges(Features):
-        vector[uint64_t] data2id
-        vector[uint64_t] tasks
-        vector[uint64_t] data
+        op_t* data2id
+        size_t data2id_len
+        op_t* edges 
 
     cdef cppclass TaskDeviceEdges(Features):
-        vector[uint64_t] device2id
-        vector[uint64_t] tasks
-        vector[uint64_t] devices
+        op_t* device2id
+        size_t device2id_len
+        op_t* edges
 
     cdef cppclass DataDeviceEdges(Features):
-        vector[uint64_t] data2id
-        vector[uint64_t] device2id 
-        vector[uint64_t] data
-        vector[uint64_t] devices
+        op_t* data2id
+        size_t data2id_len
+        op_t* device2id
+        size_t device2id_len
+        op_t* edges
 
     cdef cppclass TaskTaskEdges(Features):
-        vector[uint64_t] tasks 
-        vector[uint64_t] deps
+        op_t* edges
 
     cdef cppclass Observer:
         Observer(Simulator& simulator)
         void global_features()
         TaskIDList get_active_tasks()
-        TaskIDList get_k_hop_dependents(const TaskIDList& initial, int k)
-        TaskIDList get_k_hop_dependencies(const TaskIDList& initial, int k)
-        TaskFeatures get_task_features(const TaskIDList& task_ids)
-        DataFeatures get_data_features(const TaskIDList& data_ids)
-        DeviceFeatures get_device_features(const DeviceIDList& device_ids)
-        TaskTaskEdges get_task_task_edges(const TaskIDList& source_tasks, const TaskIDList& target_tasks)
-        TaskDataEdges get_task_data_edges(const TaskIDList& task_ids)
-        TaskDeviceEdges get_task_device_edges(const TaskIDList& task_ids)
-        DataDeviceEdges get_data_device_edges(const TaskIDList& data_ids)
+        TaskIDList get_k_hop_dependents(taskid_t* initial_tasks, size_t ntasks, int k)
+        TaskIDList get_k_hop_dependencies(taskid_t* initial_tasks, size_t ntasks, int k)
+        TaskFeatures get_task_features(taskid_t* tasks, size_t ntasks)
+        DataFeatures get_data_features(dataid_t* data, size_t ndata)
+        DeviceFeatures get_device_features(devid_t* devices, size_t ndevices)
+        TaskTaskEdges get_task_task_edges(taskid_t* sources, size_t nsource, taskid_t* targets, size_t ntarget)
+        TaskDataEdges get_task_data_edges(taskid_t* task_ids, size_t ntasks)
+        TaskDeviceEdges get_task_device_edges(taskid_t* task_ids, size_t ntasks)
+        DataDeviceEdges get_data_device_edges(dataid_t* data_ids, size_t ndata)
 
     
 

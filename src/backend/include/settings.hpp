@@ -1,5 +1,5 @@
 #pragma once
-#define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_DEBUG
+// #define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_DEBUG
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -7,11 +7,11 @@
 #include <unordered_map>
 #include <vector>
 
-using priority_t = uint64_t;
-using taskid_t = uint64_t;
-using dataid_t = uint64_t;
-using devid_t = uint64_t;
-using depcount_t = uint64_t;
+using priority_t = uint32_t;
+using taskid_t = uint32_t;
+using dataid_t = uint32_t;
+using devid_t = uint32_t;
+using depcount_t = uint32_t;
 
 using TaskIDList = std::vector<taskid_t>;
 using TaskIDLinkedList = std::list<taskid_t>;

@@ -20,6 +20,7 @@ from libcpp.vector cimport vector
 from libcpp cimport bool
 from numba.core.ccallback import CFunc 
 from cpython cimport Py_INCREF, Py_DECREF
+from cython.view cimport array as cvarray 
 
 class PyTaskState(IntEnum):
     SPAWNED = <int>TaskState.SPAWNED,
@@ -121,12 +122,12 @@ cdef convert_to_devid_list(list devid_list):
     return result
 
 
-cdef _uintv_numpy(vector[uint64_t]& v, copy: bool = True):
+cdef _uintv_numpy(vector[uint32_t]& v, copy: bool = True):
     cdef size_t n = v.size()
     if n == 0:
-        return np.array([], dtype=np.uint64)
+        return np.array([], dtype=np.uint32)
 
-    cdef cnp.uint64_t[:] result = <cnp.uint64_t[:n]>v.data()
+    cdef cnp.uint32_t[:] result = <cnp.uint32_t[:n]>v.data()
     if copy:
         return np.asarray(result, copy=True)
     else:
@@ -135,7 +136,7 @@ cdef _uintv_numpy(vector[uint64_t]& v, copy: bool = True):
 cdef _dv_numpy(vector[double]& v, int d, copy: bool = True):
     cdef size_t n = v.size() // d
     if n == 0:
-        return np.array([], dtype=np.uint64)
+        return np.array([], dtype=np.uint32)
 
     cdef cnp.float64_t[:, :] result = <cnp.float64_t[:n, :d]>v.data()
     if copy:
@@ -143,12 +144,34 @@ cdef _dv_numpy(vector[double]& v, int d, copy: bool = True):
     else:
         return np.asarray(result)
 
+cdef _dp_numpy(float* p, size_t n, size_t d, own: bool=True):
+    cdef cvarray result = <cnp.float32_t[:n, :d]>p
+    if own:
+        result.free_data = True
+    a = np.asarray(result)
+    return a
+
+cdef _uintp_numpy_1d(uint32_t* p, size_t n, own: bool=True):
+    cdef cvarray result = <cnp.uint32_t[:n]>p
+    if own:
+        result.free_data = True
+    a = np.asarray(result)
+    return a
+
+
+cdef _uintp_numpy(uint32_t* p, size_t n, size_t d, own: bool=True):
+    cdef cvarray result = <cnp.uint32_t[:n, :d]>p
+    if own:
+        result.free_data = True
+    a = np.asarray(result)
+    return a
+
 cdef convert_taskid_list_to_numpy(TaskIDList taskid_list, copy: bool = False):
     cdef size_t n = taskid_list.size()
     if n == 0:
-        return np.array([], dtype=np.uint64)
+        return np.array([], dtype=np.uint32)
 
-    cdef cnp.uint64_t[:] result = <cnp.uint64_t[:n]>taskid_list.data()
+    cdef cnp.uint32_t[:] result = <cnp.uint32_t[:n]>taskid_list.data()
     if copy:
         return np.asarray(result, copy=True)
     else:
@@ -157,9 +180,9 @@ cdef convert_taskid_list_to_numpy(TaskIDList taskid_list, copy: bool = False):
 cdef convert_dataid_list_to_numpy(DataIDList dataid_list, copy: bool = False):
     cdef size_t n = dataid_list.size()
     if n == 0:
-        return np.array([], dtype=np.uint64)
+        return np.array([], dtype=np.uint32)
 
-    cdef cnp.uint64_t[:] result = <cnp.uint64_t[:n]>dataid_list.data()
+    cdef cnp.uint32_t[:] result = <cnp.uint32_t[:n]>dataid_list.data()
     if copy:
         return np.array(result, copy=True)
     else:
@@ -168,9 +191,9 @@ cdef convert_dataid_list_to_numpy(DataIDList dataid_list, copy: bool = False):
 cdef convert_devid_list_to_numpy(DeviceIDList devid_list, copy: bool = False):
     cdef size_t n = devid_list.size()
     if n == 0:
-        return np.array([], dtype=np.uint64)
+        return np.array([], dtype=np.uint32)
 
-    cdef cnp.uint64_t[:] result = <cnp.uint64_t[:n]>devid_list.data()
+    cdef cnp.uint32_t[:] result = <cnp.uint32_t[:n]>devid_list.data()
     if copy:
         return np.asarray(result, copy=True)
     else:
@@ -190,12 +213,11 @@ cdef class PyAction:
 
 cdef class PyDevices:
     cdef Devices* devices
-    cdef uint64_t n
+    cdef uint32_t n
 
     def __cinit__(self, n: int):
         self.devices = new Devices(n)
         self.n = n
-        print("Created Devices")
 
     def size(self):
         return self.n
@@ -218,14 +240,12 @@ cdef class PyDevices:
 
     def __dealloc__(self):
         del self.devices
-        print("Deleted Devices")
 
 cdef class PyTopology:
     cdef Topology* topology
 
     def __cinit__(self, n: int):
         self.topology = new Topology(n)
-        print("Created Topology")
 
     def set_bandwidth(self, devid_t src, devid_t dst, mem_t bandwidth):
         self.topology.set_bandwidth(src, dst, bandwidth)
@@ -247,7 +267,6 @@ cdef class PyTopology:
 
     def __dealloc__(self):
         del self.topology
-        print(("Deleted Topology"))
 
 
 
@@ -257,7 +276,6 @@ cdef class PyData:
 
     def __cinit__(self, num_blocks: int):
         self.data = new Data(num_blocks)
-        print("Created Data")
 
     def create_block(self, dataid_t id, mem_t size, devid_t location, str pyname):
         cname = pyname.encode('utf-8')
@@ -286,7 +304,6 @@ cdef class PyData:
 
     def __dealloc__(self):
         del self.data
-        print("Deleted Data")
 
 
 cdef class PyTasks:
@@ -294,7 +311,6 @@ cdef class PyTasks:
 
     def __cinit__(self, n: int):
         self.tasks = new Tasks(n)
-        print("Created Tasks")
 
     def n_compute_tasks(self):
         return deref(self.tasks).compute_size()
@@ -381,7 +397,6 @@ cdef class PyTasks:
 
     def __dealloc__(self):
         del self.tasks
-        print("Deleted Tasks")
 
 
 cdef class PyTaskNoise:
@@ -516,11 +531,10 @@ cdef class PyMapper:
 
     def __cinit__(self):
         self.mapper = new Mapper()
-        print("Created Mapper")
+
 
     def __dealloc__(self):
         del self.mapper
-        print("Deleted Mapper")
 
 
 cdef class PyStaticMapper(PyMapper):
@@ -546,6 +560,14 @@ cdef class PyStaticMapper(PyMapper):
             priority_list.push_back(priority)
         (<StaticMapper*>self.mapper).set_reserving_priorities(priority_list)
 
+
+cdef class PyEFTMapper(PyMapper):
+    def __cinit__(self, PyTasks tasks, PyDevices devices):
+        self.mapper = new EFTMapper(tasks.tasks.size(), devices.devices.size())
+
+cdef class PyDequeueEFTMapper(PyMapper):
+    def __cinit__(self, PyTasks tasks, PyDevices devices):
+        self.mapper = new DequeueEFTMapper(tasks.tasks.size(), devices.devices.size())
 
 cdef class PySchedulerInput:
     cdef SchedulerInput* input 
@@ -592,7 +614,7 @@ cdef class PySimulator:
     def get_mappable_candidates(self):
         cdef TaskIDList candidates = deref(self.simulator).get_mappable_candidates()
         if candidates.empty():
-            return np.array([], dtype=np.uint64)
+            return np.array([], dtype=np.uint32)
         else:
             return convert_taskid_list_to_numpy(candidates, copy=True)
 
@@ -635,84 +657,99 @@ cdef class PyObserver:
         cdef TaskIDList tasks = self.observer.get_active_tasks()
         return convert_taskid_list_to_numpy(tasks, copy=True)
 
-    def get_k_hop_dependents(self, list initial, int k):
-        cdef TaskIDList initial_tasks = convert_to_taskid_list(initial)
-        cdef TaskIDList tasks = self.observer.get_k_hop_dependents(initial_tasks, k)
+    def get_k_hop_dependents(self, taskid_t[:] initial, int k):
+        if initial.shape[0] == 0:
+            return np.array([], dtype=np.uint32)
+
+        cdef TaskIDList tasks = self.observer.get_k_hop_dependents(&initial[0], initial.shape[0], k)
         return convert_taskid_list_to_numpy(tasks, copy=True)
 
-    def get_k_hop_dependencies(self, list initial, int k):
-        cdef TaskIDList initial_tasks = convert_to_taskid_list(initial)
-        cdef TaskIDList tasks = self.observer.get_k_hop_dependencies(initial_tasks, k)
+    def get_k_hop_dependencies(self, taskid_t[:] initial, int k):
+        if initial.shape[0] == 0:
+            return np.array([], dtype=np.uint32)
+
+        cdef TaskIDList tasks = self.observer.get_k_hop_dependencies(&initial[0], initial.shape[0], k)
         return convert_taskid_list_to_numpy(tasks, copy=True)
 
-    def get_task_features(self, list[taskid_t] task_ids):
-        cdef TaskFeatures task_features = self.observer.get_task_features(convert_to_taskid_list(task_ids))
+    def get_task_features(self, taskid_t[:] task_ids):
+        if task_ids.shape[0] == 0:
+            return np.array([], dtype=np.float32)
+
+        cdef TaskFeatures task_features = self.observer.get_task_features(&task_ids[0], task_ids.shape[0])
         cdef size_t d = task_features.feature_dim
-        cdef size_t n = task_features.features.size() // d
+        cdef size_t n = task_features.feature_len
 
-        return _dv_numpy(task_features.features, d)
+        return _dp_numpy(task_features.features, n, d)
 
-    def get_data_features(self, list[dataid_t] data_ids):
-        cdef DataFeatures data_features = self.observer.get_data_features(convert_to_dataid_list(data_ids))
+    def get_data_features(self, dataid_t[:] data_ids):
+        cdef DataFeatures data_features = self.observer.get_data_features(&data_ids[0], data_ids.shape[0])
         cdef size_t d = data_features.feature_dim
-        cdef size_t n = data_features.features.size() // d
+        cdef size_t n = data_features.feature_len 
 
-        return _dv_numpy(data_features.features, d)
+        return _dp_numpy(data_features.features, n, d)
 
-    def get_device_features(self, list[devid_t] device_ids):
-        cdef DeviceFeatures device_features = self.observer.get_device_features(convert_to_devid_list(device_ids))
+    def get_device_features(self, devid_t[:] device_ids):
+        if device_ids.shape[0] == 0:
+            return np.array([], dtype=np.float32)
+
+        cdef DeviceFeatures device_features = self.observer.get_device_features(&device_ids[0], device_ids.shape[0])
         cdef size_t d = device_features.feature_dim
-        cdef size_t n = device_features.features.size() // d
+        cdef size_t n = device_features.feature_len 
+        return _dp_numpy(device_features.features, n, d)
 
-        return _dv_numpy(device_features.features, d)
-
-    def get_task_task_edges(self, list[taskid_t] source_tasks, list[taskid_t] target_tasks):
-        cdef TaskTaskEdges edges = self.observer.get_task_task_edges(convert_to_taskid_list(source_tasks), convert_to_taskid_list(target_tasks))
+    def get_task_task_edges(self, taskid_t[:] source_tasks, taskid_t[:] target_tasks):
+        if source_tasks.shape[0] == 0 or target_tasks.shape[0] == 0:
+            return np.array([], dtype=np.uint32), np.array([], dtype=np.float32)
+        cdef TaskTaskEdges edges = self.observer.get_task_task_edges(&source_tasks[0], source_tasks.shape[0], &target_tasks[0], target_tasks.shape[0])
         cdef size_t d = edges.feature_dim
-        cdef size_t n_edges = edges.tasks.size()
+        cdef size_t n_edges = edges.feature_len
 
-        tasks = _uintv_numpy(edges.tasks)
-        deps = _uintv_numpy(edges.deps)
-        features_array = _dv_numpy(edges.features, d)
+        e = _uintp_numpy(edges.edges, 2, n_edges)
+        features_array = _dp_numpy(edges.features, n_edges, d)
 
-        return  [tasks, deps], features_array
+        return  e, features_array
 
 
-    def get_task_data_edges(self, list[taskid_t] task_ids):
-        cdef TaskDataEdges edges = self.observer.get_task_data_edges(convert_to_taskid_list(task_ids))
+    def get_task_data_edges(self, taskid_t[:] task_ids):
+        if task_ids.shape[0] == 0:
+            return np.array([], dtype=np.uint32),np.array([], dtype=np.uint32), np.array([], dtype=np.float32)
+        cdef TaskDataEdges edges = self.observer.get_task_data_edges(&task_ids[0], task_ids.shape[0])
         cdef size_t d = edges.feature_dim
-        cdef size_t n_edges = edges.tasks.size()
+        cdef size_t n_edges = edges.feature_len
+        cdef size_t n_data = edges.data2id_len
 
-        data2id = _uintv_numpy(edges.data2id)
-        tasks = _uintv_numpy(edges.tasks)
-        data = _uintv_numpy(edges.data)
-        features_array = _dv_numpy(edges.features, d)
+        data2id = _uintp_numpy_1d(edges.data2id, n_data)
+        e = _uintp_numpy(edges.edges, 2, n_edges)
+        features_array = _dp_numpy(edges.features, n_edges, d)
 
-        return data2id, [tasks, data], features_array
+        return data2id, e, features_array
 
-    def get_task_device_edges(self, list[taskid_t] task_ids):
-        cdef TaskDeviceEdges edges = self.observer.get_task_device_edges(convert_to_taskid_list(task_ids))
-        cdef size_t n = edges.tasks.size()
+    def get_task_device_edges(self, taskid_t[:] task_ids):
+        if task_ids.shape[0] == 0:
+            return np.array([], dtype=np.uint32), np.array([], dtype=np.uint32), np.array([], dtype=np.float32)
+        cdef TaskDeviceEdges edges = self.observer.get_task_device_edges(&task_ids[0], task_ids.shape[0])
+        cdef size_t n = edges.feature_len
         cdef size_t d = edges.feature_dim
-        cdef size_t n_devices = edges.device2id.size()
-        device2id = _uintv_numpy(edges.device2id)
-        tasks = _uintv_numpy(edges.tasks)
-        devices = _uintv_numpy(edges.devices)
-        features_array = _dv_numpy(edges.features, d)
-        return device2id, [tasks, devices], features_array
+        cdef size_t n_devices = edges.device2id_len
+
+        device2id = _uintp_numpy_1d(edges.device2id, n_devices)
+        e = _uintp_numpy(edges.edges, 2, n)
+        features_array = _dp_numpy(edges.features, n, d)
+        return device2id, e, features_array
 
 
-    def get_data_device_edges(self, list[taskid_t] task_ids):
-        cdef DataDeviceEdges edges = self.observer.get_data_device_edges(convert_to_taskid_list(task_ids))
-        cdef size_t n = edges.data.size()
+    def get_data_device_edges(self, dataid_t[:] task_ids):
+        if task_ids.shape[0] == 0:
+            return np.array([], dtype=np.uint32),np.array([], dtype=np.uint32),np.array([], dtype=np.uint32), np.array([], dtype=np.float64)
+        cdef DataDeviceEdges edges = self.observer.get_data_device_edges(&task_ids[0], task_ids.shape[0])   
+        cdef size_t n = edges.feature_len
         cdef size_t d = edges.feature_dim
-        cdef size_t n_data = edges.data2id.size()
-        cdef size_t n_devices = edges.device2id.size()
+        cdef size_t n_data = edges.data2id_len
+        cdef size_t n_devices = edges.device2id_len
 
-        data2id = _uintv_numpy(edges.data2id)
-        device2id = _uintv_numpy(edges.device2id)
-        data = _uintv_numpy(edges.data)
-        devices = _uintv_numpy(edges.devices)
-        features_array = _dv_numpy(edges.features, d)
+        data2id = _uintp_numpy_1d(edges.data2id, n_data)
+        device2id = _uintp_numpy_1d(edges.device2id, n_devices)
+        e = _uintp_numpy(edges.edges, 2, n)
+        features_array = _dp_numpy(edges.features, n, d)
 
-        return data2id, device2id, [data, devices], features_array
+        return data2id, device2id, e, features_array

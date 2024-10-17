@@ -464,9 +464,7 @@ public:
                             std::size_t total_in_flight_)
       : mapped_reserved_gap(mapped_launched_gap_),
         reserved_launched_gap(reserved_launched_gap_),
-        total_in_flight(total_in_flight_) {
-    std::cout << "creating range transition conditions" << std::endl;
-  }
+        total_in_flight(total_in_flight_) {}
 
   bool should_map(SchedulerState &state,
                   SchedulerQueues &queues) const override {
