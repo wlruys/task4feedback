@@ -66,7 +66,7 @@ protected:
   }
 
   ExecutionState dispatch_mapper(Event &event) {
-    if (use_python_mapper) {
+    if (use_python_mapper && scheduler.get_queues().has_mappable()) {
       return ExecutionState::EXTERNAL_MAPPING;
     }
     // otherwise just run the mapper from C++

@@ -345,7 +345,7 @@ public:
         q.pop();
 
         const auto &task = tasks.get_compute_task(current_task_id);
-        for (const auto &dep_id : task.get_data_dependencies()) {
+        for (const auto &dep_id : task.get_dependencies()) {
           if (visited.insert(dep_id).second) {
             q.push(dep_id);
             result.push_back(dep_id);

@@ -37,6 +37,7 @@ from enum import IntEnum, Enum
 import torch
 
 import torch_geometric as geom
+import gymnasium as gym
 
 
 class Phase(Enum):
@@ -67,6 +68,18 @@ class ExecutionState:
     BREAKPOINT = PyExecutionState.BREAKPOINT
     ERROR = PyExecutionState.ERROR
     EXTERNAL_MAPPING = PyExecutionState.EXTERNAL_MAPPING
+
+    def __init__(self, state: PyExecutionState):
+        self.state = state
+
+    def __int__(self):
+        return self.state
+
+    def __str__(self):
+        return str(self.state)
+
+    def __repr__(self):
+        return str(self.state)
 
 
 @dataclass(slots=True)
@@ -319,7 +332,6 @@ class CMapper:
 
 
 class StaticCMapper:
-
     def __init__(self):
         self.mapper = PyStaticMapper()
 
@@ -374,7 +386,6 @@ class PythonMapper:
 
 
 class StaticPythonMapper:
-
     def __init__(self):
         self.mapping = None
 
@@ -398,18 +409,11 @@ class StaticPythonMapper:
 
 
 class RoundRobinPythonMapper(PythonMapper):
-
     def __init__(self, n_devices: int):
         self.n_devices = n_devices
 
-    def map_tasks(self, candidates: list[int], simulator) -> list[Action]:
+    def map_tasks(self, candidates: np.ndarray[np.uint32], simulator) -> list[Action]:
         action_list = []
-
-        start_t = time.perf_counter()
-        local_graph = simulator.observer.local_graph_features(list(candidates))
-        end_t = time.perf_counter()
-        # print("Local graph time", end_t - start_t)
-        # print(local_graph)
 
         for i, candidate in enumerate(candidates):
             device = candidate % self.n_devices
@@ -438,7 +442,6 @@ class Observer:
     def get_k_hop_dependents(
         self, task_list: np.ndarray[np.uint64], k: int
     ) -> np.ndarray[np.uint64]:
-
         return self.observer.get_k_hop_dependents(task_list, k)
 
     def get_k_hop_dependencies(
@@ -589,26 +592,32 @@ class Observer:
         return self.observer.get_data_device_edges(tasks)
 
     def local_graph_features(self, candidate_tasks: np.ndarray[np.uint64]):
-        active_tasks = self.observer.get_active_tasks()
+
         # print(active_tasks, active_tasks.dtype)
 
         candidate_tasks = np.asarray(candidate_tasks, dtype=np.uint32)
 
-        k_hop_tasks = self.get_k_hop_dependents(candidate_tasks, 1)
+        k_hop_dependents = self.get_k_hop_dependents(candidate_tasks, 1)
+        k_hop_dependencies = self.get_k_hop_dependencies(candidate_tasks, 1)
+
+        unique_k_hop = np.unique(np.concatenate([k_hop_dependents, k_hop_dependencies]))
+        unique_k_hop = np.asarray(unique_k_hop, dtype=np.uint32)
 
         g = geom.data.HeteroData()
         if len(candidate_tasks) == 0:
             return g
 
-        all_tasks = np.concatenate([candidate_tasks, active_tasks, k_hop_tasks])
+        all_tasks = np.concatenate([candidate_tasks, unique_k_hop])
 
         # task_features = self.get_task_features(all_tasks_list)
-        task_features = self.get_task_features(candidate_tasks)
-        g["task"].x = torch.from_numpy(task_features)
+        task_features = self.get_task_features(all_tasks)
+        g["tasks"].x = torch.from_numpy(task_features)
 
         dep_edges, dep_features = self.get_task_task_edges(all_tasks, all_tasks)
 
-        g["tasks", "depends_on", "tasks"].edge_index = torch.from_numpy(dep_edges)
+        g["tasks", "depends_on", "tasks"].edge_index = torch.from_numpy(dep_edges).to(
+            torch.long
+        )
         g["tasks", "depends_on", "tasks"].edge_attr = torch.from_numpy(dep_features)
 
         vdevice2id, task_device_edges, task_device_features = (
@@ -618,10 +627,10 @@ class Observer:
         device_features = self.get_device_features(vdevice2id)
         g["devices"].x = torch.from_numpy(device_features)
 
-        g["task", "variant_on", "devices"].edge_index = torch.from_numpy(
-            task_device_edges
+        g["devices", "variant", "tasks"].edge_index = (
+            torch.from_numpy(task_device_edges).to(torch.long).flip(0)
         )
-        g["task", "variant_on", "devices"].edge_attr = torch.from_numpy(
+        g["devices", "variant", "tasks"].edge_attr = torch.from_numpy(
             task_device_features
         )
 
@@ -631,8 +640,13 @@ class Observer:
         data_features = self.get_data_features(data2id)
 
         g["data"].x = torch.from_numpy(data_features)
-        g["task", "uses", "data"].edge_index = torch.from_numpy(task_data_edges)
-        g["task", "uses", "data"].edge_attr = torch.from_numpy(task_data_features)
+        g["data", "used_by", "tasks"].edge_index = (
+            torch.from_numpy(task_data_edges).to(torch.long).flip(0)
+        )
+        g["data", "used_by", "tasks"].edge_attr = torch.from_numpy(task_data_features)
+
+        g["candidate_list"] = torch.from_numpy(candidate_tasks).to(torch.long)
+        g["unique_k_hop"] = torch.from_numpy(unique_k_hop).to(torch.long)
 
         return g
 
@@ -672,11 +686,19 @@ class Simulator:
         self.simulator.initialize(use_data)
         self.initialized = True
 
-    def step(self, action_list, has_action=False):
-        if has_action:
+    def step(self, action_list=None):
+        if action_list is not None:
             c_action_list = to_c_action_list(action_list)
             self.simulator.map_tasks(c_action_list)
-        return ExecutionState(int(self.simulator.run()))
+        info = ExecutionState(int(self.simulator.run()))
+        obs = self.observer.local_graph_features(
+            self.simulator.get_mappable_candidates()
+        )
+        done = info.state == PyExecutionState.COMPLETE
+        terminated = False
+        immediate_reward = 0
+
+        return obs, immediate_reward, done, terminated, info
 
     def get_mapping_candidates(self):
         return self.simulator.get_mappable_candidates()
@@ -722,10 +744,10 @@ class Simulator:
 
         self.simulator.add_task_breakpoint(etype, task_id)
 
-    def sample_durations(self):
+    def randomize_durations(self):
         self.noise.sample_durations()
 
-    def sample_priorities(self):
+    def randomize_priorities(self):
         self.noise.sample_priorities()
 
 
