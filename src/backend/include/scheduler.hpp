@@ -763,9 +763,10 @@ public:
   RoundRobinMapper() = default;
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     fill_device_targets(task_id, state);
+    auto mp = state.get_mapping_priorities()[task_id];
     devid_t device_id = device_buffer[device_index];
     device_index = (device_index + 1) % device_buffer.size();
-    return Action(task_id, 0, device_id);
+    return Action(task_id, 0, device_id, mp, mp);
   }
 };
 
@@ -812,8 +813,9 @@ public:
 
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     devid_t device_id = 0;
-    priority_t rp = 0;
-    priority_t lp = 0;
+    auto mp = state.get_mapping_priorities()[task_id];
+    priority_t rp = mp;
+    priority_t lp = mp;
 
     if (!mapping.empty()) {
       device_id = mapping.at(task_id % mapping.size());
@@ -956,7 +958,7 @@ protected:
     for (std::size_t i = 0; i < finish_time_buffer.size(); i++) {
       if (finish_time_buffer.at(i) < min_time) {
         min_time = finish_time_buffer.at(i);
-        best_device = i;
+        best_device = static_cast<devid_t>(i);
       }
     }
 
@@ -976,7 +978,8 @@ public:
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     auto [best_device, min_time] = get_best_device(task_id, state);
     record_finish_time(task_id, min_time);
-    return Action(task_id, 0, best_device);
+    auto mp = state.get_mapping_priorities()[task_id];
+    return Action(task_id, 0, best_device, mp, mp);
   }
 };
 
@@ -1007,6 +1010,7 @@ public:
     auto [best_device, min_time] = get_best_device(task_id, state);
     record_finish_time(task_id, min_time);
     set_device_available_time(best_device, min_time);
-    return Action(task_id, 0, best_device);
+    auto mp = state.get_mapping_priorities()[task_id];
+    return Action(task_id, 0, best_device, mp, mp);
   }
 };

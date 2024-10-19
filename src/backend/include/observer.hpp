@@ -360,7 +360,8 @@ public:
   }
 
   void get_task_features(taskid_t task_id, std::span<f_t> features) const {
-    constexpr std::size_t FEATURE_LENGTH = 7;
+    const auto &devices = this->state.get().get_device_manager().get_devices();
+    const std::size_t FEATURE_LENGTH = 7 + devices.size();
     assert(features.size() == FEATURE_LENGTH);
 
     const auto &s = this->state.get();
@@ -378,7 +379,26 @@ public:
     features[3] = static_cast<f_t>(task_manager.state.is_reserved(task_id));
     features[4] = static_cast<f_t>(task_manager.state.is_launched(task_id));
     features[5] = static_cast<f_t>(task_manager.state.is_completed(task_id));
-    features[6] = 0; // is mapping candidate (set in Python layer)
+    if (task_manager.state.get_state(task_id) != TaskState::SPAWNED) {
+      // One-hot encode the device
+      for (std::size_t i = 0; i < devices.size(); i++) {
+        features[6 + i] =
+            static_cast<f_t>(task_manager.state.get_mapping(task_id) == i);
+      }
+    } else {
+      for (std::size_t i = 0; i < devices.size(); i++) {
+        features[6 + i] = 0;
+      }
+    }
+    features[6 + devices.size()] =
+        0; // is mapping candidate (set in Python layer)
+
+    // // Test print
+    // std::cout << "Task features: ";
+    // for (std::size_t i = 0; i < features.size(); i++) {
+    //   std::cout << features[i] << " ";
+    // }
+    // std::cout << std::endl;
   }
 
   void get_device_features(devid_t device_id, std::span<f_t> features) const {
@@ -822,7 +842,9 @@ public:
   TaskFeatures get_task_features(taskid_t *task_ids_pointer, std::size_t n) {
     std::span task_ids(task_ids_pointer, n);
     TaskFeatures features;
-    features.feature_dim = 7;
+
+    const auto &devices = state.get().get_device_manager().get_devices();
+    features.feature_dim = 7 + devices.size();
     features.feature_len = task_ids.size();
 
     features.features = static_cast<f_t *>(

@@ -422,8 +422,8 @@ class RoundRobinPythonMapper(PythonMapper):
                     candidate,
                     i,
                     device,
-                    np.random.randint(0, 100),
-                    np.random.randint(0, 100),
+                    0,
+                    0,
                 )
             )
             return action_list
@@ -595,22 +595,27 @@ class Observer:
 
         # print(active_tasks, active_tasks.dtype)
 
+        g = geom.data.HeteroData()
+        if len(candidate_tasks) == 0:
+            return g
+
         candidate_tasks = np.asarray(candidate_tasks, dtype=np.uint32)
 
         k_hop_dependents = self.get_k_hop_dependents(candidate_tasks, 1)
         k_hop_dependencies = self.get_k_hop_dependencies(candidate_tasks, 1)
 
+        # print("k_hop_dependents", k_hop_dependents)
+        # print("k_hop_dependencies", k_hop_dependencies)
+
         unique_k_hop = np.unique(np.concatenate([k_hop_dependents, k_hop_dependencies]))
         unique_k_hop = np.asarray(unique_k_hop, dtype=np.uint32)
-
-        g = geom.data.HeteroData()
-        if len(candidate_tasks) == 0:
-            return g
 
         all_tasks = np.concatenate([candidate_tasks, unique_k_hop])
 
         # task_features = self.get_task_features(all_tasks_list)
         task_features = self.get_task_features(all_tasks)
+        task_features[: len(candidate_tasks), -1] = 1
+
         g["tasks"].x = torch.from_numpy(task_features)
 
         dep_edges, dep_features = self.get_task_task_edges(all_tasks, all_tasks)
@@ -806,6 +811,8 @@ class SimulatorHandler:
             else:
                 raise ValueError("Invalid mapper type")
 
+        self.cmapper_type = cmapper_type
+
         if self.comm_noise is None:
             self.comm_noise = CommunicationNoise(self.device_handle)
 
@@ -819,6 +826,18 @@ class SimulatorHandler:
                 self.task_noise.noise,
                 self.comm_noise.noise,
             )
+
+    def get_new_c_mapper(self):
+        if self.cmapper_type == CMapperType.STATIC:
+            return StaticCMapper()
+        elif self.cmapper_type == CMapperType.ROUND_ROBIN:
+            return RoundRobinPythonMapper(len(self.devices.devices))
+        elif self.cmapper_type == CMapperType.EFT_RESERVED:
+            return EFTCMapper(self.task_handle, self.device_handle)
+        elif self.cmapper_type == CMapperType.EFT_DEQUEUE:
+            return DequeueCMapper(self.task_handle, self.device_handle)
+        else:
+            raise ValueError("Invalid mapper type")
 
     def set_noise(self, noise_type: TNoiseType, seed: int = 0):
         if noise_type == TNoiseType.NONE:
@@ -875,7 +894,7 @@ class SimulatorHandler:
             simulator.noise,
             simulator.initialized,
             simulator.pymapper,
-            simulator.cmapper,
+            self.get_new_c_mapper(),
         )
 
         return sim_wrapper
