@@ -71,9 +71,9 @@ class Args:
     """the discount factor gamma"""
     gae_lambda: float = 0.94
     """the lambda for the general advantage estimation"""
-    num_minibatches: int = 1
+    num_minibatches: int = 4
     """the number of mini-batches"""
-    update_epochs: int = 1
+    update_epochs: int = 4
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
@@ -129,7 +129,7 @@ def initialize_simulator():
 
     mem = 1600 * 1024 * 1024 * 1024
     bandwidth = 1 * 1024 * 1024
-    latency = 0
+    latency = 1
     n_devices = args.devices
     devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
     # start_logger()
@@ -262,7 +262,7 @@ graphs_per_epoch = 20
 H, sim = initialize_simulator()
 candidates = sim.get_mapping_candidates()
 local_graph = sim.observer.local_graph_features(candidates)
-h = TaskAssignmentNet(args.devices, 3, 64, local_graph)
+h = TaskAssignmentNet(args.devices, 2, 64, local_graph)
 optimizer = optim.Adam(h.parameters(), lr=lr)
 netmap = GreedyNetworkMapper(h)
 rnetmap = RandomNetworkMapper(h)
@@ -323,8 +323,10 @@ def collect_batch(episodes, sim, h, global_step=0):
             # )
 
             if done:
-                record["reward"] = 2 * (baseline_time - record["time"]) / baseline_time
-                print("Terminal Reward: ", record["reward"])
+                record["reward"] = (
+                    0.5 * (baseline_time - record["time"]) / baseline_time
+                )
+                # print("Terminal Reward: ", record["reward"])
                 writer.add_scalar(
                     "charts/episode_reward",
                     record["reward"],
@@ -414,8 +416,9 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
 
     for k in range(update_epoch):
         # print("Update epoch: ", k)
-        nbatches = len(state)
-        loader = DataLoader(state, batch_size=1, shuffle=True)
+        nbatches = args.num_minibatches
+        batch_size = n_obs // nbatches
+        loader = DataLoader(state, batch_size=batch_size, shuffle=True)
 
         for i, batch in enumerate(loader):
             # print("Mini-batch: ", i, "of", len(loader), "; size: ", len(batch))

@@ -497,10 +497,9 @@ class HeteroGAT(nn.Module):
             add_self_loops=False,
         )
 
-        # The output dimension is (hidden_channels * n_heads) * 2
         self.gnn_tasks_tasks = GATConv(
-            hidden_channels * self.n_heads * 2,
-            hidden_channels * 2,
+            self.in_channels_tasks,
+            hidden_channels,
             heads=self.n_heads,
             concat=True,
             residual=True,
@@ -510,14 +509,14 @@ class HeteroGAT(nn.Module):
         )
 
         self.linear = nn.Linear(
-            self.in_channels_tasks + hidden_channels * self.n_heads * 2,
-            hidden_channels * 2,
+            (hidden_channels * self.n_heads * 3),
+            self.in_channels_tasks,
         )
 
         # Layer normalization layers
         self.layer_norm1 = nn.LayerNorm(hidden_channels * self.n_heads)
         self.layer_norm2 = nn.LayerNorm(hidden_channels * self.n_heads)
-        self.layer_norm3 = nn.LayerNorm(hidden_channels * 2 * self.n_heads)
+        self.layer_norm3 = nn.LayerNorm(self.in_channels_tasks)
 
         # Activation function
         self.activation = nn.LeakyReLU(negative_slope=0.01)
@@ -542,19 +541,22 @@ class HeteroGAT(nn.Module):
         device_fused_tasks = self.layer_norm2(device_fused_tasks)
         device_fused_tasks = self.activation(device_fused_tasks)
 
-        # Concatenate the processed features
-        tasks = torch.cat([data_fused_tasks, device_fused_tasks], dim=1)
-        residual = tasks
-
-        x = self.gnn_tasks_tasks(
-            tasks,
+        task_fused_tasks = self.gnn_tasks_tasks(
+            data["tasks"].x,
             data["tasks", "depends_on", "tasks"].edge_index,
             data["tasks", "depends_on", "tasks"].edge_attr,
         )
-        x = x + residual
-        # x = self.linear(tasks)
+
+        # Concatenate the processed feature
+        tasks = torch.cat(
+            [task_fused_tasks, data_fused_tasks, device_fused_tasks], dim=1
+        )
+
+        x = self.linear(tasks)
         x = self.layer_norm3(x)
         x = self.activation(x)
+
+        x = x + data["tasks"].x
         # x = torch.dropout(x, p=0.1, train=self.training)
 
         return x
@@ -581,13 +583,25 @@ class TaskAssignmentNet(nn.Module):
     def __init__(self, ndevices, priority_levels, hidden_channels, data):
         super(TaskAssignmentNet, self).__init__()
 
+        self.in_channels_tasks = data["tasks"].x.shape[1]
+        self.in_channels_data = data["data"].x.shape[1]
+        self.in_channels_devices = data["devices"].x.shape[1]
+
+        self.task_data_edge_dim = data[("data", "used_by", "tasks")].edge_attr.shape[1]
+        self.task_device_edge_dim = data[
+            ("devices", "variant", "tasks")
+        ].edge_attr.shape[1]
+        self.task_task_edge_dim = data[
+            ("tasks", "depends_on", "tasks")
+        ].edge_attr.shape[1]
+
         self.hetero_gat = HeteroGAT(hidden_channels, data)
         self.ndevices = ndevices
         self.priority_levels = priority_levels
 
         # input dimension
-        critic_input_dim = hidden_channels * 4
-        actor_input_dim = hidden_channels * 4
+        critic_input_dim = self.in_channels_tasks
+        actor_input_dim = self.in_channels_tasks
 
         # Critic Head
         self.critic_head = ActorCriticHead(critic_input_dim, hidden_channels, 1)
