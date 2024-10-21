@@ -361,7 +361,7 @@ public:
 
   void get_task_features(taskid_t task_id, std::span<f_t> features) const {
     const auto &devices = this->state.get().get_device_manager().get_devices();
-    const std::size_t FEATURE_LENGTH = 7 + devices.size();
+    const std::size_t FEATURE_LENGTH = 8 + devices.size();
     assert(features.size() == FEATURE_LENGTH);
 
     const auto &s = this->state.get();
@@ -390,7 +390,8 @@ public:
         features[6 + i] = 0;
       }
     }
-    features[6 + devices.size()] =
+    features[6 + devices.size()] = 0; // static_cast<f_t>(task.get_depth());
+    features[7 + devices.size()] =
         0; // is mapping candidate (set in Python layer)
 
     // // Test print
@@ -402,12 +403,12 @@ public:
   }
 
   void get_device_features(devid_t device_id, std::span<f_t> features) const {
-    constexpr std::size_t FEATURE_LENGTH = 8;
-    assert(features.size() == FEATURE_LENGTH);
-
     const auto &s = this->state.get();
     const auto &device_manager = s.get_device_manager();
     const auto &devices = s.get_device_manager().get_devices();
+
+    const std::size_t FEATURE_LENGTH = 8 + devices.size();
+    assert(features.size() == FEATURE_LENGTH);
 
     const auto &device = devices.get_device(device_id);
 
@@ -466,6 +467,11 @@ public:
     features[5] = guarded_divide(mapped_time, total_mapped_time);
     features[6] = guarded_divide(reserved_time, total_reserved_time);
     features[7] = guarded_divide(launched_time, total_launched_time);
+
+    // One-hot encode the device id
+    for (std::size_t i = 0; i < devices.size(); i++) {
+      features[8 + i] = static_cast<f_t>(device_id == i);
+    }
   }
 
   void get_data_features(dataid_t data_id, std::span<f_t> features) const {
@@ -844,7 +850,7 @@ public:
     TaskFeatures features;
 
     const auto &devices = state.get().get_device_manager().get_devices();
-    features.feature_dim = 7 + devices.size();
+    features.feature_dim = 8 + devices.size();
     features.feature_len = task_ids.size();
 
     features.features = static_cast<f_t *>(
@@ -865,7 +871,8 @@ public:
                                      std::size_t n) {
     std::span device_ids(device_ids_pointer, n);
     DeviceFeatures features;
-    features.feature_dim = 8;
+    const auto &devices = state.get().get_device_manager().get_devices();
+    features.feature_dim = 8 + devices.size();
     features.feature_len = device_ids.size();
 
     features.features = static_cast<f_t *>(

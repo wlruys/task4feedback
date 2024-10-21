@@ -497,9 +497,16 @@ void Scheduler::map_tasks_from_python(ActionList &action_list,
     push_mappable(nmt);
   }
 
-  // The next event is a reserving event
-  timecount_t reserver_time = state.global_time + TIME_TO_RESERVE;
-  event_manager.create_event(EventType::RESERVER, reserver_time, TaskIDList());
+  /*If we still should be mapping, continue making calls to the mapper */
+
+  if (queues.has_mappable() && conditions->should_map(state, queues)) {
+    timecount_t mapper_time = state.global_time;
+    event_manager.create_event(EventType::MAPPER, mapper_time, TaskIDList());
+  } else {
+    timecount_t reserver_time = state.global_time + TIME_TO_RESERVE;
+    event_manager.create_event(EventType::RESERVER, reserver_time,
+                               TaskIDList());
+  }
 }
 
 void Scheduler::map_tasks(Event &map_event, EventManager &event_manager,
