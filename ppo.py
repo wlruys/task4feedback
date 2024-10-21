@@ -14,7 +14,7 @@ from task4feedback.fastsim.interface import (
     start_logger,
     ExecutionState,
 )
-from task4feedback.fastsim.models import TaskAssignmentNet
+from task4feedback.fastsim.models import TaskAssignmentNet, VectorTaskAssignmentNet
 import torch
 import numpy as np
 import torch.nn as nn
@@ -37,6 +37,7 @@ def init_weights(m):
 
 @dataclass
 class Args:
+    hidden_dim = 64
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
     seed: int = 1
@@ -69,7 +70,7 @@ class Args:
     """Toggle learning rate annealing for policy and value networks"""
     gamma: float = 1
     """the discount factor gamma"""
-    gae_lambda: float = 0.94
+    gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
     num_minibatches: int = 4
     """the number of mini-batches"""
@@ -81,11 +82,11 @@ class Args:
     """the surrogate clipping coefficient"""
     clip_vloss: bool = True
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.01
+    ent_coef: float = 0.005
     """coefficient of the entropy"""
     vf_coef: float = 0.5
     """coefficient of the value function"""
-    max_grad_norm: float = 1.0
+    max_grad_norm: float = 0.5
     """the maximum norm for the gradient clipping"""
     target_kl: float = None
     """the target KL divergence threshold"""
@@ -95,12 +96,12 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 0
+    num_iterations: int = 10000
     """the number of iterations (computed in runtime)"""
 
     devices = 4
     vcus = 1
-    blocks = 2
+    blocks = 4
 
 
 args = Args()
@@ -128,7 +129,7 @@ def initialize_simulator():
     tasks, data = make_graph(config, data_config=data_config)
 
     mem = 1600 * 1024 * 1024 * 1024
-    bandwidth = 1 * 1024 * 1024
+    bandwidth = (20 * 1024 * 1024 * 1024) / 10**4
     latency = 1
     n_devices = args.devices
     devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
@@ -172,34 +173,23 @@ class GreedyNetworkMapper(PythonMapper):
 
     def map_tasks(self, candidates: np.ndarray[np.int32], simulator):
         data = simulator.observer.local_graph_features(candidates)
-
-        data["tasks"].x = (data["tasks"].x - data["tasks"].x.mean(dim=0)) / (
-            data["tasks"].x.std(dim=0) + 1e-8
-        )
-        data["data"].x = (data["data"].x - data["data"].x.mean(dim=0)) / (
-            data["data"].x.std(dim=0) + 1e-8
-        )
-        data["devices"].x = (data["devices"].x - data["devices"].x.mean(dim=0)) / (
-            data["devices"].x.std(dim=0) + 1e-8
-        )
-
         with torch.no_grad():
             p, d, v = self.model.forward(data)
 
-        # choose argmax of network output
-        # This is e-greedy policy
-        p_per_task = torch.argmax(p, dim=1)
-        dev_per_task = torch.argmax(d, dim=1)
-        action_list = []
-        for i in range(len(candidates)):
-            a = Action(
-                candidates[i],
-                i,
-                dev_per_task[i].item(),
-                p_per_task[i].item(),
-                p_per_task[i].item(),
-            )
-            action_list.append(a)
+            # choose argmax of network output
+            # This is e-greedy policy
+            p_per_task = torch.argmax(p, dim=1)
+            dev_per_task = torch.argmax(d, dim=1)
+            action_list = []
+            for i in range(len(candidates)):
+                a = Action(
+                    candidates[i],
+                    i,
+                    dev_per_task[i].item(),
+                    p_per_task[i].item(),
+                    p_per_task[i].item(),
+                )
+                action_list.append(a)
         return action_list
 
 
@@ -212,40 +202,43 @@ class RandomNetworkMapper(PythonMapper):
         data = simulator.observer.local_graph_features(candidates)
 
         with torch.no_grad():
-            data["tasks"].x = (data["tasks"].x - data["tasks"].x.mean(dim=0)) / (
-                data["tasks"].x.std(dim=0) + 1e-8
-            )
-            data["data"].x = (data["data"].x - data["data"].x.mean(dim=0)) / (
-                data["data"].x.std(dim=0) + 1e-8
-            )
-            data["devices"].x = (data["devices"].x - data["devices"].x.mean(dim=0)) / (
-                data["devices"].x.std(dim=0) + 1e-8
-            )
+            self.model.eval()
             p, d, v = self.model.forward(data)
+            self.model.train()
 
-        # sample from network output
-        p_per_task, plogprob, _ = logits_to_actions(p)
-        dev_per_task, dlogprob, _ = logits_to_actions(d)
+            # sample from network output
+            p_per_task, plogprob, _ = logits_to_actions(p)
+            dev_per_task, dlogprob, _ = logits_to_actions(d)
 
-        if output is not None:
-            output["candidates"] = candidates
-            output["state"] = data
-            output["plogprob"] = plogprob
-            output["dlogprob"] = dlogprob
-            output["value"] = v
-            output["pactions"] = p_per_task
-            output["dactions"] = dev_per_task
+            if output is not None:
+                output["candidates"] = candidates
+                output["state"] = data
+                output["plogprob"] = plogprob
+                output["dlogprob"] = dlogprob
+                output["value"] = v
+                output["pactions"] = p_per_task
+                output["dactions"] = dev_per_task
 
-        action_list = []
-        for i in range(len(candidates)):
-            a = Action(
-                candidates[i],
-                i,
-                dev_per_task[i].item(),
-                p_per_task[i].item(),
-                p_per_task[i].item(),
-            )
-            action_list.append(a)
+            action_list = []
+            for i in range(len(candidates)):
+
+                if p_per_task.dim() == 0:
+                    a = Action(
+                        candidates[i],
+                        i,
+                        dev_per_task,
+                        p_per_task,
+                        p_per_task,
+                    )
+                else:
+                    a = Action(
+                        candidates[i],
+                        i,
+                        dev_per_task[i].item(),
+                        p_per_task[i].item(),
+                        p_per_task[i].item(),
+                    )
+                action_list.append(a)
         return action_list
 
     def evaluate(self, obs, daction, paction):
@@ -255,14 +248,14 @@ class RandomNetworkMapper(PythonMapper):
         return (p, plogprob, pentropy), (d, dlogprob, dentropy), v
 
 
-lr = 2.5e-4
-epochs = 100
-graphs_per_epoch = 20
+lr = args.learning_rate
+epochs = args.num_iterations
+graphs_per_epoch = 50
 
 H, sim = initialize_simulator()
 candidates = sim.get_mapping_candidates()
 local_graph = sim.observer.local_graph_features(candidates)
-h = TaskAssignmentNet(args.devices, 2, 64, local_graph)
+h = TaskAssignmentNet(args.devices, 4, args.hidden_dim, local_graph)
 optimizer = optim.Adam(h.parameters(), lr=lr)
 netmap = GreedyNetworkMapper(h)
 rnetmap = RandomNetworkMapper(h)
@@ -275,7 +268,7 @@ h.apply(init_weights)
 #     b = H.copy(backup)
 #     b.run()
 #     print(b.get_current_time())
-run_name = f"8"
+run_name = f"17_no_random"
 writer = SummaryWriter(f"runs/{run_name}")
 writer.add_text(
     "hyperparameters",
@@ -287,6 +280,7 @@ writer.add_text(
 def collect_batch(episodes, sim, h, global_step=0):
     batch_info = []
     for e in range(0, episodes):
+        # sim.randomize_priorities()
         env = H.copy(sim)
         done = False
 
@@ -323,15 +317,25 @@ def collect_batch(episodes, sim, h, global_step=0):
             # )
 
             if done:
-                record["reward"] = (
-                    0.5 * (baseline_time - record["time"]) / baseline_time
+                percent_improvement = (
+                    1 + (baseline_time - record["time"]) / baseline_time
                 )
+                percent_improvement = percent_improvement
+                record["reward"] = 10 if record["time"] < 15505 else 0
+
                 # print("Terminal Reward: ", record["reward"])
                 writer.add_scalar(
                     "charts/episode_reward",
                     record["reward"],
                     global_step * episodes + e,
                 )
+
+                writer.add_scalar(
+                    "charts/time",
+                    record["time"],
+                    global_step * episodes + e,
+                )
+
                 break
             else:
                 record["reward"] = 0
@@ -355,27 +359,34 @@ def collect_batch(episodes, sim, h, global_step=0):
 
         #         episode_info[t]["advantages"] = episode_info[t]["returns"] + res
 
-        for t in reversed(range(len(episode_info))):
-            lastgaelam = 0
-            if t == len(episode_info) - 1:
-                nextnonterminal = 0
-                nextvalues = 0
-            else:
-                nextnonterminal = 1.0 - episode_info[t + 1]["done"]
-                nextvalues = episode_info[t + 1]["value"]
-            delta = (
-                episode_info[t]["reward"]
-                + args.gamma * nextvalues * nextnonterminal
-                - episode_info[t]["value"]
-            )
-            episode_info[t]["advantage"] = lastgaelam = (
-                delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-            )
+        with torch.no_grad():
+            for t in reversed(range(len(episode_info))):
+                lastgaelam = 0
+                if t == len(episode_info) - 1:
+                    nextnonterminal = 0
+                    nextvalues = 0
+                else:
+                    nextnonterminal = 1.0 - episode_info[t + 1]["done"]
+                    nextvalues = episode_info[t + 1]["value"]
+                delta = (
+                    episode_info[t]["reward"]
+                    + args.gamma * nextvalues * nextnonterminal
+                    - episode_info[t]["value"]
+                )
+                episode_info[t]["advantage"] = lastgaelam = (
+                    delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+                )
 
-        for t in range(len(episode_info)):
-            episode_info[t]["returns"] = (
-                episode_info[t]["advantage"] + episode_info[t]["value"]
-            )
+            for t in range(len(episode_info)):
+                episode_info[t]["returns"] = (
+                    episode_info[t]["advantage"] + episode_info[t]["value"]
+                )
+
+            # for t in range(len(episode_info)):
+            #     episode_info[t]["returns"] = episode_info[-1]["reward"]
+            #     episode_info[t]["advantage"] = (
+            #         episode_info[-1]["reward"] - episode_info[t]["value"]
+            #     )
         # print("Advantages: ", [e["advantages"] for e in episode_info])
         # print("Returns: ", [e["returns"] for e in episode_info])
         # print("Returns: ", [e["returns"] for e in episode_info])
@@ -393,6 +404,9 @@ def collect_batch(episodes, sim, h, global_step=0):
 
         batch_info.extend(episode_info)
     return batch_info
+
+
+LI = 0
 
 
 def batch_update(batch_info, update_epoch, h, optimizer, global_step):
@@ -414,6 +428,8 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
         state[i]["advantage"] = batch_info[i]["advantage"]
         state[i]["returns"] = batch_info[i]["returns"]
 
+    global LI
+
     for k in range(update_epoch):
         # print("Update epoch: ", k)
         nbatches = args.num_minibatches
@@ -431,11 +447,11 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             # print("Priority Actions: ", pa)
             # print("Device Actions: ", da)
 
-            plogratio = plogprob - batch["plogprob"]
-            pratio = torch.exp(plogratio)
+            plogratio = plogprob - batch["plogprob"].detach()
+            pratio = plogratio.exp()
 
-            dlogratio = dlogprob - batch["dlogprob"]
-            dratio = torch.exp(dlogratio)
+            dlogratio = dlogprob - batch["dlogprob"].detach()
+            dratio = dlogratio.exp()
 
             with torch.no_grad():
                 pold_approx_kl = (-plogratio).mean()
@@ -452,23 +468,23 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
 
             mb_advantages = batch["advantage"]
             # Mean center and normalize the advantages
-            if args.norm_adv:
-                mb_advantages = (mb_advantages - mb_advantages.mean()) / (
-                    mb_advantages.std(unbiased=False) + 1e-8
-                )
+            # if args.norm_adv:
+            #     mb_advantages = (mb_advantages - mb_advantages.mean()) / (
+            #         mb_advantages.std(unbiased=False) + 1e-8
+            #     )
 
             # Policy loss
-            ppg_loss1 = -mb_advantages * pratio
-            ppg_loss2 = -mb_advantages * torch.clamp(
+            ppg_loss1 = mb_advantages * pratio
+            ppg_loss2 = mb_advantages * torch.clamp(
                 pratio, 1 - args.clip_coef, 1 + args.clip_coef
             )
-            ppg_loss = torch.max(ppg_loss1, ppg_loss2).mean()
+            ppg_loss = torch.min(ppg_loss1, ppg_loss2).mean()
 
-            dpg_loss1 = -mb_advantages * dratio
-            dpg_loss2 = -mb_advantages * torch.clamp(
+            dpg_loss1 = mb_advantages * dratio
+            dpg_loss2 = mb_advantages * torch.clamp(
                 dratio, 1 - args.clip_coef, 1 + args.clip_coef
             )
-            dpg_loss = torch.max(dpg_loss1, dpg_loss2).mean()
+            dpg_loss = torch.min(dpg_loss1, dpg_loss2).mean()
 
             # Value loss
             newvalue = v.view(-1)
@@ -485,7 +501,7 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             entropy_loss = pentropy.mean() + dentropy.mean()
 
             loss = (
-                0.5 * (dpg_loss + ppg_loss)
+                -1 * (ppg_loss + dpg_loss)
                 - args.ent_coef * entropy_loss
                 + v_loss * args.vf_coef
             )
@@ -495,49 +511,57 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             nn.utils.clip_grad_norm_(h.parameters(), args.max_grad_norm)
             optimizer.step()
 
-        writer.add_scalar(
-            "charts/learning_rate",
-            optimizer.param_groups[0]["lr"],
-            global_step * update_epoch + k,
-        )
-        writer.add_scalar(
-            "losses/value_loss", v_loss.item(), global_step * update_epoch + k
-        )
-        writer.add_scalar(
-            "losses/ppolicy_loss", ppg_loss.item(), global_step * update_epoch + k
-        )
-        writer.add_scalar(
-            "losses/entropy", entropy_loss.item(), global_step * update_epoch + k
-        )
-        writer.add_scalar(
-            "losses/pold_approx_kl",
-            pold_approx_kl.item(),
-            global_step * update_epoch + k,
-        )
-        writer.add_scalar(
-            "losses/papprox_kl", papprox_kl.item(), global_step * update_epoch + k
-        )
-        writer.add_scalar(
-            "losses/pclipfrac", np.mean(pclipfracs), global_step * update_epoch + k
-        )
-        writer.add_scalar(
-            "losses/dpolicy_loss", dpg_loss.item(), global_step * update_epoch + k
-        )
-        writer.add_scalar(
-            "losses/dold_approx_kl",
-            dold_approx_kl.item(),
-            global_step * update_epoch + k,
-        )
-        writer.add_scalar(
-            "losses/dapprox_kl", dapprox_kl.item(), global_step * update_epoch + k
-        )
-        writer.add_scalar(
-            "losses/dclipfrac", np.mean(dclipfracs), global_step * update_epoch + k
-        )
+            writer.add_scalar(
+                "charts/learning_rate",
+                optimizer.param_groups[0]["lr"],
+                global_step * update_epoch + k,
+            )
+            writer.add_scalar(
+                "losses/value_loss", v_loss.item(), global_step * update_epoch + k
+            )
+            writer.add_scalar(
+                "losses/ppolicy_loss", ppg_loss.item(), global_step * update_epoch + k
+            )
+            writer.add_scalar(
+                "losses/entropy", entropy_loss.item(), global_step * update_epoch + k
+            )
+            writer.add_scalar(
+                "losses/pentropy",
+                pentropy.mean().item(),
+                global_step * update_epoch + k,
+            )
+            writer.add_scalar(
+                "losses/dentropy",
+                dentropy.mean().item(),
+                global_step * update_epoch + k,
+            )
+            writer.add_scalar(
+                "losses/pold_approx_kl",
+                pold_approx_kl.item(),
+                LI,
+            )
+            writer.add_scalar("losses/pratio", pratio.mean().item(), LI)
+            writer.add_scalar("losses/dratio", dratio.mean().item(), LI)
+            writer.add_scalar("losses/papprox_kl", papprox_kl.item(), LI)
+            writer.add_scalar("losses/pclipfrac", np.mean(pclipfracs), LI)
+            writer.add_scalar("losses/dpolicy_loss", dpg_loss.item(), LI)
+            writer.add_scalar(
+                "losses/dold_approx_kl",
+                dold_approx_kl.item(),
+                LI,
+            )
+            writer.add_scalar("losses/dapprox_kl", dapprox_kl.item(), LI)
+            writer.add_scalar("losses/dclipfrac", np.mean(dclipfracs), LI)
+            LI = LI + 1
 
 
-for epoch in range(epochs):
+for epoch in range(args.num_iterations):
     print("Epoch: ", epoch)
+
+    if args.anneal_lr:
+        frac = 1.0 - (epoch - 1.0) / args.num_iterations
+        lrnow = frac * args.learning_rate
+        optimizer.param_groups[0]["lr"] = lrnow
     batch_info = collect_batch(graphs_per_epoch, sim, h, global_step=epoch)
     batch_update(batch_info, args.update_epochs, h, optimizer, global_step=epoch)
 
@@ -568,26 +592,25 @@ for epoch in range(epochs):
         writer.add_scalar(f"parameters_norm/{name}", param.data.norm(2).item(), epoch)
         writer.add_scalar(f"parameters_std/{name}", param.data.std().item(), 0)
 
+    for i, param_group in enumerate(optimizer.param_groups):
+        for j, param in enumerate(param_group["params"]):
+            if param.grad is not None:
+                state = optimizer.state[param]
+                if "exp_avg" in state:
+                    writer.add_scalar(
+                        f"optimizer/group_{i}/param_{j}_exp_avg",
+                        state["exp_avg"].mean().item(),
+                        epoch,
+                    )
+                if "exp_avg_sq" in state:
+                    writer.add_scalar(
+                        f"optimizer/group_{i}/param_{j}_exp_avg_sq",
+                        state["exp_avg_sq"].mean().item(),
+                        epoch,
+                    )
 
-for i, param_group in enumerate(optimizer.param_groups):
-    for j, param in enumerate(param_group["params"]):
-        if param.grad is not None:
-            state = optimizer.state[param]
-            if "exp_avg" in state:
-                writer.add_scalar(
-                    f"optimizer/group_{i}/param_{j}_exp_avg",
-                    state["exp_avg"].mean().item(),
-                    epoch,
-                )
-            if "exp_avg_sq" in state:
-                writer.add_scalar(
-                    f"optimizer/group_{i}/param_{j}_exp_avg_sq",
-                    state["exp_avg_sq"].mean().item(),
-                    epoch,
-                )
-
-    # Save the model every 10 epochs
-    if (epoch + 1) % 10 == 0:
+    # Save the model
+    if (epoch + 1) % 500 == 0:
         torch.save(
             {
                 "epoch": epoch,
@@ -596,6 +619,8 @@ for i, param_group in enumerate(optimizer.param_groups):
             },
             f"runs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
         )
+
+    writer.flush()
 
 writer.close()
 
