@@ -2,6 +2,7 @@ from typing import Optional, Self
 from task4feedback.types import *
 from task4feedback.graphs import *
 import argparse
+import random
 from task4feedback.fastsim.interface import (
     SimulatorHandler,
     uniform_connected_devices,
@@ -70,11 +71,11 @@ class Args:
     """Toggle learning rate annealing for policy and value networks"""
     gamma: float = 1
     """the discount factor gamma"""
-    gae_lambda: float = 1
+    gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
-    num_minibatches: int = 4
+    num_minibatches: int = 1
     """the number of mini-batches"""
-    update_epochs: int = 4
+    update_epochs: int = 1
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
@@ -91,6 +92,9 @@ class Args:
     target_kl: float = None
     """the target KL divergence threshold"""
 
+    replay_batches: int = 2
+    """the number of batches to replay"""
+
     # to be filled in runtime
     batch_size: int = 0
     """the batch size (computed in runtime)"""
@@ -100,7 +104,6 @@ class Args:
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 50
-
     devices = 4
     vcus = 1
     blocks = 4
@@ -204,9 +207,7 @@ class RandomNetworkMapper(PythonMapper):
         data = simulator.observer.local_graph_features(candidates)
 
         with torch.no_grad():
-            self.model.eval()
             p, d, v = self.model.forward(data)
-            self.model.train()
 
             # sample from network output
             p_per_task, plogprob, _ = logits_to_actions(p)
@@ -270,7 +271,7 @@ h.apply(init_weights)
 #     b = H.copy(backup)
 #     b.run()
 #     print(b.get_current_time())
-run_name = f"ppo_4by4_smallreg_randomprior"
+run_name = f"a2c_4by4_ppo_compare"
 writer = SummaryWriter(f"runs/{run_name}")
 writer.add_text(
     "hyperparameters",
@@ -282,7 +283,7 @@ writer.add_text(
 def collect_batch(episodes, sim, h, global_step=0):
     batch_info = []
     for e in range(0, episodes):
-        sim.randomize_priorities()
+        # sim.randomize_priorities()
         env = H.copy(sim)
         done = False
 
@@ -362,28 +363,6 @@ def collect_batch(episodes, sim, h, global_step=0):
         #         episode_info[t]["advantages"] = episode_info[t]["returns"] + res
 
         with torch.no_grad():
-            # for t in reversed(range(len(episode_info))):
-            #     lastgaelam = 0
-            #     if t == len(episode_info) - 1:
-            #         nextnonterminal = 0
-            #         nextvalues = 0
-            #     else:
-            #         nextnonterminal = 1.0 - episode_info[t + 1]["done"]
-            #         nextvalues = episode_info[t + 1]["value"]
-            #     delta = (
-            #         episode_info[t]["reward"]
-            #         + args.gamma * nextvalues * nextnonterminal
-            #         - episode_info[t]["value"]
-            #     )
-            #     episode_info[t]["advantage"] = lastgaelam = (
-            #         delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-            #     )
-
-            # for t in range(len(episode_info)):
-            #     episode_info[t]["returns"] = (
-            #         episode_info[t]["advantage"] + episode_info[t]["value"]
-            #     )
-
             for t in range(len(episode_info)):
                 episode_info[t]["returns"] = episode_info[-1]["reward"]
                 episode_info[t]["advantage"] = (
@@ -443,70 +422,24 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             out = h(batch, batch["tasks"].batch)
             p, d, v = out
 
-            pa, plogprob, pentropy = logits_to_actions(
-                p, batch["pactions"].detach().view(-1)
-            )
-            da, dlogprob, dentropy = logits_to_actions(
-                d, batch["dactions"].detach().view(-1)
-            )
+            pa, plogprob, pentropy = logits_to_actions(p, batch["pactions"])
+            da, dlogprob, dentropy = logits_to_actions(d, batch["dactions"])
 
-            # print("Priority Actions: ", pa)
-            # print("Device Actions: ", da)
+            mb_advantages = batch["advantage"]
+            mb_advantages = mb_advantages.detach().view(-1)
 
-            plogratio = plogprob.view(-1) - batch["plogprob"].detach().view(-1)
-            pratio = plogratio.exp()
+            ppg_loss = -plogprob * mb_advantages
+            ppg_loss = ppg_loss.mean()
 
-            dlogratio = dlogprob.view(-1) - batch["dlogprob"].detach().view(-1)
-            dratio = dlogratio.exp()
-
-            with torch.no_grad():
-                pold_approx_kl = (-plogratio).mean()
-                papprox_kl = ((pratio - 1) - plogratio).mean()
-                pclipfracs += [
-                    ((pratio - 1.0).abs() > args.clip_coef).float().mean().item()
-                ]
-
-                dold_approx_kl = (-dlogratio).mean()
-                dapprox_kl = ((dratio - 1) - dlogratio).mean()
-                dclipfracs += [
-                    ((dratio - 1.0).abs() > args.clip_coef).float().mean().item()
-                ]
-
-            mb_advantages = batch["advantage"].detach().view(-1)
-            # Mean center and normalize the advantages
-            # if args.norm_adv:
-            #     mb_advantages = (mb_advantages - mb_advantages.mean()) / (
-            #         mb_advantages.std(unbiased=False) + 1e-8
-            #     )
-
-            # Policy loss
-            ppg_loss1 = mb_advantages * pratio.view(-1)
-            ppg_loss2 = mb_advantages * torch.clamp(
-                pratio.view(-1), 1 - args.clip_coef, 1 + args.clip_coef
-            )
-            ppg_loss = torch.min(ppg_loss1, ppg_loss2).mean()
-
-            dpg_loss1 = mb_advantages * dratio.view(-1)
-            dpg_loss2 = mb_advantages * torch.clamp(
-                dratio.view(-1), 1 - args.clip_coef, 1 + args.clip_coef
-            )
-            dpg_loss = torch.min(dpg_loss1, dpg_loss2).mean()
+            dpg_loss = -dlogprob * mb_advantages
+            dpg_loss = dpg_loss.mean()
 
             # Value loss
-            newvalue = v.view(-1)
-            v_loss_unclipped = (newvalue - batch["returns"].detach().view(-1)) ** 2
-            v_clipped = batch["value"].detach().view(-1) + torch.clamp(
-                newvalue - batch["value"].detach().view(-1),
-                -args.clip_coef,
-                args.clip_coef,
-            )
-            v_loss_clipped = (v_clipped - batch["returns"].detach().view(-1)) ** 2
-            v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-            v_loss = 0.5 * v_loss_max.mean()
+            v_loss = nn.functional.mse_loss(v.view(-1), batch["returns"])
 
             entropy_loss = pentropy.mean() + dentropy.mean()
             loss = (
-                -1 * (ppg_loss + dpg_loss)
+                (ppg_loss + dpg_loss)
                 - args.ent_coef * entropy_loss
                 + v_loss * args.vf_coef
             )
@@ -540,35 +473,93 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
                 dentropy.mean().item(),
                 global_step * update_epoch + k,
             )
-            writer.add_scalar(
-                "losses/pold_approx_kl",
-                pold_approx_kl.item(),
-                LI,
-            )
-            writer.add_scalar("losses/pratio", pratio.mean().item(), LI)
-            writer.add_scalar("losses/dratio", dratio.mean().item(), LI)
-            writer.add_scalar("losses/papprox_kl", papprox_kl.item(), LI)
-            writer.add_scalar("losses/pclipfrac", np.mean(pclipfracs), LI)
             writer.add_scalar("losses/dpolicy_loss", dpg_loss.item(), LI)
-            writer.add_scalar(
-                "losses/dold_approx_kl",
-                dold_approx_kl.item(),
-                LI,
-            )
-            writer.add_scalar("losses/dapprox_kl", dapprox_kl.item(), LI)
-            writer.add_scalar("losses/dclipfrac", np.mean(dclipfracs), LI)
             LI = LI + 1
+
+
+replay_buffer = []
+
+
+def replay(batch_info, h, optimizer, global_step):
+    M = 20000
+    B = 1000
+
+    global replay_buffer
+    random.shuffle(replay_buffer)
+    replay_buffer.extend(batch_info)
+
+    if len(replay_buffer) > M:
+        replay_buffer = replay_buffer[-M:]
+
+    # Sample from replay buffer
+    print("Replay buffer size: ", len(replay_buffer), B)
+
+    for k in range(args.replay_batches):
+        batch = random.sample(replay_buffer, min(B, len(replay_buffer) - 1))
+
+        state = []
+        for i in range(len(batch)):
+            state.append(batch[i]["state"])
+            state[i]["plogprob"] = batch[i]["plogprob"]
+            state[i]["dlogprob"] = batch[i]["dlogprob"]
+            state[i]["value"] = batch[i]["value"]
+            state[i]["pactions"] = batch[i]["pactions"]
+            state[i]["dactions"] = batch[i]["dactions"]
+            state[i]["advantage"] = batch[i]["advantage"]
+            state[i]["returns"] = batch[i]["returns"]
+
+        loader = DataLoader(state, batch_size=len(state))
+
+        for i, batchelem in enumerate(loader):
+            out = h(batchelem, batchelem["tasks"].batch)
+            p, d, v = out
+
+            pa, plogprob, pentropy = logits_to_actions(
+                p, batchelem["pactions"].detach().view(-1)
+            )
+            da, dlogprob, dentropy = logits_to_actions(
+                d, batchelem["dactions"].detach().view(-1)
+            )
+
+            advantages = batchelem["returns"].detach().view(-1) - v.detach().view(-1)
+            advantages = advantages.detach()
+
+            with torch.no_grad():
+                num_valid = (advantages > 0).sum().item()
+                mask = (advantages > 0).float()
+            ppg_loss = -plogprob * advantages * mask
+            ppg_loss = ppg_loss.sum() / max(num_valid, 1)
+
+            dpg_loss = -dlogprob * advantages * mask
+            dpg_loss = dpg_loss.sum() / max(num_valid, 1)
+
+            # Value loss
+            v_loss = ((batchelem["returns"].detach().view(-1) - v.view(-1)) * mask).pow(
+                2
+            ).sum() / max(num_valid, 1)
+
+            entropy_loss = (pentropy * mask).sum() + (dentropy * mask).sum()
+            entropy_loss = entropy_loss / max(num_valid, 1)
+
+            loss = (
+                (ppg_loss + dpg_loss)
+                - args.ent_coef * entropy_loss
+                + v_loss * args.vf_coef
+            )
+
+            print("Num valid: ", num_valid)
+
+            optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(h.parameters(), args.max_grad_norm)
+            optimizer.step()
 
 
 for epoch in range(args.num_iterations):
     print("Epoch: ", epoch)
-
-    # if args.anneal_lr:
-    #     frac = 1.0 - (epoch - 1.0) / args.num_iterations
-    #     lrnow = frac * args.learning_rate
-    #     optimizer.param_groups[0]["lr"] = lrnow
     batch_info = collect_batch(graphs_per_epoch, sim, h, global_step=epoch)
     batch_update(batch_info, args.update_epochs, h, optimizer, global_step=epoch)
+    replay(batch_info, h, optimizer, global_step=epoch)
 
     # --- Gradient Monitoring ---
     total_norm = 0.0
@@ -615,7 +606,7 @@ for epoch in range(args.num_iterations):
                     )
 
     # Save the model
-    if (epoch + 1) % 100 == 0:
+    if (epoch + 1) % 500 == 0:
         torch.save(
             {
                 "epoch": epoch,

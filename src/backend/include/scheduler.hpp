@@ -504,7 +504,6 @@ class Scheduler {
 protected:
   SchedulerState state;
   SchedulerQueues queues;
-  std::shared_ptr<TransitionConditions> conditions;
 
   std::size_t scheduler_event_count = 1;
   std::size_t success_count = 0;
@@ -522,6 +521,7 @@ protected:
 public:
   bool initialized = false;
   BreakpointManager breakpoints;
+  std::shared_ptr<TransitionConditions> conditions;
 
   Scheduler(SchedulerInput &input) : state(input), queues(input.devices) {
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
@@ -546,8 +546,7 @@ public:
     state.initialize(create_data_tasks);
     auto initial_tasks = initially_mappable_tasks();
     queues.push_mappable(initial_tasks, state.get_mapping_priorities());
-    this->conditions =
-        std::make_shared<RangeTransitionConditions>(128, 128, 64);
+    this->conditions = std::make_shared<RangeTransitionConditions>(5, 5, 8);
     initialized = true;
   }
 
@@ -604,6 +603,7 @@ public:
   [[nodiscard]] const SchedulerState &get_state() const { return state; }
   [[nodiscard]] SchedulerState &get_state() { return state; }
   [[nodiscard]] const SchedulerQueues &get_queues() const { return queues; }
+  [[nodiscard]] SchedulerQueues &get_queues() { return queues; }
 
   void push_mappable(taskid_t id) {
     priority_t p = state.task_manager.noise.get().get_priority(id);

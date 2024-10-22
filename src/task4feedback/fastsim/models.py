@@ -481,7 +481,7 @@ class HeteroGAT(nn.Module):
             heads=self.n_heads,
             concat=False,
             residual=True,
-            dropout=0.1,
+            dropout=0,
             edge_dim=self.task_data_edge_dim,
             add_self_loops=False,
         )
@@ -492,7 +492,7 @@ class HeteroGAT(nn.Module):
             heads=self.n_heads,
             concat=False,
             residual=True,
-            dropout=0.1,
+            dropout=0,
             edge_dim=self.task_device_edge_dim,
             add_self_loops=False,
         )
@@ -503,7 +503,7 @@ class HeteroGAT(nn.Module):
             heads=self.n_heads,
             concat=False,
             residual=True,
-            dropout=0.1,
+            dropout=0,
             edge_dim=self.task_task_edge_dim,
             add_self_loops=True,
         )
@@ -514,15 +514,15 @@ class HeteroGAT(nn.Module):
         )
 
         # Layer normalization layers
-        # self.layer_norm1 = nn.LayerNorm(hidden_channels)
-        self.batch_norm1 = nn.BatchNorm1d(hidden_channels)
+        self.layer_norm1 = nn.LayerNorm(hidden_channels)
+        # self.batch_norm1 = nn.BatchNorm1d(hidden_channels)
 
-        # self.layer_norm2 = nn.LayerNorm(hidden_channels)
-        self.batch_norm2 = nn.BatchNorm1d(hidden_channels)
+        self.layer_norm2 = nn.LayerNorm(hidden_channels)
+        # self.batch_norm2 = nn.BatchNorm1d(hidden_channels)
 
         # self.layer_norm3 = nn.LayerNorm(self.in_channels_tasks * self.n_heads)
-        # self.layer_norm4 = nn.LayerNorm(hidden_channels)
-        self.batch_norm4 = nn.BatchNorm1d(hidden_channels)
+        self.layer_norm4 = nn.LayerNorm(hidden_channels)
+        # self.batch_norm4 = nn.BatchNorm1d(hidden_channels)
 
         # Activation function
         self.activation = nn.LeakyReLU(negative_slope=0.01)
@@ -535,7 +535,7 @@ class HeteroGAT(nn.Module):
             data["data", "used_by", "tasks"].edge_index,
             data["data", "used_by", "tasks"].edge_attr,
         )
-        data_fused_tasks = self.batch_norm1(data_fused_tasks)
+        data_fused_tasks = self.layer_norm1(data_fused_tasks)
         data_fused_tasks = self.activation(data_fused_tasks)
 
         # Process devices to tasks
@@ -544,7 +544,7 @@ class HeteroGAT(nn.Module):
             data["devices", "variant", "tasks"].edge_index,
             data["devices", "variant", "tasks"].edge_attr,
         )
-        device_fused_tasks = self.batch_norm2(device_fused_tasks)
+        device_fused_tasks = self.layer_norm2(device_fused_tasks)
         device_fused_tasks = self.activation(device_fused_tasks)
 
         task_fused_tasks = self.gnn_tasks_tasks(
@@ -552,7 +552,7 @@ class HeteroGAT(nn.Module):
             data["tasks", "depends_on", "tasks"].edge_index,
             data["tasks", "depends_on", "tasks"].edge_attr,
         )
-        task_fused_tasks = self.batch_norm4(task_fused_tasks)
+        task_fused_tasks = self.layer_norm4(task_fused_tasks)
         task_fused_tasks = self.activation(task_fused_tasks)
 
         # Concatenate the processed feature
@@ -623,7 +623,7 @@ class ActorCriticHead(nn.Module):
         super(ActorCriticHead, self).__init__()
         self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
         self.layer_norm1 = nn.LayerNorm(hidden_dim)
-        self.batch_norm1 = nn.BatchNorm1d(hidden_dim)
+        # self.batch_norm1 = nn.BatchNorm1d(hidden_dim)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
         self.fc2 = layer_init(nn.Linear(hidden_dim, output_dim))
 
@@ -631,7 +631,7 @@ class ActorCriticHead(nn.Module):
         x = self.fc1(x)
         x = self.layer_norm1(x)
         x = self.activation(x)
-        x = torch.dropout(x, p=0.1, train=self.training)
+        # x = torch.dropout(x, p=0.1, train=self.training)
         x = self.fc2(x)
         return x
 
@@ -672,7 +672,7 @@ class VectorTaskAssignmentNet(nn.Module):
         v = self.critic_head(x)
         v = global_mean_pool(v, task_batch)
 
-        z = x[: len(data["candidate_list"])]
+        z = data[: len(data["candidate_list"])]
 
         # Actor Head for Priority
         p_logits = self.actor_p_head(z)
@@ -699,7 +699,8 @@ class TaskAssignmentNet(nn.Module):
             ("tasks", "depends_on", "tasks")
         ].edge_attr.shape[1]
 
-        self.hetero_gat = HeteroGAT(hidden_channels, data)
+        self.hetero_gat_actor = HeteroGAT(hidden_channels, data)
+        self.hetero_gat_critic = HeteroGAT(hidden_channels, data)
         self.ndevices = ndevices
         self.priority_levels = priority_levels
 
@@ -720,16 +721,23 @@ class TaskAssignmentNet(nn.Module):
 
     def forward(self, data, task_batch=None):
         # Get features from HeteroGAT
-        x = self.hetero_gat(data)
+        x = self.hetero_gat_critic(data)
 
         # Critic Head
         v = self.critic_head(x)
         v = global_mean_pool(v, task_batch)
 
+        z = self.hetero_gat_actor(data)
+
+        if task_batch is not None:
+            z = z[data["tasks"].ptr[:-1]]
+        else:
+            z = z[0]
+
         # Actor Head for Priority
-        p_logits = self.actor_p_head(x[0])
+        p_logits = self.actor_p_head(z)
 
         # Actor Head for Device Assignment
-        d_logits = self.actor_d_head(x[0])
+        d_logits = self.actor_d_head(z)
 
         return p_logits, d_logits, v
