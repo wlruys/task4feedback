@@ -51,6 +51,8 @@ protected:
     topology.set_latency(1, 0, 0);
     topology.set_max_connections(0, 1, 1);
     topology.set_max_connections(1, 0, 1);
+
+    task_noise.generate();
   }
 };
 
@@ -93,6 +95,7 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Breakpoints") {
 
 TEST_CASE_FIXTURE(SimulatorFixture, "Copy") {
 
+  logger_setup();
   auto simulator = Simulator(input);
   simulator.initialize(true);
 
@@ -645,6 +648,7 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Graph with multiple data dependencies") {
 
   std::cout << "Created mapper" << std::endl;
   auto task_noise = TaskNoise(tasks, seed);
+  task_noise.generate();
 
   // Reinitialize simulator with new configuration
   input = SchedulerInput(tasks, data, devices, topology, static_mapper,
