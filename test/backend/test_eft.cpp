@@ -41,7 +41,7 @@ protected:
     data.create_block(2, 10000, 2, "D2");
 
     for (std::size_t i = 0; i < 3; ++i) {
-      tasks.set_read(i, {i});
+      tasks.set_read(i, {static_cast<dataid_t>(i)});
       tasks.add_variant(i, DeviceType::CPU, 1, 2001, 7);
       tasks.add_variant(i, DeviceType::GPU, 1, 2002, 5);
     }

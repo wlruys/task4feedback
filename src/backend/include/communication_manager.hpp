@@ -288,9 +288,12 @@ public:
                 sizeof(request_high_precision));
       file.read(reinterpret_cast<char *>(&hstats),
                 sizeof(stats_high_precision));
-      CommunicationRequest req = {hreq.data_task_id, hreq.source,
-                                  hreq.destination, hreq.size};
-      CommunicationStats stats = {hstats.latency, hstats.bandwidth};
+      CommunicationRequest req = {static_cast<taskid_t>(hreq.data_task_id),
+                                  static_cast<devid_t>(hreq.source),
+                                  static_cast<devid_t>(hreq.destination),
+                                  static_cast<mem_t>(hreq.size)};
+      CommunicationStats stats = {static_cast<timecount_t>(hstats.latency),
+                                  static_cast<mem_t>(hstats.bandwidth)};
       record[req] = stats;
     }
 
