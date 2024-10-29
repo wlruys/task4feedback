@@ -22,7 +22,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data, Batch
 import os
 
-run_name = f"ppo_random_task15_50graphs_long"
+run_name = f"ppo_random_task15_50graphs_long_(5x10)per10"
 
 
 def init_weights(m):
@@ -98,7 +98,12 @@ class Args:
     num_iterations: int = 4000
     """the number of iterations (computed in runtime)"""
 
-    graphs_per_update: int = 50
+    graphs_per_update: int = 10
+    """the number of graphs to use for each update"""
+    reuse_graphs: int = 5
+    """the number of times to reuse the same graph in the same batch"""
+    update_graphs_every: int = 10
+    """the number of epochs for each graph update"""
 
     devices = 4
     vcus = 1
@@ -145,54 +150,6 @@ def initialize_simulator(seed=0):
     sim.initialize(use_data=True)
     sim.randomize_durations()
     sim.enable_python_mapper()
-
-    return H, sim
-
-
-def _initialize_simulator():
-    def task_config(task_id: TaskID) -> TaskPlacementInfo:
-        placement_info = TaskPlacementInfo()
-        placement_info.add(
-            (Device(Architecture.GPU, -1),),
-            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
-        )
-        placement_info.add(
-            (Device(Architecture.CPU, -1),),
-            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
-        )
-        return placement_info
-
-    data_config = CholeskyDataGraphConfig(data_size=1 * 1024 * 1024 * 1024)
-    config = CholeskyConfig(blocks=args.blocks, task_config=task_config)
-    tasks, data = make_graph(config, data_config=data_config)
-
-    mem = 1600 * 1024 * 1024 * 1024
-    bandwidth = (20 * 1024 * 1024 * 1024) / 10**4
-    latency = 1
-    n_devices = args.devices
-    devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
-    # start_logger()
-
-    H = SimulatorHandler(
-        tasks,
-        data,
-        devices,
-        noise_type=TNoiseType.NONE,
-        cmapper_type=CMapperType.EFT_DEQUEUE,
-        pymapper=RoundRobinPythonMapper(n_devices),
-        seed=100,
-    )
-    sim = H.create_simulator()
-    sim.initialize(use_data=True)
-    sim.randomize_durations()
-    sim.enable_python_mapper()
-
-    # samples = 10
-    # for i in range(samples):
-    #     current_sim = H.copy(sim)
-    #     candidates = current_sim.get_mapping_candidates()
-    #     current_sim.run()
-    #     print(current_sim.get_current_time())
 
     return H, sim
 
@@ -307,7 +264,6 @@ sims = [sim]
 for i in range(1, graphs_per_epoch):
     H, sim = initialize_simulator(seed=i)
     candidates = sim.get_mapping_candidates()
-    local_graph = sim.observer.local_graph_features(candidates)
     H.set_python_mapper(rnetmap)
     Hs.append(H)
     sims.append(sim)
@@ -319,12 +275,86 @@ writer.add_text(
     % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
 )
 
+Test_Hs = []
+Test_sims = []
+for i in range(99999, 99999 + graphs_per_epoch):
+    H, sim = initialize_simulator(seed=i)
+    candidates = sim.get_mapping_candidates()
+    H.set_python_mapper(rnetmap)
+    Test_Hs.append(H)
+    Test_sims.append(sim)
+
+
+def test_model(h, global_step=0):
+    for i in range(graphs_per_epoch):
+        H = Test_Hs[i]
+        sim = Test_sims[i]
+        sim.randomize_priorities()
+        env = H.copy(sim)
+        done = False
+
+        # Run baseline
+        baseline = H.copy(sim)
+        baseline.disable_python_mapper()
+        a = H.get_new_c_mapper()
+        baseline.set_c_mapper(a)
+        baseline_done = baseline.run()
+        baseline_time = baseline.get_current_time()
+
+        # Run env to first mapping
+        obs, immediate_reward, done, terminated, info = env.step()
+
+        episode_info = []
+
+        while not done:
+            candidates = env.get_mapping_candidates()
+            record = {}
+            action_list = GreedyNetworkMapper(h).map_tasks(candidates, env, record)
+
+            obs, immediate_reward, done, terminated, info = env.step(action_list)
+            record["done"] = done
+            record["time"] = env.get_current_time()
+            episode_info.append(record)
+
+            if done:
+                percent_improvement = (
+                    1 + (baseline_time - record["time"]) / baseline_time
+                )
+                percent_improvement = percent_improvement
+                record["reward"] = percent_improvement
+
+                writer.add_scalar(
+                    "charts/test_episode_reward",
+                    record["reward"],
+                    global_step,
+                )
+
+                break
+            else:
+                record["reward"] = 0
+
+        with torch.no_grad():
+            for t in range(len(episode_info)):
+                episode_info[t]["returns"] = episode_info[-1]["reward"]
+                episode_info[t]["advantage"] = (
+                    episode_info[-1]["reward"] - episode_info[t]["value"]
+                )
+
 
 def collect_batch(episodes, sim, h, global_step=0):
     batch_info = []
+    if global_step % args.update_graphs_every == 0 and global_step > 0:
+        Hs = []
+        sims = []
+        for i in range(1, graphs_per_epoch):
+            H, sim = initialize_simulator(seed=i + global_step * args.graphs_per_update)
+            candidates = sim.get_mapping_candidates()
+            H.set_python_mapper(rnetmap)
+            Hs.append(H)
+            sims.append(sim)
     for e in range(0, episodes):
-        H = Hs[e]
-        sim = sims[e]
+        H = Hs[e % args.graphs_per_update]
+        sim = sims[e % args.graphs_per_update]
         sim.randomize_priorities()
         env = H.copy(sim)
         done = False
@@ -544,7 +574,9 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
 for epoch in range(args.num_iterations):
     print("Epoch: ", epoch)
 
-    batch_info = collect_batch(graphs_per_epoch, sim, h, global_step=epoch)
+    batch_info = collect_batch(
+        graphs_per_epoch * args.reuse_graphs, sim, h, global_step=epoch
+    )
     batch_update(batch_info, args.update_epochs, h, optimizer, global_step=epoch)
 
     # --- Gradient Monitoring ---
@@ -564,6 +596,8 @@ for epoch in range(args.num_iterations):
             },
             f"runs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
         )
+    if (epoch + 1) % 10 == 0:
+        test_model(h)
 
     writer.flush()
 
