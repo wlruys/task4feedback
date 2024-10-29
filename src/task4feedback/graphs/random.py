@@ -8,7 +8,6 @@ from sympy import limit
 from task4feedback.simulator import data
 from .utilities import *
 from ..types import *
-from z3 import *
 
 
 @dataclass(slots=True)
@@ -51,7 +50,7 @@ def make_random_graph(
     average_data_size = int(
         (config.p2p_bw / 1024) * (config.average_task_duration / 1000) * config.ccr
     )
-    print(f"Random avg data size: {average_data_size}")
+    # print(f"Random avg data size: {average_data_size}")
 
     def task_placement(task_id: TaskID) -> tuple[TaskPlacementInfo, int]:
         runtime_info = TaskRuntimeInfo(
@@ -63,8 +62,8 @@ def make_random_graph(
         )
         placement_info = TaskPlacementInfo()
 
-        for i in range(config.num_gpus):
-            placement_info.add(Device(Architecture.GPU, i), runtime_info)
+        placement_info.add(Device(Architecture.GPU, -1), runtime_info)
+        placement_info.add(Device(Architecture.CPU, -1), runtime_info)
 
         return placement_info, runtime_info.task_time
 
@@ -154,7 +153,7 @@ def make_random_graph(
         tasks_by_level[total_level] = task_list
         nodes += width
         total_level += 1
-    print(f"Total levels: {total_level}")
+    # print(f"Total levels: {total_level}")
     # Add random edges
     all_tasks = [task for level in tasks_by_level.values() for task in level]
     possible_tasks = [task for task in all_tasks if task.task_idx[0] < total_level - 1]
@@ -178,10 +177,10 @@ def make_random_graph(
                 dag[tid_to_int[task2]].append(tid_to_int[task1])
                 success += 1
                 skipped_levels.append(task2.task_idx[0] - task1_level)
-    if len(skipped_levels) > 0:
-        print(f"Avg. skipped levels: {average(skipped_levels)}")
-    else:
-        print(f"Avg. skipped levels: {0}")
+    # if len(skipped_levels) > 0:
+    #     print(f"Avg. skipped levels: {average(skipped_levels)}")
+    # else:
+    #     print(f"Avg. skipped levels: {0}")
     if config.no_data is False:
         child_tracker: Dict[TaskID, int] = {}
         for task in task_dict.values():
@@ -222,6 +221,8 @@ def make_random_graph(
             task.data_dependencies = data_dependencies
 
     if config.z3_solver:
+        import z3
+
         print("Using Z3 solver")
         # print(f"# of gpu: {config.num_gpus}")
         # print(f"Task times: {task_times}")
@@ -245,16 +246,16 @@ def make_random_graph(
         N = config.num_gpus  # Number of devices
 
         # Define Z3 variables
-        mapped = [Int(f"x_{i}") for i in range(M)]  # Device assignment for each task
-        start_time = [Int(f"s_{i}") for i in range(M)]  # Start time for each task
-        end_time = [Int(f"e_{i}") for i in range(M)]  # End time for each task
-        T = Int("T")  # Makespan
+        mapped = [z3.Int(f"x_{i}") for i in range(M)]  # Device assignment for each task
+        start_time = [z3.Int(f"s_{i}") for i in range(M)]  # Start time for each task
+        end_time = [z3.Int(f"e_{i}") for i in range(M)]  # End time for each task
+        T = z3.Int("T")  # Makespan
 
-        solver = Optimize()
+        solver = z3.Optimize()
 
         # Constraints for device assignment
         for i in range(M):
-            solver.add(And(mapped[i] >= 0, mapped[i] < N))
+            solver.add(z3.And(mapped[i] >= 0, mapped[i] < N))
 
         # Constraints for start and end times (ensure non-negative times)
         for i in range(M):
@@ -267,7 +268,7 @@ def make_random_graph(
             for dep1 in dag[task]:  # Iterate over all dependencies
                 # If task is assigned to the same device as its dependency, ensure that it starts after the dependency ends
                 solver.add(
-                    If(
+                    z3.If(
                         mapped[task] == mapped[dep1],
                         start_time[task] >= end_time[dep1],
                         start_time[task] >= end_time[dep1] + transfer_times[dep1][task],
@@ -278,7 +279,7 @@ def make_random_graph(
                     if dep1 == dep2:
                         continue
                     solver.add(
-                        If(
+                        z3.If(
                             mapped[task] == mapped[dep1],
                             start_time[task] >= end_time[dep2],
                             start_time[task]
@@ -308,9 +309,9 @@ def make_random_graph(
         for i in range(M):
             for j in range(i + 1, M):
                 solver.add(
-                    If(
+                    z3.If(
                         mapped[i] == mapped[j],
-                        Or(
+                        z3.Or(
                             end_time[i] <= start_time[j],
                             end_time[j] <= start_time[i],
                         ),  # Task i ends before Task j starts or vice versa
@@ -322,7 +323,7 @@ def make_random_graph(
         solver.minimize(T)
 
         # Check for solution
-        if solver.check() == sat:
+        if solver.check() == z3.sat:
             model = solver.model()
             best_mapping = [model.evaluate(mapped[i]).as_long() for i in range(M)]  # type: ignore
             best_start_times = [model.evaluate(start_time[i]).as_long() for i in range(M)]  # type: ignore
