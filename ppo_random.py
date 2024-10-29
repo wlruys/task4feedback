@@ -96,7 +96,7 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 1000
+    num_iterations: int = 4000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 50
@@ -146,6 +146,8 @@ def initialize_simulator(seed=0):
     sim.initialize(use_data=True)
     sim.randomize_durations()
     sim.enable_python_mapper()
+
+    return H, sim
 
 
 def _initialize_simulator():
@@ -289,18 +291,24 @@ lr = args.learning_rate
 epochs = args.num_iterations
 graphs_per_epoch = args.graphs_per_update
 
-H, sim = initialize_simulator(seed=0)
-candidates = sim.get_mapping_candidates()
-local_graph = sim.observer.local_graph_features(candidates)
-h = TaskAssignmentNet(args.devices, 4, args.hidden_dim, local_graph)
-optimizer = optim.Adam(h.parameters(), lr=lr)
-netmap = GreedyNetworkMapper(h)
-rnetmap = RandomNetworkMapper(h)
-H.set_python_mapper(netmap)
-backup = H.copy(sim)
-h.apply(init_weights)
+Hs = []
+sims = []
 
-run_name = f"ppo_random_task15_one"
+for i in range(graphs_per_epoch):
+    H, sim = initialize_simulator(seed=i)
+    candidates = sim.get_mapping_candidates()
+    local_graph = sim.observer.local_graph_features(candidates)
+    h = TaskAssignmentNet(args.devices, 4, args.hidden_dim, local_graph)
+    optimizer = optim.Adam(h.parameters(), lr=lr)
+    netmap = GreedyNetworkMapper(h)
+    rnetmap = RandomNetworkMapper(h)
+    H.set_python_mapper(netmap)
+    backup = H.copy(sim)
+    h.apply(init_weights)
+    Hs.append(H)
+    sims.append(sim)
+
+run_name = f"ppo_random_task15_50graphs_long"
 writer = SummaryWriter(f"runs/{run_name}")
 writer.add_text(
     "hyperparameters",
@@ -312,6 +320,8 @@ writer.add_text(
 def collect_batch(episodes, sim, h, global_step=0):
     batch_info = []
     for e in range(0, episodes):
+        H = Hs[e]
+        sim = sims[e]
         sim.randomize_priorities()
         env = H.copy(sim)
         done = False
@@ -352,11 +362,11 @@ def collect_batch(episodes, sim, h, global_step=0):
                     global_step * episodes + e,
                 )
 
-                writer.add_scalar(
-                    "charts/time",
-                    record["time"],
-                    global_step * episodes + e,
-                )
+                # writer.add_scalar(
+                #     "charts/time",
+                #     record["time"],
+                #     global_step * episodes + e,
+                # )
 
                 break
             else:
@@ -368,14 +378,14 @@ def collect_batch(episodes, sim, h, global_step=0):
                 episode_info[t]["advantage"] = (
                     episode_info[-1]["reward"] - episode_info[t]["value"]
                 )
-        print(
-            "Time: ",
-            env.get_current_time(),
-            "Baseline: ",
-            baseline_time,
-            "Length: ",
-            len(batch_info),
-        )
+        # print(
+        #     "Time: ",
+        #     env.get_current_time(),
+        #     "Baseline: ",
+        #     baseline_time,
+        #     "Length: ",
+        #     len(batch_info),
+        # )
 
         batch_info.extend(episode_info)
     return batch_info
@@ -484,11 +494,11 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             nn.utils.clip_grad_norm_(h.parameters(), args.max_grad_norm)
             optimizer.step()
 
-            writer.add_scalar(
-                "charts/learning_rate",
-                optimizer.param_groups[0]["lr"],
-                global_step * update_epoch + k,
-            )
+            # writer.add_scalar(
+            #     "charts/learning_rate",
+            #     optimizer.param_groups[0]["lr"],
+            #     global_step * update_epoch + k,
+            # )
             writer.add_scalar(
                 "losses/value_loss", v_loss.item(), global_step * update_epoch + k
             )
@@ -540,43 +550,43 @@ for epoch in range(args.num_iterations):
         if param.grad is not None:
             param_norm = param.grad.data.norm(2).item()
             total_norm += param_norm**2
-            writer.add_scalar(f"gradients/{name}_norm", param_norm, epoch)
-            writer.add_histogram(f"gradients/{name}", param.grad, epoch)
+            # writer.add_scalar(f"gradients/{name}_norm", param_norm, epoch)
+            # writer.add_histogram(f"gradients/{name}", param.grad, epoch)
     total_norm = total_norm**0.5
-    writer.add_scalar("gradients/total_norm", total_norm, epoch)
+    # writer.add_scalar("gradients/total_norm", total_norm, epoch)
 
-    for name, param in h.named_parameters():
-        if param.grad is not None:
-            grad_norm = param.grad.norm().item()
-            writer.add_scalar(f"grad_norms/{name}", grad_norm, epoch)
+    # for name, param in h.named_parameters():
+    #     if param.grad is not None:
+    #         grad_norm = param.grad.norm().item()
+    #         writer.add_scalar(f"grad_norms/{name}", grad_norm, epoch)
 
-    for name, param in h.named_parameters():
-        if param.grad is not None:
-            writer.add_scalar(f"gradients_flow/{name}", param.grad.mean().item(), epoch)
+    # for name, param in h.named_parameters():
+    #     if param.grad is not None:
+    #         writer.add_scalar(f"gradients_flow/{name}", param.grad.mean().item(), epoch)
 
-    for name, param in h.named_parameters():
-        writer.add_histogram(f"parameters/{name}", param, epoch)
+    # for name, param in h.named_parameters():
+    #     writer.add_histogram(f"parameters/{name}", param, epoch)
 
-    for name, param in h.named_parameters():
-        writer.add_scalar(f"parameters_norm/{name}", param.data.norm(2).item(), epoch)
-        writer.add_scalar(f"parameters_std/{name}", param.data.std().item(), 0)
+    # for name, param in h.named_parameters():
+    #     writer.add_scalar(f"parameters_norm/{name}", param.data.norm(2).item(), epoch)
+    #     writer.add_scalar(f"parameters_std/{name}", param.data.std().item(), 0)
 
-    for i, param_group in enumerate(optimizer.param_groups):
-        for j, param in enumerate(param_group["params"]):
-            if param.grad is not None:
-                state = optimizer.state[param]
-                if "exp_avg" in state:
-                    writer.add_scalar(
-                        f"optimizer/group_{i}/param_{j}_exp_avg",
-                        state["exp_avg"].mean().item(),
-                        epoch,
-                    )
-                if "exp_avg_sq" in state:
-                    writer.add_scalar(
-                        f"optimizer/group_{i}/param_{j}_exp_avg_sq",
-                        state["exp_avg_sq"].mean().item(),
-                        epoch,
-                    )
+    # for i, param_group in enumerate(optimizer.param_groups):
+    #     for j, param in enumerate(param_group["params"]):
+    #         if param.grad is not None:
+    #             state = optimizer.state[param]
+    #             if "exp_avg" in state:
+    #                 writer.add_scalar(
+    #                     f"optimizer/group_{i}/param_{j}_exp_avg",
+    #                     state["exp_avg"].mean().item(),
+    #                     epoch,
+    #                 )
+    #             if "exp_avg_sq" in state:
+    #                 writer.add_scalar(
+    #                     f"optimizer/group_{i}/param_{j}_exp_avg_sq",
+    #                     state["exp_avg_sq"].mean().item(),
+    #                     epoch,
+    #                 )
 
     # Save the model
     if (epoch + 1) % 100 == 0:

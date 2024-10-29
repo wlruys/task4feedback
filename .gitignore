@@ -12,3 +12,6 @@ dist/
 .DS_Store
 src/task4feedback/.DS_Store
 src/task4feedback.egg-info
+venv/
+events.out.tfevents.*
+runs/
