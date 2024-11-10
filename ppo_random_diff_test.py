@@ -22,7 +22,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data, Batch
 import os
 
-run_name = f"ppo_random_task15_50graphs_long_(5x10)per10"
+run_name = f"ppo_random_task15_50graphs_long_(5x10)per40_percentage_improvement"
 
 
 def init_weights(m):
@@ -98,12 +98,13 @@ class Args:
     num_iterations: int = 4000
     """the number of iterations (computed in runtime)"""
 
-    graphs_per_update: int = 10
+    graphs_per_update: int = 5
     """the number of graphs to use for each update"""
-    reuse_graphs: int = 5
+    reuse_graphs: int = 10
     """the number of times to reuse the same graph in the same batch"""
-    update_graphs_every: int = 10
+    update_graphs_every: int = 40
     """the number of epochs for each graph update"""
+    reward: str = "percent_improvement"
 
     devices = 4
     vcus = 1
@@ -162,7 +163,6 @@ def logits_to_actions(logits, action=None):
 
 
 class GreedyNetworkMapper(PythonMapper):
-
     def __init__(self, model):
         self.model = model
 
@@ -170,19 +170,26 @@ class GreedyNetworkMapper(PythonMapper):
         data = simulator.observer.local_graph_features(candidates)
         with torch.no_grad():
             p, d, v = self.model.forward(data)
-
-            # choose argmax of network output
-            # This is e-greedy policy
-            p_per_task = torch.argmax(p, dim=1)
-            dev_per_task = torch.argmax(d, dim=1)
+            # Choose argmax of network output for priority and device assignment
+            p_per_task = torch.argmax(p, dim=-1)
+            dev_per_task = torch.argmax(d, dim=-1)
             action_list = []
             for i in range(len(candidates)):
+                # Check if p_per_task and dev_per_task are scalars
+                if p_per_task.dim() == 0:
+                    p_task = p_per_task.item()
+                else:
+                    p_task = p_per_task[i].item()
+                if dev_per_task.dim() == 0:
+                    dev_task = dev_per_task.item()
+                else:
+                    dev_task = dev_per_task[i].item()
                 a = Action(
                     candidates[i],
                     i,
-                    dev_per_task[i].item(),
-                    p_per_task[i].item(),
-                    p_per_task[i].item(),
+                    dev_task,
+                    p_task,
+                    p_task,
                 )
                 action_list.append(a)
         return action_list
@@ -247,6 +254,12 @@ lr = args.learning_rate
 epochs = args.num_iterations
 graphs_per_epoch = args.graphs_per_update
 
+writer = SummaryWriter(f"runs/{run_name}")
+writer.add_text(
+    "hyperparameters",
+    "|param|value|\n|-|-|\n%s"
+    % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+)
 
 # Make initial graph
 H, sim = initialize_simulator(seed=0)
@@ -263,30 +276,22 @@ sims = [sim]
 
 for i in range(1, graphs_per_epoch):
     H, sim = initialize_simulator(seed=i)
-    candidates = sim.get_mapping_candidates()
     H.set_python_mapper(rnetmap)
     Hs.append(H)
     sims.append(sim)
 
-writer = SummaryWriter(f"runs/{run_name}")
-writer.add_text(
-    "hyperparameters",
-    "|param|value|\n|-|-|\n%s"
-    % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
-)
 
 Test_Hs = []
 Test_sims = []
-for i in range(99999, 99999 + graphs_per_epoch):
+for i in range(99999, 99999 + 20):
     H, sim = initialize_simulator(seed=i)
-    candidates = sim.get_mapping_candidates()
-    H.set_python_mapper(rnetmap)
+    H.set_python_mapper(netmap)
     Test_Hs.append(H)
     Test_sims.append(sim)
 
 
 def test_model(h, global_step=0):
-    for i in range(graphs_per_epoch):
+    for i in range(20):
         H = Test_Hs[i]
         sim = Test_sims[i]
         sim.randomize_priorities()
@@ -316,6 +321,9 @@ def test_model(h, global_step=0):
             if done:
                 percent_improvement = (
                     1 + (baseline_time - record["time"]) / baseline_time
+                )
+                print(
+                    f"Improvement: {percent_improvement}, Baseline: {baseline_time}, New: {record['time']}"
                 )
                 percent_improvement = percent_improvement
                 record["reward"] = percent_improvement
@@ -373,11 +381,17 @@ def collect_batch(episodes, sim, h, global_step=0):
             episode_info.append(record)
 
             if done:
-                percent_improvement = (
-                    1 + (baseline_time - record["time"]) / baseline_time
-                )
-                percent_improvement = percent_improvement
-                record["reward"] = percent_improvement
+                if args.reward == "percent_improvement":
+                    percent_improvement = (
+                        1 + (baseline_time - record["time"]) / baseline_time
+                    )
+                    percent_improvement = percent_improvement
+                    record["reward"] = percent_improvement
+                elif args.reward == "better":
+                    if record["time"] < baseline_time:
+                        record["reward"] = 1
+                    else:
+                        record["reward"] = 0
 
                 writer.add_scalar(
                     "charts/episode_reward",
@@ -586,8 +600,8 @@ for epoch in range(args.num_iterations):
             },
             f"runs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
         )
-    # if (epoch + 1) % 10 == 0:
-    #     test_model(h)
+    if (epoch + 1) % 25 == 0:
+        test_model(h, global_step=epoch)
 
     writer.flush()
 
