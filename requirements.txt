@@ -1,5 +1,3 @@
-core==1.0.1
-cupy==13.3.0
 gravis==0.1.0
 gymnasium==1.0.0
 matplotlib==3.9.2
