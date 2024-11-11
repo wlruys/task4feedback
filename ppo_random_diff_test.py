@@ -21,6 +21,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data, Batch
 import os
+import wandb
 
 run_name = f"ppo_random_task15_50graphs_long_(5x10)per40_percentage_improvement"
 
@@ -116,6 +117,13 @@ random.seed(args.seed)
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
+
+wandb.init(
+    project=run_name,
+    config={
+        "total_timestep": args.total_timesteps
+    }
+)
 
 
 def initialize_simulator(seed=0):
