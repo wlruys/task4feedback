@@ -27,6 +27,9 @@ import os
 import wandb
 
 run_name = f"ppo_random_task15_50graphs_long_(5x10)per20_percentage_improvement"
+# generate folder if "runs/{run_name}" does not exist
+if not os.path.exists(f"runs/{run_name}"):
+    os.makedirs(f"runs/{run_name}")
 
 
 def init_weights(m):
