@@ -26,7 +26,7 @@ from torch_geometric.data import Data, Batch
 import os
 import wandb
 
-run_name = f"ppo_random_task15_50graphs_long_(5x10)per20_percentage_improvement"
+run_name = f"ppo_random_task15_50graphs_long_(5x10)per20_2hop"
 # generate folder if "runs/{run_name}" does not exist
 if not os.path.exists(f"runs/{run_name}"):
     os.makedirs(f"runs/{run_name}")
@@ -207,7 +207,7 @@ class GreedyNetworkMapper(PythonMapper):
         self.model = model
 
     def map_tasks(self, candidates: np.ndarray[np.int32], simulator):
-        data = simulator.observer.local_graph_features(candidates)
+        data = simulator.observer.local_graph_features(candidates, k_hop=2)
         with torch.no_grad():
             d, v = self.model.forward(data)
             # Choose argmax of network output for priority and device assignment
@@ -236,7 +236,7 @@ class RandomNetworkMapper(PythonMapper):
         self.model = model
 
     def map_tasks(self, candidates: np.ndarray[np.int32], simulator, output=None):
-        data = simulator.observer.local_graph_features(candidates)
+        data = simulator.observer.local_graph_features(candidates, k_hop=2)
 
         with torch.no_grad():
             self.model.eval()
@@ -288,7 +288,7 @@ graphs_per_epoch = args.graphs_per_update
 # Make initial graph
 H, sim = initialize_simulator(seed=0)
 candidates = sim.get_mapping_candidates()
-local_graph = sim.observer.local_graph_features(candidates)
+local_graph = sim.observer.local_graph_features(candidates, k_hop=2)
 h = TaskAssignmentNetDeviceOnly(args.devices, args.hidden_dim, local_graph)
 optimizer = optim.Adam(h.parameters(), lr=lr)
 netmap = GreedyNetworkMapper(h)
