@@ -17,3 +17,4 @@ events.out.tfevents.*
 runs/
 env/
 test/run_tests.sh
+wandb/
