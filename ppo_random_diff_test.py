@@ -121,8 +121,33 @@ torch.backends.cudnn.deterministic = args.torch_deterministic
 wandb.init(
     project=run_name,
     config={
-        "total_timestep": args.total_timesteps
-    }
+        "env_id": args.env_id,
+        "total_timesteps": args.total_timesteps,
+        "learning_rate": args.learning_rate,
+        "num_envs": args.num_envs,
+        "num_steps": args.num_steps,
+        "gamma": args.gamma,
+        "gae_lambda": args.gae_lambda,
+        "num_minibatches": args.num_minibatches,
+        "update_epochs": args.update_epochs,
+        "norm_adv": args.norm_adv,
+        "clip_coef": args.clip_coef,
+        "clip_vloss": args.clip_vloss,
+        "ent_coef": args.ent_coef,
+        "vf_coef": args.vf_coef,
+        "max_grad_norm": args.max_grad_norm,
+        "target_kl": args.target_kl,
+        "batch_size": args.batch_size,
+        "minibatch_size": args.minibatch_size,
+        "num_iterations": args.num_iterations,
+        "graphs_per_update": args.graphs_per_update,
+        "reuse_graphs": args.reuse_graphs,
+        "update_graphs_every": args.update_graphs_every,
+        "reward": args.reward,
+        "devices": args.devices,
+        "vcus": args.vcus,
+        "blocks": args.blocks,
+    },
 )
 
 
@@ -262,12 +287,12 @@ lr = args.learning_rate
 epochs = args.num_iterations
 graphs_per_epoch = args.graphs_per_update
 
-writer = SummaryWriter(f"runs/{run_name}")
-writer.add_text(
-    "hyperparameters",
-    "|param|value|\n|-|-|\n%s"
-    % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
-)
+# writer = SummaryWriter(f"runs/{run_name}")
+# writer.add_text(
+#     "hyperparameters",
+#     "|param|value|\n|-|-|\n%s"
+#     % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+# )
 
 # Make initial graph
 H, sim = initialize_simulator(seed=0)
@@ -336,11 +361,12 @@ def test_model(h, global_step=0):
                 percent_improvement = percent_improvement
                 record["reward"] = percent_improvement
 
-                writer.add_scalar(
-                    "charts/test_episode_reward",
-                    record["reward"],
-                    global_step,
-                )
+                # writer.add_scalar(
+                #     "charts/test_episode_reward",
+                #     record["reward"],
+                #     global_step,
+                # )
+                wandb.log({"test_episode_accuracy": record["reward"]}, step=global_step)
 
                 break
             else:
@@ -401,10 +427,14 @@ def collect_batch(episodes, sim, h, global_step=0):
                     else:
                         record["reward"] = 0
 
-                writer.add_scalar(
-                    "charts/episode_reward",
-                    record["reward"],
-                    global_step * episodes + e,
+                # writer.add_scalar(
+                #     "charts/episode_reward",
+                #     record["reward"],
+                #     global_step * episodes + e,
+                # )
+                wandb.log(
+                    {"episode_reward": record["reward"]},
+                    step=global_step * episodes + e,
                 )
 
                 # writer.add_scalar(
@@ -544,42 +574,67 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             #     optimizer.param_groups[0]["lr"],
             #     global_step * update_epoch + k,
             # )
-            writer.add_scalar(
-                "losses/value_loss", v_loss.item(), global_step * update_epoch + k
+            # writer.add_scalar(
+            #     "losses/value_loss", v_loss.item(), global_step * update_epoch + k
+            # )
+
+            # writer.add_scalar(
+            #     "losses/ppolicy_loss", ppg_loss.item(), global_step * update_epoch + k
+            # )
+            # writer.add_scalar(
+            #     "losses/entropy", entropy_loss.item(), global_step * update_epoch + k
+            # )
+            # writer.add_scalar(
+            #     "losses/pentropy",
+            #     pentropy.mean().item(),
+            #     global_step * update_epoch + k,
+            # )
+            # writer.add_scalar(
+            #     "losses/dentropy",
+            #     dentropy.mean().item(),
+            #     global_step * update_epoch + k,
+            # )
+            wandb.log(
+                {
+                    "losses/value_loss": v_loss.item(),
+                    "losses/ppolicy_loss": ppg_loss.item(),
+                    "losses/entropy": entropy_loss.item(),
+                    "losses/pentropy": pentropy.mean().item(),
+                    "losses/dentropy": dentropy.mean().item(),
+                },
+                step=global_step * update_epoch + k,
             )
-            writer.add_scalar(
-                "losses/ppolicy_loss", ppg_loss.item(), global_step * update_epoch + k
+            # writer.add_scalar(
+            #     "losses/pold_approx_kl",
+            #     pold_approx_kl.item(),
+            #     LI,
+            # )
+            # writer.add_scalar("losses/pratio", pratio.mean().item(), LI)
+            # writer.add_scalar("losses/dratio", dratio.mean().item(), LI)
+            # writer.add_scalar("losses/papprox_kl", papprox_kl.item(), LI)
+            # writer.add_scalar("losses/pclipfrac", np.mean(pclipfracs), LI)
+            # writer.add_scalar("losses/dpolicy_loss", dpg_loss.item(), LI)
+            # writer.add_scalar(
+            #     "losses/dold_approx_kl",
+            #     dold_approx_kl.item(),
+            #     LI,
+            # )
+            # writer.add_scalar("losses/dapprox_kl", dapprox_kl.item(), LI)
+            # writer.add_scalar("losses/dclipfrac", np.mean(dclipfracs), LI)
+            wandb.log(
+                {
+                    "losses/pold_approx_kl": pold_approx_kl.item(),
+                    "losses/pratio": pratio.mean().item(),
+                    "losses/dratio": dratio.mean().item(),
+                    "losses/papprox_kl": papprox_kl.item(),
+                    "losses/pclipfrac": np.mean(pclipfracs),
+                    "losses/dpolicy_loss": dpg_loss.item(),
+                    "losses/dold_approx_kl": dold_approx_kl.item(),
+                    "losses/dapprox_kl": dapprox_kl.item(),
+                    "losses/dclipfrac": np.mean(dclipfracs),
+                },
+                step=LI,
             )
-            writer.add_scalar(
-                "losses/entropy", entropy_loss.item(), global_step * update_epoch + k
-            )
-            writer.add_scalar(
-                "losses/pentropy",
-                pentropy.mean().item(),
-                global_step * update_epoch + k,
-            )
-            writer.add_scalar(
-                "losses/dentropy",
-                dentropy.mean().item(),
-                global_step * update_epoch + k,
-            )
-            writer.add_scalar(
-                "losses/pold_approx_kl",
-                pold_approx_kl.item(),
-                LI,
-            )
-            writer.add_scalar("losses/pratio", pratio.mean().item(), LI)
-            writer.add_scalar("losses/dratio", dratio.mean().item(), LI)
-            writer.add_scalar("losses/papprox_kl", papprox_kl.item(), LI)
-            writer.add_scalar("losses/pclipfrac", np.mean(pclipfracs), LI)
-            writer.add_scalar("losses/dpolicy_loss", dpg_loss.item(), LI)
-            writer.add_scalar(
-                "losses/dold_approx_kl",
-                dold_approx_kl.item(),
-                LI,
-            )
-            writer.add_scalar("losses/dapprox_kl", dapprox_kl.item(), LI)
-            writer.add_scalar("losses/dclipfrac", np.mean(dclipfracs), LI)
             LI = LI + 1
 
 
@@ -599,7 +654,7 @@ for epoch in range(args.num_iterations):
             total_norm += param_norm**2
     total_norm = total_norm**0.5
     # Save the model
-    if (epoch + 1) % 100 == 0:
+    if (epoch + 1) % 1000 == 0:
         torch.save(
             {
                 "epoch": epoch,
@@ -608,12 +663,13 @@ for epoch in range(args.num_iterations):
             },
             f"runs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
         )
+        torch.save(h, f"runs/{run_name}/model_epoch_{epoch+1}.torch")
     if (epoch + 1) % 25 == 0:
         test_model(h, global_step=epoch)
 
-    writer.flush()
+    # writer.flush()
 
-writer.close()
+# writer.close()
 
 # save pytorch model
 torch.save(h.state_dict(), f"runs/{run_name}/model.pth")
