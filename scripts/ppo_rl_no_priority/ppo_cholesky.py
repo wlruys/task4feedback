@@ -1,3 +1,4 @@
+from json import load
 from task4feedback.types import *
 from task4feedback.graphs import *
 from task4feedback.fastsim.interface import (
@@ -26,7 +27,7 @@ from torch_geometric.data import Data, Batch
 import os
 import wandb
 
-run_name = f"ppo_cholesky_(4x4)_PreTrained_PriorRand"
+run_name = f"ppo_cholesky_(4x4)_RandALL"
 # generate folder if "runs/{run_name}" does not exist
 if not os.path.exists(f"runs/{run_name}"):
     os.makedirs(f"runs/{run_name}")
@@ -108,7 +109,7 @@ class Args:
     graphs_per_update: int = 50
     """the number of graphs to use for each update"""
     reward: str = "percent_improvement"
-
+    load_model: bool = False
     devices = 4
     vcus = 1
     blocks = 4
@@ -180,7 +181,7 @@ def initialize_simulator(seed=0):
         tasks,
         data,
         devices,
-        noise_type=TNoiseType.NONE,
+        noise_type=TNoiseType.LOGNORMAL,
         cmapper_type=CMapperType.EFT_DEQUEUE,
         pymapper=RoundRobinPythonMapper(n_devices),
         seed=seed,
@@ -285,20 +286,23 @@ netmap = GreedyNetworkMapper(h)
 rnetmap = RandomNetworkMapper(h)
 H.set_python_mapper(netmap)
 backup = H.copy(sim)
-# h.apply(init_weights)
-h.load_state_dict(
-    torch.load(
-        "/Users/jaeyoung/work/task4feedback/scripts/ppo_rl_no_priority/runs/ppo_random_task15_50graphs_long_(5x10)per20/model.pth",
-        map_location=torch.device("cpu"),
-        weights_only=True,
+if args.load_model:
+    h.load_state_dict(
+        torch.load(
+            "model.pth",
+            map_location=torch.device("cpu"),
+            weights_only=True,
+        )
     )
-)
+else:
+    h.apply(init_weights)
 
 
 def collect_batch(episodes, sim, h, global_step=0):
     batch_info = []
     for e in range(0, episodes):
         sim.randomize_priorities()
+        sim.randomize_durations()
         env = H.copy(sim)
         done = False
 
@@ -309,6 +313,7 @@ def collect_batch(episodes, sim, h, global_step=0):
         baseline.set_c_mapper(a)
         baseline_done = baseline.run()
         baseline_time = baseline.get_current_time()
+        print("Baseline time: ", baseline_time)
 
         # Run env to first mapping
         obs, immediate_reward, done, terminated, info = env.step()
