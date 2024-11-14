@@ -26,7 +26,7 @@ from torch_geometric.data import Data, Batch
 import os
 import wandb
 
-run_name = f"ppo_cholesky_(4x4)"
+run_name = f"ppo_cholesky_(4x4)_PreTrained_PriorRand"
 # generate folder if "runs/{run_name}" does not exist
 if not os.path.exists(f"runs/{run_name}"):
     os.makedirs(f"runs/{run_name}")
@@ -285,7 +285,14 @@ netmap = GreedyNetworkMapper(h)
 rnetmap = RandomNetworkMapper(h)
 H.set_python_mapper(netmap)
 backup = H.copy(sim)
-h.apply(init_weights)
+# h.apply(init_weights)
+h.load_state_dict(
+    torch.load(
+        "/Users/jaeyoung/work/task4feedback/scripts/ppo_rl_no_priority/runs/ppo_random_task15_50graphs_long_(5x10)per20/model.pth",
+        map_location=torch.device("cpu"),
+        weights_only=True,
+    )
+)
 
 
 def collect_batch(episodes, sim, h, global_step=0):
