@@ -78,7 +78,7 @@ local_graph = sim_dummy.observer.local_graph_features(candidates)
 # Initialize the network and load the saved model
 model = TaskAssignmentNet(args.devices, 4, args.hidden_dim, local_graph)
 model.load_state_dict(
-    torch.load("model.pth", map_location=torch.device("cpu"), weights_only=True)
+    torch.load("/work2/09611/jaeyoung/stampede3/task4feedback/scripts/ppo_rl_no_priority/runs/ppo_cholesky_(4x4)_RandALL/model.pth", map_location=torch.device("cpu"), weights_only=True)
 )
 model.eval()
 
@@ -243,4 +243,4 @@ plt.xlabel("Graph Density")
 plt.ylabel("Speedup (model/baseline)")
 plt.title("Model speedup compared to EFT")
 plt.tight_layout()
-plt.show()
+plt.save("result.png")
