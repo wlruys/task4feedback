@@ -122,7 +122,7 @@ torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
 
 wandb.init(
-    project="cholesky_graph",
+    project="stencil_graph",
     name=run_name,
     config={
         "env_id": args.env_id,
@@ -166,8 +166,16 @@ def initialize_simulator(seed=0):
         )
         return placement_info
 
-    data_config = CholeskyDataGraphConfig(data_size=1 * 1024 * 1024 * 1024)
-    config = CholeskyConfig(blocks=args.blocks, task_config=task_config)
+    # data_config = CholeskyDataGraphConfig(data_size=1 * 1024 * 1024 * 1024)
+    data_config = StencilDataGraphConfig(n_devices=args.devices)
+    data_config.initial_placement = default_data_initial_placement
+    # config = CholeskyConfig(blocks=args.blocks, task_config=task_config)
+    config = StencilConfig(
+        steps=args.steps,
+        width=args.width,
+        dimensions=args.dimensions,
+        task_config=task_config,
+    )
     tasks, data = make_graph(config, data_config=data_config)
 
     mem = 1600 * 1024 * 1024 * 1024
