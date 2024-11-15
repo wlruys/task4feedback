@@ -10,7 +10,7 @@ from task4feedback.fastsim.interface import (
     PythonMapper,
     Action,
 )
-from task4feedback.fastsim.models import TaskAssignmentNet
+from task4feedback.fastsim.models import TaskAssignmentNetDeviceOnly
 import torch
 import numpy as np
 import torch.nn as nn
@@ -76,9 +76,13 @@ candidates = sim_dummy.get_mapping_candidates()
 local_graph = sim_dummy.observer.local_graph_features(candidates)
 
 # Initialize the network and load the saved model
-model = TaskAssignmentNet(args.devices, 4, args.hidden_dim, local_graph)
+model = TaskAssignmentNetDeviceOnly(args.devices, args.hidden_dim, local_graph)
 model.load_state_dict(
-    torch.load("model.pth", map_location=torch.device("cpu"), weights_only=True)
+    torch.load(
+        "model.pth",
+        map_location=torch.device("cpu"),
+        weights_only=True,
+    )
 )
 model.eval()
 
@@ -88,19 +92,14 @@ class GreedyNetworkMapper(PythonMapper):
         self.model = model
 
     def map_tasks(self, candidates: np.ndarray[np.int32], simulator):
-        data = simulator.observer.local_graph_features(candidates)
+        data = simulator.observer.local_graph_features(candidates, k_hop=1)
         with torch.no_grad():
-            p, d, v = self.model.forward(data)
+            d, v = self.model.forward(data)
             # Choose argmax of network output for priority and device assignment
-            p_per_task = torch.argmax(p, dim=-1)
             dev_per_task = torch.argmax(d, dim=-1)
             action_list = []
             for i in range(len(candidates)):
                 # Check if p_per_task and dev_per_task are scalars
-                if p_per_task.dim() == 0:
-                    p_task = p_per_task.item()
-                else:
-                    p_task = p_per_task[i].item()
                 if dev_per_task.dim() == 0:
                     dev_task = dev_per_task.item()
                 else:
@@ -109,8 +108,8 @@ class GreedyNetworkMapper(PythonMapper):
                     candidates[i],
                     i,
                     dev_task,
-                    p_task,
-                    p_task,
+                    0,
+                    0,
                 )
                 action_list.append(a)
         return action_list
@@ -243,4 +242,5 @@ plt.xlabel("Graph Density")
 plt.ylabel("Speedup (model/baseline)")
 plt.title("Model speedup compared to EFT")
 plt.tight_layout()
-plt.show()
+# Save the plot
+plt.savefig("speedup_boxplot.png")
