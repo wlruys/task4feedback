@@ -27,7 +27,7 @@ from torch_geometric.data import Data, Batch
 import os
 import wandb
 
-run_name = f"ppo_cholesky_(15x15)_RandALL"
+run_name = f"ppo_stencil_(5x5)_RandALL"
 # generate folder if "runs/{run_name}" does not exist
 if not os.path.exists(f"runs/{run_name}"):
     os.makedirs(f"runs/{run_name}")
@@ -112,7 +112,9 @@ class Args:
     load_model: bool = False
     devices = 4
     vcus = 1
-    blocks = 15
+    steps = 5
+    width = 5
+    dimensions = 1
 
 
 args = Args()
@@ -148,27 +150,36 @@ wandb.init(
         "reward": args.reward,
         "devices": args.devices,
         "vcus": args.vcus,
-        "blocks": args.blocks,
+        "steps": args.steps,
+        "width": args.width,
     },
 )
 
 
 def initialize_simulator(seed=0):
+    interior_size = 100 * 1024 * 1024
+    boundary_size = 100 * 1024 * 1024
+
+    def sizes(data_id: DataID) -> int:
+        return boundary_size if data_id.idx[1] == 1 else interior_size
+
     def task_config(task_id: TaskID) -> TaskPlacementInfo:
         placement_info = TaskPlacementInfo()
         placement_info.add(
             (Device(Architecture.GPU, -1),),
-            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
+            TaskRuntimeInfo(task_time=25, device_fraction=args.vcus),
         )
         placement_info.add(
             (Device(Architecture.CPU, -1),),
-            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
+            TaskRuntimeInfo(task_time=25, device_fraction=args.vcus),
         )
         return placement_info
 
-    # data_config = CholeskyDataGraphConfig(data_size=1 * 1024 * 1024 * 1024)
     data_config = StencilDataGraphConfig(n_devices=args.devices)
-    data_config.initial_placement = default_data_initial_placement
+    data_config.initial_sizes = sizes
+    data_config.dimensions = args.dimensions
+    data_config.width = args.width
+
     # config = CholeskyConfig(blocks=args.blocks, task_config=task_config)
     config = StencilConfig(
         steps=args.steps,
@@ -196,7 +207,6 @@ def initialize_simulator(seed=0):
     )
     sim = H.create_simulator()
     sim.initialize(use_data=True)
-    sim.randomize_durations()
     sim.enable_python_mapper()
 
     return H, sim
@@ -474,17 +484,11 @@ for epoch in range(args.num_iterations):
             param_norm = param.grad.data.norm(2).item()
             total_norm += param_norm**2
     total_norm = total_norm**0.5
-    # # Save the model
-    # if (epoch + 1) % 1000 == 0:
-    #     torch.save(
-    #         {
-    #             "epoch": epoch,
-    #             "model_state_dict": h.state_dict(),
-    #             "optimizer_state_dict": optimizer.state_dict(),
-    #         },
-    #         f"runs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
-    #     )
-    #     torch.save(h, f"runs/{run_name}/model_epoch_{epoch+1}.torch")
+    if (epoch + 1) % 500 == 0:
+        torch.save(
+            h.state_dict(),
+            f"runs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
+        )
 
 # save pytorch model
 torch.save(h.state_dict(), f"runs/{run_name}/model.pth")
