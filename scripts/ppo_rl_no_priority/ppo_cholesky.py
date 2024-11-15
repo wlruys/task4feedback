@@ -27,7 +27,7 @@ from torch_geometric.data import Data, Batch
 import os
 import wandb
 
-run_name = f"ppo_cholesky_(15x15)_RandALL"
+run_name = f"ppo_cholesky_(5x5)_RandALL"
 # generate folder if "runs/{run_name}" does not exist
 if not os.path.exists(f"runs/{run_name}"):
     os.makedirs(f"runs/{run_name}")
@@ -103,7 +103,7 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 1000
+    num_iterations: int = 3000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 50
@@ -112,7 +112,7 @@ class Args:
     load_model: bool = False
     devices = 4
     vcus = 1
-    blocks = 15
+    blocks = 5
 
 
 args = Args()
@@ -467,17 +467,11 @@ for epoch in range(args.num_iterations):
             total_norm += param_norm**2
     total_norm = total_norm**0.5
     # # Save the model
-    # if (epoch + 1) % 1000 == 0:
-    #     torch.save(
-    #         {
-    #             "epoch": epoch,
-    #             "model_state_dict": h.state_dict(),
-    #             "optimizer_state_dict": optimizer.state_dict(),
-    #         },
-    #         f"runs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
-    #     )
-    #     torch.save(h, f"runs/{run_name}/model_epoch_{epoch+1}.torch")
+    if (epoch + 1) % 100 == 0:
+        torch.save(
+            h.state_dict(),
+            f"runs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
+        )
 
 # save pytorch model
 torch.save(h.state_dict(), f"runs/{run_name}/model.pth")
-torch.save(h, f"runs/{run_name}/model.torch")
