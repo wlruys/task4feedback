@@ -86,7 +86,7 @@ local_graph = sim_dummy.observer.local_graph_features(candidates)
 model = TaskAssignmentNetDeviceOnly(args.devices, args.hidden_dim, local_graph)
 model.load_state_dict(
     torch.load(
-        "/Users/jaeyoung/work/task4feedback/scripts/ppo_rl_no_priority/runs/ppo_random_task15_50graphs_long_(5x10)per20/model.pth",
+        "model.pth",
         map_location=torch.device("cpu"),
         weights_only=True,
     )
@@ -250,7 +250,7 @@ plt.ylabel("Speedup (model/baseline)")
 plt.title("Model speedup compared to EFT")
 plt.tight_layout()
 # Save the plot
-plt.savefig("speedup_boxplot_cholesky_pretrained_on_15.png")
+plt.savefig("speedup_boxplot_cholesky.png")
 
 
 for seed in range(10000, 10000 + num_test_graphs):

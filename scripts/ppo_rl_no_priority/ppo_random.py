@@ -26,7 +26,7 @@ from torch_geometric.data import Data, Batch
 import os
 import wandb
 
-run_name = f"ppo_random_task15_50graphs_long_(5x10)per20"
+run_name = f"ppo_random_task10_50graphs_long_(5x10)per20"
 # generate folder if "runs/{run_name}" does not exist
 if not os.path.exists(f"runs/{run_name}"):
     os.makedirs(f"runs/{run_name}")
@@ -102,7 +102,7 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 4000
+    num_iterations: int = 10000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 5
@@ -163,7 +163,7 @@ def initialize_simulator(seed=0):
         n_devices=4,
         seed=seed,
         nodes=15,
-        density=0.3,
+        density=np.random.uniform(0.3, 0.5),
         no_data=False,
         z3_solver=False,
         ccr=1,
