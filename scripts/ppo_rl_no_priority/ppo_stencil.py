@@ -65,7 +65,7 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 1000
+    num_iterations: int = 2000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 50
@@ -144,10 +144,10 @@ def initialize_simulator(seed=0):
             (Device(Architecture.GPU, -1),),
             TaskRuntimeInfo(task_time=task_time, device_fraction=args.vcus),
         )
-        # placement_info.add(
-        #     (Device(Architecture.CPU, -1),),
-        #     TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
-        # )
+        placement_info.add(
+            (Device(Architecture.CPU, -1),),
+            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
+        )
         return placement_info
 
     data_config = StencilDataGraphConfig(n_devices=args.devices)
