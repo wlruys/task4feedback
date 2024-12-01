@@ -144,10 +144,10 @@ def initialize_simulator(seed=0):
             (Device(Architecture.GPU, -1),),
             TaskRuntimeInfo(task_time=task_time, device_fraction=args.vcus),
         )
-        # placement_info.add(
-        #     (Device(Architecture.CPU, -1),),
-        #     TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
-        # )
+        placement_info.add(
+            (Device(Architecture.CPU, -1),),
+            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
+        )
         return placement_info
 
     data_config = StencilDataGraphConfig(n_devices=args.devices)
