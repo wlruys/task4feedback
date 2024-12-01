@@ -150,7 +150,7 @@ def evaluate_model_on_graph(model, seed=0):
 
 # Evaluate the model on multiple test graphs and different densities
 num_test_graphs = 100
-blocks = [4, 5, 10, 15]
+blocks = [3, 4, 5, 6]
 accuracies_per_size = {}
 
 for block in blocks:

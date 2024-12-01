@@ -31,10 +31,10 @@ class Args:
     hidden_dim = 64
     seed: int = 1
     """seed of the experiment"""
-    env_id: str = "stencil"
-    """the id of the environment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
+    env_id: str = "sweep"
+    """the id of the environment"""
     wandb_project_name: str = f"{env_id}_graph"
     """the wandb's project name"""
 
@@ -78,7 +78,7 @@ class Args:
     width = 5
     dimensions = 1
 
-    wandb_run_name = f"ppo_{env_id}_{steps}steps_{width}width_{dimensions}d_RandALL"
+    wandb_run_name = f"ppo_{env_id}_{}_{dimensions}d_RandALL"
     """the wandb's run name"""
 
 
@@ -130,10 +130,8 @@ def init_weights(m):
 
 
 def initialize_simulator(seed=0):
-    interior_size = 4 * 1024 * 1024 * 1024
-    boundary_size = 8 * 1024 * 1024
-    task_time = 9033
-    # Roughly equal to the boundary movement time
+    interior_size = 100 * 1024 * 1024
+    boundary_size = 100 * 1024 * 1024
 
     def sizes(data_id: DataID) -> int:
         return boundary_size if data_id.idx[1] == 1 else interior_size
@@ -142,12 +140,12 @@ def initialize_simulator(seed=0):
         placement_info = TaskPlacementInfo()
         placement_info.add(
             (Device(Architecture.GPU, -1),),
-            TaskRuntimeInfo(task_time=task_time, device_fraction=args.vcus),
+            TaskRuntimeInfo(task_time=25, device_fraction=args.vcus),
         )
-        # placement_info.add(
-        #     (Device(Architecture.CPU, -1),),
-        #     TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
-        # )
+        placement_info.add(
+            (Device(Architecture.CPU, -1),),
+            TaskRuntimeInfo(task_time=25, device_fraction=args.vcus),
+        )
         return placement_info
 
     data_config = StencilDataGraphConfig(n_devices=args.devices)
@@ -165,7 +163,7 @@ def initialize_simulator(seed=0):
     tasks, data = make_graph(config, data_config=data_config)
 
     mem = 1600 * 1024 * 1024 * 1024
-    bandwidth = 10 * 1024 * 1024 * 1024
+    bandwidth = (20 * 1024 * 1024 * 1024) / 10**4
     latency = 1
     n_devices = args.devices
     devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
@@ -359,8 +357,6 @@ LI = 0
 
 def batch_update(batch_info, update_epoch, h, optimizer, global_step):
     n_obs = len(batch_info)
-
-    batch_size = args.batch_size
 
     dclipfracs = []
 
