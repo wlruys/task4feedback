@@ -31,10 +31,10 @@ class Args:
     hidden_dim = 64
     seed: int = 1
     """seed of the experiment"""
+    env_id: str = "mix"
+    """the id of the environment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
-    env_id: str = "sweep"
-    """the id of the environment"""
     wandb_project_name: str = f"{env_id}_graph"
     """the wandb's project name"""
 
@@ -65,7 +65,7 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 1000
+    num_iterations: int = 10000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 50
@@ -78,7 +78,9 @@ class Args:
     width = 5
     dimensions = 1
 
-    wandb_run_name = f"ppo_{env_id}_{steps}steps_{width}width_{dimensions}d_RandALL"
+    blocks = 5
+
+    wandb_run_name = f"ppo_{env_id}_RandALL"
     """the wandb's run name"""
 
 
@@ -129,41 +131,79 @@ def init_weights(m):
         nn.init.constant_(m.bias, 0.0)
 
 
-def initialize_simulator(seed=0):
+def initialize_stencil(seed=0):
+    interior_size = 4 * 1024 * 1024 * 1024
+    boundary_size = 8 * 1024 * 1024
+    task_time = 9033
+    # Roughly equal to the boundary movement time
 
     def sizes(data_id: DataID) -> int:
-        interior_size = 2 * 1024 * 1024
-        elements = interior_size / 4
-        d = args.dimensions + 1
-        boundary_elements = int(elements ** ((d - 1) / d))
-        boundary_size = boundary_elements * 4
-
-        if data_id.idx[0] == 0:
-            return interior_size
-        else:
-            return boundary_size
+        return boundary_size if data_id.idx[1] == 1 else interior_size
 
     def task_config(task_id: TaskID) -> TaskPlacementInfo:
         placement_info = TaskPlacementInfo()
         placement_info.add(
             (Device(Architecture.GPU, -1),),
-            TaskRuntimeInfo(task_time=25, device_fraction=args.vcus),
+            TaskRuntimeInfo(task_time=task_time, device_fraction=args.vcus),
         )
         placement_info.add(
             (Device(Architecture.CPU, -1),),
-            TaskRuntimeInfo(task_time=25, device_fraction=args.vcus),
+            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
         )
         return placement_info
 
-    data_config = SweepDataGraphConfig(n_devices=args.devices)
+    data_config = StencilDataGraphConfig(n_devices=args.devices)
     data_config.initial_sizes = sizes
+    data_config.dimensions = args.dimensions
+    data_config.width = args.width
 
-    config = SweepConfig(
+    # config = CholeskyConfig(blocks=args.blocks, task_config=task_config)
+    config = StencilConfig(
         steps=args.steps,
         width=args.width,
         dimensions=args.dimensions,
         task_config=task_config,
     )
+    tasks, data = make_graph(config, data_config=data_config)
+
+    mem = 1600 * 1024 * 1024 * 1024
+    bandwidth = 10 * 1024 * 1024 * 1024
+    latency = 1
+    n_devices = args.devices
+    devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
+    # start_logger()
+
+    H = SimulatorHandler(
+        tasks,
+        data,
+        devices,
+        noise_type=TNoiseType.LOGNORMAL,
+        cmapper_type=CMapperType.EFT_DEQUEUE,
+        pymapper=RoundRobinPythonMapper(n_devices),
+        seed=seed,
+    )
+    sim = H.create_simulator()
+    sim.initialize(use_data=True)
+    sim.enable_python_mapper()
+
+    return H, sim
+
+
+def initialize_cholesky(seed=0):
+    def task_config(task_id: TaskID) -> TaskPlacementInfo:
+        placement_info = TaskPlacementInfo()
+        placement_info.add(
+            (Device(Architecture.GPU, -1),),
+            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
+        )
+        placement_info.add(
+            (Device(Architecture.CPU, -1),),
+            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
+        )
+        return placement_info
+
+    data_config = CholeskyDataGraphConfig(data_size=1 * 1024 * 1024 * 1024)
+    config = CholeskyConfig(blocks=args.blocks, task_config=task_config)
     tasks, data = make_graph(config, data_config=data_config)
 
     mem = 1600 * 1024 * 1024 * 1024
@@ -272,15 +312,14 @@ lr = args.learning_rate
 epochs = args.num_iterations
 graphs_per_epoch = args.graphs_per_update
 
-H, sim = initialize_simulator()
-candidates = sim.get_mapping_candidates()
-local_graph = sim.observer.local_graph_features(candidates)
+H, sim_stencil = initialize_stencil()
+candidates = sim_stencil.get_mapping_candidates()
+local_graph = sim_stencil.observer.local_graph_features(candidates)
 h = TaskAssignmentNetDeviceOnly(args.devices, args.hidden_dim, local_graph)
 optimizer = optim.Adam(h.parameters(), lr=lr)
 netmap = GreedyNetworkMapper(h)
 rnetmap = RandomNetworkMapper(h)
 H.set_python_mapper(netmap)
-backup = H.copy(sim)
 if args.load_model:
     h.load_state_dict(
         torch.load(
@@ -292,10 +331,16 @@ if args.load_model:
 else:
     h.apply(init_weights)
 
+_, sim_cholesky = initialize_cholesky()
 
-def collect_batch(episodes, sim, h, global_step=0):
+
+def collect_batch(episodes, h, global_step=0):
     batch_info = []
     for e in range(0, episodes):
+        if (e / episodes) > 0.5 == 0:
+            sim = sim_cholesky
+        else:
+            sim = sim_stencil
         sim.randomize_priorities()
         sim.randomize_durations()
         env = H.copy(sim)
@@ -361,6 +406,8 @@ LI = 0
 
 def batch_update(batch_info, update_epoch, h, optimizer, global_step):
     n_obs = len(batch_info)
+
+    batch_size = args.batch_size
 
     dclipfracs = []
 
@@ -449,7 +496,7 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
 for epoch in range(args.num_iterations):
     print("Epoch: ", epoch)
 
-    batch_info = collect_batch(graphs_per_epoch, sim, h, global_step=epoch)
+    batch_info = collect_batch(graphs_per_epoch, h, global_step=epoch)
     batch_update(batch_info, args.update_epochs, h, optimizer, global_step=epoch)
 
     # --- Gradient Monitoring ---

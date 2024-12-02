@@ -217,7 +217,7 @@ def test_data():
         "P2P_BW": parse_size(args.p2p + " GB"),
         "H2D_BW": parse_size("10 GB"),
         "D2H_BW": parse_size("10 GB"),
-        "GPU_MEM": parse_size("16 GB"),
+        "GPU_MEM": parse_size("1300 GB"),
         "CPU_MEM": parse_size("1300 GB"),
         "GPU_COPY_ENGINES": 3,
         "CPU_COPY_ENGINES": 3,
