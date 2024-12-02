@@ -189,6 +189,43 @@ def initialize_stencil(seed=0):
     return H, sim
 
 
+def initialize_random(seed=0):
+    config = RandomConfig(
+        n_devices=4,
+        seed=seed,
+        nodes=15,
+        density=np.random.uniform(0.3, 0.5),
+        no_data=False,
+        z3_solver=False,
+        ccr=np.random.uniform(0.5, 1.5),
+        num_gpus=4,
+    )
+    tasks, data = make_random_graph(config)
+
+    mem = 1600 * 1024 * 1024 * 1024
+    bandwidth = 10 * 1024 * 1024 * 1024
+    latency = 1
+    n_devices = args.devices
+    devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
+    # start_logger()
+
+    H = SimulatorHandler(
+        tasks,
+        data,
+        devices,
+        noise_type=TNoiseType.NONE,
+        cmapper_type=CMapperType.EFT_DEQUEUE,
+        pymapper=RoundRobinPythonMapper(n_devices),
+        seed=seed,
+    )
+    sim = H.create_simulator()
+    sim.initialize(use_data=True)
+    sim.randomize_durations()
+    sim.enable_python_mapper()
+
+    return H, sim
+
+
 def initialize_cholesky(seed=0):
     def task_config(task_id: TaskID) -> TaskPlacementInfo:
         placement_info = TaskPlacementInfo()
@@ -312,14 +349,22 @@ lr = args.learning_rate
 epochs = args.num_iterations
 graphs_per_epoch = args.graphs_per_update
 
-H, sim_stencil = initialize_stencil()
+H_stencil, sim_stencil = initialize_stencil()
+H_cholesky, sim_cholesky = initialize_cholesky()
+H_random, sim_random = initialize_random()
+
+
 candidates = sim_stencil.get_mapping_candidates()
 local_graph = sim_stencil.observer.local_graph_features(candidates)
 h = TaskAssignmentNetDeviceOnly(args.devices, args.hidden_dim, local_graph)
 optimizer = optim.Adam(h.parameters(), lr=lr)
 netmap = GreedyNetworkMapper(h)
 rnetmap = RandomNetworkMapper(h)
-H.set_python_mapper(netmap)
+
+H_stencil.set_python_mapper(netmap)
+H_cholesky.set_python_mapper(netmap)
+H_random.set_python_mapper(rnetmap)
+
 if args.load_model:
     h.load_state_dict(
         torch.load(
@@ -331,16 +376,22 @@ if args.load_model:
 else:
     h.apply(init_weights)
 
-_, sim_cholesky = initialize_cholesky()
-
 
 def collect_batch(episodes, h, global_step=0):
     batch_info = []
+    if global_step % 10 == 0:
+        H_random, sim_random = initialize_random()
+        H_random.set_python_mapper(rnetmap)
     for e in range(0, episodes):
-        if (e / episodes) > 0.5 == 0:
+        if (e / episodes) > 0.66 == 0:
             sim = sim_cholesky
+            H = H_cholesky
+        elif (e / episodes) > 0.33 == 0:
+            sim = sim_random
+            H = H_random
         else:
             sim = sim_stencil
+            H = H_stencil
         sim.randomize_priorities()
         sim.randomize_durations()
         env = H.copy(sim)
