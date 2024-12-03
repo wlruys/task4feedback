@@ -75,10 +75,10 @@ class Args:
     devices = 4
     vcus = 1
     steps = 5
-    width = 5
+    width = 4
     dimensions = 1
 
-    blocks = 5
+    blocks = 4
 
     wandb_run_name = f"ppo_{env_id}_RandALL"
     """the wandb's run name"""
@@ -164,6 +164,7 @@ def initialize_stencil(seed=0):
         dimensions=args.dimensions,
         task_config=task_config,
     )
+
     tasks, data = make_graph(config, data_config=data_config)
 
     mem = 1600 * 1024 * 1024 * 1024
@@ -193,7 +194,7 @@ def initialize_random(seed=0):
     config = RandomConfig(
         n_devices=4,
         seed=seed,
-        nodes=15,
+        nodes=20,
         density=np.random.uniform(0.3, 0.5),
         no_data=False,
         z3_solver=False,
@@ -241,6 +242,66 @@ def initialize_cholesky(seed=0):
 
     data_config = CholeskyDataGraphConfig(data_size=1 * 1024 * 1024 * 1024)
     config = CholeskyConfig(blocks=args.blocks, task_config=task_config)
+    tasks, data = make_graph(config, data_config=data_config)
+
+    mem = 1600 * 1024 * 1024 * 1024
+    bandwidth = 10 * 1024 * 1024 * 1024
+    latency = 1
+    n_devices = args.devices
+    devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
+    # start_logger()
+
+    H = SimulatorHandler(
+        tasks,
+        data,
+        devices,
+        noise_type=TNoiseType.LOGNORMAL,
+        cmapper_type=CMapperType.EFT_DEQUEUE,
+        pymapper=RoundRobinPythonMapper(n_devices),
+        seed=seed,
+    )
+    sim = H.create_simulator()
+    sim.initialize(use_data=True)
+    sim.enable_python_mapper()
+
+    return H, sim
+
+
+def initialize_sweep(seed=0):
+
+    def sizes(data_id: DataID) -> int:
+        interior_size = 2 * 1024 * 1024
+        elements = interior_size / 4
+        d = args.dimensions + 1
+        boundary_elements = int(elements ** ((d - 1) / d))
+        boundary_size = boundary_elements * 4
+
+        if data_id.idx[0] == 0:
+            return interior_size
+        else:
+            return boundary_size
+
+    def task_config(task_id: TaskID) -> TaskPlacementInfo:
+        placement_info = TaskPlacementInfo()
+        placement_info.add(
+            (Device(Architecture.GPU, -1),),
+            TaskRuntimeInfo(task_time=25, device_fraction=args.vcus),
+        )
+        placement_info.add(
+            (Device(Architecture.CPU, -1),),
+            TaskRuntimeInfo(task_time=25, device_fraction=args.vcus),
+        )
+        return placement_info
+
+    data_config = SweepDataGraphConfig(n_devices=args.devices)
+    data_config.initial_sizes = sizes
+
+    config = SweepConfig(
+        steps=args.steps,
+        width=args.width,
+        dimensions=args.dimensions,
+        task_config=task_config,
+    )
     tasks, data = make_graph(config, data_config=data_config)
 
     mem = 1600 * 1024 * 1024 * 1024
@@ -352,6 +413,7 @@ graphs_per_epoch = args.graphs_per_update
 H_stencil, sim_stencil = initialize_stencil()
 H_cholesky, sim_cholesky = initialize_cholesky()
 H_random, sim_random = initialize_random()
+H_sweep, sim_sweep = initialize_sweep()
 
 
 candidates = sim_stencil.get_mapping_candidates()
@@ -364,6 +426,7 @@ rnetmap = RandomNetworkMapper(h)
 H_stencil.set_python_mapper(netmap)
 H_cholesky.set_python_mapper(netmap)
 H_random.set_python_mapper(rnetmap)
+H_sweep.set_python_mapper(netmap)
 
 if args.load_model:
     h.load_state_dict(
@@ -383,10 +446,13 @@ def collect_batch(episodes, h, global_step=0):
         H_random, sim_random = initialize_random()
         H_random.set_python_mapper(rnetmap)
     for e in range(0, episodes):
-        if (e / episodes) > 0.66 == 0:
+        if (e / episodes) > 0.75 == 0:
             sim = sim_cholesky
             H = H_cholesky
-        elif (e / episodes) > 0.33 == 0:
+        if (e / episodes) > 0.5 == 0:
+            sim = sim_sweep
+            H = H_sweep
+        elif (e / episodes) > 0.25 == 0:
             sim = sim_random
             H = H_random
         else:
