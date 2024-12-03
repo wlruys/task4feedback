@@ -214,7 +214,7 @@ def initialize_random(seed=0):
         tasks,
         data,
         devices,
-        noise_type=TNoiseType.NONE,
+        noise_type=TNoiseType.LOGNORMAL,
         cmapper_type=CMapperType.EFT_DEQUEUE,
         pymapper=RoundRobinPythonMapper(n_devices),
         seed=seed,

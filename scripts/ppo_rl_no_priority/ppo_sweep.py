@@ -65,7 +65,7 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 1000
+    num_iterations: int = 2000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 50

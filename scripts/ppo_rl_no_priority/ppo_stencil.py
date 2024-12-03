@@ -35,7 +35,7 @@ class Args:
     """the id of the environment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
-    wandb_project_name: str = f"{env_id}_graph"
+    wandb_project_name: str = f"transfer_learning"
     """the wandb's project name"""
 
     # Algorithm specific arguments
@@ -71,7 +71,7 @@ class Args:
     graphs_per_update: int = 50
     """the number of graphs to use for each update"""
     reward: str = "percent_improvement"
-    load_model: bool = False
+    load_model: bool = True
     devices = 4
     vcus = 1
     steps = 5

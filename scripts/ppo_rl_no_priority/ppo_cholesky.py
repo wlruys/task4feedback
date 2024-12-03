@@ -103,13 +103,13 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 3000
+    num_iterations: int = 2000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 50
     """the number of graphs to use for each update"""
     reward: str = "percent_improvement"
-    load_model: bool = False
+    load_model: bool = True
     devices = 4
     vcus = 1
     blocks = 5
@@ -122,7 +122,7 @@ torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
 
 wandb.init(
-    project="cholesky_graph",
+    project="transfer_learning",
     name=run_name,
     config={
         "env_id": args.env_id,
