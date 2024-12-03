@@ -225,7 +225,6 @@ def create_sweep_iteration(
     shape = tuple(config.width for _ in range(config.dimensions))
 
     # Sweep Task IDs: (iter; 0; direction; grid)
-
     # Generate Sweep Tasks
     for direction_idx in config.direction_list:
         for i in range(config.steps):
@@ -272,7 +271,6 @@ def create_sweep_iteration(
 
                 # Task Mapping
                 task_mapping = get_mapping(config, task_id)
-
                 task_dict[task_id] = TaskInfo(
                     task_id,
                     task_placement_info,
@@ -307,6 +305,18 @@ def create_update_iteration(
                 dependency = TaskID("T", dependent_task_idx, 0)
                 dependency_list.append(dependency)
 
+            # This part is complete hack around to manually set task dependencies for dim=1
+            ###############################################################################
+            if grid_idx[0] > 0:
+                dependent_task_idx = (iter,) + (1,) + (grid_idx[0] - 1,) + grid_idx[1:]
+                dependency = TaskID("T", dependent_task_idx, 0)
+                dependency_list.append(dependency)
+            if grid_idx[1] > 0:
+                dependent_task_idx = (iter,) + (1,) + (grid_idx[0], grid_idx[1] - 1)
+                dependency = TaskID("T", dependent_task_idx, 0)
+                dependency_list.append(dependency)
+            ###############################################################################
+
             # Task Data Dependencies
             data_dependencies, data_dict = get_data_dependencies(
                 task_id, data_dict, data_config
@@ -316,7 +326,6 @@ def create_update_iteration(
             task_mapping = get_mapping(config, task_id)
 
             # print("Creating Update Task: ", task_id)
-
             task_dict[task_id] = TaskInfo(
                 task_id,
                 task_placement_info,
@@ -334,11 +343,15 @@ def make_sweep_graph(
 
     task_dict = dict()
     data_dict = dict()
-
     ##Task ID:
     #   sweep: (iteration; 0; direction; cell)
     #   update: (iteration; 1; cell)
-
+    print("\033[91mCurrently only supports 2D (dim=1) sweep graph\033[0m")
+    print(
+        "\033[93mThere is a complete hack around to manually set task dependencies for dim=1\033[0m"
+    )
+    print("\033[96mThis is not a general solution\033[0m")
+    print("\033[95mPlease fix this in create_update_iteration function\033[0m")
     for iter in range(config.max_iter):
         create_sweep_iteration(iter, config, data_config, task_dict, data_dict)
         create_update_iteration(iter, config, data_config, task_dict, data_dict)
