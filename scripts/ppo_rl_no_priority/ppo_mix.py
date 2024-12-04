@@ -65,7 +65,7 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 10000
+    num_iterations: int = 4000
     """the number of iterations (computed in runtime)"""
 
     graphs_per_update: int = 50
@@ -75,12 +75,12 @@ class Args:
     devices = 4
     vcus = 1
     steps = 5
-    width = 4
+    width = 5
     dimensions = 1
 
-    blocks = 4
+    blocks = 5
 
-    wandb_run_name = f"ppo_{env_id}_RandALL"
+    wandb_run_name = f"ppo_{env_id}_RandALL_cholesy_stencil"
     """the wandb's run name"""
 
 
@@ -446,15 +446,15 @@ def collect_batch(episodes, h, global_step=0):
         H_random, sim_random = initialize_random()
         H_random.set_python_mapper(rnetmap)
     for e in range(0, episodes):
-        if (e / episodes) > 0.75 == 0:
+        if (e / episodes) > 0.5 == 0:
             sim = sim_cholesky
             H = H_cholesky
-        if (e / episodes) > 0.5 == 0:
-            sim = sim_sweep
-            H = H_sweep
-        elif (e / episodes) > 0.25 == 0:
-            sim = sim_random
-            H = H_random
+        # if (e / episodes) > 0.5 == 0:
+        #     sim = sim_sweep
+        #     H = H_sweep
+        # elif (e / episodes) > 0.25 == 0:
+        #     sim = sim_random
+        #     H = H_random
         else:
             sim = sim_stencil
             H = H_stencil

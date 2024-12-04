@@ -19,27 +19,31 @@ from torch_geometric.loader import DataLoader
 import os
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
-import argparse
-
-parser = argparse.ArgumentParser()
-
-parser.add_argument("--devices", type=int, default=4)
-parser.add_argument("--vcus", type=int, default=1)
-parser.add_argument("--blocks", type=int, default=4)
-parser.add_argument("--hidden_dim", type=int, default=64)
-parser.add_argument("--seed", type=int, default=0)
-parser.add_argument("--model", type=str, default="models/model.pth")
-parser.add_argument("--use_eft", type=int, default=1)
-args = parser.parse_args()
 
 
-def initialize_simulator(blocks=3, seed=0):
+@dataclass
+class Args:
+    devices: int = 4
+    vcus: int = 1
+    blocks: int = 4
+    hidden_dim: int = 64
+    seed: int = 0
+
+
+def initialize_simulator(seed=0, steps=5, width=5):
+    interior_size = 4 * 1024 * 1024 * 1024
+    boundary_size = 8 * 1024 * 1024
+    task_time = 9033
+    # Roughly equal to the boundary movement time
+
+    def sizes(data_id: DataID) -> int:
+        return boundary_size if data_id.idx[1] == 1 else interior_size
 
     def task_config(task_id: TaskID) -> TaskPlacementInfo:
         placement_info = TaskPlacementInfo()
         placement_info.add(
             (Device(Architecture.GPU, -1),),
-            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
+            TaskRuntimeInfo(task_time=task_time, device_fraction=args.vcus),
         )
         placement_info.add(
             (Device(Architecture.CPU, -1),),
@@ -47,15 +51,27 @@ def initialize_simulator(blocks=3, seed=0):
         )
         return placement_info
 
-    data_config = CholeskyDataGraphConfig(data_size=1 * 1024 * 1024 * 1024)
-    config = CholeskyConfig(blocks=blocks, task_config=task_config)
+    data_config = StencilDataGraphConfig(n_devices=args.devices)
+    data_config.initial_sizes = sizes
+    data_config.dimensions = args.dimensions
+    data_config.width = args.width
+
+    # config = CholeskyConfig(blocks=args.blocks, task_config=task_config)
+    config = StencilConfig(
+        steps=steps,
+        width=width,
+        dimensions=args.dimensions,
+        task_config=task_config,
+    )
+
     tasks, data = make_graph(config, data_config=data_config)
 
     mem = 1600 * 1024 * 1024 * 1024
-    bandwidth = (20 * 1024 * 1024 * 1024) / 10**4
+    bandwidth = 10 * 1024 * 1024 * 1024
     latency = 1
-    n_devices = 4
+    n_devices = args.devices
     devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
+    # start_logger()
 
     H = SimulatorHandler(
         tasks,
@@ -68,16 +84,19 @@ def initialize_simulator(blocks=3, seed=0):
     )
     sim = H.create_simulator()
     sim.initialize(use_data=True)
+    sim.enable_python_mapper()
     sim.randomize_durations()
     sim.randomize_priorities()
-    sim.enable_python_mapper()
-
     return H, sim
 
 
 # Load the model
+args = Args()
+args.hidden_dim = 64  # Use the same hidden dimension as during training
+args.devices = 4
+
 # Initialize a dummy simulator to get the graph features
-H_dummy, sim_dummy = initialize_simulator(blocks=5)
+H_dummy, sim_dummy = initialize_simulator()
 candidates = sim_dummy.get_mapping_candidates()
 local_graph = sim_dummy.observer.local_graph_features(candidates)
 
@@ -85,7 +104,7 @@ local_graph = sim_dummy.observer.local_graph_features(candidates)
 model = TaskAssignmentNetDeviceOnly(args.devices, args.hidden_dim, local_graph)
 model.load_state_dict(
     torch.load(
-        args.model,
+        "models/model.pth",
         map_location=torch.device("cpu"),
         weights_only=True,
     )
@@ -121,17 +140,16 @@ class GreedyNetworkMapper(PythonMapper):
         return action_list
 
 
-def evaluate_model_on_graph(model, block, seed=0):
+def evaluate_model_on_graph(model, seed=0):
     # Initialize the simulator with the given seed and density
     # Run baseline
     H, sim = initialize_simulator(blocks=block, seed=seed)
     sim.randomize_durations()
     sim.randomize_priorities()
     baseline_sim = H.copy(sim)
-    if args.use_eft:
-        baseline_sim.disable_python_mapper()
-        c_mapper = H.get_new_c_mapper()
-        baseline_sim.set_c_mapper(c_mapper)
+    baseline_sim.disable_python_mapper()
+    c_mapper = H.get_new_c_mapper()
+    baseline_sim.set_c_mapper(c_mapper)
     baseline_sim.run()
     baseline_time = baseline_sim.get_current_time()
 
@@ -158,9 +176,7 @@ for block in blocks:
     print(f"Testing on block {block}")
     for seed in range(10000, 10000 + num_test_graphs):
 
-        accuracy, model_time, baseline_time = evaluate_model_on_graph(
-            model, block, seed=seed
-        )
+        accuracy, model_time, baseline_time = evaluate_model_on_graph(model, seed=seed)
         accuracies_per_size[block].append(accuracy)
         print(
             f"{block}x{block}, Graph seed {seed}: Model time {model_time}, Baseline time {baseline_time}, Accuracy (baseline/model) {accuracy}"
@@ -168,8 +184,7 @@ for block in blocks:
 
 # Plot the box plot with detailed statistics
 data = [accuracies_per_size[d] for d in blocks]
-# Increase font size by a factor of 2
-plt.rcParams.update({"font.size": plt.rcParams["font.size"] * 2})
+
 fig, ax = plt.subplots(figsize=(10, 6))
 
 boxprops = dict(
@@ -250,13 +265,15 @@ for i in range(len(bp["boxes"])):
 # Set labels and title
 plt.xlabel("Cholesky Block Size")
 plt.ylabel("Speedup (model/baseline)")
-if args.use_eft:
-    plt.title("Model speedup compared to EFT")
-else:
-    plt.title("Model speedup compared to RoundRobin")
+plt.title("Model speedup compared to EFT")
 plt.tight_layout()
 # Save the plot
-if args.use_eft:
-    plt.savefig("speedup_boxplot_cholesky_eft.png")
-else:
-    plt.savefig("speedup_boxplot_cholesky_roundrobin.png")
+plt.savefig("speedup_boxplot_cholesky.png")
+
+
+for seed in range(10000, 10000 + num_test_graphs):
+    accuracy, model_time, baseline_time = evaluate_model_on_graph(model, seed=seed)
+    accuracies_per_size[block].append(accuracy)
+    print(
+        f"{block}x{block}, Graph seed {seed}: Model time {model_time}, Baseline time {baseline_time}, Accuracy (baseline/model) {accuracy}"
+    )
