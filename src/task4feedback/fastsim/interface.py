@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from enum import IntEnum, Enum
 import torch
+import copy
 
 import torch_geometric as geom
 import gymnasium as gym
@@ -877,7 +878,11 @@ class SimulatorHandler:
     def create_simulator(self, use_python_mapper=False) -> Simulator:
         internal_sim = PySimulator(self.input)
         sim_wrapper = Simulator(
-            internal_sim, self.task_noise, False, self.pymapper, self.cmapper
+            internal_sim,
+            self.task_noise,
+            False,
+            copy.deepcopy(self.pymapper),
+            self.cmapper,
         )
 
         if use_python_mapper:
