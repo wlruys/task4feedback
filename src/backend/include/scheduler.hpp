@@ -409,13 +409,13 @@ public:
 };
 
 template <typename T>
-concept TransitionConditionConcept = requires(T t, SchedulerState &state,
-                                              SchedulerQueues &queues) {
-  { t.should_map(state, queues) } -> std::convertible_to<bool>;
-  { t.should_reserve(state, queues) } -> std::convertible_to<bool>;
-  { t.should_launch(state, queues) } -> std::convertible_to<bool>;
-  { t.should_launch_data(state, queues) } -> std::convertible_to<bool>;
-};
+concept TransitionConditionConcept =
+    requires(T t, SchedulerState &state, SchedulerQueues &queues) {
+      { t.should_map(state, queues) } -> std::convertible_to<bool>;
+      { t.should_reserve(state, queues) } -> std::convertible_to<bool>;
+      { t.should_launch(state, queues) } -> std::convertible_to<bool>;
+      { t.should_launch_data(state, queues) } -> std::convertible_to<bool>;
+    };
 
 class TransitionConditions {
 public:
@@ -710,6 +710,11 @@ protected:
 public:
   Mapper() = default;
 
+  Mapper(const Mapper &other) {
+    device_buffer = other.device_buffer;
+    arch_buffer = other.arch_buffer;
+  }
+
   void initialize() {
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
     arch_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
@@ -748,6 +753,12 @@ protected:
 
 public:
   RandomMapper(unsigned int seed = 0) : gen(seed) {}
+
+  RandomMapper(const RandomMapper &other) {
+    // copy the state of the random number generator
+    gen = other.gen;
+  }
+
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     fill_device_targets(task_id, state);
     devid_t device_id = choose_random_device(device_buffer);
@@ -761,6 +772,11 @@ protected:
 
 public:
   RoundRobinMapper() = default;
+
+  RoundRobinMapper(const RoundRobinMapper &other) {
+    device_index = other.device_index;
+  }
+
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     fill_device_targets(task_id, state);
     auto mp = state.get_mapping_priorities()[task_id];
@@ -792,6 +808,12 @@ public:
   StaticMapper() = default;
 
   StaticMapper(DeviceIDList device_ids_) : mapping(std::move(device_ids_)) {}
+
+  StaticMapper(const StaticMapper &other) {
+    mapping = other.mapping;
+    reserving_priorities = other.reserving_priorities;
+    launching_priorities = other.launching_priorities;
+  }
 
   StaticMapper(DeviceIDList device_ids_, PriorityList reserving_priorities_,
                PriorityList launching_priorities_)
@@ -840,6 +862,10 @@ protected:
 
 public:
   StaticActionMapper(ActionList actions_) : actions(std::move(actions_)) {}
+
+  StaticActionMapper(const StaticActionMapper &other) {
+    actions = other.actions;
+  }
 
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     MONUnusedParameter(state);
@@ -971,6 +997,11 @@ public:
     finish_time_buffer.reserve(n_devices);
   }
 
+  EFTMapper(const EFTMapper &other) {
+    finish_time_record = other.finish_time_record;
+    finish_time_buffer = other.finish_time_buffer;
+  }
+
   void initialize(std::size_t n_tasks, std::size_t n_devices) {
     finish_time_record = std::vector<timecount_t>(n_tasks, 0);
   }
@@ -1000,6 +1031,10 @@ public:
   DequeueEFTMapper(std::size_t n_tasks, std::size_t n_devices)
       : EFTMapper(n_tasks, n_devices), device_available_time_buffer(n_devices) {
   }
+
+  DequeueEFTMapper(const DequeueEFTMapper &other)
+      : EFTMapper(other),
+        device_available_time_buffer(other.device_available_time_buffer) {}
 
   void initialize(std::size_t n_tasks, std::size_t n_devices) {
     EFTMapper::initialize(n_tasks, n_devices);

@@ -21,7 +21,6 @@ std::vector<Variant> ComputeTask::get_variant_vector() const {
 }
 
 // Tasks
-
 Tasks::Tasks(taskid_t num_compute_tasks)
     : num_compute_tasks(num_compute_tasks) {
   current_task_id = num_compute_tasks;

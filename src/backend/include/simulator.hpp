@@ -72,14 +72,15 @@ protected:
       return ExecutionState::EXTERNAL_MAPPING;
     }
     // otherwise just run the mapper from C++
-    scheduler.map_tasks(event, event_manager, mapper.get());
+    scheduler.map_tasks(event, event_manager, mapper);
     return ExecutionState::RUNNING;
   }
 
 public:
   EventManager event_manager;
   Scheduler scheduler;
-  std::reference_wrapper<Mapper> mapper;
+  // std::reference_wrapper<Mapper> mapper;
+  Mapper mapper;
 
   bool initialized = false;
   volatile bool use_python_mapper = false;
@@ -97,7 +98,9 @@ public:
 
   void set_mapper(Mapper &mapper_) { mapper = mapper_; }
 
-  const SchedulerState &get_state() const { return scheduler.get_state(); }
+  [[nodiscard]] const SchedulerState &get_state() const {
+    return scheduler.get_state();
+  }
   SchedulerState &get_state() { return scheduler.get_state(); }
 
   void initialize(bool create_data_tasks = false) {
