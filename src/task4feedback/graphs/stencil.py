@@ -55,7 +55,7 @@ class StencilDataGraphConfig(DataGraphConfig):
 
             # A task (read) writes to its interior domain at the current timestep
             interior_id = (timestep_flag,) + (0,) + (0,) + task_idx
-            data_info.read_write.append(DataAccess(DataID(interior_id), device=0))
+            data_info.write.append(DataAccess(DataID(interior_id), device=0))
 
             n_boundaries = 2 * (self.dimensions)
 
@@ -67,7 +67,7 @@ class StencilDataGraphConfig(DataGraphConfig):
             # A task writes to its boundaries at the current timestep
             for i in range(n_boundaries):
                 boundary_id = (timestep_flag,) + (1,) + (i,) + task_idx
-                data_info.read_write.append(DataAccess(DataID(boundary_id), device=0))
+                data_info.write.append(DataAccess(DataID(boundary_id), device=0))
 
             # A task reads the boundaries of its neighbors from the previous timestep
             if timestep_idx > 0:

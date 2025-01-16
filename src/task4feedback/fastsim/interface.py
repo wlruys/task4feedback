@@ -410,19 +410,25 @@ class StaticPythonMapper:
 
 
 class RoundRobinPythonMapper(PythonMapper):
-    def __init__(self, n_devices: int):
+    def __init__(self, n_devices: int, mask: Optional[np.ndarray] = None):
         self.n_devices = n_devices
+        self.mask = mask
+        self.active_device = 0
 
     def map_tasks(self, candidates: np.ndarray[np.uint32], simulator) -> list[Action]:
         action_list = []
 
         for i, candidate in enumerate(candidates):
-            device = candidate % self.n_devices
+
+            self.active_device = (self.active_device + 1) % self.n_devices
+            while self.mask is not None and not self.mask[self.active_device]:
+                self.active_device = (self.active_device + 1) % self.n_devices
+
             action_list.append(
                 Action(
                     candidate,
                     i,
-                    device,
+                    self.active_device,
                     0,
                     0,
                 )
