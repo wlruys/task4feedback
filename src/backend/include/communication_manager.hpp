@@ -521,8 +521,8 @@ public:
     bool found = false;
     devid_t best_source = 0;
     mem_t best_bandwidth = 0;
-    for (auto src : possible_source) {
 
+    for (auto src : possible_source) {
       if (src == dst) {
         return {true, src};
       }

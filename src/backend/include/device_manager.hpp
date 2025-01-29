@@ -158,8 +158,17 @@ public:
   void create_device(devid_t id, std::string name, DeviceType arch, vcu_t vcu,
                      mem_t mem) {
     assert(id < devices.size());
+    printf("Creating device: %s\n", name.c_str());
+    printf("Device id: %d\n", id);
+    printf("Device arch: %d\n", arch);
+    printf("Device vcu: %llu\n", vcu);
+    printf("Device mem: %llu\n", mem);
     devices.at(id) = Device(id, arch, vcu, mem);
     type_map.at(static_cast<std::size_t>(arch)).push_back(id);
+
+    printf("Devices in type: %zu",
+           type_map.at(static_cast<std::size_t>(arch)).size());
+
     device_names.at(id) = std::move(name);
   }
 
@@ -185,7 +194,7 @@ public:
 
   DeviceManager(Devices &devices_)
       : devices(devices_), mapped(devices_.size()), reserved(devices_.size()),
-        launched(devices_.size()){};
+        launched(devices_.size()) {};
 
   DeviceManager(const DeviceManager &other) = default;
 

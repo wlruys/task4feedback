@@ -3,6 +3,7 @@
 #include "settings.hpp"
 
 #include "devices.hpp"
+#include "spdlog/spdlog.h"
 #include <array>
 #include <cassert>
 #include <iostream>
@@ -89,13 +90,13 @@ inline std::ostream &operator<<(std::ostream &os, const TaskStatus &state) {
 
 class Variant {
 public:
-  DeviceType arch = DeviceType::NONE;
   Resources resources;
   timecount_t time = 0;
+  DeviceType arch = DeviceType::NONE;
 
   Variant() = default;
   Variant(DeviceType arch_, vcu_t vcu_, mem_t mem_, timecount_t time_)
-      : arch(arch_), resources(vcu_, mem_), time(time_) {}
+      : resources(vcu_, mem_), time(time_), arch(arch_) {}
 
   [[nodiscard]] DeviceType get_arch() const { return arch; }
 
@@ -104,6 +105,7 @@ public:
 
   [[nodiscard]] const Resources &get_resources() const { return resources; }
 
+  // TODO: This REALLY needs to be renamed. This is the mean time.
   [[nodiscard]] timecount_t get_observed_time() const { return time; }
 };
 
