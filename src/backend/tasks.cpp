@@ -2,9 +2,15 @@
 
 std::vector<DeviceType> ComputeTask::get_supported_architectures() const {
   std::vector<DeviceType> supported_architectures;
-  for (std::size_t i = 0; i < num_device_types; i++) {
-    if (variants[i].arch != DeviceType::NONE) {
-      supported_architectures.push_back(static_cast<DeviceType>(i));
+
+  SPDLOG_DEBUG("Getting supported architectures for task {}", id);
+  SPDLOG_DEBUG("Task has {} variants", variants.size());
+
+  for (const auto &variant : variants) {
+    auto arch = variant.get_arch();
+    if (arch != DeviceType::NONE) {
+      printf("variant.arch: %d\n is supported", arch);
+      supported_architectures.push_back(arch);
     }
   }
   return supported_architectures;
@@ -13,7 +19,8 @@ std::vector<DeviceType> ComputeTask::get_supported_architectures() const {
 std::vector<Variant> ComputeTask::get_variant_vector() const {
   std::vector<Variant> variant_vector;
   for (const auto &variant : variants) {
-    if (variant.arch != DeviceType::NONE) {
+    auto arch = variant.get_arch();
+    if (arch != DeviceType::NONE) {
       variant_vector.push_back(variant);
     }
   }

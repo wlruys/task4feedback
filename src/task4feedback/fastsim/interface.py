@@ -112,7 +112,7 @@ class DeviceHandle:
         for i, (device, (vcu, mem)) in enumerate(self.devices.devices.items()):
             name = str(device)
             arch = device.architecture.value
-            self.cdevices.create_device(i, name, 0, vcu, mem)
+            self.cdevices.create_device(i, name, arch, vcu, mem)
             self.devices_to_ids[device] = i
             self.ids_to_devices[i] = device
 

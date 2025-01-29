@@ -409,13 +409,13 @@ public:
 };
 
 template <typename T>
-concept TransitionConditionConcept = requires(T t, SchedulerState &state,
-                                              SchedulerQueues &queues) {
-  { t.should_map(state, queues) } -> std::convertible_to<bool>;
-  { t.should_reserve(state, queues) } -> std::convertible_to<bool>;
-  { t.should_launch(state, queues) } -> std::convertible_to<bool>;
-  { t.should_launch_data(state, queues) } -> std::convertible_to<bool>;
-};
+concept TransitionConditionConcept =
+    requires(T t, SchedulerState &state, SchedulerQueues &queues) {
+      { t.should_map(state, queues) } -> std::convertible_to<bool>;
+      { t.should_reserve(state, queues) } -> std::convertible_to<bool>;
+      { t.should_launch(state, queues) } -> std::convertible_to<bool>;
+      { t.should_launch_data(state, queues) } -> std::convertible_to<bool>;
+    };
 
 class TransitionConditions {
 public:
@@ -685,6 +685,7 @@ protected:
     const auto &tasks = state.get_task_manager().get_tasks();
     arch_buffer = tasks.get_supported_architectures(task_id);
     assert(!arch_buffer.empty());
+    printf("arch_buffer size: %zu\n", arch_buffer.size());
   }
 
   void fill_device_targets(taskid_t task_id, const SchedulerState &state) {
@@ -694,11 +695,18 @@ protected:
     const auto &devices = state.get_device_manager().get_devices();
 
     for (auto arch : supported_architectures) {
+      printf("Getting devices for architecture %d\n", arch);
       const auto &device_ids = devices.get_devices(arch);
+      printf("device_ids size: %zu\n", device_ids.size());
       device_buffer.insert(device_buffer.end(), device_ids.begin(),
                            device_ids.end());
     }
     assert(!device_buffer.empty());
+
+    printf("device_buffer size: %zu\n", device_buffer.size());
+    for (auto device_id : device_buffer) {
+      printf("device_id: %d\n", device_id);
+    }
   }
 
   static const DeviceIDList &get_devices_from_arch(DeviceType arch,
@@ -849,13 +857,14 @@ public:
 
 class EFTMapper : public Mapper {
 protected:
-  std::vector<timecount_t> finish_time_record;
-  std::vector<timecount_t> finish_time_buffer;
-
   struct DeviceTime {
     devid_t device_id;
     timecount_t time;
   };
+  // Records the finish time by task id
+  std::vector<timecount_t> finish_time_record;
+  // Stores the temporary EFT values for each device
+  std::vector<DeviceTime> finish_time_buffer;
 
   void record_finish_time(taskid_t task_id, timecount_t time) {
     finish_time_record.at(task_id) = time;
@@ -871,12 +880,21 @@ protected:
     assert(!valid_sources.empty());
     const mem_t data_size = data_manager.get_data().get_size(data_id);
 
+    SPDLOG_DEBUG("Data {} has size {}",
+                 data_manager.get_data().get_name(data_id), data_size);
+
+    SPDLOG_DEBUG("Data is located on devices:");
+    for (auto source : valid_sources) {
+      SPDLOG_DEBUG("{}", state.get_device_name(source));
+    }
+
     SourceRequest req =
         communication_manager.get_best_source(destination, valid_sources);
     assert(req.found);
 
     SPDLOG_DEBUG("Best source to transfer data {} to device {} is device {}",
-                 data_id, destination, req.source);
+                 data_manager.get_data().get_name(data_id), destination,
+                 req.source);
     SPDLOG_DEBUG("It has bandwidth {}",
                  communication_manager.get_bandwidth(req.source, destination));
 
@@ -929,22 +947,24 @@ protected:
   }
 
   void fill_finish_time_buffer(taskid_t task_id, const SchedulerState &state) {
+    const auto &task_manager = state.get_task_manager();
     const auto &device_manager = state.get_device_manager();
     const auto &devices = device_manager.get_devices();
     finish_time_buffer.clear();
 
     timecount_t dep_time = get_dependency_finish_time(task_id, state);
 
-    SPDLOG_DEBUG("Computing EFT for task {}", task_id);
+    SPDLOG_DEBUG("Computing EFT for task {}",
+                 task_manager.get_tasks().get_name(task_id));
     SPDLOG_DEBUG("Dependency finish time is {}", dep_time);
 
-    for (devid_t device_id = 0; device_id < devices.size(); device_id++) {
+    for (auto device_id : device_buffer) {
       timecount_t start_time = get_device_available_time(device_id, state);
       SPDLOG_DEBUG("Device {} is available at {}", device_id, start_time);
       start_time = std::max(start_time, dep_time);
       timecount_t finish_time =
           get_finish_time(task_id, device_id, start_time, state);
-      finish_time_buffer.push_back(finish_time);
+      finish_time_buffer.emplace_back(device_id, finish_time);
       SPDLOG_DEBUG("EFT for task {} on device {} is {}", task_id, device_id,
                    finish_time);
     }
@@ -956,9 +976,14 @@ protected:
     devid_t best_device = 0;
 
     for (std::size_t i = 0; i < finish_time_buffer.size(); i++) {
-      if (finish_time_buffer.at(i) < min_time) {
-        min_time = finish_time_buffer.at(i);
-        best_device = static_cast<devid_t>(i);
+      devid_t device_id = finish_time_buffer.at(i).device_id;
+      timecount_t finish_time = finish_time_buffer.at(i).time;
+      SPDLOG_DEBUG("EFT for task {} on device {} is {}", task_id, device_id,
+                   finish_time);
+
+      if (finish_time < min_time) {
+        min_time = finish_time;
+        best_device = device_id;
       }
     }
 
@@ -1007,6 +1032,7 @@ public:
   }
 
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    fill_device_targets(task_id, state);
     auto [best_device, min_time] = get_best_device(task_id, state);
     record_finish_time(task_id, min_time);
     set_device_available_time(best_device, min_time);
