@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from enum import IntEnum, Enum
 import torch
+import copy
 
 import torch_geometric as geom
 import gymnasium as gym
@@ -409,19 +410,25 @@ class StaticPythonMapper:
 
 
 class RoundRobinPythonMapper(PythonMapper):
-    def __init__(self, n_devices: int):
+    def __init__(self, n_devices: int, mask: Optional[np.ndarray] = None):
         self.n_devices = n_devices
+        self.mask = mask
+        self.active_device = 0
 
     def map_tasks(self, candidates: np.ndarray[np.uint32], simulator) -> list[Action]:
         action_list = []
 
         for i, candidate in enumerate(candidates):
-            device = candidate % self.n_devices
+
+            self.active_device = (self.active_device + 1) % self.n_devices
+            while self.mask is not None and not self.mask[self.active_device]:
+                self.active_device = (self.active_device + 1) % self.n_devices
+
             action_list.append(
                 Action(
                     candidate,
                     i,
-                    device,
+                    self.active_device,
                     0,
                     0,
                 )
@@ -877,7 +884,11 @@ class SimulatorHandler:
     def create_simulator(self, use_python_mapper=False) -> Simulator:
         internal_sim = PySimulator(self.input)
         sim_wrapper = Simulator(
-            internal_sim, self.task_noise, False, self.pymapper, self.cmapper
+            internal_sim,
+            self.task_noise,
+            False,
+            copy.deepcopy(self.pymapper),
+            self.cmapper,
         )
 
         if use_python_mapper:
