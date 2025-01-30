@@ -9,7 +9,6 @@ std::vector<DeviceType> ComputeTask::get_supported_architectures() const {
   for (const auto &variant : variants) {
     auto arch = variant.get_arch();
     if (arch != DeviceType::NONE) {
-      printf("variant.arch: %d\n is supported", arch);
       supported_architectures.push_back(arch);
     }
   }

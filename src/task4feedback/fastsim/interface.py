@@ -446,6 +446,9 @@ class Observer:
     def get_active_tasks(self) -> np.ndarray[np.uint64]:
         return self.observer.get_active_tasks()
 
+    def get_device_mask(self, task_id: np.uint64, device_mask: np.ndarray[np.int8]):
+        return self.observer.get_device_mask_int8(task_id, device_mask)
+
     def get_k_hop_dependents(
         self, task_list: np.ndarray[np.uint64], k: int
     ) -> np.ndarray[np.uint64]:

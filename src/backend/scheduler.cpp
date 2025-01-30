@@ -6,6 +6,7 @@
 #include "settings.hpp"
 #include "task_manager.hpp"
 #include "tasks.hpp"
+#include <cstdint>
 #include <iostream>
 
 // SchedulerState

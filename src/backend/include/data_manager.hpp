@@ -38,7 +38,7 @@ public:
     sizes.at(id) = size;
   }
   void set_location(dataid_t id, devid_t location) {
-    assert(location < initial_location.size());
+    assert(id < initial_location.size());
     initial_location.at(id) = location;
   }
   void set_name(dataid_t id, std::string name) {

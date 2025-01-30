@@ -373,6 +373,10 @@ public:
   [[nodiscard]] priority_t get_reserving_priority(taskid_t task_id) const;
   [[nodiscard]] priority_t get_launching_priority(taskid_t task_id) const;
 
+  template <typename precision_t>
+  void fill_supported_devices(taskid_t task_id,
+                              std::span<precision_t> valid_devices) const;
+
   void set_reserving_priority(taskid_t task_id, priority_t priority);
   void set_launching_priority(taskid_t task_id, priority_t priority);
 
@@ -685,7 +689,6 @@ protected:
     const auto &tasks = state.get_task_manager().get_tasks();
     arch_buffer = tasks.get_supported_architectures(task_id);
     assert(!arch_buffer.empty());
-    printf("arch_buffer size: %zu\n", arch_buffer.size());
   }
 
   void fill_device_targets(taskid_t task_id, const SchedulerState &state) {
@@ -695,18 +698,11 @@ protected:
     const auto &devices = state.get_device_manager().get_devices();
 
     for (auto arch : supported_architectures) {
-      printf("Getting devices for architecture %d\n", arch);
       const auto &device_ids = devices.get_devices(arch);
-      printf("device_ids size: %zu\n", device_ids.size());
       device_buffer.insert(device_buffer.end(), device_ids.begin(),
                            device_ids.end());
     }
     assert(!device_buffer.empty());
-
-    printf("device_buffer size: %zu\n", device_buffer.size());
-    for (auto device_id : device_buffer) {
-      printf("device_id: %d\n", device_id);
-    }
   }
 
   static const DeviceIDList &get_devices_from_arch(DeviceType arch,
@@ -1040,3 +1036,21 @@ public:
     return Action(task_id, 0, best_device, mp, mp);
   }
 };
+
+template <typename precision_t>
+void SchedulerState::fill_supported_devices(
+    taskid_t task_id, std::span<precision_t> valid_devices) const {
+  const auto &devices = device_manager.devices.get();
+  const auto &tasks = task_manager.get_tasks();
+
+  const auto &task = tasks.get_compute_task(task_id);
+
+  auto supported_architectures = task.get_supported_architectures();
+
+  for (auto arch : supported_architectures) {
+    auto &device_ids = devices.get_devices(arch);
+    for (auto device_id : device_ids) {
+      valid_devices[device_id] = true;
+    }
+  }
+}

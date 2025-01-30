@@ -7,7 +7,7 @@ cimport cython
 
 from libcpp.vector cimport vector 
 from cython.operator cimport dereference as deref, preincrement as inc
-from libc.stdint cimport int64_t, uint16_t, int32_t, uint32_t, uint64_t
+from libc.stdint cimport int64_t, uint16_t, int32_t, uint32_t, uint64_t, int8_t 
 
 cdef extern from "include/settings.hpp":
 
