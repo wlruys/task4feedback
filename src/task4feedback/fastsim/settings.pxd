@@ -27,6 +27,7 @@ cdef extern from "include/settings.hpp":
 
 cdef extern from "include/devices.hpp":
     cpdef enum class DeviceType(int):
+        NONE,
         CPU,
         GPU
 

@@ -154,7 +154,9 @@ class DataHandle:
 
             # location_id = self.device_handle.get_device_id(location)
             # print(location, location_id)
-            self.cdata.create_block(i, size, 0, name)
+            self.cdata.create_block(
+                i, size, self.device_handle.get_device_id(location), name
+            )
 
     def get_data_id(self, data_id: int) -> DataID:
         return self.ids_to_data[data_id]
