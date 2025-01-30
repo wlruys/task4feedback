@@ -456,7 +456,7 @@ public:
   [[nodiscard]] timecount_t time_to_transfer(taskid_t data_task_id, mem_t size,
                                              devid_t src, devid_t dst) const {
 
-    if (src == dst) {
+    if (src == dst || size == 0) {
       return 0;
     }
 
@@ -464,13 +464,13 @@ public:
     const auto bw = static_cast<double>(bandwidth);
     const auto s = static_cast<double>(size);
     timecount_t time = latency + static_cast<timecount_t>(s / bw);
-    return std::max(time, static_cast<timecount_t>(1));
+    return std::max(time, static_cast<timecount_t>(0));
   }
 
   [[nodiscard]] timecount_t ideal_time_to_transfer(mem_t size, devid_t src,
                                                    devid_t dst) const {
 
-    if (src == dst) {
+    if (src == dst || size == 0) {
       return 0;
     }
 
