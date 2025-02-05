@@ -176,7 +176,9 @@ class DataHandle:
 
             # location_id = self.device_handle.get_device_id(location)
             # print(location, location_id)
-            self.cdata.create_block(i, size, 0, name)
+            self.cdata.create_block(
+                i, size, self.device_handle.get_device_id(location), name
+            )
 
     def get_data_id(self, data_id: int) -> DataID:
         return self.ids_to_data[data_id]
@@ -601,7 +603,9 @@ class Observer:
         """
         return self.observer.get_data_device_edges(tasks)
 
-    def local_graph_features(self, candidate_tasks: np.ndarray[np.uint64]):
+    def local_graph_features(
+        self, candidate_tasks: np.ndarray[np.uint64], k_hop: int = 1
+    ):
 
         # print(active_tasks, active_tasks.dtype)
 
@@ -611,8 +615,8 @@ class Observer:
 
         candidate_tasks = np.asarray(candidate_tasks, dtype=np.uint32)
 
-        k_hop_dependents = self.get_k_hop_dependents(candidate_tasks, 1)
-        k_hop_dependencies = self.get_k_hop_dependencies(candidate_tasks, 1)
+        k_hop_dependents = self.get_k_hop_dependents(candidate_tasks, k_hop)
+        k_hop_dependencies = self.get_k_hop_dependencies(candidate_tasks, k_hop)
 
         # print("k_hop_dependents", k_hop_dependents)
         # print("k_hop_dependencies", k_hop_dependencies)

@@ -1,7 +1,5 @@
-from typing import Optional, Self
 from task4feedback.types import *
 from task4feedback.graphs import *
-import argparse
 from task4feedback.fastsim.interface import (
     SimulatorHandler,
     uniform_connected_devices,
@@ -12,9 +10,11 @@ from task4feedback.fastsim.interface import (
     PythonMapper,
     Action,
     start_logger,
-    ExecutionState,
 )
-from task4feedback.fastsim.models import TaskAssignmentNet, VectorTaskAssignmentNet
+from task4feedback.fastsim.models import (
+    TaskAssignmentNetDeviceOnly,
+    VectorTaskAssignmentNet,
+)
 import torch
 import numpy as np
 import torch.nn as nn
@@ -24,6 +24,12 @@ from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data, Batch
 import os
+import wandb
+
+run_name = f"ppo_random_task10_50graphs_long_(5x10)per20"
+# generate folder if "runs/{run_name}" does not exist
+if not os.path.exists(f"runs/{run_name}"):
+    os.makedirs(f"runs/{run_name}")
 
 
 def init_weights(m):
@@ -96,10 +102,16 @@ class Args:
     """the batch size (computed in runtime)"""
     minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 1000
+    num_iterations: int = 10000
     """the number of iterations (computed in runtime)"""
 
-    graphs_per_update: int = 50
+    graphs_per_update: int = 5
+    """the number of graphs to use for each update"""
+    reuse_graphs: int = 10
+    """the number of times to reuse the same graph in the same batch"""
+    update_graphs_every: int = 20
+    """the number of epochs for each graph update"""
+    reward: str = "percent_improvement"
 
     devices = 4
     vcus = 1
@@ -112,13 +124,46 @@ np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.backends.cudnn.deterministic = args.torch_deterministic
 
+wandb.init(
+    project="random_graph",
+    name=run_name,
+    config={
+        "env_id": args.env_id,
+        "total_timesteps": args.total_timesteps,
+        "learning_rate": args.learning_rate,
+        "num_envs": args.num_envs,
+        "num_steps": args.num_steps,
+        "gamma": args.gamma,
+        "gae_lambda": args.gae_lambda,
+        "num_minibatches": args.num_minibatches,
+        "update_epochs": args.update_epochs,
+        "norm_adv": args.norm_adv,
+        "clip_coef": args.clip_coef,
+        "clip_vloss": args.clip_vloss,
+        "ent_coef": args.ent_coef,
+        "vf_coef": args.vf_coef,
+        "max_grad_norm": args.max_grad_norm,
+        "target_kl": args.target_kl,
+        "batch_size": args.batch_size,
+        "minibatch_size": args.minibatch_size,
+        "num_iterations": args.num_iterations,
+        "graphs_per_update": args.graphs_per_update,
+        "reuse_graphs": args.reuse_graphs,
+        "update_graphs_every": args.update_graphs_every,
+        "reward": args.reward,
+        "devices": args.devices,
+        "vcus": args.vcus,
+        "blocks": args.blocks,
+    },
+)
+
 
 def initialize_simulator(seed=0):
     config = RandomConfig(
         n_devices=4,
         seed=seed,
         nodes=15,
-        density=0.3,
+        density=np.random.uniform(0.3, 0.5),
         no_data=False,
         z3_solver=False,
         ccr=1,
@@ -137,7 +182,7 @@ def initialize_simulator(seed=0):
         tasks,
         data,
         devices,
-        noise_type=TNoiseType.NONE,
+        noise_type=TNoiseType.LOGNORMAL,
         cmapper_type=CMapperType.EFT_DEQUEUE,
         pymapper=RoundRobinPythonMapper(n_devices),
         seed=seed,
@@ -146,52 +191,6 @@ def initialize_simulator(seed=0):
     sim.initialize(use_data=True)
     sim.randomize_durations()
     sim.enable_python_mapper()
-
-
-def _initialize_simulator():
-    def task_config(task_id: TaskID) -> TaskPlacementInfo:
-        placement_info = TaskPlacementInfo()
-        placement_info.add(
-            (Device(Architecture.GPU, -1),),
-            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
-        )
-        placement_info.add(
-            (Device(Architecture.CPU, -1),),
-            TaskRuntimeInfo(task_time=1000, device_fraction=args.vcus),
-        )
-        return placement_info
-
-    data_config = CholeskyDataGraphConfig(data_size=1 * 1024 * 1024 * 1024)
-    config = CholeskyConfig(blocks=args.blocks, task_config=task_config)
-    tasks, data = make_graph(config, data_config=data_config)
-
-    mem = 1600 * 1024 * 1024 * 1024
-    bandwidth = (20 * 1024 * 1024 * 1024) / 10**4
-    latency = 1
-    n_devices = args.devices
-    devices = uniform_connected_devices(n_devices, mem, latency, bandwidth)
-    # start_logger()
-
-    H = SimulatorHandler(
-        tasks,
-        data,
-        devices,
-        noise_type=TNoiseType.NONE,
-        cmapper_type=CMapperType.EFT_DEQUEUE,
-        pymapper=RoundRobinPythonMapper(n_devices),
-        seed=100,
-    )
-    sim = H.create_simulator()
-    sim.initialize(use_data=True)
-    sim.randomize_durations()
-    sim.enable_python_mapper()
-
-    # samples = 10
-    # for i in range(samples):
-    #     current_sim = H.copy(sim)
-    #     candidates = current_sim.get_mapping_candidates()
-    #     current_sim.run()
-    #     print(current_sim.get_current_time())
 
     return H, sim
 
@@ -204,27 +203,28 @@ def logits_to_actions(logits, action=None):
 
 
 class GreedyNetworkMapper(PythonMapper):
-
     def __init__(self, model):
         self.model = model
 
     def map_tasks(self, candidates: np.ndarray[np.int32], simulator):
-        data = simulator.observer.local_graph_features(candidates)
+        data = simulator.observer.local_graph_features(candidates, k_hop=1)
         with torch.no_grad():
-            p, d, v = self.model.forward(data)
-
-            # choose argmax of network output
-            # This is e-greedy policy
-            p_per_task = torch.argmax(p, dim=1)
-            dev_per_task = torch.argmax(d, dim=1)
+            d, v = self.model.forward(data)
+            # Choose argmax of network output for priority and device assignment
+            dev_per_task = torch.argmax(d, dim=-1)
             action_list = []
             for i in range(len(candidates)):
+                # Check if p_per_task and dev_per_task are scalars
+                if dev_per_task.dim() == 0:
+                    dev_task = dev_per_task.item()
+                else:
+                    dev_task = dev_per_task[i].item()
                 a = Action(
                     candidates[i],
                     i,
-                    dev_per_task[i].item(),
-                    p_per_task[i].item(),
-                    p_per_task[i].item(),
+                    dev_task,
+                    0,
+                    0,
                 )
                 action_list.append(a)
         return action_list
@@ -236,45 +236,34 @@ class RandomNetworkMapper(PythonMapper):
         self.model = model
 
     def map_tasks(self, candidates: np.ndarray[np.int32], simulator, output=None):
-        data = simulator.observer.local_graph_features(candidates)
+        data = simulator.observer.local_graph_features(candidates, k_hop=1)
 
         with torch.no_grad():
             self.model.eval()
-            p, d, v = self.model.forward(data)
+            d, v = self.model.forward(data)
             self.model.train()
 
             # sample from network output
-            p_per_task, plogprob, _ = logits_to_actions(p)
             dev_per_task, dlogprob, _ = logits_to_actions(d)
 
             if output is not None:
                 output["candidates"] = candidates
                 output["state"] = data
-                output["plogprob"] = plogprob
                 output["dlogprob"] = dlogprob
                 output["value"] = v
-                output["pactions"] = p_per_task
                 output["dactions"] = dev_per_task
 
             action_list = []
             for i in range(len(candidates)):
 
-                if p_per_task.dim() == 0:
-                    a = Action(
-                        candidates[i],
-                        i,
-                        dev_per_task,
-                        p_per_task,
-                        p_per_task,
-                    )
-                else:
-                    a = Action(
-                        candidates[i],
-                        i,
-                        dev_per_task[i].item(),
-                        p_per_task[i].item(),
-                        p_per_task[i].item(),
-                    )
+                a = Action(
+                    candidates[i],
+                    i,
+                    dev_per_task,
+                    0,
+                    0,
+                )
+
                 action_list.append(a)
         return action_list
 
@@ -289,30 +278,107 @@ lr = args.learning_rate
 epochs = args.num_iterations
 graphs_per_epoch = args.graphs_per_update
 
+# writer = SummaryWriter(f"runs/{run_name}")
+# writer.add_text(
+#     "hyperparameters",
+#     "|param|value|\n|-|-|\n%s"
+#     % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+# )
+
+# Make initial graph
 H, sim = initialize_simulator(seed=0)
 candidates = sim.get_mapping_candidates()
-local_graph = sim.observer.local_graph_features(candidates)
-h = TaskAssignmentNet(args.devices, 4, args.hidden_dim, local_graph)
+local_graph = sim.observer.local_graph_features(candidates, k_hop=1)
+h = TaskAssignmentNetDeviceOnly(args.devices, args.hidden_dim, local_graph)
 optimizer = optim.Adam(h.parameters(), lr=lr)
 netmap = GreedyNetworkMapper(h)
 rnetmap = RandomNetworkMapper(h)
-H.set_python_mapper(netmap)
-backup = H.copy(sim)
+H.set_python_mapper(rnetmap)
 h.apply(init_weights)
+Hs = [H]
+sims = [sim]
 
-run_name = f"ppo_random_task15_one"
-writer = SummaryWriter(f"runs/{run_name}")
-writer.add_text(
-    "hyperparameters",
-    "|param|value|\n|-|-|\n%s"
-    % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
-)
+for i in range(1, graphs_per_epoch):
+    H, sim = initialize_simulator(seed=i)
+    H.set_python_mapper(rnetmap)
+    Hs.append(H)
+    sims.append(sim)
+
+
+Test_Hs = []
+Test_sims = []
+for i in range(99999, 99999 + 20):
+    H, sim = initialize_simulator(seed=i)
+    H.set_python_mapper(netmap)
+    Test_Hs.append(H)
+    Test_sims.append(sim)
+
+
+def test_model(h, global_step=0):
+    for i in range(20):
+        H = Test_Hs[i]
+        sim = Test_sims[i]
+        sim.randomize_priorities()
+        env = H.copy(sim)
+        done = False
+
+        # Run baseline
+        baseline = H.copy(sim)
+        baseline.disable_python_mapper()
+        a = H.get_new_c_mapper()
+        baseline.set_c_mapper(a)
+        baseline_done = baseline.run()
+        baseline_time = baseline.get_current_time()
+
+        # Run env to first mapping
+        obs, immediate_reward, done, terminated, info = env.step()
+
+        while not done:
+            candidates = env.get_mapping_candidates()
+            record = {}
+            action_list = GreedyNetworkMapper(h).map_tasks(candidates, env)
+
+            obs, immediate_reward, done, terminated, info = env.step(action_list)
+            record["done"] = done
+            record["time"] = env.get_current_time()
+
+            if done:
+                percent_improvement = (
+                    1 + (baseline_time - record["time"]) / baseline_time
+                )
+                print(
+                    f"Improvement: {percent_improvement}, Baseline: {baseline_time}, New: {record['time']}"
+                )
+                percent_improvement = percent_improvement
+                record["reward"] = percent_improvement
+
+                # writer.add_scalar(
+                #     "charts/test_episode_reward",
+                #     record["reward"],
+                #     global_step,
+                # )
+                wandb.log({"test_episode_accuracy": record["reward"]})
+
+                break
+            else:
+                record["reward"] = 0
 
 
 def collect_batch(episodes, sim, h, global_step=0):
     batch_info = []
+    global Hs
+    global sims
+    if global_step % args.update_graphs_every == 0 and global_step > 0:
+        for i in range(1, graphs_per_epoch):
+            H, sim = initialize_simulator(seed=i + global_step * args.graphs_per_update)
+            candidates = sim.get_mapping_candidates()
+            H.set_python_mapper(rnetmap)
+            Hs[i] = H
+            sims[i] = sim
     for e in range(0, episodes):
-        sim.randomize_priorities()
+        H = Hs[e % args.graphs_per_update]
+        sim = sims[e % args.graphs_per_update]
+        # sim.randomize_priorities()
         env = H.copy(sim)
         done = False
 
@@ -340,23 +406,32 @@ def collect_batch(episodes, sim, h, global_step=0):
             episode_info.append(record)
 
             if done:
-                percent_improvement = (
-                    1 + (baseline_time - record["time"]) / baseline_time
-                )
-                percent_improvement = percent_improvement
-                record["reward"] = percent_improvement
+                if args.reward == "percent_improvement":
+                    percent_improvement = (
+                        1 + (baseline_time - record["time"]) / baseline_time
+                    )
+                    percent_improvement = percent_improvement
+                    record["reward"] = percent_improvement
+                elif args.reward == "better":
+                    if record["time"] < baseline_time:
+                        record["reward"] = 1
+                    else:
+                        record["reward"] = 0
 
-                writer.add_scalar(
-                    "charts/episode_reward",
-                    record["reward"],
-                    global_step * episodes + e,
+                # writer.add_scalar(
+                #     "charts/episode_reward",
+                #     record["reward"],
+                #     global_step * episodes + e,
+                # )
+                wandb.log(
+                    {"episode_reward": record["reward"]},
                 )
 
-                writer.add_scalar(
-                    "charts/time",
-                    record["time"],
-                    global_step * episodes + e,
-                )
+                # writer.add_scalar(
+                #     "charts/time",
+                #     record["time"],
+                #     global_step * episodes + e,
+                # )
 
                 break
             else:
@@ -368,14 +443,14 @@ def collect_batch(episodes, sim, h, global_step=0):
                 episode_info[t]["advantage"] = (
                     episode_info[-1]["reward"] - episode_info[t]["value"]
                 )
-        print(
-            "Time: ",
-            env.get_current_time(),
-            "Baseline: ",
-            baseline_time,
-            "Length: ",
-            len(batch_info),
-        )
+        # print(
+        #     "Time: ",
+        #     env.get_current_time(),
+        #     "Baseline: ",
+        #     baseline_time,
+        #     "Length: ",
+        #     len(batch_info),
+        # )
 
         batch_info.extend(episode_info)
     return batch_info
@@ -389,16 +464,13 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
 
     batch_size = args.batch_size
 
-    pclipfracs = []
     dclipfracs = []
 
     state = []
     for i in range(n_obs):
         state.append(batch_info[i]["state"])
-        state[i]["plogprob"] = batch_info[i]["plogprob"]
         state[i]["dlogprob"] = batch_info[i]["dlogprob"]
         state[i]["value"] = batch_info[i]["value"]
-        state[i]["pactions"] = batch_info[i]["pactions"]
         state[i]["dactions"] = batch_info[i]["dactions"]
         state[i]["advantage"] = batch_info[i]["advantage"]
         state[i]["returns"] = batch_info[i]["returns"]
@@ -414,11 +486,8 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
         for i, batch in enumerate(loader):
             # print("Mini-batch: ", i, "of", len(loader), "; size: ", len(batch))
             out = h(batch, batch["tasks"].batch)
-            p, d, v = out
+            d, v = out
 
-            pa, plogprob, pentropy = logits_to_actions(
-                p, batch["pactions"].detach().view(-1)
-            )
             da, dlogprob, dentropy = logits_to_actions(
                 d, batch["dactions"].detach().view(-1)
             )
@@ -426,19 +495,10 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             # print("Priority Actions: ", pa)
             # print("Device Actions: ", da)
 
-            plogratio = plogprob.view(-1) - batch["plogprob"].detach().view(-1)
-            pratio = plogratio.exp()
-
             dlogratio = dlogprob.view(-1) - batch["dlogprob"].detach().view(-1)
             dratio = dlogratio.exp()
 
             with torch.no_grad():
-                pold_approx_kl = (-plogratio).mean()
-                papprox_kl = ((pratio - 1) - plogratio).mean()
-                pclipfracs += [
-                    ((pratio - 1.0).abs() > args.clip_coef).float().mean().item()
-                ]
-
                 dold_approx_kl = (-dlogratio).mean()
                 dapprox_kl = ((dratio - 1) - dlogratio).mean()
                 dclipfracs += [
@@ -448,12 +508,6 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             mb_advantages = batch["advantage"].detach().view(-1)
 
             # Policy loss
-            ppg_loss1 = mb_advantages * pratio.view(-1)
-            ppg_loss2 = mb_advantages * torch.clamp(
-                pratio.view(-1), 1 - args.clip_coef, 1 + args.clip_coef
-            )
-            ppg_loss = torch.min(ppg_loss1, ppg_loss2).mean()
-
             dpg_loss1 = mb_advantages * dratio.view(-1)
             dpg_loss2 = mb_advantages * torch.clamp(
                 dratio.view(-1), 1 - args.clip_coef, 1 + args.clip_coef
@@ -472,11 +526,9 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
             v_loss = 0.5 * v_loss_max.mean()
 
-            entropy_loss = pentropy.mean() + dentropy.mean()
+            entropy_loss = dentropy.mean()
             loss = (
-                -1 * (ppg_loss + dpg_loss)
-                - args.ent_coef * entropy_loss
-                + v_loss * args.vf_coef
+                -1 * (dpg_loss) - args.ent_coef * entropy_loss + v_loss * args.vf_coef
             )
 
             optimizer.zero_grad()
@@ -484,54 +536,73 @@ def batch_update(batch_info, update_epoch, h, optimizer, global_step):
             nn.utils.clip_grad_norm_(h.parameters(), args.max_grad_norm)
             optimizer.step()
 
-            writer.add_scalar(
-                "charts/learning_rate",
-                optimizer.param_groups[0]["lr"],
-                global_step * update_epoch + k,
+            # writer.add_scalar(
+            #     "charts/learning_rate",
+            #     optimizer.param_groups[0]["lr"],
+            #     global_step * update_epoch + k,
+            # )
+            # writer.add_scalar(
+            #     "losses/value_loss", v_loss.item(), global_step * update_epoch + k
+            # )
+
+            # writer.add_scalar(
+            #     "losses/ppolicy_loss", ppg_loss.item(), global_step * update_epoch + k
+            # )
+            # writer.add_scalar(
+            #     "losses/entropy", entropy_loss.item(), global_step * update_epoch + k
+            # )
+            # writer.add_scalar(
+            #     "losses/pentropy",
+            #     pentropy.mean().item(),
+            #     global_step * update_epoch + k,
+            # )
+            # writer.add_scalar(
+            #     "losses/dentropy",
+            #     dentropy.mean().item(),
+            #     global_step * update_epoch + k,
+            # )
+            wandb.log(
+                {
+                    "losses/value_loss": v_loss.item(),
+                    "losses/entropy": entropy_loss.item(),
+                    "losses/dentropy": dentropy.mean().item(),
+                },
             )
-            writer.add_scalar(
-                "losses/value_loss", v_loss.item(), global_step * update_epoch + k
+            # writer.add_scalar(
+            #     "losses/pold_approx_kl",
+            #     pold_approx_kl.item(),
+            #     LI,
+            # )
+            # writer.add_scalar("losses/pratio", pratio.mean().item(), LI)
+            # writer.add_scalar("losses/dratio", dratio.mean().item(), LI)
+            # writer.add_scalar("losses/papprox_kl", papprox_kl.item(), LI)
+            # writer.add_scalar("losses/pclipfrac", np.mean(pclipfracs), LI)
+            # writer.add_scalar("losses/dpolicy_loss", dpg_loss.item(), LI)
+            # writer.add_scalar(
+            #     "losses/dold_approx_kl",
+            #     dold_approx_kl.item(),
+            #     LI,
+            # )
+            # writer.add_scalar("losses/dapprox_kl", dapprox_kl.item(), LI)
+            # writer.add_scalar("losses/dclipfrac", np.mean(dclipfracs), LI)
+            wandb.log(
+                {
+                    "losses/dratio": dratio.mean().item(),
+                    "losses/dpolicy_loss": dpg_loss.item(),
+                    "losses/dold_approx_kl": dold_approx_kl.item(),
+                    "losses/dapprox_kl": dapprox_kl.item(),
+                    "losses/dclipfrac": np.mean(dclipfracs),
+                },
             )
-            writer.add_scalar(
-                "losses/ppolicy_loss", ppg_loss.item(), global_step * update_epoch + k
-            )
-            writer.add_scalar(
-                "losses/entropy", entropy_loss.item(), global_step * update_epoch + k
-            )
-            writer.add_scalar(
-                "losses/pentropy",
-                pentropy.mean().item(),
-                global_step * update_epoch + k,
-            )
-            writer.add_scalar(
-                "losses/dentropy",
-                dentropy.mean().item(),
-                global_step * update_epoch + k,
-            )
-            writer.add_scalar(
-                "losses/pold_approx_kl",
-                pold_approx_kl.item(),
-                LI,
-            )
-            writer.add_scalar("losses/pratio", pratio.mean().item(), LI)
-            writer.add_scalar("losses/dratio", dratio.mean().item(), LI)
-            writer.add_scalar("losses/papprox_kl", papprox_kl.item(), LI)
-            writer.add_scalar("losses/pclipfrac", np.mean(pclipfracs), LI)
-            writer.add_scalar("losses/dpolicy_loss", dpg_loss.item(), LI)
-            writer.add_scalar(
-                "losses/dold_approx_kl",
-                dold_approx_kl.item(),
-                LI,
-            )
-            writer.add_scalar("losses/dapprox_kl", dapprox_kl.item(), LI)
-            writer.add_scalar("losses/dclipfrac", np.mean(dclipfracs), LI)
             LI = LI + 1
 
 
 for epoch in range(args.num_iterations):
     print("Epoch: ", epoch)
 
-    batch_info = collect_batch(graphs_per_epoch, sim, h, global_step=epoch)
+    batch_info = collect_batch(
+        graphs_per_epoch * args.reuse_graphs, sim, h, global_step=epoch
+    )
     batch_update(batch_info, args.update_epochs, h, optimizer, global_step=epoch)
 
     # --- Gradient Monitoring ---
@@ -540,44 +611,7 @@ for epoch in range(args.num_iterations):
         if param.grad is not None:
             param_norm = param.grad.data.norm(2).item()
             total_norm += param_norm**2
-            writer.add_scalar(f"gradients/{name}_norm", param_norm, epoch)
-            writer.add_histogram(f"gradients/{name}", param.grad, epoch)
     total_norm = total_norm**0.5
-    writer.add_scalar("gradients/total_norm", total_norm, epoch)
-
-    for name, param in h.named_parameters():
-        if param.grad is not None:
-            grad_norm = param.grad.norm().item()
-            writer.add_scalar(f"grad_norms/{name}", grad_norm, epoch)
-
-    for name, param in h.named_parameters():
-        if param.grad is not None:
-            writer.add_scalar(f"gradients_flow/{name}", param.grad.mean().item(), epoch)
-
-    for name, param in h.named_parameters():
-        writer.add_histogram(f"parameters/{name}", param, epoch)
-
-    for name, param in h.named_parameters():
-        writer.add_scalar(f"parameters_norm/{name}", param.data.norm(2).item(), epoch)
-        writer.add_scalar(f"parameters_std/{name}", param.data.std().item(), 0)
-
-    for i, param_group in enumerate(optimizer.param_groups):
-        for j, param in enumerate(param_group["params"]):
-            if param.grad is not None:
-                state = optimizer.state[param]
-                if "exp_avg" in state:
-                    writer.add_scalar(
-                        f"optimizer/group_{i}/param_{j}_exp_avg",
-                        state["exp_avg"].mean().item(),
-                        epoch,
-                    )
-                if "exp_avg_sq" in state:
-                    writer.add_scalar(
-                        f"optimizer/group_{i}/param_{j}_exp_avg_sq",
-                        state["exp_avg_sq"].mean().item(),
-                        epoch,
-                    )
-
     # Save the model
     if (epoch + 1) % 100 == 0:
         torch.save(
@@ -589,10 +623,9 @@ for epoch in range(args.num_iterations):
             f"runs/{run_name}/checkpoint_epoch_{epoch+1}.pth",
         )
 
-    writer.flush()
+    # writer.flush()
 
-writer.close()
+# writer.close()
 
 # save pytorch model
 torch.save(h.state_dict(), f"runs/{run_name}/model.pth")
-torch.save(h, f"runs/{run_name}/model.torch")

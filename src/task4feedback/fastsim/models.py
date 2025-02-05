@@ -741,3 +741,54 @@ class TaskAssignmentNet(nn.Module):
         d_logits = self.actor_d_head(z)
 
         return p_logits, d_logits, v
+
+
+class TaskAssignmentNetDeviceOnly(nn.Module):
+    def __init__(self, ndevices, hidden_channels, data):
+        super(TaskAssignmentNetDeviceOnly, self).__init__()
+
+        self.in_channels_tasks = data["tasks"].x.shape[1]
+        self.in_channels_data = data["data"].x.shape[1]
+        self.in_channels_devices = data["devices"].x.shape[1]
+
+        self.task_data_edge_dim = data[("data", "used_by", "tasks")].edge_attr.shape[1]
+        self.task_device_edge_dim = data[
+            ("devices", "variant", "tasks")
+        ].edge_attr.shape[1]
+        self.task_task_edge_dim = data[
+            ("tasks", "depends_on", "tasks")
+        ].edge_attr.shape[1]
+
+        self.hetero_gat_actor = HeteroGAT(hidden_channels, data)
+        self.hetero_gat_critic = HeteroGAT(hidden_channels, data)
+        self.ndevices = ndevices
+
+        # input dimension
+        critic_input_dim = hidden_channels * 3 + self.in_channels_tasks
+        actor_input_dim = hidden_channels * 3 + self.in_channels_tasks
+
+        # Critic Head
+        self.critic_head = ActorCriticHead(critic_input_dim, hidden_channels, 1)
+
+        # Actor Head for Device Assignment
+        self.actor_d_head = ActorCriticHead(actor_input_dim, hidden_channels, ndevices)
+
+    def forward(self, data, task_batch=None):
+        # Get features from HeteroGAT
+        x = self.hetero_gat_critic(data)
+
+        # Critic Head
+        v = self.critic_head(x)
+        v = global_mean_pool(v, task_batch)
+
+        z = self.hetero_gat_actor(data)
+
+        if task_batch is not None:
+            z = z[data["tasks"].ptr[:-1]]
+        else:
+            z = z[0]
+
+        # Actor Head for Device Assignment
+        d_logits = self.actor_d_head(z)
+
+        return d_logits, v

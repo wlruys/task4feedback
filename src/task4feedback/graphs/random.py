@@ -254,7 +254,8 @@ def make_random_graph(
         solver = z3.Optimize()
 
         # Constraints for device assignment
-        for i in range(M):
+        solver.add(mapped[0] == 0)
+        for i in range(1, M):
             solver.add(z3.And(mapped[i] >= 0, mapped[i] < N))
 
         # Constraints for start and end times (ensure non-negative times)
