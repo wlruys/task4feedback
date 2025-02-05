@@ -9,6 +9,7 @@
 #include <iostream>
 #include <ostream>
 #include <set>
+#include <span>
 #include <string>
 #include <tabulate/table.hpp>
 #include <tabulate/tabulate.hpp>

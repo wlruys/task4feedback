@@ -5,7 +5,7 @@
 import cython 
 
 from graph cimport GraphManager
-from settings cimport taskid_t, dataid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t, copy_t
+from settings cimport int8_t, taskid_t, dataid_t, TaskIDList, DataIDList, DeviceIDList, DeviceType, devid_t, depcount_t, vcu_t, mem_t, timecount_t, copy_t
 from tasks cimport Tasks, Variant, TaskState, TaskStatus
 from data cimport Data 
 from noise cimport TaskNoise, ExternalTaskNoise, LognormalTaskNoise, esf_t
@@ -653,6 +653,12 @@ cdef class PyObserver:
     def global_features(self):
         self.observer.global_features()
 
+    def get_device_mask_int8(self, taskid_t task_id, int8_t[:] valid_devices):
+        self.observer.get_device_mask_int8(task_id, &valid_devices[0], valid_devices.shape[0])
+
+    # def get_device_mask_int32(self, taskid_t, task_id, int32_t[:] valid_devices):
+    #     self.observer.get_device_mask[int32_t](task_id, &valid_devices[0], valid_devices.shape[0])
+        
     def get_active_tasks(self):
         cdef TaskIDList tasks = self.observer.get_active_tasks()
         return convert_taskid_list_to_numpy(tasks, copy=True)

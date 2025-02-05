@@ -15,7 +15,7 @@ cimport cython
 
 from libcpp.vector cimport vector 
 from cython.operator cimport dereference as deref, preincrement as inc
-from libc.stdint cimport uint8_t, int64_t, int32_t, uint32_t, uint64_t 
+from libc.stdint cimport int8_t, uint8_t, int64_t, int32_t, uint32_t, uint64_t 
 from libcpp.string cimport string
 from libcpp.utility cimport move
 from libc.stddef cimport size_t
@@ -140,6 +140,7 @@ cdef extern from "include/observer.hpp":
         TaskIDList get_active_tasks()
         TaskIDList get_k_hop_dependents(taskid_t* initial_tasks, size_t ntasks, int k)
         TaskIDList get_k_hop_dependencies(taskid_t* initial_tasks, size_t ntasks, int k)
+        void get_device_mask_int8(taskid_t task_id, int8_t* devices, size_t max_devices)
         TaskFeatures get_task_features(taskid_t* tasks, size_t ntasks)
         DataFeatures get_data_features(dataid_t* data, size_t ndata)
         DeviceFeatures get_device_features(devid_t* devices, size_t ndevices)

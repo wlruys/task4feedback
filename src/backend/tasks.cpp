@@ -10,8 +10,8 @@ std::vector<DeviceType> ComputeTask::get_supported_architectures() const
   for (const auto &variant : variants)
   {
     auto arch = variant.get_arch();
-    if (arch != DeviceType::NONE)
-    {
+
+    if (arch != DeviceType::NONE) {
       supported_architectures.push_back(arch);
     }
   }

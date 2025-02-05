@@ -254,6 +254,14 @@ public:
     preprocess_global(tasks, data);
   }
 
+  void get_device_mask_int8(taskid_t task_id, int8_t *valid_devices,
+                            size_t max_devices) const {
+    const auto &s = this->state.get();
+    assert(max_devices > s.get_device_manager().get_devices().size());
+    s.fill_supported_devices(task_id,
+                             std::span<int8_t>(valid_devices, max_devices));
+  }
+
   [[nodiscard]] TaskIDList get_active_tasks() const {
     const auto &s = this->state.get();
     return s.counts.get_active_task_list();

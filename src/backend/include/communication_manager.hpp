@@ -519,8 +519,8 @@ public:
                                              devid_t src, devid_t dst) const
   {
 
-    if (src == dst)
-    {
+
+    if (src == dst || size == 0) {
       return 0;
     }
 
@@ -535,8 +535,8 @@ public:
                                                    devid_t dst) const
   {
 
-    if (src == dst)
-    {
+
+    if (src == dst || size == 0) {
       return 0;
     }
 
@@ -549,7 +549,7 @@ public:
     SPDLOG_DEBUG("Calculating ideal time to transfer {} bytes from device {} "
                  "to device {} with bandwidth {} and latency {}",
                  size, src, dst, bw, latency);
-    return std::max(time, static_cast<timecount_t>(1));
+    return std::max(time, static_cast<timecount_t>(0));
   }
 
   [[nodiscard]] SourceRequest
