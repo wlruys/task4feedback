@@ -72,9 +72,11 @@ def create_simulator(config: SimulatorConfig):
     )
 
     tasklist, simulated_tasks = create_sim_graph(
-        config.tasks, config.data, use_data=config.use_data,
+        config.tasks,
+        config.data,
+        use_data=config.use_data,
         task_order_mode=config.task_order_mode,
-        task_order_log=config.task_order_log
+        task_order_log=config.task_order_log,
     )
 
     # for task in simulated_tasks.values():

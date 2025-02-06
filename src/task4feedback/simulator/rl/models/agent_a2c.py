@@ -17,18 +17,25 @@ import random
 
 
 class A2CAgent(RLModel):
-
-    def __init__(self, rl_env: RLBaseEnvironment, load_best_model: int = 0,
-                 execution_mode: str = "testing", lr: float = 0.999,
-                 eps_start = 0.9, eps_end = 0.03, eps_decay = 1000,
-                 oracle_function: OraclePolicy = None):
+    def __init__(
+        self,
+        rl_env: RLBaseEnvironment,
+        load_best_model: int = 0,
+        execution_mode: str = "testing",
+        lr: float = 0.999,
+        eps_start=0.9,
+        eps_end=0.03,
+        eps_decay=1000,
+        oracle_function: OraclePolicy = None,
+    ):
         self.rl_env = rl_env
         self.num_actions = rl_env.get_out_dim()
         # S, (S, A) value networks
         self.network = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
-        self.optimizer = optim.RMSprop(self.network.parameters(),
-                                       lr=0.0001)#, weight_decay=0.5)
-                                       #lr=0.0005)
+        self.optimizer = optim.RMSprop(
+            self.network.parameters(), lr=0.0001
+        )  # , weight_decay=0.5)
+        # lr=0.0005)
         self.execution_mode = execution_mode
         self.episode = 0
 
@@ -42,7 +49,7 @@ class A2CAgent(RLModel):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Accumulated reward 
+        # Accumulated reward
         self.accumulated_reward = 0
 
         # Model parameters
@@ -77,7 +84,9 @@ class A2CAgent(RLModel):
             returns.insert(0, R)
         return returns
 
-    def select_device(self, task: SimulatedTask, state: torch.tensor, sched_state: "SystemState"):
+    def select_device(
+        self, task: SimulatedTask, state: torch.tensor, sched_state: "SystemState"
+    ):
         """
         Select a device from pi.
         If a specified state has not been visited, select a device from a neural
@@ -111,10 +120,11 @@ class A2CAgent(RLModel):
 
         next_state = self.rl_env.create_state(self.terminal_task, sched_state)
         _, next_v = self.network(next_state)
-        cat_log_probs = torch.cat(
-            [lp.unsqueeze(0) for lp in self.log_probs])
+        cat_log_probs = torch.cat([lp.unsqueeze(0) for lp in self.log_probs])
         cat_values = torch.cat(self.values)
-        cat_rewards = torch.tensor([reward for i in range(0, len(self.values))]).to(self.device)
+        cat_rewards = torch.tensor([reward for i in range(0, len(self.values))]).to(
+            self.device
+        )
 
         returns = self.compute_returns(next_v, cat_rewards)
         returns = torch.cat(returns).detach()
@@ -122,7 +132,7 @@ class A2CAgent(RLModel):
         actor_loss = -(cat_log_probs * advantage.detach()).mean()
         critic_loss = F.mse_loss(cat_values.unsqueeze(-1), returns.unsqueeze(-1))
         loss = actor_loss + 0.5 * critic_loss - 0.001 * self.entropy_sum
-        print("Loss,", self.steps-1, ",", loss.item())
+        print("Loss,", self.steps - 1, ",", loss.item())
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -137,15 +147,14 @@ class A2CAgent(RLModel):
         self.rewards = []
 
     def load_model(self):
-        """ Load a2c model and optimizer parameters from files;
-            if a file doesn't exist, skip reading and use default parameters.
+        """Load a2c model and optimizer parameters from files;
+        if a file doesn't exist, skip reading and use default parameters.
         """
         print("Load models..", flush=True)
         if os.path.exists(self.net_fname):
             self.network = torch.load(self.net_fname)
         else:
-            print("A2C network does not exist, and so, not loaded",
-                  flush=True)
+            print("A2C network does not exist, and so, not loaded", flush=True)
         if os.path.exists(self.optimizer_fname):
             # The optimizer needs to do two phases to correctly link it
             # to the policy network, and load parameters.
@@ -155,7 +164,7 @@ class A2CAgent(RLModel):
             print("Optimizer  does not exist, and so, not loaded", flush=True)
 
     def save_model(self):
-        """ Save a2c model and optimizer parameters to files. """
+        """Save a2c model and optimizer parameters to files."""
         if not self.is_training_mode():
             return
         print("Save models..", flush=True)
@@ -192,17 +201,19 @@ class A2CAgent(RLModel):
         Start a new episode, and update (or initialize) the current state.
         """
         self.episode += 1
-        #self.print_model("started")
+        # self.print_model("started")
 
     def complete_episode(self, execution_time):
         """
         Finalize the current episode.
         """
-        #self.print_model("finished")
+        # self.print_model("finished")
 
-        print("reward,",self.steps-1, ",", self.accumulated_reward)
+        print("reward,", self.steps - 1, ",", self.accumulated_reward)
         with open("log.out", "a") as fp:
-            fp.write(str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n")
+            fp.write(
+                str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n"
+            )
 
         if self.is_training_mode():
             self.save_model()

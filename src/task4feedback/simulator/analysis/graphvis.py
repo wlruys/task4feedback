@@ -22,7 +22,6 @@ import io
 def build_data_usage_networkx_graph(
     tasks: SimulatedTaskMap, verbose: bool = False
 ) -> nx.DiGraph:
-
     G = nx.DiGraph()
 
     task_color_map = {
@@ -77,7 +76,6 @@ def build_data_usage_networkx_graph(
 def build_mapping_networkx_graph(
     tasks: SimulatedTaskMap, topology: SimulatedTopology
 ) -> nx.DiGraph:
-
     G = nx.DiGraph()
 
     devices = topology.devices
@@ -86,7 +84,6 @@ def build_mapping_networkx_graph(
     task_color_map = {device.name: colors[i] for i, device in enumerate(devices)}
 
     for name, info in tasks.items():
-
         if isinstance(info, SimulatedDataTask):
             continue
 
@@ -127,7 +124,6 @@ def build_state_at_time(
     time: Time,
     plot_data_tasks: bool = False,
 ) -> nx.DiGraph:
-
     G = nx.DiGraph()
 
     devices = topology.devices
@@ -138,7 +134,6 @@ def build_state_at_time(
     task_size_map = {s: sizes[i] for i, s in enumerate(TaskState)}
 
     for name, info in tasks.items():
-
         if isinstance(info, SimulatedDataTask) and not plot_data_tasks:
             continue
 

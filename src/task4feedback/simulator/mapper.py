@@ -163,7 +163,6 @@ def eft_without_data(task: SimulatedTask, simulator) -> Optional[Devices]:
     potential_devices = task.info.runtime.locations
     # potential_devices = scheduler_state.topology.devices
     for device in potential_devices:
-
         if isinstance(device, Tuple):
             device = device[0]
 
@@ -274,7 +273,6 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
 
     total_workload = 0
     for device in potential_devices:
-
         if isinstance(device, Tuple):
             device = device[0]
 
@@ -284,7 +282,6 @@ def parla_mapping_policy(task: SimulatedTask, simulator) -> Optional[Devices]:
         total_workload += scheduler_state.perdev_active_workload[device]
 
     for device in potential_devices:
-
         if isinstance(device, Tuple):
             device = device[0]
 

@@ -197,7 +197,6 @@ def _plot_events(
     recorder: EventRecorder,
     labels: bool = False,
 ):
-
     for time, events in recorder.completed_events.items():
         end_time = time.duration
         for event in events:
@@ -237,7 +236,6 @@ def _plot_compute_tasks(
     device_color_map = plt.cm.tab20.colors
 
     for taskid, taskrecord in recorder.tasks.items():
-
         active_read_data = data_id is not None and data_id in taskrecord.read_data
         active_write_data = data_id is not None and data_id in taskrecord.write_data
         active_read_write_data = data_id is not None and (
@@ -348,7 +346,6 @@ def _plot_data_tasks(
     type_color_map = {TaskType.DATA: "purple", TaskType.EVICTION: "lightgreen"}
 
     for taskid, taskrecord in recorder.tasks.items():
-
         active_data = data_id is not None and data_id in taskrecord.read_data
         active_device = device_id is not None and (
             device_id in _get_device_list(taskrecord)

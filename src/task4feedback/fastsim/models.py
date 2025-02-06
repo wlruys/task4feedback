@@ -528,7 +528,6 @@ class HeteroGAT(nn.Module):
         self.activation = nn.LeakyReLU(negative_slope=0.01)
 
     def forward(self, data):
-
         # Process data to tasks
         data_fused_tasks = self.gnn_tasks_data(
             (data["data"].x, data["tasks"].x),
@@ -590,7 +589,6 @@ class HeteroVec(nn.Module):
         )
 
     def forward(self, data):
-
         # Get subgraph for candidate task
 
         subset_dict = {"tasks": torch.tensor([0])}

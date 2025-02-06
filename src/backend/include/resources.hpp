@@ -5,7 +5,11 @@
 #include <limits>
 #include <sys/types.h>
 
-enum class ResourceType { VCUS = 0, MEM = 1, TIME = 2 };
+enum class ResourceType {
+  VCUS = 0,
+  MEM = 1,
+  TIME = 2
+};
 constexpr std::size_t num_resource_types = 3;
 
 using vcu_t = uint64_t;
@@ -27,8 +31,7 @@ consteval mem_t operator"" _MB(unsigned long long val) {
   return static_cast<mem_t>(val * BYTES_IN_POWER * BYTES_IN_POWER);
 }
 consteval mem_t operator"" _GB(unsigned long long val) {
-  return static_cast<mem_t>(val * BYTES_IN_POWER * BYTES_IN_POWER *
-                            BYTES_IN_POWER);
+  return static_cast<mem_t>(val * BYTES_IN_POWER * BYTES_IN_POWER * BYTES_IN_POWER);
 }
 
 consteval timecount_t operator"" _us(unsigned long long val) {
@@ -51,63 +54,70 @@ struct Resources {
   mem_t mem = 0;
 
   Resources() = default;
-  Resources(vcu_t vcu, mem_t mem) : vcu(vcu), mem(mem) {}
+  Resources(vcu_t vcu, mem_t mem) : vcu(vcu), mem(mem) {
+  }
 
-  [[nodiscard]] bool empty() const { return vcu == 0 && mem == 0; }
+  [[nodiscard]] bool empty() const {
+    return vcu == 0 && mem == 0;
+  }
 
-  [[nodiscard]] bool empty_vcu() const { return vcu == 0; }
+  [[nodiscard]] bool empty_vcu() const {
+    return vcu == 0;
+  }
 
-  [[nodiscard]] bool empty_mem() const { return mem == 0; }
+  [[nodiscard]] bool empty_mem() const {
+    return mem == 0;
+  }
 
-  Resources &operator+=(const Resources &rhs) {
+  Resources& operator+=(const Resources& rhs) {
     vcu += rhs.vcu;
     mem += rhs.mem;
     return *this;
   }
 
-  Resources &operator-=(const Resources &rhs) {
+  Resources& operator-=(const Resources& rhs) {
     vcu -= rhs.vcu;
     mem -= rhs.mem;
     return *this;
   }
 
-  Resources operator+(const Resources &rhs) const {
+  Resources operator+(const Resources& rhs) const {
     Resources result = *this;
     result += rhs;
     return result;
   }
 
-  Resources operator-(const Resources &rhs) const {
+  Resources operator-(const Resources& rhs) const {
     Resources result = *this;
     result -= rhs;
     return result;
   }
 
-  [[nodiscard]] bool operator==(const Resources &rhs) const {
+  [[nodiscard]] bool operator==(const Resources& rhs) const {
     return vcu == rhs.vcu && mem == rhs.mem;
   }
 
-  [[nodiscard]] bool operator!=(const Resources &rhs) const {
+  [[nodiscard]] bool operator!=(const Resources& rhs) const {
     return !(*this == rhs);
   }
 
-  [[nodiscard]] bool operator<(const Resources &rhs) const {
+  [[nodiscard]] bool operator<(const Resources& rhs) const {
     return vcu < rhs.vcu && mem < rhs.mem;
   }
 
-  [[nodiscard]] bool operator>(const Resources &rhs) const {
+  [[nodiscard]] bool operator>(const Resources& rhs) const {
     return vcu > rhs.vcu && mem > rhs.mem;
   }
 
-  [[nodiscard]] bool operator<=(const Resources &rhs) const {
+  [[nodiscard]] bool operator<=(const Resources& rhs) const {
     return vcu <= rhs.vcu && mem <= rhs.mem;
   }
 
-  [[nodiscard]] bool operator>=(const Resources &rhs) const {
+  [[nodiscard]] bool operator>=(const Resources& rhs) const {
     return vcu >= rhs.vcu && mem >= rhs.mem;
   }
 
-  friend std::ostream &operator<<(std::ostream &os, const Resources &r) {
+  friend std::ostream& operator<<(std::ostream& os, const Resources& r) {
     os << "Resources(VCUs: " << r.vcu << ", MEM: " << r.mem << ")";
     return os;
   }

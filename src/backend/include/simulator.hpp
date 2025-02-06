@@ -29,7 +29,7 @@ enum class ExecutionState {
 };
 constexpr std::size_t num_execution_states = 6;
 
-inline std::string to_string(const ExecutionState &state) {
+inline std::string to_string(const ExecutionState& state) {
   switch (state) {
   case ExecutionState::NONE:
     return "NONE";
@@ -54,7 +54,7 @@ inline std::string to_string(const ExecutionState &state) {
   }
 }
 
-inline std::ostream &operator<<(std::ostream &os, const ExecutionState &state) {
+inline std::ostream& operator<<(std::ostream& os, const ExecutionState& state) {
   os << to_string(state);
   return os;
 }
@@ -65,10 +65,9 @@ protected:
     event_manager.create_event(EventType::MAPPER, 0, TaskIDList());
   }
 
-  ExecutionState dispatch_mapper(Event &event) {
+  ExecutionState dispatch_mapper(Event& event) {
     if (use_python_mapper && scheduler.get_queues().has_mappable() &&
-        scheduler.conditions->should_map(scheduler.get_state(),
-                                         scheduler.get_queues())) {
+        scheduler.conditions->should_map(scheduler.get_state(), scheduler.get_queues())) {
       return ExecutionState::EXTERNAL_MAPPING;
     }
     // otherwise just run the mapper from C++
@@ -87,18 +86,24 @@ public:
   ExecutionState last_state = ExecutionState::NONE;
   Event last_event = Event(EventType::MAPPER, 0, TaskIDList());
 
-  Simulator(SchedulerInput &input)
-      : event_manager(EventManager()), scheduler(Scheduler(input)),
-        mapper(input.mapper) {}
+  Simulator(SchedulerInput& input)
+      : event_manager(EventManager()), scheduler(Scheduler(input)), mapper(input.mapper) {
+  }
 
   void set_use_python_mapper(bool use_python_mapper_) {
     use_python_mapper = use_python_mapper_;
   }
 
-  void set_mapper(Mapper &mapper_) { mapper = mapper_; }
+  void set_mapper(Mapper& mapper_) {
+    mapper = mapper_;
+  }
 
-  const SchedulerState &get_state() const { return scheduler.get_state(); }
-  SchedulerState &get_state() { return scheduler.get_state(); }
+  const SchedulerState& get_state() const {
+    return scheduler.get_state();
+  }
+  SchedulerState& get_state() {
+    return scheduler.get_state();
+  }
 
   void initialize(bool create_data_tasks = false) {
     add_initial_event();
@@ -106,12 +111,11 @@ public:
     initialized = true;
   }
 
-  void
-  set_transition_conditions(std::shared_ptr<TransitionConditions> conditions_) {
+  void set_transition_conditions(std::shared_ptr<TransitionConditions> conditions_) {
     scheduler.set_transition_conditions(std::move(conditions_));
   }
 
-  ExecutionState handle_event(Event &event) {
+  ExecutionState handle_event(Event& event) {
     auto event_type = event.get_type();
 
     switch (event_type) {
@@ -138,13 +142,15 @@ public:
     return {};
   }
 
-  void update_time(Event &event) { scheduler.update_time(event.get_time()); }
+  void update_time(Event& event) {
+    scheduler.update_time(event.get_time());
+  }
 
-  const TaskIDList &get_mappable_candidates() {
+  const TaskIDList& get_mappable_candidates() {
     return scheduler.get_mappable_candidates();
   }
 
-  void map_tasks(ActionList &action_list) {
+  void map_tasks(ActionList& action_list) {
     scheduler.map_tasks_from_python(action_list, event_manager);
     // Set the state back to running
     last_state = ExecutionState::RUNNING;

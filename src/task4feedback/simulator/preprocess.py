@@ -277,9 +277,9 @@ def filter_data_dependenices(task: SimulatedTask):
     read_set = set([d.id for d in read]).difference([d.id for d in read_write])
     write_set = set([d.id for d in write]).difference([d.id for d in read_write])
 
-    assert (
-        len(read_set.intersection(write_set)) == 0
-    ), "Read and write sets must be disjoint"
+    assert len(read_set.intersection(write_set)) == 0, (
+        "Read and write sets must be disjoint"
+    )
 
     read = list(DataAccess(id=d) for d in read_set)
     write = list(DataAccess(id=d) for d in write_set)

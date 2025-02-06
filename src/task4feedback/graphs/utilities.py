@@ -263,7 +263,7 @@ class DataPlacer:
                 self.device_data_sizes[device] += data_size
                 self.data_id_to_device[data_id] = device
                 print(
-                    f"data ID: {data_id} size in MB: {data_size/1024/1024} placed: {device}."
+                    f"data ID: {data_id} size in MB: {data_size / 1024 / 1024} placed: {device}."
                 )
                 return device
 
@@ -271,7 +271,7 @@ class DataPlacer:
         cpu_device = Device(Architecture.CPU, 0)
         self.data_id_to_device[data_id] = cpu_device
         print(
-            f"data ID: {data_id} size in MB: {data_size/1024/1024} placed: {cpu_device}."
+            f"data ID: {data_id} size in MB: {data_size / 1024 / 1024} placed: {cpu_device}."
         )
         return cpu_device
 
@@ -292,14 +292,14 @@ class DataPlacer:
             self.data_id_to_device[data_id] = Device(Architecture.GPU, chosen)
 
         print(
-            f"data ID: {data_id} size in MB: {data_size/1024/1024} placed: {self.data_id_to_device[data_id]}."
+            f"data ID: {data_id} size in MB: {data_size / 1024 / 1024} placed: {self.data_id_to_device[data_id]}."
         )
 
         return self.data_id_to_device[data_id]
 
     def cpu_data_placement(self, data_id: DataID) -> Devices:
         print(
-            f"data ID: {data_id} size in MB: {self.data_size(data_id)/1024/1024} placed: {Device(Architecture.CPU, 0)}."
+            f"data ID: {data_id} size in MB: {self.data_size(data_id) / 1024 / 1024} placed: {Device(Architecture.CPU, 0)}."
         )
         return Device(Architecture.CPU, 0)
 

@@ -8,12 +8,12 @@ from torch_geometric.nn import GCNConv
 """
 3 Graph Convolutional Networks (GCNs) + 1 Fully-Conneceted Network (FCN).
 """
-class A2CNetwork(torch.nn.Module):
 
+
+class A2CNetwork(torch.nn.Module):
     def __init__(self, gcn_indim: int, in_dim: int, out_dim: int):
         super().__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available()
-                                   else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.gcn_indim = gcn_indim
         self.fcn1_indim = in_dim
         self.fcn1_outdim = in_dim * 4
@@ -23,19 +23,17 @@ class A2CNetwork(torch.nn.Module):
         self.gcn = GCNConv(self.gcn_indim, self.gcn_indim).to(device=self.device)
 
         # Actor configuration
-        self.actor_fcn1 = Linear(self.fcn1_indim, self.fcn1_outdim,
-                                 device=self.device)
-        self.actor_fcn2 = Linear(self.fcn1_outdim, self.fcn2_outdim,
-                                 device=self.device)
-        self.actor_out = Linear(self.fcn2_outdim, self.actor_outdim,
-                                device=self.device)
+        self.actor_fcn1 = Linear(self.fcn1_indim, self.fcn1_outdim, device=self.device)
+        self.actor_fcn2 = Linear(self.fcn1_outdim, self.fcn2_outdim, device=self.device)
+        self.actor_out = Linear(self.fcn2_outdim, self.actor_outdim, device=self.device)
         # Critic configuration
-        self.critic_fcn1 = Linear(self.fcn1_indim, self.fcn1_outdim,
-                                  device=self.device)
-        self.critic_fcn2 = Linear(self.fcn1_outdim, self.fcn2_outdim,
-                                  device=self.device)
-        self.critic_out = Linear(self.fcn2_outdim, self.critic_outdim,
-                                 device=self.device)
+        self.critic_fcn1 = Linear(self.fcn1_indim, self.fcn1_outdim, device=self.device)
+        self.critic_fcn2 = Linear(
+            self.fcn1_outdim, self.fcn2_outdim, device=self.device
+        )
+        self.critic_out = Linear(
+            self.fcn2_outdim, self.critic_outdim, device=self.device
+        )
 
     def forward(self, model_input):
         is_batch = model_input.is_batch
@@ -67,4 +65,4 @@ class A2CNetwork(torch.nn.Module):
         c = F.leaky_relu(self.critic_fcn2(c))
         c = self.critic_out(c)
 
-        return a,c
+        return a, c

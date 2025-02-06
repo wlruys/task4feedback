@@ -13,19 +13,22 @@ from .env import *
 
 import torchviz
 
-MappingLogs = namedtuple("MappingLogs",
-                         ("state", "action", "next_state"))
+MappingLogs = namedtuple("MappingLogs", ("state", "action", "next_state"))
+
 
 class A2CAgent(RLModel):
-
-    def __init__(self, rl_env: RLBaseEnvironment, load_best_model: int = 0,
-                 execution_mode: str = "testing", lr: float = 0.999):
+    def __init__(
+        self,
+        rl_env: RLBaseEnvironment,
+        load_best_model: int = 0,
+        execution_mode: str = "testing",
+        lr: float = 0.999,
+    ):
         # Actor: Policy network that selects an action.
         # Critic: Value network that evaluates an action from the policy network.
         self.a2c_model = A2CNetworkNoGCN(rl_env.get_state_dim(), rl_env.get_out_dim())
-        self.optimizer = optim.RMSprop(self.a2c_model.parameters(),
-                                       lr=0.0001)
-                                       #lr=0.0005)
+        self.optimizer = optim.RMSprop(self.a2c_model.parameters(), lr=0.0001)
+        # lr=0.0005)
         self.steps = 0
         self.execution_mode = execution_mode
         self.is_loaded_model_best = load_best_model
@@ -40,7 +43,7 @@ class A2CAgent(RLModel):
         self.best_optimizer_fname = "best_optimizer.pt"
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.task_mapping_decision = dict()
-        # Accumulated reward 
+        # Accumulated reward
         self.accumulated_reward = 0
         # Log action selection
         self.entropy_sum = 0
@@ -126,23 +129,25 @@ class A2CAgent(RLModel):
             # To perform TD to optimize the model, get a state value
             # of the expected next state from the critic netowrk
             _, next_value = self.a2c_model(
-                NetworkInput(next_x, False, next_gcn_x, next_gcn_edgeindex))
-            cat_log_probs = torch.cat(
-                [lp.unsqueeze(0) for lp in self.log_probs])
+                NetworkInput(next_x, False, next_gcn_x, next_gcn_edgeindex)
+            )
+            cat_log_probs = torch.cat([lp.unsqueeze(0) for lp in self.log_probs])
             cat_values = torch.cat(self.values)
             cat_rewards = torch.cat(self.rewards).to(self.device)
             returns = self.compute_returns(next_value, cat_rewards)
-            returns = torch.cat(returns).detach() 
+            returns = torch.cat(returns).detach()
             advantage = returns - cat_values
             actor_loss = -(cat_log_probs * advantage.detach()).mean()
-            #critic_loss = advantage.pow(2).mean()
-            critic_loss = 1 * F.mse_loss(cat_values.unsqueeze(-1), returns.unsqueeze(-1))
+            # critic_loss = advantage.pow(2).mean()
+            critic_loss = 1 * F.mse_loss(
+                cat_values.unsqueeze(-1), returns.unsqueeze(-1)
+            )
             loss = actor_loss + 0.5 * critic_loss - 0.001 * self.entropy_sum
             self.optimizer.zero_grad()
             loss.backward()
             # torchviz.make_dot(loss, params=dict(self.a2c_model.named_parameters())).render("attacehd", format="png")
             for param in self.a2c_model.parameters():
-               param.grad.data.clamp_(-1, 1)
+                param.grad.data.clamp_(-1, 1)
             """
             print("next x:", next_x)
             print("next_gcn_x:", next_gcn_x)
@@ -164,15 +169,14 @@ class A2CAgent(RLModel):
             self.rewards = []
 
     def load_model(self):
-        """ Load a2c model and optimizer parameters from files;
-            if a file doesn't exist, skip reading and use default parameters.
+        """Load a2c model and optimizer parameters from files;
+        if a file doesn't exist, skip reading and use default parameters.
         """
         print("Load models..", flush=True)
         if os.path.exists(self.a2cnet_fname):
             self.a2c_model = torch.load(self.a2cnet_fname)
         else:
-            print("A2C network does not exist, and so, not loaded",
-                  flush=True)
+            print("A2C network does not exist, and so, not loaded", flush=True)
         if os.path.exists(self.optimizer_fname):
             # The optimizer needs to do two phases to correctly link it
             # to the policy network, and load parameters.
@@ -182,7 +186,7 @@ class A2CAgent(RLModel):
             print("Optimizer  does not exist, and so, not loaded", flush=True)
 
     def save_model(self):
-        """ Save a2c model and optimizer parameters to files. """
+        """Save a2c model and optimizer parameters to files."""
         if not self.is_training_mode():
             return
         print("Save models..", flush=True)
@@ -228,18 +232,18 @@ class A2CAgent(RLModel):
             self.load_model()
 
     def start_episode(self):
-        """ Start a new episode, and update (or initialize) the current state.
-        """
+        """Start a new episode, and update (or initialize) the current state."""
         self.episode += 1
-        #self.print_model("started")
+        # self.print_model("started")
 
     def complete_episode(self, execution_time):
-        """ Finalize the current episode.
-        """
-        #self.print_model("finished")
+        """Finalize the current episode."""
+        # self.print_model("finished")
         print("Episode total reward:", self.episode, ", ", self.accumulated_reward)
         with open("log.out", "a") as fp:
-            fp.write(str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n")
+            fp.write(
+                str(self.episode) + " reward, " + str(self.accumulated_reward) + "\n"
+            )
         if self.is_training_mode():
             self.save_model()
             if execution_time < self.fastest_execution_time:
@@ -263,7 +267,7 @@ class A2CAgent(RLModel):
 
     def log_action(self, action: int):
         """
-        Log a chosen action (A). 
+        Log a chosen action (A).
         """
         self.tmp_action = action
 
@@ -280,7 +284,9 @@ class A2CAgent(RLModel):
         """
 
         # print("S:", self.tmp_curr_state, " A:", self.tmp_action, " S':", self.tmp_next_state)
-        self.logs.append(MappingLogs(self.tmp_curr_state, self.tmp_action, self.tmp_next_state))
+        self.logs.append(
+            MappingLogs(self.tmp_curr_state, self.tmp_action, self.tmp_next_state)
+        )
         # print("logs length:", len(self.logs))
         self.tmp_curr_state = None
         self.tmp_action = None

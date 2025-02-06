@@ -8,15 +8,17 @@ from torch_geometric.data import Data
 """
 3 Graph Convolutional Networks (GCNs) + 1 Fully-Conneceted Network (FCN).
 """
-class GCN(torch.nn.Module):
 
+
+class GCN(torch.nn.Module):
     def __init__(self, in_dim: int, out_dim: int):
         super().__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available()
-                                   else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.gcn_indim = in_dim
         self.outdim = out_dim
-        self.gcn = GCNConv(self.gcn_indim, self.gcn_indim, device=self.device, flow="target_to_source").to(device=self.device)
+        self.gcn = GCNConv(
+            self.gcn_indim, self.gcn_indim, device=self.device, flow="target_to_source"
+        ).to(device=self.device)
         self.out = Linear(self.gcn_indim, self.outdim, device=self.device)
 
     def forward(self, x, ei):

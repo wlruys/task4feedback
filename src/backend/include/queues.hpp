@@ -24,17 +24,15 @@ constexpr int MAX_PRIORITY = 100;
 template <typename Q>
 concept QueueConcept = requires(Q q) {
   typename Q::value_type;
-  {q.push(std::declval<typename Q::value_type>())};
-  {q.pop()};
+  { q.push(std::declval<typename Q::value_type>()) };
+  { q.pop() };
   { q.top() } -> std::convertible_to<typename Q::value_type>;
   { q.size() } -> std::convertible_to<std::size_t>;
   { q.empty() } -> std::convertible_to<bool>;
 };
 
 template <typename Q>
-concept PriorityQueueConcept = QueueConcept<Q> && requires(Q q) {
-  typename Q::value_compare;
-};
+concept PriorityQueueConcept = QueueConcept<Q> && requires(Q q) { typename Q::value_compare; };
 
 template <typename Q>
 concept WrappedQueueConcept = QueueConcept<Q> && requires(Q q) {
@@ -54,31 +52,55 @@ private:
 
 public:
   ResizeableArray() = default;
-  T &at(std::size_t index) { return arr[index]; }
-  T &operator[](int index) { return arr[index]; }
+  T& at(std::size_t index) {
+    return arr[index];
+  }
+  T& operator[](int index) {
+    return arr[index];
+  }
   void remove_at(int index);
-  void erase(T *it);
-  void insert(T *it, T val);
+  void erase(T* it);
+  void insert(T* it, T val);
   void insert_at(int index, T val);
-  void push_back(T val) { arr[l++] = val; }
-  void pop_back() { l--; }
-  [[nodiscard]] std::size_t size() const { return l; }
+  void push_back(T val) {
+    arr[l++] = val;
+  }
+  void pop_back() {
+    l--;
+  }
+  [[nodiscard]] std::size_t size() const {
+    return l;
+  }
   void pop_front();
   void push_front(T val);
-  [[nodiscard]] const T &front() const { return arr[0]; }
-  [[nodiscard]] const T &back() const { return arr[l - 1]; }
-  T &front() { return arr[0]; }
-  T &back() { return arr[l - 1]; }
-  T *begin() { return arr.begin(); }
-  T *end() { return arr.begin() + l; }
-  [[nodiscard]] bool empty() const { return l == 0; }
+  [[nodiscard]] const T& front() const {
+    return arr[0];
+  }
+  [[nodiscard]] const T& back() const {
+    return arr[l - 1];
+  }
+  T& front() {
+    return arr[0];
+  }
+  T& back() {
+    return arr[l - 1];
+  }
+  T* begin() {
+    return arr.begin();
+  }
+  T* end() {
+    return arr.begin() + l;
+  }
+  [[nodiscard]] bool empty() const {
+    return l == 0;
+  }
 };
 
 template <typename T> struct Element {
   T value;
   int priority;
 
-  bool operator<(const Element &other) const {
+  bool operator<(const Element& other) const {
     if (priority == other.priority) {
       return value < other.value;
     }
@@ -104,7 +126,7 @@ class ContainerQueue {
 private:
   struct ElementCompare {
     Compare compare;
-    bool operator()(const Element<T> &lhs, const Element<T> &rhs) const {
+    bool operator()(const Element<T>& lhs, const Element<T>& rhs) const {
       if (lhs.priority == rhs.priority) {
         return compare(lhs.value, rhs.value);
       }
@@ -113,8 +135,7 @@ private:
   };
 
   using QueueType = Queue<Element<T>, std::vector<Element<T>>, ElementCompare>;
-  static_assert(PriorityQueueConcept<QueueType>,
-                "Queue must satisfy PriorityQueueConcept");
+  static_assert(PriorityQueueConcept<QueueType>, "Queue must satisfy PriorityQueueConcept");
 
   unsigned long seed = 0;
   std::mt19937 gen;
@@ -130,37 +151,59 @@ public:
   // Conditionally define ContainerQueue::K if QueueType::K exists to satify
   // is_top_k_queue if QueueType is a TopKQueue
   template <typename QT = QueueType>
-  requires is_top_k_queue<QT>
+    requires is_top_k_queue<QT>
   static constexpr int K = QT::K;
 
-  ContainerQueue() : dist(MIN_PRIORITY, MAX_PRIORITY) {}
-  ContainerQueue(unsigned long seed)
-      : gen(seed), dist(MIN_PRIORITY, MAX_PRIORITY) {}
-  ContainerQueue(int min, int max) : gen(0), dist(min, max) {}
-  ContainerQueue(unsigned long seed, int min, int max)
-      : gen(seed), dist(min, max) {}
+  ContainerQueue() : dist(MIN_PRIORITY, MAX_PRIORITY) {
+  }
+  ContainerQueue(unsigned long seed) : gen(seed), dist(MIN_PRIORITY, MAX_PRIORITY) {
+  }
+  ContainerQueue(int min, int max) : gen(0), dist(min, max) {
+  }
+  ContainerQueue(unsigned long seed, int min, int max) : gen(seed), dist(min, max) {
+  }
 
-  void push(T value) { pq.push(make_element(value)); }
+  void push(T value) {
+    pq.push(make_element(value));
+  }
   void push(T value, priority_t priority) {
     pq.push(make_element(value, priority));
   }
-  void push(Element<T> element) { pq.push(element); }
-  void push_random(T value) { pq.push(make_element(value, dist(gen))); }
-  [[nodiscard]] const T &top() const { return pq.top().value; }
-  const T &top() { return const_cast<T &>(std::as_const(*this).top()); }
-  [[nodiscard]] const Element<T> &top_element() const { return pq.top(); };
-  const Element<T> &top_element() {
-    return const_cast<Element<T> &>(std::as_const(*this).top_element());
+  void push(Element<T> element) {
+    pq.push(element);
+  }
+  void push_random(T value) {
+    pq.push(make_element(value, dist(gen)));
+  }
+  [[nodiscard]] const T& top() const {
+    return pq.top().value;
+  }
+  const T& top() {
+    return const_cast<T&>(std::as_const(*this).top());
+  }
+  [[nodiscard]] const Element<T>& top_element() const {
+    return pq.top();
   };
-  void pop() { pq.pop(); }
-  [[nodiscard]] bool empty() const { return pq.empty(); }
-  [[nodiscard]] std::size_t size() const { return pq.size(); }
+  const Element<T>& top_element() {
+    return const_cast<Element<T>&>(std::as_const(*this).top_element());
+  };
+  void pop() {
+    pq.pop();
+  }
+  [[nodiscard]] bool empty() const {
+    return pq.empty();
+  }
+  [[nodiscard]] std::size_t size() const {
+    return pq.size();
+  }
   static consteval int get_k();
   int topk_size();
-  static consteval bool is_top_k() { return is_top_k_queue<QueueType>; }
-  T &at(std::size_t i);
+  static consteval bool is_top_k() {
+    return is_top_k_queue<QueueType>;
+  }
+  T& at(std::size_t i);
   void remove_at(std::size_t i);
-  void remove(std::vector<std::size_t> &indices);
+  void remove(std::vector<std::size_t>& indices);
   auto get_top_k_elements();
   std::vector<T> get_top_k();
 };
@@ -176,49 +219,65 @@ private:
   std::vector<T> top_k;
   std::priority_queue<T, Container, Compare> remaining_min_heap;
   Compare cmp;
-  std::function<bool(const T &, const T &)> r_cmp;
+  std::function<bool(const T&, const T&)> r_cmp;
 
-  void insert_top_k(const T &val);
-  void push_front(const T &val) { top_k.insert(top_k.begin(), val); }
-  void pop_front() { top_k.erase(top_k.begin()); }
+  void insert_top_k(const T& val);
+  void push_front(const T& val) {
+    top_k.insert(top_k.begin(), val);
+  }
+  void pop_front() {
+    top_k.erase(top_k.begin());
+  }
 
 public:
   using value_type = T;
   using value_compare = Compare;
   static constexpr int K = k;
 
-  TopKQueue() : r_cmp([this](const T &a, const T &b) { return !cmp(a, b); }) {}
+  TopKQueue() : r_cmp([this](const T& a, const T& b) { return !cmp(a, b); }) {
+  }
 
-  [[nodiscard]] value_compare value_comp() const { return Compare{}; }
-  void push(const T &val);
+  [[nodiscard]] value_compare value_comp() const {
+    return Compare{};
+  }
+  void push(const T& val);
   void pop();
-  [[nodiscard]] const T &top() const;
-  T &top() { return const_cast<T &>(std::as_const(*this).top()); }
-  T &at(std::size_t i);
+  [[nodiscard]] const T& top() const;
+  T& top() {
+    return const_cast<T&>(std::as_const(*this).top());
+  }
+  T& at(std::size_t i);
   void remove_at(std::size_t i);
-  [[nodiscard]] bool empty() const { return top_k.empty(); }
+  [[nodiscard]] bool empty() const {
+    return top_k.empty();
+  }
   [[nodiscard]] std::size_t size() const {
     return top_k.size() + remaining_min_heap.size();
   }
-  auto &get_top_k() { return top_k; }
-  std::size_t topk_size() { return top_k.size(); }
-  static consteval int get_k() { return K; }
-  static consteval bool is_top_k() { return true; }
+  auto& get_top_k() {
+    return top_k;
+  }
+  std::size_t topk_size() {
+    return top_k.size();
+  }
+  static consteval int get_k() {
+    return K;
+  }
+  static consteval bool is_top_k() {
+    return true;
+  }
 
-  void remove(std::vector<std::size_t> &indices);
+  void remove(std::vector<std::size_t>& indices);
 };
 
-static_assert(QueueConcept<TopKQueue<int, 3>>,
-              "Queue must satisfy QueueConcept");
+static_assert(QueueConcept<TopKQueue<int, 3>>, "Queue must satisfy QueueConcept");
 
 template <int k> struct TopKQueueHelper {
-  template <typename T, typename Container = std::vector<T>,
-            typename Compare = std::less<T>>
+  template <typename T, typename Container = std::vector<T>, typename Compare = std::less<T>>
   using queue_type = TopKQueue<T, k, Container, Compare>;
 };
 
-static_assert(is_top_k_queue<TopKQueue<int, 3>>,
-              "TopKQueue must satisfy is_topk_queue");
+static_assert(is_top_k_queue<TopKQueue<int, 3>>, "TopKQueue must satisfy is_topk_queue");
 
 static_assert(is_top_k_queue<TopKQueueHelper<3>::queue_type<int>>);
 
@@ -228,11 +287,10 @@ static_assert(QueueConcept<ContainerQueue<int, TopKQueueHelper<3>::queue_type>>,
 using Top3Queue = TopKQueue<int, 3>;
 using Top10Queue = TopKQueue<int, 10>;
 
-template <typename T, int S> void print(TopKQueue<T, S> &q);
-template <QueueConcept Q> std::vector<typename Q::value_type> as_vector(Q &q);
-template <WrappedQueueConcept Q>
-std::vector<typename Q::element_type> as_vector(Q &q);
-template <WrappedQueueConcept Q> void print_table(Q &q);
+template <typename T, int S> void print(TopKQueue<T, S>& q);
+template <QueueConcept Q> std::vector<typename Q::value_type> as_vector(Q& q);
+template <WrappedQueueConcept Q> std::vector<typename Q::element_type> as_vector(Q& q);
+template <WrappedQueueConcept Q> void print_table(Q& q);
 
 template <typename T, int s> void ResizeableArray<T, s>::remove_at(int index) {
   for (int i = index; i < l - 1; i++) {
@@ -242,8 +300,8 @@ template <typename T, int s> void ResizeableArray<T, s>::remove_at(int index) {
   l--;
 }
 
-template <typename T, int s> void ResizeableArray<T, s>::erase(T *it) {
-  for (T *i = it; i != arr.begin() + l - 1; i++) {
+template <typename T, int s> void ResizeableArray<T, s>::erase(T* it) {
+  for (T* i = it; i != arr.begin() + l - 1; i++) {
     // check in bounds
     assert(i + 1 < arr.end());
     *i = *(i + 1);
@@ -251,8 +309,8 @@ template <typename T, int s> void ResizeableArray<T, s>::erase(T *it) {
   l--;
 }
 
-template <typename T, int s> void ResizeableArray<T, s>::insert(T *it, T val) {
-  for (T *i = arr.begin() + l - 1; i >= it; i--) {
+template <typename T, int s> void ResizeableArray<T, s>::insert(T* it, T val) {
+  for (T* i = arr.begin() + l - 1; i >= it; i--) {
     // check in bounds
     assert(i + 1 < arr.end());
     *(i + 1) = *i;
@@ -261,8 +319,7 @@ template <typename T, int s> void ResizeableArray<T, s>::insert(T *it, T val) {
   l++;
 }
 
-template <typename T, int s>
-void ResizeableArray<T, s>::insert_at(int index, T val) {
+template <typename T, int s> void ResizeableArray<T, s>::insert_at(int index, T val) {
   for (int i = l - 1; i >= index; i--) {
     assert(i + 1 < s);
     arr[i + 1] = arr[i];
@@ -298,8 +355,7 @@ consteval int ContainerQueue<T, Queue, Compare>::get_k() {
 }
 
 template <typename T, template <typename...> class Queue, typename Compare>
-void ContainerQueue<T, Queue, Compare>::remove(
-    std::vector<std::size_t> &indices) {
+void ContainerQueue<T, Queue, Compare>::remove(std::vector<std::size_t>& indices) {
   if constexpr (is_top_k_queue<QueueType>) {
     pq.remove(indices);
   } else {
@@ -316,7 +372,7 @@ int ContainerQueue<T, Queue, Compare>::topk_size() {
   }
 }
 template <typename T, template <typename...> class Queue, typename Compare>
-T &ContainerQueue<T, Queue, Compare>::at(std::size_t i) {
+T& ContainerQueue<T, Queue, Compare>::at(std::size_t i) {
   if constexpr (is_top_k_queue<QueueType>) {
     return pq.get_top_k().at(i);
   } else {
@@ -336,8 +392,7 @@ auto ContainerQueue<T, Queue, Compare>::get_top_k_elements() {
   if constexpr (is_top_k_queue<QueueType>) {
     return pq.get_top_k();
   } else {
-    return std::vector<typename ContainerQueue::element_type>{
-        this->top_element()};
+    return std::vector<typename ContainerQueue::element_type>{this->top_element()};
   }
 }
 
@@ -345,7 +400,7 @@ template <typename T, template <typename...> class Queue, typename Compare>
 std::vector<T> ContainerQueue<T, Queue, Compare>::get_top_k() {
   std::vector<T> top_k_values;
   if constexpr (is_top_k_queue<QueueType>) {
-    auto &top_k = pq.get_top_k();
+    auto& top_k = pq.get_top_k();
     for (auto it = top_k.begin(); it != top_k.end(); ++it) {
       top_k_values.push_back(it->value);
     }
@@ -356,13 +411,13 @@ std::vector<T> ContainerQueue<T, Queue, Compare>::get_top_k() {
 }
 
 template <typename T, int k, typename Container, typename Compare>
-void TopKQueue<T, k, Container, Compare>::insert_top_k(const T &val) {
+void TopKQueue<T, k, Container, Compare>::insert_top_k(const T& val) {
   auto it = std::lower_bound(top_k.begin(), top_k.end(), val, r_cmp);
   top_k.insert(it, val);
 }
 
 template <typename T, int k, typename Container, typename Compare>
-void TopKQueue<T, k, Container, Compare>::push(const T &val) {
+void TopKQueue<T, k, Container, Compare>::push(const T& val) {
   if (top_k.size() < k) {
     insert_top_k(val);
   } else {
@@ -390,7 +445,7 @@ void TopKQueue<T, k, Container, Compare>::pop() {
 }
 
 template <typename T, int k, typename Container, typename Compare>
-const T &TopKQueue<T, k, Container, Compare>::top() const {
+const T& TopKQueue<T, k, Container, Compare>::top() const {
   if (top_k.empty()) {
     throw std::out_of_range("top() called on an empty queue");
   }
@@ -398,7 +453,7 @@ const T &TopKQueue<T, k, Container, Compare>::top() const {
 }
 
 template <typename T, int k, typename Container, typename Compare>
-T &TopKQueue<T, k, Container, Compare>::at(std::size_t i) {
+T& TopKQueue<T, k, Container, Compare>::at(std::size_t i) {
   if (i >= top_k.size()) {
     throw std::out_of_range("at() called with an index out of range");
   }
@@ -419,22 +474,21 @@ void TopKQueue<T, k, Container, Compare>::remove_at(std::size_t i) {
 }
 
 template <typename T, int k, typename Container, typename Compare>
-void TopKQueue<T, k, Container, Compare>::remove(
-    std::vector<std::size_t> &indices) {
+void TopKQueue<T, k, Container, Compare>::remove(std::vector<std::size_t>& indices) {
   std::sort(indices.begin(), indices.end(), std::greater<>());
   for (auto i : indices) {
     remove_at(i);
   }
 }
 
-template <typename T, int S> void print(TopKQueue<T, S> &q) {
-  auto &top_k = q.get_top_k();
+template <typename T, int S> void print(TopKQueue<T, S>& q) {
+  auto& top_k = q.get_top_k();
   for (auto it = top_k.begin(); it != top_k.end(); ++it) {
     std::cout << *it << " ";
   }
 }
 
-template <QueueConcept Q> std::vector<typename Q::value_type> as_vector(Q &q) {
+template <QueueConcept Q> std::vector<typename Q::value_type> as_vector(Q& q) {
   typedef typename Q::value_type Value_t;
   // drain store and refill queue
   std::vector<Value_t> elements;
@@ -442,14 +496,13 @@ template <QueueConcept Q> std::vector<typename Q::value_type> as_vector(Q &q) {
     elements.push_back(q.top_element());
     q.pop();
   }
-  for (auto &element : elements) {
+  for (auto& element : elements) {
     q.push(element);
   }
   return elements;
 }
 
-template <WrappedQueueConcept Q>
-std::vector<typename Q::element_type> as_vector(Q &q) {
+template <WrappedQueueConcept Q> std::vector<typename Q::element_type> as_vector(Q& q) {
   typedef typename Q::element_type Element_t;
   // drain store and refill queue
   std::vector<Element_t> elements;
@@ -457,13 +510,13 @@ std::vector<typename Q::element_type> as_vector(Q &q) {
     elements.push_back(q.top_element());
     q.pop();
   }
-  for (auto &element : elements) {
+  for (auto& element : elements) {
     q.push(element);
   }
   return elements;
 }
 
-template <WrappedQueueConcept Q> void print_table(Q &q) {
+template <WrappedQueueConcept Q> void print_table(Q& q) {
 
   using namespace tabulate;
   using Row_t = Table::Row_t;
@@ -490,7 +543,7 @@ template <WrappedQueueConcept Q> void print_table(Q &q) {
   table.add_row(priorities);
 
   // Iterator over cells in the first column
-  for (auto &cell : table.column(0)) {
+  for (auto& cell : table.column(0)) {
     if (cell.get_text() != "Company") {
       cell.format().font_align(FontAlign::right).font_style({FontStyle::bold});
     }

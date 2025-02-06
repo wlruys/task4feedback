@@ -15,7 +15,7 @@ enum class EventType {
 constexpr std::size_t num_event_types = 5;
 
 // Define << operator for EventType
-inline std::string to_string(const EventType &type) {
+inline std::string to_string(const EventType& type) {
   switch (type) {
   case EventType::MAPPER:
     return "MAPPER";
@@ -37,7 +37,7 @@ inline std::string to_string(const EventType &type) {
   }
 }
 
-inline std::ostream &operator<<(std::ostream &os, const EventType &type) {
+inline std::ostream& operator<<(std::ostream& os, const EventType& type) {
   os << to_string(type);
   return os;
 }
@@ -50,14 +50,21 @@ protected:
 
 public:
   Event(EventType type, timecount_t time, TaskIDList tasks)
-      : type(type), time(time), tasks(std::move(tasks)) {}
+      : type(type), time(time), tasks(std::move(tasks)) {
+  }
 
-  [[nodiscard]] EventType get_type() const { return type; }
-  [[nodiscard]] timecount_t get_time() const { return time; }
+  [[nodiscard]] EventType get_type() const {
+    return type;
+  }
+  [[nodiscard]] timecount_t get_time() const {
+    return time;
+  }
 
-  [[nodiscard]] const TaskIDList &get_tasks() { return tasks; }
+  [[nodiscard]] const TaskIDList& get_tasks() {
+    return tasks;
+  }
 
-  [[nodiscard]] bool operator<(const Event &other) const {
+  [[nodiscard]] bool operator<(const Event& other) const {
 
     if (time == other.time) {
       // larger events are processed first
@@ -68,7 +75,7 @@ public:
     return time < other.time;
   }
 
-  [[nodiscard]] bool operator>(const Event &other) const {
+  [[nodiscard]] bool operator>(const Event& other) const {
     if (time == other.time) {
       return type < other.type;
     }
@@ -79,31 +86,36 @@ public:
 class MapperEvent : public Event {
 public:
   MapperEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::MAPPER, time, std::move(tasks)} {}
+      : Event{EventType::MAPPER, time, std::move(tasks)} {
+  }
 };
 
 class ReserverEvent : public Event {
 public:
   ReserverEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::RESERVER, time, std::move(tasks)} {}
+      : Event{EventType::RESERVER, time, std::move(tasks)} {
+  }
 };
 
 class LauncherEvent : public Event {
 public:
   LauncherEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::LAUNCHER, time, std::move(tasks)} {}
+      : Event{EventType::LAUNCHER, time, std::move(tasks)} {
+  }
 };
 
 class EvictorEvent : public Event {
 public:
   EvictorEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::EVICTOR, time, std::move(tasks)} {}
+      : Event{EventType::EVICTOR, time, std::move(tasks)} {
+  }
 };
 
 class CompleterEvent : public Event {
 public:
   CompleterEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::COMPLETER, time, std::move(tasks)} {}
+      : Event{EventType::COMPLETER, time, std::move(tasks)} {
+  }
 };
 
 using EventList = std::vector<Event>;

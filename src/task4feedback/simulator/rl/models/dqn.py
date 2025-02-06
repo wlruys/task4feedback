@@ -10,21 +10,28 @@ from ..networks.dqn_gcn_fcn import *
 from .replay_memory import *
 from .globals import *
 
-class DQNAgent:
 
+class DQNAgent:
     # TODO(hc): execution mode would be enum, instead of string.
-    def __init__(self, gcn_indim: int, in_dim: int, out_dim: int,
-                 execution_mode: str = "training",
-                 eps_start = 0.9, eps_end = 0.05, eps_decay = 1000,
-                 batch_size = 10, gamma = 0.999):
-        if True: # Use GCN+FCN layers
+    def __init__(
+        self,
+        gcn_indim: int,
+        in_dim: int,
+        out_dim: int,
+        execution_mode: str = "training",
+        eps_start=0.9,
+        eps_end=0.05,
+        eps_decay=1000,
+        batch_size=10,
+        gamma=0.999,
+    ):
+        if True:  # Use GCN+FCN layers
             self.policy_network = DQNNetwork(gcn_indim, in_dim, out_dim)
             self.target_network = DQNNetwork(gcn_indim, in_dim, out_dim)
-        else: # Use pure FCN layers
+        else:  # Use pure FCN layers
             self.policy_network = FCN(in_dim, out_dim)
             self.target_network = FCN(in_dim, out_dim)
-        self.optimizer = optim.RMSprop(self.policy_network.parameters(),
-                                       lr=0.002)
+        self.optimizer = optim.RMSprop(self.policy_network.parameters(), lr=0.002)
         self.replay_memory = ReplayMemory(1000)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.execution_mode = execution_mode
@@ -48,12 +55,12 @@ class DQNAgent:
     def is_training_mode(self):
         return "training" in self.execution_mode
 
-    def select_device(self, x, gcn_x = None, gcn_edgeindex = None):
-        """ Select a device (action) with a state `x` and `policy_network`.
-        """
+    def select_device(self, x, gcn_x=None, gcn_edgeindex=None):
+        """Select a device (action) with a state `x` and `policy_network`."""
         sample = random.random()
-        eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * \
-                        math.exp(-1. * self.steps / self.eps_decay)
+        eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * math.exp(
+            -1.0 * self.steps / self.eps_decay
+        )
         print("sample:", sample)
         self.steps += 1
         if (not self.is_training_mode()) or sample > eps_threshold:
@@ -69,14 +76,13 @@ class DQNAgent:
             # TODO(hc): Check mask; the mask is marked if that device does not
             # have sufficient resources.
             out = torch.tensor(
-                  random.choice([d for d in range(self.n_actions)]),
-                  dtype=torch.float)
+                random.choice([d for d in range(self.n_actions)]), dtype=torch.float
+            )
 
         return out
 
     def optimize_model(self):
-        """ Optimize DQN model.
-        """
+        """Optimize DQN model."""
         if not self.is_training_mode():
             return
 
@@ -92,8 +98,9 @@ class DQNAgent:
 
         # Make each next state in transitions as a separete element in a list.
         # Then, `target_network` will produce an output for each next state.
-        next_states = torch.cat([s.unsqueeze(0) for s in batch.next_state
-                                 if s is not None])
+        next_states = torch.cat(
+            [s.unsqueeze(0) for s in batch.next_state if s is not None]
+        )
         # States should be [[state1], [state2], ..]
         states = torch.cat([s.unsqueeze(0) for s in batch.state])
         # Actions should be [[action1], [action2], ..]
@@ -103,29 +110,35 @@ class DQNAgent:
         # GCN states should be [[state1], [state2], ..] or [].
         # The latter case implies that either a GCN layer is not used, or none
         # of the subgraph is visible.
-        lst_gcn_states = [s.unsqueeze(0) for s in batch.gcn_state
-                          if s is not None]
-        gcn_states = None if len(lst_gcn_states) == 0 \
-                     else torch.cat(lst_gcn_states)
-        lst_next_gcn_states = [s.unsqueeze(0) for s in
-                               batch.next_gcn_state if s is not None]
-        next_gcn_states = None if len(lst_next_gcn_states) == 0 else \
-                          torch.cat(lst_next_gcn_states)
+        lst_gcn_states = [s.unsqueeze(0) for s in batch.gcn_state if s is not None]
+        gcn_states = None if len(lst_gcn_states) == 0 else torch.cat(lst_gcn_states)
+        lst_next_gcn_states = [
+            s.unsqueeze(0) for s in batch.next_gcn_state if s is not None
+        ]
+        next_gcn_states = (
+            None if len(lst_next_gcn_states) == 0 else torch.cat(lst_next_gcn_states)
+        )
         # GCN edge index should be [[src nodes], [dst nodes]] or [].
         # The latter case implies that either a GCN layer is not used, or none
         # of the subgraph is visible.
-        lst_gcn_edgeindex = [ei.unsqueeze(0) for ei in batch.gcn_edgeindex
-                             if ei is not None]
-        gcn_edgeindex = None if len(lst_gcn_edgeindex) == 0 else \
-                        torch.cat(lst_gcn_edgeindex)
-        lst_next_gcn_edgeindex = [ei.unsqueeze(0) for ei in
-                                  batch.next_gcn_edgeindex if ei is not None]
-        next_gcn_edgeindex = None if len(lst_next_gcn_edgeindex) == 0 \
-                             else torch.cat(lst_next_gcn_edgeindex)
-        next_model_inputs = NetworkInput(next_states, True, next_gcn_states,
-                                         next_gcn_edgeindex)
-        next_states_qvals = \
-            self.target_network(next_model_inputs).max(1)[0].detach()
+        lst_gcn_edgeindex = [
+            ei.unsqueeze(0) for ei in batch.gcn_edgeindex if ei is not None
+        ]
+        gcn_edgeindex = (
+            None if len(lst_gcn_edgeindex) == 0 else torch.cat(lst_gcn_edgeindex)
+        )
+        lst_next_gcn_edgeindex = [
+            ei.unsqueeze(0) for ei in batch.next_gcn_edgeindex if ei is not None
+        ]
+        next_gcn_edgeindex = (
+            None
+            if len(lst_next_gcn_edgeindex) == 0
+            else torch.cat(lst_next_gcn_edgeindex)
+        )
+        next_model_inputs = NetworkInput(
+            next_states, True, next_gcn_states, next_gcn_edgeindex
+        )
+        next_states_qvals = self.target_network(next_model_inputs).max(1)[0].detach()
         model_inputs = NetworkInput(states, True, gcn_states, gcn_edgeindex)
         # Get Q values of the chosen action from `policy_network`.
         states_qvals = self.policy_network(model_inputs).gather(1, actions)
@@ -142,28 +155,25 @@ class DQNAgent:
         self.optimizer.step()
 
     def update_target_network(self):
-        """ In DQN, the target network needs to update its parameters
-            by the policy network for each inverval. This function
-            performs this. """
+        """In DQN, the target network needs to update its parameters
+        by the policy network for each inverval. This function
+        performs this."""
         if self.episode != 0 and episode % 100 == 0:
-            self.target_network.load_state_dict(
-                self.policy_network.state_dict())
+            self.target_network.load_state_dict(self.policy_network.state_dict())
 
     def load_models(self):
-        """ Load policy_network, target_network, and optimizer
-            parameters from files; if a file doesn't exist, skip reading
-            and use default parameters. """
+        """Load policy_network, target_network, and optimizer
+        parameters from files; if a file doesn't exist, skip reading
+        and use default parameters."""
         print("Load models..", flush=True)
         if os.path.exists(self.policynet_fname):
             self.policy_network = torch.load(self.policynet_fname)
         else:
-            print("Policy network does not exist, and so, not loaded",
-                  flush=True)
+            print("Policy network does not exist, and so, not loaded", flush=True)
         if os.path.exists(self.targetnet_fname):
             self.target_network = torch.load(self.targetnet_fname)
         else:
-            print("Target network does not exist, and so, not loaded",
-                  flush=True)
+            print("Target network does not exist, and so, not loaded", flush=True)
         if os.path.exists(self.optimizer_fname):
             # The optimizer needs to do two phases to correctly link it
             # to the policy network, and load parameters.
@@ -173,8 +183,8 @@ class DQNAgent:
             print("Optimizer  does not exist, and so, not loaded", flush=True)
 
     def save_models(self):
-        """ Save policy_network, target_network, and optimizer
-            parameters to files. """
+        """Save policy_network, target_network, and optimizer
+        parameters to files."""
         if not self.is_training_mode():
             return
         print("Save models..", flush=True)
@@ -191,25 +201,36 @@ class DQNAgent:
 
         pass
 
-    def append_transition(self, state: torch.tensor, action: torch.tensor,
-                          next_state: torch.tensor, reward: torch.tensor,
-                          gcn_state = None, gcn_edgeindex = None,
-                          next_gcn_state = None, next_gcn_edgeindex = None):
-        """ Append (S, A, S', R) to the experience replay memory.
-        """
-        self.replay_memory.push(state, action, next_state, reward,
-                                gcn_state, gcn_edgeindex,
-                                next_gcn_state, next_gcn_edgeindex)
+    def append_transition(
+        self,
+        state: torch.tensor,
+        action: torch.tensor,
+        next_state: torch.tensor,
+        reward: torch.tensor,
+        gcn_state=None,
+        gcn_edgeindex=None,
+        next_gcn_state=None,
+        next_gcn_edgeindex=None,
+    ):
+        """Append (S, A, S', R) to the experience replay memory."""
+        self.replay_memory.push(
+            state,
+            action,
+            next_state,
+            reward,
+            gcn_state,
+            gcn_edgeindex,
+            next_gcn_state,
+            next_gcn_edgeindex,
+        )
 
     def start_episode(self):
-        """ Start a new episode, and update (or initialize) the current state.
-        """
+        """Start a new episode, and update (or initialize) the current state."""
         self.episode += 1
         self.print_model("started")
 
     def complete_episode(self):
-        """ Finalize the current episode.
-        """
+        """Finalize the current episode."""
         self.print_model("finished")
 
     def print_model(self, prefix: str):

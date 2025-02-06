@@ -85,7 +85,7 @@ def make_cholesky_graph(
                 dependency_list,
                 data_dependencies,
                 task_mapping,
-                func_id=config.func_id(syrk_task_id)
+                func_id=config.func_id(syrk_task_id),
             )
 
         # Diagonal block Cholesky
@@ -102,7 +102,7 @@ def make_cholesky_graph(
             dependency_list,
             data_dependencies,
             task_mapping,
-            func_id=config.func_id(potrf_task_id)
+            func_id=config.func_id(potrf_task_id),
         )
 
         for i in range(j + 1, config.blocks):
@@ -124,7 +124,7 @@ def make_cholesky_graph(
                     dependency_list,
                     data_dependencies,
                     task_mapping,
-                    func_id=config.func_id(gemm_task_id)
+                    func_id=config.func_id(gemm_task_id),
                 )
 
             # Panel solve
@@ -143,7 +143,7 @@ def make_cholesky_graph(
                 dependency_list,
                 data_dependencies,
                 task_mapping,
-                func_id=config.func_id(solve_task_id)
+                func_id=config.func_id(solve_task_id),
             )
 
     return task_dict, data_dict

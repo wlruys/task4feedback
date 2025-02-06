@@ -1,0 +1,18 @@
+# .clang-format
+BasedOnStyle: LLVM
+IndentWidth: 2       
+TabWidth: 2
+UseTab: Never        
+
+AllowShortEnumsOnASingleLine: false
+ColumnLimit: 100    
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+SpacesInAngles: false
+
+DerivePointerAlignment: false
+PointerAlignment: Left

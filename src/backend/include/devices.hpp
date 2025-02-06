@@ -3,10 +3,14 @@
 #include <iostream>
 #include <type_traits>
 
-enum class DeviceType { NONE = -1, CPU = 0, GPU = 1 };
+enum class DeviceType {
+  NONE = -1,
+  CPU = 0,
+  GPU = 1
+};
 constexpr std::size_t num_device_types = 2;
 
-inline auto to_string(const DeviceType &arch) {
+inline auto to_string(const DeviceType& arch) {
   switch (arch) {
   case DeviceType::NONE:
     return "NONE";
@@ -22,7 +26,7 @@ inline auto to_string(const DeviceType &arch) {
   }
 }
 
-inline std::ostream &operator<<(std::ostream &os, const DeviceType &arch) {
+inline std::ostream& operator<<(std::ostream& os, const DeviceType& arch) {
   os << to_string(arch);
   return os;
 }
@@ -35,5 +39,6 @@ public:
 
   Device() = default;
   Device(devid_t id, DeviceType arch, vcu_t vcu, mem_t mem)
-      : id(id), arch(arch), max_resources(vcu, mem) {}
+      : id(id), arch(arch), max_resources(vcu, mem) {
+  }
 };

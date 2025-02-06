@@ -11,25 +11,25 @@ def verify_task_order(task: SimulatedTask, taskmap: SimulatedTaskMap):
     for state_1 in TaskState:
         for state_2 in TaskState:
             if state_2 >= state_1:
-                assert (
-                    times.state_times[state_1] <= times.state_times[state_2]
-                ), f"Task {task.name} has state {state_1} at time {times.state_times[state_1]}. Task {task.name} has state {state_2} at time {times.state_times[state_2]}."
+                assert times.state_times[state_1] <= times.state_times[state_2], (
+                    f"Task {task.name} has state {state_1} at time {times.state_times[state_1]}. Task {task.name} has state {state_2} at time {times.state_times[state_2]}."
+                )
 
     # Verify status times are ascending
     for status_1 in TaskStatus:
         for status_2 in TaskStatus:
             if status_2 >= status_1:
-                assert (
-                    times.status_times[status_1] <= times.status_times[status_2]
-                ), f"Task {task.name} has status {status_1} at time {times.status_times[status_1]}. Task {task.name} has status {status_2} at time {times.status_times[status_2]}."
+                assert times.status_times[status_1] <= times.status_times[status_2], (
+                    f"Task {task.name} has status {status_1} at time {times.status_times[status_1]}. Task {task.name} has status {status_2} at time {times.status_times[status_2]}."
+                )
 
     # Verify state times are after all dependencies
     for state in TaskState:
         for dependency in task.dependencies:
             dependency = taskmap[dependency]
-            assert (
-                times.state_times[state] >= dependency.times.state_times[state]
-            ), f"Task {task.name} has state {state} at time {times.state_times[state]}. Dependency {dependency.name} has state {state} at time {dependency.times.state_times[state]}."
+            assert times.state_times[state] >= dependency.times.state_times[state], (
+                f"Task {task.name} has state {state} at time {times.state_times[state]}. Dependency {dependency.name} has state {state} at time {dependency.times.state_times[state]}."
+            )
 
     # Verify status times are after all dependencies
     for status in TaskStatus:
@@ -45,7 +45,9 @@ def verify_task_order(task: SimulatedTask, taskmap: SimulatedTaskMap):
                 continue
             assert (
                 times.status_times[status] >= dependency.times.status_times[status]
-            ), f"Task {task.name} has status {status} at time {times.status_times[status]}. Dependency {dependency.name} has status {status} at time {dependency.times.status_times[status]}."
+            ), (
+                f"Task {task.name} has status {status} at time {times.status_times[status]}. Dependency {dependency.name} has status {status} at time {dependency.times.status_times[status]}."
+            )
 
 
 def verify_order(tasks: SimulatedTaskMap):
@@ -65,9 +67,9 @@ def verify_resources_at_snapshot(
     for task in running_tasks:
         task = tasks[task]
         devices = task.assigned_devices
-        assert (
-            devices is not None
-        ), f"Task {task.name} is running but has no assigned devices."
+        assert devices is not None, (
+            f"Task {task.name} is running but has no assigned devices."
+        )
         if not isinstance(devices, tuple):
             devices = (devices,)
 
@@ -77,9 +79,9 @@ def verify_resources_at_snapshot(
             current_usage[device] += resources[i]
 
     for device, usage in current_usage.items():
-        assert (
-            usage <= devicemap[device].resources
-        ), f"Device {device} has resources {devicemap[device].resources} but is using {usage}."
+        assert usage <= devicemap[device].resources, (
+            f"Device {device} has resources {devicemap[device].resources} but is using {usage}."
+        )
 
 
 def verify_runtime_resources(

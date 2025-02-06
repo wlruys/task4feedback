@@ -327,7 +327,9 @@ def make_random_graph(
         if solver.check() == z3.sat:
             model = solver.model()
             best_mapping = [model.evaluate(mapped[i]).as_long() for i in range(M)]  # type: ignore
-            best_start_times = [model.evaluate(start_time[i]).as_long() for i in range(M)]  # type: ignore
+            best_start_times = [
+                model.evaluate(start_time[i]).as_long() for i in range(M)
+            ]  # type: ignore
             best_end_times = [model.evaluate(end_time[i]).as_long() for i in range(M)]  # type: ignore
             # best_makespan = model.evaluate(T).as_long()  # type: ignore
             best_makespan = max(best_end_times)
@@ -340,7 +342,7 @@ def make_random_graph(
                 ranks[sorted_idx[i]] = i
 
             print(f"Best Mapping: {best_mapping}")
-            print(f"Optimal,simtime,{best_makespan/(1000**2)}")
+            print(f"Optimal,simtime,{best_makespan / (1000**2)}")
             for tid, i in tid_to_int.items():
                 task_dict[tid].z3_allocation = best_mapping[i]
                 task_dict[tid].z3_order = ranks[i]

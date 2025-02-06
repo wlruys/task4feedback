@@ -421,7 +421,6 @@ class RoundRobinPythonMapper(PythonMapper):
         action_list = []
 
         for i, candidate in enumerate(candidates):
-
             self.active_device = (self.active_device + 1) % self.n_devices
             while self.mask is not None and not self.mask[self.active_device]:
                 self.active_device = (self.active_device + 1) % self.n_devices
@@ -539,7 +538,9 @@ class Observer:
         """
         return self.observer.get_task_task_edges(source_tasks, target_tasks)
 
-    def get_task_data_edges(self, tasks: np.ndarray[np.uint64]) -> tuple[
+    def get_task_data_edges(
+        self, tasks: np.ndarray[np.uint64]
+    ) -> tuple[
         np.ndarray[np.uint64],
         list[np.uint64],
         np.ndarray[np.float64],
@@ -560,7 +561,9 @@ class Observer:
         """
         return self.observer.get_task_data_edges(tasks)
 
-    def get_task_device_edges(self, tasks: np.ndarray[np.uint64]) -> tuple[
+    def get_task_device_edges(
+        self, tasks: np.ndarray[np.uint64]
+    ) -> tuple[
         np.ndarray[np.uint64],
         list[np.ndarray[np.uint64]],
         np.ndarray[np.float64],
@@ -581,7 +584,9 @@ class Observer:
         """
         return self.observer.get_task_device_edges(tasks)
 
-    def get_data_device_edges(self, tasks: np.ndarray[np.uint64]) -> tuple[
+    def get_data_device_edges(
+        self, tasks: np.ndarray[np.uint64]
+    ) -> tuple[
         np.ndarray[np.uint64],
         np.ndarray[np.uint64],
         list[np.ndarray[np.uint64]],
@@ -606,7 +611,6 @@ class Observer:
     def local_graph_features(
         self, candidate_tasks: np.ndarray[np.uint64], k_hop: int = 1
     ):
-
         # print(active_tasks, active_tasks.dtype)
 
         g = geom.data.HeteroData()

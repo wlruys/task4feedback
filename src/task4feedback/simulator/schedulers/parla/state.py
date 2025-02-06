@@ -989,12 +989,12 @@ def _move_data(
 
     # move data is called from a data movement task at launch time
     # each data movement task moves one data item onto a single target device
-    assert (
-        len(data_accesses) == 1
-    ), f"Data Task {task.name} should only move one data item: {data_accesses}"
-    assert (
-        len(devices) == 1
-    ), f"Data Task {task.name} should only move to one device: {devices}"
+    assert len(data_accesses) == 1, (
+        f"Data Task {task.name} should only move one data item: {data_accesses}"
+    )
+    assert len(devices) == 1, (
+        f"Data Task {task.name} should only move to one device: {devices}"
+    )
     target_device = devices[0]
     assert target_device is not None
 
@@ -1028,12 +1028,12 @@ def _finish_move(
 
     # move data is called from a data movement task at launch time
     # each data movement task moves one data item onto a single target device
-    assert (
-        len(data_accesses) == 1
-    ), f"Data Task {task.name} should only move one data item: {data_accesses}"
-    assert (
-        len(devices) == 1
-    ), f"Data Task {task.name} should only move to one device: {devices}"
+    assert len(data_accesses) == 1, (
+        f"Data Task {task.name} should only move one data item: {data_accesses}"
+    )
+    assert len(devices) == 1, (
+        f"Data Task {task.name} should only move to one device: {devices}"
+    )
     target_device = devices[0]
     assert target_device is not None
 
@@ -1177,9 +1177,9 @@ def _data_task_duration(
         task.real = False
         duration = Time(0)
         other_task = list(other_moving_tasks)[0]
-        assert (
-            other_task != task.name
-        ), f"Current task {task} should not be in the list of moving tasks {other_moving_tasks} during duration calculation."
+        assert other_task != task.name, (
+            f"Current task {task} should not be in the list of moving tasks {other_moving_tasks} during duration calculation."
+        )
 
         other_task = state.objects.get_task(other_task)
         completion_time = other_task.completion_time

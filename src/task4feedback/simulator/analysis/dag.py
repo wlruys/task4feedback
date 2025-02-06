@@ -33,7 +33,6 @@ def build_networkx_graph_from_infos(
     G = nx.DiGraph()
 
     for name, task_info in tasks.items():
-
         runtime_infos = task_info.runtime[task_info.runtime.locations[0]]
 
         max_time = max([runtime_info.task_time for runtime_info in runtime_infos])

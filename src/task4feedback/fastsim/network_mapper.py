@@ -78,7 +78,6 @@ class MaskableCategorical(Categorical):
 
 
 class GreedyNetworkMapper(PythonMapper):
-
     def __init__(self, model):
         self.model = model
 
@@ -105,7 +104,6 @@ class GreedyNetworkMapper(PythonMapper):
 
 
 class RandomNetworkMapper(PythonMapper):
-
     def __init__(self, model):
         self.model = model
 
@@ -132,7 +130,6 @@ class RandomNetworkMapper(PythonMapper):
 
             action_list = []
             for i in range(len(candidates)):
-
                 if p_per_task.dim() == 0:
                     a = Action(
                         candidates[i],

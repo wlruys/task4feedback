@@ -11,6 +11,8 @@ depending on a network type. For example, a fully-connected
 network (FCN) only requires a state, but a graph-convolution
 network (GCN) requires not only a state, but also features and a graph topology.
 """
+
+
 @dataclass
 class NetworkInput:
     # State other than vertex feature

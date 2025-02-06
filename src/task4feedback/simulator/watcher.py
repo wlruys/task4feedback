@@ -6,7 +6,6 @@ from .task import *
 
 @dataclass(slots=True)
 class Watcher:
-
     conditions: List[Callable[[SystemState, SchedulerArchitecture, Event], bool]] = (
         field(default_factory=list)
     )
