@@ -14,17 +14,17 @@ public:
     events.emplace(type, time, tasks);
   }
 
-  void add_event(const Event& event) {
+  void add_event(const Event &event) {
     events.push(event);
   }
 
-  void add_events(const EventList& event_list) {
-    for (const auto& event : event_list) {
+  void add_events(const EventList &event_list) {
+    for (const auto &event : event_list) {
       events.push(event);
     }
   }
 
-  const Event& peek_next_event() {
+  const Event &peek_next_event() {
     return events.top();
   }
 

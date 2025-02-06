@@ -10,7 +10,7 @@ enum class DeviceType {
 };
 constexpr std::size_t num_device_types = 2;
 
-inline auto to_string(const DeviceType& arch) {
+inline auto to_string(const DeviceType &arch) {
   switch (arch) {
   case DeviceType::NONE:
     return "NONE";
@@ -26,7 +26,7 @@ inline auto to_string(const DeviceType& arch) {
   }
 }
 
-inline std::ostream& operator<<(std::ostream& os, const DeviceType& arch) {
+inline std::ostream &operator<<(std::ostream &os, const DeviceType &arch) {
   os << to_string(arch);
   return os;
 }

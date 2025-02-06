@@ -15,4 +15,4 @@ SpacesInParentheses: false
 SpacesInAngles: false
 
 DerivePointerAlignment: false
-PointerAlignment: Left
+PointerAlignment: Right

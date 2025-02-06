@@ -51,10 +51,10 @@ public:
   std::vector<TaskIDList> eviction_dependents;
 
   TaskStateInfo() = default;
-  TaskStateInfo(const Tasks& tasks);
+  TaskStateInfo(const Tasks &tasks);
 
-  TaskStateInfo(const TaskStateInfo& other) = default;
-  TaskStateInfo& operator=(const TaskStateInfo& other) = default;
+  TaskStateInfo(const TaskStateInfo &other) = default;
+  TaskStateInfo &operator=(const TaskStateInfo &other) = default;
 
   [[nodiscard]] TaskState get_state(taskid_t id) const {
     return state.at(id);
@@ -91,11 +91,11 @@ public:
   // }
 
   void set_reserving_priority(taskid_t id, priority_t p);
-  void set_reserving_priority(PriorityList& ps) {
+  void set_reserving_priority(PriorityList &ps) {
     reserving_priority = std::move(ps);
   }
   void set_launching_priority(taskid_t id, priority_t p);
-  void set_launching_priority(PriorityList& ps) {
+  void set_launching_priority(PriorityList &ps) {
     launching_priority = std::move(ps);
   }
 
@@ -113,14 +113,14 @@ public:
     assert(id < reserving_priority.size());
     return reserving_priority.at(id);
   };
-  [[nodiscard]] const PriorityList& get_reserving_priorities() const {
+  [[nodiscard]] const PriorityList &get_reserving_priorities() const {
     return reserving_priority;
   }
   [[nodiscard]] priority_t get_launching_priority(taskid_t id) const {
     assert(id < launching_priority.size());
     return launching_priority.at(id);
   };
-  [[nodiscard]] const PriorityList& get_launching_priorities() const {
+  [[nodiscard]] const PriorityList &get_launching_priorities() const {
     return launching_priority;
   }
 
@@ -160,12 +160,12 @@ public:
   std::vector<timecount_t> state_times;
 
   TaskRecords() = default;
-  TaskRecords(const Tasks& tasks) {
+  TaskRecords(const Tasks &tasks) {
     state_times.resize(tasks.size() * n_tracked_states, 0);
   }
 
-  TaskRecords(const TaskRecords& other) = default;
-  TaskRecords& operator=(const TaskRecords& other) = default;
+  TaskRecords(const TaskRecords &other) = default;
+  TaskRecords &operator=(const TaskRecords &other) = default;
 
   void record_mapped(taskid_t id, timecount_t time);
   void record_reserved(taskid_t id, timecount_t time);
@@ -194,12 +194,12 @@ public:
 
   bool initialized = false;
 
-  TaskManager(Tasks& tasks, TaskNoise& noise) : tasks(tasks), noise(noise) {};
+  TaskManager(Tasks &tasks, TaskNoise &noise) : tasks(tasks), noise(noise) {};
   [[nodiscard]] std::size_t size() const {
     return tasks.get().size();
   }
 
-  TaskManager(const TaskManager& other) = default;
+  TaskManager(const TaskManager &other) = default;
 
   void initialize(bool create_data_tasks = false) {
     task_buffer.reserve(TASK_MANAGER_TASK_BUFFER_SIZE);
@@ -212,13 +212,13 @@ public:
   //   state.set_mapping_priority(ps);
   // }
 
-  [[nodiscard]] const TaskStateInfo& get_state() const {
+  [[nodiscard]] const TaskStateInfo &get_state() const {
     return state;
   }
-  [[nodiscard]] const TaskRecords& get_records() const {
+  [[nodiscard]] const TaskRecords &get_records() const {
     return records;
   }
-  [[nodiscard]] const Tasks& get_tasks() const {
+  [[nodiscard]] const Tasks &get_tasks() const {
     return tasks;
   }
 
@@ -242,16 +242,16 @@ public:
     return state.get_data_task_virtual(id);
   }
 
-  const TaskIDList& notify_mapped(taskid_t id, timecount_t time);
-  const TaskIDList& notify_reserved(taskid_t id, timecount_t time);
+  const TaskIDList &notify_mapped(taskid_t id, timecount_t time);
+  const TaskIDList &notify_reserved(taskid_t id, timecount_t time);
   void notify_launched(taskid_t id, timecount_t time);
-  const TaskIDList& notify_completed(taskid_t id, timecount_t time);
-  const TaskIDList& notify_data_completed(taskid_t id, timecount_t time);
+  const TaskIDList &notify_completed(taskid_t id, timecount_t time);
+  const TaskIDList &notify_data_completed(taskid_t id, timecount_t time);
 
-  [[nodiscard]] const Variant& get_task_variant(taskid_t id, DeviceType arch) const {
+  [[nodiscard]] const Variant &get_task_variant(taskid_t id, DeviceType arch) const {
     return tasks.get().get_variant(id, arch);
   }
-  [[nodiscard]] const Resources& get_task_resources(taskid_t id, DeviceType arch) const {
+  [[nodiscard]] const Resources &get_task_resources(taskid_t id, DeviceType arch) const {
     return get_task_variant(id, arch).resources;
   }
 
@@ -260,7 +260,7 @@ public:
   }
 
   [[nodiscard]] timecount_t get_execution_time(taskid_t task_id, DeviceType arch) const {
-    const auto& ctasks = get_tasks();
+    const auto &ctasks = get_tasks();
     assert(ctasks.is_compute(task_id));
     return noise.get().get(task_id, arch);
   }
@@ -275,20 +275,20 @@ private:
   std::reference_wrapper<TaskManager> tm;
 
 public:
-  TaskPrinter(TaskManager& tm) : tm(tm) {
+  TaskPrinter(TaskManager &tm) : tm(tm) {
   }
 
   [[nodiscard]] Color get_task_color(taskid_t id) const;
 
-  template <typename DependencyList> Table make_list_table(DependencyList& dependencies);
+  template <typename DependencyList> Table make_list_table(DependencyList &dependencies);
 
   template <typename DependencyList>
-  Table make_list_table(DependencyList& dependencies, std::string name);
+  Table make_list_table(DependencyList &dependencies, std::string name);
 
   template <typename DependencyList>
-  Table make_list_table_named(DependencyList& dependencies, std::string name);
+  Table make_list_table_named(DependencyList &dependencies, std::string name);
 
-  template <typename DataList> Table make_data_table(DataList& read, DataList& write);
+  template <typename DataList> Table make_data_table(DataList &read, DataList &write);
 
   static Table make_variant_table(Variant v);
 
@@ -297,10 +297,10 @@ public:
   Table make_status_table(taskid_t id);
 
   [[nodiscard]] Table
-  wrap_tables(const std::vector<std::function<tabulate::Table(taskid_t)>>& generators,
+  wrap_tables(const std::vector<std::function<tabulate::Table(taskid_t)>> &generators,
               taskid_t id) const;
 
-  void print_tables(const std::vector<std::function<tabulate::Table(taskid_t)>>& generators,
+  void print_tables(const std::vector<std::function<tabulate::Table(taskid_t)>> &generators,
                     taskid_t id);
 
   static Table wrap_in_task_table(taskid_t id, tabulate::Table table);

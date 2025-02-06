@@ -6,7 +6,7 @@ std::vector<DeviceType> ComputeTask::get_supported_architectures() const {
   SPDLOG_DEBUG("Getting supported architectures for task {}", id);
   SPDLOG_DEBUG("Task has {} variants", variants.size());
 
-  for (const auto& variant : variants) {
+  for (const auto &variant : variants) {
     auto arch = variant.get_arch();
 
     if (arch != DeviceType::NONE) {
@@ -18,7 +18,7 @@ std::vector<DeviceType> ComputeTask::get_supported_architectures() const {
 
 std::vector<Variant> ComputeTask::get_variant_vector() const {
   std::vector<Variant> variant_vector;
-  for (const auto& variant : variants) {
+  for (const auto &variant : variants) {
     auto arch = variant.get_arch();
     if (arch != DeviceType::NONE) {
       variant_vector.push_back(variant);
@@ -66,19 +66,19 @@ void Tasks::add_data_task(DataTask task) {
   data_tasks.emplace_back(std::move(task));
 }
 
-void Tasks::create_data_task(ComputeTask& task, bool has_writer, taskid_t writer_id,
+void Tasks::create_data_task(ComputeTask &task, bool has_writer, taskid_t writer_id,
                              dataid_t data_id) {
   taskid_t data_task_id = current_task_id++;
   data_tasks.emplace_back(data_task_id);
-  DataTask& data_task = data_tasks.back();
-  auto& compute_task_name = task_names[task.id];
+  DataTask &data_task = data_tasks.back();
+  auto &compute_task_name = task_names[task.id];
   task_names.emplace_back(compute_task_name + "_data[" + std::to_string(data_id) + "]");
   data_task.set_data_id(data_id);
   data_task.set_compute_task(task.id);
 
   if (has_writer) {
     data_task.add_dependency(writer_id);
-    auto& writer_task = get_compute_task(writer_id);
+    auto &writer_task = get_compute_task(writer_id);
     writer_task.add_data_dependent(data_task_id);
   }
 
@@ -106,37 +106,37 @@ void Tasks::set_write(taskid_t id, DataIDList write) {
   compute_tasks[id].set_write(std::move(write));
 }
 
-const TaskIDList& Tasks::get_dependencies(taskid_t id) const {
+const TaskIDList &Tasks::get_dependencies(taskid_t id) const {
   if (is_compute(id)) {
     return get_compute_task(id).get_dependencies();
   }
   return get_data_task(id).get_dependencies();
 }
 
-const TaskIDList& Tasks::get_dependents(taskid_t id) const {
+const TaskIDList &Tasks::get_dependents(taskid_t id) const {
   if (is_compute(id)) {
     return get_compute_task(id).get_dependents();
   }
   return get_data_task(id).get_dependents();
 }
 
-const VariantList& Tasks::get_variants(taskid_t id) const {
+const VariantList &Tasks::get_variants(taskid_t id) const {
   return get_compute_task(id).get_variants();
 }
 
-const Variant& Tasks::get_variant(taskid_t id, DeviceType arch) const {
+const Variant &Tasks::get_variant(taskid_t id, DeviceType arch) const {
   return get_compute_task(id).get_variants()[static_cast<std::size_t>(arch)];
 }
 
-const DataIDList& Tasks::get_read(taskid_t id) const {
+const DataIDList &Tasks::get_read(taskid_t id) const {
   return get_compute_task(id).get_read();
 }
 
-const DataIDList& Tasks::get_write(taskid_t id) const {
+const DataIDList &Tasks::get_write(taskid_t id) const {
   return get_compute_task(id).get_write();
 }
 
-const Resources& Tasks::get_task_resources(taskid_t id, DeviceType arch) const {
+const Resources &Tasks::get_task_resources(taskid_t id, DeviceType arch) const {
   return get_variant(id, arch).resources;
 }
 
@@ -144,25 +144,25 @@ std::vector<DeviceType> Tasks::get_supported_architectures(taskid_t id) const {
   return get_compute_task(id).get_supported_architectures();
 }
 
-Task& Tasks::get_task(taskid_t id) {
+Task &Tasks::get_task(taskid_t id) {
   if (id < num_compute_tasks) {
     return get_compute_task(id);
   }
   return get_data_task(id);
 }
 
-const Task& Tasks::get_task(taskid_t id) const {
+const Task &Tasks::get_task(taskid_t id) const {
   if (id < num_compute_tasks) {
     return get_compute_task(id);
   }
   return get_data_task(id);
 }
 
-const TaskIDList& Tasks::get_data_dependencies(taskid_t id) const {
+const TaskIDList &Tasks::get_data_dependencies(taskid_t id) const {
   return get_compute_task(id).get_data_dependencies();
 }
 
-const TaskIDList& Tasks::get_data_dependents(taskid_t id) const {
+const TaskIDList &Tasks::get_data_dependents(taskid_t id) const {
   return get_compute_task(id).get_data_dependents();
 }
 

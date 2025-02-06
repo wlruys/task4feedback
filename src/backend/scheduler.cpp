@@ -17,23 +17,23 @@ timecount_t SchedulerState::get_execution_time(taskid_t task_id) const {
   return task_manager.get_execution_time(task_id, arch);
 }
 
-const Resources& SchedulerState::get_task_resources(taskid_t task_id, devid_t device_id) const {
-  const Resources& task_resources =
+const Resources &SchedulerState::get_task_resources(taskid_t task_id, devid_t device_id) const {
+  const Resources &task_resources =
       task_manager.get_task_resources(task_id, device_manager.devices.get().get_type(device_id));
   return task_resources;
 }
 
-const Resources& SchedulerState::get_task_resources(taskid_t task_id) const {
+const Resources &SchedulerState::get_task_resources(taskid_t task_id) const {
   devid_t device_id = task_manager.state.get_mapping(task_id);
-  const Resources& task_resources =
+  const Resources &task_resources =
       task_manager.get_task_resources(task_id, device_manager.devices.get().get_type(device_id));
   return task_resources;
 }
 
 ResourceRequest SchedulerState::request_map_resources(taskid_t task_id, devid_t device_id) const {
 
-  const Resources& task_resources = get_task_resources(task_id, device_id);
-  const auto& task = task_manager.get_tasks().get_compute_task(task_id);
+  const Resources &task_resources = get_task_resources(task_id, device_id);
+  const auto &task = task_manager.get_tasks().get_compute_task(task_id);
   mem_t non_local_mem = data_manager.non_local_size_mapped(task.get_unique(), device_id);
   Resources requested = {task_resources.vcu, task_resources.mem + non_local_mem};
   Resources missing;
@@ -41,20 +41,20 @@ ResourceRequest SchedulerState::request_map_resources(taskid_t task_id, devid_t 
 }
 
 bool SchedulerState::is_data_task(taskid_t task_id) const {
-  const auto& tasks = task_manager.get_tasks();
+  const auto &tasks = task_manager.get_tasks();
   return tasks.is_data(task_id);
 }
 
 bool SchedulerState::is_compute_task(taskid_t task_id) const {
-  const auto& tasks = task_manager.get_tasks();
+  const auto &tasks = task_manager.get_tasks();
   return tasks.is_compute(task_id);
 }
 
 ResourceRequest SchedulerState::request_reserve_resources(taskid_t task_id,
                                                           devid_t device_id) const {
-  const auto& task = task_manager.get_tasks().get_compute_task(task_id);
+  const auto &task = task_manager.get_tasks().get_compute_task(task_id);
 
-  const Resources& task_resources = get_task_resources(task_id, device_id);
+  const Resources &task_resources = get_task_resources(task_id, device_id);
   mem_t non_local_mem = data_manager.non_local_size_reserved(task.get_unique(), device_id);
   Resources requested = {task_resources.vcu, task_resources.mem + non_local_mem};
   auto missing_mem = device_manager.overflow_mem<TaskState::RESERVED>(device_id, requested.mem);
@@ -63,7 +63,7 @@ ResourceRequest SchedulerState::request_reserve_resources(taskid_t task_id,
 
 ResourceRequest SchedulerState::request_launch_resources(taskid_t task_id,
                                                          devid_t device_id) const {
-  const Resources& task_resources = get_task_resources(task_id, device_id);
+  const Resources &task_resources = get_task_resources(task_id, device_id);
   // mem_t non_local_mem =
   //     data_manager.non_local_size_launched(task.get_read(), device_id);
   // non_local_mem +=
@@ -75,36 +75,36 @@ ResourceRequest SchedulerState::request_launch_resources(taskid_t task_id,
 }
 
 void SchedulerState::map_resources(taskid_t task_id, devid_t device_id,
-                                   const Resources& requested) {
+                                   const Resources &requested) {
   MONUnusedParameter(task_id);
   device_manager.add_resources<TaskState::MAPPED>(device_id, requested);
 }
 
 void SchedulerState::reserve_resources(taskid_t task_id, devid_t device_id,
-                                       const Resources& requested) {
+                                       const Resources &requested) {
   MONUnusedParameter(task_id);
   device_manager.add_resources<TaskState::RESERVED>(device_id, requested);
 }
 
 void SchedulerState::launch_resources(taskid_t task_id, devid_t device_id,
-                                      const Resources& requested) {
+                                      const Resources &requested) {
   MONUnusedParameter(task_id);
   device_manager.add_resources<TaskState::LAUNCHED>(device_id, requested);
 }
 
 void SchedulerState::free_resources(taskid_t task_id) {
   devid_t device_id = task_manager.state.get_mapping(task_id);
-  const auto& task_resources = get_task_resources(task_id);
+  const auto &task_resources = get_task_resources(task_id);
   device_manager.remove_resources<TaskState::MAPPED>(device_id, task_resources);
   device_manager.remove_resources<TaskState::RESERVED>(device_id, task_resources);
   device_manager.remove_resources<TaskState::LAUNCHED>(device_id, task_resources);
 }
 
-const TaskIDList& SchedulerState::notify_mapped(taskid_t task_id) {
+const TaskIDList &SchedulerState::notify_mapped(taskid_t task_id) {
   return task_manager.notify_mapped(task_id, global_time);
 }
 
-const TaskIDList& SchedulerState::notify_reserved(taskid_t task_id) {
+const TaskIDList &SchedulerState::notify_reserved(taskid_t task_id) {
   return task_manager.notify_reserved(task_id, global_time);
 }
 
@@ -112,11 +112,11 @@ void SchedulerState::notify_launched(taskid_t task_id) {
   task_manager.notify_launched(task_id, global_time);
 }
 
-const TaskIDList& SchedulerState::notify_completed(taskid_t task_id) {
+const TaskIDList &SchedulerState::notify_completed(taskid_t task_id) {
   return task_manager.notify_completed(task_id, global_time);
 }
 
-const TaskIDList& SchedulerState::notify_data_completed(taskid_t task_id) {
+const TaskIDList &SchedulerState::notify_data_completed(taskid_t task_id) {
   return task_manager.notify_data_completed(task_id, global_time);
 }
 
@@ -152,16 +152,16 @@ devid_t SchedulerState::get_mapping(taskid_t task_id) const {
   return task_manager.state.get_mapping(task_id);
 }
 
-const PriorityList& SchedulerState::get_mapping_priorities() const {
+const PriorityList &SchedulerState::get_mapping_priorities() const {
   // return task_manager.state.get_mapping_priorities();
   return task_manager.noise.get().get_priorities();
 }
 
-const PriorityList& SchedulerState::get_reserving_priorities() const {
+const PriorityList &SchedulerState::get_reserving_priorities() const {
   return task_manager.state.get_reserving_priorities();
 }
 
-const PriorityList& SchedulerState::get_launching_priorities() const {
+const PriorityList &SchedulerState::get_launching_priorities() const {
   return task_manager.state.get_launching_priorities();
 }
 
@@ -209,7 +209,7 @@ void SchedulerState::update_completed_cost(taskid_t task_id, devid_t device_id) 
 void SchedulerQueues::push_mappable(taskid_t id, priority_t p) {
   mappable.push(id, p);
 }
-void SchedulerQueues::push_mappable(const TaskIDList& ids, const PriorityList& ps) {
+void SchedulerQueues::push_mappable(const TaskIDList &ids, const PriorityList &ps) {
   assert(ps.size() >= ids.size());
   for (auto id : ids) {
     assert(ps.size() > id);
@@ -221,7 +221,7 @@ void SchedulerQueues::push_reservable(taskid_t id, priority_t p, devid_t device)
   reservable.at(device).push(id, p);
 }
 
-void SchedulerQueues::push_reservable(const TaskIDList& ids, const PriorityList& ps,
+void SchedulerQueues::push_reservable(const TaskIDList &ids, const PriorityList &ps,
                                       devid_t device) {
   assert(ps.size() >= ids.size());
   for (auto id : ids) {
@@ -233,7 +233,7 @@ void SchedulerQueues::push_launchable(taskid_t id, priority_t p, devid_t device)
   launchable.at(device).push(id, p);
 }
 
-void SchedulerQueues::push_launchable(const TaskIDList& ids, const PriorityList& ps,
+void SchedulerQueues::push_launchable(const TaskIDList &ids, const PriorityList &ps,
                                       devid_t device) {
   assert(ps.size() >= ids.size());
   for (auto id : ids) {
@@ -245,7 +245,7 @@ void SchedulerQueues::push_launchable_data(taskid_t id, priority_t p, devid_t de
   data_launchable.at(device).push(id, p);
 }
 
-void SchedulerQueues::push_launchable_data(const TaskIDList& ids, const PriorityList& ps,
+void SchedulerQueues::push_launchable_data(const TaskIDList &ids, const PriorityList &ps,
                                            devid_t device) {
   assert(ps.size() >= ids.size());
   for (auto id : ids) {
@@ -389,8 +389,8 @@ void TaskCostInfo::count_data_completed(devid_t device_id, timecount_t time) {
 
 // Scheduler
 
-TaskIDList& Scheduler::get_mappable_candidates() {
-  auto& s = this->state;
+TaskIDList &Scheduler::get_mappable_candidates() {
+  auto &s = this->state;
   bool condition = queues.has_mappable() && conditions->should_map(s, queues);
   clear_task_buffer();
 
@@ -398,14 +398,14 @@ TaskIDList& Scheduler::get_mappable_candidates() {
     return task_buffer;
   }
 
-  auto& mappable = queues.mappable;
+  auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
   task_buffer.insert(task_buffer.end(), top_k_tasks.begin(), top_k_tasks.end());
   return task_buffer;
 }
 
-const TaskIDList& Scheduler::map_task(Action& action) {
-  auto& s = this->state;
+const TaskIDList &Scheduler::map_task(Action &action) {
+  auto &s = this->state;
 
   taskid_t task_id = action.task_id;
   devid_t chosen_device = action.device;
@@ -427,13 +427,13 @@ const TaskIDList& Scheduler::map_task(Action& action) {
   s.map_resources(task_id, chosen_device, requested);
 
   // Update data locations
-  const ComputeTask& task = s.task_manager.get_tasks().get_compute_task(task_id);
+  const ComputeTask &task = s.task_manager.get_tasks().get_compute_task(task_id);
   s.data_manager.read_update_mapped(task.get_read(), chosen_device);
   s.data_manager.read_update_mapped(task.get_write(), chosen_device);
   s.data_manager.write_update_mapped(task.get_write(), chosen_device);
 
   // Notify dependents and enqueue newly mappable tasks
-  const auto& newly_mappable_tasks = s.notify_mapped(task_id);
+  const auto &newly_mappable_tasks = s.notify_mapped(task_id);
   success_count += 1;
   state.counts.count_mapped(task_id, chosen_device);
   state.update_mapped_cost(task_id, chosen_device);
@@ -449,22 +449,22 @@ const TaskIDList& Scheduler::map_task(Action& action) {
   return newly_mappable_tasks;
 }
 
-void Scheduler::remove_mapped_tasks(ActionList& action_list) {
+void Scheduler::remove_mapped_tasks(ActionList &action_list) {
   std::vector<std::size_t> positions;
 
-  for (auto& action : action_list) {
+  for (auto &action : action_list) {
     positions.push_back(action.pos);
   }
 
   queues.mappable.remove(positions);
 }
 
-void Scheduler::map_tasks_from_python(ActionList& action_list, EventManager& event_manager) {
+void Scheduler::map_tasks_from_python(ActionList &action_list, EventManager &event_manager) {
   success_count = 0;
   if (!action_list.empty()) {
     TaskIDList nmt;
-    for (auto& action : action_list) {
-      const auto& tasks = map_task(action);
+    for (auto &action : action_list) {
+      const auto &tasks = map_task(action);
       nmt.insert(nmt.end(), tasks.begin(), tasks.end());
     }
     remove_mapped_tasks(action_list);
@@ -482,13 +482,13 @@ void Scheduler::map_tasks_from_python(ActionList& action_list, EventManager& eve
   }
 }
 
-void Scheduler::map_tasks(Event& map_event, EventManager& event_manager, Mapper& mapper) {
+void Scheduler::map_tasks(Event &map_event, EventManager &event_manager, Mapper &mapper) {
   assert(map_event.get_type() == EventType::MAPPER);
   assert(map_event.get_tasks().empty());
   success_count = 0;
 
-  auto& s = this->state;
-  auto& task_states = state.task_manager.state;
+  auto &s = this->state;
+  auto &task_states = state.task_manager.state;
 
   SPDLOG_DEBUG("Starting mapper at time {}", s.global_time);
   SPDLOG_DEBUG("Mappable Queue Size: {}", queues.mappable.size());
@@ -508,7 +508,7 @@ void Scheduler::map_tasks(Event& map_event, EventManager& event_manager, Mapper&
     Action action = mapper.map_task(task_id, s);
     // spdlog::info("Mapping task {} at time {} to device {}",
     //              s.get_task_name(task_id), s.global_time, action.device);
-    const auto& newly_mappable_tasks = map_task(action);
+    const auto &newly_mappable_tasks = map_task(action);
     // spdlog::debug("Newly mappable tasks: {}", newly_mappable_tasks.size());
     push_mappable(newly_mappable_tasks);
   }
@@ -525,13 +525,13 @@ void Scheduler::map_tasks(Event& map_event, EventManager& event_manager, Mapper&
 }
 
 void Scheduler::enqueue_data_tasks(taskid_t id) {
-  auto& s = this->state;
-  auto& task_manager = state.task_manager;
-  const auto& tasks = state.task_manager.get_tasks();
+  auto &s = this->state;
+  auto &task_manager = state.task_manager;
+  const auto &tasks = state.task_manager.get_tasks();
 
   assert(tasks.is_compute(id));
 
-  const auto& data_dependencies = tasks.get_data_dependencies(id);
+  const auto &data_dependencies = tasks.get_data_dependencies(id);
 
   SPDLOG_DEBUG("Enqueueing {} data tasks for task {}", data_dependencies.size(),
                s.get_task_name(id));
@@ -548,7 +548,7 @@ void Scheduler::enqueue_data_tasks(taskid_t id) {
 }
 
 SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
-  auto& s = this->state;
+  auto &s = this->state;
 
   assert(s.is_compute_task(task_id));
   assert(s.is_reservable(task_id));
@@ -573,12 +573,12 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
   s.reserve_resources(task_id, device_id, requested);
 
   // Update data locations
-  const ComputeTask& task = s.task_manager.get_tasks().get_compute_task(task_id);
+  const ComputeTask &task = s.task_manager.get_tasks().get_compute_task(task_id);
   s.data_manager.read_update_reserved(task.get_read(), device_id);
   s.data_manager.read_update_reserved(task.get_write(), device_id);
   s.data_manager.write_update_reserved(task.get_write(), device_id);
 
-  const auto& newly_reservable_tasks = s.notify_reserved(task_id);
+  const auto &newly_reservable_tasks = s.notify_reserved(task_id);
 
   success_count += 1;
   enqueue_data_tasks(task_id);
@@ -595,12 +595,12 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
   return {true, &newly_reservable_tasks};
 }
 
-void Scheduler::reserve_tasks(Event& reserve_event, EventManager& event_manager) {
+void Scheduler::reserve_tasks(Event &reserve_event, EventManager &event_manager) {
   assert(reserve_event.get_type() == EventType::RESERVER);
   assert(reserve_event.get_tasks().empty());
-  auto& s = this->state;
+  auto &s = this->state;
 
-  auto& reservable = queues.reservable;
+  auto &reservable = queues.reservable;
   reservable.reset();
   reservable.current_or_next_active();
 
@@ -657,8 +657,8 @@ void Scheduler::reserve_tasks(Event& reserve_event, EventManager& event_manager)
 }
 
 bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
-                                    EventManager& event_manager) {
-  auto& s = this->state;
+                                    EventManager &event_manager) {
+  auto &s = this->state;
 
   SPDLOG_DEBUG("Attempting to launch compute task {} at time {} on device {}",
                s.get_task_name(task_id), s.global_time, device_id);
@@ -675,7 +675,7 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
     return false;
   }
 
-  const auto& task = s.task_manager.get_tasks().get_compute_task(task_id);
+  const auto &task = s.task_manager.get_tasks().get_compute_task(task_id);
 
   SPDLOG_DEBUG("Launching compute task {} at time {} on device {}", s.get_task_name(task_id),
                s.global_time, device_id);
@@ -706,15 +706,15 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
 }
 
 bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
-                                 EventManager& event_manager) {
-  auto& s = this->state;
+                                 EventManager &event_manager) {
+  auto &s = this->state;
 
   SPDLOG_DEBUG("Attempting to launch data task {} at time {} on device {}",
                s.get_task_name(task_id), s.global_time, destination_id);
 
   assert(s.is_launchable(task_id));
 
-  const auto& task = s.task_manager.get_tasks().get_data_task(task_id);
+  const auto &task = s.task_manager.get_tasks().get_data_task(task_id);
   const dataid_t data_id = task.get_data_id();
 
   auto [found, source_id] = s.data_manager.request_source(data_id, destination_id);
@@ -747,13 +747,13 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
   return true;
 }
 
-void Scheduler::launch_tasks(Event& launch_event, EventManager& event_manager) {
+void Scheduler::launch_tasks(Event &launch_event, EventManager &event_manager) {
   assert(launch_event.get_type() == EventType::LAUNCHER);
   assert(launch_event.get_tasks().empty());
 
-  auto& s = this->state;
+  auto &s = this->state;
 
-  auto& launchable = queues.launchable;
+  auto &launchable = queues.launchable;
   launchable.reset();
   launchable.current_or_next_active();
 
@@ -796,7 +796,7 @@ void Scheduler::launch_tasks(Event& launch_event, EventManager& event_manager) {
   SPDLOG_DEBUG("Launching data tasks at time {}", s.global_time);
   SPDLOG_DEBUG("Data Launchable Queue Size: {}", queues.data_launchable.total_active_size());
 
-  auto& data_launchable = queues.data_launchable;
+  auto &data_launchable = queues.data_launchable;
   data_launchable.reset();
   data_launchable.current_or_next_active();
 
@@ -843,13 +843,13 @@ void Scheduler::launch_tasks(Event& launch_event, EventManager& event_manager) {
 }
 
 // TODO(wlr): implement eviction event
-void Scheduler::evict(Event& eviction_event, EventManager& event_manager) {
+void Scheduler::evict(Event &eviction_event, EventManager &event_manager) {
   MONUnusedParameter(eviction_event);
   MONUnusedParameter(event_manager);
 }
 
 void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
-  auto& s = this->state;
+  auto &s = this->state;
 
   SPDLOG_DEBUG("Completing compute task {} at time {} on device {}", s.get_task_name(task_id),
                s.global_time, device_id);
@@ -859,14 +859,14 @@ void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
   s.counts.count_completed(task_id, device_id);
   s.update_completed_cost(task_id, device_id);
 
-  const auto& newly_launchable_data_tasks = s.notify_data_completed(task_id);
+  const auto &newly_launchable_data_tasks = s.notify_data_completed(task_id);
   push_launchable_data(newly_launchable_data_tasks);
   // spdlog::debug("Newly launchable data tasks: {}",
   //               newly_launchable_data_tasks.size());
 }
 
 void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
-  auto& s = this->state;
+  auto &s = this->state;
   s.counts.count_data_completed(task_id, destination_id);
 
   SPDLOG_DEBUG("Completing data task {} at time {} on device {}", s.get_task_name(task_id),
@@ -878,24 +878,24 @@ void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
   s.data_manager.complete_move(data_id, source_id, destination_id, is_virtual);
 }
 
-void Scheduler::complete_task(Event& complete_event, EventManager& event_manager) {
+void Scheduler::complete_task(Event &complete_event, EventManager &event_manager) {
   assert(complete_event.get_type() == EventType::COMPLETER);
   assert(complete_event.get_tasks().size() == 1);
 
-  auto& s = this->state;
+  auto &s = this->state;
   taskid_t task_id = complete_event.get_tasks().front();
 
   if (s.is_compute_task(task_id)) {
     devid_t device_id = s.get_mapping(task_id);
     complete_compute_task(task_id, device_id);
   } else {
-    const auto& data_task = s.task_manager.get_tasks().get_data_task(task_id);
+    const auto &data_task = s.task_manager.get_tasks().get_data_task(task_id);
     devid_t device_id = s.get_mapping(data_task.get_compute_task());
     complete_data_task(task_id, device_id);
   }
 
   // Notify dependents and enqueue newly launchable tasks
-  const auto& newly_launchable_tasks = s.notify_completed(task_id);
+  const auto &newly_launchable_tasks = s.notify_completed(task_id);
   push_launchable(newly_launchable_tasks);
   // spdlog::debug("Newly launchable compute tasks: {}",
   //               newly_launchable_tasks.size());

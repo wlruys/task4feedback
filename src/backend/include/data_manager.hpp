@@ -64,7 +64,7 @@ public:
   [[nodiscard]] devid_t get_location(dataid_t id) const {
     return initial_location.at(id);
   }
-  [[nodiscard]] const std::string& get_name(dataid_t id) const {
+  [[nodiscard]] const std::string &get_name(dataid_t id) const {
     return data_names.at(id);
   }
 
@@ -140,7 +140,7 @@ public:
     return updated;
   }
 
-  friend std::ostream& operator<<(std::ostream& os, const BlockLocation& bl) {
+  friend std::ostream &operator<<(std::ostream &os, const BlockLocation &bl) {
     os << "[";
     for (devid_t i = 0; i < bl.locations.size(); i++) {
       os << (bl.is_valid(i) ? "1" : "0");
@@ -183,15 +183,15 @@ public:
     return block_locations.at(data_id).get_valid_locations();
   }
 
-  BlockLocation& at(dataid_t data_id) {
+  BlockLocation &at(dataid_t data_id) {
     return block_locations.at(data_id);
   }
 
-  BlockLocation& operator[](dataid_t data_id) {
+  BlockLocation &operator[](dataid_t data_id) {
     return block_locations.at(data_id);
   }
 
-  const BlockLocation& operator[](dataid_t data_id) const {
+  const BlockLocation &operator[](dataid_t data_id) const {
     return block_locations.at(data_id);
   }
 };
@@ -205,20 +205,20 @@ struct MovementPair {
   MovementPair(dataid_t data_id, devid_t destination) : data_id(data_id), destination(destination) {
   }
 
-  bool operator==(const MovementPair& other) const {
+  bool operator==(const MovementPair &other) const {
     return data_id == other.data_id && destination == other.destination;
   }
 
   // Hash function for MovementPair
   struct Hash {
-    std::size_t operator()(const MovementPair& pair) const {
+    std::size_t operator()(const MovementPair &pair) const {
       // NOTE(wlr): I have no idea what the collision rate of this is
       //            Keep this in mind if something starts failing
       return std::hash<dataid_t>()(pair.data_id) ^ std::hash<devid_t>()(pair.destination);
     }
   };
 
-  bool operator<(const MovementPair& other) const {
+  bool operator<(const MovementPair &other) const {
     return data_id < other.data_id || (data_id == other.data_id && destination < other.destination);
   }
 };
@@ -257,7 +257,7 @@ protected:
   DataCount moving_counts;
 
   // Increment the count of a data block, return true if the block is new
-  static bool increment(DataCount& counts, dataid_t data_id) {
+  static bool increment(DataCount &counts, dataid_t data_id) {
     auto it = counts.find(data_id);
     if (it == counts.end()) {
       counts.at(data_id) = 1;
@@ -269,7 +269,7 @@ protected:
 
   // Decrement the count of a data block, removing it if the count reaches 0 and
   // return true if the block is removed
-  static bool decrement(DataCount& counts, dataid_t data_id) {
+  static bool decrement(DataCount &counts, dataid_t data_id) {
     auto it = counts.find(data_id);
     if (it == counts.end()) {
       return false;
@@ -285,7 +285,7 @@ protected:
 public:
   DeviceDataCounts() = default;
 
-  DeviceDataCounts(const DeviceDataCounts& other) {
+  DeviceDataCounts(const DeviceDataCounts &other) {
     mapped_counts = other.mapped_counts;
     reserved_counts = other.reserved_counts;
     launched_counts = other.launched_counts;
@@ -426,24 +426,24 @@ protected:
   MovementManager movement_manager;
   DataCounts counts;
 
-  static bool check_valid(const DataIDList& list, const LocationManager& locations,
+  static bool check_valid(const DataIDList &list, const LocationManager &locations,
                           devid_t device_id) {
     return std::ranges::all_of(
         list, [&](auto data_id) { return !locations.is_invalid(data_id, device_id); });
   }
 
-  static bool read_update(dataid_t data_id, devid_t device_id, LocationManager& locations) {
+  static bool read_update(dataid_t data_id, devid_t device_id, LocationManager &locations) {
     return locations.at(data_id).validate(device_id);
   }
 
-  static auto write_update(dataid_t data_id, devid_t device_id, LocationManager& locations) {
+  static auto write_update(dataid_t data_id, devid_t device_id, LocationManager &locations) {
     auto updated_ids = locations[data_id].invalidate_except(device_id);
     return updated_ids;
   }
 
 public:
-  DataManager(Data& data_, DeviceManager& device_manager_,
-              CommunicationManager& communication_manager_)
+  DataManager(Data &data_, DeviceManager &device_manager_,
+              CommunicationManager &communication_manager_)
       : data(data_), device_manager(device_manager_), communication_manager(communication_manager_),
         mapped_locations(data.get().size(), device_manager_.size()),
         reserved_locations(data.get().size(), device_manager_.size()),
@@ -451,16 +451,16 @@ public:
         counts(device_manager_.size()) {
   }
 
-  DataManager(const DataManager& o_, DeviceManager& device_manager_,
-              CommunicationManager& communication_manager_)
+  DataManager(const DataManager &o_, DeviceManager &device_manager_,
+              CommunicationManager &communication_manager_)
       : data(o_.data), device_manager(device_manager_),
         communication_manager(communication_manager_), mapped_locations(o_.mapped_locations),
         reserved_locations(o_.reserved_locations), launched_locations(o_.launched_locations),
         movement_manager(o_.movement_manager), counts(o_.counts) {
   }
 
-  DataManager(const DataManager& o_) = delete;
-  DataManager& operator=(const DataManager& o_) = delete;
+  DataManager(const DataManager &o_) = delete;
+  DataManager &operator=(const DataManager &o_) = delete;
 
   void initialize() {
     for (dataid_t i = 0; i < data.get().size(); i++) {
@@ -474,39 +474,39 @@ public:
     }
   }
 
-  [[nodiscard]] const Data& get_data() const {
+  [[nodiscard]] const Data &get_data() const {
     return data;
   }
 
-  [[nodiscard]] const LocationManager& get_mapped_locations() const {
+  [[nodiscard]] const LocationManager &get_mapped_locations() const {
     return mapped_locations;
   }
 
-  [[nodiscard]] const LocationManager& get_reserved_locations() const {
+  [[nodiscard]] const LocationManager &get_reserved_locations() const {
     return reserved_locations;
   }
 
-  [[nodiscard]] const LocationManager& get_launched_locations() const {
+  [[nodiscard]] const LocationManager &get_launched_locations() const {
     return launched_locations;
   }
 
-  [[nodiscard]] const DataCounts& get_counts() const {
+  [[nodiscard]] const DataCounts &get_counts() const {
     return counts;
   }
 
-  bool check_valid_mapped(const DataIDList& list, devid_t device_id) const {
+  bool check_valid_mapped(const DataIDList &list, devid_t device_id) const {
     return check_valid(list, mapped_locations, device_id);
   }
 
-  bool check_valid_reserved(const DataIDList& list, devid_t device_id) const {
+  bool check_valid_reserved(const DataIDList &list, devid_t device_id) const {
     return check_valid(list, reserved_locations, device_id);
   }
 
-  bool check_valid_launched(const DataIDList& list, devid_t device_id) const {
+  bool check_valid_launched(const DataIDList &list, devid_t device_id) const {
     return check_valid(list, launched_locations, device_id);
   }
 
-  [[nodiscard]] mem_t local_size(const DataIDList& list, const LocationManager& locations,
+  [[nodiscard]] mem_t local_size(const DataIDList &list, const LocationManager &locations,
                                  devid_t device_id) const {
     mem_t local_size = 0;
     for (auto data_id : list) {
@@ -517,19 +517,19 @@ public:
     return local_size;
   }
 
-  mem_t local_size_mapped(const DataIDList& list, devid_t device_id) const {
+  mem_t local_size_mapped(const DataIDList &list, devid_t device_id) const {
     return local_size(list, mapped_locations, device_id);
   }
 
-  mem_t local_size_reserved(const DataIDList& list, devid_t device_id) const {
+  mem_t local_size_reserved(const DataIDList &list, devid_t device_id) const {
     return local_size(list, reserved_locations, device_id);
   }
 
-  mem_t local_size_launched(const DataIDList& list, devid_t device_id) const {
+  mem_t local_size_launched(const DataIDList &list, devid_t device_id) const {
     return local_size(list, launched_locations, device_id);
   }
 
-  [[nodiscard]] mem_t non_local_size(const DataIDList& list, const LocationManager& locations,
+  [[nodiscard]] mem_t non_local_size(const DataIDList &list, const LocationManager &locations,
                                      devid_t device_id) const {
     mem_t non_local_size = 0;
     for (auto data_id : list) {
@@ -540,19 +540,19 @@ public:
     return non_local_size;
   }
 
-  mem_t non_local_size_mapped(const DataIDList& list, devid_t device_id) const {
+  mem_t non_local_size_mapped(const DataIDList &list, devid_t device_id) const {
     return non_local_size(list, mapped_locations, device_id);
   }
 
-  mem_t non_local_size_reserved(const DataIDList& list, devid_t device_id) const {
+  mem_t non_local_size_reserved(const DataIDList &list, devid_t device_id) const {
     return non_local_size(list, reserved_locations, device_id);
   }
 
-  mem_t non_local_size_launched(const DataIDList& list, devid_t device_id) const {
+  mem_t non_local_size_launched(const DataIDList &list, devid_t device_id) const {
     return non_local_size(list, launched_locations, device_id);
   }
 
-  mem_t shared_size(const DataIDList& list1, const DataIDList& list2) const {
+  mem_t shared_size(const DataIDList &list1, const DataIDList &list2) const {
     mem_t shared_size = 0;
     for (auto data_id : list1) {
       if (std::find(list2.begin(), list2.end(), data_id) != list2.end()) {
@@ -562,28 +562,28 @@ public:
     return shared_size;
   }
 
-  void read_update_mapped(const DataIDList& list, devid_t device_id) {
+  void read_update_mapped(const DataIDList &list, devid_t device_id) {
     for (auto data_id : list) {
       read_update(data_id, device_id, mapped_locations);
     }
     // Memory change is handled by task request in mapper
   }
 
-  void write_update_mapped(const DataIDList& list, devid_t device_id) {
+  void write_update_mapped(const DataIDList &list, devid_t device_id) {
     for (auto data_id : list) {
       write_update(data_id, device_id, mapped_locations);
     }
     // Memory change is handled by task complete
   }
 
-  void read_update_reserved(const DataIDList& list, devid_t device_id) {
+  void read_update_reserved(const DataIDList &list, devid_t device_id) {
     for (auto data_id : list) {
       read_update(data_id, device_id, reserved_locations);
     }
     // Memory change is handeled by task request in reserver
   }
 
-  void write_update_reserved(const DataIDList& list, devid_t device_id) {
+  void write_update_reserved(const DataIDList &list, devid_t device_id) {
     for (auto data_id : list) {
       write_update(data_id, device_id, reserved_locations);
     }
@@ -596,7 +596,7 @@ public:
     device_manager.get().add_mem<TaskState::LAUNCHED>(device_id, data.get().get_size(data_id));
   }
 
-  void read_update_launched(const DataIDList& list, devid_t device_id) {
+  void read_update_launched(const DataIDList &list, devid_t device_id) {
     for (auto data_id : list) {
       bool changed = read_update(data_id, device_id, launched_locations);
       if (changed) {
@@ -701,7 +701,7 @@ public:
     communication_manager.get().release_connection(source, destination);
   }
 
-  void remove_memory(const DeviceIDList& device_list, dataid_t data_id) {
+  void remove_memory(const DeviceIDList &device_list, dataid_t data_id) {
     for (auto device : device_list) {
       auto size = data.get().get_size(data_id);
       SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device, size);
@@ -711,7 +711,7 @@ public:
     }
   }
 
-  void write_update_launched(const DataIDList& list, devid_t device_id) {
+  void write_update_launched(const DataIDList &list, devid_t device_id) {
     for (auto data_id : list) {
       auto updated_devices = write_update(data_id, device_id, launched_locations);
       remove_memory(updated_devices, data_id);

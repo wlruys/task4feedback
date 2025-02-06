@@ -24,19 +24,19 @@ public:
     return num_active > 0;
   }
 
-  T& get_active() {
+  T &get_active() {
     return containers.at(active_index);
   }
-  T& operator[](std::size_t index) {
+  T &operator[](std::size_t index) {
     return containers.at(index);
   }
-  T& at(std::size_t index) {
+  T &at(std::size_t index) {
     return containers.at(index);
   }
-  const T& operator[](std::size_t index) const {
+  const T &operator[](std::size_t index) const {
     return containers.at(index);
   }
-  const T& at(std::size_t index) const {
+  const T &at(std::size_t index) const {
     return containers.at(index);
   }
 
@@ -49,7 +49,7 @@ public:
   }
   [[nodiscard]] std::size_t total_size() const {
     std::size_t tsize = 0;
-    for (auto& c : containers) {
+    for (auto &c : containers) {
       tsize += c.size();
     }
     return tsize;
@@ -125,7 +125,7 @@ public:
   }
 
   void reset() {
-    for (auto&& a : active) {
+    for (auto &&a : active) {
       a = true;
     }
     num_active = containers.size();
@@ -160,11 +160,11 @@ public:
     this->containers.at(index).push_random(value);
   }
 
-  [[nodiscard]] const Q::value_type& top() const {
+  [[nodiscard]] const Q::value_type &top() const {
     return this->containers.at(this->active_index).top();
   }
 
-  [[nodiscard]] const Element<typename Q::value_type>& top_element() const {
+  [[nodiscard]] const Element<typename Q::value_type> &top_element() const {
     return this->containers.at(this->active_index).top_element();
   };
 

@@ -5,7 +5,7 @@
 
 // TaskStateInfo
 
-TaskStateInfo::TaskStateInfo(const Tasks& tasks) {
+TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
   auto n = tasks.size();
   n_compute_tasks = tasks.compute_size();
   n_data_tasks = tasks.data_size();
@@ -149,12 +149,12 @@ timecount_t TaskRecords::get_completed_time(taskid_t id) const {
 
 // Task Manager
 void TaskManager::initialize_state() {
-  const auto& const_tasks = this->tasks.get();
+  const auto &const_tasks = this->tasks.get();
   state = TaskStateInfo(tasks);
   records = TaskRecords(tasks);
 
-  const auto& compute_tasks = const_tasks.get_compute_tasks();
-  for (const auto& task : compute_tasks) {
+  const auto &compute_tasks = const_tasks.get_compute_tasks();
+  for (const auto &task : compute_tasks) {
     taskid_t id = task.id;
     auto n_deps = static_cast<depcount_t>(task.get_dependencies().size());
     state.set_state(id, TaskState::SPAWNED);
@@ -167,7 +167,7 @@ void TaskManager::initialize_state() {
     state.set_incomplete(id, n_total_deps);
   }
 
-  for (const auto& task : const_tasks.get_data_tasks()) {
+  for (const auto &task : const_tasks.get_data_tasks()) {
     taskid_t id = task.id;
     auto n_deps = static_cast<depcount_t>(task.get_dependencies().size());
     state.set_state(id, TaskState::SPAWNED);
@@ -181,8 +181,8 @@ void TaskManager::set_mapping(taskid_t id, devid_t devid) {
   state.set_mapping(id, devid);
 }
 
-const TaskIDList& TaskManager::notify_mapped(taskid_t id, timecount_t time) {
-  const auto& task_objects = get_tasks();
+const TaskIDList &TaskManager::notify_mapped(taskid_t id, timecount_t time) {
+  const auto &task_objects = get_tasks();
 
   records.record_mapped(id, time);
   state.set_state(id, TaskState::MAPPED);
@@ -201,8 +201,8 @@ const TaskIDList& TaskManager::notify_mapped(taskid_t id, timecount_t time) {
   return task_buffer;
 }
 
-const TaskIDList& TaskManager::notify_reserved(taskid_t id, timecount_t time) {
-  const auto& task_objects = get_tasks();
+const TaskIDList &TaskManager::notify_reserved(taskid_t id, timecount_t time) {
+  const auto &task_objects = get_tasks();
 
   records.record_reserved(id, time);
   state.set_state(id, TaskState::RESERVED);
@@ -226,8 +226,8 @@ void TaskManager::notify_launched(taskid_t id, timecount_t time) {
   records.record_launched(id, time);
 }
 
-const TaskIDList& TaskManager::notify_completed(taskid_t id, timecount_t time) {
-  const auto& task_objects = get_tasks();
+const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
+  const auto &task_objects = get_tasks();
 
   records.record_completed(id, time);
   state.set_state(id, TaskState::COMPLETED);
@@ -246,9 +246,9 @@ const TaskIDList& TaskManager::notify_completed(taskid_t id, timecount_t time) {
   return task_buffer;
 }
 
-const TaskIDList& TaskManager::notify_data_completed(taskid_t id, timecount_t time) {
+const TaskIDList &TaskManager::notify_data_completed(taskid_t id, timecount_t time) {
   MONUnusedParameter(time);
-  const auto& task_objects = get_tasks();
+  const auto &task_objects = get_tasks();
   // clear task_buffer
   task_buffer.clear();
 
@@ -300,7 +300,7 @@ Color TaskPrinter::get_task_color(taskid_t id) const {
 }
 
 template <typename DependencyList>
-Table TaskPrinter::make_list_table(DependencyList& dependencies) {
+Table TaskPrinter::make_list_table(DependencyList &dependencies) {
   Table dep_table;
   Table::Row_t deps;
   for (auto dep : dependencies) {
@@ -313,7 +313,7 @@ Table TaskPrinter::make_list_table(DependencyList& dependencies) {
   return dep_table;
 }
 template <typename DependencyList>
-Table TaskPrinter::make_list_table(DependencyList& dependencies, std::string name) {
+Table TaskPrinter::make_list_table(DependencyList &dependencies, std::string name) {
   Table dep_table;
   Table::Row_t deps;
   std::vector<Color> colors;
@@ -332,7 +332,7 @@ Table TaskPrinter::make_list_table(DependencyList& dependencies, std::string nam
 }
 
 template <typename DependencyList>
-Table TaskPrinter::make_list_table_named(DependencyList& dependencies, std::string name) {
+Table TaskPrinter::make_list_table_named(DependencyList &dependencies, std::string name) {
   Table dep_table;
   Table::Row_t deps;
   std::vector<Color> colors;
@@ -351,7 +351,7 @@ Table TaskPrinter::make_list_table_named(DependencyList& dependencies, std::stri
   return dep_table;
 }
 
-template <typename DataList> Table TaskPrinter::make_data_table(DataList& read, DataList& write) {
+template <typename DataList> Table TaskPrinter::make_data_table(DataList &read, DataList &write) {
   Table data_table;
   Table::Row_t read_row;
   Table::Row_t write_row;
@@ -405,7 +405,7 @@ template <typename VariantList> Table TaskPrinter::make_variant_tables(VariantLi
   Table variant_table;
   Table::Row_t variants;
 
-  for (auto& v : vlist) {
+  for (auto &v : vlist) {
     if (v.arch == DeviceType::NONE) {
       continue;
     }
@@ -423,7 +423,7 @@ Table TaskPrinter::make_status_table(taskid_t id) {
   Table::Row_t header_row = {"ID",       "Name",       "State",     "Status",
                              "Unmapped", "Unreserved", "Incomplete"};
 
-  const auto& _tm = this->tm.get();
+  const auto &_tm = this->tm.get();
 
   Table::Row_t value_row = {std::to_string(id),
                             _tm.tasks.get().get_name(id),
@@ -440,14 +440,14 @@ Table TaskPrinter::make_status_table(taskid_t id) {
 }
 
 Table TaskPrinter::wrap_tables(
-    const std::vector<std::function<tabulate::Table(taskid_t)>>& generators, taskid_t id) const {
+    const std::vector<std::function<tabulate::Table(taskid_t)>> &generators, taskid_t id) const {
   Table table;
 
   Table::Row_t task_name;
   task_name.emplace_back("Task " + tm.get().get_tasks().get_name(id));
   table.add_row(task_name);
 
-  for (const auto& generator : generators) {
+  for (const auto &generator : generators) {
     Table::Row_t inner_row;
     auto inner_table = generator(id);
     inner_row.emplace_back(inner_table);
@@ -458,7 +458,7 @@ Table TaskPrinter::wrap_tables(
 }
 
 void TaskPrinter::print_tables(
-    const std::vector<std::function<tabulate::Table(taskid_t)>>& generators, taskid_t id) {
+    const std::vector<std::function<tabulate::Table(taskid_t)>> &generators, taskid_t id) {
   Table table;
 
   Table::Row_t task_name;
@@ -473,7 +473,7 @@ void TaskPrinter::print_tables(
 
   std::cout << table << std::endl;
 
-  for (const auto& generator : generators) {
+  for (const auto &generator : generators) {
     Table::Row_t inner_row;
     auto inner_table = generator(id);
     if (inner_table.size() > 0) {

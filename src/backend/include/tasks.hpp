@@ -20,13 +20,22 @@
 
 using namespace tabulate;
 
-enum class TaskType { COMPUTE = 0, DATA = 1 };
+enum class TaskType {
+  COMPUTE = 0,
+  DATA = 1
+};
 constexpr std::size_t num_task_types = 2;
 
-enum class TaskState { SPAWNED = 0, MAPPED = 1, RESERVED = 2, LAUNCHED = 3, COMPLETED = 4 };
+enum class TaskState {
+  SPAWNED = 0,
+  MAPPED = 1,
+  RESERVED = 2,
+  LAUNCHED = 3,
+  COMPLETED = 4
+};
 constexpr std::size_t num_task_states = 5;
 
-inline std::string to_string(const TaskState& state) {
+inline std::string to_string(const TaskState &state) {
   switch (state) {
   case TaskState::SPAWNED:
     return "SPAWNED";
@@ -48,7 +57,7 @@ inline std::string to_string(const TaskState& state) {
   }
 }
 
-inline std::ostream& operator<<(std::ostream& os, const TaskState& state) {
+inline std::ostream &operator<<(std::ostream &os, const TaskState &state) {
   os << to_string(state);
   return os;
 }
@@ -61,7 +70,7 @@ enum class TaskStatus {
 };
 constexpr std::size_t num_task_statuses = 3;
 
-inline std::string to_string(const TaskStatus& status) {
+inline std::string to_string(const TaskStatus &status) {
   switch (status) {
   case TaskStatus::MAPPABLE:
     return "MAPPABLE";
@@ -78,7 +87,7 @@ inline std::string to_string(const TaskStatus& status) {
   }
 }
 
-inline std::ostream& operator<<(std::ostream& os, const TaskStatus& state) {
+inline std::ostream &operator<<(std::ostream &os, const TaskStatus &state) {
   os << to_string(state);
   return os;
 }
@@ -105,7 +114,7 @@ public:
     return resources.mem;
   }
 
-  [[nodiscard]] const Resources& get_resources() const {
+  [[nodiscard]] const Resources &get_resources() const {
     return resources;
   }
 
@@ -156,10 +165,10 @@ public:
     this->dependents = std::move(_dependents);
   }
 
-  [[nodiscard]] const TaskIDList& get_dependencies() const {
+  [[nodiscard]] const TaskIDList &get_dependencies() const {
     return dependencies;
   }
-  [[nodiscard]] const TaskIDList& get_dependents() const {
+  [[nodiscard]] const TaskIDList &get_dependents() const {
     return dependents;
   }
 
@@ -195,15 +204,15 @@ public:
     variants.at(static_cast<std::size_t>(arch)) = Variant(arch, vcu, mem, time);
   }
 
-  Variant& get_variant(DeviceType arch) {
+  Variant &get_variant(DeviceType arch) {
     return variants.at(static_cast<std::size_t>(arch));
   }
 
-  [[nodiscard]] const Variant& get_variant(DeviceType arch) const {
+  [[nodiscard]] const Variant &get_variant(DeviceType arch) const {
     return variants.at(static_cast<std::size_t>(arch));
   }
 
-  [[nodiscard]] const VariantList& get_variants() const {
+  [[nodiscard]] const VariantList &get_variants() const {
     return variants;
   }
   [[nodiscard]] std::vector<Variant> get_variant_vector() const;
@@ -217,10 +226,10 @@ public:
 
   [[nodiscard]] std::vector<DeviceType> get_supported_architectures() const;
 
-  [[nodiscard]] const DataIDList& get_read() const {
+  [[nodiscard]] const DataIDList &get_read() const {
     return read;
   }
-  [[nodiscard]] const DataIDList& get_write() const {
+  [[nodiscard]] const DataIDList &get_write() const {
     return write;
   }
 
@@ -232,11 +241,11 @@ public:
     data_dependents.push_back(dependent);
   }
 
-  [[nodiscard]] const TaskIDList& get_data_dependencies() const {
+  [[nodiscard]] const TaskIDList &get_data_dependencies() const {
     return data_dependencies;
   }
 
-  [[nodiscard]] const TaskIDList& get_data_dependents() const {
+  [[nodiscard]] const TaskIDList &get_data_dependents() const {
     return data_dependents;
   }
 
@@ -251,7 +260,7 @@ public:
     unique.assign(unique_set.begin(), unique_set.end());
   }
 
-  [[nodiscard]] const DataIDList& get_unique() const {
+  [[nodiscard]] const DataIDList &get_unique() const {
     return unique;
   }
 };
@@ -295,16 +304,16 @@ public:
   MinimalTask(taskid_t id) : id(id) {
   }
 
-  MinimalTask(const MinimalTask& other) = default;
+  MinimalTask(const MinimalTask &other) = default;
 
-  MinimalTask(MinimalTask&& other) noexcept
+  MinimalTask(MinimalTask &&other) noexcept
       : id(std::exchange(other.id, 0)), dependencies(std::move(other.dependencies)),
         dependents(std::move(other.dependents)) {
   }
 
-  MinimalTask(const Task& task) : id(task.id) {
-    const auto& task_dependencies = task.get_dependencies();
-    const auto& task_dependents = task.get_dependents();
+  MinimalTask(const Task &task) : id(task.id) {
+    const auto &task_dependencies = task.get_dependencies();
+    const auto &task_dependents = task.get_dependents();
 
     for (auto dep : task_dependencies) {
       dependencies[dep] = dep;
@@ -313,7 +322,7 @@ public:
   }
 
   // Copy assignment operator
-  MinimalTask& operator=(const MinimalTask& other) {
+  MinimalTask &operator=(const MinimalTask &other) {
     if (this != &other) {
       id = other.id;
       dependencies = other.dependencies;
@@ -323,7 +332,7 @@ public:
   }
 
   // Move assignment operator
-  MinimalTask& operator=(MinimalTask&& other) noexcept {
+  MinimalTask &operator=(MinimalTask &&other) noexcept {
     if (this != &other) {
       id = std::exchange(other.id, 0);
       dependencies = std::move(other.dependencies);
@@ -353,22 +362,22 @@ protected:
   DataTaskList data_tasks;
   std::vector<std::string> task_names;
 
-  ComputeTaskList& get_compute_tasks() {
+  ComputeTaskList &get_compute_tasks() {
     return compute_tasks;
   }
-  DataTaskList& get_data_tasks() {
+  DataTaskList &get_data_tasks() {
     return data_tasks;
   }
 
-  ComputeTask& get_compute_task(taskid_t id) {
+  ComputeTask &get_compute_task(taskid_t id) {
     return compute_tasks[id];
   }
-  DataTask& get_data_task(taskid_t id) {
+  DataTask &get_data_task(taskid_t id) {
     return data_tasks[id - num_compute_tasks];
   }
-  Task& get_task(taskid_t id);
+  Task &get_task(taskid_t id);
 
-  void create_data_task(ComputeTask& task, bool has_writer, taskid_t writer_id, dataid_t data_id);
+  void create_data_task(ComputeTask &task, bool has_writer, taskid_t writer_id, dataid_t data_id);
 
 public:
   Tasks(taskid_t num_compute_tasks);
@@ -388,39 +397,39 @@ public:
   void set_read(taskid_t id, DataIDList read);
   void set_write(taskid_t id, DataIDList write);
 
-  [[nodiscard]] const ComputeTaskList& get_compute_tasks() const {
+  [[nodiscard]] const ComputeTaskList &get_compute_tasks() const {
     return compute_tasks;
   }
-  [[nodiscard]] const DataTaskList& get_data_tasks() const {
+  [[nodiscard]] const DataTaskList &get_data_tasks() const {
     return data_tasks;
   }
 
-  [[nodiscard]] const ComputeTask& get_compute_task(taskid_t id) const {
+  [[nodiscard]] const ComputeTask &get_compute_task(taskid_t id) const {
     assert(id < num_compute_tasks);
     return compute_tasks.at(id);
   }
-  [[nodiscard]] const DataTask& get_data_task(taskid_t id) const {
+  [[nodiscard]] const DataTask &get_data_task(taskid_t id) const {
     assert(id >= num_compute_tasks);
     return data_tasks.at(id - num_compute_tasks);
   }
 
-  [[nodiscard]] const TaskIDList& get_dependencies(taskid_t id) const;
-  [[nodiscard]] const TaskIDList& get_dependents(taskid_t id) const;
-  [[nodiscard]] const VariantList& get_variants(taskid_t id) const;
-  [[nodiscard]] const Variant& get_variant(taskid_t id, DeviceType arch) const;
-  [[nodiscard]] const DataIDList& get_read(taskid_t id) const;
-  [[nodiscard]] const DataIDList& get_write(taskid_t id) const;
+  [[nodiscard]] const TaskIDList &get_dependencies(taskid_t id) const;
+  [[nodiscard]] const TaskIDList &get_dependents(taskid_t id) const;
+  [[nodiscard]] const VariantList &get_variants(taskid_t id) const;
+  [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const;
+  [[nodiscard]] const DataIDList &get_read(taskid_t id) const;
+  [[nodiscard]] const DataIDList &get_write(taskid_t id) const;
 
-  [[nodiscard]] const Resources& get_task_resources(taskid_t id) const;
-  [[nodiscard]] const Resources& get_task_resources(taskid_t id, DeviceType arch) const;
+  [[nodiscard]] const Resources &get_task_resources(taskid_t id) const;
+  [[nodiscard]] const Resources &get_task_resources(taskid_t id, DeviceType arch) const;
 
-  [[nodiscard]] const TaskIDList& get_data_dependencies(taskid_t id) const;
-  [[nodiscard]] const TaskIDList& get_data_dependents(taskid_t id) const;
+  [[nodiscard]] const TaskIDList &get_data_dependencies(taskid_t id) const;
+  [[nodiscard]] const TaskIDList &get_data_dependents(taskid_t id) const;
 
   [[nodiscard]] std::size_t get_depth(taskid_t id) const;
   [[nodiscard]] dataid_t get_data_id(taskid_t id) const;
 
-  [[nodiscard]] std::string const& get_name(taskid_t id) const {
+  [[nodiscard]] std::string const &get_name(taskid_t id) const {
     return task_names.at(id);
   }
 
@@ -430,7 +439,7 @@ public:
     return get_compute_task(id).get_variant_vector();
   }
 
-  [[nodiscard]] const Task& get_task(taskid_t id) const;
+  [[nodiscard]] const Task &get_task(taskid_t id) const;
 
   friend class GraphManager;
 };

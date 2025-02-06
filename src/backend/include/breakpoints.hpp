@@ -14,7 +14,7 @@ private:
   std::map<EventType, TaskIDList> breakpoints;
   volatile bool breakpoint_status = false;
 
-  static bool check_task(TaskIDList& tasks, taskid_t task) {
+  static bool check_task(TaskIDList &tasks, taskid_t task) {
     if (tasks.empty()) {
       return false;
     }
@@ -27,7 +27,7 @@ private:
     return found;
   }
 
-  static bool check_tasks(TaskIDList& tasks, const TaskIDList& other) {
+  static bool check_tasks(TaskIDList &tasks, const TaskIDList &other) {
     if (tasks.empty() || other.empty()) {
       return false;
     }
@@ -35,7 +35,7 @@ private:
     return std::ranges::all_of(other, [&tasks](taskid_t task) { return check_task(tasks, task); });
   }
 
-  static bool check_event(const std::map<EventType, TaskIDList>& map, EventType type) {
+  static bool check_event(const std::map<EventType, TaskIDList> &map, EventType type) {
     return map.find(type) != map.end();
   }
 

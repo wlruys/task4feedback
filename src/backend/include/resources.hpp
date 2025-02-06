@@ -69,55 +69,55 @@ struct Resources {
     return mem == 0;
   }
 
-  Resources& operator+=(const Resources& rhs) {
+  Resources &operator+=(const Resources &rhs) {
     vcu += rhs.vcu;
     mem += rhs.mem;
     return *this;
   }
 
-  Resources& operator-=(const Resources& rhs) {
+  Resources &operator-=(const Resources &rhs) {
     vcu -= rhs.vcu;
     mem -= rhs.mem;
     return *this;
   }
 
-  Resources operator+(const Resources& rhs) const {
+  Resources operator+(const Resources &rhs) const {
     Resources result = *this;
     result += rhs;
     return result;
   }
 
-  Resources operator-(const Resources& rhs) const {
+  Resources operator-(const Resources &rhs) const {
     Resources result = *this;
     result -= rhs;
     return result;
   }
 
-  [[nodiscard]] bool operator==(const Resources& rhs) const {
+  [[nodiscard]] bool operator==(const Resources &rhs) const {
     return vcu == rhs.vcu && mem == rhs.mem;
   }
 
-  [[nodiscard]] bool operator!=(const Resources& rhs) const {
+  [[nodiscard]] bool operator!=(const Resources &rhs) const {
     return !(*this == rhs);
   }
 
-  [[nodiscard]] bool operator<(const Resources& rhs) const {
+  [[nodiscard]] bool operator<(const Resources &rhs) const {
     return vcu < rhs.vcu && mem < rhs.mem;
   }
 
-  [[nodiscard]] bool operator>(const Resources& rhs) const {
+  [[nodiscard]] bool operator>(const Resources &rhs) const {
     return vcu > rhs.vcu && mem > rhs.mem;
   }
 
-  [[nodiscard]] bool operator<=(const Resources& rhs) const {
+  [[nodiscard]] bool operator<=(const Resources &rhs) const {
     return vcu <= rhs.vcu && mem <= rhs.mem;
   }
 
-  [[nodiscard]] bool operator>=(const Resources& rhs) const {
+  [[nodiscard]] bool operator>=(const Resources &rhs) const {
     return vcu >= rhs.vcu && mem >= rhs.mem;
   }
 
-  friend std::ostream& operator<<(std::ostream& os, const Resources& r) {
+  friend std::ostream &operator<<(std::ostream &os, const Resources &r) {
     os << "Resources(VCUs: " << r.vcu << ", MEM: " << r.mem << ")";
     return os;
   }

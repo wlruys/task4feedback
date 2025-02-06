@@ -15,7 +15,7 @@ enum class EventType {
 constexpr std::size_t num_event_types = 5;
 
 // Define << operator for EventType
-inline std::string to_string(const EventType& type) {
+inline std::string to_string(const EventType &type) {
   switch (type) {
   case EventType::MAPPER:
     return "MAPPER";
@@ -37,7 +37,7 @@ inline std::string to_string(const EventType& type) {
   }
 }
 
-inline std::ostream& operator<<(std::ostream& os, const EventType& type) {
+inline std::ostream &operator<<(std::ostream &os, const EventType &type) {
   os << to_string(type);
   return os;
 }
@@ -60,11 +60,11 @@ public:
     return time;
   }
 
-  [[nodiscard]] const TaskIDList& get_tasks() {
+  [[nodiscard]] const TaskIDList &get_tasks() {
     return tasks;
   }
 
-  [[nodiscard]] bool operator<(const Event& other) const {
+  [[nodiscard]] bool operator<(const Event &other) const {
 
     if (time == other.time) {
       // larger events are processed first
@@ -75,7 +75,7 @@ public:
     return time < other.time;
   }
 
-  [[nodiscard]] bool operator>(const Event& other) const {
+  [[nodiscard]] bool operator>(const Event &other) const {
     if (time == other.time) {
       return type < other.type;
     }

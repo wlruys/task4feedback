@@ -27,27 +27,27 @@ using PriorityList = std::vector<priority_t>;
 class SchedulerState;
 
 template <typename T> void print(std::vector<T> vec) {
-  for (auto& elem : vec) {
+  for (auto &elem : vec) {
     std::cout << elem << " ";
   }
   std::cout << std::endl;
 }
 
 template <typename K, typename T> void print(std::unordered_map<K, T> map) {
-  for (auto& elem : map) {
+  for (auto &elem : map) {
     std::cout << elem.first << " ";
   }
   std::cout << std::endl;
 }
 
 template <typename T> void print(std::list<T> list) {
-  for (auto& elem : list) {
+  for (auto &elem : list) {
     std::cout << elem << " ";
   }
   std::cout << std::endl;
 }
 
-template <typename G> void labeled_print(const std::string& name, const G& g) {
+template <typename G> void labeled_print(const std::string &name, const G &g) {
   std::cout << name << " ";
   print(g);
 }
