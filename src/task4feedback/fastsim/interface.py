@@ -698,8 +698,8 @@ class Simulator:
         self.cmapper = cmapper
         self.simulator.set_mapper(cmapper.mapper)
 
-    def initialize(self, use_data: bool = True):
-        self.simulator.initialize(use_data)
+    def initialize(self, use_data: bool = True, use_transition_conditions: bool = True):
+        self.simulator.initialize(use_data, use_transition_conditions)
         self.initialized = True
 
     def step(self, action_list=None):

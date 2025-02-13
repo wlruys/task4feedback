@@ -82,7 +82,7 @@ cdef extern from "include/simulator.hpp":
     cdef cppclass Simulator:
         Simulator(Simulator&)
         Simulator(SchedulerInput& input)
-        void initialize(bool create_data_tasks)
+        void initialize(bool create_data_tasks, bool use_transition_conditions)
         ExecutionState run()
         timecount_t get_current_time()
         TaskIDList get_mappable_candidates()

@@ -598,8 +598,8 @@ cdef class PySimulator:
     cdef create(self):
         self.simulator = new Simulator(deref(self.input.input))
 
-    def initialize(self, bool create_data_tasks = 0):
-        self.simulator.initialize(create_data_tasks)
+    def initialize(self, bool create_data_tasks = 0, bool use_transition_conditions = 1):
+        self.simulator.initialize(create_data_tasks, use_transition_conditions)
 
     def run(self):
         cdef ExecutionState stop_reason = self.simulator.run()
