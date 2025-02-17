@@ -715,7 +715,6 @@ cdef class PyObserver:
 
         return  e, features_array
 
-
     def get_task_data_edges(self, taskid_t[:] task_ids):
         if task_ids.shape[0] == 0:
             return np.array([], dtype=np.uint32),np.array([], dtype=np.uint32), np.array([], dtype=np.float32)
@@ -759,3 +758,6 @@ cdef class PyObserver:
         features_array = _dp_numpy(edges.features, n, d)
 
         return data2id, device2id, e, features_array
+        
+    def get_n_tasks(self):
+        return self.observer.get_n_tasks()

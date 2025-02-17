@@ -529,13 +529,25 @@ class HeteroGAT(nn.Module):
 
     def forward(self, data):
         # Process data to tasks
+        
+        print(f"Data shape: {data['data'].x.shape}")
+        print(f"Tasks shape: {data['tasks'].x.shape}")
+        print(f"Data edge index shape: {data['data', 'used_by', 'tasks'].edge_index.shape}")
+        print(f"Data edge attr shape: {data['data', 'used_by', 'tasks'].edge_attr.shape}")
+        
         data_fused_tasks = self.gnn_tasks_data(
             (data["data"].x, data["tasks"].x),
             data["data", "used_by", "tasks"].edge_index,
             data["data", "used_by", "tasks"].edge_attr,
         )
+
+        # Check device placements for all
+        # print(f"data_fused_tasks device: {data_fused_tasks.device}")
+
         data_fused_tasks = self.layer_norm1(data_fused_tasks)
+        # print(f"data_fused_tasks after layer_norm1 device: {data_fused_tasks.device}")
         data_fused_tasks = self.activation(data_fused_tasks)
+        # print(f"data_fused_tasks after activation device: {data_fused_tasks.device}")
 
         # Process devices to tasks
         device_fused_tasks = self.gnn_tasks_devices(
@@ -682,7 +694,7 @@ class VectorTaskAssignmentNet(nn.Module):
 
 
 class TaskAssignmentNet(nn.Module):
-    def __init__(self, ndevices, priority_levels, hidden_channels, data):
+    def __init__(self, ndevices, priority_levels, hidden_channels, data, device):
         super(TaskAssignmentNet, self).__init__()
 
         self.in_channels_tasks = data["tasks"].x.shape[1]
@@ -697,8 +709,8 @@ class TaskAssignmentNet(nn.Module):
             ("tasks", "depends_on", "tasks")
         ].edge_attr.shape[1]
 
-        self.hetero_gat_actor = HeteroGAT(hidden_channels, data)
-        self.hetero_gat_critic = HeteroGAT(hidden_channels, data)
+        self.hetero_gat_actor = HeteroGAT(hidden_channels, data).to(device)
+        self.hetero_gat_critic = HeteroGAT(hidden_channels, data).to(device)
         self.ndevices = ndevices
         self.priority_levels = priority_levels
 
@@ -707,15 +719,19 @@ class TaskAssignmentNet(nn.Module):
         actor_input_dim = hidden_channels * 3 + self.in_channels_tasks
 
         # Critic Head
-        self.critic_head = ActorCriticHead(critic_input_dim, hidden_channels, 1)
+        self.critic_head = ActorCriticHead(critic_input_dim, hidden_channels, 1).to(
+            device
+        )
 
         # Actor Head for Priority
         self.actor_p_head = ActorCriticHead(
             critic_input_dim, hidden_channels, priority_levels
-        )
+        ).to(device)
 
         # Actor Head for Device Assignment
-        self.actor_d_head = ActorCriticHead(actor_input_dim, hidden_channels, ndevices)
+        self.actor_d_head = ActorCriticHead(
+            actor_input_dim, hidden_channels, ndevices
+        ).to(device)
 
     def forward(self, data, task_batch=None):
         # Get features from HeteroGAT

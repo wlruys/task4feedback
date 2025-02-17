@@ -117,6 +117,7 @@ const TaskIDList &SchedulerState::notify_completed(taskid_t task_id) {
 }
 
 const TaskIDList &SchedulerState::notify_data_completed(taskid_t task_id) {
+  //This notifies data tasks that WAIT on the completion of this (task_id) compute task
   return task_manager.notify_data_completed(task_id, global_time);
 }
 

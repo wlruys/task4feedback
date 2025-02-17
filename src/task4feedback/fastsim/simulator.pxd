@@ -148,6 +148,7 @@ cdef extern from "include/observer.hpp":
         TaskDataEdges get_task_data_edges(taskid_t* task_ids, size_t ntasks)
         TaskDeviceEdges get_task_device_edges(taskid_t* task_ids, size_t ntasks)
         DataDeviceEdges get_data_device_edges(dataid_t* data_ids, size_t ndata)
+        int get_n_tasks()
 
     
 

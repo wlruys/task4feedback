@@ -38,6 +38,7 @@ import torch
 import copy
 
 import torch_geometric as geom
+from tensordict.tensordict import TensorDict
 
 
 class Phase(Enum):
@@ -666,6 +667,115 @@ class Observer:
 
         return g
 
+    def get_local_graph_tensordict(
+        self, candidate_tasks: np.ndarray[np.uint64], k_hop: int = 1
+    ):
+
+        print(candidate_tasks)
+
+        # if len(candidate_tasks) == 0:
+        #    return TensorDict()
+
+        candidate_tasks = np.asarray(candidate_tasks, dtype=np.uint32)
+
+        k_hop_dependents = self.get_k_hop_dependents(candidate_tasks, k_hop)
+        k_hop_dependencies = self.get_k_hop_dependencies(candidate_tasks, k_hop)
+
+        unique_k_hop = np.unique(np.concatenate([k_hop_dependents, k_hop_dependencies]))
+        unique_k_hop = np.asarray(unique_k_hop, dtype=np.uint32)
+
+        all_tasks = np.concatenate([candidate_tasks, unique_k_hop])
+
+        task_features = self.get_task_features(all_tasks)
+        task_features[: len(candidate_tasks), -1] = 1
+        task_features = torch.from_numpy(task_features)
+
+        dep_edges, dep_features = self.get_task_task_edges(all_tasks, all_tasks)
+        dep_edges = torch.from_numpy(dep_edges).to(torch.long)
+        dep_features = torch.from_numpy(dep_features)
+
+        vdevice2id, task_device_edges, task_device_features = (
+            self.get_task_device_edges(all_tasks)
+        )
+
+        device_features = self.get_device_features(vdevice2id)
+        device_features = torch.from_numpy(device_features)
+
+        device_task_edges = torch.from_numpy(task_device_edges).to(torch.long).flip(0)
+        device_task_features = torch.from_numpy(task_device_features)
+
+        data2id, task_data_edges, task_data_features = self.get_task_data_edges(
+            all_tasks
+        )
+        data_features = self.get_data_features(data2id)
+
+        data_features = torch.from_numpy(data_features)
+        data_task_edges = torch.from_numpy(task_data_edges).to(torch.long).flip(0)
+
+        data_task_features = torch.from_numpy(task_data_features)
+
+        candidate_list = torch.from_numpy(candidate_tasks).to(torch.long)
+
+        unique_k_hop = torch.from_numpy(unique_k_hop).to(torch.long)
+
+        obs_tensordict = TensorDict(
+            {
+                "tasks": task_features,
+                "data": data_features,
+                "devices": device_features,
+                "task_task": TensorDict(
+                    {
+                        "edge_index": dep_edges,
+                        "edge_attr": dep_features,
+                    }
+                ),
+                "task_device": TensorDict(
+                    {
+                        "edge_index": device_task_edges,
+                        "edge_attr": device_task_features,
+                    }
+                ),
+                "task_data": TensorDict(
+                    {
+                        "edge_index": data_task_edges,
+                        "edge_attr": data_task_features,
+                    }
+                ),
+                "candidate_list": candidate_list,
+                "unique_k_hop": unique_k_hop,
+            }
+        )
+
+        # obs_tensordict = TensorDict(
+        #     {
+        #         "tasks": task_features,
+        #         "data": data_features,
+        #         "devices": device_features,
+        #         "task_task_edge_index": dep_edges,
+        #         "task_task_edge_attr": dep_features,
+        #     }
+        # )
+
+        return obs_tensordict
+
+    def convert_tensordict_to_heterodata(self, td: TensorDict) -> geom.data.HeteroData:
+        g = geom.data.HeteroData()
+
+        g["tasks"].x = td["task"]
+        g["devices"].x = td["devices"]
+        g["data"].x = td["data"]
+
+        g["tasks", "depends_on", "tasks"].edge_index = td["task_task"]["edge_index"]
+        g["tasks", "depends_on", "tasks"].edge_attr = td["task_task"]["edge_attr"]
+
+        g["devices", "variant", "tasks"].edge_index = td["task_device"]["edge_index"]
+        g["devices", "variant", "tasks"].edge_attr = td["task_device"]["edge_attr"]
+
+        g["data", "used_by", "tasks"].edge_index = td["task_data"]["edge_index"]
+        g["data", "used_by", "tasks"].edge_attr = td["task_data"]["edge_attr"]
+
+        return g
+
 
 @dataclass
 class Simulator:
@@ -710,6 +820,7 @@ class Simulator:
         obs = self.observer.local_graph_features(
             self.simulator.get_mappable_candidates()
         )
+        print(info)
         done = info.state == PyExecutionState.COMPLETE
         terminated = False
         immediate_reward = 0

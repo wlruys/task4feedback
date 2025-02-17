@@ -170,7 +170,7 @@ public:
       if (scheduler.is_complete()) {
         return ExecutionState::COMPLETE;
       }
-      // spdlog::critical("No more events and not complete.");
+      spdlog::critical("No more events and not complete.");
       return ExecutionState::ERROR;
     }
 
@@ -185,12 +185,12 @@ public:
 
     if (!initialized) {
       last_state = ExecutionState::ERROR;
-      // spdlog::critical("Simulator not initialized.");
+      spdlog::critical("Simulator not initialized.");
       return ExecutionState::ERROR;
     }
 
     if (last_state == ExecutionState::ERROR) {
-      // spdlog::critical("Simulator in error state.");
+      spdlog::critical("Simulator in error state.");
       return ExecutionState::ERROR;
     }
 
@@ -199,7 +199,7 @@ public:
     }
 
     if (last_state == ExecutionState::EXTERNAL_MAPPING) {
-      // spdlog::debug("Python Mapping has not been completed.");
+      spdlog::debug("Python Mapping has not been completed.");
       return ExecutionState::ERROR;
     }
 
