@@ -543,11 +543,14 @@ public:
     return GraphManager::initial_tasks(compute_tasks);
   }
 
-  void initialize(bool create_data_tasks = false) {
+  void initialize(bool create_data_tasks = false, bool use_transition_conditions = true) {
     state.initialize(create_data_tasks);
     auto initial_tasks = initially_mappable_tasks();
     queues.push_mappable(initial_tasks, state.get_mapping_priorities());
-    this->conditions = std::make_shared<RangeTransitionConditions>(5, 5, 8);
+    if (use_transition_conditions)
+      this->conditions = std::make_shared<RangeTransitionConditions>(5, 5, 8);
+    else
+      this->conditions = std::make_shared<DefaultTransitionConditions>();
     initialized = true;
   }
 

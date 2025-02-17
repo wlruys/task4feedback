@@ -105,9 +105,9 @@ public:
     return scheduler.get_state();
   }
 
-  void initialize(bool create_data_tasks = false) {
+  void initialize(bool create_data_tasks = false, bool use_transition_conditions = true) {
     add_initial_event();
-    scheduler.initialize(create_data_tasks);
+    scheduler.initialize(create_data_tasks, use_transition_conditions);
     initialized = true;
   }
 
@@ -236,5 +236,9 @@ public:
 
   void add_time_breakpoint(timecount_t time) {
     scheduler.breakpoints.add_time_breakpoint(time);
+  }
+
+  [[nodiscard]] devid_t get_mapping(taskid_t task_id) const {
+    return scheduler.get_state().get_mapping(task_id);
   }
 };

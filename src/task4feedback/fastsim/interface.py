@@ -808,8 +808,8 @@ class Simulator:
         self.cmapper = cmapper
         self.simulator.set_mapper(cmapper.mapper)
 
-    def initialize(self, use_data: bool = True):
-        self.simulator.initialize(use_data)
+    def initialize(self, use_data: bool = True, use_transition_conditions: bool = True):
+        self.simulator.initialize(use_data, use_transition_conditions)
         self.initialized = True
 
     def step(self, action_list=None):
@@ -870,6 +870,9 @@ class Simulator:
             etype = PyEventType.COMPLETER
 
         self.simulator.add_task_breakpoint(etype, task_id)
+
+    def get_mapping(self, task_index: int):
+        return self.simulator.get_mapping(task_index)
 
     def randomize_durations(self):
         self.noise.sample_durations()
