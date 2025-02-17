@@ -617,7 +617,7 @@ cdef class PySimulator:
             return np.array([], dtype=np.uint32)
         else:
             return convert_taskid_list_to_numpy(candidates, copy=True)
-
+    
     def map_tasks(self, list[PyAction] actions):
         cdef ActionList action_list
         cdef PyAction action
@@ -633,6 +633,9 @@ cdef class PySimulator:
 
     def add_time_breakpoint(self, timecount_t time):
         self.simulator.add_time_breakpoint(time)
+    
+    def get_mapping(self, taskid_t task_id):
+        return self.simulator.get_mapping(task_id)
 
     def use_python_mapper(self, bool use_python_mapper):
         self.simulator.set_use_python_mapper(use_python_mapper)

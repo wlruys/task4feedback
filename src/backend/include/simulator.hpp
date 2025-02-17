@@ -237,4 +237,8 @@ public:
   void add_time_breakpoint(timecount_t time) {
     scheduler.breakpoints.add_time_breakpoint(time);
   }
+
+  [[nodiscard]] devid_t get_mapping(taskid_t task_id) const {
+    return scheduler.get_state().get_mapping(task_id);
+  }
 };

@@ -760,6 +760,9 @@ class Simulator:
 
         self.simulator.add_task_breakpoint(etype, task_id)
 
+    def get_mapping(self, task_index: int):
+        return self.simulator.get_mapping(task_index)
+
     def randomize_durations(self):
         self.noise.sample_durations()
 
