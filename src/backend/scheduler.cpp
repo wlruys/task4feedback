@@ -77,27 +77,27 @@ ResourceRequest SchedulerState::request_launch_resources(taskid_t task_id,
 void SchedulerState::map_resources(taskid_t task_id, devid_t device_id,
                                    const Resources &requested) {
   MONUnusedParameter(task_id);
-  device_manager.add_resources<TaskState::MAPPED>(device_id, requested, this->global_time);
+  device_manager.add_resources<TaskState::MAPPED>(device_id, requested, global_time);
 }
 
 void SchedulerState::reserve_resources(taskid_t task_id, devid_t device_id,
                                        const Resources &requested) {
   MONUnusedParameter(task_id);
-  device_manager.add_resources<TaskState::RESERVED>(device_id, requested, this->global_time);
+  device_manager.add_resources<TaskState::RESERVED>(device_id, requested, global_time);
 }
 
 void SchedulerState::launch_resources(taskid_t task_id, devid_t device_id,
                                       const Resources &requested) {
   MONUnusedParameter(task_id);
-  device_manager.add_resources<TaskState::LAUNCHED>(device_id, requested, this->global_time);
+  device_manager.add_resources<TaskState::LAUNCHED>(device_id, requested, global_time);
 }
 
 void SchedulerState::free_resources(taskid_t task_id) {
   devid_t device_id = task_manager.state.get_mapping(task_id);
   const auto &task_resources = get_task_resources(task_id);
-  device_manager.remove_resources<TaskState::MAPPED>(device_id, task_resources, this->global_time);
-  device_manager.remove_resources<TaskState::RESERVED>(device_id, task_resources, this->global_time);
-  device_manager.remove_resources<TaskState::LAUNCHED>(device_id, task_resources, this->global_time);
+  device_manager.remove_resources<TaskState::MAPPED>(device_id, task_resources, global_time);
+  device_manager.remove_resources<TaskState::RESERVED>(device_id, task_resources, global_time);
+  device_manager.remove_resources<TaskState::LAUNCHED>(device_id, task_resources, global_time);
 }
 
 const TaskIDList &SchedulerState::notify_mapped(taskid_t task_id) {
