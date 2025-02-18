@@ -128,24 +128,6 @@ public:
     return state.get().get_task_manager().get_tasks().size();
   }
 
-  void get_state_times(std::span<timecount_t> times) const {
-    const auto &s = state.get();
-    const auto &task_manager = s.get_task_manager();
-    const auto &task_record = task_manager.get_records();
-
-    const auto& time_record = task_record.get_time_record();
-
-    assert(times.size() >= time_record.size());
-
-    for (std::size_t i = 0; i < times.size(); i++) {
-      times[i] = time_record[i];
-    }
-  }
-
-  void get_state_times(timecount_t *times, std::size_t n) {
-    get_state_times(std::span<timecount_t>(times, n));
-  }
-
   void get_mapping(std::span<devid_t> mapping) const {
     const auto &s = state.get();
     const auto &task_manager = s.get_task_manager();
