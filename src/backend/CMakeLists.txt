@@ -44,6 +44,18 @@ target_include_directories(backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(backend PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set_target_properties(backend PROPERTIES PUBLIC_HEADER "${BACKEND_HDR_INCLUDE}")
 
+message(STATUS "SIM_TRACK_LOCATION: ${SIM_TRACK_LOCATION}")
+if(SIM_TRACK_LOCATION)
+    message(STATUS "...data location logging enabled")
+    target_compile_definitions(backend PRIVATE SIM_TRACK_LOCATION)
+endif()
+
+message(STATUS "SIM_TRACK_RESOURCES: ${SIM_TRACK_RESOURCES}")
+if(SIM_TRACK_RESOURCES)
+    message(STATUS "...resource logging enabled")
+    target_compile_definitions(backend PRIVATE SIM_TRACK_RESOURCES)
+endif()
+
 #${PYTHON_RELATIVE_SITE_PACKAGES_DIR}/parla/lib/
 
 install(TARGETS backend

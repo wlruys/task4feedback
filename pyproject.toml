@@ -31,6 +31,12 @@ cmake.build-type = "Release"
 cmake.verbose = true
 ninja.minimum-version = "1.11"
 
+
+[tool.scikit-build.cmake.define]
+SIM_TRACK_RESOURCES = { env = "SIM_TRACK_RESOURCES", default = "ON" }
+SIM_TRACK_LOCATION = { env = "SIM_TRACK_LOCATION", default = "ON" }
+SIM_LOGGING_LEVEL = { env = "SIM_LOGGING_LEVEL", default = "INFO" }
+
 [tool.cython-lint]
 ignore = [
     'E504', # break after binary operator

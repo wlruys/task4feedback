@@ -109,7 +109,7 @@ public:
     #endif
   }
 
-  bool check_valid_at_time(devid_t device_id, timecount_t query_time) {
+  bool check_valid_at_time(devid_t device_id, timecount_t query_time) const {
     const auto &intervals = valid_intervals[device_id];
 
     // Use binary search to find the first interval whose start is greater than query_time.
@@ -154,6 +154,7 @@ public:
     }
     #else
     locations[device_id] = false;
+    #endif
   }
 
   [[nodiscard]] bool is_valid(devid_t device_id) const {
@@ -278,12 +279,20 @@ public:
     return block_locations.at(data_id);
   }
 
+  const BlockLocation &at(dataid_t data_id) const {
+    return block_locations.at(data_id);
+  }
+
   BlockLocation &operator[](dataid_t data_id) {
     return block_locations.at(data_id);
   }
 
   const BlockLocation &operator[](dataid_t data_id) const {
     return block_locations.at(data_id);
+  }
+
+  ValidEventArray get_valid_intervals(dataid_t data_id, devid_t device_id) const {
+    return block_locations.at(data_id).get_valid_intervals(device_id);
   }
 
   void finalize(timecount_t current_time){
@@ -821,15 +830,15 @@ public:
     launched_locations.finalize(current_time);
   }
 
-  bool check_valid_at_time_mapped(dataid_t data_id, devid_t device_id, timecount_t query_time){
+  bool check_valid_at_time_mapped(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
     return mapped_locations.at(data_id).check_valid_at_time(device_id, query_time);
   }
 
-  bool check_valid_at_time_reserved(dataid_t data_id, devid_t device_id, timecount_t query_time){
+  bool check_valid_at_time_reserved(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
     return reserved_locations.at(data_id).check_valid_at_time(device_id, query_time);
   }
 
-  bool check_valid_at_time_launched(dataid_t data_id, devid_t device_id, timecount_t query_time){
+  bool check_valid_at_time_launched(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
     return launched_locations.at(data_id).check_valid_at_time(device_id, query_time);
   }
 

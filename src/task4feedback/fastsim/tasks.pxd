@@ -38,7 +38,6 @@ cdef extern from "include/tasks.hpp":
         timecount_t get_observed_time() const
 
 
-
 cdef extern from "include/task_manager.hpp":
 
     cdef cppclass Tasks:
@@ -67,7 +66,4 @@ cdef extern from "include/task_manager.hpp":
         bool empty() const
         bool is_compute(taskid_t id) const 
         bool is_data(taskid_t id) const
-
-
-    
 

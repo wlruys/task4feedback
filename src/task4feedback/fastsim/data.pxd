@@ -29,3 +29,7 @@ cdef extern from "include/data_manager.hpp":
         mem_t get_size(dataid_t id) const
         devid_t get_location(dataid_t id) const
         string get_name(dataid_t id) const
+
+    cdef cppclass ValidEventArray:
+        timecount_t* starts 
+        timecount_t* stops 

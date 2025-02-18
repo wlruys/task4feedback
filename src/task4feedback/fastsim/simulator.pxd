@@ -5,9 +5,9 @@
 from settings cimport dataid_t, taskid_t, TaskIDList, DataIDList, DeviceIDList, PriorityList, DeviceType, devid_t, priority_t, depcount_t, vcu_t, mem_t, timecount_t
 
 from tasks cimport Tasks
-from devices cimport Devices
+from devices cimport Devices, ResourceEventArray
 from communication cimport Topology, CommunicationNoise
-from data cimport Data
+from data cimport Data, ValidEventArray
 from noise cimport TaskNoise 
 
 import cython
@@ -97,8 +97,6 @@ cdef extern from "include/simulator.hpp":
         timecount_t get_reserved_time(taskid_t task_id)
         timecount_t get_launched_time(taskid_t task_id)
         timecount_t get_completed_time(taskid_t task_id)
-
-
 
 
 cdef extern from "include/observer.hpp":

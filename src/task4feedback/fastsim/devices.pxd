@@ -23,4 +23,10 @@ cdef extern from "include/device_manager.hpp":
         size_t size() const
 
 
+    cdef cppclass ResourceEventArray[T]:
+        timecount_t* times 
+        T* resources 
 
+        
+
+    

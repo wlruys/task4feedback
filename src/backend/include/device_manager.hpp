@@ -58,17 +58,17 @@ public:
     events.clear();
   }
 
-  ResourceEventArray<T> get_events(){
+  ResourceEventArray<T> get_events() const {
     //Returns a copy of the events
     ResourceEventArray<T> result;
-    results.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t) * events.size()));
-    results.resources = static_cast<T*>(malloc(sizeof(T) * events.size()));
+    result.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t) * events.size()));
+    result.resources = static_cast<T*>(malloc(sizeof(T) * events.size()));
 
     for(int i = 0; i < events.size(); i++){
-      results.times[i] = events[i].time;
-      results.resources[i] = events[i].resource;
+      result.times[i] = events[i].time;
+      result.resources[i] = events[i].resource;
     }
-    return results;
+    return result;
   }
 
 };
@@ -84,8 +84,8 @@ public:
   std::vector<vcu_t> vcu;
   std::vector<mem_t> mem;
 
-  ResourceTracker<vcu_t> vcu_tracker;
-  ResourceTracker<mem_t> mem_tracker;
+  std::vector<ResourceTracker<vcu_t>> vcu_tracker;
+  std::vector<ResourceTracker<mem_t>> mem_tracker;
 
   DeviceResources() = default;
 
@@ -101,11 +101,11 @@ public:
 
   void set_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     vcu[id] = vcu_;
-    vcu_tracker.add_set(current_time, vcu_);
+    vcu_tracker[id].add_set(current_time, vcu_);
   }
   void set_mem(devid_t id, mem_t m, timecount_t current_time) {
     mem[id] = m;
-    mem_tracker.add_set(current_time, m);
+    mem_tracker[id].add_set(current_time, m);
   }
 
   [[nodiscard]] vcu_t get_vcu(devid_t id) const {
@@ -120,13 +120,13 @@ public:
   vcu_t add_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     assert(id < vcu.size());
     vcu.at(id) += vcu_;
-    vcu_tracker.add_change(current_time, vcu.at(id));
+    vcu_tracker[id].add_change(current_time, vcu.at(id));
     return vcu.at(id);
   }
   mem_t add_mem(devid_t id, mem_t m, timecount_t current_time) {
     assert(id < mem.size());
     mem.at(id) += m;
-    mem_tracker.add_change(current_time, mem.at(id));
+    mem_tracker[id].add_change(current_time, mem.at(id));
     return mem.at(id);
   }
 
@@ -134,14 +134,14 @@ public:
     assert(id < vcu.size());
     assert(vcu.at(id) >= vcu_);
     vcu.at(id) -= vcu_;
-    vcu_tracker.add_change(current_time, vcu.at(id));
+    vcu_tracker[id].add_change(current_time, vcu.at(id));
     return vcu.at(id);
   }
   mem_t remove_mem(devid_t id, mem_t m, timecount_t current_time) {
     assert(id < mem.size());
     assert(mem.at(id) >= m);
     mem.at(id) -= m;
-    mem_tracker.add_change(current_time, mem.at(id));
+    mem_tracker[id].add_change(current_time, mem.at(id));
     return mem.at(id);
   }
 
@@ -190,20 +190,20 @@ public:
     return {vcu_overflow, mem_overflow};
   }
 
-  vcu_t get_vcu_at_time(timecount_t time) const {
-    return vcu_tracker.get_resource(time);
+  vcu_t get_vcu_at_time(devid_t id, timecount_t time) const {
+    return vcu_tracker[id].get_resource(time);
   }
 
-  mem_t get_mem_at_time(timecount_t time) const {
-    return mem_tracker.get_resource(time);
+  mem_t get_mem_at_time(devid_t id, timecount_t time) const {
+    return mem_tracker[id].get_resource(time);
   }
 
-  ResourceEventArray<vcu_t> get_vcu_events(){
-    return vcu_tracker.get_events();
+  ResourceEventArray<vcu_t> get_vcu_events(devid_t id) const {
+    return vcu_tracker[id].get_events();
   }
 
-  ResourceEventArray<mem_t> get_mem_events(){
-    return mem_tracker.get_events();
+  ResourceEventArray<mem_t> get_mem_events(devid_t id) const {
+    return mem_tracker[id].get_events();
   }
 
   friend class DeviceManager;
@@ -410,22 +410,22 @@ public:
 
   template <TaskState State> [[nodiscard]] vcu_t get_vcu_at_time(devid_t id, timecount_t time) const {
     auto &state_resources = get_resources<State>();
-    return state_resources.get_vcu_at_time(time);
+    return state_resources.get_vcu_at_time(id, time);
   }
 
   template <TaskState State> [[nodiscard]] mem_t get_mem_at_time(devid_t id, timecount_t time) const {
     auto &state_resources = get_resources<State>();
-    return state_resources.get_mem_at_time(time);
+    return state_resources.get_mem_at_time(id, time);
   }
 
-  template <TaskState State> ResourceEventArray<vcu_t> get_vcu_events(){
+  template <TaskState State> ResourceEventArray<vcu_t> get_vcu_events(devid_t id) const {
     auto &state_resources = get_resources<State>();
-    return state_resources.get_vcu_events();
+    return state_resources.get_vcu_events(id);
   }
 
-  template <TaskState State> ResourceEventArray<mem_t> get_mem_events(){
+  template <TaskState State> ResourceEventArray<mem_t> get_mem_events(devid_t id) const {
     auto &state_resources = get_resources<State>();
-    return state_resources.get_mem_events();
+    return state_resources.get_mem_events(id);
   }
 
   friend class SchedulerState;
