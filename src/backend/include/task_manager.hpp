@@ -43,7 +43,7 @@ public:
   // Store the task state
   std::vector<devid_t> mapping;
 
-  // PriorityList mapping_priority;
+  PriorityList mapping_priority;
   PriorityList reserving_priority;
   PriorityList launching_priority;
 
@@ -85,10 +85,6 @@ public:
     assert(id < n_compute_tasks);
     mapping.at(id) = devid;
   }
-  // void set_mapping_priority(taskid_t id, priority_t p);
-  // void set_mapping_priority(PriorityList &ps) {
-  //   mapping_priority = std::move(ps);
-  // }
 
   void set_reserving_priority(taskid_t id, priority_t p);
   void set_reserving_priority(PriorityList &ps) {
@@ -102,13 +98,7 @@ public:
   [[nodiscard]] devid_t get_mapping(taskid_t id) const {
     return mapping[id];
   };
-  // [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const {
-  //   assert(id < mapping_priority.size());
-  //   return mapping_priority.at(id);
-  // };
-  // [[nodiscard]] const PriorityList &get_mapping_priorities() const {
-  //   return mapping_priority;
-  // }
+
   [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const {
     assert(id < reserving_priority.size());
     return reserving_priority.at(id);
@@ -214,9 +204,39 @@ public:
     initialized = true;
   }
 
-  // void set_mapping_priority(PriorityList &ps) {
-  //   state.set_mapping_priority(ps);
-  // }
+  [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const {
+    return noise.get().get_priority(id);
+  }
+
+  [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const {
+    return state.get_reserving_priority(id);
+  }
+  [[nodiscard]] priority_t get_launching_priority(taskid_t id) const {
+    return state.get_launching_priority(id);
+  }
+
+  [[nodiscard]] const PriorityList &get_mapping_priorities() const {
+    return noise.get().get_priorities();
+  }
+
+  [[nodiscard]] const PriorityList &get_reserving_priorities() const {
+    return state.get_reserving_priorities();
+  }
+  [[nodiscard]] const PriorityList &get_launching_priorities() const {
+    return state.get_launching_priorities();
+  }
+
+  void set_mapping_priority(taskid_t id, priority_t p) {
+    noise.get().set_priority(id, p);
+  }
+
+  void set_reserving_priority(taskid_t id, priority_t p) {
+    state.set_reserving_priority(id, p);
+  }
+
+  void set_launching_priority(taskid_t id, priority_t p) {
+    state.set_launching_priority(id, p);
+  }
 
   [[nodiscard]] const TaskStateInfo &get_state() const {
     return state;

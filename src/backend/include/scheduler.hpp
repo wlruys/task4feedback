@@ -384,12 +384,14 @@ public:
   [[nodiscard]] const PriorityList &get_reserving_priorities() const;
   [[nodiscard]] const PriorityList &get_launching_priorities() const;
 
+  [[nodiscard]] priority_t get_mapping_priority(taskid_t task_id) const;
   [[nodiscard]] priority_t get_reserving_priority(taskid_t task_id) const;
   [[nodiscard]] priority_t get_launching_priority(taskid_t task_id) const;
 
   template <typename precision_t>
   void fill_supported_devices(taskid_t task_id, std::span<precision_t> valid_devices) const;
 
+  void set_mapping_priority(taskid_t task_id, priority_t priority);
   void set_reserving_priority(taskid_t task_id, priority_t priority);
   void set_launching_priority(taskid_t task_id, priority_t priority);
 

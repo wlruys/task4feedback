@@ -11,6 +11,7 @@ template<typename T>
 struct ResourceEventArray{
   timecount_t* times;
   T* resources;
+  std::size_t size;
 };
 
 template<typename T>
@@ -68,6 +69,9 @@ public:
       result.times[i] = events[i].time;
       result.resources[i] = events[i].resource;
     }
+
+    result.size = events.size();
+
     return result;
   }
 

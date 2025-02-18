@@ -154,32 +154,39 @@ devid_t SchedulerState::get_mapping(taskid_t task_id) const {
 }
 
 const PriorityList &SchedulerState::get_mapping_priorities() const {
-  // return task_manager.state.get_mapping_priorities();
-  return task_manager.noise.get().get_priorities();
+  return task_manager.get_mapping_priorities();
 }
 
 const PriorityList &SchedulerState::get_reserving_priorities() const {
-  return task_manager.state.get_reserving_priorities();
+  return task_manager.get_reserving_priorities();
 }
 
 const PriorityList &SchedulerState::get_launching_priorities() const {
-  return task_manager.state.get_launching_priorities();
+  return task_manager.get_launching_priorities();
+}
+
+priority_t SchedulerState::get_mapping_priority(taskid_t task_id) const {
+  return task_manager.get_mapping_priority(task_id);
 }
 
 priority_t SchedulerState::get_reserving_priority(taskid_t task_id) const {
-  return task_manager.state.get_reserving_priority(task_id);
+  return task_manager.get_reserving_priority(task_id);
 }
 
 priority_t SchedulerState::get_launching_priority(taskid_t task_id) const {
-  return task_manager.state.get_launching_priority(task_id);
+  return task_manager.get_launching_priority(task_id);
+}
+
+void SchedulerState::set_mapping_priority(taskid_t task_id, priority_t priority) {
+  task_manager.set_mapping_priority(task_id, priority);
 }
 
 void SchedulerState::set_reserving_priority(taskid_t task_id, priority_t priority) {
-  task_manager.state.set_reserving_priority(task_id, priority);
+  task_manager.set_reserving_priority(task_id, priority);
 }
 
 void SchedulerState::set_launching_priority(taskid_t task_id, priority_t priority) {
-  task_manager.state.set_launching_priority(task_id, priority);
+  task_manager.set_launching_priority(task_id, priority);
 }
 
 void SchedulerState::update_mapped_cost(taskid_t task_id, devid_t device_id) {

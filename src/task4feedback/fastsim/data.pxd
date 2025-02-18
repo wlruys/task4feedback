@@ -33,3 +33,4 @@ cdef extern from "include/data_manager.hpp":
     cdef cppclass ValidEventArray:
         timecount_t* starts 
         timecount_t* stops 
+        size_t size

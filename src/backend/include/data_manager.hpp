@@ -90,6 +90,7 @@ struct ValidInterval {
 struct ValidEventArray{
   timecount_t* starts;
   timecount_t* stops;
+  std::size_t size = 0;
 };
 
 
@@ -227,6 +228,8 @@ public:
       valid_events.starts[intervals.size()] = current_start[device_id];
       valid_events.stops[intervals.size()] = MAX_TIME;
     }
+
+    valid_events.size = intervals.size() + has_open_interval;
 
     return valid_events;
   }

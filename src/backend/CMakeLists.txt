@@ -56,6 +56,8 @@ if(SIM_TRACK_RESOURCES)
     target_compile_definitions(backend PRIVATE SIM_TRACK_RESOURCES)
 endif()
 
+target_compile_definitions(backend PUBLIC SPDLOG_ACTIVE_LEVEL)
+
 #${PYTHON_RELATIVE_SITE_PACKAGES_DIR}/parla/lib/
 
 install(TARGETS backend

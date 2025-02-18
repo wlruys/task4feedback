@@ -239,8 +239,20 @@ public:
   }
 
   [[nodiscard]] devid_t get_mapping(taskid_t task_id) const {
-    /*Get location */
+    /*Get mapped location of task */
     return scheduler.get_state().get_mapping(task_id);
+  }
+
+  [[nodiscard]] priority_t get_mapping_priority(taskid_t task_id) const {
+    return scheduler.get_state().get_mapping_priority(task_id);
+  }
+
+  [[nodiscard]] priority_t get_reserving_priority(taskid_t task_id) const {
+    return scheduler.get_state().get_reserving_priority(task_id);
+  }
+
+  [[nodiscard]] priority_t  get_launching_priority(taskid_t task_id) const {
+    return scheduler.get_state().get_reserving_priority(task_id);
   }
 
   [[nodiscard]] timecount_t get_mapped_time(taskid_t task_id) const {

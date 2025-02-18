@@ -12,7 +12,7 @@ TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
   state.resize(n, TaskState::SPAWNED);
   counts.resize(n, DepCount());
   mapping.resize(n_compute_tasks, 0);
-  // mapping_priority.resize(n, 0);
+  //mapping_priority.resize(n, 0);
   reserving_priority.resize(n, 0);
   launching_priority.resize(n, 0);
   is_virtual.resize(n, false);
