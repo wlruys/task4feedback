@@ -77,27 +77,27 @@ ResourceRequest SchedulerState::request_launch_resources(taskid_t task_id,
 void SchedulerState::map_resources(taskid_t task_id, devid_t device_id,
                                    const Resources &requested) {
   MONUnusedParameter(task_id);
-  device_manager.add_resources<TaskState::MAPPED>(device_id, requested);
+  device_manager.add_resources<TaskState::MAPPED>(device_id, requested, this->global_time);
 }
 
 void SchedulerState::reserve_resources(taskid_t task_id, devid_t device_id,
                                        const Resources &requested) {
   MONUnusedParameter(task_id);
-  device_manager.add_resources<TaskState::RESERVED>(device_id, requested);
+  device_manager.add_resources<TaskState::RESERVED>(device_id, requested, this->global_time);
 }
 
 void SchedulerState::launch_resources(taskid_t task_id, devid_t device_id,
                                       const Resources &requested) {
   MONUnusedParameter(task_id);
-  device_manager.add_resources<TaskState::LAUNCHED>(device_id, requested);
+  device_manager.add_resources<TaskState::LAUNCHED>(device_id, requested, this->global_time);
 }
 
 void SchedulerState::free_resources(taskid_t task_id) {
   devid_t device_id = task_manager.state.get_mapping(task_id);
   const auto &task_resources = get_task_resources(task_id);
-  device_manager.remove_resources<TaskState::MAPPED>(device_id, task_resources);
-  device_manager.remove_resources<TaskState::RESERVED>(device_id, task_resources);
-  device_manager.remove_resources<TaskState::LAUNCHED>(device_id, task_resources);
+  device_manager.remove_resources<TaskState::MAPPED>(device_id, task_resources, this->global_time);
+  device_manager.remove_resources<TaskState::RESERVED>(device_id, task_resources, this->global_time);
+  device_manager.remove_resources<TaskState::LAUNCHED>(device_id, task_resources, this->global_time);
 }
 
 const TaskIDList &SchedulerState::notify_mapped(taskid_t task_id) {
@@ -407,6 +407,7 @@ TaskIDList &Scheduler::get_mappable_candidates() {
 
 const TaskIDList &Scheduler::map_task(Action &action) {
   auto &s = this->state;
+  auto current_time = s.global_time;
 
   taskid_t task_id = action.task_id;
   devid_t chosen_device = action.device;
@@ -429,9 +430,9 @@ const TaskIDList &Scheduler::map_task(Action &action) {
 
   // Update data locations
   const ComputeTask &task = s.task_manager.get_tasks().get_compute_task(task_id);
-  s.data_manager.read_update_mapped(task.get_read(), chosen_device);
-  s.data_manager.read_update_mapped(task.get_write(), chosen_device);
-  s.data_manager.write_update_mapped(task.get_write(), chosen_device);
+  s.data_manager.read_update_mapped(task.get_read(), chosen_device, current_time);
+  s.data_manager.read_update_mapped(task.get_write(), chosen_device, current_time);
+  s.data_manager.write_update_mapped(task.get_write(), chosen_device, current_time);
 
   // Notify dependents and enqueue newly mappable tasks
   const auto &newly_mappable_tasks = s.notify_mapped(task_id);
@@ -550,6 +551,7 @@ void Scheduler::enqueue_data_tasks(taskid_t id) {
 
 SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
   auto &s = this->state;
+  auto current_time = s.global_time;
 
   assert(s.is_compute_task(task_id));
   assert(s.is_reservable(task_id));
@@ -575,9 +577,9 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id) {
 
   // Update data locations
   const ComputeTask &task = s.task_manager.get_tasks().get_compute_task(task_id);
-  s.data_manager.read_update_reserved(task.get_read(), device_id);
-  s.data_manager.read_update_reserved(task.get_write(), device_id);
-  s.data_manager.write_update_reserved(task.get_write(), device_id);
+  s.data_manager.read_update_reserved(task.get_read(), device_id, current_time);
+  s.data_manager.read_update_reserved(task.get_write(), device_id, current_time);
+  s.data_manager.write_update_reserved(task.get_write(), device_id, current_time);
 
   const auto &newly_reservable_tasks = s.notify_reserved(task_id);
 
@@ -660,6 +662,7 @@ void Scheduler::reserve_tasks(Event &reserve_event, EventManager &event_manager)
 bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
                                     EventManager &event_manager) {
   auto &s = this->state;
+  auto current_time = s.global_time;
 
   SPDLOG_DEBUG("Attempting to launch compute task {} at time {} on device {}",
                s.get_task_name(task_id), s.global_time, device_id);
@@ -679,11 +682,11 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
   const auto &task = s.task_manager.get_tasks().get_compute_task(task_id);
 
   SPDLOG_DEBUG("Launching compute task {} at time {} on device {}", s.get_task_name(task_id),
-               s.global_time, device_id);
+               current_time, device_id);
 
   // Update data locations for WRITE data (create them here)
-  s.data_manager.read_update_launched(task.get_write(), device_id);
-  s.data_manager.write_update_launched(task.get_write(), device_id);
+  s.data_manager.read_update_launched(task.get_write(), device_id, current_time);
+  s.data_manager.write_update_launched(task.get_write(), device_id, current_time);
 
   // All READ data should already be here (prefetched by data tasks)
   s.data_manager.check_valid_launched(task.get_read(), device_id);
@@ -709,6 +712,7 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
 bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
                                  EventManager &event_manager) {
   auto &s = this->state;
+  auto current_time = s.global_time;
 
   SPDLOG_DEBUG("Attempting to launch data task {} at time {} on device {}",
                s.get_task_name(task_id), s.global_time, destination_id);
@@ -726,7 +730,7 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
     return false;
   }
   s.task_manager.set_source(task_id, source_id);
-  auto duration = s.data_manager.start_move(data_id, source_id, destination_id);
+  auto duration = s.data_manager.start_move(data_id, source_id, destination_id, current_time);
 
   if (duration.is_virtual) {
     SPDLOG_DEBUG("Data task {} is virtual at time {}", s.get_task_name(task_id), s.global_time);
@@ -868,6 +872,7 @@ void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
 
 void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
   auto &s = this->state;
+  auto current_time = s.global_time;
   s.counts.count_data_completed(task_id, destination_id);
 
   SPDLOG_DEBUG("Completing data task {} at time {} on device {}", s.get_task_name(task_id),
@@ -876,7 +881,7 @@ void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
   auto source_id = s.task_manager.get_source(task_id);
   auto is_virtual = s.task_manager.is_virtual(task_id);
   auto data_id = s.task_manager.get_tasks().get_data_task(task_id).get_data_id();
-  s.data_manager.complete_move(data_id, source_id, destination_id, is_virtual);
+  s.data_manager.complete_move(data_id, source_id, destination_id, is_virtual, current_time);
 }
 
 void Scheduler::complete_task(Event &complete_event, EventManager &event_manager) {

@@ -177,7 +177,9 @@ public:
   [[nodiscard]] timecount_t get_launched_time(taskid_t id) const;
   [[nodiscard]] timecount_t get_completed_time(taskid_t id) const;
 
-  std::vector<timecount_t>& get_time_record(){
+  [[nodiscard]] TaskState get_state_at_time(taskid_t id, timecount_t time) const;
+
+  std::vector<timecount_t>& get_time_record() {
     return state_times;
   }
 };

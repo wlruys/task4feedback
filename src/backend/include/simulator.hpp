@@ -241,4 +241,115 @@ public:
   [[nodiscard]] devid_t get_mapping(taskid_t task_id) const {
     return scheduler.get_state().get_mapping(task_id);
   }
+
+  [[nodiscard]] timecount_t get_mapped_time(taskid_t task_id) const {
+    const auto& s = scheduler.get_state();
+    const auto& records = s.get_task_manager().get_records();
+    return records.get_mapped_time(task_id);
+  }
+
+  [[nodiscard]] timecount_t get_reserved_time(taskid_t task_id) const {
+    const auto& s = scheduler.get_state();
+    const auto& records = s.get_task_manager().get_records();
+    return records.get_reserved_time(task_id);
+  }
+
+  [[nodiscard]] timecount_t get_launched_time(taskid_t task_id) const {
+    const auto& s = scheduler.get_state();
+    const auto& records = s.get_task_manager().get_records();
+    return records.get_launched_time(task_id);
+  }
+
+  [[nodiscard]] timecount_t get_completed_time(taskid_t task_id) const {
+    const auto& s = scheduler.get_state();
+    const auto& records = s.get_task_manager().get_records();
+    return records.get_completed_time(task_id);
+  }
+
+  bool track_resource_guard(){
+    #ifndef SIM_TRACK_RESOURCES
+    spdlog::warn("SIM_TRACK_RESOURCES not defined. Resource tracking is disabled.");
+    return true;
+    #else
+    return false;
+    #endif
+  }
+
+  void track_location_guard(){
+    #ifndef SIM_TRACK_LOCATION
+    spdlog::warn("SIM_TRACK_LOCATION not defined. Location tracking is disabled.");
+    return true;
+    #else 
+    return false;
+    #endif
+  }
+
+  [[nodiscard]] vcu_t get_mapped_vcu_at_time(devid_t device_id, timecount_t time){
+    if(track_resource_guard()){
+      return {};
+    }
+
+    const auto& s = scheduler.get_state();
+    const auto& device_manager = s.get_device_manager();
+    return device_manager.get_vcu_at_time<TaskState::MAPPED>(device_id, time);
+  }
+
+  [[nodiscard]] mem_t get_mapped_mem_at_time(devid_t device_id, timecount_t time){
+    if(track_resource_guard()){
+      return {};
+    }
+
+    const auto& s = scheduler.get_state();
+    const auto& device_manager = s.get_device_manager();
+    return device_manager.get_mem_at_time<TaskState::MAPPED>(device_id, time);
+  }
+
+  [[nodiscard]] vcu_t get_reserved_vcu_at_time(devid_t device_id, timecount_t time){
+    if (track_resource_guard()){
+      return {};
+    }
+
+    const auto& s = scheduler.get_state();
+    const auto& device_manager = s.get_device_manager();
+    return device_manager.get_vcu_at_time<TaskState::RESERVED>(device_id, time);
+  }
+
+  [[nodiscard]] mem_t get_reserved_mem_at_time(devid_t device_id, timecount_t time){
+    if (track_resource_guard()){
+      return {};
+    }
+
+    const auto& s = scheduler.get_state();
+    const auto& device_manager = s.get_device_manager();
+    return device_manager.get_mem_at_time<TaskState::RESERVED>(device_id, time);
+  }
+
+  [[nodiscard]] vcu_t get_launched_vcu_at_time(devid_t device_id, timecount_t time){
+    if (track_resource_guard()){
+      return {};
+    }
+
+    const auto& s = scheduler.get_state();
+    const auto& device_manager = s.get_device_manager();
+    return device_manager.get_vcu_at_time<TaskState::LAUNCHED>(device_id, time);
+  }
+
+  [[nodiscard]] mem_t get_launched_mem_at_time(devid_t device_id, timecount_t time){
+    if (track_resource_guard()){
+      return {};
+    }
+
+    const auto& s = scheduler.get_state();
+    const auto& device_manager = s.get_device_manager();
+    return device_manager.get_mem_at_time<TaskState::LAUNCHED>(device_id, time);
+  }
+
+  [[nodiscard]] TaskState get_state_at_time(taskid_t task_id, timecount_t time) const {
+    if (track_resource_guard()){
+      return {};
+    }
+    const auto& s = scheduler.get_state();
+    const auto& records = s.get_task_manager().get_records();
+    return records.get_state_at_time(task_id, time);
+  }
 };

@@ -385,7 +385,6 @@ cdef class PyTasks:
 
     def get_data_id(self, taskid_t taskid):
         return deref(self.tasks).get_data_id(taskid)
-    
 
     def get_read_set(self, taskid_t taskid):
         cdef DataIDList dataids = deref(self.tasks).get_read(taskid)
@@ -636,6 +635,21 @@ cdef class PySimulator:
     
     def get_mapping(self, taskid_t task_id):
         return self.simulator.get_mapping(task_id)
+
+    def get_mapped_time(self, taskid_t task_id):
+        return self.simulator.get_mapped_time(task_id)
+
+    def get_mapped_device(self, taskid_t task_id):
+        return self.simulator.get_mapping(task_id)
+
+    def get_reserved_time(self, taskid_t task_id):
+        return self.simulator.get_reserved_time(task_id)
+
+    def get_launched_time(self, taskid_t task_id):
+        return self.simulator.get_launched_time(task_id)
+
+    def get_completed_time(self, taskid_t task_id):
+        return self.simulator.get_completed_time(task_id)
 
     def use_python_mapper(self, bool use_python_mapper):
         self.simulator.set_use_python_mapper(use_python_mapper)

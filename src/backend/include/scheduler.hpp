@@ -334,10 +334,16 @@ public:
     assert(global_time >= 0);
   }
 
-  void initialize(bool create_data_tasks = false) {
+  void initialize(bool create_data_tasks = false, bool initialize_data_manager = true) {
     task_manager.initialize(create_data_tasks);
     device_manager.initialize();
     communication_manager.initialize();
+    if (initialize_data_manager){
+      data_manager.initialize();
+    }
+  }
+
+  void initialize_data_manager() {
     data_manager.initialize();
   }
 
@@ -543,8 +549,8 @@ public:
     return GraphManager::initial_tasks(compute_tasks);
   }
 
-  void initialize(bool create_data_tasks = false, bool use_transition_conditions = true) {
-    state.initialize(create_data_tasks);
+  void initialize(bool create_data_tasks = false, bool use_transition_conditions = true, bool initialize_data_manager = false) {
+    state.initialize(create_data_tasks, initialize_data_manager);
     auto initial_tasks = initially_mappable_tasks();
     queues.push_mappable(initial_tasks, state.get_mapping_priorities());
     if (use_transition_conditions)
@@ -552,6 +558,10 @@ public:
     else
       this->conditions = std::make_shared<DefaultTransitionConditions>();
     initialized = true;
+  }
+
+  void initialize_data_manager() {
+    state.initialize_data_manager();
   }
 
   TaskIDList &get_mappable_candidates();
