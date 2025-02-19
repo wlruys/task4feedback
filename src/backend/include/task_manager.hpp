@@ -166,12 +166,12 @@ public:
   [[nodiscard]] timecount_t get_reserved_time(taskid_t id) const;
   [[nodiscard]] timecount_t get_launched_time(taskid_t id) const;
   [[nodiscard]] timecount_t get_completed_time(taskid_t id) const;
-
   [[nodiscard]] TaskState get_state_at_time(taskid_t id, timecount_t time) const;
 
   std::vector<timecount_t>& get_time_record() {
     return state_times;
   }
+
 };
 
 #define TASK_MANAGER_TASK_BUFFER_SIZE 10
