@@ -109,11 +109,9 @@ class DeviceHandle:
 
     def __post_init__(self):
         self.cdevices = PyDevices(len(self.devices.devices))
-        print("Number of devices:", len(self.devices.devices))
         for i, (device, (vcu, mem)) in enumerate(self.devices.devices.items()):
             name = str(device)
             arch = device.architecture.value
-            print(name, device, arch, vcu, mem)
             self.cdevices.create_device(i, name, arch, vcu, mem)
             self.devices_to_ids[device] = i
             self.ids_to_devices[i] = device
@@ -674,8 +672,6 @@ class Observer:
         self, candidate_tasks: np.ndarray[np.uint64], k_hop: int = 1
     ):
 
-        print(candidate_tasks)
-
         # if len(candidate_tasks) == 0:
         #    return TensorDict()
 
@@ -826,7 +822,6 @@ class Simulator:
         obs = self.observer.local_graph_features(
             self.simulator.get_mappable_candidates()
         )
-        print(info)
         done = info.state == PyExecutionState.COMPLETE
         terminated = False
         immediate_reward = 0
