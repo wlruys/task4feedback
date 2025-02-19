@@ -1,6 +1,9 @@
+from task4feedback.simulator import task
 from ....types import *
 from ...data import *
 from ...device import *
+from ...utility import *
+from ...randomizer import *
 
 from ..state import *
 from ..architecture import *
@@ -27,11 +30,13 @@ def get_required_memory_for_data(
     data_id: DataID,
     objects: ObjectRegistry,
     access_type: AccessType,
+    always_count: bool = False,
 ) -> int:
     data = objects.get_data(data_id)
 
-    if is_valid := data.is_valid_or_moving(device, phase) and (
-        access_type == AccessType.READ or access_type == AccessType.READ_WRITE
+    if not always_count and (
+        is_valid := data.is_valid_or_moving(device, phase)
+        and (access_type == AccessType.READ or access_type == AccessType.READ_WRITE)
     ):
         return 0
     else:
@@ -45,12 +50,13 @@ def get_required_memory(
     data_accesses: List[DataAccess],
     objects: ObjectRegistry,
     access_type: AccessType = AccessType.READ,
+    always_count: bool = False,
 ) -> None:
     for data_access in data_accesses:
         idx = data_access.device
         device = devices[idx]
         memory[idx] += get_required_memory_for_data(
-            phase, device, data_access.id, objects, access_type
+            phase, device, data_access.id, objects, access_type, always_count
         )
 
 
@@ -61,6 +67,7 @@ def get_required_resources(
     objects: ObjectRegistry,
     count_data: bool = True,
     verbose: bool = False,
+    always_count_data: bool = False,
 ) -> List[FasterResourceSet]:
     if isinstance(devices, Device):
         devices = (devices,)
@@ -76,9 +83,15 @@ def get_required_resources(
     memory: List[int] = [s.memory for s in resources]
 
     if count_data:
-        get_required_memory(memory, phase, devices, task.read_accesses, objects)
-        get_required_memory(memory, phase, devices, task.read_write_accesses, objects)
-        get_required_memory(memory, phase, devices, task.write_accesses, objects)
+        get_required_memory(
+            memory, phase, devices, task.read_accesses, objects, always_count_data
+        )
+        get_required_memory(
+            memory, phase, devices, task.read_write_accesses, objects, always_count_data
+        )
+        get_required_memory(
+            memory, phase, devices, task.write_accesses, objects, always_count_data
+        )
 
     resources = []
     for i in range(len(devices)):
@@ -152,6 +165,17 @@ def _check_eviction(
         if resources.memory > evictable_memory or resources.memory < 0:
             # if : request is too big and not satisfiable by eviction, do not run eviction
             # if : request is already satisfied by previously enqueued (but not complete) eviction, do not run eviction
+            if state.reserved_active_tasks == 0:
+                devices = task.assigned_devices
+                if _check_eviction_status(state, task, check_complete=True):
+                    task_data_print(state, task, devices, TaskState.RESERVED)
+                    resource_error_print(
+                        state, task, devices, [resources], resource_types=["memory"]
+                    )
+                    raise RuntimeError(
+                        f"Failure to acquire resources for task {task.name}."
+                    )
+
             # Return tasks data to the eviction pool
             # for data_access in task.info.data_dependencies.all_accesses():
             #     data = state.objects.get_data(data_access.id)
@@ -208,17 +232,18 @@ def _check_nearest_source(
         # )
         assert isinstance(eviction_task, SimulatedEvictionTask)
         if eviction_task.source == source_device:
-            if eviction_task.state == TaskState.LAUNCHED:
+            if eviction_task.in_ready_queue:
                 # print(
                 #     f"Eviction task {eviction_task} is already evicting from {source_device}"
                 # )
                 return None
 
-            # print(f"Adding dependency on eviction task {eviction_task} for {task.name}")
-            eviction_task.add_dependency(
-                task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED]
-            )
-            task.add_dependent(eviction_task.name)
+            if eviction_task not in task.dependents:
+                # print(f"Adding dependency on eviction task {eviction_task} for {task.name}")
+                eviction_task.add_dependency(
+                    task.name, states=[TaskState.LAUNCHED, TaskState.COMPLETED]
+                )
+                task.add_dependent(eviction_task.name)
 
     if logger.ENABLE_LOGGING:
         logger.data.debug(
@@ -481,9 +506,12 @@ def resource_error_print(
 def _check_eviction_status(state, task, check_complete=True):
     if not state.use_eviction:
         return True
+
     if check_complete:
         # if: there are any outstanding eviction requests, don't throw an error yet
-        if any([d > 0 for d in task.requested_eviction_bytes.values()]):
+        outstanding_bytes = list(task.requested_eviction_bytes.values())
+        print(f">> outstanding bytes for task {task}", outstanding_bytes)
+        if any([d > 0 for d in outstanding_bytes]):
             return False
         return True
     else:
@@ -515,10 +543,32 @@ def _check_resources_reserved(
         resources=resources,
     )
 
-    # print(f"Can fit resources: {can_fit}")
+    # print(f"Can fit resources: {can_fit}: ", resources)
     # print(f"Reserved active tasks: {state.reserved_active_tasks}")
 
     if not can_fit and state.reserved_active_tasks == 0:
+        # check if task could NEVER fit
+        max_resources = get_required_resources(
+            TaskState.RESERVED,
+            task,
+            devices,
+            state.objects,
+            count_data=True,
+            always_count_data=True,
+        )
+        can_fit_max = state.resource_pool.check_max_resources(
+            devices=devices, type=ResourceGroup.PERSISTENT, resources=max_resources
+        )
+        if not can_fit_max:
+            task_data_print(state, task, devices, TaskState.RESERVED)
+            resource_error_print(
+                state, task, devices, max_resources, resource_types=["memory"]
+            )
+            raise RuntimeError(
+                f"Task {task.name} requires more memory than is satisifiable on its chosen devices (at max capacity)."
+            )
+
+        # print("Checking eviction status")
         if _check_eviction_status(state, task, check_complete=False):
             task_data_print(state, task, devices, TaskState.RESERVED)
             resource_error_print(
@@ -939,12 +989,12 @@ def _move_data(
 
     # move data is called from a data movement task at launch time
     # each data movement task moves one data item onto a single target device
-    assert (
-        len(data_accesses) == 1
-    ), f"Data Task {task.name} should only move one data item: {data_accesses}"
-    assert (
-        len(devices) == 1
-    ), f"Data Task {task.name} should only move to one device: {devices}"
+    assert len(data_accesses) == 1, (
+        f"Data Task {task.name} should only move one data item: {data_accesses}"
+    )
+    assert len(devices) == 1, (
+        f"Data Task {task.name} should only move to one device: {devices}"
+    )
     target_device = devices[0]
     assert target_device is not None
 
@@ -978,12 +1028,12 @@ def _finish_move(
 
     # move data is called from a data movement task at launch time
     # each data movement task moves one data item onto a single target device
-    assert (
-        len(data_accesses) == 1
-    ), f"Data Task {task.name} should only move one data item: {data_accesses}"
-    assert (
-        len(devices) == 1
-    ), f"Data Task {task.name} should only move to one device: {devices}"
+    assert len(data_accesses) == 1, (
+        f"Data Task {task.name} should only move one data item: {data_accesses}"
+    )
+    assert len(devices) == 1, (
+        f"Data Task {task.name} should only move to one device: {devices}"
+    )
     target_device = devices[0]
     assert target_device is not None
 
@@ -1127,9 +1177,9 @@ def _data_task_duration(
         task.real = False
         duration = Time(0)
         other_task = list(other_moving_tasks)[0]
-        assert (
-            other_task != task.name
-        ), f"Current task {task} should not be in the list of moving tasks {other_moving_tasks} during duration calculation."
+        assert other_task != task.name, (
+            f"Current task {task} should not be in the list of moving tasks {other_moving_tasks} during duration calculation."
+        )
 
         other_task = state.objects.get_task(other_task)
         completion_time = other_task.completion_time
@@ -1165,6 +1215,97 @@ class ParlaState(SystemState):
     mapped_active_tasks: int = 0
     reserved_active_tasks: int = 0
     launched_active_tasks: int = 0
+    # Total workload planned across devices
+    total_active_workload: float = 0
+    # Workload per device
+    perdev_active_workload: Dict[Device, int] = field(default_factory=dict)
+    # Earliest device available time estimation
+    # It considers task dependencies and hence, is different from active workload.
+    # e.g., taskA -> taskB, taskA -> taskC, each task takes 3ms, there are 2 GPUS,
+    # taskA was mapped to GPU0, and others were mapped to GPU1.
+    # Then,
+    # perdev_active_workload:
+    # GPU0: 3, GPU1: 6
+    # But, perdev_earliest_avail_time:
+    # GPU0: 3, GPU1: 9 since taskB and taskC cannot start until taskA is completed.
+    #
+    # NOTE that this is only utilized for EFT mapping policies.
+    # This information provides more accurate estimation for the earliest ready time
+    # of a task.
+    perdev_earliest_avail_time: Dict[Device, int] = field(default_factory=dict)
+    # # of completed tasks
+    total_num_completed_tasks: int = 0
+    # Threshold of the number of tasks that can be mapped per each mapper event
+    mapper_num_tasks_threshold: int = -1
+    # # of tasks in (mapped~launchable) states
+    total_num_mapped_tasks: int = 0
+
+    def initialize(
+        self,
+        task_ids: List[TaskID],
+        task_objects: List[SimulatedTask],
+        mapper_type: str,
+        consider_initial_placement: bool,
+    ):
+        self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+            self.perdev_earliest_avail_time[device] = 0
+
+        if self.task_order_mode == TaskOrderType.RANDOM:
+            # Calculation of HEFT is required when using HEFT mapper
+            if mapper_type == "heft":
+                _ = calculate_heft(
+                    task_objects,
+                    self.objects.taskmap,
+                    len(self.objects.devicemap) - 1,
+                    self,
+                    False,
+                    consider_initial_placement,
+                )
+            if self.load_task_order:
+                print("REPLAY RANDOM SORT")
+                task_objects[:] = load_task_order(task_objects)
+            else:
+                print("RANDOM SORT")
+                # Deep copy
+                task_objects[:] = self.randomizer.task_order(
+                    task_objects, self.objects.taskmap
+                )
+                if self.save_task_order:
+                    print("save task order..")
+                    save_task_order(task_objects)
+        elif self.task_order_mode == TaskOrderType.HEFT:
+            print("HEFT SORT")
+            # Tasks are sorted in-place
+            _ = calculate_heft(
+                task_objects,
+                self.objects.taskmap,
+                len(self.objects.devicemap) - 1,
+                self,
+                True,
+                consider_initial_placement,
+            )
+        elif self.task_order_mode == TaskOrderType.OPTIMAL:
+            print("OPTIMAL SORT")
+
+            # Calculation of HEFT is required when using HEFT mapper
+            if mapper_type == "heft":
+                _ = calculate_heft(
+                    task_objects,
+                    self.objects.taskmap,
+                    len(self.objects.devicemap) - 1,
+                    self,
+                    False,
+                    consider_initial_placement,
+                )
+            task_objects = sorted(task_objects, key=lambda x: x.info.z3_order)
+            # print("OPTIMAL ORDER")
+            for task in task_objects:
+                # print(task.info.z3_order, task.name)
+                task.info.order = task.info.z3_order
+
+        task_ids[:] = [t.name for t in task_objects]
 
     def __deepcopy__(self, memo):
         s = clock()
@@ -1187,6 +1328,12 @@ class ParlaState(SystemState):
         time = deepcopy(self.time)
         # print(f"Time to deepcopy time: {clock() - s}")
 
+        s = clock()
+        perdev_active_workload = deepcopy(self.perdev_active_workload)
+
+        s = clock()
+        perdev_earliest_avail_time = deepcopy(self.perdev_earliest_avail_time)
+
         return ParlaState(
             topology=topology,
             data_pool=data_pool,
@@ -1195,6 +1342,21 @@ class ParlaState(SystemState):
             time=time,
             init=self.init,
             use_eviction=self.use_eviction,
+            mapped_active_tasks=self.mapped_active_tasks,
+            reserved_active_tasks=self.reserved_active_tasks,
+            launched_active_tasks=self.launched_active_tasks,
+            total_active_workload=self.total_active_workload,
+            perdev_active_workload=perdev_active_workload,
+            perdev_earliest_avail_time=perdev_earliest_avail_time,
+            total_num_completed_tasks=self.total_num_completed_tasks,
+            mapper_num_tasks_threshold=self.mapper_num_tasks_threshold,
+            total_num_mapped_tasks=self.total_num_mapped_tasks,
+            randomizer=self.randomizer,
+            task_order_mode=self.task_order_mode,
+            save_task_order=self.save_task_order,
+            load_task_order=self.load_task_order,
+            save_task_noise=self.save_task_noise,
+            load_task_noise=self.load_task_noise,
         )
 
     def check_resources(
@@ -1292,12 +1454,49 @@ class ParlaState(SystemState):
         self, task: SimulatedTask, devices: Devices, verbose: bool = False
     ) -> Tuple[Time, Time]:
         if isinstance(task, SimulatedComputeTask):
-            return _compute_task_duration(self, task, devices, verbose=verbose)
+            duration, completion_time = _compute_task_duration(
+                self, task, devices, verbose=verbose
+            )
         elif isinstance(task, SimulatedDataTask):
-            # Includes eviction tasks
-            return _data_task_duration(self, task, devices, verbose=verbose)
+            duration, completion_time = _data_task_duration(
+                self, task, devices, verbose=verbose
+            )
         else:
             raise RuntimeError(f"Invalid task type for {task} of type {type(task)}")
+
+        return duration
+
+    def get_task_duration_completion(
+        self, task: SimulatedTask, devices: Devices, verbose: bool = False
+    ) -> Tuple[Time, Time]:
+        if isinstance(task, SimulatedComputeTask):
+            duration, completion_time = _compute_task_duration(
+                self, task, devices, verbose=verbose
+            )
+        elif isinstance(task, SimulatedDataTask):
+            duration, completion_time = _data_task_duration(
+                self, task, devices, verbose=verbose
+            )
+        else:
+            raise RuntimeError(f"Invalid task type for {task} of type {type(task)}")
+
+        assert (
+            self.use_duration_noise == False and self.load_task_noise == False
+        ) or self.use_duration_noise != self.load_task_noise
+        noise = Time()
+
+        if "eviction" not in str(task.name) and "data" not in str(task.name):
+            # if True:
+            if self.use_duration_noise:
+                # noise = Time(abs(gaussian_noise(duration.duration, self.noise_scale)))
+                noise = log_normal_noise(duration.duration, self.noise_scale)
+            elif self.load_task_noise:
+                noise = int(self.loaded_task_noises[str(task.name)])
+
+            if self.save_task_noise:
+                save_task_noise(task, noise)
+
+        return duration, completion_time + noise
 
     def check_task_status(
         self, task: SimulatedTask, status: TaskStatus, verbose: bool = False
@@ -1311,3 +1510,64 @@ class ParlaState(SystemState):
             return _check_eviction(self, task, verbose=verbose)
         else:
             return None
+
+    def complete(self):
+        pass
+
+
+@SchedulerOptions.register_state("rl")
+@dataclass(slots=True)
+class RLState(ParlaState):
+    target_exec_time: float = 0
+
+    def initialize(
+        self,
+        task_ids: List[TaskID],
+        task_objects: List[SimulatedTask],
+        mapper_type: str,
+        consider_initial_placement: bool,
+    ):
+        self.mapper_num_tasks_threshold = len(self.topology.devices) * 4
+        for device in self.objects.devicemap:
+            self.perdev_active_workload[device] = 0
+
+        # RL state always requires HEFT calculation for rewarding
+        # Tasks are sorted in-place
+        self.target_exec_time = calculate_heft(
+            task_objects,
+            self.objects.taskmap,
+            len(self.objects.devicemap) - 1,
+            self,
+            self.task_order_mode == TaskOrderType.HEFT,
+            consider_initial_placement,
+        )
+
+        if self.task_order_mode == TaskOrderType.RANDOM:
+            if self.load_task_order:
+                print("REPLAY RANDOM SORT")
+                task_objects[:] = load_task_order(task_objects)
+            else:
+                print("RANDOM SORT")
+                # Deep copy
+                task_objects[:] = self.randomizer.task_order(
+                    task_objects, self.objects.taskmap
+                )
+                if self.save_task_order:
+                    print("save task order..")
+                    save_task_order(task_objects)
+        elif self.task_order_mode == TaskOrderType.HEFT:
+            print("HEFT SORT")
+
+        task_ids[:] = [t.name for t in task_objects]
+
+    def complete(self):
+        total_exec_time = convert_to_float(self.time.scale_to("ms"))
+        if self.rl_mapper.is_training_mode():
+            reward = (
+                0
+                if total_exec_time == 0
+                else (self.target_exec_time - total_exec_time) / self.target_exec_time
+            )
+            # reward = -(1-reward) if reward < 0.8 else reward
+            self.rl_mapper.optimize_model(reward, self)
+        self.rl_mapper.complete_episode(total_exec_time)

@@ -7,6 +7,7 @@ import networkx as nx
 from .topology import *
 from copy import deepcopy
 import random
+from collections import deque
 
 
 def summarize_dependencies(taskmap: TaskMap | SimulatedTaskMap):
@@ -38,7 +39,7 @@ def data_from_task(task: TaskInfo, access: AccessType) -> List[DataID]:
 
 
 def find_writer_bfs(
-    graph: TaskMap, node: TaskID, target: DataID, verbose: bool = True
+    graph: TaskMap, node: TaskID, target: DataID, verbose: bool = False
 ) -> List[TaskID | DataID]:
     """
     Return last task to touch the data.
@@ -50,31 +51,30 @@ def find_writer_bfs(
     queue = []
     visited = []
     visited.append(node)
-    queue.append(node)
     found = []
+
+    for neighbor_id in graph[node].dependencies:
+        queue.append(neighbor_id)
 
     while queue:
         s = queue.pop(0)
-        if verbose:
-            print(f"Checking dependencies of {s}")
-        for neighbor_id in graph[s].dependencies:
-            neighbor = graph[neighbor_id]
 
-            writes_to = data_from_task(neighbor, AccessType.WRITE)
-            writes_to = writes_to + data_from_task(neighbor, AccessType.READ_WRITE)
-            write_to = set(writes_to)
+        if s in visited:
+            continue
+        visited.append(s)
 
+        current = graph[s]
+        writes_to = data_from_task(current, AccessType.WRITE)
+        writes_to = writes_to + data_from_task(current, AccessType.READ_WRITE)
+        write_to = set(writes_to)
+
+        if target in writes_to:
             if verbose:
-                print(f"Dependency {neighbor_id} writes to {writes_to}")
+                print(f"Found writer {s} to {target}")
+            found.append(s)
 
-            if target in writes_to:
-                if verbose:
-                    print(f"Found writer {neighbor_id} to {target}")
-                found.append(neighbor_id if neighbor_id != node else target)
-
-            if neighbor_id not in visited and len(found) == 0:
-                visited.append(neighbor.id)
-                queue.append(neighbor.id)
+        for neighbor_id in graph[s].dependencies:
+            queue.append(neighbor_id)
 
     if verbose and len(found) == 0:
         print(f"Could not find writer to {target} from {node}.")
@@ -100,14 +100,20 @@ def most_recent_writer(
     touches = set(read_data)
 
     if verbose:
-        print(f"Task {task.id} reads data: {touches}")
+        print(f" -- Task {task.id} reads data: {touches}")
 
     recent_writer = dict()
 
     for target in touches:
         if verbose:
-            print(f"Looking for most recent writer to Data {target}")
+            print(
+                f"Looking for most recent writer to Data {target} from task {task.id}..."
+            )
         recent_writer[target] = find_writer_bfs(graph, task.id, target, verbose=verbose)
+        if verbose:
+            print(
+                f"Recent writer to {target} from {task.id} is {recent_writer[target]}"
+            )
 
     return recent_writer
 
@@ -127,6 +133,83 @@ def find_recent_writers(graph: TaskMap, verbose: bool = False) -> DataWriters:
         recent_writers[task.id] = most_recent_writer(graph, task, verbose=verbose)
 
     return recent_writers
+
+
+def find_recent_writers_topdown(graph: TaskMap, verbose: bool = False) -> DataWriters:
+    """
+    For each task, find the most recent writer for each of its inputs.
+    """
+    recent_writers = dict()
+
+    if verbose:
+        print("Finding recent writers...")
+
+    ready_task_deque = deque()
+    task_dependent_dict: Dict[TaskID, List[TaskInfo]] = {}
+    task_dependency_dict: Dict[TaskID, int] = {}
+    # task dependent relationship are created for SimulatedTask later, but
+    # to sort tasks by a topological order, creates that here.
+    for task in graph.values():
+        num_dependencies = len(task.dependencies)
+        task_dependency_dict[task.id] = num_dependencies
+        if num_dependencies == 0:
+            ready_task_deque.append(task)
+        else:
+            for dependency_id in task.dependencies:
+                dependency = graph[dependency_id]
+                if dependency_id not in task_dependent_dict:
+                    task_dependent_dict[dependency.id] = []
+                task_dependent_dict[dependency.id].append(task)
+        if task.id not in task_dependent_dict:
+            task_dependent_dict[task.id] = []
+
+    # Sort tasks based on a graph's topology
+    tasklist = []
+    i = 0
+    while ready_task_deque:
+        task = ready_task_deque.popleft()
+
+        for dependent in task_dependent_dict[task.id]:
+            task_dependency_dict[dependent.id] -= 1
+            if task_dependency_dict[dependent.id] == 0:
+                ready_task_deque.append(dependent)
+        task.order = i
+        i += 1
+        tasklist.append(task)
+    tasklist = sorted(tasklist, key=lambda t: t.order)
+
+    #
+    data_dependency_dict: DataWriters = dict()
+    recent_writers: Dict[DataID, TaskID] = dict()
+    for task in tasklist:
+        if verbose:
+            print(f"task {task.id} order {task.order}")
+
+        read_data = data_from_task(task, AccessType.READ)
+        read_write_data = data_from_task(task, AccessType.READ_WRITE)
+        read_data = read_data + read_write_data
+        touches = set(read_data)
+
+        write_data = data_from_task(task, AccessType.WRITE)
+        write_data = write_data + read_write_data
+        write_data = set(write_data)
+
+        data_dependency_dict_for_task: DataWriter = dict()
+
+        if verbose:
+            print(f" -- Task {task.id} reads data: {touches}")
+
+        for target in touches:
+            if target not in data_dependency_dict_for_task:
+                data_dependency_dict_for_task[target] = []
+            if target in recent_writers:
+                data_dependency_dict_for_task[target].append(recent_writers[target])
+            if target in write_data:
+                recent_writers[target] = task.id
+
+        data_dependency_dict[task.id] = data_dependency_dict_for_task
+
+    return data_dependency_dict
 
 
 def create_compute_tasks(graph: TaskMap) -> SimulatedComputeTaskMap:
@@ -155,7 +238,7 @@ def create_data_tasks(
         task_info = task.info
         recent_writer = recent_writers[task_info.id]
         for i, (data, writer_list) in enumerate(recent_writer.items()):
-            # print(f"Creating data task for {data} from {writer}")
+            # print(f"Creating data task for {data} from {writer_list}")
             dependencies = writer_list
 
             data_task_id = TaskID(taskspace=f"{task_info.id}.data", task_idx=data.idx)
@@ -169,6 +252,7 @@ def create_data_tasks(
                 dependencies=dependencies,
                 runtime=runtime,
                 data_dependencies=data_info,
+                func_id=task_info.func_id,
             )
 
             data_task = SimulatedDataTask(
@@ -193,9 +277,9 @@ def filter_data_dependenices(task: SimulatedTask):
     read_set = set([d.id for d in read]).difference([d.id for d in read_write])
     write_set = set([d.id for d in write]).difference([d.id for d in read_write])
 
-    assert (
-        len(read_set.intersection(write_set)) == 0
-    ), "Read and write sets must be disjoint"
+    assert len(read_set.intersection(write_set)) == 0, (
+        "Read and write sets must be disjoint"
+    )
 
     read = list(DataAccess(id=d) for d in read_set)
     write = list(DataAccess(id=d) for d in write_set)
@@ -233,7 +317,11 @@ def combine_task_graphs(
 
 
 def create_sim_graph(
-    tasks: TaskMap, data: DataMap, use_data: bool = True
+    tasks: TaskMap,
+    data: DataMap,
+    use_data: bool = True,
+    task_order_mode: TaskOrderType = TaskOrderType.DEFAULT,
+    task_order_log: List[TaskID] | None = None,
 ) -> Tuple[List[TaskID], SimulatedTaskMap]:
     compute_tasks = create_task_graph(tasks)
     if use_data:
@@ -242,7 +330,14 @@ def create_sim_graph(
     else:
         taskmap: SimulatedTaskMap = compute_tasks
 
-    tasklist = list(compute_tasks.keys())
+    if task_order_mode == TaskOrderType.REPLAY_LAST_ITER:
+        assert task_order_log is not None
+        tasklist = task_order_log
+    elif task_order_mode == TaskOrderType.REPLAY_FILE:
+        tasklist = list(compute_tasks.keys())
+        tasklist = load_task_order(tasklist)
+    else:
+        tasklist = list(compute_tasks.keys())
     populate_dependents(taskmap)
     # compute_depths(taskmap)
 

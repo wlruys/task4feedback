@@ -1,8 +1,6 @@
 from .utilities import *
 from ..types import *
 
-from rich import print
-
 
 @dataclass(slots=True)
 class StencilDataGraphConfig(DataGraphConfig):
@@ -84,6 +82,7 @@ class StencilDataGraphConfig(DataGraphConfig):
                     stencil_tuple = np.subtract(stencil_tuple, self.neighbor_distance)
                     if np.count_nonzero(stencil_tuple) == 1:
                         dependency_grid = tuple(np.add(task_idx, stencil_tuple))
+                        dependency_grid = tuple(int(d) for d in dependency_grid)
                         out_of_bounds = any(
                             element < 0 or element >= self.width
                             for element in dependency_grid

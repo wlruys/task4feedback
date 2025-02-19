@@ -8,12 +8,18 @@ from .resources import *
 from .task import *
 from .topology import *
 
+from .rl.models.model import *
+from .rl.models.env import *
+
 from ..types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
-from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
+from ..types import TaskOrderType
 
 from typing import List, Dict, Set, Tuple, Optional, Callable
-from dataclasses import dataclass, InitVar
+from dataclasses import dataclass
 from collections import defaultdict as DefaultDict
+
+from .schedulers.parla.state import RLState
 
 from .schedulers import *
 
@@ -27,10 +33,39 @@ from .mapper import *
 from enum import Enum
 
 
+def get_scheduler_state(mapper_type: str):
+    """
+    This function returns a scheduler state type based on the specified
+    mapper type.
+    Different mappers may need different information due to their policies.
+    This information is usually tracked by the state.
+    NOTE that if you add new policy, you also should add the corresponding
+    state on here.
+    """
+    if (
+        mapper_type == "random"
+        or mapper_type == "parla"
+        or mapper_type == "loadbalance"
+        or mapper_type == "heft"
+        or mapper_type == "eft_without_data"
+        or mapper_type == "eft_with_data"
+        or mapper_type == "opt"
+    ):
+        return "parla"
+    elif mapper_type == "rl":
+        return "rl"
+    else:
+        print(f"Unsupported mapper type: {mapper_type}")
+        return None
+
+
 @dataclass(slots=True)
 class SimulatedScheduler:
     topology: SimulatedTopology | None = None
     scheduler_type: str = "parla"
+    mapper_type: str = "parla"
+    # Consider data's initial placement for HEFT
+    consider_initial_placement: bool = True
     tasks: List[TaskID] = field(default_factory=list)
     name: str = "SimulatedScheduler"
     mechanisms: SchedulerArchitecture | None = None
@@ -46,14 +81,37 @@ class SimulatedScheduler:
     event_count: int = 0
     init: bool = True
     use_eviction: bool = True
+    task_order_mode: TaskOrderType = TaskOrderType.DEFAULT
+    use_duration_noise: bool = False
+    noise_scale: float = 0
+    save_task_order: bool = False
+    load_task_order: bool = False
+    save_task_noise: bool = False
+    load_task_noise: bool = False
 
-    def __post_init__(
-        self,
-    ):
+    ###########################
+    # RL related fields
+    ###########################
+
+    rl_env: RLBaseEnvironment = None
+    rl_mapper: RLModel = None
+
+    def __post_init__(self):
         if self.state is None:
-            scheduler_state = SchedulerOptions.get_state(self.scheduler_type)
+            scheduler_state_type = get_scheduler_state(self.mapper_type)
+            scheduler_state = SchedulerOptions.get_state(scheduler_state_type)
             self.state = scheduler_state(
-                topology=self.topology, use_eviction=self.use_eviction
+                topology=self.topology,
+                rl_env=self.rl_env,
+                rl_mapper=self.rl_mapper,
+                task_order_mode=self.task_order_mode,
+                use_duration_noise=self.use_duration_noise,
+                noise_scale=self.noise_scale,
+                save_task_order=self.save_task_order,
+                load_task_order=self.load_task_order,
+                save_task_noise=self.save_task_noise,
+                load_task_noise=self.load_task_noise,
+                randomizer=self.randomizer,
             )
         if self.mechanisms is None:
             scheduler_arch = SchedulerOptions.get_architecture(self.scheduler_type)
@@ -76,8 +134,22 @@ class SimulatedScheduler:
         end_t = clock()
         # print(f"Time to deepcopy events: {end_t - start_t}")
 
+        start_t = clock()
+        mapper = deepcopy(self.mapper)
+        end_t = clock()
+
+        start_t = clock()
+        rl_env = deepcopy(self.rl_env)
+        end_t = clock()
+
+        start_t = clock()
+        rl_mapper = deepcopy(self.rl_mapper)
+        end_t
+
         return SimulatedScheduler(
             topology=self.topology,
+            mapper_type=self.mapper_type,
+            consider_initial_placement=self.consider_initial_placement,
             scheduler_type=self.scheduler_type,
             tasks=tasks,
             name=self.name,
@@ -86,10 +158,20 @@ class SimulatedScheduler:
             log_level=self.log_level,
             events=events,
             event_count=self.event_count,
+            mapper=mapper,
             init=self.init,
             randomizer=deepcopy(self.randomizer),
+            use_duration_noise=self.use_duration_noise,
+            save_task_order=self.save_task_order,
+            load_task_order=self.load_task_order,
+            save_task_noise=self.save_task_noise,
+            load_task_noise=self.load_task_noise,
+            noise_scale=self.noise_scale,
             current_event=deepcopy(self.current_event),
             use_eviction=self.use_eviction,
+            task_order_mode=self.task_order_mode,
+            rl_env=rl_env,
+            rl_mapper=rl_mapper,
         )
 
     def __str__(self):
@@ -132,11 +214,13 @@ class SimulatedScheduler:
     ):
         self.watcher.add_condition(condition)
 
-    def add_initial_tasks(self, tasks: List[TaskID], apply_sort: bool = True):
-        if apply_sort:
-            tasks = self.randomizer.task_order(tasks, self.taskmap)
-            # print(f"Initial Task Order: {tasks}")
+    def add_initial_tasks(self, tasks: List[TaskID]):
+        # if apply_sort:
+        #     tasks = self.randomizer.task_order(tasks, self.taskmap)
         self.tasks.extend(tasks)
+
+    # def add_initial_tasks(self, tasks: List[TaskID]):
+    #     self.tasks.extend(tasks)
 
     def __repr__(self):
         return self.__str__()
@@ -170,12 +254,18 @@ class SimulatedScheduler:
         watcher_status = True
 
         if self.init:
-            new_event_pairs = self.mechanisms.initialize(self.tasks, self.state)
+            new_event_pairs = self.mechanisms.initialize(
+                tasks=self.tasks,
+                scheduler_state=self.state,
+                simulator=self,
+                mapper_type=self.mapper_type,
+                consider_initial_placement=self.consider_initial_placement,
+            )
             for completion_time, new_event in new_event_pairs:
                 self.events.put(new_event, completion_time)
             self.init = False
 
-        # from rich import print
+        from rich import print
         from copy import deepcopy
         from time import perf_counter as clock
 
@@ -209,12 +299,35 @@ class SimulatedScheduler:
 
         self.recorders.finalize(self.time, self.mechanisms, self.state)
 
+        for device in self.topology.devices:
+            last_active = max(
+                device.stats.last_active_compute, device.stats.last_active_movement
+            )
+
+            device.stats.idle_time += self.time - last_active
+
+            device.stats.idle_time_compute += (
+                self.time - device.stats.last_active_compute
+            )
+            device.stats.idle_time_movement += (
+                self.time - device.stats.last_active_movement
+            )
+
+            print(f"{device.name},idle,{device.stats.idle_time}")
+
+        print(f"{self.mapper_type},simtime,{float(self.time.scale_to('s'))}")
+        print(
+            f"{self.mapper_type},wait_time,{float(self.state.wait_time_accum.scale_to('s')) / self.state.num_tasks}"
+        )
+
         # print(f"Event Count: {self.event_count}")
 
         is_complete = self.mechanisms.complete(self.state)
         events_empty = self.events.empty()
 
         if not is_complete and watcher_status:
+            print("Event Queue", self.events)
+            print("Arch", self.mechanisms)
             raise RuntimeError("Scheduler terminated without completing all tasks.")
 
-        return is_complete and events_empty
+        return self.time, self.tasks, (is_complete and events_empty)

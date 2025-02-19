@@ -1,0 +1,15 @@
+#pragma once
+#include "events.hpp"
+#include "settings.hpp"
+#include <cstddef>
+
+class Action {
+public:
+  taskid_t task_id = 0;
+  std::size_t pos = 0;
+  devid_t device = 0;
+  priority_t reservable_priority = 0;
+  priority_t launchable_priority = 0;
+};
+
+using ActionList = std::vector<Action>;

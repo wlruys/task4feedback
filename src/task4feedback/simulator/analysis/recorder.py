@@ -422,7 +422,7 @@ class DataTaskRecorder(Recorder):
                             # print("In if")
                             for device in devices:
                                 communication_energy += device.energy * data_size
-                                print(communication_energy)
+                                # print(communication_energy)
 
                         if isinstance(task, SimulatedEvictionTask):
                             type = TaskType.EVICTION
@@ -482,9 +482,9 @@ class FasterDataValidRecorder(Recorder):
                     # End the current interval
                     current_interval = self.current_interval[data_id][device]
 
-                    assert (
-                        current_interval is not None
-                    ), f"Cannot end an interval that does not exist. {time} {data_id} {device}"
+                    assert current_interval is not None, (
+                        f"Cannot end an interval that does not exist. {time} {data_id} {device}"
+                    )
 
                     current_interval.end_time = time
                     self.intervals[data_id][device].append(current_interval)

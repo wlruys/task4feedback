@@ -8,7 +8,6 @@ def _create_eviction_task(
     source_device: Device,
     target_device: Device,
 ) -> SimulatedEvictionTask:
-
     # Assume each parent task only requests one eviction task for each of its data dependencies
     data.eviction_count += 1
 
@@ -45,7 +44,6 @@ def _check_target_resources(
     target_device: SimulatedDevice,
     data: SimulatedData,
 ) -> bool:
-
     if source_device == target_device:
         # Backup copy already exists, no need to make a new one
         return True
@@ -115,7 +113,6 @@ def eviction_init(
     device: SimulatedDevice,
     data: SimulatedData,
 ) -> SimulatedEvictionTask:
-
     # print(
     #     f"Task {parent_task} is requesting space. Generating eviction task to remove data {data.name} from {device.name}"
     # )

@@ -10,3 +10,5 @@ from .stencil import *
 from .sweep import *
 from .utilities import *
 from .cannon_gemm import *
+from .write_test import *
+from .random import *

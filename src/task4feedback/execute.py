@@ -106,7 +106,8 @@ _GPUInfo = GPUInfo()
 @specialize
 def free_sleep(duration: float, config: RunConfig = None):
     sleep_nogil(duration)
-    
+
+
 def free_sleep_cpu(duration: float, config: RunConfig = None):
     sleep_nogil(duration)
 
@@ -130,7 +131,8 @@ def free_sleep_gpu(duration: float, config: RunConfig = None):
 @specialize
 def lock_sleep(duration: float, config: RunConfig = None):
     sleep_gil(duration)
-    
+
+
 def lock_sleep_cpu(duration: float, config: RunConfig = None):
     sleep_gil(duration)
 
@@ -216,7 +218,7 @@ def generate_array(
 
 
 def generate_parray(
-    location_to_block: Dict[Device, "np.ndarray | cupy.ndarray"]
+    location_to_block: Dict[Device, "np.ndarray | cupy.ndarray"],
 ) -> PArray:
     parray: PArray | None = None
     for i, (location, block) in enumerate(location_to_block.items()):
@@ -248,7 +250,7 @@ def generate_data(
     movement_type: MovementType = MovementType.NO_MOVEMENT,
 ) -> Dict[DataID, PArray | Dict[Device, "np.ndarray | cupy.ndarray"]]:
     data_blocks = dict()
-    
+
     print("Generating Data: ", data_config, movement_type)
 
     if movement_type == MovementType.NO_MOVEMENT:
@@ -361,6 +363,7 @@ def waste_time(info_list: List[TaskRuntimeInfo], config: RunConfig):
             free_sleep(free_time)
             lock_sleep(gil_time)
 
+
 def waste_time_cpu(info_list: List[TaskRuntimeInfo], config: RunConfig):
     if len(info_list) == 0:
         raise ValueError("No TaskRuntimeInfo provided to busy sleep kernel.")
@@ -377,6 +380,7 @@ def waste_time_cpu(info_list: List[TaskRuntimeInfo], config: RunConfig):
         for i in range(gil_accesses):
             free_sleep_cpu(free_time)
             lock_sleep_cpu(gil_time)
+
 
 @waste_time.variant(architecture=gpu)
 def waste_time_gpu(info_list: List[TaskRuntimeInfo], config: RunConfig):
@@ -639,7 +643,8 @@ def execute_graph(
                 taskspaces, tasks, run_config, data_list=data_list
             )
 
-            import cupy 
+            import cupy
+
             graph_start_t = time.perf_counter()
 
             # execute_tasks(taskspaces, tasks, run_config, data_list=data_list)

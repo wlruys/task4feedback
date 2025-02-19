@@ -2,7 +2,8 @@ from .task import *
 from ..types import *
 import numpy as np
 import random
-from .schedulers import SystemState
+
+# from .schedulers import SystemState
 from .preprocess import *
 
 
@@ -27,10 +28,17 @@ def _determinisitc_pop(s: Dict):
     return element
 
 
-def gaussian_noise(task: SimulatedTask) -> int:
-    duration = task.duration.duration
-    stddev = duration * 0.05
+def gaussian_noise(duration: float, scale: float = 0.05) -> int:
+    stddev = duration * scale
+    np.random.seed(None)
     noise = np.random.normal(0, stddev)
+    return int(noise)
+
+
+def log_normal_noise(duration: float, scale: float = 0.2) -> int:
+    np.random.seed(None)
+    noise = (np.random.lognormal(0, scale) - np.exp(scale**2 / 2)) * duration
+    # noise = max(0, (np.random.lognormal(0, scale) - np.exp(scale**2 / 2)) * duration)
     return int(noise)
 
 
@@ -39,10 +47,12 @@ def no_noise(task: SimulatedTask) -> int:
 
 
 def random_topological_sort(
-    tasklist: List[TaskID], taskmap: SimulatedTaskMap, verbose: bool = False
-) -> List[TaskID]:
+    tasklist: List[SimulatedTask], taskmap: SimulatedTaskMap, verbose: bool = False
+) -> List[SimulatedTask]:
     L = []
     S = dict.fromkeys(get_initial_tasks(taskmap))
+
+    np.random.seed(None)
 
     taskmapcopy = deepcopy(taskmap)
     i = 0
@@ -63,8 +73,9 @@ def random_topological_sort(
 
         i += 1
         taskmap[n].info.order = i
+    tasklist = sorted(tasklist, key=lambda t: t.info.order)
 
-    return sort_tasks_by_order(tasklist, taskmap)
+    return tasklist
 
 
 @dataclass(slots=True)

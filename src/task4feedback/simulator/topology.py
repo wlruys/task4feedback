@@ -404,7 +404,7 @@ class TopologyManager:
 
 @TopologyManager.register_generator("frontera")
 def generate_ngpus_1cpu_toplogy(
-    config: Optional[Dict[str, int]] = None
+    config: Optional[Dict[str, int]] = None,
 ) -> SimulatedTopology:
     """
     This function creates 4 GPUs and 1 CPU architecture.
@@ -440,7 +440,6 @@ def generate_ngpus_1cpu_toplogy(
         for key, value in default_config.items():
             if key in config:
                 default_config[key] = config[key]
-
     config = default_config
 
     P2P_BW = config["P2P_BW"]
@@ -459,7 +458,7 @@ def generate_ngpus_1cpu_toplogy(
         SimulatedDevice(
             Device(Architecture.GPU, i), FasterResourceSet(1, GPU_MEM, GPU_COPY_ENGINES)
         )
-        for i in range(4)
+        for i in range(NGPUS)
     ]
     cpus = [
         SimulatedDevice(

@@ -1,9 +1,14 @@
+[build-system]
+requires = ["scikit-build-core>=0.5", "pyyaml", "cython", "numpy"]
+build-backend = "scikit_build_core.build"
+
 [project]
 name = "task4feedback"
 version = "0.0.1"
 maintainers = [
     { name = "William Ruys", email = "will.ruys@gmail.com" },
     { name = "Hochan Lee", email = "hochan@utexas.edu" },
+    { name = "Jaeyoung Park", email = "jaeyoung@utexas.edu" },
 ]
 description = ""
 readme = "README.md"
@@ -15,6 +20,16 @@ dependencies = ["psutil", "pyyaml", "numpy", "python-json-logger"]
 graph = ["pydot", "networkx", "hypernetx", "matplotlib", "seaborn"]
 dev = ["ruff"]
 rl = ["torch"]
+
+[tool.scikit-build]
+minimum-version = "0.5"
+build-dir = "build"
+wheel.packages = ["src/task4feedback"]
+wheel.license-files = []
+cmake.minimum-version = "3.22.1"
+cmake.build-type = "Release"
+cmake.verbose = true
+ninja.minimum-version = "1.11"
 
 [tool.cython-lint]
 ignore = [

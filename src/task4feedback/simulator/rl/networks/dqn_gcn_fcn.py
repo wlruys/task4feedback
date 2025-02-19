@@ -8,24 +8,23 @@ from torch_geometric.nn import GCNConv
 """
 3 Graph Convolutional Networks (GCNs) + 1 Fully-Conneceted Network (FCN).
 """
-class DQNNetwork(torch.nn.Module):
 
+
+class DQNNetwork(torch.nn.Module):
     def __init__(self, gcn_indim: int, in_dim: int, out_dim: int):
         super().__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available()
-                                   else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.gcn_indim = gcn_indim
         self.fcn1_indim = in_dim
         self.fcn1_outdim = in_dim * 4
         self.fcn2_outdim = in_dim * 8
         self.outdim = out_dim
-        self.gcn = GCNConv(self.gcn_indim, self.gcn_indim, device=self.device).to(device=self.device)
-        self.fcn1 = Linear(self.fcn1_indim, self.fcn1_outdim,
-                                   device=self.device)
-        self.fcn2 = Linear(self.fcn1_outdim, self.fcn2_outdim,
-                                   device=self.device)
-        self.out = Linear(self.fcn2_outdim, self.outdim,
-                                   device=self.device)
+        self.gcn = GCNConv(self.gcn_indim, self.gcn_indim, device=self.device).to(
+            device=self.device
+        )
+        self.fcn1 = Linear(self.fcn1_indim, self.fcn1_outdim, device=self.device)
+        self.fcn2 = Linear(self.fcn1_outdim, self.fcn2_outdim, device=self.device)
+        self.out = Linear(self.fcn2_outdim, self.outdim, device=self.device)
 
     def forward(self, model_input):
         is_batch = model_input.is_batch

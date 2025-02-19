@@ -1,8 +1,13 @@
+from asyncio import Task
 from .recorder import *
 import numpy as np
 from pandas import *
 import matplotlib.pyplot as plt
 from ...types import *
+from typing import cast
+from task4feedback.simulator.simulator import *
+import pydot
+from mplcursors import cursor  # separate package must be installed
 
 
 def make_resource_plot(
@@ -192,7 +197,6 @@ def _plot_events(
     recorder: EventRecorder,
     labels: bool = False,
 ):
-
     for time, events in recorder.completed_events.items():
         end_time = time.duration
         for event in events:
@@ -232,7 +236,6 @@ def _plot_compute_tasks(
     device_color_map = plt.cm.tab20.colors
 
     for taskid, taskrecord in recorder.tasks.items():
-
         active_read_data = data_id is not None and data_id in taskrecord.read_data
         active_write_data = data_id is not None and data_id in taskrecord.write_data
         active_read_write_data = data_id is not None and (
@@ -343,7 +346,6 @@ def _plot_data_tasks(
     type_color_map = {TaskType.DATA: "purple", TaskType.EVICTION: "lightgreen"}
 
     for taskid, taskrecord in recorder.tasks.items():
-
         active_data = data_id is not None and data_id in taskrecord.read_data
         active_device = device_id is not None and (
             device_id in _get_device_list(taskrecord)
@@ -484,3 +486,291 @@ def make_data_plot(
         plt.tight_layout()
 
         plt.show()
+
+
+def make_dag_and_timeline(
+    simulator: SimulatedScheduler,
+    plot_dag: bool = True,
+    color_dag: bool = True,
+    plot_timeline: bool = True,
+    plot_data_movement: bool = False,
+    file_name: str = None,
+    save_file: bool = True,
+    show_plot: bool = False,
+    timeline_plot_size: Tuple[int, int] = (25, 10),
+    timeline_plot_fontsize: str = "xx-large",
+):
+    if file_name is None:
+        file_name = f"""{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}_{str(len(simulator.topology.get_devices(device_type=Architecture.GPU)))}GPUs"""
+    recorders = simulator.recorders
+
+    try:
+        recorder_instance = recorders.get(ComputeTaskRecorder)
+        compute_task_record: Optional[ComputeTaskRecorder] = cast(
+            Optional[ComputeTaskRecorder], recorder_instance
+        )
+    except KeyError as e:  # raise error if not found
+        raise KeyError(e)
+
+    # Make color map of upto 32 colors in strings
+    colors = ["Red", "Green", "Blue", "Yellow", "Purple", "Orange", "Pink", "Brown"]
+    device_colors = {}
+
+    # Make dictionary of task results (Device it ran on, start time, end time)
+    task_results = {}
+    for taskid, task_record in compute_task_record.tasks.items():
+        task_result = {}
+        task_result["devices"] = task_record.devices
+        if task_record.devices[0].device_id not in device_colors:
+            device_colors[task_record.devices[0].device_id] = colors[
+                task_record.devices[0].device_id % 8
+            ]
+        task_result["start_time"] = task_record.start_time
+        task_result["end_time"] = task_record.end_time
+        task_results[str(taskid)] = task_result
+
+    # Generate pydot graph from tasks
+    # Assign same color for same device
+    if plot_dag:
+        graph = pydot.Dot(graph_type="digraph")
+        for name, task_info in simulator.taskmap.items():
+            if isinstance(task_info, SimulatedComputeTask):
+                task_info = task_info.info
+                idx = name.task_idx
+                name = str(name)
+                if color_dag:
+                    node = pydot.Node(
+                        name=name,
+                        style="filled",
+                        fillcolor=device_colors[
+                            task_results[name]["devices"][0].device_id
+                        ],
+                    )
+                else:
+                    node = pydot.Node(
+                        name=name,
+                        style="filled",
+                        fillcolor="white",
+                    )
+                graph.add_node(node)
+                for dep_id in task_info.dependencies:
+                    dep_id = str(dep_id)
+                    edge = pydot.Edge(dep_id, name)
+                    graph.add_edge(edge)
+
+        if save_file:
+            graph.write_png(file_name + "_dag.png")
+
+    if plot_timeline:
+        fig, ax = plt.subplots(figsize=timeline_plot_size)
+        fig.subplots_adjust(left=0.01, right=0.99)
+        for taskid, task_result in task_results.items():
+            # Calculate the start time and duration for each task
+            start_time = task_result["start_time"].duration
+            duration = (task_result["end_time"] - task_result["start_time"]).duration
+
+            # Draw the horizontal bar
+            bar = ax.barh(
+                task_result["devices"][0].device_id,
+                duration,
+                left=start_time,
+                height=0.4,
+                color=device_colors[task_result["devices"][0].device_id],
+                edgecolor="black",
+            )
+
+            # Add text inside the bar
+            text_position = (
+                start_time + duration / 2
+            )  # Positioning text at the middle of the bar
+            ax.text(
+                text_position,
+                task_result["devices"][0].device_id,
+                taskid,  # The text to display (taskid in this case)
+                va="center",  # Vertical alignment
+                ha="center",  # Horizontal alignment
+                color="black",  # Text color
+                fontsize=timeline_plot_fontsize,  # Font size
+            )
+
+        if plot_data_movement:
+            try:
+                data_task_record: Optional[DataTaskRecorder] = recorders.get(
+                    DataTaskRecorder
+                )
+            except KeyError as e:  # raise error if not found
+                raise KeyError(e)
+
+            for taskid, task_record in data_task_record.tasks.items():
+                if task_record.type == TaskType.DATA:
+                    start_time = task_record.start_time.duration
+                    duration = (task_record.end_time - task_record.start_time).duration
+
+                    if task_record.source.device_id == task_record.devices[0].device_id:
+                        continue
+
+                    # Draw the horizontal bar
+                    bar = ax.barh(
+                        task_record.devices[0].device_id - 0.25,
+                        duration,
+                        left=start_time,
+                        height=0.1,
+                        color="black",
+                        edgecolor="black",
+                    )
+
+                    # Add text inside the bar
+                    text_position = start_time + duration / 2
+                    ax.text(
+                        text_position,
+                        task_record.devices[0].device_id - 0.25,
+                        str(task_record.source),
+                        va="center",
+                        ha="center",
+                        color="white",
+                        fontsize="xx-small",
+                    )
+                elif task_record.type == TaskType.EVICTION:
+                    start_time = task_record.start_time.duration
+                    duration = (task_record.end_time - task_record.start_time).duration
+                    if task_record.source.device_id == task_record.devices[0].device_id:
+                        continue
+                    # Draw the horizontal bar
+                    bar = ax.barh(
+                        task_record.source.device_id + 0.25,
+                        duration,
+                        left=start_time,
+                        height=0.1,
+                        color="gray",
+                        edgecolor="black",
+                    )
+
+                    # Add text inside the bar
+                    text_position = start_time + duration / 2
+                    ax.text(
+                        text_position,
+                        task_record.source.device_id + 0.25,
+                        "Evict",
+                        va="center",
+                        ha="center",
+                        color="white",
+                        fontsize="xx-small",
+                    )
+
+        # Add horizontal lines for each device
+        for device in device_colors.keys():
+            ax.axhline(
+                device - 0.5,
+                color="black",
+                linestyle="--",
+                linewidth=1,
+            )
+            ax.text(
+                10,
+                device - 0.4,
+                str(device),
+                va="center",
+                ha="left",
+                color="black",
+                fontsize="small",
+            )
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Device")
+        ax.set_title("Timeline of Tasks")
+        if save_file:
+            plt.savefig(file_name + "_timeline.png")
+        if show_plot:
+            cursor()
+            plt.show()
+
+
+def plot_data_movement_count(
+    simulator: SimulatedScheduler,
+    threshold: int = 0,  # Threshold for data movement in Bytes. Only plot data movements that are greater than this threshold
+    bandwidth: float = 1e10,  # Bandwidth of the network in Bytes/s
+    args=None,  # argparse arguments
+):
+    data_tasks: DataTaskRecorder = simulator.recorders.get(DataTaskRecorder)
+
+    data_movement = []
+    for task in data_tasks.tasks.values():
+        if task.source.device_id == task.devices[0].device_id:
+            continue
+        if (task.end_time - task.start_time) < (1e6 * threshold / bandwidth):
+            continue
+        data_movement.append(task.start_time.duration)
+    # Sort the data movement times
+    data_movement.sort()
+
+    # Generate the accumulated count of data movements over time
+    accumulated_movements = list(range(1, len(data_movement) + 1))
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.plot(data_movement, accumulated_movements, drawstyle="steps-post")
+    plt.xlabel("Time(us)")
+    plt.ylabel("Accumulated Number of Data Movements")
+    plt.title(
+        f"Accumulated Data Movements Over Time\n{args.mode}_{args.sort}Order_{args.gpus}GPUs_Initial:{args.distribution}_{args.time}us_{args.steps}Steps_Simulated Time: {simulator.time}"
+    )
+    plt.grid(True)
+    plt.savefig(
+        f"{args.mode}_{args.sort}_{args.gpus}_{args.distribution}_{args.time}us_{args.steps}Steps.png"
+    )  # You can change the file format to .pdf, .svg, etc.
+
+
+def eviction_event_checker(
+    task: DataTaskRecord,
+) -> bool:
+    if (
+        task.devices[0].architecture == Architecture.CPU
+        and task.source.architecture != Architecture.CPU
+    ):  # Eviction only happens from GPU to CPU
+        return True
+    return False
+
+
+def data_size_checker(
+    task: DataTaskRecord,
+    threshold: int = 0,
+) -> bool:
+    if (
+        task.data_size > threshold
+        and task.source.device_id
+        != task.devices[0].device_id  # Source and destination should be different
+    ):
+        return True
+    return False
+
+
+def plot_data_event_count(
+    simulator: SimulatedScheduler,
+    rule: Callable[
+        [DataTaskRecord], bool
+    ] = lambda x: False,  # Rule to filter data events. default to false
+    name: str = "",  # {args.mode}_{args.sort}Order_{args.gpus}GPUs_Initial:{args.distribution}_{args.time}us_{args.steps}Steps
+    title: str = "",  # Title of the plot
+    ylabel: str = "Accumulated Number of Data Movements",  # Label of the y-axis
+):
+    data_tasks: DataTaskRecorder = simulator.recorders.get(DataTaskRecorder)
+    if name is "":
+        name = f"DataEventCount_{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}_{str(len(simulator.topology.get_devices(device_type=Architecture.GPU)))}GPUs"
+    data_movement = []
+    for task in data_tasks.tasks.values():
+        if rule(task):
+            data_movement.append(task.start_time.duration)
+    # Sort the data movement times
+    data_movement.sort()
+
+    # Generate the accumulated count of data movements over time
+    accumulated_movements = list(range(1, len(data_movement) + 1))
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.plot(data_movement, accumulated_movements, drawstyle="steps-post")
+    plt.xlabel("Time(us)")
+    plt.xlim((0, simulator.time.duration))
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
+    plt.savefig(f"{name}.png")  # You can change the file format to .pdf, .svg, etc.

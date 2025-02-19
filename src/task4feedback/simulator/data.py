@@ -412,9 +412,9 @@ class DataStatus:
         target_device = source_device
         current_state = self.get_data_state(source_device, state)
         # print("Current state of eviction target on source device", current_state.name)
-        assert (
-            current_state == DataState.VALID
-        ), f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device} in phase {state}."
+        assert current_state == DataState.VALID, (
+            f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device} in phase {state}."
+        )
 
         # print(f"Number of valid copies of data {self.id}: {len(valid_copies)}")
         # print(
@@ -460,9 +460,9 @@ class DataStatus:
             )
 
         current_state = self.get_data_state(source_device, state)
-        assert (
-            current_state == DataState.VALID
-        ), f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device}."
+        assert current_state == DataState.VALID, (
+            f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device}."
+        )
 
         if source_device != target_device:
             self.start_move(task, source_device, target_device, pools, verbose=verbose)
@@ -538,9 +538,9 @@ class DataStatus:
             )
 
         current_state = self.get_data_state(source_device, state)
-        assert (
-            current_state == DataState.VALID
-        ), f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device}."
+        assert current_state == DataState.VALID, (
+            f"Data {self.id} must be VALID to be evicted, but is {current_state} on {source_device}."
+        )
 
         if source_device != target_device:
             self.set_data_state(target_device, state, DataState.VALID)
@@ -601,9 +601,9 @@ class DataStatus:
                             f"Task {task} cannot write to data {self.id} that is not valid on device {device}. Status: {status}"
                         )
             else:
-                assert (
-                    self.get_data_state(device, state) != DataState.MOVING
-                ), f"Task {task} cannot invalidate data that is moving. Status: {status}"
+                assert self.get_data_state(device, state) != DataState.MOVING, (
+                    f"Task {task} cannot invalidate data that is moving. Status: {status}"
+                )
                 prev_state = self.set_data_state(device, state, DataState.NONE)
 
                 if prev_state == DataState.VALID:
@@ -843,6 +843,7 @@ class SimulatedData:
     info: DataInfo = None
     status: DataStatus = None
     init: bool = True
+    stats: DataStats = field(default_factory=DataStats)
     eviction_count: int = 0
 
     def __deepcopy__(self, memo):

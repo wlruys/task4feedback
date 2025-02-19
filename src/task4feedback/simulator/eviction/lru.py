@@ -94,9 +94,9 @@ class LRUEvictionPool(EvictionPool):
         if status := self.datalist.remove(data):
             # print(f"Removing {data.info} from eviction pool: {data.size}")
             self.evictable_size -= size
-            assert (
-                self.evictable_size >= 0
-            ), f"Evictable size is negative: {self.evictable_size}"
+            assert self.evictable_size >= 0, (
+                f"Evictable size is negative: {self.evictable_size}"
+            )
         return status
 
     def peek(self) -> DataID:
