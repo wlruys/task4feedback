@@ -258,8 +258,12 @@ public:
     return scheduler.get_state().get_global_time();
   }
 
-  void add_task_breakpoint(EventType type, taskid_t task) {
-    scheduler.breakpoints.add_breakpoint(type, task);
+  void add_task_breakpoint(EventType type, taskid_t task, bool collective = false) {
+    if (collective) {
+      scheduler.breakpoints.add_collective_breakpoint(type, task);
+    } else {
+      scheduler.breakpoints.add_breakpoint(type, task);
+    }
   }
 
   void add_time_breakpoint(timecount_t time) {
