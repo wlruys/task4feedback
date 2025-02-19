@@ -109,9 +109,11 @@ class DeviceHandle:
 
     def __post_init__(self):
         self.cdevices = PyDevices(len(self.devices.devices))
+        print("Number of devices:", len(self.devices.devices))
         for i, (device, (vcu, mem)) in enumerate(self.devices.devices.items()):
             name = str(device)
             arch = device.architecture.value
+            print(name, device, arch, vcu, mem)
             self.cdevices.create_device(i, name, arch, vcu, mem)
             self.devices_to_ids[device] = i
             self.ids_to_devices[i] = device
@@ -809,9 +811,12 @@ class Simulator:
         self.cmapper = cmapper
         self.simulator.set_mapper(cmapper.mapper)
 
-    def initialize(self, use_data: bool = True, use_transition_conditions: bool = True):
-        self.simulator.initialize(use_data, use_transition_conditions)
+    def initialize(self, use_data: bool = True, use_transition_conditions: bool = True, initialize_data_manager: bool = False):
+        self.simulator.initialize(use_data, use_transition_conditions, initialize_data_manager)
         self.initialized = True
+        
+    def initialize_data_manager(self):
+        self.simulator.initialize_data_manager()
 
     def step(self, action_list=None):
         if action_list is not None:

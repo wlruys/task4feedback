@@ -9,15 +9,15 @@ class DeviceManager;
 
 template<typename T>
 struct ResourceEventArray{
-  timecount_t* times;
-  T* resources;
-  std::size_t size;
+  timecount_t* times = NULL;
+  T* resources = NULL;
+  std::size_t size = 0;
 };
 
 template<typename T>
 struct ResourceEvent{
-  timecount_t time;
-  T resource;
+  timecount_t time = 0;
+  T resource = 0;
 };
 
 template<typename T>
@@ -46,6 +46,11 @@ public:
 
   [[nodiscard]] T get_resource(timecount_t time) const {
     //Assume events are sorted access with binary search
+
+    if (events.empty()) {
+      return 0;
+    }
+
     auto it = std::lower_bound(events.begin(), events.end(), time, [](const ResourceEvent<T> &e, timecount_t t) {
       return e.time < t;
     });
@@ -62,6 +67,18 @@ public:
   ResourceEventArray<T> get_events() const {
     //Returns a copy of the events
     ResourceEventArray<T> result;
+
+    result.size = events.size();
+
+    if (result.size == 0) {
+      //If no events, return a single event with time 0 and resource 0
+      result.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t)));
+      result.resources = static_cast<T*>(malloc(sizeof(T)));
+      result.times[0] = 0;
+      result.resources[0] = 0;
+      return result;
+    }
+
     result.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t) * events.size()));
     result.resources = static_cast<T*>(malloc(sizeof(T) * events.size()));
 
@@ -69,8 +86,6 @@ public:
       result.times[i] = events[i].time;
       result.resources[i] = events[i].resource;
     }
-
-    result.size = events.size();
 
     return result;
   }
@@ -82,6 +97,8 @@ protected:
   void resize(std::size_t n) {
     vcu.resize(n, 0);
     mem.resize(n, 0);
+    vcu_tracker.resize(n);
+    mem_tracker.resize(n);
   }
 
 public:
@@ -91,14 +108,15 @@ public:
   std::vector<ResourceTracker<vcu_t>> vcu_tracker;
   std::vector<ResourceTracker<mem_t>> mem_tracker;
 
-  DeviceResources() = default;
+  DeviceResources(){};
 
-  DeviceResources(std::size_t n) : vcu(n, 0), mem(n, 0) {
-  }
+  DeviceResources(std::size_t n) : vcu(n, 0), mem(n, 0), vcu_tracker(n), mem_tracker(n) {}
 
   DeviceResources(const DeviceResources &other) {
     vcu = other.vcu;
     mem = other.mem;
+    vcu_tracker = other.vcu_tracker;
+    mem_tracker = other.mem_tracker;
   }
 
   DeviceResources &operator=(const DeviceResources &other) = default;

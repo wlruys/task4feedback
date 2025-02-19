@@ -604,8 +604,11 @@ cdef class PySimulator:
     cdef create(self):
         self.simulator = new Simulator(deref(self.input.input))
 
-    def initialize(self, bool create_data_tasks = 0, bool use_transition_conditions = 1):
-        self.simulator.initialize(create_data_tasks, use_transition_conditions)
+    def initialize(self, bool create_data_tasks = 0, bool use_transition_conditions = 1, bool initialize_data_manager = 0):
+        self.simulator.initialize(create_data_tasks, use_transition_conditions, initialize_data_manager)
+    
+    def initialize_data_manager(self):
+        self.simulator.initialize_data_manager()
 
     def run(self):
         cdef ExecutionState stop_reason = self.simulator.run()

@@ -83,25 +83,26 @@ public:
 };
 
 struct ValidInterval {
-  timecount_t start = MAX_TIME;
-  timecount_t stop = MAX_TIME;
+  timecount_t start = 0;
+  timecount_t stop = 0;
 };
 
 struct ValidEventArray{
-  timecount_t* starts;
-  timecount_t* stops;
+  timecount_t* starts = NULL;
+  timecount_t* stops = NULL;
   std::size_t size = 0;
 };
 
 
 class BlockLocation {
 protected:
+  dataid_t data_id;
   std::vector<bool> locations;
   std::vector<std::vector<ValidInterval>> valid_intervals;
   std::vector<timecount_t> current_start;
 
 public:
-  BlockLocation(std::size_t n_devices) : locations(n_devices), valid_intervals(n_devices), current_start(n_devices) {
+  BlockLocation(dataid_t data_id, std::size_t n_devices) : data_id(data_id), locations(n_devices), valid_intervals(n_devices), current_start(n_devices) {
 
     #ifdef SIM_TRACK_LOCATION
     for(auto &interval : valid_intervals){
@@ -112,6 +113,10 @@ public:
 
   bool check_valid_at_time(devid_t device_id, timecount_t query_time) const {
     const auto &intervals = valid_intervals[device_id];
+
+    if(intervals.empty()){
+      return false;
+    }
 
     // Use binary search to find the first interval whose start is greater than query_time.
     auto it = std::upper_bound(intervals.begin(), intervals.end(), query_time,
@@ -136,7 +141,6 @@ public:
   }
 
   void set_valid(devid_t device_id, timecount_t current_time) {
-
     #ifdef SIM_TRACK_LOCATION
     if(!locations[device_id]){
       locations[device_id] = true;
@@ -151,7 +155,9 @@ public:
     #ifdef SIM_TRACK_LOCATION
     if(locations[device_id]){
       locations[device_id] = false;
-      valid_intervals[device_id].emplace_back(current_start[device_id], current_time);
+      if(current_start[device_id] != current_time){
+        valid_intervals[device_id].emplace_back(current_start[device_id], current_time);
+      }
     }
     #else
     locations[device_id] = false;
@@ -180,6 +186,14 @@ public:
       }
     }
     return valid_locations;
+  }
+
+  void populate_valid_locations(std::vector<devid_t> &valid_locations) const {
+    for (devid_t i = 0; i < locations.size(); i++) {
+      if (is_valid(i)) {
+        valid_locations.push_back(i);
+      }
+    }
   }
 
   bool validate(devid_t device_id, timecount_t current_time) {
@@ -212,14 +226,28 @@ public:
   }
 
   ValidEventArray get_valid_intervals(devid_t device_id) const {
+    assert(device_id < valid_intervals.size());
+
     const auto &intervals = valid_intervals[device_id];
     ValidEventArray valid_events;
 
     bool has_open_interval = is_valid(device_id);
 
-    valid_events.starts = static_cast<timecount_t*>(malloc((intervals.size() + has_open_interval) * sizeof(timecount_t)));
-    valid_events.stops = static_cast<timecount_t*>(malloc((intervals.size() + has_open_interval) * sizeof(timecount_t)));
+    valid_events.size = intervals.size() + has_open_interval;
 
+    if(valid_events.size == 0){
+      //Return a single interval from 0 to 0 to indicate no valid intervals
+      valid_events.starts = static_cast<timecount_t*>(malloc(1 * sizeof(timecount_t)));
+      valid_events.stops = static_cast<timecount_t*>(malloc(1 * sizeof(timecount_t)));
+      valid_events.size = 1;
+      valid_events.starts[0] = 0;
+      valid_events.stops[0] = 0;
+      return valid_events;
+    }
+
+
+    valid_events.starts = static_cast<timecount_t*>(malloc((valid_events.size) * sizeof(timecount_t)));
+    valid_events.stops = static_cast<timecount_t*>(malloc((valid_events.size) * sizeof(timecount_t)));
     for (std::size_t i = 0; i < intervals.size(); i++) {
       valid_events.starts[i] = intervals[i].start;
       valid_events.stops[i] = intervals[i].stop;
@@ -228,9 +256,6 @@ public:
       valid_events.starts[intervals.size()] = current_start[device_id];
       valid_events.stops[intervals.size()] = MAX_TIME;
     }
-
-    valid_events.size = intervals.size() + has_open_interval;
-
     return valid_events;
   }
 
@@ -251,7 +276,10 @@ protected:
 
 public:
   LocationManager(std::size_t num_data, std::size_t num_devices) {
-    block_locations.resize(num_data, BlockLocation(num_devices));
+    block_locations.reserve(num_data);
+    for (dataid_t i = 0; i < num_data; i++) {
+      block_locations.emplace_back(i, num_devices);
+    }
   }
 
   void set_valid(dataid_t data_id, devid_t device_id, timecount_t current_time) {
@@ -295,6 +323,7 @@ public:
   }
 
   ValidEventArray get_valid_intervals(dataid_t data_id, devid_t device_id) const {
+    assert(data_id < block_locations.size());
     return block_locations.at(data_id).get_valid_intervals(device_id);
   }
 

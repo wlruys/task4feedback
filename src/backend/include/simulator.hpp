@@ -81,6 +81,7 @@ public:
   std::reference_wrapper<Mapper> mapper;
 
   bool initialized = false;
+  bool data_initialized = false;
   volatile bool use_python_mapper = false;
 
   ExecutionState last_state = ExecutionState::NONE;
@@ -105,10 +106,25 @@ public:
     return scheduler.get_state();
   }
 
-  void initialize(bool create_data_tasks = false, bool use_transition_conditions = true) {
+  void initialize(bool create_data_tasks = false, bool use_transition_conditions = true, bool initialize_data_manager = false) {
     add_initial_event();
-    scheduler.initialize(create_data_tasks, use_transition_conditions);
+    scheduler.initialize(create_data_tasks, use_transition_conditions, initialize_data_manager);
     initialized = true;
+    data_initialized = initialize_data_manager;
+  }
+
+  void initialize_data_manager() {
+    if (!initialized) {
+      spdlog::critical("Simulator not initialized.");
+      return;
+    }
+
+    if (data_initialized) {
+      spdlog::warn("Data Manager already initialized.");
+      return;
+    }
+    scheduler.initialize_data_manager();
+    data_initialized = true;
   }
 
   void set_transition_conditions(std::shared_ptr<TransitionConditions> conditions_) {
@@ -151,6 +167,12 @@ public:
   }
 
   void map_tasks(ActionList &action_list) {
+
+    if (last_state != ExecutionState::EXTERNAL_MAPPING) {
+      spdlog::critical("Simulator not in external mapping state.");
+      return;
+    }
+
     scheduler.map_tasks_from_python(action_list, event_manager);
     // Set the state back to running
     last_state = ExecutionState::RUNNING;
@@ -186,6 +208,12 @@ public:
     if (!initialized) {
       last_state = ExecutionState::ERROR;
       spdlog::critical("Simulator not initialized.");
+      return ExecutionState::ERROR;
+    }
+
+    if (!data_initialized) {
+      last_state = ExecutionState::ERROR;
+      spdlog::critical("Data Manager not initialized.");
       return ExecutionState::ERROR;
     }
 
