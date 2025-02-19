@@ -47,6 +47,10 @@ public:
   [[nodiscard]] T get_resource(timecount_t time) const {
     //Assume events are sorted access with binary search
 
+    #ifndef SIM_TRACK_RESOURCES
+    return 0;
+    #endif //SIM_TRACK_RESOURCES
+
     if (events.empty()) {
       return 0;
     }

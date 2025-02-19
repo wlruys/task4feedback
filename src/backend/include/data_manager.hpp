@@ -114,25 +114,27 @@ public:
   bool check_valid_at_time(devid_t device_id, timecount_t query_time) const {
     const auto &intervals = valid_intervals[device_id];
 
-    if(intervals.empty()){
-      return false;
-    }
+    #ifndef SIM_TRACK_LOCATION
+    return false;
+    #endif
 
-    // Use binary search to find the first interval whose start is greater than query_time.
-    auto it = std::upper_bound(intervals.begin(), intervals.end(), query_time,
-      [](timecount_t t, const ValidInterval &interval) {
-        return t < interval.start;
-      });
-    
-    // Check the interval immediately preceding the found one.
-    if (it != intervals.begin()) {
-      const ValidInterval &candidate = *(it - 1);
-      if (candidate.start <= query_time && query_time < candidate.stop) {
-        return true;
+    if (!intervals.empty()) {
+      // Use binary search to find the first interval whose start is greater than query_time.
+      auto it = std::upper_bound(intervals.begin(), intervals.end(), query_time,
+                                [](const timecount_t &t, const auto &interval) {
+                                  return t < interval.start;
+                                });
+
+      // Check the interval immediately before 'it'
+      if (it != intervals.begin()) {
+        auto candidate = std::prev(it);
+        if (candidate->start <= query_time && query_time < candidate->stop) {
+          return true;
+        }
       }
     }
-    
-    // If the device is currently valid, check if the open interval covers the query time.
+
+    // Otherwise, check if the device is currently valid and has an open interval.
     if (locations[device_id] && query_time >= current_start[device_id]) {
       return true;
     }
