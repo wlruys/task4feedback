@@ -93,6 +93,13 @@ public:
     return mapping_priority;
   }
 
+  const std::vector<timecount_t> &get_durations() const {
+    return task_durations;
+  }
+  const PriorityList &get_priorities() const {
+    return mapping_priority;
+  }
+
   void lock() {
     generated = true;
   }

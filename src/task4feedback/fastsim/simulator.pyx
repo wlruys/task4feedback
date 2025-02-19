@@ -166,6 +166,13 @@ cdef _uintp_numpy(uint32_t* p, size_t n, size_t d, own: bool=True):
     a = np.asarray(result)
     return a
 
+cdef _uintp64_numpy(uint64_t* p, size_t n, own: bool=True):
+    cdef cvarray result = <cnp.uint64_t[:n]>p
+    if own:
+        result.free_data = True
+    a = np.asarray(result)
+    return a
+
 cdef convert_taskid_list_to_numpy(TaskIDList taskid_list, copy: bool = False):
     cdef size_t n = taskid_list.size()
     if n == 0:
@@ -385,7 +392,6 @@ cdef class PyTasks:
 
     def get_data_id(self, taskid_t taskid):
         return deref(self.tasks).get_data_id(taskid)
-    
 
     def get_read_set(self, taskid_t taskid):
         cdef DataIDList dataids = deref(self.tasks).get_read(taskid)
@@ -598,8 +604,11 @@ cdef class PySimulator:
     cdef create(self):
         self.simulator = new Simulator(deref(self.input.input))
 
-    def initialize(self, bool create_data_tasks = 0, bool use_transition_conditions = 1):
-        self.simulator.initialize(create_data_tasks, use_transition_conditions)
+    def initialize(self, bool create_data_tasks = 0, bool use_transition_conditions = 1, bool initialize_data_manager = 0):
+        self.simulator.initialize(create_data_tasks, use_transition_conditions, initialize_data_manager)
+    
+    def initialize_data_manager(self):
+        self.simulator.initialize_data_manager()
 
     def run(self):
         cdef ExecutionState stop_reason = self.simulator.run()
@@ -636,6 +645,129 @@ cdef class PySimulator:
     
     def get_mapping(self, taskid_t task_id):
         return self.simulator.get_mapping(task_id)
+
+    def get_mapped_time(self, taskid_t task_id):
+        return self.simulator.get_mapped_time(task_id)
+
+    def get_mapped_device(self, taskid_t task_id):
+        return self.simulator.get_mapping(task_id)
+
+    def get_reserved_time(self, taskid_t task_id):
+        return self.simulator.get_reserved_time(task_id)
+
+    def get_launched_time(self, taskid_t task_id):
+        return self.simulator.get_launched_time(task_id)
+
+    def get_completed_time(self, taskid_t task_id):
+        return self.simulator.get_completed_time(task_id)
+
+    def get_mapping_priority(self, taskid_t task_id):
+        return self.simulator.get_mapping_priority(task_id)
+
+    def get_reserving_priority(self, taskid_t task_id):
+        return self.simulator.get_reserving_priority(task_id)
+
+    def get_launching_priority(self, taskid_t task_id):
+        return self.simulator.get_launching_priority(task_id)
+
+    def get_mapped_vcu_at_time(self, taskid_t task_id, timecount_t time):
+        return self.simulator.get_mapped_vcu_at_time(task_id, time)
+
+    def get_reserved_vcu_at_time(self, taskid_t task_id, timecount_t time):
+        return self.simulator.get_reserved_vcu_at_time(task_id, time)
+
+    def get_launched_vcu_at_time(self, taskid_t task_id, timecount_t time):
+        return self.simulator.get_launched_vcu_at_time(task_id, time)
+
+    def get_mapped_mem_at_time(self, taskid_t task_id, timecount_t time):
+        return self.simulator.get_mapped_mem_at_time(task_id, time)
+
+    def get_reserved_mem_at_time(self, taskid_t task_id, timecount_t time):
+        return self.simulator.get_reserved_mem_at_time(task_id, time)
+
+    def get_launched_mem_at_time(self, taskid_t task_id, timecount_t time):
+        return self.simulator.get_launched_mem_at_time(task_id, time)
+
+    def get_vcu_events_mapped(self, devid_t device_id):
+        cdef ResourceEventArray[vcu_t] events = self.simulator.get_vcu_events_mapped(device_id)
+
+        cdef size_t n = events.size
+        times = _uintp64_numpy(events.times, n)
+        resources = _uintp64_numpy(events.resources, n)
+        return times, resources
+
+    def get_vcu_events_reserved(self, devid_t device_id):
+        cdef ResourceEventArray[vcu_t] events = self.simulator.get_vcu_events_reserved(device_id)
+
+        cdef size_t n = events.size
+        times = _uintp64_numpy(events.times, n)
+        resources = _uintp64_numpy(events.resources, n)
+        return times, resources
+
+    def get_vcu_events_launched(self, devid_t device_id):
+        cdef ResourceEventArray[vcu_t] events = self.simulator.get_vcu_events_launched(device_id)
+
+        cdef size_t n = events.size
+        times = _uintp64_numpy(events.times, n)
+        resources = _uintp64_numpy(events.resources, n)
+        return times, resources
+
+    def get_mem_events_mapped(self, devid_t device_id):
+        cdef ResourceEventArray[mem_t] events = self.simulator.get_mem_events_mapped(device_id)
+
+        cdef size_t n = events.size
+        times = _uintp64_numpy(events.times, n)
+        resources = _uintp64_numpy(events.resources, n)
+        return times, resources
+
+    def get_mem_events_reserved(self, devid_t device_id):
+        cdef ResourceEventArray[mem_t] events = self.simulator.get_mem_events_reserved(device_id)
+
+        cdef size_t n = events.size
+        times = _uintp64_numpy(events.times, n)
+        resources = _uintp64_numpy(events.resources, n)
+        return times, resources
+
+    def get_mem_events_launched(self, devid_t device_id):
+        cdef ResourceEventArray[mem_t] events = self.simulator.get_mem_events_launched(device_id)
+
+        cdef size_t n = events.size
+        times = _uintp64_numpy(events.times, n)
+        resources = _uintp64_numpy(events.resources, n)
+        return times, resources
+    
+    def check_valid_mapped(self, dataid_t data_id, devid_t device_id, timecount_t time):
+        return self.simulator.check_valid_mapped(data_id, device_id, time)
+
+    def check_valid_reserved(self, dataid_t data_id, devid_t device_id, timecount_t time):
+        return self.simulator.check_valid_reserved(data_id, device_id, time)
+
+    def check_valid_launched(self, dataid_t data_id, devid_t device_id, timecount_t time):
+        return self.simulator.check_valid_launched(data_id, device_id, time)
+
+    def get_valid_intervals_mapped(self, dataid_t data_id, devid_t device_id):
+        cdef ValidEventArray valid_events = self.simulator.get_valid_intervals_mapped(data_id, device_id)
+        cdef size_t n = valid_events.size 
+
+        starts = _uintp64_numpy(valid_events.starts, n)
+        stops = _uintp64_numpy(valid_events.stops, n)
+        return starts, stops
+
+    def get_valid_intervals_reserved(self, dataid_t data_id, devid_t device_id):
+        cdef ValidEventArray valid_events = self.simulator.get_valid_intervals_reserved(data_id, device_id)
+        cdef size_t n = valid_events.size 
+
+        starts = _uintp64_numpy(valid_events.starts, n)
+        stops = _uintp64_numpy(valid_events.stops, n)
+        return starts, stops
+
+    def get_valid_intervals_launched(self, dataid_t data_id, devid_t device_id):
+        cdef ValidEventArray valid_events = self.simulator.get_valid_intervals_launched(data_id, device_id)
+        cdef size_t n = valid_events.size 
+
+        starts = _uintp64_numpy(valid_events.starts, n)
+        stops = _uintp64_numpy(valid_events.stops, n)
+        return starts, stops    
 
     def use_python_mapper(self, bool use_python_mapper):
         self.simulator.set_use_python_mapper(use_python_mapper)

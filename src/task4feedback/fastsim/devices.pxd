@@ -11,6 +11,7 @@ from libcpp.vector cimport vector
 from cython.operator cimport dereference as deref, preincrement as inc
 from libc.stdint cimport int64_t, int32_t, uint32_t, uint64_t 
 from libcpp.string cimport string
+from libc.stddef cimport size_t
 
 cdef extern from "include/device_manager.hpp":
 
@@ -23,4 +24,11 @@ cdef extern from "include/device_manager.hpp":
         size_t size() const
 
 
+    cdef cppclass ResourceEventArray[T]:
+        timecount_t* times 
+        T* resources 
+        size_t size 
 
+        
+
+    

@@ -109,9 +109,11 @@ class DeviceHandle:
 
     def __post_init__(self):
         self.cdevices = PyDevices(len(self.devices.devices))
+        print("Number of devices:", len(self.devices.devices))
         for i, (device, (vcu, mem)) in enumerate(self.devices.devices.items()):
             name = str(device)
             arch = device.architecture.value
+            print(name, device, arch, vcu, mem)
             self.cdevices.create_device(i, name, arch, vcu, mem)
             self.devices_to_ids[device] = i
             self.ids_to_devices[i] = device
@@ -197,6 +199,7 @@ class DataHandle:
 
     def __contains__(self, data_id: DataID) -> bool:
         return data_id in self.datamap
+    
 
 
 @dataclass(slots=True)
@@ -277,7 +280,7 @@ class TaskHandle:
 
     def get_name(self, task_id: TaskID) -> str:
         return str(task_id)
-
+    
 
 class TaskNoise:
     def __init__(self, tasks: TaskHandle, seed: int = 0):
@@ -808,9 +811,12 @@ class Simulator:
         self.cmapper = cmapper
         self.simulator.set_mapper(cmapper.mapper)
 
-    def initialize(self, use_data: bool = True, use_transition_conditions: bool = True):
-        self.simulator.initialize(use_data, use_transition_conditions)
+    def initialize(self, use_data: bool = True, use_transition_conditions: bool = True, initialize_data_manager: bool = False):
+        self.simulator.initialize(use_data, use_transition_conditions, initialize_data_manager)
         self.initialized = True
+        
+    def initialize_data_manager(self):
+        self.simulator.initialize_data_manager()
 
     def step(self, action_list=None):
         if action_list is not None:
@@ -871,7 +877,7 @@ class Simulator:
 
         self.simulator.add_task_breakpoint(etype, task_id)
 
-    def get_mapping(self, task_index: int):
+    def get_mapping(self, task_index: int) -> int:
         return self.simulator.get_mapping(task_index)
 
     def randomize_durations(self):
@@ -879,6 +885,89 @@ class Simulator:
 
     def randomize_priorities(self):
         self.noise.sample_priorities()
+        
+    def get_mapped_device(self, task_index: int) ->int:
+        return self.simulator.get_mapped_device(task_index)
+    
+    def get_mapped_time(self, task_index: int) -> int:
+        return self.simulator.get_mapped_time(task_index)
+    
+    def get_reserved_time(self, task_index: int) -> int:
+        return self.simulator.get_reserved_time(task_index)
+    
+    def get_launched_time(self, task_index: int) -> int:
+        return self.simulator.get_launched_time(task_index)
+    
+    def get_completed_time(self, task_index: int) -> int:
+        return self.simulator.get_completed_time(task_index)
+    
+    def get_mapping_priority(self, task_index: int) -> int:
+        return self.simulator.get_mapping_priority(task_index)
+    
+    def get_reserving_priority(self, task_index: int) -> int:
+        return self.simulator.get_reserving_priority(task_index)
+    
+    def get_launching_priority(self, task_index: int) -> int:
+        return self.simulator.get_launching_priority(task_index)
+    
+    def get_mapped_vcu_at_time(self, task_index: int, time: int) -> int:
+        return self.simulator.get_mapped_vcu_at_time(task_index, time)
+    
+    def get_reserved_vcu_at_time(self, task_index: int, time: int) -> int:
+        return self.simulator.get_reserved_vcu_at_time(task_index, time)
+    
+    def get_launched_vcu_at_time(self, task_index: int, time: int) -> int:
+        return self.simulator.get_launched_vcu_at_time(task_index, time)
+    
+    def get_mapped_memory_at_time(self, task_index: int, time: int) -> int:
+        return self.simulator.get_mapped_mem_at_time(task_index, time)
+    
+    def get_reserved_memory_at_time(self, task_index: int, time: int) -> int:
+        return self.simulator.get_reserved_mem_at_time(task_index, time)
+    
+    def get_launched_memory_at_time(self, task_index: int, time: int) -> int:
+        return self.simulator.get_launched_mem_at_time(task_index, time)
+    
+    def get_vcu_events_mapped(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        return self.simulator.get_vcu_events_mapped(device_index)
+    
+    def get_vcu_events_reserved(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        return self.simulator.get_vcu_events_reserved(device_index)
+    
+    def get_vcu_events_launched(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        return self.simulator.get_vcu_events_launched(device_index)
+    
+    def get_memory_events_mapped(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        return self.simulator.get_mem_events_mapped(device_index)
+    
+    def get_memory_events_reserved(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        return self.simulator.get_mem_events_reserved(device_index)
+    
+    def get_memory_events_launched(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        return self.simulator.get_mem_events_launched(device_index)
+    
+    def check_valid_mapped(self, data_id: int, device_index: int, time: int) -> bool:
+        return self.simulator.check_valid_mapped(data_id, device_index, time)
+    
+    def check_valid_reserved(self, data_id: int, device_index: int, time: int) -> bool:
+        return self.simulator.check_valid_reserved(data_id, device_index, time)
+    
+    def check_valid_launched(self, data_id: int, device_index: int, time: int) -> bool:
+        return self.simulator.check_valid_launched(data_id, device_index, time)
+    
+    def get_valid_intervals_mapped(self, data_id: int, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        return self.simulator.get_valid_intervals_mapped(data_id, device_index)
+    
+    def get_valid_intervals_reserved(self, data_id: int, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        return self.simulator.get_valid_intervals_reserved(data_id, device_index)
+    
+    def get_valid_intervals_launched(self, data_id: int, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+        return self.simulator.get_valid_intervals_launched(data_id, device_index)
+        
+    
+    
+    
+    
 
 
 @dataclass

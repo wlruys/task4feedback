@@ -7,34 +7,131 @@
 
 class DeviceManager;
 
+template<typename T>
+struct ResourceEventArray{
+  timecount_t* times = NULL;
+  T* resources = NULL;
+  std::size_t size = 0;
+};
+
+template<typename T>
+struct ResourceEvent{
+  timecount_t time = 0;
+  T resource = 0;
+};
+
+template<typename T>
+class ResourceTracker {
+  std::vector<ResourceEvent<T>> events;
+
+public:
+
+  ResourceTracker() {
+    #ifdef SIM_TRACK_RESOURCES
+    events.reserve(2000);
+    #endif //SIM_TRACK_RESOURCES
+  }
+
+  void add_set(timecount_t time, T resource) {
+    #ifdef SIM_TRACK_RESOURCES
+    events.emplace_back(time, resource);
+    #endif //SIM_TRACK_RESOURCES
+  }
+
+  void add_change(timecount_t time, T resource) {
+    #ifdef SIM_TRACK_RESOURCES
+    events.emplace_back(time, resource);
+    #endif //SIM_TRACK_RESOURCES
+  }
+
+  [[nodiscard]] T get_resource(timecount_t time) const {
+    //Assume events are sorted access with binary search
+
+    #ifndef SIM_TRACK_RESOURCES
+    return 0;
+    #endif //SIM_TRACK_RESOURCES
+
+    if (events.empty()) {
+      return 0;
+    }
+
+    auto it = std::lower_bound(events.begin(), events.end(), time, [](const ResourceEvent<T> &e, timecount_t t) {
+      return e.time < t;
+    });
+    if (it == events.end()) {
+      return events.back().resource;
+    }
+    return it->resource;
+  }
+
+  void reset() {
+    events.clear();
+  }
+
+  ResourceEventArray<T> get_events() const {
+    //Returns a copy of the events
+    ResourceEventArray<T> result;
+
+    result.size = events.size();
+
+    if (result.size == 0) {
+      //If no events, return a single event with time 0 and resource 0
+      result.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t)));
+      result.resources = static_cast<T*>(malloc(sizeof(T)));
+      result.times[0] = 0;
+      result.resources[0] = 0;
+      return result;
+    }
+
+    result.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t) * events.size()));
+    result.resources = static_cast<T*>(malloc(sizeof(T) * events.size()));
+
+    for(int i = 0; i < events.size(); i++){
+      result.times[i] = events[i].time;
+      result.resources[i] = events[i].resource;
+    }
+
+    return result;
+  }
+
+};
+
 class DeviceResources {
 protected:
   void resize(std::size_t n) {
     vcu.resize(n, 0);
     mem.resize(n, 0);
+    vcu_tracker.resize(n);
+    mem_tracker.resize(n);
   }
 
 public:
   std::vector<vcu_t> vcu;
   std::vector<mem_t> mem;
 
-  DeviceResources() = default;
+  std::vector<ResourceTracker<vcu_t>> vcu_tracker;
+  std::vector<ResourceTracker<mem_t>> mem_tracker;
 
-  DeviceResources(std::size_t n) : vcu(n, 0), mem(n, 0) {
-  }
+  DeviceResources(){};
+
+  DeviceResources(std::size_t n) : vcu(n, 0), mem(n, 0), vcu_tracker(n), mem_tracker(n) {}
 
   DeviceResources(const DeviceResources &other) {
     vcu = other.vcu;
     mem = other.mem;
+    vcu_tracker = other.vcu_tracker;
+    mem_tracker = other.mem_tracker;
   }
 
   DeviceResources &operator=(const DeviceResources &other) = default;
 
-  void set_vcu(devid_t id, vcu_t vcu_) {
+  void set_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     vcu[id] = vcu_;
+    vcu_tracker[id].add_set(current_time, vcu_);
   }
-  void set_mem(devid_t id, mem_t m) {
+  void set_mem(devid_t id, mem_t m, timecount_t current_time) {
     mem[id] = m;
+    mem_tracker[id].add_set(current_time, m);
   }
 
   [[nodiscard]] vcu_t get_vcu(devid_t id) const {
@@ -46,39 +143,43 @@ public:
     return mem.at(id);
   }
 
-  vcu_t add_vcu(devid_t id, vcu_t vcu_) {
+  vcu_t add_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     assert(id < vcu.size());
     vcu.at(id) += vcu_;
+    vcu_tracker[id].add_change(current_time, vcu.at(id));
     return vcu.at(id);
   }
-  mem_t add_mem(devid_t id, mem_t m) {
+  mem_t add_mem(devid_t id, mem_t m, timecount_t current_time) {
     assert(id < mem.size());
     mem.at(id) += m;
+    mem_tracker[id].add_change(current_time, mem.at(id));
     return mem.at(id);
   }
 
-  vcu_t remove_vcu(devid_t id, vcu_t vcu_) {
+  vcu_t remove_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     assert(id < vcu.size());
     assert(vcu.at(id) >= vcu_);
     vcu.at(id) -= vcu_;
+    vcu_tracker[id].add_change(current_time, vcu.at(id));
     return vcu.at(id);
   }
-  mem_t remove_mem(devid_t id, mem_t m) {
+  mem_t remove_mem(devid_t id, mem_t m, timecount_t current_time) {
     assert(id < mem.size());
     assert(mem.at(id) >= m);
     mem.at(id) -= m;
+    mem_tracker[id].add_change(current_time, mem.at(id));
     return mem.at(id);
   }
 
-  Resources add_resources(devid_t id, const Resources &r) {
-    add_vcu(id, r.vcu);
-    add_mem(id, r.mem);
+  Resources add_resources(devid_t id, const Resources &r, timecount_t current_time) {
+    add_vcu(id, r.vcu, current_time);
+    add_mem(id, r.mem, current_time);
     return {vcu.at(id), mem.at(id)};
   }
 
-  Resources remove_resources(devid_t id, const Resources &r) {
-    remove_vcu(id, r.vcu);
-    remove_mem(id, r.mem);
+  Resources remove_resources(devid_t id, const Resources &r, timecount_t current_time) {
+    remove_vcu(id, r.vcu, current_time);
+    remove_mem(id, r.mem, current_time);
     return {vcu.at(id), mem.at(id)};
   }
 
@@ -115,8 +216,25 @@ public:
     return {vcu_overflow, mem_overflow};
   }
 
+  vcu_t get_vcu_at_time(devid_t id, timecount_t time) const {
+    return vcu_tracker[id].get_resource(time);
+  }
+
+  mem_t get_mem_at_time(devid_t id, timecount_t time) const {
+    return mem_tracker[id].get_resource(time);
+  }
+
+  ResourceEventArray<vcu_t> get_vcu_events(devid_t id) const {
+    return vcu_tracker[id].get_events();
+  }
+
+  ResourceEventArray<mem_t> get_mem_events(devid_t id) const {
+    return mem_tracker[id].get_events();
+  }
+
   friend class DeviceManager;
 };
+
 
 class Devices {
 
@@ -255,24 +373,24 @@ public:
     return resources.get_vcu(id);
   }
 
-  template <TaskState State> mem_t add_mem(devid_t id, mem_t mem_) {
+  template <TaskState State> mem_t add_mem(devid_t id, mem_t mem_, timecount_t current_time) {
     auto &resources = get_resources<State>();
-    return resources.add_mem(id, mem_);
+    return resources.add_mem(id, mem_, current_time);
   }
 
-  template <TaskState State> mem_t remove_mem(devid_t id, mem_t mem_) {
+  template <TaskState State> mem_t remove_mem(devid_t id, mem_t mem_, timecount_t current_time) {
     auto &resources = get_resources<State>();
-    return resources.remove_mem(id, mem_);
+    return resources.remove_mem(id, mem_, current_time);
   }
 
-  template <TaskState State> void remove_vcu(devid_t id, vcu_t vcu_) {
+  template <TaskState State> void remove_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     auto &resources = get_resources<State>();
-    resources.remove_vcu(id, vcu_);
+    resources.remove_vcu(id, vcu_, current_time);
   }
 
-  template <TaskState State> void add_vcu(devid_t id, vcu_t vcu_) {
+  template <TaskState State> void add_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     auto &resources = get_resources<State>();
-    resources.add_vcu(id, vcu_);
+    resources.add_vcu(id, vcu_, current_time);
   }
 
   template <TaskState State> [[nodiscard]] bool can_fit_mem(devid_t id, mem_t mem_) const {
@@ -299,14 +417,14 @@ public:
     return state_resources.overflow_vcu(id, vcu_, device_max_resources.vcu);
   }
 
-  template <TaskState State> void add_resources(devid_t id, const Resources &r) {
+  template <TaskState State> void add_resources(devid_t id, const Resources &r, timecount_t current_time) {
     auto &state_resources = get_resources<State>();
-    state_resources.add_resources(id, r);
+    state_resources.add_resources(id, r, current_time);
   }
 
-  template <TaskState State> void remove_resources(devid_t id, const Resources &r) {
+  template <TaskState State> void remove_resources(devid_t id, const Resources &r, timecount_t current_time) {
     auto &state_resources = get_resources<State>();
-    state_resources.remove_resources(id, r);
+    state_resources.remove_resources(id, r, current_time);
   }
 
   template <TaskState State>
@@ -315,5 +433,26 @@ public:
     const auto &device_max_resources = devices.get().get_max_resources(id);
     return state_resources.overflow_resources(id, r, device_max_resources);
   }
+
+  template <TaskState State> [[nodiscard]] vcu_t get_vcu_at_time(devid_t id, timecount_t time) const {
+    auto &state_resources = get_resources<State>();
+    return state_resources.get_vcu_at_time(id, time);
+  }
+
+  template <TaskState State> [[nodiscard]] mem_t get_mem_at_time(devid_t id, timecount_t time) const {
+    auto &state_resources = get_resources<State>();
+    return state_resources.get_mem_at_time(id, time);
+  }
+
+  template <TaskState State> ResourceEventArray<vcu_t> get_vcu_events(devid_t id) const {
+    auto &state_resources = get_resources<State>();
+    return state_resources.get_vcu_events(id);
+  }
+
+  template <TaskState State> ResourceEventArray<mem_t> get_mem_events(devid_t id) const {
+    auto &state_resources = get_resources<State>();
+    return state_resources.get_mem_events(id);
+  }
+
   friend class SchedulerState;
 };

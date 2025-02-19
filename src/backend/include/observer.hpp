@@ -128,22 +128,6 @@ public:
     return state.get().get_task_manager().get_tasks().size();
   }
 
-  void get_mapping(std::span<devid_t> mapping) const {
-    const auto &s = state.get();
-    const auto &task_manager = s.get_task_manager();
-    const auto &tasks = task_manager.get_tasks();
-
-    assert(mapping.size() >= tasks.size());
-
-    for (std::size_t i = 0; i < tasks.size(); i++) {
-      mapping[i] = task_manager.state.get_mapping(i);
-    }
-  }
-
-  void get_mapping(devid_t *mapping, std::size_t n){
-    get_mapping(std::span<devid_t>(mapping, n));
-  }
-
   void preprocess_global(const Tasks &tasks, const Data &data) {
 
     // NOTE(wlr): This is AN AWFUL estimator of stddev

@@ -4,10 +4,10 @@
 
 from settings cimport dataid_t, taskid_t, TaskIDList, DataIDList, DeviceIDList, PriorityList, DeviceType, devid_t, priority_t, depcount_t, vcu_t, mem_t, timecount_t
 
-from tasks cimport Tasks
-from devices cimport Devices
+from tasks cimport Tasks, TaskState 
+from devices cimport Devices, ResourceEventArray
 from communication cimport Topology, CommunicationNoise
-from data cimport Data
+from data cimport Data, ValidEventArray
 from noise cimport TaskNoise 
 
 import cython
@@ -82,17 +82,54 @@ cdef extern from "include/simulator.hpp":
     cdef cppclass Simulator:
         Simulator(Simulator&)
         Simulator(SchedulerInput& input)
-        void initialize(bool create_data_tasks, bool use_transition_conditions)
+        void initialize(bool create_data_tasks, bool use_transition_conditions, bool initialize_data_manager)
+        void initialize_data_manager()
         ExecutionState run()
         timecount_t get_current_time()
         TaskIDList get_mappable_candidates()
         void map_tasks(ActionList& actions)
         void add_task_breakpoint(EventType event_type, taskid_t task_id)
         void add_time_breakpoint(timecount_t time)
-        devid_t get_mapping(taskid_t task_id)
         void set_use_python_mapper(bool use_python_mapper)
         void set_mapper(Mapper& mapper)
         SchedulerState& get_state()
+        devid_t get_mapping(taskid_t task_id)
+        priority_t get_mapping_priority(taskid_t task_id)
+        priority_t get_reserving_priority(taskid_t task_id)
+        priority_t get_launching_priority(taskid_t task_id)
+
+        timecount_t get_mapped_time(taskid_t task_id)
+        timecount_t get_reserved_time(taskid_t task_id)
+        timecount_t get_launched_time(taskid_t task_id)
+        timecount_t get_completed_time(taskid_t task_id)
+
+        TaskState get_state_at_time(taskid_t task_id, timecount_t time)
+
+        vcu_t get_mapped_vcu_at_time(devid_t device_id, timecount_t time)
+        vcu_t get_reserved_vcu_at_time(devid_t device_id, timecount_t time)
+        vcu_t get_launched_vcu_at_time(devid_t device_id, timecount_t time)
+
+        mem_t get_mapped_mem_at_time(devid_t device_id, timecount_t time)
+        mem_t get_reserved_mem_at_time(devid_t device_id, timecount_t time)
+        mem_t get_launched_mem_at_time(devid_t device_id, timecount_t time)
+
+        ResourceEventArray[vcu_t] get_vcu_events_mapped(devid_t device_id)
+        ResourceEventArray[vcu_t] get_vcu_events_reserved(devid_t device_id)
+        ResourceEventArray[vcu_t] get_vcu_events_launched(devid_t device_id)
+
+        ResourceEventArray[mem_t] get_mem_events_mapped(devid_t device_id)
+        ResourceEventArray[mem_t] get_mem_events_reserved(devid_t device_id)
+        ResourceEventArray[mem_t] get_mem_events_launched(devid_t device_id)
+
+        bool check_valid_mapped(dataid_t data_id, devid_t device_id, timecount_t query_time)
+        bool check_valid_reserved(dataid_t data_id, devid_t device_id, timecount_t query_time)
+        bool check_valid_launched(dataid_t data_id, devid_t device_id, timecount_t query_time)
+
+        ValidEventArray get_valid_intervals_mapped(dataid_t data_id, devid_t device_id)
+        ValidEventArray get_valid_intervals_reserved(dataid_t data_id, devid_t device_id)
+        ValidEventArray get_valid_intervals_launched(dataid_t data_id, devid_t device_id)
+
+
 
 
 

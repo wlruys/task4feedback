@@ -12,7 +12,7 @@ TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
   state.resize(n, TaskState::SPAWNED);
   counts.resize(n, DepCount());
   mapping.resize(n_compute_tasks, 0);
-  // mapping_priority.resize(n, 0);
+  //mapping_priority.resize(n, 0);
   reserving_priority.resize(n, 0);
   launching_priority.resize(n, 0);
   is_virtual.resize(n, false);
@@ -145,6 +145,22 @@ timecount_t TaskRecords::get_launched_time(taskid_t id) const {
 timecount_t TaskRecords::get_completed_time(taskid_t id) const {
   auto index = task_to_index(id, completed_idx);
   return state_times[index];
+}
+
+TaskState TaskRecords::get_state_at_time(taskid_t id, timecount_t query_time) const {
+  if (query_time < get_mapped_time(id)) {
+    return TaskState::SPAWNED;
+  }
+  if (query_time < get_reserved_time(id)) {
+    return TaskState::MAPPED;
+  }
+  if (query_time < get_launched_time(id)) {
+    return TaskState::RESERVED;
+  }
+  if (query_time < get_completed_time(id)) {
+    return TaskState::LAUNCHED;
+  }
+  return TaskState::COMPLETED;
 }
 
 // Task Manager
