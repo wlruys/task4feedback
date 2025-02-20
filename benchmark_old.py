@@ -431,6 +431,12 @@ for epoch in range(args.num_iterations):
     end_t = time.perf_counter()
 
     print(f"Batch collection time: {end_t - start_t:.2f} seconds")
+    
+    start_t = time.perf_counter()
+    batch_info = collect_batch(args.graphs_per_update, sim, H, model, global_step=epoch)
+    end_t = time.perf_counter()
+
+    print(f"Batch collection time: {end_t - start_t:.2f} seconds")
 
     start_t = time.perf_counter()
     batch_update(batch_info, args.update_epochs, model, optimizer, global_step=epoch)
