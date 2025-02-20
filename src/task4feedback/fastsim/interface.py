@@ -109,11 +109,11 @@ class DeviceHandle:
 
     def __post_init__(self):
         self.cdevices = PyDevices(len(self.devices.devices))
-        print("Number of devices:", len(self.devices.devices))
+        #print("Number of devices:", len(self.devices.devices))
         for i, (device, (vcu, mem)) in enumerate(self.devices.devices.items()):
             name = str(device)
             arch = device.architecture.value
-            print(name, device, arch, vcu, mem)
+            #print(name, device, arch, vcu, mem)
             self.cdevices.create_device(i, name, arch, vcu, mem)
             self.devices_to_ids[device] = i
             self.ids_to_devices[i] = device
@@ -674,7 +674,7 @@ class Observer:
         self, candidate_tasks: np.ndarray[np.uint64], k_hop: int = 1
     ):
 
-        print(candidate_tasks)
+        #print(candidate_tasks)
 
         # if len(candidate_tasks) == 0:
         #    return TensorDict()
@@ -720,46 +720,58 @@ class Observer:
         candidate_list = torch.from_numpy(candidate_tasks).to(torch.long)
 
         unique_k_hop = torch.from_numpy(unique_k_hop).to(torch.long)
-
+        
+        def _make_node_tensor(features):
+            return TensorDict(
+                {
+                    "attr": features,
+                }
+            )
+            
+        def _make_edge_tensor(edge_index, edge_attr):
+            return TensorDict(
+                {
+                    "idx": edge_index,
+                    "attr": edge_attr,
+                }
+            )
+            
+        task_features = _make_node_tensor(task_features)
+        data_features = _make_node_tensor(data_features)
+        device_features = _make_node_tensor(device_features)
+        
+        node_tensordict = TensorDict(
+            {
+                "tasks" : task_features,
+                "data" : data_features,
+                "devices" : device_features,
+            })
+        
+        dep_features = _make_edge_tensor(dep_edges, dep_features)
+        device_task_features = _make_edge_tensor(device_task_edges, device_task_features)
+        data_task_features = _make_edge_tensor(data_task_edges, data_task_features)
+        
+        edge_tensordict = TensorDict(
+            {
+                "tasks_tasks" : dep_features,
+                "tasks_devices" : device_task_features,
+                "tasks_data" : data_task_features,
+            })
+        
+        aux_tensordict = TensorDict(
+            {
+                "candidates" : candidate_list,
+                "unique_k_hop" : unique_k_hop,
+            })
+        
         obs_tensordict = TensorDict(
             {
-                "tasks": task_features,
-                "data": data_features,
-                "devices": device_features,
-                "task_task": TensorDict(
-                    {
-                        "edge_index": dep_edges,
-                        "edge_attr": dep_features,
-                    }
-                ),
-                "task_device": TensorDict(
-                    {
-                        "edge_index": device_task_edges,
-                        "edge_attr": device_task_features,
-                    }
-                ),
-                "task_data": TensorDict(
-                    {
-                        "edge_index": data_task_edges,
-                        "edge_attr": data_task_features,
-                    }
-                ),
-                "candidate_list": candidate_list,
-                "unique_k_hop": unique_k_hop,
-            }
-        )
+                "nodes" : node_tensordict,
+                "edges" : edge_tensordict,
+                "aux" : aux_tensordict,
+            })
 
-        # obs_tensordict = TensorDict(
-        #     {
-        #         "tasks": task_features,
-        #         "data": data_features,
-        #         "devices": device_features,
-        #         "task_task_edge_index": dep_edges,
-        #         "task_task_edge_attr": dep_features,
-        #     }
-        # )
-
-        return obs_tensordict
+        return obs_tensordict 
 
     def convert_tensordict_to_heterodata(self, td: TensorDict) -> geom.data.HeteroData:
         g = geom.data.HeteroData()
@@ -826,7 +838,7 @@ class Simulator:
         obs = self.observer.local_graph_features(
             self.simulator.get_mappable_candidates()
         )
-        print(info)
+        #print(info)
         done = info.state == PyExecutionState.COMPLETE
         terminated = False
         immediate_reward = 0
