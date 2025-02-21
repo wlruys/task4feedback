@@ -529,12 +529,7 @@ class HeteroGAT(nn.Module):
 
     def forward(self, data):
         # Process data to tasks
-        
-        print(f"Data shape: {data['data'].x.shape}")
-        print(f"Tasks shape: {data['tasks'].x.shape}")
-        print(f"Data edge index shape: {data['data', 'used_by', 'tasks'].edge_index.shape}")
-        print(f"Data edge attr shape: {data['data', 'used_by', 'tasks'].edge_attr.shape}")
-        
+
         data_fused_tasks = self.gnn_tasks_data(
             (data["data"].x, data["tasks"].x),
             data["data", "used_by", "tasks"].edge_index,
