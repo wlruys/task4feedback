@@ -865,7 +865,7 @@ class Simulator:
     def add_time_breakpoint(self, time: int):
         self.simulator.add_time_breakpoint(time)
 
-    def add_task_breakpoint(self, event: Phase, task_id: int):
+    def add_task_breakpoint(self, event: Phase, task_id: int, collective: bool = False):
         if event == Phase.MAP:
             etype = PyEventType.MAPPER
         elif event == Phase.RESERVE:
@@ -875,7 +875,7 @@ class Simulator:
         elif event == Phase.COMPLETE:
             etype = PyEventType.COMPLETER
 
-        self.simulator.add_task_breakpoint(etype, task_id)
+        self.simulator.add_task_breakpoint(etype, task_id, collective)
 
     def get_mapping(self, task_index: int) -> int:
         return self.simulator.get_mapping(task_index)

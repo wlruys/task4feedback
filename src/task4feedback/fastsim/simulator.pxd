@@ -88,7 +88,7 @@ cdef extern from "include/simulator.hpp":
         timecount_t get_current_time()
         TaskIDList get_mappable_candidates()
         void map_tasks(ActionList& actions)
-        void add_task_breakpoint(EventType event_type, taskid_t task_id)
+        void add_task_breakpoint(EventType event_type, taskid_t task_id, bool collective)
         void add_time_breakpoint(timecount_t time)
         void set_use_python_mapper(bool use_python_mapper)
         void set_mapper(Mapper& mapper)
