@@ -820,7 +820,6 @@ class Simulator:
         obs = self.observer.local_graph_features(
             self.simulator.get_mappable_candidates()
         )
-        print(info)
         done = info.state == PyExecutionState.COMPLETE
         terminated = False
         immediate_reward = 0
