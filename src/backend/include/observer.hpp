@@ -11,6 +11,172 @@
 #include <span>
 #include <sys/types.h>
 #include <unordered_map>
+#include <array>
+#include <math.h>
+
+using op_t = uint32_t;
+using f_t = float_t;
+
+enum class NodeType {
+  TASK = 0,
+  DATA_BLOCK = 1,
+  DEVICE = 2
+};
+
+enum class EdgeType {
+  TASK_TASK = 0,
+  TASK_DATA = 1,
+  TASK_DEVICE = 2,
+  DATA_DEVICE = 3
+};
+
+f_t guarded_divide(double a, double b) {
+  if (b == 0) {
+    return static_cast<f_t>(a);
+  }
+  return static_cast<f_t>(a / b);
+}
+
+void one_hot(int index, std::span<f_t> output) {
+  for (std::size_t i = 0; i < output.size(); i++) {
+    output[i] = static_cast<f_t>(i == index);
+  }
+}
+
+template <typename Derived>
+struct Feature {
+    const SchedulerState &state;
+    const NodeType node_type;
+    
+    Feature(const SchedulerState &state, NodeType node_type) : state(state), node_type(node_type) {}
+
+    [[nodiscard]] size_t getFeatureDim() const { return static_cast<const Derived*>(this)->getFeatureDimImpl(); }
+    
+    template <typename ID, typename Span>
+    void extractFeature(ID object_id, Span output) const {
+        static_cast<const Derived*>(this)->extractFeatureImpl(object_id, output );
+    }
+};
+
+template <typename... Features>
+class FeatureExtractor {
+  protected:
+    std::tuple<Features...> features;
+
+    template <size_t... Is>
+    size_t computeFeatureDim(std::index_sequence<Is...>) const {
+        return (std::get<Is>(features).getFeatureDim() + ...);
+    }
+
+public:
+    FeatureExtractor(Features... feats) : features(std::move(feats)...) {}
+
+    [[nodiscard]] size_t getFeatureDim() const {
+        return computeFeatureDim(std::make_index_sequence<sizeof...(Features)>{});
+    }
+
+    template <typename ID, typename Span>
+    void getFeatures(ID object_id, Span output) const {
+        size_t offset = 0;
+        std::apply([&](const auto&... feats) {
+            (..., (feats.extractFeature(object_id, output.subspan(offset, feats.getFeatureDim())), offset += feats.getFeatureDim()));
+        }, features);
+    }
+};
+
+
+struct InDegreeTaskFeature : public Feature<InDegreeTaskFeature> {
+    InDegreeTaskFeature(const SchedulerState &state) : Feature<InDegreeTaskFeature>(state, NodeType::TASK) {}
+
+    size_t getFeatureDimImpl() const { return 1; }
+
+    static f_t get_in_degree(const ComputeTask &task) {
+      return static_cast<f_t>(task.get_dependencies().size());
+    }
+
+    template <typename ID, typename Span>
+    void extractFeatureImpl(ID task_id, Span&& output) const {
+        const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+        output[0] = log(get_in_degree(task));
+    }
+};
+
+struct OutDegreeTaskFeature : public Feature<OutDegreeTaskFeature> {
+    OutDegreeTaskFeature(const SchedulerState &state) : Feature<OutDegreeTaskFeature>(state, NodeType::TASK) {}
+
+    size_t getFeatureDimImpl() const { return 1; }
+
+    static f_t get_out_degree(const ComputeTask &task) {
+      return static_cast<f_t>(task.get_dependents().size());
+    }
+
+    template <typename ID, typename Span>
+    void extractFeatureImpl(ID task_id, Span&& output) const {
+        const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+        output[0] = log(get_out_degree(task));
+    }
+};
+
+struct DurationTaskFeature : public Feature<DurationTaskFeature> {
+    DurationTaskFeature(const SchedulerState &state) : Feature<DurationTaskFeature>(state, NodeType::TASK) {}
+
+    size_t getFeatureDimImpl() const { return 2; }
+
+    static f_t get_duration(const ComputeTask &task, DeviceType arch) {
+      return static_cast<f_t>(task.get_variant(arch).get_observed_time());
+    }
+
+    template <typename ID, typename Span>
+    void extractFeatureImpl(ID task_id, Span&& output) const {
+        const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+        output[0] = log(get_duration(task, DeviceType::CPU));
+        output[1] = log(get_duration(task, DeviceType::GPU));
+    }
+};
+
+struct MemoryTaskFeature : public Feature<MemoryTaskFeature> {
+    MemoryTaskFeature(const SchedulerState &state) : Feature<MemoryTaskFeature>(state, NodeType::TASK) {}
+
+    size_t getFeatureDimImpl() const { return 2; }
+
+    static f_t get_task_memcost(const ComputeTask &task, DeviceType arch) {
+      return static_cast<f_t>(task.get_variant(arch).get_mem());
+    }
+
+    template <typename ID, typename Span>
+    void extractFeatureImpl(ID task_id, Span&& output) const {
+        const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+        output[0] = log(get_task_memcost(task, DeviceType::CPU));
+        output[1] = log(get_task_memcost(task, DeviceType::GPU));
+    }
+};
+
+struct EmptyTaskFeature : public Feature<EmptyTaskFeature> {
+    size_t dimension;
+    EmptyTaskFeature(const SchedulerState &state, size_t dimension) : Feature<EmptyTaskFeature>(state, NodeType::TASK), dimension(dimension) {}
+
+    size_t getFeatureDimImpl() const { return dimension; }
+
+    template <typename ID, typename Span>
+    void extractFeatureImpl(ID task_id, Span&& output) const {}
+};
+
+struct OneHotMappedDeviceTaskFeature : public Feature<OneHotMappedDeviceTaskFeature> {
+    OneHotMappedDeviceTaskFeature(const SchedulerState &state) : Feature<OneHotMappedDeviceTaskFeature>(state, NodeType::TASK) {}
+
+    size_t getFeatureDimImpl() const { 
+          const auto &devices = this->state.get_device_manager().get_devices();
+          return devices.size();
+    }
+
+    template <typename ID, typename Span>
+    void extractFeatureImpl(ID task_id, Span&& output) const {
+        const auto &task_manager = state.get_task_manager();
+        one_hot(task_manager.state.get_mapping(task_id), output);
+    }
+};
+
+
 
 struct NormalizationInfo {
   depcount_t max_in_degree;
@@ -32,8 +198,34 @@ struct NormalizationInfo {
   double stddev_data_size;
 };
 
-using op_t = uint32_t;
-using f_t = float_t;
+
+struct FeatureDimSpec {
+  std::size_t max_candidates = 5;
+  std::size_t max_devices = 8;
+
+  std::size_t max_edges_tasks_tasks = 20;
+  std::size_t max_edges_tasks_data = 20;
+
+  std::size_t max_tasks = max_candidates * max_devices;
+  std::size_t max_data = max_tasks * max_edges_tasks_data;
+
+  std::size_t task_feature_dim = 8 + max_devices;
+  std::size_t data_feature_dim = 1 + max_devices;
+  std::size_t device_feature_dim = 8 + max_devices;
+
+  std::size_t task_data_feature_dim = 3;
+  std::size_t task_device_feature_dim = 2;
+  std::size_t task_task_feature_dim = 1;
+
+  FeatureDimSpec() = default;
+
+  FeatureDimSpec(std::size_t max_candidates, std::size_t max_devices, std::size_t max_edges_tasks_tasks,
+              std::size_t max_edges_tasks_data)
+      : max_candidates(max_candidates), max_devices(max_devices),
+        max_edges_tasks_tasks(max_edges_tasks_tasks), max_edges_tasks_data(max_edges_tasks_data),
+        max_tasks(max_candidates * max_devices), max_data(max_tasks * max_edges_tasks_data) {}
+};
+
 struct Features {
   f_t *features = nullptr;
   std::size_t feature_dim = 0;
@@ -67,12 +259,6 @@ struct TaskTaskEdges : public Features {
   op_t *edges;
 };
 
-f_t guarded_divide(double a, double b) {
-  if (b == 0) {
-    return static_cast<f_t>(a);
-  }
-  return static_cast<f_t>(a / b);
-}
 
 class Observer {
 private:
