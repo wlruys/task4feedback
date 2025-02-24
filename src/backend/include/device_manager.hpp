@@ -9,9 +9,9 @@ class DeviceManager;
 
 template<typename T>
 struct ResourceEventArray{
-  timecount_t* times = NULL;
-  T* resources = NULL;
-  std::size_t size = 0;
+  std::vector<timecount_t> times;
+  std::vector<T> resources;
+  std::size_t size;
 };
 
 template<typename T>
@@ -76,15 +76,15 @@ public:
 
     if (result.size == 0) {
       //If no events, return a single event with time 0 and resource 0
-      result.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t)));
-      result.resources = static_cast<T*>(malloc(sizeof(T)));
+      result.times.resize(1);
+      result.resources.resize(1);
       result.times[0] = 0;
       result.resources[0] = 0;
       return result;
     }
 
-    result.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t) * events.size()));
-    result.resources = static_cast<T*>(malloc(sizeof(T) * events.size()));
+    result.times.resize(events.size());
+    result.resources.resize(events.size());
 
     for(int i = 0; i < events.size(); i++){
       result.times[i] = events[i].time;

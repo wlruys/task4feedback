@@ -204,6 +204,10 @@ public:
     variants.at(static_cast<std::size_t>(arch)) = Variant(arch, vcu, mem, time);
   }
 
+  void add_variant(DeviceType arch, Variant variant) {
+    variants.at(static_cast<std::size_t>(arch)) = variant;
+  }
+
   Variant &get_variant(DeviceType arch) {
     return variants.at(static_cast<std::size_t>(arch));
   }

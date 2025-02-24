@@ -88,8 +88,8 @@ struct ValidInterval {
 };
 
 struct ValidEventArray{
-  timecount_t* starts = NULL;
-  timecount_t* stops = NULL;
+  std::vector<timecount_t> starts;
+  std::vector<timecount_t> stops;
   std::size_t size = 0;
 };
 
@@ -239,8 +239,8 @@ public:
 
     if(valid_events.size == 0){
       //Return a single interval from 0 to 0 to indicate no valid intervals
-      valid_events.starts = static_cast<timecount_t*>(malloc(1 * sizeof(timecount_t)));
-      valid_events.stops = static_cast<timecount_t*>(malloc(1 * sizeof(timecount_t)));
+      valid_events.starts.resize(1);
+      valid_events.stops.resize(1);
       valid_events.size = 1;
       valid_events.starts[0] = 0;
       valid_events.stops[0] = 0;
@@ -248,8 +248,8 @@ public:
     }
 
 
-    valid_events.starts = static_cast<timecount_t*>(malloc((valid_events.size) * sizeof(timecount_t)));
-    valid_events.stops = static_cast<timecount_t*>(malloc((valid_events.size) * sizeof(timecount_t)));
+    valid_events.starts.resize(valid_events.size);
+    valid_events.stops.resize(valid_events.size);
     for (std::size_t i = 0; i < intervals.size(); i++) {
       valid_events.starts[i] = intervals[i].start;
       valid_events.stops[i] = intervals[i].stop;

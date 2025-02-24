@@ -473,9 +473,9 @@ public:
   std::size_t reserved_launched_gap = 1;
   std::size_t total_in_flight = 1;
 
-  RangeTransitionConditions(std::size_t mapped_launched_gap_, std::size_t reserved_launched_gap_,
+  RangeTransitionConditions(std::size_t mapped_reserved_gap_, std::size_t reserved_launched_gap_,
                             std::size_t total_in_flight_)
-      : mapped_reserved_gap(mapped_launched_gap_), reserved_launched_gap(reserved_launched_gap_),
+      : mapped_reserved_gap(mapped_reserved_gap_), reserved_launched_gap(reserved_launched_gap_),
         total_in_flight(total_in_flight_) {
   }
 
@@ -736,6 +736,7 @@ public:
 
   virtual Action map_task(taskid_t task_id, const SchedulerState &state) {
     MONUnusedParameter(state);
+    SPDLOG_WARN("Mapping task {} with unset mapper", task_id);
     return Action(task_id, 0);
   }
 
@@ -865,16 +866,21 @@ public:
   }
 };
 
-class EFTMapper : public Mapper {
-protected:
-  struct DeviceTime {
+class DeviceTime {
+  public:
     devid_t device_id;
     timecount_t time;
-  };
+};
+
+class EFTMapper : public Mapper {
+
   // Records the finish time by task id
   std::vector<timecount_t> finish_time_record;
   // Stores the temporary EFT values for each device
   std::vector<DeviceTime> finish_time_buffer;
+
+
+public: 
 
   void record_finish_time(taskid_t task_id, timecount_t time) {
     finish_time_record.at(task_id) = time;
@@ -984,7 +990,6 @@ protected:
     return {best_device, min_time};
   }
 
-public:
   EFTMapper(std::size_t n_tasks, std::size_t n_devices) : finish_time_record(n_tasks, 0) {
     finish_time_buffer.reserve(n_devices);
   }
@@ -1002,9 +1007,11 @@ public:
 };
 
 class DequeueEFTMapper : public EFTMapper {
-protected:
+
+
   std::vector<timecount_t> device_available_time_buffer;
 
+  public:
   timecount_t get_device_available_time(devid_t device_id, const SchedulerState &state) override {
     return device_available_time_buffer.at(device_id);
   }
@@ -1013,7 +1020,7 @@ protected:
     device_available_time_buffer.at(device_id) = time;
   }
 
-public:
+
   DequeueEFTMapper(std::size_t n_tasks, std::size_t n_devices)
       : EFTMapper(n_tasks, n_devices), device_available_time_buffer(n_devices) {
   }
