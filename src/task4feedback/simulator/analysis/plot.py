@@ -3,7 +3,7 @@ from .recorder import *
 import numpy as np
 from pandas import *
 import matplotlib.pyplot as plt
-from ...types import *
+from ...legacy_types import *
 from typing import cast
 from task4feedback.simulator.simulator import *
 import pydot

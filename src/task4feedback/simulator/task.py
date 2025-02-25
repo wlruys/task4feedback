@@ -1,5 +1,5 @@
 from __future__ import annotations
-from ..types import (
+from ..legacy_types import (
     TaskID,
     TaskInfo,
     TaskState,
@@ -10,9 +10,9 @@ from ..types import (
     DataID,
 )
 
-from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
-from ..types import Architecture, Device, Devices
-from ..types import DataInfo
+from ..legacy_types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ..legacy_types import Architecture, Device, Devices
+from ..legacy_types import DataInfo
 from typing import (
     List,
     Dict,

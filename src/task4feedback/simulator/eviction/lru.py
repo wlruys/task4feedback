@@ -1,5 +1,5 @@
 from __future__ import annotations
-from ...types import DataID
+from ...legacy_types import DataID
 from ..data import *
 from dataclasses import dataclass, field
 from typing import Dict

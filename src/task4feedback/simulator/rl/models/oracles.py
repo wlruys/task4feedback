@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 
 import torch
 
-from ....types import Device, Architecture
+from ....legacy_types import Device, Architecture
 
 
 class OraclePolicy(ABC):

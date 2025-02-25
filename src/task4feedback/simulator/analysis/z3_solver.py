@@ -3,7 +3,7 @@ from z3 import *
 from task4feedback.simulator.analysis import recorder
 from task4feedback.simulator.analysis.recorder import ComputeTaskRecorder
 from task4feedback.simulator.simulator import *
-from ...types import *
+from ...legacy_types import *
 
 
 def calculate_optimal(simulator: SimulatedScheduler):

@@ -1,4 +1,4 @@
-from ..types import (
+from ..legacy_types import (
     Architecture,
     Device,
     TaskID,
@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, InitVar
 from collections import defaultdict as DefaultDict
 from enum import IntEnum
 from ..logging import logger
-from ..types import Time
+from ..legacy_types import Time
 from .datapool import *
 
 

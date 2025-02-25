@@ -1,4 +1,4 @@
-from ...types import *
+from ...legacy_types import *
 from typing import List, Dict, Any, Tuple, Type
 from dataclasses import dataclass, field, InitVar
 from ..events import *

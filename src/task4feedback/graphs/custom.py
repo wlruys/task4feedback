@@ -7,7 +7,7 @@ from sympy import limit
 
 from task4feedback.simulator import data
 from .utilities import *
-from ..types import *
+from ..legacy_types import *
 
 
 @dataclass(slots=True)

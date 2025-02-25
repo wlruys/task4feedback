@@ -1,6 +1,6 @@
 import networkx as nx
 
-from ...types import *
+from ...legacy_types import *
 from ..topology import *
 
 

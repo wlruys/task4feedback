@@ -11,9 +11,9 @@ from .topology import *
 from .rl.models.model import *
 from .rl.models.env import *
 
-from ..types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
-from ..types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
-from ..types import TaskOrderType
+from ..legacy_types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
+from ..legacy_types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
+from ..legacy_types import TaskOrderType
 
 from typing import List, Dict, Set, Tuple, Optional, Callable
 from dataclasses import dataclass

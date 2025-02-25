@@ -11,7 +11,7 @@ from .globals import *
 from ...utility import convert_to_float
 from ...task import SimulatedTask, SimulatedComputeTask
 
-from ....types import TaskState, TaskType, Device, Architecture
+from ....legacy_types import TaskState, TaskType, Device, Architecture
 from ....logging import logger
 
 

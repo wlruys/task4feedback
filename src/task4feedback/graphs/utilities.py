@@ -16,7 +16,7 @@ from enum import IntEnum
 import random
 from collections import defaultdict
 
-from ..types import *
+from ..legacy_types import *
 from ..load import *
 
 graph_generators = []

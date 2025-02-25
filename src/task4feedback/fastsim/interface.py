@@ -20,7 +20,7 @@ from task4feedback.fastsim.simulator import (
     PyObserver,
     start_logger,
 )
-from task4feedback.types import (
+from task4feedback.legacy_types import (
     DataID,
     TaskID,
     TaskInfo,

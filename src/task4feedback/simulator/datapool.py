@@ -1,4 +1,4 @@
-from ..types import Device, DataID
+from ..legacy_types import Device, DataID
 from typing import Dict, Sequence
 from dataclasses import dataclass
 from .eviction.base import DataPool

@@ -4,7 +4,7 @@ from itertools import chain
 from typing import Tuple, Dict
 
 from .task import SimulatedDataTask
-from ..types import Device, Architecture, TaskState, AccessType
+from ..legacy_types import Device, Architecture, TaskState, AccessType
 
 import bisect
 import random

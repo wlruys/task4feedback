@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import heapq
-from ..types import TaskID, Time
+from ..legacy_types import TaskID, Time
 from .events import Event
 from typing import Tuple, TypeVar, Optional, Dict, Iterable
 from copy import deepcopy

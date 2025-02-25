@@ -1,4 +1,4 @@
-from ..types import *
+from ..legacy_types import *
 from .schedulers import SystemState, SchedulerArchitecture
 from .events import *
 from .task import *

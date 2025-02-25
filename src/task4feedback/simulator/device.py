@@ -1,4 +1,4 @@
-from ..types import Architecture, Device, TaskID, TaskState, ResourceType, Time
+from ..legacy_types import Architecture, Device, TaskID, TaskState, ResourceType, Time
 from dataclasses import dataclass, field
 from .queue import *
 from .datapool import *

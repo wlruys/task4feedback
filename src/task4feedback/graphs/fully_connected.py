@@ -1,5 +1,5 @@
 from .utilities import *
-from ..types import *
+from ..legacy_types import *
 
 fully_connected_task_mapping_gpu = partial(round_robin_task_mapping_gpu, index=1)
 

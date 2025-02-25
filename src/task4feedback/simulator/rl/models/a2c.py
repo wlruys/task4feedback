@@ -6,7 +6,7 @@ from collections import namedtuple
 from ..networks.a2c_gcn_fcn import *
 from ..networks.a2c_fcn import *
 from ...task import SimulatedTask
-from ....types import TaskState, TaskType
+from ....legacy_types import TaskState, TaskType
 from .globals import *
 from .model import *
 from .env import *

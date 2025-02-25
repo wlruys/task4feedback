@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 from itertools import chain
 
 from ...task import SimulatedTask
-from ....types import TaskState, TaskType, Device, Architecture
+from ....legacy_types import TaskState, TaskType, Device, Architecture
 from .globals import *
 
 from .env_rl import *

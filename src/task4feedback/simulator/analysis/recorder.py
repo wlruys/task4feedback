@@ -9,7 +9,7 @@ from ..device import SimulatedDevice, ResourceType
 from ..resourceset import FasterResourceSet
 from ..schedulers import SchedulerArchitecture, SystemState
 from ..task import *
-from ...types import (
+from ...legacy_types import (
     DataID,
     TaskID,
     TaskState,

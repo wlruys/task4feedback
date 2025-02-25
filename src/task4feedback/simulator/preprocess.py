@@ -1,4 +1,4 @@
-from ..types import *
+from ..legacy_types import *
 from ..load import *
 from .task import *
 from .data import *

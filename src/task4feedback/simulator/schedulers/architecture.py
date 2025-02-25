@@ -9,8 +9,8 @@ from ..topology import *
 
 from .state import SystemState
 
-from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
-from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ...legacy_types import Architecture, Device, TaskID, TaskState, TaskType, Time
+from ...legacy_types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Type, Sequence
 from dataclasses import dataclass, InitVar

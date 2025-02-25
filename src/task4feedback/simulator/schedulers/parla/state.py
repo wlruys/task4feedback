@@ -1,5 +1,5 @@
 from task4feedback.simulator import task
-from ....types import *
+from ....legacy_types import *
 from ...data import *
 from ...device import *
 from ...utility import *

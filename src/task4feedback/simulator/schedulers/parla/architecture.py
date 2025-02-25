@@ -7,8 +7,8 @@ from ...resources import *
 from ...task import *
 from ...topology import *
 
-from ....types import Architecture, Device, TaskID, TaskState, TaskType, Time
-from ....types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
+from ....legacy_types import Architecture, Device, TaskID, TaskState, TaskType, Time
+from ....legacy_types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap
 
 from typing import List, Dict, Set, Tuple, Optional, Callable, Sequence
 from dataclasses import dataclass, InitVar

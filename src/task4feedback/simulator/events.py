@@ -1,4 +1,4 @@
-from ..types import TaskID, TaskInfo, TaskState, Optional, Time, Device, Devices
+from ..legacy_types import TaskID, TaskInfo, TaskState, Optional, Time, Device, Devices
 from dataclasses import dataclass, field
 from .resourceset import FasterResourceSet
 from typing import Dict, Set

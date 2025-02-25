@@ -1,5 +1,5 @@
 from .simulator import *
-from ..types import *
+from ..legacy_types import *
 from .data import *
 from .device import *
 from .preprocess import *

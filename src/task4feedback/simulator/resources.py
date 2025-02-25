@@ -1,4 +1,4 @@
-from ..types import (
+from ..legacy_types import (
     Architecture,
     Device,
     TaskID,

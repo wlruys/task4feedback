@@ -1,5 +1,5 @@
 from .task import *
-from ..types import *
+from ..legacy_types import *
 import numpy as np
 import random
 

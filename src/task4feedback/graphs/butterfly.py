@@ -1,5 +1,5 @@
 from .utilities import *
-from ..types import *
+from ..legacy_types import *
 
 
 @dataclass(slots=True)

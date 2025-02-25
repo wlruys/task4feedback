@@ -1,6 +1,6 @@
 from .schedulers.state import SystemState
 from .schedulers.architecture import SchedulerArchitecture
-from ..types import *
+from ..legacy_types import *
 from .task import SimulatedTask
 from dataclasses import dataclass
 from copy import deepcopy

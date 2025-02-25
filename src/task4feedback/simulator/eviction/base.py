@@ -1,5 +1,5 @@
 from __future__ import annotations
-from ...types import *
+from ...legacy_types import *
 from dataclasses import dataclass, field
 from typing import Set
 

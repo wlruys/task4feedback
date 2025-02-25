@@ -1,4 +1,4 @@
-from ..types import Architecture, Device, TaskID, TaskState, ResourceType, Time
+from ..legacy_types import Architecture, Device, TaskID, TaskState, ResourceType, Time
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import List, Dict, Set, Tuple, Optional, Type

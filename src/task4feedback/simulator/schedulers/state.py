@@ -10,9 +10,9 @@ from ..utility import *
 from ..randomizer import Randomizer
 from ..datapool import *
 
-from ...types import Architecture, Device, TaskID, TaskState, TaskType, Time
-from ...types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
-from ...types import TaskOrderType
+from ...legacy_types import Architecture, Device, TaskID, TaskState, TaskType, Time
+from ...legacy_types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
+from ...legacy_types import TaskOrderType
 
 from ..rl.models.model import *
 from ..rl.models.env import *
