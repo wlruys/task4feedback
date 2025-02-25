@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <functional>
 #include <unordered_map>
+#include <string>
 
 
 enum class DataState {
@@ -25,15 +26,17 @@ protected:
   std::vector<mem_t> sizes;
   std::vector<devid_t> initial_location;
   std::vector<std::string> data_names;
+  std::vector<int> data_types;
+  std::vector<int> data_tags;
+
+  std::unordered_map<std::string, dataid_t> name_to_id;
 
 public:
   Data() = default;
   Data(std::size_t num_data) : sizes(num_data), initial_location(num_data), data_names(num_data) {
   }
 
-  [[nodiscard]] std::size_t size() const {
-    return sizes.size();
-  }
+
   [[nodiscard]] bool empty() const {
     return size() == 0;
   }
@@ -41,6 +44,24 @@ public:
   void set_size(dataid_t id, mem_t size) {
     assert(id < sizes.size());
     sizes.at(id) = size;
+  }
+
+  void set_tag(dataid_t id, int tag) {
+    assert(id < data_tags.size());
+    data_tags.at(id) = tag;
+  }
+
+  int get_tag(dataid_t id) const {
+    return data_tags.at(id);
+  }
+
+  void set_type(dataid_t id, int type) {
+    assert(id < data_types.size());
+    data_types.at(id) = type;
+  }
+
+  int get_type(dataid_t id) const {
+    return data_types.at(id);
   }
 
   void set_location(dataid_t id, devid_t location) {
@@ -51,12 +72,38 @@ public:
   void set_name(dataid_t id, std::string name) {
     assert(id < data_names.size());
     data_names.at(id) = std::move(name);
+    name_to_id[data_names.at(id)] = id;
+  }
+
+  dataid_t get_id(const std::string &name){
+    return name_to_id.at(name);
   }
 
   void create_block(dataid_t id, mem_t size, devid_t location, std::string name) {
+    //extend the vectors if necessary
+    if(id >= sizes.size()){
+      sizes.resize(id + 1);
+      initial_location.resize(id + 1);
+      data_names.resize(id + 1);
+      data_types.resize(id + 1);
+      data_tags.resize(id + 1);
+    }
+
+    assert(id < sizes.size());
     set_size(id, size);
     set_location(id, location);
     set_name(id, std::move(name));
+    set_type(id, 0);
+    set_tag(id, 0);
+  }
+
+  [[nodiscard]] dataid_t size() const {
+    return sizes.size();
+  }
+
+  dataid_t append_block(mem_t size, devid_t location, std::string name) {
+    create_block(sizes.size(), size, location, std::move(name));
+    return sizes.size() - 1;
   }
 
   [[nodiscard]] mem_t get_size(dataid_t id) const {

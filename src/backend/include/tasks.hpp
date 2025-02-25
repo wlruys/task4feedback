@@ -192,6 +192,9 @@ protected:
 
   VariantList variants;
 
+  int type = -1;
+  int tag = -1;
+
 public:
   static constexpr TaskType task_type = TaskType::COMPUTE;
 
@@ -226,6 +229,22 @@ public:
   }
   void set_write(DataIDList _write) {
     this->write = std::move(_write);
+  }
+
+  void set_type(int type_) {
+    this->type = type_;
+  }
+
+  void set_tag(int tag_) {
+    this->tag = tag_;
+  }
+
+  [[nodiscard]] int get_type() const {
+    return type;
+  }
+
+  [[nodiscard]] int get_tag() const {
+    return tag;
   }
 
   [[nodiscard]] std::vector<DeviceType> get_supported_architectures() const;
@@ -365,6 +384,7 @@ protected:
   ComputeTaskList compute_tasks;
   DataTaskList data_tasks;
   std::vector<std::string> task_names;
+  mutable bool initialized = false;
 
   ComputeTaskList &get_compute_tasks() {
     return compute_tasks;
@@ -386,6 +406,15 @@ protected:
 public:
   Tasks(taskid_t num_compute_tasks);
 
+  [[nodiscard]] bool is_initialized() const {
+    return initialized;
+  }
+
+  void set_initalized() const {
+    assert(!initialized);
+    initialized = true;
+  }
+
   [[nodiscard]] std::size_t size() const;
   [[nodiscard]] std::size_t compute_size() const;
   [[nodiscard]] std::size_t data_size() const;
@@ -400,6 +429,11 @@ public:
   void add_variant(taskid_t id, DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time);
   void set_read(taskid_t id, DataIDList read);
   void set_write(taskid_t id, DataIDList write);
+  void set_type(taskid_t id, int type);
+  void set_tag(taskid_t id, int tag);
+
+  [[nodiscard]] int get_type(taskid_t id) const;
+  [[nodiscard]] int get_tag(taskid_t id) const;
 
   [[nodiscard]] const ComputeTaskList &get_compute_tasks() const {
     return compute_tasks;

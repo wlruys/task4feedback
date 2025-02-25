@@ -729,6 +729,8 @@ protected:
 public:
   Mapper() = default;
 
+  Mapper(const Mapper &other) = default;
+
   void initialize() {
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
     arch_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
@@ -767,6 +769,11 @@ protected:
 public:
   RandomMapper(unsigned int seed = 0) : gen(seed) {
   }
+
+  RandomMapper(const RandomMapper &other){
+    gen = other.gen;
+  }
+  
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     fill_device_targets(task_id, state);
     devid_t device_id = choose_random_device(device_buffer);
@@ -780,6 +787,7 @@ protected:
 
 public:
   RoundRobinMapper() = default;
+  RoundRobinMapper(const RoundRobinMapper &other) = default;
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     fill_device_targets(task_id, state);
     auto mp = state.get_mapping_priorities()[task_id];
@@ -807,6 +815,8 @@ protected:
 
 public:
   StaticMapper() = default;
+
+  StaticMapper(const StaticMapper &other) = default;
 
   StaticMapper(DeviceIDList device_ids_) : mapping(std::move(device_ids_)) {
   }
@@ -860,6 +870,8 @@ public:
   StaticActionMapper(ActionList actions_) : actions(std::move(actions_)) {
   }
 
+  StaticActionMapper(const StaticActionMapper &other) = default;
+
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     MONUnusedParameter(state);
     return actions.at(task_id);
@@ -874,10 +886,11 @@ class DeviceTime {
 
 class EFTMapper : public Mapper {
 
-  // Records the finish time by task id
-  std::vector<timecount_t> finish_time_record;
-  // Stores the temporary EFT values for each device
-  std::vector<DeviceTime> finish_time_buffer;
+  protected:
+    // Records the finish time by task id
+    std::vector<timecount_t> finish_time_record;
+    // Stores the temporary EFT values for each device
+    std::vector<DeviceTime> finish_time_buffer;
 
 
 public: 
@@ -990,6 +1003,10 @@ public:
     return {best_device, min_time};
   }
 
+  EFTMapper() = default;
+
+  EFTMapper(const EFTMapper &other) = default;
+
   EFTMapper(std::size_t n_tasks, std::size_t n_devices) : finish_time_record(n_tasks, 0) {
     finish_time_buffer.reserve(n_devices);
   }
@@ -999,6 +1016,10 @@ public:
   }
 
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    finish_time_record.resize(state.get_task_manager().get_tasks().size());
+    finish_time_buffer.reserve(state.get_device_manager().size());
+
+    fill_device_targets(task_id, state);
     auto [best_device, min_time] = get_best_device(task_id, state);
     record_finish_time(task_id, min_time);
     auto mp = state.get_mapping_priorities()[task_id];
@@ -1020,6 +1041,10 @@ class DequeueEFTMapper : public EFTMapper {
     device_available_time_buffer.at(device_id) = time;
   }
 
+  DequeueEFTMapper() = default;
+
+  DequeueEFTMapper(const DequeueEFTMapper &other) = default;
+
 
   DequeueEFTMapper(std::size_t n_tasks, std::size_t n_devices)
       : EFTMapper(n_tasks, n_devices), device_available_time_buffer(n_devices) {
@@ -1031,6 +1056,10 @@ class DequeueEFTMapper : public EFTMapper {
   }
 
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
+    finish_time_record.resize(state.get_task_manager().get_tasks().size());
+    finish_time_buffer.reserve(state.get_device_manager().size());
+    device_available_time_buffer.resize(state.get_device_manager().size());
+
     fill_device_targets(task_id, state);
     auto [best_device, min_time] = get_best_device(task_id, state);
     record_finish_time(task_id, min_time);

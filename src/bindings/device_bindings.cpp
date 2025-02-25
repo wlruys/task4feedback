@@ -53,11 +53,19 @@ void init_device_ext(nb::module_& m) {
         .def(nb::init<devid_t, DeviceType, vcu_t, mem_t>(), "id"_a, "arch"_a, "vcu"_a, "mem"_a)
         .def_ro("id", &Device::id)         
         .def_ro("arch", &Device::arch)
-        .def_ro("max_resources", &Device::max_resources, nb::rv_policy::copy);
+        .def_ro("max_resources", &Device::max_resources, nb::rv_policy::copy)
+        .def("get_mem", &Device::get_mem)
+        .def("get_vcu", &Device::get_vcu);
 
     nb::class_<Devices>(m, "Devices")
+        .def(nb::init<>())
         .def(nb::init<std::size_t>(), "n_devices"_a)
         .def("create_device", &Devices::create_device, "id"_a, "name"_a, "arch"_a, "vcus"_a, "mem"_a)
+        .def("append_device", &Devices::append_device, "name"_a, "arch"_a, "vcus"_a, "mem"_a)
+        .def("get_device", nb::overload_cast<devid_t>(&Devices::get_device, nb::const_), "id"_a, nb::rv_policy::reference_internal)
+        .def("get_device_id", &Devices::get_device_id, "name"_a)
+        .def("get_local_id", &Devices::get_local_id, "global_id"_a)
+        .def("get_global_id", &Devices::get_global_id, "local_id"_a)
         .def("get_type", &Devices::get_type, "id"_a)
         .def("size", &Devices::size)
         .def("get_name", nb::overload_cast<devid_t>(&Devices::get_name, nb::const_), "id"_a, nb::rv_policy::copy);

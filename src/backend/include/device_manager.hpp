@@ -4,6 +4,7 @@
 #include "tasks.hpp"
 #include <cassert>
 #include <functional>
+#include <unordered_map>
 
 class DeviceManager;
 
@@ -243,6 +244,9 @@ protected:
   std::array<DeviceIDList, num_device_types> type_map;
   std::vector<std::string> device_names;
 
+  std::unordered_map<std::string, devid_t> device_name_map;
+  std::unordered_map<devid_t, devid_t> global_to_local;
+
   void resize(std::size_t n_devices) {
     devices.resize(n_devices);
     device_names.resize(n_devices);
@@ -285,12 +289,38 @@ public:
     return devices.at(id).arch;
   }
 
+  [[nodiscard]] devid_t get_device_id(std::string name) const {
+    return device_name_map.at(name);
+  }
+
+  [[nodiscard]] devid_t get_local_id(devid_t global_id) const {
+    return global_to_local.at(global_id);
+  }
+
+  [[nodiscard]] devid_t get_global_id(devid_t local_id) const {
+    return type_map.at(static_cast<std::size_t>(devices.at(local_id).arch)).at(local_id);
+  }
+
   void create_device(devid_t id, std::string name, DeviceType arch, vcu_t vcu, mem_t mem) {
+    if (id >= devices.size()) {
+      resize(id + 1);
+    }
+
     assert(id < devices.size());
     devices.at(id) = Device(id, arch, vcu, mem);
     type_map.at(static_cast<std::size_t>(arch)).push_back(id);
 
+    device_name_map[name] = id;
+    devid_t local_id = type_map.at(static_cast<std::size_t>(arch)).size() - 1;
+    global_to_local[id] = local_id;
+
     device_names.at(id) = std::move(name);
+  }
+
+  devid_t append_device(std::string name, DeviceType arch, vcu_t vcu, mem_t mem) {
+    devid_t id = devices.size();
+    create_device(id, std::move(name), arch, vcu, mem);
+    return id;
   }
 
   friend class DeviceManager;

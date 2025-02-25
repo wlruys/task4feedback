@@ -60,7 +60,9 @@ class GraphTemplate{
       task_name_to_id[task_name] = task_id;
       read_data.push_back(std::vector<taskid_t>());
       write_data.push_back(std::vector<taskid_t>());
-      variant_info.push_back(std::array<std::array<uint64_t, 4>, num_device_types>());
+
+      std::array<std::array<uint64_t, 4>, num_device_types> zero_variant_array{};
+      variant_info.push_back(zero_variant_array);
       dependencies.push_back(std::vector<taskid_t>());
       return task_id;
     }
@@ -73,8 +75,12 @@ class GraphTemplate{
       write_data[task_id].insert(write_data[task_id].end(), data_ids.begin(), data_ids.end());
     }
 
-    taskid_t get_tag(taskid_t task_id){
+    int get_tag(taskid_t task_id){
       return task_tags[task_id];
+    }
+
+    std::string get_name(taskid_t task_id){
+      return task_names[task_id];
     }
 
     void set_tag(taskid_t task_id, taskid_t tag){
@@ -85,7 +91,7 @@ class GraphTemplate{
       task_types[task_id] = type;
     }
 
-    taskid_t get_type(taskid_t task_id){
+    int get_type(taskid_t task_id){
       return task_types[task_id];
     }
 
@@ -103,7 +109,7 @@ class GraphTemplate{
 
     void add_variant_info(taskid_t task_id, DeviceType device_type, uint64_t vcus, uint64_t memory, uint64_t time){
       std::size_t arch_idx = static_cast<std::size_t>(device_type);
-      variant_info[task_id].at(arch_idx) = {arch_idx, vcus, memory, time};
+      variant_info[task_id].at(arch_idx) = {1, vcus, memory, time};
     }
 
     vcu_t get_vcu(taskid_t task_id, DeviceType device_type){
@@ -245,7 +251,7 @@ class GraphTemplate{
 
           for (std::size_t k = 0; k < num_device_types; k++){
             std::array<uint64_t, 4> info = variant_info[j][k];
-            add_variant_info(j + offset, static_cast<DeviceType>(k), info[1], info[2], info[3]);
+            variant_info[j + offset][k] = info;
           }
         }
       }
@@ -269,10 +275,31 @@ class GraphTemplate{
 
           for (std::size_t j = 0; j < num_device_types; j++){
             std::array<uint64_t, 4> info = graph.variant_info[i][j];
-            add_variant_info(i + offset, static_cast<DeviceType>(j), info[1], info[2], info[3]);
+            variant_info[i + offset][j] = info;
+          }
+        }
+        offset += graph.size();
+      }
+    }
+
+    Tasks to_tasks(){
+      Tasks tasks(size());
+
+      for(taskid_t i = 0; i < size(); i++){
+        tasks.create_compute_task(i, get_name(i), get_dependencies(i));
+        tasks.set_tag(i, get_tag(i));
+        tasks.set_read(i, get_read_data(i));
+        tasks.set_write(i, get_write_data(i));
+        tasks.set_type(i, get_type(i));
+        for (std::size_t j = 0; j < num_device_types; j++){
+          std::vector<uint64_t> info = get_variant_info(i, static_cast<DeviceType>(j));
+          if (info[0] == 1){
+            tasks.add_variant(i, static_cast<DeviceType>(j), info[1], info[2], info[3]);
           }
         }
       }
+
+      return tasks;
     }
 };
 
@@ -290,7 +317,7 @@ private:
                                   std::unordered_map<taskid_t, dataid_t> &writers);
 
 public:
-  static void populate_data_dependencies(TaskIDList &sorted, Tasks &tasks);
+  static void populate_data_dependencies(TaskIDList &sorted, Tasks &tasks, bool create_data_tasks, bool add_missing_writers);
   static void populate_dependents(Tasks &tasks);
   static void add_missing_writer_dependencies(std::unordered_map<dataid_t, taskid_t> &writers,
                                               ComputeTask &task, Tasks &tasks);
@@ -304,7 +331,7 @@ public:
                              const DataIDList &write, taskid_t task_id);
 
   static void calculate_depth(TaskIDList &sorted, Tasks &tasks);
-  static void finalize(Tasks &tasks, bool create_data_tasks = false);
+  static void finalize(Tasks &tasks, bool create_data_tasks, bool add_missing_writers);
 
   static TaskIDList initial_tasks(const ComputeTaskList &tasks);
   static TaskIDList initial_tasks(const TaskIDList &task_ids, Tasks &tasks);

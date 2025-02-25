@@ -199,7 +199,8 @@ public:
 
   void initialize(bool create_data_tasks = false) {
     task_buffer.reserve(TASK_MANAGER_TASK_BUFFER_SIZE);
-    GraphManager::finalize(tasks, create_data_tasks);
+    //GraphManager::finalize(tasks, create_data_tasks);
+    assert(tasks.is_initialized());
     initialize_state();
     initialized = true;
   }

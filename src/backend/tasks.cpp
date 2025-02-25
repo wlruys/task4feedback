@@ -102,6 +102,22 @@ void Tasks::set_read(taskid_t id, DataIDList read) {
   compute_tasks[id].set_read(std::move(read));
 }
 
+void Tasks::set_tag(taskid_t id, int tag) {
+  compute_tasks[id].set_tag(tag);
+}
+
+void Tasks::set_type(taskid_t id, int type){
+  compute_tasks[id].set_type(type);
+}
+
+int Tasks::get_type(taskid_t id) const {
+  return compute_tasks[id].get_type();
+}
+
+int Tasks::get_tag(taskid_t id) const {
+  return compute_tasks[id].get_tag();
+}
+
 void Tasks::set_write(taskid_t id, DataIDList write) {
   compute_tasks[id].set_write(std::move(write));
 }
