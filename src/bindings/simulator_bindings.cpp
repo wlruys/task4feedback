@@ -23,7 +23,7 @@ using namespace nb::literals;
 
 void init_simulator_ext(nb::module_& m) {
 
-    m.def("logger_setup", &logger_setup);
+    m.def("start_logger", &logger_setup);
 
     nb::enum_<ExecutionState>(m, "ExecutionState", nb::is_arithmetic())
         .value("NONE", ExecutionState::NONE)
@@ -37,7 +37,7 @@ void init_simulator_ext(nb::module_& m) {
     
     
     nb::class_<SchedulerInput>(m, "SchedulerInput")
-        .def(nb::init<Tasks&, Data&, Devices&, Topology&, Mapper&, TaskNoise&, CommunicationNoise&>(), "tasks"_a, "data"_a, "devices"_a, "topology"_a, "mapper"_a, "task_noise"_a, "communication_noise"_a)
+        .def(nb::init<Tasks&, Data&, Devices&, Topology&, TaskNoise&, CommunicationNoise&, TransitionConditions&>(), "tasks"_a, "data"_a, "devices"_a, "topology"_a, "task_noise"_a, "communication_noise"_a, "transition_conditions"_a)
         .def(nb::init<SchedulerInput&>(), "other"_a);
 
     nb::class_<Simulator>(m, "Simulator")
@@ -46,14 +46,16 @@ void init_simulator_ext(nb::module_& m) {
         .def_ro("last_state", &Simulator::last_state)
         .def_ro("last_event", &Simulator::last_event)
         .def_ro("data_initialized", &Simulator::data_initialized)
-        .def(nb::init<SchedulerInput&>(), "input"_a)
-        .def("initialize", &Simulator::initialize, "create_data_tasks"_a = true, "use_transition_conditions"_a = true, "initialize_data_manager"_a = true)
-        .def("initialize_data_manager", &Simulator::initialize_data_manager)
-        .def("set_use_python_mapper", &Simulator::set_use_python_mapper, "use_python_mapper"_a)
+        .def(nb::init<SchedulerInput&, Mapper&>(), "input"_a, "mapper"_a)
+        .def("initialize", &Simulator::initialize, "create_data_tasks"_a = true, "initialize_data_manager"_a = true)
+        .def("initialize_data", &Simulator::initialize_data_manager)
+        .def("enable_python_mapper", [](Simulator& s) { s.set_use_python_mapper(true); })
+        .def("disable_python_mapper", [](Simulator& s) { s.set_use_python_mapper(false); })
         .def("set_mapper", &Simulator::set_mapper, "mapper"_a)
         .def("get_state", nb::overload_cast<>(&Simulator::get_state, nb::const_))
         .def("run", &Simulator::run)
         .def("get_current_time", &Simulator::get_current_time)
+        .def("get_mappable_candidates", &Simulator::get_mappable_candidates)
         .def("map_tasks", &Simulator::map_tasks, "action_list"_a);
 
 

@@ -399,7 +399,7 @@ void TaskCostInfo::count_data_completed(devid_t device_id, timecount_t time) {
 
 TaskIDList &Scheduler::get_mappable_candidates() {
   auto &s = this->state;
-  bool condition = queues.has_mappable() && conditions->should_map(s, queues);
+  bool condition = queues.has_mappable() && conditions.get().should_map(s, queues);
   clear_task_buffer();
 
   if (!condition) {
@@ -482,7 +482,7 @@ void Scheduler::map_tasks_from_python(ActionList &action_list, EventManager &eve
 
   /*If we still should be mapping, continue making calls to the mapper */
 
-  if (queues.has_mappable() && conditions->should_map(state, queues)) {
+  if (queues.has_mappable() && conditions.get().should_map(state, queues)) {
     timecount_t mapper_time = state.global_time;
     event_manager.create_event(EventType::MAPPER, mapper_time, TaskIDList());
   } else {
@@ -503,7 +503,7 @@ void Scheduler::map_tasks(Event &map_event, EventManager &event_manager, Mapper 
   SPDLOG_DEBUG("Mappable Queue Size: {}", queues.mappable.size());
   bool break_flag = false;
 
-  while (queues.has_mappable() && conditions->should_map(s, queues)) {
+  while (queues.has_mappable() && conditions.get().should_map(s, queues)) {
 
     if (is_breakpoint()) {
       break_flag = true;
@@ -618,7 +618,7 @@ void Scheduler::reserve_tasks(Event &reserve_event, EventManager &event_manager)
   SPDLOG_DEBUG("Reservable Queue Size: {}", queues.reservable.total_active_size());
   bool break_flag = false;
 
-  while (queues.has_active_reservable() && conditions->should_reserve(s, queues)) {
+  while (queues.has_active_reservable() && conditions.get().should_reserve(s, queues)) {
 
     if (is_breakpoint()) {
       break_flag = true;
@@ -773,7 +773,7 @@ void Scheduler::launch_tasks(Event &launch_event, EventManager &event_manager) {
   SPDLOG_DEBUG("Launchable Queue Size: {}", queues.launchable.total_active_size());
   bool break_flag = false;
 
-  while (queues.has_active_launchable() && conditions->should_launch(s, queues)) {
+  while (queues.has_active_launchable() && conditions.get().should_launch(s, queues)) {
 
     if (is_breakpoint()) {
       SPDLOG_DEBUG("Breaking from launcher at time {}", s.global_time);
@@ -812,7 +812,7 @@ void Scheduler::launch_tasks(Event &launch_event, EventManager &event_manager) {
   data_launchable.reset();
   data_launchable.current_or_next_active();
 
-  while (queues.has_active_data_launchable() && conditions->should_launch_data(s, queues)) {
+  while (queues.has_active_data_launchable() && conditions.get().should_launch_data(s, queues)) {
 
     if (is_breakpoint()) {
       SPDLOG_DEBUG("Breaking from data launcher at time {}", s.global_time);

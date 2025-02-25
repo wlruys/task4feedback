@@ -248,14 +248,14 @@ struct SchedulerInput {
   std::reference_wrapper<Data> data;
   std::reference_wrapper<Devices> devices;
   std::reference_wrapper<Topology> topology;
-  std::reference_wrapper<Mapper> mapper;
   std::reference_wrapper<TaskNoise> task_noise;
   std::reference_wrapper<CommunicationNoise> comm_noise;
+  std::reference_wrapper<TransitionConditions> conditions;
 
-  SchedulerInput(Tasks &tasks, Data &data, Devices &devices, Topology &topology, Mapper &mapper,
-                 TaskNoise &task_noise, CommunicationNoise &comm_noise)
-      : tasks(tasks), data(data), devices(devices), topology(topology), mapper(mapper),
-        task_noise(task_noise), comm_noise(comm_noise) {
+  SchedulerInput(Tasks &tasks, Data &data, Devices &devices, Topology &topology,
+                 TaskNoise &task_noise, CommunicationNoise &comm_noise, TransitionConditions &conditions)
+      : tasks(tasks), data(data), devices(devices), topology(topology),
+        task_noise(task_noise), comm_noise(comm_noise), conditions(conditions) {
   }
 
   SchedulerInput(const SchedulerInput &other) = default;
@@ -265,7 +265,7 @@ struct SchedulerInput {
   // Shallow copy constructor
   SchedulerInput(SchedulerInput &&other) noexcept
       : tasks(other.tasks), data(other.data), devices(other.devices), topology(other.topology),
-        mapper(other.mapper), task_noise(other.task_noise), comm_noise(other.comm_noise) {
+        task_noise(other.task_noise), comm_noise(other.comm_noise), conditions(other.conditions) {
   }
 
   SchedulerInput &operator=(SchedulerInput &&other) noexcept {
@@ -274,9 +274,9 @@ struct SchedulerInput {
       data = other.data;
       devices = other.devices;
       topology = other.topology;
-      mapper = other.mapper;
       task_noise = other.task_noise;
       comm_noise = other.comm_noise;
+      conditions = other.conditions;
     }
     return *this;
   }
@@ -532,9 +532,9 @@ protected:
 public:
   bool initialized = false;
   BreakpointManager breakpoints;
-  std::shared_ptr<TransitionConditions> conditions;
+  std::reference_wrapper<TransitionConditions> conditions;
 
-  Scheduler(SchedulerInput &input) : state(input), queues(input.devices) {
+  Scheduler(SchedulerInput &input) : state(input), queues(input.devices), conditions(input.conditions) {
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
     event_buffer.reserve(INITIAL_EVENT_BUFFER_SIZE);
@@ -542,8 +542,8 @@ public:
 
   Scheduler(const Scheduler &other) = default;
 
-  void set_transition_conditions(std::shared_ptr<TransitionConditions> conditions_) {
-    this->conditions = std::move(conditions_);
+  void set_transition_conditions(TransitionConditions &conditions_) {
+    conditions = conditions_;
   }
 
   TaskIDList initially_mappable_tasks() {
@@ -551,14 +551,10 @@ public:
     return GraphManager::initial_tasks(compute_tasks);
   }
 
-  void initialize(bool create_data_tasks = false, bool use_transition_conditions = true, bool initialize_data_manager = false) {
+  void initialize(bool create_data_tasks = false, bool initialize_data_manager = false) {
     state.initialize(create_data_tasks, initialize_data_manager);
     auto initial_tasks = initially_mappable_tasks();
     queues.push_mappable(initial_tasks, state.get_mapping_priorities());
-    if (use_transition_conditions)
-      this->conditions = std::make_shared<RangeTransitionConditions>(5, 5, 8);
-    else
-      this->conditions = std::make_shared<DefaultTransitionConditions>();
     initialized = true;
   }
 
@@ -773,7 +769,7 @@ public:
   RandomMapper(const RandomMapper &other){
     gen = other.gen;
   }
-  
+
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     fill_device_targets(task_id, state);
     devid_t device_id = choose_random_device(device_buffer);

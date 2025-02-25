@@ -67,7 +67,7 @@ protected:
 
   ExecutionState dispatch_mapper(Event &event) {
     if (use_python_mapper && scheduler.get_queues().has_mappable() &&
-        scheduler.conditions->should_map(scheduler.get_state(), scheduler.get_queues())) {
+        scheduler.conditions.get().should_map(scheduler.get_state(), scheduler.get_queues())) {
       return ExecutionState::EXTERNAL_MAPPING;
     }
     // otherwise just run the mapper from C++
@@ -87,8 +87,8 @@ public:
   ExecutionState last_state = ExecutionState::NONE;
   Event last_event = Event(EventType::MAPPER, 0, TaskIDList());
 
-  Simulator(SchedulerInput &input)
-      : event_manager(EventManager()), scheduler(Scheduler(input)), mapper(input.mapper) {
+  Simulator(SchedulerInput &input, Mapper& mapper)
+      : event_manager(EventManager()), scheduler(Scheduler(input)), mapper(mapper) {
   }
 
   void set_use_python_mapper(bool use_python_mapper_) {
@@ -106,9 +106,9 @@ public:
     return scheduler.get_state();
   }
 
-  void initialize(bool create_data_tasks = false, bool use_transition_conditions = true, bool initialize_data_manager = false) {
+  void initialize(bool create_data_tasks = false, bool initialize_data_manager = false) {
     add_initial_event();
-    scheduler.initialize(create_data_tasks, use_transition_conditions, initialize_data_manager);
+    scheduler.initialize(create_data_tasks, initialize_data_manager);
     initialized = true;
     data_initialized = initialize_data_manager;
   }
@@ -127,8 +127,8 @@ public:
     data_initialized = true;
   }
 
-  void set_transition_conditions(std::shared_ptr<TransitionConditions> conditions_) {
-    scheduler.set_transition_conditions(std::move(conditions_));
+  void set_transition_conditions(TransitionConditions &conditions) {
+    scheduler.set_transition_conditions(conditions);
   }
 
   ExecutionState handle_event(Event &event) {
