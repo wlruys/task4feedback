@@ -11,6 +11,206 @@
 
 // SchedulerState
 
+[[nodiscard]] timecount_t SchedulerState::get_mapped_time(taskid_t task_id) const {
+  /*Get the time a task was mapped */
+  const auto &records = task_manager.get_records();
+  return records.get_mapped_time(task_id);
+}
+
+[[nodiscard]] timecount_t SchedulerState::get_reserved_time(taskid_t task_id) const {
+  /*Get the time a task was reserved */
+  const auto &records = task_manager.get_records();
+  return records.get_reserved_time(task_id);
+}
+
+[[nodiscard]] timecount_t SchedulerState::get_launched_time(taskid_t task_id) const {
+  /*Get the time a task was launched */
+  const auto &records = task_manager.get_records();
+  return records.get_launched_time(task_id);
+}
+
+[[nodiscard]] timecount_t SchedulerState::get_completed_time(taskid_t task_id) const {
+  /*Get the time a task was completed */
+  const auto &records = task_manager.get_records();
+  return records.get_completed_time(task_id);
+}
+
+bool SchedulerState::track_resource_guard() const {
+/* Compilation guard for when resource tracking (memory and vcu usage over time) is disabled */
+#ifndef SIM_TRACK_RESOURCES
+  spdlog::warn("SIM_TRACK_RESOURCES not defined. Resource tracking is disabled.");
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool SchedulerState::track_location_guard() const {
+/* Compilation guard for when location tracking (data location over time) is disabled */
+#ifndef SIM_TRACK_LOCATION
+  spdlog::warn("SIM_TRACK_LOCATION not defined. Location tracking is disabled.");
+  return true;
+#else
+  return false;
+#endif
+}
+
+[[nodiscard]] vcu_t SchedulerState::get_mapped_vcu_at(devid_t device_id, timecount_t time) const {
+  /* Get the VCU mapped to a device at a given time */
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_vcu_at_time<TaskState::MAPPED>(device_id, time);
+}
+[[nodiscard]] vcu_t SchedulerState::get_reserved_vcu_at(devid_t device_id, timecount_t time) const {
+  /* Get the VCU reserved to a device at a given time */
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_vcu_at_time<TaskState::RESERVED>(device_id, time);
+}
+[[nodiscard]] vcu_t SchedulerState::get_launched_vcu_at(devid_t device_id, timecount_t time) const {
+  /* Get the VCU launched to a device at a given time */
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_vcu_at_time<TaskState::LAUNCHED>(device_id, time);
+}
+
+[[nodiscard]] mem_t SchedulerState::get_mapped_mem_at(devid_t device_id, timecount_t time) const {
+  /* Get the memory mapped to a device at a given time */
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_mem_at_time<TaskState::MAPPED>(device_id, time);
+}
+[[nodiscard]] mem_t SchedulerState::get_reserved_mem_at(devid_t device_id, timecount_t time) const {
+  /* Get the memory reserved to a device at a given time */
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_mem_at_time<TaskState::RESERVED>(device_id, time);
+}
+[[nodiscard]] mem_t SchedulerState::get_launched_mem_at(devid_t device_id, timecount_t time) const {
+  /* Get the memory launched to a device at a given time */
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_mem_at_time<TaskState::LAUNCHED>(device_id, time);
+}
+
+[[nodiscard]] ResourceEventArray<vcu_t>
+SchedulerState::get_mapped_vcu_events(devid_t device_id) const {
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_vcu_events<TaskState::MAPPED>(device_id);
+}
+[[nodiscard]] ResourceEventArray<vcu_t>
+SchedulerState::get_reserved_vcu_events(devid_t device_id) const {
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_vcu_events<TaskState::RESERVED>(device_id);
+}
+[[nodiscard]] ResourceEventArray<vcu_t>
+SchedulerState::get_launched_vcu_events(devid_t device_id) const {
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_vcu_events<TaskState::LAUNCHED>(device_id);
+}
+
+[[nodiscard]] ResourceEventArray<mem_t>
+SchedulerState::get_mapped_mem_events(devid_t device_id) const {
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_mem_events<TaskState::MAPPED>(device_id);
+}
+[[nodiscard]] ResourceEventArray<mem_t>
+SchedulerState::get_reserved_mem_events(devid_t device_id) const {
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_mem_events<TaskState::RESERVED>(device_id);
+}
+[[nodiscard]] ResourceEventArray<mem_t>
+SchedulerState::get_launched_mem_events(devid_t device_id) const {
+  if (track_resource_guard()) {
+    return {};
+  }
+  return device_manager.get_mem_events<TaskState::LAUNCHED>(device_id);
+}
+
+[[nodiscard]] TaskState SchedulerState::get_state_at(taskid_t task_id, timecount_t time) const {
+  /* Get the state of a task at a given time */
+  if (track_resource_guard()) {
+    return {};
+  }
+  const auto &records = task_manager.get_records();
+  return records.get_state_at_time(task_id, time);
+}
+
+ValidEventArray SchedulerState::get_valid_intervals_mapped(dataid_t data_id,
+                                                           devid_t device_id) const {
+  /* Get the valid intervals for a data mapped to a device */
+  if (track_location_guard()) {
+    return {};
+  }
+  return data_manager.get_valid_intervals_mapped(data_id, device_id);
+}
+
+ValidEventArray SchedulerState::get_valid_intervals_reserved(dataid_t data_id,
+                                                             devid_t device_id) const {
+  /* Get the valid intervals for a data reserved to a device*/
+  if (track_location_guard()) {
+    return {};
+  }
+
+  return data_manager.get_valid_intervals_reserved(data_id, device_id);
+}
+
+ValidEventArray SchedulerState::get_valid_intervals_launched(dataid_t data_id,
+                                                             devid_t device_id) const {
+  /* Get the valid intervals for a data launched to a device */
+  if (track_location_guard()) {
+    return {};
+  }
+
+  return data_manager.get_valid_intervals_launched(data_id, device_id);
+}
+
+bool SchedulerState::check_valid_mapped_at(dataid_t data_id, devid_t device_id,
+                                           timecount_t query_time) const {
+  /* Check if a data is valid at a given time (in the mapping location table) */
+  if (track_location_guard()) {
+    return false;
+  }
+
+  return data_manager.check_valid_at_time_mapped(data_id, device_id, query_time);
+}
+
+bool SchedulerState::check_valid_reserved_at(dataid_t data_id, devid_t device_id,
+                                             timecount_t query_time) const {
+  /* Check if a data is valid at a given time (in the reservation location table) */
+  if (track_location_guard()) {
+    return false;
+  }
+
+  return data_manager.check_valid_at_time_reserved(data_id, device_id, query_time);
+}
+
+bool SchedulerState::check_valid_launched_at(dataid_t data_id, devid_t device_id,
+                                             timecount_t query_time) const {
+  /* Check if a data is valid at a given time (in the launch location table) */
+  if (track_location_guard()) {
+    return false;
+  }
+
+  return data_manager.check_valid_at_time_launched(data_id, device_id, query_time);
+}
+
 timecount_t SchedulerState::get_execution_time(taskid_t task_id) const {
   auto device_id = task_manager.state.get_mapping(task_id);
   auto arch = device_manager.devices.get().get_type(device_id);
@@ -117,7 +317,7 @@ const TaskIDList &SchedulerState::notify_completed(taskid_t task_id) {
 }
 
 const TaskIDList &SchedulerState::notify_data_completed(taskid_t task_id) {
-  //This notifies data tasks that WAIT on the completion of this (task_id) compute task
+  // This notifies data tasks that WAIT on the completion of this (task_id) compute task
   return task_manager.notify_data_completed(task_id, global_time);
 }
 

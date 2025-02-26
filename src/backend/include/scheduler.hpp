@@ -253,9 +253,10 @@ struct SchedulerInput {
   std::reference_wrapper<TransitionConditions> conditions;
 
   SchedulerInput(Tasks &tasks, Data &data, Devices &devices, Topology &topology,
-                 TaskNoise &task_noise, CommunicationNoise &comm_noise, TransitionConditions &conditions)
-      : tasks(tasks), data(data), devices(devices), topology(topology),
-        task_noise(task_noise), comm_noise(comm_noise), conditions(conditions) {
+                 TaskNoise &task_noise, CommunicationNoise &comm_noise,
+                 TransitionConditions &conditions)
+      : tasks(tasks), data(data), devices(devices), topology(topology), task_noise(task_noise),
+        comm_noise(comm_noise), conditions(conditions) {
   }
 
   SchedulerInput(const SchedulerInput &other) = default;
@@ -338,7 +339,7 @@ public:
     task_manager.initialize(create_data_tasks);
     device_manager.initialize();
     communication_manager.initialize();
-    if (initialize_data_manager){
+    if (initialize_data_manager) {
       data_manager.initialize();
     }
   }
@@ -379,6 +380,50 @@ public:
 
   void set_mapping(taskid_t task_id, devid_t device_id);
   [[nodiscard]] devid_t get_mapping(taskid_t task_id) const;
+
+  [[nodiscard]] timecount_t get_mapped_time(taskid_t task_id) const;
+  [[nodiscard]] timecount_t get_reserved_time(taskid_t task_id) const;
+  [[nodiscard]] timecount_t get_launched_time(taskid_t task_id) const;
+  [[nodiscard]] timecount_t get_completed_time(taskid_t task_id) const;
+
+  bool track_resource_guard() const;
+  bool track_location_guard() const;
+
+  [[nodiscard]] vcu_t get_mapped_vcu_at(devid_t device_id, timecount_t time) const;
+  [[nodiscard]] vcu_t get_reserved_vcu_at(devid_t device_id, timecount_t time) const;
+  [[nodiscard]] vcu_t get_launched_vcu_at(devid_t device_id, timecount_t time) const;
+
+  [[nodiscard]] mem_t get_mapped_mem_at(devid_t device_id, timecount_t time) const;
+  [[nodiscard]] mem_t get_reserved_mem_at(devid_t device_id, timecount_t time) const;
+  [[nodiscard]] mem_t get_launched_mem_at(devid_t device_id, timecount_t time) const;
+
+  [[nodiscard]] ResourceEventArray<vcu_t> get_mapped_vcu_events(devid_t device_id) const;
+  [[nodiscard]] ResourceEventArray<vcu_t> get_reserved_vcu_events(devid_t device_id) const;
+  [[nodiscard]] ResourceEventArray<vcu_t> get_launched_vcu_events(devid_t device_id) const;
+
+  [[nodiscard]] ResourceEventArray<mem_t> get_mapped_mem_events(devid_t device_id) const;
+  [[nodiscard]] ResourceEventArray<mem_t> get_reserved_mem_events(devid_t device_id) const;
+  [[nodiscard]] ResourceEventArray<mem_t> get_launched_mem_events(devid_t device_id) const;
+
+  [[nodiscard]] TaskState get_state_at(taskid_t task_id, timecount_t time) const;
+
+  [[nodiscard]] ValidEventArray get_valid_intervals_mapped(dataid_t data_id,
+                                                           devid_t device_id) const;
+  [[nodiscard]] ValidEventArray get_valid_intervals_reserved(dataid_t data_id,
+                                                             devid_t device_id) const;
+  [[nodiscard]] ValidEventArray get_valid_intervals_launched(dataid_t data_id,
+                                                             devid_t device_id) const;
+
+  [[nodiscard]] bool check_valid_mapped_at(dataid_t data_id, devid_t device_id,
+                                           timecount_t query_time) const;
+  [[nodiscard]] bool check_valid_reserved_at(dataid_t data_id, devid_t device_id,
+                                             timecount_t query_time) const;
+  [[nodiscard]] bool check_valid_launched_at(dataid_t data_id, devid_t device_id,
+                                             timecount_t query_time) const;
+
+  // [[nodiscard]] check_valid_mapped(dataid_t data_id, devid_t device_id) const;
+  // [[nodiscard]] check_valid_reserved(dataid_t data_id, devid_t device_id) const;
+  // [[nodiscard]] check_valid_launched(dataid_t data_id, devid_t device_id) const;
 
   [[nodiscard]] const PriorityList &get_mapping_priorities() const;
   [[nodiscard]] const PriorityList &get_reserving_priorities() const;
@@ -534,7 +579,8 @@ public:
   BreakpointManager breakpoints;
   std::reference_wrapper<TransitionConditions> conditions;
 
-  Scheduler(SchedulerInput &input) : state(input), queues(input.devices), conditions(input.conditions) {
+  Scheduler(SchedulerInput &input)
+      : state(input), queues(input.devices), conditions(input.conditions) {
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
     event_buffer.reserve(INITIAL_EVENT_BUFFER_SIZE);
@@ -766,7 +812,7 @@ public:
   RandomMapper(unsigned int seed = 0) : gen(seed) {
   }
 
-  RandomMapper(const RandomMapper &other){
+  RandomMapper(const RandomMapper &other) {
     gen = other.gen;
   }
 
@@ -875,22 +921,20 @@ public:
 };
 
 class DeviceTime {
-  public:
-    devid_t device_id;
-    timecount_t time;
+public:
+  devid_t device_id;
+  timecount_t time;
 };
 
 class EFTMapper : public Mapper {
 
-  protected:
-    // Records the finish time by task id
-    std::vector<timecount_t> finish_time_record;
-    // Stores the temporary EFT values for each device
-    std::vector<DeviceTime> finish_time_buffer;
+protected:
+  // Records the finish time by task id
+  std::vector<timecount_t> finish_time_record;
+  // Stores the temporary EFT values for each device
+  std::vector<DeviceTime> finish_time_buffer;
 
-
-public: 
-
+public:
   void record_finish_time(taskid_t task_id, timecount_t time) {
     finish_time_record.at(task_id) = time;
   }
@@ -1025,10 +1069,9 @@ public:
 
 class DequeueEFTMapper : public EFTMapper {
 
-
   std::vector<timecount_t> device_available_time_buffer;
 
-  public:
+public:
   timecount_t get_device_available_time(devid_t device_id, const SchedulerState &state) override {
     return device_available_time_buffer.at(device_id);
   }
@@ -1040,7 +1083,6 @@ class DequeueEFTMapper : public EFTMapper {
   DequeueEFTMapper() = default;
 
   DequeueEFTMapper(const DequeueEFTMapper &other) = default;
-
 
   DequeueEFTMapper(std::size_t n_tasks, std::size_t n_devices)
       : EFTMapper(n_tasks, n_devices), device_available_time_buffer(n_devices) {
