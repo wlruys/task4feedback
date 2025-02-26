@@ -9,6 +9,7 @@ def generate_clangd_config(output_file):
     spdlog_path = os.path.join(current_dir, "external")
     backend_path = os.path.join(current_dir, "src", "backend")
     backend_inc_path = os.path.join(current_dir, "src", "backend", "include")
+    nanobind_inc_path = "-I/home/popdesk/micromamba/envs/py311/lib/python3.11/site-packages/nanobind/include"
 
     config = {
         "CompileFlags": {
@@ -25,6 +26,7 @@ def generate_clangd_config(output_file):
                 f"-I{backend_path}",
                 f"-I{backend_inc_path}",
                 f"-I{spdlog_path}",
+                f"{nanobind_inc_path}",
             ]
         },
         "Diagnostics": {

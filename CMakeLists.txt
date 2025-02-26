@@ -73,9 +73,9 @@ else(NOT UNIX)
 endif()
 
 add_subdirectory(src/backend)
-add_subdirectory(src/task4feedback/fastsim)
-
-add_subdirectory(test)
+#add_subdirectory(src/task4feedback/fastsim)
+add_subdirectory(src/bindings)
+#add_subdirectory(test)
 
 set(test_path_file ${CMAKE_SOURCE_DIR}/test/run_tests.sh)
 file(WRITE ${test_path_file} "export PARLA_TESTS=${CMAKE_BINARY_DIR}/test\n")

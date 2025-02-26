@@ -7,13 +7,14 @@ CompileFlags:
   - -Werror
   - -Wshadow
   - -Wconversion
-  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/external/tabulate/include
-  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/external/doctest
-  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/src/backend
-  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/src/backend/include
+  - -I/home/popdesk/workspace/task_scheduling/task4feedback/external/tabulate/include
+  - -I/home/popdesk/workspace/task_scheduling/task4feedback/external/doctest
+  - -I/home/popdesk/workspace/task_scheduling/task4feedback/src/backend
+  - -I/home/popdesk/workspace/task_scheduling/task4feedback/src/backend/include
+  - -I/home/popdesk/workspace/task_scheduling/task4feedback/external
+  - -I/home/popdesk/micromamba/envs/py311/lib/python3.11/site-packages/nanobind/include
 Diagnostics:
   UnusedIncludes: Strict
-  MissingIncludes: Strict
   ClangTidy:
     Add:
     - modernize*

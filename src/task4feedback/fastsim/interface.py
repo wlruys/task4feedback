@@ -109,11 +109,11 @@ class DeviceHandle:
 
     def __post_init__(self):
         self.cdevices = PyDevices(len(self.devices.devices))
-        #print("Number of devices:", len(self.devices.devices))
+        # print("Number of devices:", len(self.devices.devices))
         for i, (device, (vcu, mem)) in enumerate(self.devices.devices.items()):
             name = str(device)
             arch = device.architecture.value
-            #print(name, device, arch, vcu, mem)
+            # print(name, device, arch, vcu, mem)
             self.cdevices.create_device(i, name, arch, vcu, mem)
             self.devices_to_ids[device] = i
             self.ids_to_devices[i] = device
@@ -199,7 +199,6 @@ class DataHandle:
 
     def __contains__(self, data_id: DataID) -> bool:
         return data_id in self.datamap
-    
 
 
 @dataclass(slots=True)
@@ -280,7 +279,7 @@ class TaskHandle:
 
     def get_name(self, task_id: TaskID) -> str:
         return str(task_id)
-    
+
 
 class TaskNoise:
     def __init__(self, tasks: TaskHandle, seed: int = 0):
@@ -541,7 +540,9 @@ class Observer:
         """
         return self.observer.get_task_task_edges(source_tasks, target_tasks)
 
-    def get_task_data_edges(self, tasks: np.ndarray[np.uint64]) -> tuple[
+    def get_task_data_edges(
+        self, tasks: np.ndarray[np.uint64]
+    ) -> tuple[
         np.ndarray[np.uint64],
         list[np.uint64],
         np.ndarray[np.float64],
@@ -562,7 +563,9 @@ class Observer:
         """
         return self.observer.get_task_data_edges(tasks)
 
-    def get_task_device_edges(self, tasks: np.ndarray[np.uint64]) -> tuple[
+    def get_task_device_edges(
+        self, tasks: np.ndarray[np.uint64]
+    ) -> tuple[
         np.ndarray[np.uint64],
         list[np.ndarray[np.uint64]],
         np.ndarray[np.float64],
@@ -583,7 +586,9 @@ class Observer:
         """
         return self.observer.get_task_device_edges(tasks)
 
-    def get_data_device_edges(self, tasks: np.ndarray[np.uint64]) -> tuple[
+    def get_data_device_edges(
+        self, tasks: np.ndarray[np.uint64]
+    ) -> tuple[
         np.ndarray[np.uint64],
         np.ndarray[np.uint64],
         list[np.ndarray[np.uint64]],
@@ -673,8 +678,7 @@ class Observer:
     def get_local_graph_tensordict(
         self, candidate_tasks: np.ndarray[np.uint64], k_hop: int = 1
     ):
-
-        #print(candidate_tasks)
+        # print(candidate_tasks)
 
         # if len(candidate_tasks) == 0:
         #    return TensorDict()
@@ -720,14 +724,14 @@ class Observer:
         candidate_list = torch.from_numpy(candidate_tasks).to(torch.long)
 
         unique_k_hop = torch.from_numpy(unique_k_hop).to(torch.long)
-        
+
         def _make_node_tensor(features):
             return TensorDict(
                 {
                     "attr": features,
                 }
             )
-            
+
         def _make_edge_tensor(edge_index, edge_attr):
             return TensorDict(
                 {
@@ -735,43 +739,49 @@ class Observer:
                     "attr": edge_attr,
                 }
             )
-            
+
         task_features = _make_node_tensor(task_features)
         data_features = _make_node_tensor(data_features)
         device_features = _make_node_tensor(device_features)
-        
+
         node_tensordict = TensorDict(
             {
-                "tasks" : task_features,
-                "data" : data_features,
-                "devices" : device_features,
-            })
-        
+                "tasks": task_features,
+                "data": data_features,
+                "devices": device_features,
+            }
+        )
+
         dep_features = _make_edge_tensor(dep_edges, dep_features)
-        device_task_features = _make_edge_tensor(device_task_edges, device_task_features)
+        device_task_features = _make_edge_tensor(
+            device_task_edges, device_task_features
+        )
         data_task_features = _make_edge_tensor(data_task_edges, data_task_features)
-        
+
         edge_tensordict = TensorDict(
             {
-                "tasks_tasks" : dep_features,
-                "tasks_devices" : device_task_features,
-                "tasks_data" : data_task_features,
-            })
-        
+                "tasks_tasks": dep_features,
+                "tasks_devices": device_task_features,
+                "tasks_data": data_task_features,
+            }
+        )
+
         aux_tensordict = TensorDict(
             {
-                "candidates" : candidate_list,
-                "unique_k_hop" : unique_k_hop,
-            })
-        
+                "candidates": candidate_list,
+                "unique_k_hop": unique_k_hop,
+            }
+        )
+
         obs_tensordict = TensorDict(
             {
-                "nodes" : node_tensordict,
-                "edges" : edge_tensordict,
-                "aux" : aux_tensordict,
-            })
+                "nodes": node_tensordict,
+                "edges": edge_tensordict,
+                "aux": aux_tensordict,
+            }
+        )
 
-        return obs_tensordict 
+        return obs_tensordict
 
     def convert_tensordict_to_heterodata(self, td: TensorDict) -> geom.data.HeteroData:
         g = geom.data.HeteroData()
@@ -823,10 +833,17 @@ class Simulator:
         self.cmapper = cmapper
         self.simulator.set_mapper(cmapper.mapper)
 
-    def initialize(self, use_data: bool = True, use_transition_conditions: bool = True, initialize_data_manager: bool = True):
-        self.simulator.initialize(use_data, use_transition_conditions, initialize_data_manager)
+    def initialize(
+        self,
+        use_data: bool = True,
+        use_transition_conditions: bool = True,
+        initialize_data_manager: bool = True,
+    ):
+        self.simulator.initialize(
+            use_data, use_transition_conditions, initialize_data_manager
+        )
         self.initialized = True
-        
+
     def initialize_data_manager(self):
         self.simulator.initialize_data_manager()
 
@@ -838,7 +855,7 @@ class Simulator:
         obs = self.observer.local_graph_features(
             self.simulator.get_mappable_candidates()
         )
-        #print(info)
+        # print(info)
         done = info.state == PyExecutionState.COMPLETE
         terminated = False
         immediate_reward = 0
@@ -897,89 +914,102 @@ class Simulator:
 
     def randomize_priorities(self):
         self.noise.sample_priorities()
-        
-    def get_mapped_device(self, task_index: int) ->int:
+
+    def get_mapped_device(self, task_index: int) -> int:
         return self.simulator.get_mapped_device(task_index)
-    
+
     def get_mapped_time(self, task_index: int) -> int:
         return self.simulator.get_mapped_time(task_index)
-    
+
     def get_reserved_time(self, task_index: int) -> int:
         return self.simulator.get_reserved_time(task_index)
-    
+
     def get_launched_time(self, task_index: int) -> int:
         return self.simulator.get_launched_time(task_index)
-    
+
     def get_completed_time(self, task_index: int) -> int:
         return self.simulator.get_completed_time(task_index)
-    
+
     def get_mapping_priority(self, task_index: int) -> int:
         return self.simulator.get_mapping_priority(task_index)
-    
+
     def get_reserving_priority(self, task_index: int) -> int:
         return self.simulator.get_reserving_priority(task_index)
-    
+
     def get_launching_priority(self, task_index: int) -> int:
         return self.simulator.get_launching_priority(task_index)
-    
+
     def get_mapped_vcu_at_time(self, task_index: int, time: int) -> int:
         return self.simulator.get_mapped_vcu_at_time(task_index, time)
-    
+
     def get_reserved_vcu_at_time(self, task_index: int, time: int) -> int:
         return self.simulator.get_reserved_vcu_at_time(task_index, time)
-    
+
     def get_launched_vcu_at_time(self, task_index: int, time: int) -> int:
         return self.simulator.get_launched_vcu_at_time(task_index, time)
-    
+
     def get_mapped_memory_at_time(self, task_index: int, time: int) -> int:
         return self.simulator.get_mapped_mem_at_time(task_index, time)
-    
+
     def get_reserved_memory_at_time(self, task_index: int, time: int) -> int:
         return self.simulator.get_reserved_mem_at_time(task_index, time)
-    
+
     def get_launched_memory_at_time(self, task_index: int, time: int) -> int:
         return self.simulator.get_launched_mem_at_time(task_index, time)
-    
-    def get_vcu_events_mapped(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+
+    def get_vcu_events_mapped(
+        self, device_index: int
+    ) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
         return self.simulator.get_vcu_events_mapped(device_index)
-    
-    def get_vcu_events_reserved(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+
+    def get_vcu_events_reserved(
+        self, device_index: int
+    ) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
         return self.simulator.get_vcu_events_reserved(device_index)
-    
-    def get_vcu_events_launched(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+
+    def get_vcu_events_launched(
+        self, device_index: int
+    ) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
         return self.simulator.get_vcu_events_launched(device_index)
-    
-    def get_memory_events_mapped(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+
+    def get_memory_events_mapped(
+        self, device_index: int
+    ) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
         return self.simulator.get_mem_events_mapped(device_index)
-    
-    def get_memory_events_reserved(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+
+    def get_memory_events_reserved(
+        self, device_index: int
+    ) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
         return self.simulator.get_mem_events_reserved(device_index)
-    
-    def get_memory_events_launched(self, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+
+    def get_memory_events_launched(
+        self, device_index: int
+    ) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
         return self.simulator.get_mem_events_launched(device_index)
-    
+
     def check_valid_mapped(self, data_id: int, device_index: int, time: int) -> bool:
         return self.simulator.check_valid_mapped(data_id, device_index, time)
-    
+
     def check_valid_reserved(self, data_id: int, device_index: int, time: int) -> bool:
         return self.simulator.check_valid_reserved(data_id, device_index, time)
-    
+
     def check_valid_launched(self, data_id: int, device_index: int, time: int) -> bool:
         return self.simulator.check_valid_launched(data_id, device_index, time)
-    
-    def get_valid_intervals_mapped(self, data_id: int, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+
+    def get_valid_intervals_mapped(
+        self, data_id: int, device_index: int
+    ) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
         return self.simulator.get_valid_intervals_mapped(data_id, device_index)
-    
-    def get_valid_intervals_reserved(self, data_id: int, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+
+    def get_valid_intervals_reserved(
+        self, data_id: int, device_index: int
+    ) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
         return self.simulator.get_valid_intervals_reserved(data_id, device_index)
-    
-    def get_valid_intervals_launched(self, data_id: int, device_index: int) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
+
+    def get_valid_intervals_launched(
+        self, data_id: int, device_index: int
+    ) -> tuple[np.ndarray[np.uint64], np.ndarray[np.uint64]]:
         return self.simulator.get_valid_intervals_launched(data_id, device_index)
-        
-    
-    
-    
-    
 
 
 @dataclass
