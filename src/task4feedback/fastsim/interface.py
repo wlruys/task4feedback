@@ -30,7 +30,7 @@ from task4feedback.legacy_types import (
     TaskMap,
     DataMap,
 )
-from task4feedback.graphs import *
+from task4feedback.legacy_graphs import *
 from dataclasses import dataclass, field
 import numpy as np
 from enum import IntEnum, Enum
