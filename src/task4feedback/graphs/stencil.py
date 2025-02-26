@@ -117,6 +117,8 @@ class StencilConfig(GraphConfig):
     steps: int = 2
     neighbor_distance: int = 1
     dimensions: int = 1
+    reduction: bool = False
+    keep_task_dependencies: bool = True
 
 
 @register_graph_generator
@@ -134,6 +136,10 @@ def make_stencil_graph(
     dimensions = tuple(config.width for _ in range(config.dimensions))
 
     for t in range(config.steps):
+        # Tasks in step t synchronizes to task S(t)
+        if config.reduction:
+            sync_task_id = TaskID("S", (t,), 0)
+            sync_dependency_list = []
         grid_generator = np.ndindex(dimensions)
         for grid_tuple in grid_generator:
             # Task ID:
@@ -146,23 +152,31 @@ def make_stencil_graph(
             # Task Dependencies
             dependency_list = []
             if t > 0:
-                neighbor_generator = tuple(
-                    config.neighbor_distance * 2 + 1 for _ in range(config.dimensions)
-                )
-                stencil_generator = np.ndindex(neighbor_generator)
-                for stencil_tuple in stencil_generator:
-                    # Filter to only orthogonal stencil directions (no diagonals)
-                    # This is inefficient, but allows easy testing of other stencil types
-                    stencil_tuple = np.subtract(stencil_tuple, config.neighbor_distance)
-                    if np.count_nonzero(stencil_tuple) <= 1:
-                        dependency_grid = tuple(np.add(grid_tuple, stencil_tuple))
-                        out_of_bounds = any(
-                            element < 0 or element >= config.width
-                            for element in dependency_grid
+                if config.reduction:
+                    dependency_list.append(TaskID("S", (t - 1,), 0))
+                if (
+                    config.reduction and config.keep_task_dependencies
+                ) or config.reduction is False:
+                    neighbor_generator = tuple(
+                        config.neighbor_distance * 2 + 1
+                        for _ in range(config.dimensions)
+                    )
+                    stencil_generator = np.ndindex(neighbor_generator)
+                    for stencil_tuple in stencil_generator:
+                        # Filter to only orthogonal stencil directions (no diagonals)
+                        # This is inefficient, but allows easy testing of other stencil types
+                        stencil_tuple = np.subtract(
+                            stencil_tuple, config.neighbor_distance
                         )
-                        if not out_of_bounds:
-                            dependency = TaskID("T", (t - 1,) + dependency_grid, 0)
-                            dependency_list.append(dependency)
+                        if np.count_nonzero(stencil_tuple) <= 1:
+                            dependency_grid = tuple(np.add(grid_tuple, stencil_tuple))
+                            out_of_bounds = any(
+                                element < 0 or element >= config.width
+                                for element in dependency_grid
+                            )
+                            if not out_of_bounds:
+                                dependency = TaskID("T", (t - 1,) + dependency_grid, 0)
+                                dependency_list.append(dependency)
 
             # Task Data Dependencies
             data_dependencies, data_dict = get_data_dependencies(
@@ -178,6 +192,17 @@ def make_stencil_graph(
                 dependency_list,
                 data_dependencies,
                 task_mapping,
+            )
+            if config.reduction:
+                sync_dependency_list.append(task_id)
+
+        if config.reduction:
+            task_dict[sync_task_id] = TaskInfo(
+                id=sync_task_id,
+                runtime=configurations(sync_task_id),
+                dependencies=sync_dependency_list,
+                data_dependencies=TaskDataInfo(),
+                mapping=get_mapping(config, sync_task_id),
             )
 
     return task_dict, data_dict
