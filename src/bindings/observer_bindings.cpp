@@ -176,7 +176,7 @@ template <typename FEType> void bind_int_feature(nb::module_ &m, const char *cla
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(task_id, sp);
            })
-      .def_static("make_shared", [](size_t n) -> std::shared_ptr<IFeature> {
+      .def_static("create", [](size_t n) -> std::shared_ptr<IFeature> {
         return std::make_shared<FeatureAdapter<FEType>>(FEType(n));
       });
 }
@@ -192,7 +192,7 @@ template <typename FEType> void bind_int_edge_feature(nb::module_ &m, const char
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(source_id, target_id, sp);
            })
-      .def_static("make_shared", [](size_t n) -> std::shared_ptr<IEdgeFeature> {
+      .def_static("create", [](size_t n) -> std::shared_ptr<IEdgeFeature> {
         return std::make_shared<EdgeFeatureAdapter<FEType>>(FEType(n));
       });
 }
@@ -208,7 +208,7 @@ template <typename FEType> void bind_state_feature(nb::module_ &m, const char *c
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(task_id, sp);
            })
-      .def_static("make_shared", [](SchedulerState &n) -> std::shared_ptr<IFeature> {
+      .def_static("create", [](SchedulerState &n) -> std::shared_ptr<IFeature> {
         return std::make_shared<FeatureAdapter<FEType>>(FEType(n));
       });
 }
@@ -224,7 +224,7 @@ template <typename FEType> void bind_state_edge_feature(nb::module_ &m, const ch
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(source_id, target_id, sp);
            })
-      .def_static("make_shared", [](SchedulerState &n) -> std::shared_ptr<IEdgeFeature> {
+      .def_static("create", [](SchedulerState &n) -> std::shared_ptr<IEdgeFeature> {
         return std::make_shared<EdgeFeatureAdapter<FEType>>(FEType(n));
       });
 }

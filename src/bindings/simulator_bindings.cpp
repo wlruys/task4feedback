@@ -23,7 +23,7 @@ using namespace nb::literals;
 
 void init_simulator_ext(nb::module_ &m) {
 
-  //   m.def("start_logger", &init_simulator_logger);
+  m.def("start_logger", &init_simulator_logger);
 
   nb::enum_<ExecutionState>(m, "ExecutionState", nb::is_arithmetic())
       .value("NONE", ExecutionState::NONE)

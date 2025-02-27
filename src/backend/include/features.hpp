@@ -573,7 +573,7 @@ struct InDegreeTaskFeature : public StateFeature<InDegreeTaskFeature> {
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
-    output[0] = log(get_in_degree(task));
+    output[0] = log(get_in_degree(task) + 1);
   }
 };
 
@@ -592,7 +592,7 @@ struct OutDegreeTaskFeature : public StateFeature<OutDegreeTaskFeature> {
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
-    output[0] = log(get_out_degree(task));
+    output[0] = log(get_out_degree(task) + 1);
   }
 };
 
@@ -663,6 +663,26 @@ struct OneHotMappedDeviceTaskFeature : public StateFeature<OneHotMappedDeviceTas
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task_manager = state.get_task_manager();
     one_hot(task_manager.state.get_mapping(task_id), output);
+  }
+};
+
+struct TaskStateFeature : public StateFeature<TaskStateFeature> {
+  TaskStateFeature(const SchedulerState &state)
+      : StateFeature<TaskStateFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 4;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &s = this->state;
+    const auto &task_manager = s.get_task_manager();
+    const auto state = task_manager.state.get_state(task_id);
+    output[0] = static_cast<f_t>(state == TaskState::MAPPED);
+    output[1] = static_cast<f_t>(state == TaskState::RESERVED);
+    output[2] = static_cast<f_t>(state == TaskState::LAUNCHED);
+    output[3] = static_cast<f_t>(state == TaskState::COMPLETED);
   }
 };
 
