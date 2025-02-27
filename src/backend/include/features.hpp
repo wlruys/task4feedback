@@ -679,6 +679,7 @@ struct TaskStateFeature : public StateFeature<TaskStateFeature> {
     const auto &s = this->state;
     const auto &task_manager = s.get_task_manager();
     const auto state = task_manager.state.get_state(task_id);
+    std::cout << "Task state: " << static_cast<int>(state) << std::endl;
     output[0] = static_cast<f_t>(state == TaskState::MAPPED);
     output[1] = static_cast<f_t>(state == TaskState::RESERVED);
     output[2] = static_cast<f_t>(state == TaskState::LAUNCHED);

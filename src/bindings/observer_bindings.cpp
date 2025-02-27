@@ -168,7 +168,7 @@ void get_edge_features_batch(const E &extractor, TorchUInt64Arr2D &edges,
 template <typename FEType> void bind_int_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
       .def(nb::init<size_t>())
-      .def("get_feature_dim", &FEType::getFeatureDim)
+      .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
            [](const FEType &self, uint32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
@@ -184,7 +184,7 @@ template <typename FEType> void bind_int_feature(nb::module_ &m, const char *cla
 template <typename FEType> void bind_int_edge_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
       .def(nb::init<size_t>())
-      .def("get_feature_dim", &FEType::getFeatureDim)
+      .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
            [](const FEType &self, uint32_t source_id, uint32_t target_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
@@ -200,7 +200,7 @@ template <typename FEType> void bind_int_edge_feature(nb::module_ &m, const char
 template <typename FEType> void bind_state_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
       .def(nb::init<SchedulerState &>())
-      .def("get_feature_dim", &FEType::getFeatureDim)
+      .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
            [](const FEType &self, uint32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
@@ -216,7 +216,7 @@ template <typename FEType> void bind_state_feature(nb::module_ &m, const char *c
 template <typename FEType> void bind_state_edge_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
       .def(nb::init<SchedulerState &>())
-      .def("get_feature_dim", &FEType::getFeatureDim)
+      .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
            [](const FEType &self, uint32_t source_id, uint32_t target_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
@@ -318,4 +318,17 @@ void init_observer_ext(nb::module_ &m) {
              self.getFeatures(task_id, sp);
            })
       .def("get_features_batch", &get_features_batch<RuntimeFeatureExtractor>);
+
+  nb::class_<RuntimeEdgeFeatureExtractor>(m, "RuntimeEdgeFeatureExtractor")
+      .def(nb::init<>())
+      .def("add_feature", &RuntimeEdgeFeatureExtractor::addFeature)
+      .def_prop_ro("feature_dim", &RuntimeEdgeFeatureExtractor::getFeatureDim)
+      .def("get_features",
+           [](const RuntimeEdgeFeatureExtractor &self, uint32_t source_id, uint32_t target_id,
+              nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
+             float *data = arr.data();
+             std::span<float> sp(data, self.getFeatureDim());
+             self.getFeatures(source_id, target_id, sp);
+           })
+      .def("get_features_batch", &get_edge_features_batch<RuntimeEdgeFeatureExtractor>);
 }

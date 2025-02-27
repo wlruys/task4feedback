@@ -55,7 +55,8 @@ void init_simulator_ext(nb::module_ &m) {
       .def("enable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(true); })
       .def("disable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(false); })
       .def("set_mapper", &Simulator::set_mapper, "mapper"_a)
-      .def("get_state", nb::overload_cast<>(&Simulator::get_state, nb::const_))
+      .def("get_state", nb::overload_cast<>(&Simulator::get_state, nb::const_),
+           nb::rv_policy::reference_internal)
       .def("run", &Simulator::run)
       .def("get_current_time", &Simulator::get_current_time)
       .def("get_mappable_candidates", &Simulator::get_mappable_candidates)
