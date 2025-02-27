@@ -134,9 +134,9 @@ public:
     max_data = max_tasks * max_data_usage;
   }
 
-  void finalize(bool use_graph = false) {
+  void finalize(const SchedulerState &state, bool use_graph = false) {
     if (use_graph) {
-      compute_max_degree();
+      compute_max_degree(state);
     }
     compute_max_tasks();
     compute_max_data();
@@ -207,6 +207,9 @@ public:
         const auto &task = tasks.get_compute_task(current_task_id);
         for (const auto &dep_id : task.get_dependents()) {
           if (local_visited.insert(dep_id).second) {
+            if (visited.size() >= spec.max_tasks) {
+              return;
+            }
             q.push(dep_id);
             visited.insert(dep_id);
           }
@@ -226,10 +229,16 @@ public:
 
     // Only keep the first max_tasks tasks
     TaskIDList result;
-    result.resize(min(spec.max_tasks, visited.size()));
-    std::copy_n(visited.begin(), result.size(), result.begin());
+    auto count = min(spec.max_tasks, visited.size());
+    result.resize(count);
+    std::copy_n(visited.begin(), count, result.begin());
 
     return result;
+  }
+
+  [[nodiscard]] TaskIDList get_k_hop_dependents(TaskIDList &initial_tasks, int k) {
+    visited.clear();
+    return get_k_hop_task_dependents(visited, initial_tasks, k);
   }
 
   void _get_k_hop_task_dependencies(TaskSet &visited, taskid_t task_id, int k) {
@@ -256,6 +265,9 @@ public:
         const auto &task = tasks.get_compute_task(current_task_id);
         for (const auto &dep_id : task.get_dependencies()) {
           if (local_visited.insert(dep_id).second) {
+            if (visited.size() >= spec.max_tasks) {
+              return;
+            }
             q.push(dep_id);
             visited.insert(dep_id);
           }
@@ -275,10 +287,16 @@ public:
 
     // Only keep the first max_tasks tasks
     TaskIDList result;
-    result.resize(min(spec.max_tasks, visited.size()));
-    std::copy_n(visited.begin(), result.size(), result.begin());
+    auto count = min(spec.max_tasks, visited.size());
+    result.resize(count);
+    std::copy_n(visited.begin(), count, result.begin());
 
     return result;
+  }
+
+  [[nodiscard]] TaskIDList get_k_hop_dependencies(TaskIDList &initial_tasks, int k) {
+    visited.clear();
+    return get_k_hop_task_dependencies(visited, initial_tasks, k);
   }
 
   void _get_k_hop_task_bidirectional(TaskSet &visited, taskid_t task_id, int k) {
@@ -305,6 +323,9 @@ public:
         const auto &task = tasks.get_compute_task(current_task_id);
         for (const auto &dep_id : task.get_dependencies()) {
           if (local_visited.insert(dep_id).second) {
+            if (visited.size() >= spec.max_tasks) {
+              return;
+            }
             q.push(dep_id);
             visited.insert(dep_id);
           }
@@ -312,6 +333,9 @@ public:
 
         for (const auto &dep_id : task.get_dependents()) {
           if (local_visited.insert(dep_id).second) {
+            if (visited.size() >= spec.max_tasks) {
+              return;
+            }
             q.push(dep_id);
             visited.insert(dep_id);
           }
@@ -331,10 +355,16 @@ public:
 
     // Only keep the first max_tasks tasks
     TaskIDList result;
-    result.resize(min(spec.max_tasks, visited.size()));
-    std::copy_n(visited.begin(), result.size(), result.begin());
+    auto count = min(spec.max_tasks, visited.size());
+    result.resize(count);
+    std::copy_n(visited.begin(), count, result.begin());
 
     return result;
+  }
+
+  [[nodiscard]] TaskIDList get_k_hop_bidirectional(TaskIDList &initial_tasks, int k) {
+    visited.clear();
+    return get_k_hop_task_bidirectional(visited, initial_tasks, k);
   }
 
   size_t get_task_task_edges(TaskIDList &sources, TorchUInt64Arr2D &output) {
@@ -385,13 +415,19 @@ public:
       const auto &task = tasks.get_compute_task(task_id);
       for (auto data_id : task.get_unique()) {
         data_visited.insert(data_id);
+        if (data_visited.size() >= spec.max_data) {
+          break;
+        }
+      }
+      if (data_visited.size() >= spec.max_data) {
+        break;
       }
     }
 
     DataIDList result;
     auto max_size = min(spec.max_data, data_visited.size());
     result.reserve(max_size);
-    std::copy(data_visited.begin(), data_visited.end(), std::back_inserter(result));
+    std::copy_n(data_visited.begin(), max_size, std::back_inserter(result));
 
     return result;
   }
@@ -400,6 +436,8 @@ public:
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
+
+    const auto max_edges = output.shape(1);
 
     data_index_map.clear();
     data_index_map.reserve(data_ids.size());
@@ -421,7 +459,13 @@ public:
           output(0, edge_count) = i;
           output(1, edge_count) = it->second;
           edge_count++;
+          if (edge_count >= max_edges) {
+            break;
+          }
         }
+      }
+      if (edge_count >= max_edges) {
+        break;
       }
     }
     return edge_count;
@@ -432,6 +476,8 @@ public:
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
+
+    const auto max_edges = output.shape(1);
 
     const auto &device_manager = state.get().get_device_manager();
     const auto &devices = device_manager.get_devices();
@@ -444,7 +490,13 @@ public:
           output(0, i) = i;
           output(1, i) = j;
           edge_count++;
+          if (edge_count >= max_edges) {
+            break;
+          }
         }
+      }
+      if (edge_count >= max_edges) {
+        break;
       }
     }
     return edge_count;

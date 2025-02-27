@@ -331,4 +331,36 @@ void init_observer_ext(nb::module_ &m) {
              self.getFeatures(source_id, target_id, sp);
            })
       .def("get_features_batch", &get_edge_features_batch<RuntimeEdgeFeatureExtractor>);
+
+  nb::class_<GraphSpec>(m, "GraphSpec")
+      .def(nb::init<>())
+      .def_rw("max_in_degree", &GraphSpec::max_in_degree)
+      .def_rw("max_out_degree", &GraphSpec::max_out_degree)
+      .def_rw("max_data_usage", &GraphSpec::max_data_usage)
+      .def_rw("max_candidates", &GraphSpec::max_candidates)
+      .def_rw("max_edges_tasks_tasks", &GraphSpec::max_edges_tasks_tasks)
+      .def_rw("max_edges_tasks_data", &GraphSpec::max_edges_tasks_data)
+      .def_rw("max_edges_tasks_devices", &GraphSpec::max_edges_tasks_devices)
+      .def_rw("max_edges_data_devices", &GraphSpec::max_edges_data_devices)
+      .def_rw("max_tasks", &GraphSpec::max_tasks)
+      .def_rw("max_data", &GraphSpec::max_data)
+      .def_rw("max_devices", &GraphSpec::max_devices)
+      .def("compute_max_degree",
+           nb::overload_cast<const SchedulerState &>(&GraphSpec::compute_max_degree))
+      .def("compute_max_tasks", &GraphSpec::compute_max_tasks)
+      .def("compute_max_data", &GraphSpec::compute_max_data)
+      .def("finalize", &GraphSpec::finalize);
+
+  nb::class_<GraphExtractor>(m, "GraphExtractor")
+      .def(nb::init<SchedulerState &>())
+      .def("set_spec", &GraphExtractor::set_spec)
+      .def("get_spec", &GraphExtractor::get_spec)
+      .def("get_k_hop_dependencies", &GraphExtractor::get_k_hop_dependencies)
+      .def("get_k_hop_dependents", &GraphExtractor::get_k_hop_dependents)
+      .def("get_k_hop_bidirectional", &GraphExtractor::get_k_hop_bidirectional)
+      .def("get_active_tasks", &GraphExtractor::get_active_tasks)
+      .def("get_task_task_edges", &GraphExtractor::get_task_task_edges)
+      .def("get_task_data_edges", &GraphExtractor::get_task_data_edges)
+      .def("get_data_device_edges", &GraphExtractor::get_data_device_edges)
+      .def("get_unique_data", &GraphExtractor::get_unique_data);
 }
