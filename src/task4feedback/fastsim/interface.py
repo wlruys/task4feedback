@@ -480,7 +480,16 @@ class Observer:
             - f[5]: is completed
             - f[6]: is mapping candiate (to be set by user)
         """
-        return self.observer.get_task_features(tasks)
+        features: np.ndarray[np.float64] = self.observer.get_task_features(tasks)
+        for i, task in enumerate(tasks):
+            x = 0
+            y = 0
+            if (task + 1) % 17 != 0:
+                x = int(int(task % 17 / 4) / 2)
+                y = int(task % 17 % 4 / 2)
+            np.insert(features[i], -1, [x, y])
+
+        return features
 
     def get_data_features(self, data: np.ndarray[np.uint64]) -> np.ndarray[np.float64]:
         """Get data features
@@ -624,7 +633,6 @@ class Observer:
 
         all_tasks = np.concatenate([candidate_tasks, unique_k_hop])
 
-        # task_features = self.get_task_features(all_tasks_list)
         task_features = self.get_task_features(all_tasks)
         task_features[: len(candidate_tasks), -1] = 1
 
