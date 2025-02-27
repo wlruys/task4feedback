@@ -234,7 +234,7 @@ void bind_feature_extractor(nb::module_ &m, const char *class_name) {
   using FEType = FeatureExtractor<Features...>;
   nb::class_<FEType>(m, class_name)
       .def(nb::init<Features...>())
-      .def("get_feature_dim", &FEType::getFeatureDim)
+      .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("get_features",
            [](const FEType &self, uint32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
@@ -250,7 +250,7 @@ void bind_edge_feature_extractor(nb::module_ &m, const char *class_name) {
   using FEType = EdgeFeatureExtractor<Features...>;
   nb::class_<FEType>(m, class_name)
       .def(nb::init<Features...>())
-      .def("get_feature_dim", &FEType::getFeatureDim)
+      .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("get_features",
            [](const FEType &self, uint32_t source_id, uint32_t target_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
@@ -272,6 +272,7 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_feature<DurationTaskFeature>(m, "DurationTaskFeature");
   bind_state_feature<MemoryTaskFeature>(m, "MemoryTaskFeature");
   bind_state_feature<OneHotMappedDeviceTaskFeature>(m, "OneHotMappedDeviceTaskFeature");
+  bind_state_feature<TaskStateFeature>(m, "TaskStateFeature");
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");
@@ -302,13 +303,13 @@ void init_observer_ext(nb::module_ &m) {
 
   nb::class_<IFeature, PyIFeature>(m, "IFeature")
       .def(nb::init<>())
-      .def("get_feature_dim", &IFeature::get_feature_dim)
+      .def_prop_ro("feature_dim", &IFeature::get_feature_dim)
       .def("extract_feature", &IFeature::extract_feature);
 
   nb::class_<RuntimeFeatureExtractor>(m, "RuntimeFeatureExtractor")
       .def(nb::init<>())
       .def("add_feature", &RuntimeFeatureExtractor::addFeature)
-      .def("get_feature_dim", &RuntimeFeatureExtractor::getFeatureDim)
+      .def_prop_ro("feature_dim", &RuntimeFeatureExtractor::getFeatureDim)
       .def("get_features",
            [](const RuntimeFeatureExtractor &self, uint32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
