@@ -1,6 +1,7 @@
 // nanobind_module.cpp
 #include "devices.hpp"
 #include "features.hpp"
+#include "scheduler.hpp"
 #include <cstdint>
 #include <memory>
 #include <nanobind/nanobind.h>
@@ -87,18 +88,34 @@ void get_features_batch(const E &extractor, const std::vector<uint32_t> &object_
   }
 }
 
-template <typename FEType> void bind_state_feature(nb::module_ &m, const char *class_name) {
+template <typename FEType> void bind_int_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
       .def(nb::init<size_t>())
-      .def("get_feature_dim", &DeviceLocationFeature::getFeatureDim)
+      .def("get_feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
-           [](const DeviceLocationFeature &self, uint32_t task_id,
+           [](const FEType &self, uint32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
              float *data = arr.data();
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(task_id, sp);
            })
       .def_static("make_shared", [](size_t n) -> std::shared_ptr<IFeature> {
+        return std::make_shared<FeatureAdapter<FEType>>(FEType(n));
+      });
+}
+
+template <typename FEType> void bind_state_feature(nb::module_ &m, const char *class_name) {
+  nb::class_<FEType>(m, class_name)
+      .def(nb::init<SchedulerState &>())
+      .def("get_feature_dim", &FEType::getFeatureDim)
+      .def("extract_feature",
+           [](const FEType &self, uint32_t task_id,
+              nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
+             float *data = arr.data();
+             std::span<float> sp(data, self.getFeatureDim());
+             self.extractFeature(task_id, sp);
+           })
+      .def_static("make_shared", [](SchedulerState &n) -> std::shared_ptr<IFeature> {
         return std::make_shared<FeatureAdapter<FEType>>(FEType(n));
       });
 }
@@ -123,9 +140,9 @@ void bind_feature_extractor(nb::module_ &m, const char *class_name) {
 void init_observer_ext(nb::module_ &m) {
   nb::bind_vector<std::vector<std::shared_ptr<IFeature>>>(m, "IFeatureVector");
 
-  bind_state_feature<DeviceLocationFeature>(m, "DeviceLocationFeature");
+  bind_int_feature<EmptyTaskFeature>(m, "EmptyTaskFeature");
 
-  bind_feature_extractor<DeviceLocationFeature, DeviceLocationFeature>(m, "FeatureExtractor");
+  bind_feature_extractor<EmptyTaskFeature>(m, "FeatureExtractor");
 
   nb::class_<IFeature, PyIFeature>(m, "IFeature")
       .def(nb::init<>())

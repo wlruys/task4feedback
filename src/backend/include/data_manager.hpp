@@ -8,10 +8,10 @@
 #include "spdlog/spdlog.h"
 #include "tasks.hpp"
 #include <algorithm>
+#include <cstddef>
 #include <functional>
-#include <unordered_map>
 #include <string>
-
+#include <unordered_map>
 
 enum class DataState {
   NONE = 0,
@@ -35,7 +35,6 @@ public:
   Data() = default;
   Data(std::size_t num_data) : sizes(num_data), initial_location(num_data), data_names(num_data) {
   }
-
 
   [[nodiscard]] bool empty() const {
     return size() == 0;
@@ -75,13 +74,13 @@ public:
     name_to_id[data_names.at(id)] = id;
   }
 
-  dataid_t get_id(const std::string &name){
+  dataid_t get_id(const std::string &name) {
     return name_to_id.at(name);
   }
 
   void create_block(dataid_t id, mem_t size, devid_t location, std::string name) {
-    //extend the vectors if necessary
-    if(id >= sizes.size()){
+    // extend the vectors if necessary
+    if (id >= sizes.size()) {
       sizes.resize(id + 1);
       initial_location.resize(id + 1);
       data_names.resize(id + 1);
@@ -134,12 +133,11 @@ struct ValidInterval {
   timecount_t stop = 0;
 };
 
-struct ValidEventArray{
+struct ValidEventArray {
   std::vector<timecount_t> starts;
   std::vector<timecount_t> stops;
   std::size_t size = 0;
 };
-
 
 class BlockLocation {
 protected:
@@ -149,28 +147,29 @@ protected:
   std::vector<timecount_t> current_start;
 
 public:
-  BlockLocation(dataid_t data_id, std::size_t n_devices) : data_id(data_id), locations(n_devices), valid_intervals(n_devices), current_start(n_devices) {
+  BlockLocation(dataid_t data_id, std::size_t n_devices)
+      : data_id(data_id), locations(n_devices), valid_intervals(n_devices),
+        current_start(n_devices) {
 
-    #ifdef SIM_TRACK_LOCATION
-    for(auto &interval : valid_intervals){
+#ifdef SIM_TRACK_LOCATION
+    for (auto &interval : valid_intervals) {
       interval.reserve(50);
     }
-    #endif
+#endif
   }
 
   bool check_valid_at_time(devid_t device_id, timecount_t query_time) const {
     const auto &intervals = valid_intervals[device_id];
 
-    #ifndef SIM_TRACK_LOCATION
+#ifndef SIM_TRACK_LOCATION
     return false;
-    #endif
+#endif
 
     if (!intervals.empty()) {
       // Use binary search to find the first interval whose start is greater than query_time.
-      auto it = std::upper_bound(intervals.begin(), intervals.end(), query_time,
-                                [](const timecount_t &t, const auto &interval) {
-                                  return t < interval.start;
-                                });
+      auto it = std::upper_bound(
+          intervals.begin(), intervals.end(), query_time,
+          [](const timecount_t &t, const auto &interval) { return t < interval.start; });
 
       // Check the interval immediately before 'it'
       if (it != intervals.begin()) {
@@ -185,32 +184,32 @@ public:
     if (locations[device_id] && query_time >= current_start[device_id]) {
       return true;
     }
-    
+
     return false;
   }
 
   void set_valid(devid_t device_id, timecount_t current_time) {
-    #ifdef SIM_TRACK_LOCATION
-    if(!locations[device_id]){
+#ifdef SIM_TRACK_LOCATION
+    if (!locations[device_id]) {
       locations[device_id] = true;
       current_start[device_id] = current_time;
     }
-    #else
+#else
     locations[device_id] = true;
-    #endif
+#endif
   }
 
   void set_invalid(devid_t device_id, timecount_t current_time) {
-    #ifdef SIM_TRACK_LOCATION
-    if(locations[device_id]){
+#ifdef SIM_TRACK_LOCATION
+    if (locations[device_id]) {
       locations[device_id] = false;
-      if(current_start[device_id] != current_time){
+      if (current_start[device_id] != current_time) {
         valid_intervals[device_id].emplace_back(current_start[device_id], current_time);
       }
     }
-    #else
+#else
     locations[device_id] = false;
-    #endif
+#endif
   }
 
   [[nodiscard]] bool is_valid(devid_t device_id) const {
@@ -264,10 +263,10 @@ public:
     return updated;
   }
 
-  void finalize(timecount_t current_time){
-    //tie off any open/hanging interval at the end of the simulation
-    for(devid_t i = 0; i < locations.size(); i++){
-      if(is_valid(i)){
+  void finalize(timecount_t current_time) {
+    // tie off any open/hanging interval at the end of the simulation
+    for (devid_t i = 0; i < locations.size(); i++) {
+      if (is_valid(i)) {
         valid_intervals[i].emplace_back(current_start[i], current_time);
         current_start[i] = current_time;
       }
@@ -284,8 +283,8 @@ public:
 
     valid_events.size = intervals.size() + has_open_interval;
 
-    if(valid_events.size == 0){
-      //Return a single interval from 0 to 0 to indicate no valid intervals
+    if (valid_events.size == 0) {
+      // Return a single interval from 0 to 0 to indicate no valid intervals
       valid_events.starts.resize(1);
       valid_events.stops.resize(1);
       valid_events.size = 1;
@@ -293,7 +292,6 @@ public:
       valid_events.stops[0] = 0;
       return valid_events;
     }
-
 
     valid_events.starts.resize(valid_events.size);
     valid_events.stops.resize(valid_events.size);
@@ -307,7 +305,6 @@ public:
     }
     return valid_events;
   }
-
 
   friend std::ostream &operator<<(std::ostream &os, const BlockLocation &bl) {
     os << "[";
@@ -376,8 +373,8 @@ public:
     return block_locations.at(data_id).get_valid_intervals(device_id);
   }
 
-  void finalize(timecount_t current_time){
-    for(auto &block : block_locations){
+  void finalize(timecount_t current_time) {
+    for (auto &block : block_locations) {
       block.finalize(current_time);
     }
   }
@@ -613,17 +610,23 @@ protected:
   MovementManager movement_manager;
   DataCounts counts;
 
+  static bool check_valid(size_t data_id, const LocationManager &locations, devid_t device_id) {
+    return locations.is_valid(data_id, device_id);
+  }
+
   static bool check_valid(const DataIDList &list, const LocationManager &locations,
                           devid_t device_id) {
     return std::ranges::all_of(
         list, [&](auto data_id) { return !locations.is_invalid(data_id, device_id); });
   }
 
-  static bool read_update(dataid_t data_id, devid_t device_id, LocationManager &locations, timecount_t current_time) {
+  static bool read_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
+                          timecount_t current_time) {
     return locations.at(data_id).validate(device_id, current_time);
   }
 
-  static auto write_update(dataid_t data_id, devid_t device_id, LocationManager &locations, timecount_t current_time) {
+  static auto write_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
+                           timecount_t current_time) {
     auto updated_ids = locations[data_id].invalidate_except(device_id, current_time);
     return updated_ids;
   }
@@ -656,8 +659,10 @@ public:
       reserved_locations.set_valid(i, initial_location, 0);
       launched_locations.set_valid(i, initial_location, 0);
       device_manager.get().add_mem<TaskState::MAPPED>(initial_location, data.get().get_size(i), 0);
-      device_manager.get().add_mem<TaskState::RESERVED>(initial_location, data.get().get_size(i), 0);
-      device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, data.get().get_size(i), 0);
+      device_manager.get().add_mem<TaskState::RESERVED>(initial_location, data.get().get_size(i),
+                                                        0);
+      device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, data.get().get_size(i),
+                                                        0);
     }
   }
 
@@ -685,12 +690,24 @@ public:
     return check_valid(list, mapped_locations, device_id);
   }
 
+  bool check_valid_mapped(dataid_t data_id, devid_t device_id) const {
+    return check_valid(data_id, mapped_locations, device_id);
+  }
+
   bool check_valid_reserved(const DataIDList &list, devid_t device_id) const {
     return check_valid(list, reserved_locations, device_id);
   }
 
+  bool check_valid_reserved(dataid_t data_id, devid_t device_id) const {
+    return check_valid(data_id, reserved_locations, device_id);
+  }
+
   bool check_valid_launched(const DataIDList &list, devid_t device_id) const {
     return check_valid(list, launched_locations, device_id);
+  }
+
+  bool check_valid_launched(dataid_t data_id, devid_t device_id) const {
+    return check_valid(data_id, launched_locations, device_id);
   }
 
   [[nodiscard]] mem_t local_size(const DataIDList &list, const LocationManager &locations,
@@ -780,7 +797,8 @@ public:
   void add_memory(dataid_t data_id, devid_t device_id, timecount_t current_time) {
     SPDLOG_DEBUG("Adding data block {} to device {} with size {}", data_id, device_id,
                  data.get().get_size(data_id));
-    device_manager.get().add_mem<TaskState::LAUNCHED>(device_id, data.get().get_size(data_id), current_time);
+    device_manager.get().add_mem<TaskState::LAUNCHED>(device_id, data.get().get_size(data_id),
+                                                      current_time);
   }
 
   void read_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
@@ -821,7 +839,8 @@ public:
     return req;
   }
 
-  MovementStatus start_move(dataid_t data_id, devid_t source, devid_t destination, timecount_t current_time) {
+  MovementStatus start_move(dataid_t data_id, devid_t source, devid_t destination,
+                            timecount_t current_time) {
     assert(launched_locations.is_valid(data_id, source));
 
     bool is_moving = movement_manager.is_moving(data_id, destination);
@@ -856,7 +875,8 @@ public:
     return {false, duration};
   }
 
-  void complete_move(dataid_t data_id, devid_t source, devid_t destination, bool is_virtual, timecount_t current_time) {
+  void complete_move(dataid_t data_id, devid_t source, devid_t destination, bool is_virtual,
+                     timecount_t current_time) {
 
     if (is_virtual) {
       SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
@@ -911,15 +931,18 @@ public:
     launched_locations.finalize(current_time);
   }
 
-  bool check_valid_at_time_mapped(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
+  bool check_valid_at_time_mapped(dataid_t data_id, devid_t device_id,
+                                  timecount_t query_time) const {
     return mapped_locations.at(data_id).check_valid_at_time(device_id, query_time);
   }
 
-  bool check_valid_at_time_reserved(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
+  bool check_valid_at_time_reserved(dataid_t data_id, devid_t device_id,
+                                    timecount_t query_time) const {
     return reserved_locations.at(data_id).check_valid_at_time(device_id, query_time);
   }
 
-  bool check_valid_at_time_launched(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
+  bool check_valid_at_time_launched(dataid_t data_id, devid_t device_id,
+                                    timecount_t query_time) const {
     return launched_locations.at(data_id).check_valid_at_time(device_id, query_time);
   }
 
@@ -929,7 +952,7 @@ public:
 
   ValidEventArray get_valid_intervals_reserved(dataid_t data_id, devid_t device_id) const {
     return reserved_locations.get_valid_intervals(data_id, device_id);
-  } 
+  }
 
   ValidEventArray get_valid_intervals_launched(dataid_t data_id, devid_t device_id) const {
     return launched_locations.get_valid_intervals(data_id, device_id);
