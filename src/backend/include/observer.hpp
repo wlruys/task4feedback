@@ -71,29 +71,6 @@ template <typename Derived> struct SimpleFeature {
   }
 };
 
-struct TestFeature : public SimpleFeature<TestFeature> {
-
-  size_t getFeatureDimImpl() const {
-    return 1;
-  }
-
-  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
-    output[0] = 1;
-  }
-};
-
-struct TestFeature2 : public SimpleFeature<TestFeature2> {
-
-  size_t getFeatureDimImpl() const {
-    return 2;
-  }
-
-  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
-    output[0] = 2;
-    output[1] = 3;
-  }
-};
-
 template <typename... Features> class FeatureExtractor {
   std::tuple<Features...> features;
 
