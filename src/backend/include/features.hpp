@@ -91,7 +91,7 @@ public:
 
   taskid_t max_tasks = 0;
   taskid_t max_data = 0;
-  taskid_t max_devices = 0;
+  taskid_t max_devices = 5;
 
   void compute_max_degree(const SchedulerState &state) {
     const auto &tasks = state.get_task_manager().get_tasks();
@@ -102,6 +102,44 @@ public:
       max_data_out_degree = max(max_data_out_degree, task.get_data_dependents().size());
       max_data_usage = max(max_data_usage, task.get_unique().size());
     }
+  }
+
+  void set_max_task_degree(taskid_t degree) {
+    max_in_degree = degree;
+    max_out_degree = degree;
+  }
+
+  void set_max_data_degree(dataid_t degree) {
+    max_data_in_degree = degree;
+    max_data_out_degree = degree;
+    max_data_usage = degree;
+  }
+
+  void set_max_devices(devid_t devices) {
+    max_devices = devices;
+  }
+  void set_max_tasks(taskid_t tasks) {
+    max_tasks = tasks;
+  }
+
+  void set_max_data(dataid_t data) {
+    max_data = data;
+  }
+
+  void compute_max_tasks() {
+    max_tasks = max_candidates * (max_in_degree + max_out_degree);
+  }
+
+  void compute_max_data() {
+    max_data = max_tasks * max_data_usage;
+  }
+
+  void finalize(bool use_graph = false) {
+    if (use_graph) {
+      compute_max_degree();
+    }
+    compute_max_tasks();
+    compute_max_data();
   }
 };
 
@@ -243,7 +281,7 @@ public:
     return result;
   }
 
-  void i_get_k_hop_task_bidirectional(TaskSet &visited, taskid_t task_id, int k) {
+  void _get_k_hop_task_bidirectional(TaskSet &visited, taskid_t task_id, int k) {
 
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
@@ -288,7 +326,7 @@ public:
                                                         int k) {
 
     for (const auto &task_id : initial_tasks) {
-      i_get_k_hop_task_bidirectional(visited, task_id, k);
+      _get_k_hop_task_bidirectional(visited, task_id, k);
     }
 
     // Only keep the first max_tasks tasks
