@@ -44,5 +44,6 @@ NB_MODULE(fastsim2, m) {
   init_topology_ext(m);
   init_scheduler_ext(m);
   init_mapper_ext(m);
+  init_observer_ext(m);
   init_simulator_ext(m);
 }

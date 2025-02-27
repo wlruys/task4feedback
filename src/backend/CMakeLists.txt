@@ -30,6 +30,7 @@ set(BACKEND_HDR
     stats.hpp
     task_manager.hpp
     tasks.hpp
+    features.hpp
 )
 
 # Add "include" to all header files

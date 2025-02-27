@@ -17,6 +17,7 @@ nanobind_add_module(
   mapper_bindings.cpp
   scheduler_bindings.cpp
   simulator_bindings.cpp
+  observer_bindings.cpp
 )
 
 
@@ -35,5 +36,6 @@ target_include_directories(fastsim2 PRIVATE ${PROJECT_SOURCE_DIR}/src/backend)
 target_include_directories(fastsim2 PRIVATE ${PROJECT_SOURCE_DIR}/src/backend/include)
 target_include_directories(fastsim2 PRIVATE ${NumPy_INCLUDE_DIRS})
 install(TARGETS fastsim2 LIBRARY DESTINATION task4feedback)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/fastsim2.pyi DESTINATION task4feedback)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/py.typed DESTINATION task4feedback)
 
- 

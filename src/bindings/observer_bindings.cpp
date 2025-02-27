@@ -1,75 +1,147 @@
+// nanobind_module.cpp
+#include "devices.hpp"
+#include "features.hpp"
+#include <cstdint>
+#include <memory>
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/string.h>
-#include <nanobind/stl/vector.h>
-#include <nanobind/stl/optional.h>
 #include <nanobind/ndarray.h>
-
-#include "observer.hpp"
-#include "simulator.hpp"
+#include <nanobind/stl/bind_vector.h>
+#include <nanobind/stl/shared_ptr.h>
+#include <nanobind/trampoline.h>
+#include <span>
+#include <sys/types.h>
+#include <vector>
 
 namespace nb = nanobind;
 using namespace nb::literals;
 
-void init_observer(nb::module_& m) {
+// Runtime Polymorphism Interface
 
-    nb::class_<Observer>(m, "Observer")
-        .def(nb::init<const Simulator&>(), "simulator"_a) //Use const Simulator&
-        .def("global_features", &Observer::global_features)
-        .def("get_active_tasks", &Observer::get_active_tasks)
-        .def("get_k_hop_dependents", &Observer::get_k_hop_dependents, "initial_tasks"_a.noconvert(), "n"_a, "k"_a)
-        .def("get_k_hop_dependencies", &Observer::get_k_hop_dependencies, "initial_tasks"_a.noconvert(), "n"_a, "k"_a)
-        .def("get_device_mask_int8", [](Observer& o, taskid_t task_id, nb::ndarray_t<int8_t, nb::shape<nb::any>> valid_devices) {
-                if (valid_devices.ndim() != 1) {
-                    throw std::runtime_error("device_mask must be a 1D array.");
-                }            
-                o.get_device_mask_int8(task_id, valid_devices.data(), valid_devices.shape(0));
-            }, "task_id"_a, "valid_devices"_a.noconvert()) // Use .noconvert()
+struct IFeature {
+  virtual ~IFeature() = default;
+  virtual size_t get_feature_dim() const = 0;
+  virtual void extract_feature(uint32_t object_id, std::span<float> output) const = 0;
+};
 
-        .def("get_task_features", [](Observer &o, nb::ndarray_t<const taskid_t, nb::shape<nb::any>> task_ids) {
-                if (task_ids.ndim() != 1) {
-                    throw std::runtime_error("task_ids must be a 1D array.");
-                }            
-                return o.get_task_features(task_ids.data(), task_ids.shape(0));
-        }, "task_ids"_a.noconvert())
+template <typename Derived> struct FeatureAdapter : IFeature {
+  Derived feature;
+  FeatureAdapter(Derived feat) : feature(std::move(feat)) {
+  }
 
-        .def("get_device_features", [](Observer &o, nb::ndarray_t<const devid_t, nb::shape<nb::any>> device_ids) {
-            if (device_ids.ndim() != 1) {
-                    throw std::runtime_error("device_ids must be a 1D array.");
-                }      
-            return o.get_device_features(device_ids.data(), device_ids.shape(0));
-        }, "device_ids"_a.noconvert())
+  size_t get_feature_dim() const override {
+    return feature.getFeatureDim();
+  }
 
-        .def("get_data_features", [](Observer &o, nb::ndarray_t<const dataid_t, nb::shape<nb::any>> data_ids) {
-                if (data_ids.ndim() != 1) {
-                    throw std::runtime_error("data_ids must be a 1D array.");
-                }            
-                return o.get_data_features(data_ids.data(), data_ids.shape(0));
-        }, "data_ids"_a.noconvert())
+  void extract_feature(uint32_t object_id, std::span<float> output) const override {
+    feature.extractFeature(object_id, output);
+  }
+};
 
-        .def("get_task_task_edges", [](Observer &o, nb::ndarray_t<const taskid_t, nb::shape<nb::any>> source_tasks, nb::ndarray_t<const taskid_t, nb::shape<nb::any>> target_tasks) {
-            if (source_tasks.ndim() != 1 || target_tasks.ndim() != 1) {
-                throw std::runtime_error("source_tasks and target_tasks must be 1D arrays");
-            }
-                return o.get_task_task_edges(source_tasks.data(), source_tasks.size(), target_tasks.data(), target_tasks.size());
-        }, "source_tasks"_a.noconvert(), "target_tasks"_a.noconvert())
-        .def("get_task_data_edges", [](Observer &o, nb::ndarray_t<const taskid_t, nb::shape<nb::any>> task_ids) {
-            if (task_ids.ndim() != 1) {
-                throw std::runtime_error("task_ids must be a 1D array");
-            }                
-            return o.get_task_data_edges(task_ids.data(), task_ids.size());
-        }, "task_ids"_a.noconvert())
-        .def("get_task_device_edges", [](Observer &o, nb::ndarray_t<const taskid_t, nb::shape<nb::any>> task_ids) {
-            if (task_ids.ndim() != 1) {
-                throw std::runtime_error("task_ids must be a 1D array");
-            }        
-            return o.get_task_device_edges(task_ids.data(), task_ids.size());
-        }, "task_ids"_a.noconvert())
-        .def("get_data_device_edges", [](Observer &o, nb::ndarray_t<const taskid_t, nb::shape<nb::any>> task_ids) {
-            if (task_ids.ndim() != 1) {
-                throw std::runtime_error("task_ids must be a 1D array");
-            }
-            return o.get_data_device_edges(task_ids.data(), task_ids.size());
-        }, "task_ids"_a.noconvert())  // Keep as reference if possible
-        .def("get_number_of_unique_data", &Observer::get_number_of_unique_data, "ids"_a.noconvert(), "n"_a)  // Keep as reference if possible
-        .def("get_n_tasks", &Observer::get_n_tasks);
+struct PyIFeature : IFeature {
+  NB_TRAMPOLINE(IFeature, 2);
+
+  size_t get_feature_dim() const override {
+    NB_OVERRIDE_PURE(get_feature_dim);
+  }
+
+  void extract_feature(uint32_t object_id, std::span<float> output) const override {
+    // nb::ndarray<nb::pytorch, float, nb::device::cpu> arr(output.data(), output.size());
+    NB_OVERRIDE_PURE(extract_feature, object_id, output);
+  }
+};
+
+struct RuntimeFeatureExtractor {
+  std::vector<std::shared_ptr<IFeature>> features;
+
+  void addFeature(std::shared_ptr<IFeature> feature) {
+    features.push_back(std::move(feature));
+  }
+
+  size_t getFeatureDim() const {
+    size_t total = 0;
+    for (const auto &f : features)
+      total += f->get_feature_dim();
+    return total;
+  }
+
+  void getFeatures(uint32_t object_id, std::span<float> arr) const {
+    float *data = arr.data();
+    size_t offset = 0;
+    for (const auto &f : features) {
+      size_t dim = f->get_feature_dim();
+      std::span<float> sp(data + offset, dim);
+      f->extract_feature(object_id, sp);
+      offset += dim;
+    }
+  }
+};
+
+template <typename E>
+void get_features_batch(const E &extractor, const std::vector<uint32_t> &object_ids,
+                        nb::ndarray<nb::pytorch, float, nb::device::cpu> tensor) {
+  float *data = tensor.data();
+  auto num_cols = extractor.getFeatureDim();
+  for (size_t i = 0; i < object_ids.size(); ++i) {
+    std::span<float> row(data + i * num_cols, num_cols);
+    extractor.getFeatures(object_ids[i], row);
+  }
+}
+
+template <typename FEType> void bind_state_feature(nb::module_ &m, const char *class_name) {
+  nb::class_<FEType>(m, class_name)
+      .def(nb::init<size_t>())
+      .def("get_feature_dim", &DeviceLocationFeature::getFeatureDim)
+      .def("extract_feature",
+           [](const DeviceLocationFeature &self, uint32_t task_id,
+              nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
+             float *data = arr.data();
+             std::span<float> sp(data, self.getFeatureDim());
+             self.extractFeature(task_id, sp);
+           })
+      .def_static("make_shared", [](size_t n) -> std::shared_ptr<IFeature> {
+        return std::make_shared<FeatureAdapter<FEType>>(FEType(n));
+      });
+}
+
+template <typename... Features>
+void bind_feature_extractor(nb::module_ &m, const char *class_name) {
+  using FEType = FeatureExtractor<Features...>;
+  nb::class_<FEType>(m, class_name)
+      .def(nb::init<Features...>())
+      .def("get_feature_dim", &FEType::getFeatureDim)
+      .def("get_features",
+           [](const FEType &self, uint32_t task_id,
+              nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
+             float *data = arr.data();
+             std::span<float> sp(data, self.getFeatureDim());
+             self.getFeatures(task_id, sp);
+           })
+      .def("get_features_batch", &get_features_batch<FEType>);
+}
+
+// ----- Nanobind Module -----
+void init_observer_ext(nb::module_ &m) {
+  nb::bind_vector<std::vector<std::shared_ptr<IFeature>>>(m, "IFeatureVector");
+
+  bind_state_feature<DeviceLocationFeature>(m, "DeviceLocationFeature");
+
+  bind_feature_extractor<DeviceLocationFeature, DeviceLocationFeature>(m, "FeatureExtractor");
+
+  nb::class_<IFeature, PyIFeature>(m, "IFeature")
+      .def(nb::init<>())
+      .def("get_feature_dim", &IFeature::get_feature_dim)
+      .def("extract_feature", &IFeature::extract_feature);
+
+  nb::class_<RuntimeFeatureExtractor>(m, "RuntimeFeatureExtractor")
+      .def(nb::init<>())
+      .def("add_feature", &RuntimeFeatureExtractor::addFeature)
+      .def("get_feature_dim", &RuntimeFeatureExtractor::getFeatureDim)
+      .def("get_features",
+           [](const RuntimeFeatureExtractor &self, uint32_t task_id,
+              nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
+             float *data = arr.data();
+             std::span<float> sp(data, self.getFeatureDim());
+             self.getFeatures(task_id, sp);
+           })
+      .def("get_features_batch", &get_features_batch<RuntimeFeatureExtractor>);
 }

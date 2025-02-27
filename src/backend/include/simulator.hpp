@@ -13,7 +13,7 @@
 #include <functional>
 #include <memory>
 
-void logger_setup() {
+void init_simulator_logger() {
   auto new_logger = spdlog::stdout_color_mt("console");
   spdlog::set_default_logger(new_logger);
   spdlog::set_level(spdlog::level::debug);
