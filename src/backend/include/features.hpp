@@ -183,7 +183,7 @@ public:
     return s.counts.get_active_task_list();
   }
 
-  void _get_k_hop_task_dependents(TaskSet &visited, taskid_t task_id, int k) {
+  void _get_k_hop_task_dependents(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
 
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
@@ -207,7 +207,7 @@ public:
         const auto &task = tasks.get_compute_task(current_task_id);
         for (const auto &dep_id : task.get_dependents()) {
           if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= spec.max_tasks) {
+            if (visited.size() >= max_tasks) {
               return;
             }
             q.push(dep_id);
@@ -220,28 +220,39 @@ public:
     }
   }
 
-  [[nodiscard]] TaskIDList get_k_hop_task_dependents(TaskSet &visited, TaskIDList &initial_tasks,
-                                                     int k) {
+  [[nodiscard]] size_t get_k_hop_task_dependents(TaskSet &visited, TaskIDList &initial_tasks, int k,
+                                                 TorchInt64Arr1D &output) {
+
+    size_t max_tasks = output.size();
 
     for (const auto &task_id : initial_tasks) {
-      _get_k_hop_task_dependents(visited, task_id, k);
+      _get_k_hop_task_dependents(visited, task_id, k, max_tasks);
+      if (visited.size() >= max_tasks) {
+        break;
+      }
     }
 
-    // Only keep the first max_tasks tasks
-    TaskIDList result;
-    auto count = min(spec.max_tasks, visited.size());
-    result.resize(count);
-    std::copy_n(visited.begin(), count, result.begin());
+    auto count = min(max_tasks, visited.size());
+    size_t i = 0;
+
+    for (auto task : visited) {
+      if (i >= count) {
+        break;
+      }
+      output(i) = task;
+      i++;
+    }
 
     return result;
   }
 
-  [[nodiscard]] TaskIDList get_k_hop_dependents(TaskIDList &initial_tasks, int k) {
+  [[nodiscard]] size_t get_k_hop_dependents(TaskIDList &initial_tasks, int k,
+                                            TorchInt64Arr1D &output) {
     visited.clear();
-    return get_k_hop_task_dependents(visited, initial_tasks, k);
+    return get_k_hop_task_dependents(visited, initial_tasks, k, output);
   }
 
-  void _get_k_hop_task_dependencies(TaskSet &visited, taskid_t task_id, int k) {
+  void _get_k_hop_task_dependencies(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
 
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
@@ -265,7 +276,7 @@ public:
         const auto &task = tasks.get_compute_task(current_task_id);
         for (const auto &dep_id : task.get_dependencies()) {
           if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= spec.max_tasks) {
+            if (visited.size() >= max_tasks) {
               return;
             }
             q.push(dep_id);
@@ -279,27 +290,36 @@ public:
   }
 
   [[nodiscard]] TaskIDList get_k_hop_task_dependencies(TaskSet &visited, TaskIDList &initial_tasks,
-                                                       int k) {
+                                                       int k, TorchInt64Arr1D &output) {
 
+    size_t max_tasks = output.size();
     for (const auto &task_id : initial_tasks) {
-      _get_k_hop_task_dependencies(visited, task_id, k);
+      _get_k_hop_task_dependencies(visited, task_id, k, max_tasks);
+      if (visited.size() >= spec.max_tasks) {
+        break;
+      }
     }
 
-    // Only keep the first max_tasks tasks
-    TaskIDList result;
-    auto count = min(spec.max_tasks, visited.size());
-    result.resize(count);
-    std::copy_n(visited.begin(), count, result.begin());
+    auto count = min(max_tasks, visited.size());
 
-    return result;
+    size_t i = 0;
+    for (auto task : visited) {
+      if (i >= count) {
+        break;
+      }
+      output(i) = task;
+      i++;
+    }
+
+    return count;
   }
 
-  [[nodiscard]] TaskIDList get_k_hop_dependencies(TaskIDList &initial_tasks, int k) {
+  size_t get_k_hop_dependencies(TaskIDList &initial_tasks, int k, TorchInt64Arr1D &output) {
     visited.clear();
-    return get_k_hop_task_dependencies(visited, initial_tasks, k);
+    return get_k_hop_task_dependencies(visited, initial_tasks, k, output);
   }
 
-  void _get_k_hop_task_bidirectional(TaskSet &visited, taskid_t task_id, int k) {
+  void _get_k_hop_task_bidirectional(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
 
     const auto &s = this->state.get();
     const auto &task_manager = s.get_task_manager();
@@ -323,7 +343,7 @@ public:
         const auto &task = tasks.get_compute_task(current_task_id);
         for (const auto &dep_id : task.get_dependencies()) {
           if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= spec.max_tasks) {
+            if (visited.size() >= max_tasks) {
               return;
             }
             q.push(dep_id);
@@ -333,7 +353,7 @@ public:
 
         for (const auto &dep_id : task.get_dependents()) {
           if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= spec.max_tasks) {
+            if (visited.size() >= max_tasks) {
               return;
             }
             q.push(dep_id);
@@ -346,28 +366,38 @@ public:
     }
   }
 
-  [[nodiscard]] TaskIDList get_k_hop_task_bidirectional(TaskSet &visited, TaskIDList &initial_tasks,
-                                                        int k) {
+  size_t get_k_hop_task_bidirectional(TaskSet &visited, TaskIDList &initial_tasks, int k,
+                                      TorchInt64Arr1D &output) {
+
+    size_t max_tasks = output.size();
 
     for (const auto &task_id : initial_tasks) {
-      _get_k_hop_task_bidirectional(visited, task_id, k);
+      _get_k_hop_task_bidirectional(visited, task_id, k, max_tasks);
+      if (visited.size() >= max_tasks) {
+        break;
+      }
     }
 
-    // Only keep the first max_tasks tasks
-    TaskIDList result;
-    auto count = min(spec.max_tasks, visited.size());
-    result.resize(count);
-    std::copy_n(visited.begin(), count, result.begin());
+    auto count = min(max_tasks, visited.size());
 
-    return result;
+    size_t i = 0;
+    for (auto task : visited) {
+      if (i >= count) {
+        break;
+      }
+      output(i) = task;
+      i++;
+    }
+
+    return count;
   }
 
-  [[nodiscard]] TaskIDList get_k_hop_bidirectional(TaskIDList &initial_tasks, int k) {
+  size_t get_k_hop_bidirectional(TaskIDList &initial_tasks, int k, TorchInt64Arr1D &output) {
     visited.clear();
-    return get_k_hop_task_bidirectional(visited, initial_tasks, k);
+    return get_k_hop_task_bidirectional(visited, initial_tasks, k, output);
   }
 
-  size_t get_task_task_edges(TaskIDList &sources, TorchUInt64Arr2D &output) {
+  size_t get_task_task_edges(TaskIDList &sources, TorchInt64Arr2D &output) {
 
     // Check first dimension is 2
     if (output.shape(0) != 2) {
@@ -432,7 +462,7 @@ public:
     return result;
   }
 
-  size_t get_task_data_edges(TaskIDList &task_ids, DataIDList &data_ids, TorchUInt64Arr2D &output) {
+  size_t get_task_data_edges(TaskIDList &task_ids, DataIDList &data_ids, TorchInt64Arr2D &output) {
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
@@ -471,7 +501,7 @@ public:
     return edge_count;
   }
 
-  size_t get_data_device_edges(DataIDList &data_ids, TorchUInt64Arr2D &output) {
+  size_t get_data_device_edges(DataIDList &data_ids, TorchInt64Arr2D &output) {
 
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
@@ -769,7 +799,6 @@ struct TaskStateFeature : public StateFeature<TaskStateFeature> {
     const auto &s = this->state;
     const auto &task_manager = s.get_task_manager();
     const auto state = task_manager.state.get_state(task_id);
-    std::cout << "Task state: " << static_cast<int>(state) << std::endl;
     output[0] = static_cast<f_t>(state == TaskState::MAPPED);
     output[1] = static_cast<f_t>(state == TaskState::RESERVED);
     output[2] = static_cast<f_t>(state == TaskState::LAUNCHED);
