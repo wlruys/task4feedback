@@ -666,6 +666,20 @@ struct OneHotMappedDeviceTaskFeature : public StateFeature<OneHotMappedDeviceTas
   }
 };
 
+struct EmptyDataFeature : public IntFeature<EmptyDataFeature> {
+  size_t dimension;
+  EmptyDataFeature(size_t dimension)
+      : IntFeature<EmptyDataFeature>(dimension, NodeType::DATA_BLOCK), dimension(dimension) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return dimension;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID data_id, Span output) const {
+  }
+};
+
 struct DataMappedLocations : public StateFeature<DataMappedLocations> {
   DataMappedLocations(const SchedulerState &state)
       : StateFeature<DataMappedLocations>(state, NodeType::DATA_BLOCK) {
@@ -735,6 +749,20 @@ struct DataSizeFeature : public StateFeature<DataSizeFeature> {
   template <typename ID, typename Span> void extractFeatureImpl(ID data_id, Span output) const {
     const auto &data = state.get_data_manager().get_data();
     output[0] = log(static_cast<f_t>(data.get_size(data_id)));
+  }
+};
+
+struct EmptyDeviceFeature : public IntFeature<EmptyDeviceFeature> {
+  size_t dimension;
+  EmptyDeviceFeature(size_t dimension)
+      : IntFeature<EmptyDeviceFeature>(dimension, NodeType::DEVICE), dimension(dimension) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return dimension;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID device_id, Span output) const {
   }
 };
 
@@ -810,6 +838,21 @@ struct DeviceArchitectureFeature : public StateFeature<DeviceArchitectureFeature
   }
 };
 
+struct EmptyTaskTaskFeature : public IntEdgeFeature<EmptyTaskTaskFeature> {
+  size_t dimension;
+  EmptyTaskTaskFeature(size_t dimension)
+      : IntEdgeFeature<EmptyTaskTaskFeature>(dimension, EdgeType::TASK_TASK), dimension(dimension) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return dimension;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
+  }
+};
+
 struct TaskTaskSharedDataFeature : public StateEdgeFeature<TaskTaskSharedDataFeature> {
   TaskTaskSharedDataFeature(const SchedulerState &state)
       : StateEdgeFeature<TaskTaskSharedDataFeature>(state, EdgeType::TASK_TASK) {
@@ -841,6 +884,21 @@ struct TaskTaskSharedDataFeature : public StateEdgeFeature<TaskTaskSharedDataFea
         data_manager.shared_size(source_task.get_unique(), target_task.get_unique()));
 
     output[0] = guarded_divide(shared_memory_cost, total_memory_cost_source);
+  }
+};
+
+struct EmptyTaskDataFeature : public IntEdgeFeature<EmptyTaskDataFeature> {
+  size_t dimension;
+  EmptyTaskDataFeature(size_t dimension)
+      : IntEdgeFeature<EmptyTaskDataFeature>(dimension, EdgeType::TASK_DATA), dimension(dimension) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return dimension;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
   }
 };
 
