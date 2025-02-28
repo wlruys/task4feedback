@@ -529,7 +529,56 @@ class SimulatorInput:
 
 @dataclass
 class ExternalObserver:
-    pass
+    task_feature_extractor: fastsim.RuntimeFeatureExtractor
+    data_feature_extractor: fastsim.RuntimeFeatureExtractor
+    device_feature_extractor: fastsim.RuntimeFeatureExtractor
+    task_task_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
+    task_data_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
+    task_device_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
+    data_device_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
+    graph_extractor: fastsim.GraphExtractor
+
+    @dataclass
+    class ExternalObserver:
+        task_feature_extractor: fastsim.RuntimeFeatureExtractor
+        data_feature_extractor: fastsim.RuntimeFeatureExtractor
+        device_feature_extractor: fastsim.RuntimeFeatureExtractor
+        task_task_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
+        task_data_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
+        task_device_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
+        data_device_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
+        graph_extractor: fastsim.GraphExtractor
+
+        def __init__(
+            self,
+            state: fastsim.SchedulerState,
+            task_feature_types: Optional[list],
+            data_feature_types: Optional[list],
+            device_feature_types: Optional[list],
+            task_task_feature_types: Optional[list],
+        ):
+            self.task_feature_extractor = fastsim.RuntimeFeatureExtractor(
+                state, task_feature_types
+            )
+            self.data_feature_extractor = fastsim.RuntimeFeatureExtractor(
+                state, data_feature_types
+            )
+            self.device_feature_extractor = fastsim.RuntimeFeatureExtractor(
+                state, device_feature_types
+            )
+            self.task_task_feature_extractor = fastsim.RuntimeEdgeFeatureExtractor(
+                state, task_task_feature_types
+            )
+            self.task_data_feature_extractor = fastsim.RuntimeEdgeFeatureExtractor(
+                state, task_task_feature_types
+            )
+            self.task_device_feature_extractor = fastsim.RuntimeEdgeFeatureExtractor(
+                state, task_task_feature_types
+            )
+            self.data_device_feature_extractor = fastsim.RuntimeEdgeFeatureExtractor(
+                state, task_task_feature_types
+            )
+            self.graph_extractor = fastsim.GraphExtractor(state)
 
 
 @dataclass
@@ -549,6 +598,23 @@ class SimulatorDriver:
         observer: Type[ExternalObserver] = ExternalObserver,
         simulator: Optional[fastsim.Simulator] = None,
     ):
+        """
+        Initializes the wrapper with the provided input, mappers, observer, and simulator.
+
+        Args:
+            input (SimulatorInput): The input data for the simulator.
+            internal_mapper (fastsim.Mapper | Type[fastsim.Mapper], optional): The internal mapper instance or class. Defaults to fastsim.DequeueEFTMapper.
+            external_mapper (ExternalMapper | Type[ExternalMapper], optional): The external mapper instance or class. Defaults to ExternalMapper.
+            observer (Type[ExternalObserver], optional): The observer class. Defaults to ExternalObserver.
+            simulator (Optional[fastsim.Simulator], optional): An optional simulator instance. If not provided, a new simulator will be created using the input and internal mapper.
+
+        Attributes:
+            input (SimulatorInput): The input data for the simulator.
+            internal_mapper (fastsim.Mapper): The internal mapper instance.
+            external_mapper (ExternalMapper): The external mapper instance.
+            observer (ExternalObserver): The observer instance.
+            simulator (fastsim.Simulator): The simulator instance.
+        """
         self.input = input
         if isinstance(internal_mapper, type):
             internal_mapper = internal_mapper()
@@ -663,6 +729,18 @@ class SimulatorDriver:
 
 
 def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth: int):
+    """
+    Creates a system with a uniform connection of devices including one CPU and multiple GPUs.
+    Parameters:
+    n_devices (int): Total number of devices including one CPU and multiple GPUs. Must be greater than 1.
+    mem (int): Memory allocated to each device.
+    latency (int): Latency of the connections between devices.
+    bandwidth (int): Bandwidth of the connections between devices.
+    Returns:
+    System: A system object with the specified devices and connections.
+    Raises:
+    AssertionError: If n_devices is not greater than 1.
+    """
     assert n_devices > 1
 
     s = System()

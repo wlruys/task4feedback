@@ -3,6 +3,7 @@
 #include "features.hpp"
 #include "scheduler.hpp"
 #include "settings.hpp"
+#include "simulator.hpp"
 #include <cstdint>
 #include <memory>
 #include <nanobind/nanobind.h>
