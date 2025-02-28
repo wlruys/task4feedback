@@ -17,7 +17,16 @@ dependencies = ["psutil", "pyyaml", "numpy", "python-json-logger"]
 
 
 [project.optional-dependencies]
-graph = ["pydot", "networkx", "hypernetx", "matplotlib", "seaborn"]
+graph = [
+    "pydot",
+    "networkx",
+    "hypernetx",
+    "matplotlib",
+    "seaborn",
+    "torch",
+    "torch-geometric",
+    "torch-rl",
+]
 dev = ["ruff"]
 rl = ["torch"]
 

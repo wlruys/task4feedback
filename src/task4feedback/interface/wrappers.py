@@ -978,7 +978,7 @@ class ExternalObserver:
 
         # Edge observations (edges depend on ids collected during node observation)
         self.task_task_observation(output)
-        # self.task_data_observation(output)
+        self.task_data_observation(output)
 
         return output
 
