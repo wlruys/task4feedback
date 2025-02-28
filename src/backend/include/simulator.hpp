@@ -12,6 +12,8 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 
 void init_simulator_logger() {
   auto new_logger = spdlog::stdout_color_mt("console");
@@ -82,7 +84,7 @@ public:
 
   bool initialized = false;
   bool data_initialized = false;
-  volatile bool use_python_mapper = false;
+  bool use_python_mapper = false;
 
   ExecutionState last_state = ExecutionState::NONE;
   Event last_event = Event(EventType::MAPPER, 0, TaskIDList());
@@ -167,8 +169,8 @@ public:
     scheduler.update_time(event.get_time());
   }
 
-  const TaskIDList &get_mappable_candidates() {
-    return scheduler.get_mappable_candidates();
+  size_t get_mappable_candidates(TorchInt64Arr1D &output_tensor) {
+    return scheduler.get_mappable_candidates(output_tensor);
   }
 
   void map_tasks(ActionList &action_list) {

@@ -59,6 +59,6 @@ void init_simulator_ext(nb::module_ &m) {
            nb::rv_policy::reference_internal)
       .def("run", &Simulator::run)
       .def("get_current_time", &Simulator::get_current_time)
-      .def("get_mappable_candidates", &Simulator::get_mappable_candidates)
+      .def("get_mappable_candidates", &Simulator::get_mappable_candidates, "output_tensor"_a)
       .def("map_tasks", &Simulator::map_tasks, "action_list"_a);
 }

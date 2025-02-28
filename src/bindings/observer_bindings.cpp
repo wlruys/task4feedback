@@ -2,12 +2,14 @@
 #include "devices.hpp"
 #include "features.hpp"
 #include "scheduler.hpp"
+#include "settings.hpp"
 #include <cstdint>
 #include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/trampoline.h>
 #include <span>
 #include <sys/types.h>
@@ -15,24 +17,6 @@
 
 namespace nb = nanobind;
 using namespace nb::literals;
-
-using TorchArr = nb::ndarray<nb::pytorch, nb::device::cpu, float>;
-
-template <typename T>
-using TorchArr2D = nb::ndarray<T, nb::shape<any_size, any_size>, nb::c_contig, nb::pytorch>;
-using TorchFloatArr2D = TorchArr2D<float>;
-using TorchIntArr2D = TorchArr2D<int>;
-using TorchInt64Arr2D = TorchArr2D<int64_t>;
-using TorchUInt32Arr2D = TorchArr2D<uint32_t>;
-using TorchUInt64Arr2D = TorchArr2D<uint64_t>;
-
-template <typename T>
-using TorchArr1D = nb::ndarray<T, nb::shape<any_size>, nb::c_contig, nb::pytorch>;
-using TorchFloatArr1D = TorchArr1D<float>;
-using TorchIntArr1D = TorchArr1D<int>;
-using TorchInt64Arr1D = TorchArr1D<int64_t>;
-using TorchUInt32Arr1D = TorchArr1D<uint32_t>;
-using TorchUInt64Arr1D = TorchArr1D<uint64_t>;
 
 // Runtime Polymorphism Interface
 
@@ -77,20 +61,6 @@ template <typename Derived> struct EdgeFeatureAdapter : IEdgeFeature {
     feature.extractFeature(source_id, target_id, output);
   }
 };
-
-struct PyIFeature : IFeature {
-  NB_TRAMPOLINE(IFeature, 2);
-
-  size_t get_feature_dim() const override {
-    NB_OVERRIDE_PURE(get_feature_dim);
-  }
-
-  void extract_feature(uint32_t object_id, std::span<float> output) const override {
-    // nb::ndarray<nb::pytorch, float, nb::device::cpu> arr(output.data(), output.size());
-    NB_OVERRIDE_PURE(extract_feature, object_id, output);
-  }
-};
-
 struct RuntimeFeatureExtractor {
   std::vector<std::shared_ptr<IFeature>> features;
 
@@ -144,24 +114,24 @@ struct RuntimeEdgeFeatureExtractor {
 };
 
 template <typename E>
-void get_features_batch(const E &extractor, const std::vector<uint32_t> &object_ids,
-                        nb::ndarray<nb::pytorch, float, nb::device::cpu> tensor) {
+void get_features_batch(const E &extractor, const TorchInt64Arr1D &object_ids,
+                        TorchFloatArr2D &tensor) {
   float *data = tensor.data();
   auto num_cols = extractor.getFeatureDim();
   for (size_t i = 0; i < object_ids.size(); ++i) {
     std::span<float> row(data + i * num_cols, num_cols);
-    extractor.getFeatures(object_ids[i], row);
+    extractor.getFeatures(static_cast<uint32_t>(object_ids(i)), row);
   }
 }
 
 template <typename E>
-void get_edge_features_batch(const E &extractor, TorchUInt64Arr2D &edges,
-                             nb::ndarray<nb::pytorch, float, nb::device::cpu> tensor) {
+void get_edge_features_batch(const E &extractor, TorchInt64Arr2D &edges, TorchFloatArr2D &tensor) {
   float *data = tensor.data();
   auto num_cols = extractor.getFeatureDim();
   for (size_t i = 0; i < edges.shape(1); ++i) {
     std::span<float> row(data + i * num_cols, num_cols);
-    extractor.getFeatures(edges(i, 0), edges(i, 1), row);
+    extractor.getFeatures(static_cast<uint32_t>(edges(0, i)), static_cast<uint32_t>(edges(1, i)),
+                          row);
   }
 }
 
@@ -264,6 +234,7 @@ void bind_edge_feature_extractor(nb::module_ &m, const char *class_name) {
 // ----- Nanobind Module -----
 void init_observer_ext(nb::module_ &m) {
   nb::bind_vector<std::vector<std::shared_ptr<IFeature>>>(m, "IFeatureVector");
+  nb::bind_vector<std::vector<std::shared_ptr<IEdgeFeature>>>(m, "IEdgeFeatureVector");
 
   // Task Features
   bind_int_feature<EmptyTaskFeature>(m, "EmptyTaskFeature");
@@ -301,10 +272,13 @@ void init_observer_ext(nb::module_ &m) {
 
   // Data Device Features
 
-  nb::class_<IFeature, PyIFeature>(m, "IFeature")
-      .def(nb::init<>())
+  nb::class_<IFeature>(m, "IFeature")
       .def_prop_ro("feature_dim", &IFeature::get_feature_dim)
       .def("extract_feature", &IFeature::extract_feature);
+
+  nb::class_<IEdgeFeature>(m, "IEdgeFeature")
+      .def_prop_ro("feature_dim", &IEdgeFeature::get_feature_dim)
+      .def("extract_feature", &IEdgeFeature::extract_feature);
 
   nb::class_<RuntimeFeatureExtractor>(m, "RuntimeFeatureExtractor")
       .def(nb::init<>())
@@ -349,7 +323,47 @@ void init_observer_ext(nb::module_ &m) {
            nb::overload_cast<const SchedulerState &>(&GraphSpec::compute_max_degree))
       .def("compute_max_tasks", &GraphSpec::compute_max_tasks)
       .def("compute_max_data", &GraphSpec::compute_max_data)
-      .def("finalize", &GraphSpec::finalize);
+      .def("finalize", &GraphSpec::finalize)
+      .def("__str__", [](const GraphSpec &self) {
+        return "GraphSpec {\n"
+               "  Nodes:\n"
+               "    max_tasks: " +
+               std::to_string(self.max_tasks) +
+               "\n"
+               "    max_data: " +
+               std::to_string(self.max_data) +
+               "\n"
+               "    max_devices: " +
+               std::to_string(self.max_devices) +
+               "\n"
+               "  Degrees:\n"
+               "    max_in_degree: " +
+               std::to_string(self.max_in_degree) +
+               "\n"
+               "    max_out_degree: " +
+               std::to_string(self.max_out_degree) +
+               "\n"
+               "    max_data_usage: " +
+               std::to_string(self.max_data_usage) +
+               "\n"
+               "    max_candidates: " +
+               std::to_string(self.max_candidates) +
+               "\n"
+               "  Edges:\n"
+               "    max_edges_tasks_tasks: " +
+               std::to_string(self.max_edges_tasks_tasks) +
+               "\n"
+               "    max_edges_tasks_data: " +
+               std::to_string(self.max_edges_tasks_data) +
+               "\n"
+               "    max_edges_tasks_devices: " +
+               std::to_string(self.max_edges_tasks_devices) +
+               "\n"
+               "    max_edges_data_devices: " +
+               std::to_string(self.max_edges_data_devices) +
+               "\n"
+               "}";
+      });
 
   nb::class_<GraphExtractor>(m, "GraphExtractor")
       .def(nb::init<SchedulerState &>())
@@ -360,6 +374,7 @@ void init_observer_ext(nb::module_ &m) {
       .def("get_k_hop_bidirectional", &GraphExtractor::get_k_hop_bidirectional)
       .def("get_active_tasks", &GraphExtractor::get_active_tasks)
       .def("get_task_task_edges", &GraphExtractor::get_task_task_edges)
+      .def("get_task_task_edges_reverse", &GraphExtractor::get_task_task_edges_reverse)
       .def("get_task_data_edges", &GraphExtractor::get_task_data_edges)
       .def("get_data_device_edges", &GraphExtractor::get_data_device_edges)
       .def("get_unique_data", &GraphExtractor::get_unique_data);

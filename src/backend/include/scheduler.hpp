@@ -608,6 +608,7 @@ public:
     state.initialize_data_manager();
   }
 
+  size_t get_mappable_candidates(TorchInt64Arr1D &output_tensor);
   TaskIDList &get_mappable_candidates();
 
   const TaskIDList &map_task(Action &action);

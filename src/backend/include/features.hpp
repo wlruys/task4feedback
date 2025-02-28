@@ -26,31 +26,6 @@ using op_t = uint32_t;
 using f_t = float_t;
 using namespace nb::literals;
 
-#if NB_VERSION_MAJOR > 1
-// shapes are signed starting with NB 2, nb::any now stands for any type, not any shape
-constexpr auto any_size = -1;
-#else
-constexpr auto any_size = nb::any;
-#endif
-
-using TorchArr = nb::ndarray<nb::pytorch, nb::device::cpu, float>;
-
-template <typename T>
-using TorchArr2D = nb::ndarray<T, nb::shape<any_size, any_size>, nb::c_contig, nb::pytorch>;
-using TorchFloatArr2D = TorchArr2D<float>;
-using TorchIntArr2D = TorchArr2D<int>;
-using TorchInt64Arr2D = TorchArr2D<int64_t>;
-using TorchUInt32Arr2D = TorchArr2D<uint32_t>;
-using TorchUInt64Arr2D = TorchArr2D<uint64_t>;
-
-template <typename T>
-using TorchArr1D = nb::ndarray<T, nb::shape<any_size>, nb::c_contig, nb::pytorch>;
-using TorchFloatArr1D = TorchArr1D<float>;
-using TorchIntArr1D = TorchArr1D<int>;
-using TorchInt64Arr1D = TorchArr1D<int64_t>;
-using TorchUInt32Arr1D = TorchArr1D<uint32_t>;
-using TorchUInt64Arr1D = TorchArr1D<uint64_t>;
-
 taskid_t max(taskid_t a, taskid_t b) {
   return a > b ? a : b;
 }
@@ -220,12 +195,14 @@ public:
     }
   }
 
-  [[nodiscard]] size_t get_k_hop_task_dependents(TaskSet &visited, TaskIDList &initial_tasks, int k,
-                                                 TorchInt64Arr1D &output) {
+  [[nodiscard]] size_t get_k_hop_task_dependents(TaskSet &visited, TorchInt64Arr1D &initial_tasks,
+                                                 int k, TorchInt64Arr1D &output) {
 
     size_t max_tasks = output.size();
+    std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
 
-    for (const auto &task_id : initial_tasks) {
+    for (const auto &task_id_64_bit : initial_tasks_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_dependents(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
         break;
@@ -239,14 +216,14 @@ public:
       if (i >= count) {
         break;
       }
-      output(i) = task;
+      output(i) = static_cast<int64_t>(task);
       i++;
     }
 
-    return result;
+    return count;
   }
 
-  [[nodiscard]] size_t get_k_hop_dependents(TaskIDList &initial_tasks, int k,
+  [[nodiscard]] size_t get_k_hop_dependents(TorchInt64Arr1D &initial_tasks, int k,
                                             TorchInt64Arr1D &output) {
     visited.clear();
     return get_k_hop_task_dependents(visited, initial_tasks, k, output);
@@ -289,11 +266,14 @@ public:
     }
   }
 
-  [[nodiscard]] TaskIDList get_k_hop_task_dependencies(TaskSet &visited, TaskIDList &initial_tasks,
-                                                       int k, TorchInt64Arr1D &output) {
+  [[nodiscard]] size_t get_k_hop_task_dependencies(TaskSet &visited, TorchInt64Arr1D &initial_tasks,
+                                                   int k, TorchInt64Arr1D &output) {
+
+    std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
 
     size_t max_tasks = output.size();
-    for (const auto &task_id : initial_tasks) {
+    for (const auto &task_id_64_bit : initial_tasks_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_dependencies(visited, task_id, k, max_tasks);
       if (visited.size() >= spec.max_tasks) {
         break;
@@ -307,14 +287,14 @@ public:
       if (i >= count) {
         break;
       }
-      output(i) = task;
+      output(i) = static_cast<int64_t>(task);
       i++;
     }
 
     return count;
   }
 
-  size_t get_k_hop_dependencies(TaskIDList &initial_tasks, int k, TorchInt64Arr1D &output) {
+  size_t get_k_hop_dependencies(TorchInt64Arr1D &initial_tasks, int k, TorchInt64Arr1D &output) {
     visited.clear();
     return get_k_hop_task_dependencies(visited, initial_tasks, k, output);
   }
@@ -366,12 +346,14 @@ public:
     }
   }
 
-  size_t get_k_hop_task_bidirectional(TaskSet &visited, TaskIDList &initial_tasks, int k,
+  size_t get_k_hop_task_bidirectional(TaskSet &visited, TorchInt64Arr1D &initial_tasks, int k,
                                       TorchInt64Arr1D &output) {
 
     size_t max_tasks = output.size();
+    std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
 
-    for (const auto &task_id : initial_tasks) {
+    for (const auto &task_id_64_bit : initial_tasks_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_bidirectional(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
         break;
@@ -385,19 +367,19 @@ public:
       if (i >= count) {
         break;
       }
-      output(i) = task;
+      output(i) = static_cast<int64_t>(task);
       i++;
     }
 
     return count;
   }
 
-  size_t get_k_hop_bidirectional(TaskIDList &initial_tasks, int k, TorchInt64Arr1D &output) {
+  size_t get_k_hop_bidirectional(TorchInt64Arr1D &initial_tasks, int k, TorchInt64Arr1D &output) {
     visited.clear();
     return get_k_hop_task_bidirectional(visited, initial_tasks, k, output);
   }
 
-  size_t get_task_task_edges(TaskIDList &sources, TorchInt64Arr2D &output) {
+  size_t get_task_task_edges(TorchInt64Arr1D &sources, TorchInt64Arr2D &output) {
 
     // Check first dimension is 2
     if (output.shape(0) != 2) {
@@ -408,16 +390,18 @@ public:
     task_index_map.clear();
     task_index_map.reserve(sources.size());
 
-    for (std::size_t i = 0; i < sources.size(); i++) {
-      task_index_map[sources[i]] = i;
+    std::span<int64_t> sources_span(sources.data(), sources.size());
+
+    for (std::size_t i = 0; i < sources_span.size(); i++) {
+      task_index_map[static_cast<taskid_t>(sources_span[i])] = i;
     }
 
     const auto &task_manager = state.get().get_task_manager();
     const auto &tasks = task_manager.get_tasks();
     std::size_t edge_count = 0;
 
-    for (std::size_t source_idx = 0; source_idx < sources.size(); source_idx++) {
-      const auto source_id = sources[source_idx];
+    for (std::size_t source_idx = 0; source_idx < sources_span.size(); source_idx++) {
+      const auto source_id = sources_span[source_idx];
       const auto &source_task = tasks.get_compute_task(source_id);
       const auto &dependencies = source_task.get_dependencies();
 
@@ -425,8 +409,8 @@ public:
       for (const auto &dep_id : dependencies) {
         auto it = task_index_map.find(dep_id);
         if (it != task_index_map.end()) {
-          output(0, edge_count) = source_idx;
-          output(1, edge_count) = it->second;
+          output(0, edge_count) = static_cast<int64_t>(source_idx);
+          output(1, edge_count) = static_cast<int64_t>(it->second);
           edge_count++;
         }
       }
@@ -434,38 +418,90 @@ public:
     return edge_count;
   }
 
-  [[nodiscard]] DataIDList get_unique_data(TaskIDList &task_ids) {
+  size_t get_task_task_edges_reverse(TorchInt64Arr1D &sources, TorchInt64Arr2D &output) {
+
+    // Check first dimension is 2
+    if (output.shape(0) != 2) {
+      throw std::runtime_error("Edge output shape must be 2 x N");
+    }
+
+    // Clear data structures before use
+    task_index_map.clear();
+    task_index_map.reserve(sources.size());
+
+    std::span<int64_t> sources_span(sources.data(), sources.size());
+
+    for (std::size_t i = 0; i < sources_span.size(); i++) {
+      task_index_map[static_cast<taskid_t>(sources_span[i])] = i;
+    }
+
+    const auto &task_manager = state.get().get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+    std::size_t edge_count = 0;
+
+    for (std::size_t source_idx = 0; source_idx < sources_span.size(); source_idx++) {
+      const auto source_id = sources_span[source_idx];
+      const auto &source_task = tasks.get_compute_task(source_id);
+      const auto &dependents = source_task.get_dependents();
+
+      // Process each dependency
+      for (const auto &dep_id : dependents) {
+        auto it = task_index_map.find(dep_id);
+        if (it != task_index_map.end()) {
+          output(0, edge_count) = static_cast<int64_t>(source_idx);
+          output(1, edge_count) = static_cast<int64_t>(it->second);
+          edge_count++;
+        }
+      }
+    }
+    return edge_count;
+  }
+
+  size_t get_unique_data(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &output) {
     data_visited.clear();
     data_visited.reserve(400);
+
+    const auto max_data = output.size();
+
+    std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
 
     const auto &task_manager = state.get().get_task_manager();
     const auto &tasks = task_manager.get_tasks();
 
-    for (const auto &task_id : task_ids) {
+    for (const auto &task_id_64_bit : task_ids_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       const auto &task = tasks.get_compute_task(task_id);
       for (auto data_id : task.get_unique()) {
         data_visited.insert(data_id);
-        if (data_visited.size() >= spec.max_data) {
+        if (data_visited.size() >= max_data) {
           break;
         }
       }
-      if (data_visited.size() >= spec.max_data) {
+      if (data_visited.size() >= max_data) {
         break;
       }
     }
 
-    DataIDList result;
-    auto max_size = min(spec.max_data, data_visited.size());
-    result.reserve(max_size);
-    std::copy_n(data_visited.begin(), max_size, std::back_inserter(result));
-
-    return result;
+    size_t count = min(output.size(), data_visited.size());
+    size_t i = 0;
+    for (auto data_id : data_visited) {
+      if (i >= count) {
+        break;
+      }
+      output(i) = static_cast<int64_t>(data_id);
+      i++;
+    }
+    return count;
   }
 
-  size_t get_task_data_edges(TaskIDList &task_ids, DataIDList &data_ids, TorchInt64Arr2D &output) {
+  size_t get_task_data_edges(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
+                             TorchInt64Arr2D &output) {
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
+
+    std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
+    std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
     const auto max_edges = output.shape(1);
 
@@ -476,18 +512,21 @@ public:
     const auto &tasks = task_manager.get_tasks();
 
     std::size_t edge_count = 0;
-    for (std::size_t i = 0; i < data_ids.size(); i++) {
-      data_index_map[data_ids[i]] = i;
+    for (std::size_t i = 0; i < data_ids_span.size(); i++) {
+      // if (data_index_map.find(static_cast<dataid_t>(data_ids_span[i])) == data_index_map.end()) {
+      //   data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
+      // }
+      data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
     }
 
-    for (std::size_t i = 0; i < task_ids.size(); i++) {
-      const auto &task_id = task_ids[i];
+    for (std::size_t i = 0; i < task_ids_span.size(); i++) {
+      const auto &task_id = static_cast<taskid_t>(task_ids_span[i]);
       const auto &task = tasks.get_compute_task(task_id);
       for (auto data_id : task.get_unique()) {
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          output(0, edge_count) = i;
-          output(1, edge_count) = it->second;
+          output(0, edge_count) = static_cast<int64_t>(i);
+          output(1, edge_count) = static_cast<int64_t>(it->second);
           edge_count++;
           if (edge_count >= max_edges) {
             break;
@@ -501,11 +540,13 @@ public:
     return edge_count;
   }
 
-  size_t get_data_device_edges(DataIDList &data_ids, TorchInt64Arr2D &output) {
+  size_t get_data_device_edges(TorchInt64Arr1D &data_ids, TorchInt64Arr2D &output) {
 
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
+
+    std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
     const auto max_edges = output.shape(1);
 
@@ -514,11 +555,11 @@ public:
     const auto &data_manager = state.get().get_data_manager();
 
     std::size_t edge_count = 0;
-    for (std::size_t i = 0; i < data_ids.size(); i++) {
+    for (std::size_t i = 0; i < data_ids_span.size(); i++) {
       for (std::size_t j = 0; j < devices.size(); j++) {
-        if (data_manager.check_valid_mapped(data_ids[i], j)) {
-          output(0, i) = i;
-          output(1, i) = j;
+        if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
+          output(0, i) = static_cast<int64_t>(i);
+          output(1, i) = static_cast<int64_t>(j);
           edge_count++;
           if (edge_count >= max_edges) {
             break;
@@ -1005,6 +1046,7 @@ struct TaskTaskSharedDataFeature : public StateEdgeFeature<TaskTaskSharedDataFea
   template <typename ID, typename Span>
   void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
     const auto &tasks = state.get_task_manager().get_tasks();
+
     const auto &source_task = tasks.get_compute_task(source_id);
     const auto &target_task = tasks.get_compute_task(target_id);
     const auto &data_manager = state.get_data_manager();
@@ -1022,7 +1064,6 @@ struct TaskTaskSharedDataFeature : public StateEdgeFeature<TaskTaskSharedDataFea
 
     auto shared_memory_cost = static_cast<double>(
         data_manager.shared_size(source_task.get_unique(), target_task.get_unique()));
-
     output[0] = guarded_divide(shared_memory_cost, total_memory_cost_source);
   }
 };
