@@ -118,10 +118,11 @@ template <typename E>
 void get_features_batch(const E &extractor, const TorchInt64Arr1D &object_ids,
                         TorchFloatArr2D &tensor) {
   float *data = tensor.data();
+  auto v = object_ids.view();
   auto num_cols = extractor.getFeatureDim();
   for (size_t i = 0; i < object_ids.size(); ++i) {
     std::span<float> row(data + i * num_cols, num_cols);
-    extractor.getFeatures(static_cast<uint32_t>(object_ids(i)), row);
+    extractor.getFeatures(static_cast<uint32_t>(v(i)), row);
   }
 }
 
@@ -129,16 +130,16 @@ template <typename E>
 void get_edge_features_batch(const E &extractor, TorchInt64Arr2D &edges, TorchFloatArr2D &tensor) {
   float *data = tensor.data();
   auto num_cols = extractor.getFeatureDim();
+  auto v = edges.view();
   for (size_t i = 0; i < edges.shape(1); ++i) {
     std::span<float> row(data + i * num_cols, num_cols);
-    extractor.getFeatures(static_cast<uint32_t>(edges(0, i)), static_cast<uint32_t>(edges(1, i)),
-                          row);
+    extractor.getFeatures(static_cast<uint32_t>(v(0, i)), static_cast<uint32_t>(v(1, i)), row);
   }
 }
 
 template <typename FEType> void bind_int_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
-      .def(nb::init<size_t>())
+      .def(nb::init<SchedulerState &, size_t>())
       .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
            [](const FEType &self, uint32_t task_id,
@@ -147,14 +148,14 @@ template <typename FEType> void bind_int_feature(nb::module_ &m, const char *cla
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(task_id, sp);
            })
-      .def_static("create", [](size_t n) -> std::shared_ptr<IFeature> {
-        return std::make_shared<FeatureAdapter<FEType>>(FEType(n));
+      .def_static("create", [](SchedulerState &state, size_t n) -> std::shared_ptr<IFeature> {
+        return std::make_shared<FeatureAdapter<FEType>>(FEType(state, n));
       });
 }
 
 template <typename FEType> void bind_int_edge_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
-      .def(nb::init<size_t>())
+      .def(nb::init<SchedulerState &, size_t>())
       .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
            [](const FEType &self, uint32_t source_id, uint32_t target_id,
@@ -163,8 +164,8 @@ template <typename FEType> void bind_int_edge_feature(nb::module_ &m, const char
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(source_id, target_id, sp);
            })
-      .def_static("create", [](size_t n) -> std::shared_ptr<IEdgeFeature> {
-        return std::make_shared<EdgeFeatureAdapter<FEType>>(FEType(n));
+      .def_static("create", [](SchedulerState &state, size_t n) -> std::shared_ptr<IEdgeFeature> {
+        return std::make_shared<EdgeFeatureAdapter<FEType>>(FEType(state, n));
       });
 }
 
@@ -248,9 +249,9 @@ void init_observer_ext(nb::module_ &m) {
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");
-  bind_state_feature<DataMappedLocations>(m, "DataMappedLocations");
-  bind_state_feature<DataReservedLocations>(m, "DataReservedLocations");
-  bind_state_feature<DataLaunchedLocations>(m, "DataLaunchedLocations");
+  bind_state_feature<DataMappedLocations>(m, "DataMappedLocationsFeature");
+  bind_state_feature<DataReservedLocations>(m, "DataReservedLocationsFeature");
+  bind_state_feature<DataLaunchedLocations>(m, "DataLaunchedLocationsFeature");
   bind_state_feature<DataSizeFeature>(m, "DataSizeFeature");
 
   // Device Features
@@ -272,6 +273,16 @@ void init_observer_ext(nb::module_ &m) {
   // Task Device Features
 
   // Data Device Features
+
+  // PrecompiledFeatureExtractors
+  bind_feature_extractor<InDegreeTaskFeature, OutDegreeTaskFeature, OneHotMappedDeviceTaskFeature>(
+      m, "TaskFeatureExtractor");
+  bind_feature_extractor<DataSizeFeature, DataMappedLocations>(m, "DataFeatureExtractor");
+  bind_feature_extractor<DeviceArchitectureFeature, DeviceIDFeature, DeviceMemoryFeature,
+                         DeviceTimeFeature>(m, "DeviceFeatureExtractor");
+  bind_edge_feature_extractor<TaskTaskSharedDataFeature>(m, "TaskTaskFeatureExtractor");
+  bind_edge_feature_extractor<TaskDataRelativeSizeFeature, TaskDataUsageFeature>(
+      m, "TaskDataFeatureExtractor");
 
   nb::class_<IFeature>(m, "IFeature")
       .def_prop_ro("feature_dim", &IFeature::get_feature_dim)
@@ -368,8 +379,6 @@ void init_observer_ext(nb::module_ &m) {
 
   nb::class_<GraphExtractor>(m, "GraphExtractor")
       .def(nb::init<SchedulerState &>())
-      .def("set_spec", &GraphExtractor::set_spec)
-      .def("get_spec", &GraphExtractor::get_spec)
       .def("get_k_hop_dependencies", &GraphExtractor::get_k_hop_dependencies)
       .def("get_k_hop_dependents", &GraphExtractor::get_k_hop_dependents)
       .def("get_k_hop_bidirectional", &GraphExtractor::get_k_hop_bidirectional)

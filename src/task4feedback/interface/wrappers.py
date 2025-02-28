@@ -28,6 +28,8 @@ from task4feedback.fastsim2 import (
     Simulator,
 )
 from task4feedback.fastsim2 import ExecutionState, start_logger
+import torch
+from tensordict.tensordict import TensorDict
 
 
 class Graph:
@@ -527,58 +529,458 @@ class SimulatorInput:
         )
 
 
+class FeatureExtractorFactory:
+    def __init__(
+        self,
+        feature_list: Optional[list] = None,
+        options: Optional[dict[Type, tuple]] = None,
+    ):
+        if feature_list is None:
+            feature_list = []
+        if options is None:
+            options = {}
+
+        self.options = options
+        self.feature_list = feature_list
+
+    def create(self, state: fastsim.SchedulerState):
+        feature_extractor = fastsim.RuntimeFeatureExtractor()
+        for feature_t in self.feature_list:
+            args = self.options.get(feature_t, tuple())
+            feature_extractor.add_feature(feature_t.create(state, *args))
+        return feature_extractor
+
+    def add(self, feature_t: Type, *args):
+        self.feature_list.append(feature_t)
+
+        if args:
+            self.options[feature_t] = args
+
+
+class EdgeFeatureExtractorFactory:
+    def __init__(
+        self,
+        feature_list: Optional[list] = None,
+        options: Optional[dict[Type, tuple]] = None,
+    ):
+        if feature_list is None:
+            feature_list = []
+        if options is None:
+            options = {}
+
+        self.options = options
+        self.feature_list = feature_list
+
+    def create(self, state: fastsim.SchedulerState):
+        feature_extractor = fastsim.RuntimeEdgeFeatureExtractor()
+        for feature_t in self.feature_list:
+            args = self.options.get(feature_t, tuple())
+            feature_extractor.add_feature(feature_t.create(state, *args))
+        return feature_extractor
+
+    def add(self, feature_t: Type, *args):
+        self.feature_list.append(feature_t)
+
+        if args:
+            self.options[feature_t] = args
+
+
+@dataclass
+class ExternalObserverFactory:
+    graph_spec: fastsim.GraphSpec
+    graph_extractor_t: Type[fastsim.GraphExtractor]
+    task_feature_factory: FeatureExtractorFactory
+    data_feature_factory: FeatureExtractorFactory
+    device_feature_factory: FeatureExtractorFactory
+    task_task_feature_factory: EdgeFeatureExtractorFactory
+    task_data_feature_factory: EdgeFeatureExtractorFactory
+    task_device_feature_factory: Optional[EdgeFeatureExtractorFactory]
+    data_device_feature_factory: Optional[EdgeFeatureExtractorFactory]
+
+    def create(self, state: fastsim.SchedulerState):
+        graph_spec = self.graph_spec
+        graph_extractor = self.graph_extractor_t(state)
+        task_feature_extractor = self.task_feature_factory.create(state)
+        data_feature_extractor = self.data_feature_factory.create(state)
+        device_feature_extractor = self.device_feature_factory.create(state)
+        task_task_feature_extractor = self.task_task_feature_factory.create(state)
+        task_data_feature_extractor = self.task_data_feature_factory.create(state)
+        task_device_feature_extractor = (
+            self.task_device_feature_factory.create(state)
+            if self.task_device_feature_factory is not None
+            else None
+        )
+        data_device_feature_extractor = (
+            self.data_device_feature_factory.create(state)
+            if self.data_device_feature_factory is not None
+            else None
+        )
+
+        return ExternalObserver(
+            graph_spec,
+            graph_extractor,
+            task_feature_extractor,
+            data_feature_extractor,
+            device_feature_extractor,
+            task_task_feature_extractor,
+            task_data_feature_extractor,
+            task_device_feature_extractor,
+            data_device_feature_extractor,
+        )
+
+
+class CompiledDefaultObserverFactory:
+    def __init__(self, spec: fastsim.GraphSpec):
+        self.spec = spec
+        self.graph_extractor_t = fastsim.GraphExtractor
+        self.task_feature_factory = fastsim.TaskFeatureExtractor
+        self.data_feature_factory = fastsim.DataFeatureExtractor
+        self.device_feature_factory = fastsim.DeviceFeatureExtractor
+        self.task_task_feature_factory = fastsim.TaskTaskFeatureExtractor
+        self.task_data_feature_factory = fastsim.TaskDataFeatureExtractor
+        self.task_device_feature_factory = None
+        self.data_device_feature_factory = None
+
+    def create(self, state: fastsim.SchedulerState):
+        graph_spec = self.spec
+        graph_extractor = self.graph_extractor_t(state)
+        task_feature_extractor = self.task_feature_factory(
+            fastsim.InDegreeTaskFeature(state),
+            fastsim.OutDegreeTaskFeature(state),
+            fastsim.OneHotMappedDeviceTaskFeature(state),
+        )
+        data_feature_extractor = self.data_feature_factory(
+            fastsim.DataSizeFeature(state),
+            fastsim.DataMappedLocationsFeature(state),
+        )
+
+        device_feature_extractor = self.device_feature_factory(
+            fastsim.DeviceArchitectureFeature(state),
+            fastsim.DeviceIDFeature(state),
+            fastsim.DeviceMemoryFeature(state),
+            fastsim.DeviceTimeFeature(state),
+        )
+
+        task_task_feature_extractor = self.task_task_feature_factory(
+            fastsim.TaskTaskSharedDataFeature(state)
+        )
+
+        task_data_feature_extractor = self.task_data_feature_factory(
+            fastsim.TaskDataRelativeSizeFeature(state),
+            fastsim.TaskDataUsageFeature(state),
+        )
+
+        task_device_feature_extractor = None
+        data_device_feature_extractor = None
+
+        return ExternalObserver(
+            graph_spec,
+            graph_extractor,
+            task_feature_extractor,
+            data_feature_extractor,
+            device_feature_extractor,
+            task_task_feature_extractor,
+            task_data_feature_extractor,
+            task_device_feature_extractor,
+            data_device_feature_extractor,
+        )
+
+
+class DefaultObserverFactory(ExternalObserverFactory):
+    def __init__(self, spec: fastsim.GraphSpec):
+        graph_extractor_t = fastsim.GraphExtractor
+        task_feature_factory = FeatureExtractorFactory()
+        task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+
+        data_feature_factory = FeatureExtractorFactory()
+        data_feature_factory.add(fastsim.DataSizeFeature)
+        data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+
+        device_feature_factory = FeatureExtractorFactory()
+        device_feature_factory.add(fastsim.DeviceArchitectureFeature)
+        device_feature_factory.add(fastsim.DeviceIDFeature)
+        device_feature_factory.add(fastsim.DeviceMemoryFeature)
+        device_feature_factory.add(fastsim.DeviceTimeFeature)
+
+        task_task_feature_factory = EdgeFeatureExtractorFactory()
+        task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
+
+        task_data_feature_factory = EdgeFeatureExtractorFactory()
+        task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
+        task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
+        task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
+        task_device_feature_factory = None
+        data_device_feature_factory = None
+
+        super().__init__(
+            spec,
+            graph_extractor_t,
+            task_feature_factory,
+            data_feature_factory,
+            device_feature_factory,
+            task_task_feature_factory,
+            task_data_feature_factory,
+            task_device_feature_factory,
+            data_device_feature_factory,
+        )
+
+
 @dataclass
 class ExternalObserver:
-    task_feature_extractor: fastsim.RuntimeFeatureExtractor
-    data_feature_extractor: fastsim.RuntimeFeatureExtractor
-    device_feature_extractor: fastsim.RuntimeFeatureExtractor
-    task_task_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
-    task_data_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
-    task_device_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
-    data_device_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
+    graph_spec: fastsim.GraphSpec
     graph_extractor: fastsim.GraphExtractor
+    task_features: fastsim.RuntimeFeatureExtractor
+    data_features: fastsim.RuntimeFeatureExtractor
+    device_features: fastsim.RuntimeFeatureExtractor
+    task_task_features: fastsim.RuntimeEdgeFeatureExtractor
+    task_data_features: fastsim.RuntimeEdgeFeatureExtractor
+    task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
+    data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
+    truncate: bool = True
 
-    @dataclass
-    class ExternalObserver:
-        task_feature_extractor: fastsim.RuntimeFeatureExtractor
-        data_feature_extractor: fastsim.RuntimeFeatureExtractor
-        device_feature_extractor: fastsim.RuntimeFeatureExtractor
-        task_task_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
-        task_data_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
-        task_device_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
-        data_device_feature_extractor: fastsim.RuntimeEdgeFeatureExtractor
-        graph_extractor: fastsim.GraphExtractor
+    def get_task_features(self, task_ids, workspace):
+        length = self.task_features.get_features_batch(task_ids, workspace)
 
-        def __init__(
-            self,
-            state: fastsim.SchedulerState,
-            task_feature_types: Optional[list],
-            data_feature_types: Optional[list],
-            device_feature_types: Optional[list],
-            task_task_feature_types: Optional[list],
-        ):
-            self.task_feature_extractor = fastsim.RuntimeFeatureExtractor(
-                state, task_feature_types
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_data_features(self, data_ids, workspace):
+        length = self.data_features.get_features_batch(data_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_device_features(self, device_ids, workspace):
+        length = self.device_features.get_features_batch(device_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_task_task_features(self, task_ids, workspace):
+        length = self.task_task_features.get_features_batch(task_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_task_data_features(self, task_ids, workspace):
+        length = self.task_data_features.get_features_batch(task_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_bidirectional_neighborhood(self, task_ids, workspace):
+        length = self.graph_extractor.get_k_hop_bidirectional(task_ids, 1, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_used_data(self, task_ids, workspace):
+        length = self.graph_extractor.get_unique_data(task_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_task_task_edges(self, task_ids, workspace):
+        length = self.graph_extractor.get_task_task_edges(task_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+        return workspace, length
+
+    def get_task_data_edges(self, task_ids, data_ids, workspace):
+        length = self.graph_extractor.get_task_data_edges(task_ids, data_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+        return workspace, length
+
+    def _local_to_global(self, global_ids, local_ids, workspace=None):
+        if workspace is not None:
+            workspace[: len(local_ids)] = global_ids[local_ids]
+            return workspace
+        else:
+            return global_ids[local_ids]
+
+    def _local_to_global2D(self, g1, g2, l, workspace=None):
+        if workspace is not None:
+            size = len(l[0, :])
+            workspace[0, :size] = g1[l[0, :]][:size]
+            workspace[1, :size] = g2[l[1, :]][:size]
+            return workspace
+        else:
+            id1 = g1[l[0, :]]
+            id2 = g2[l[1, :]]
+            return torch.stack((id1, id2), dim=0)
+
+    def _local_to_global2D_same(self, g1, l, workspace=None):
+        if workspace is not None:
+            size = len(l[0, :])
+            workspace[:, :size] = g1[l][:size]
+            return workspace
+        else:
+            return g1[l]
+
+    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
+        if spec is None:
+            spec = self.graph_spec
+
+        def _make_node_tensor(nodes, dim):
+            return TensorDict(
+                {
+                    "glb": torch.zeros((nodes), dtype=torch.int64),
+                    "attr": torch.zeros((nodes, dim), dtype=torch.float32),
+                    "count": torch.zeros((1), dtype=torch.int64),
+                }
             )
-            self.data_feature_extractor = fastsim.RuntimeFeatureExtractor(
-                state, data_feature_types
+
+        def _make_edge_tensor(edges, dim):
+            return TensorDict(
+                {
+                    "glb": torch.zeros((2, edges), dtype=torch.int64),
+                    "idx": torch.zeros((2, edges), dtype=torch.int64),
+                    "attr": torch.zeros((edges, dim), dtype=torch.float32),
+                    "count": torch.zeros((1), dtype=torch.int64),
+                }
             )
-            self.device_feature_extractor = fastsim.RuntimeFeatureExtractor(
-                state, device_feature_types
-            )
-            self.task_task_feature_extractor = fastsim.RuntimeEdgeFeatureExtractor(
-                state, task_task_feature_types
-            )
-            self.task_data_feature_extractor = fastsim.RuntimeEdgeFeatureExtractor(
-                state, task_task_feature_types
-            )
-            self.task_device_feature_extractor = fastsim.RuntimeEdgeFeatureExtractor(
-                state, task_task_feature_types
-            )
-            self.data_device_feature_extractor = fastsim.RuntimeEdgeFeatureExtractor(
-                state, task_task_feature_types
-            )
-            self.graph_extractor = fastsim.GraphExtractor(state)
+
+        node_tensor = TensorDict(
+            {
+                "tasks": _make_node_tensor(
+                    spec.max_tasks, self.task_features.feature_dim
+                ),
+                "data": _make_node_tensor(
+                    spec.max_data, self.data_features.feature_dim
+                ),
+                "devices": _make_node_tensor(
+                    spec.max_devices, self.device_features.feature_dim
+                ),
+            }
+        )
+
+        edge_tensor = TensorDict(
+            {
+                "task_task": _make_edge_tensor(
+                    spec.max_edges_tasks_tasks, self.task_task_features.feature_dim
+                ),
+                "task_data": _make_edge_tensor(
+                    spec.max_edges_tasks_data, self.task_data_features.feature_dim
+                ),
+            }
+        )
+
+        aux_tensor = TensorDict(
+            {
+                "candidates": torch.zeros((spec.max_candidates), dtype=torch.int64),
+            }
+        )
+
+        obs_tensor = TensorDict(
+            {
+                "nodes": node_tensor,
+                "edges": edge_tensor,
+                "aux": aux_tensor,
+            }
+        )
+
+        return obs_tensor
+
+    def task_observation(self, task_ids, output: TensorDict):
+        _, count = self.get_bidirectional_neighborhood(
+            task_ids, output["nodes"]["tasks"]["glb"]
+        )
+        output["nodes"]["tasks"]["count"][0] = count
+        self.get_task_features(
+            output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
+        )
+
+    def data_observation(self, output: TensorDict):
+        ntasks = output["nodes"]["tasks"]["count"][0]
+        _, count = self.get_used_data(
+            output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
+        )
+        output["nodes"]["data"]["count"][0] = count
+        self.get_data_features(
+            output["nodes"]["data"]["glb"][:count], output["nodes"]["data"]["attr"]
+        )
+
+    def device_observation(self, output: TensorDict):
+        count = output["nodes"]["devices"]["glb"].shape[0]
+        output["nodes"]["devices"]["count"][0] = count
+        output["nodes"]["devices"]["glb"][:count] = torch.arange(
+            count, dtype=torch.int64
+        )
+        self.get_device_features(
+            output["nodes"]["devices"]["glb"][:count],
+            output["nodes"]["devices"]["attr"],
+        )
+
+    def task_task_observation(self, output: TensorDict):
+        ntasks = output["nodes"]["tasks"]["count"][0]
+
+        _, count = self.get_task_task_edges(
+            output["nodes"]["tasks"]["glb"][:ntasks],
+            output["edges"]["task_task"]["idx"],
+        )
+        output["edges"]["task_task"]["count"][0] = count
+
+        self._local_to_global2D_same(
+            output["nodes"]["tasks"]["glb"],
+            output["edges"]["task_task"]["idx"][:, :count],
+            output["edges"]["task_task"]["glb"],
+        )
+
+        self.get_task_task_features(
+            output["edges"]["task_task"]["glb"][:, :count],
+            output["edges"]["task_task"]["attr"],
+        )
+
+    def task_data_observation(self, output: TensorDict):
+        ntasks = output["nodes"]["tasks"]["count"][0]
+        ndata = output["nodes"]["data"]["count"][0]
+        _, count = self.get_task_data_edges(
+            output["nodes"]["tasks"]["glb"][:ntasks],
+            output["nodes"]["data"]["glb"][:ndata],
+            output["edges"]["task_data"]["idx"],
+        )
+        output["edges"]["task_data"]["count"][0] = count
+
+        self._local_to_global2D(
+            output["nodes"]["tasks"]["glb"],
+            output["nodes"]["data"]["glb"],
+            output["edges"]["task_data"]["idx"][:, :count],
+            output["edges"]["task_data"]["glb"],
+        )
+
+        self.get_task_data_features(
+            output["edges"]["task_data"]["glb"][:, :count],
+            output["edges"]["task_data"]["attr"],
+        )
+
+    def get_observation(self, candidates, output: Optional[TensorDict] = None):
+        if output is None:
+            output = self.new_observation_buffer(self.graph_spec)
+
+        output["aux"]["candidates"] = candidates
+
+        # Node observations (all nodes must be processed before edges)
+        self.task_observation(output["aux"]["candidates"], output)
+        self.data_observation(output)
+        self.device_observation(output)
+
+        # Edge observations (edges depend on ids collected during node observation)
+        self.task_task_observation(output)
+        # self.task_data_observation(output)
+
+        return output
 
 
 @dataclass
@@ -587,7 +989,8 @@ class SimulatorDriver:
     internal_mapper: fastsim.Mapper
     external_mapper: ExternalMapper
     simulator: fastsim.Simulator
-    observer: ExternalObserver
+    observer_t: Optional[Type[ExternalObserver]]
+    observer: Optional[ExternalObserver]
 
     def __init__(
         self,
@@ -595,7 +998,7 @@ class SimulatorDriver:
         internal_mapper: fastsim.Mapper
         | Type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
         external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
-        observer: Type[ExternalObserver] = ExternalObserver,
+        observer_t: Optional[Type[ExternalObserver]] = None,
         simulator: Optional[fastsim.Simulator] = None,
     ):
         """
@@ -625,13 +1028,14 @@ class SimulatorDriver:
         self.internal_mapper = internal_mapper
         self.external_mapper = external_mapper
 
-        self.observer = observer()
-
         if simulator is None:
             self.simulator = fastsim.Simulator(input.to_input(), self.internal_mapper)
         else:
             self.simulator = simulator
             self.simulator.set_mapper(self.internal_mapper)
+
+        if observer_t is not None:
+            self.observer = observer_t(self.simulator.get_state())
 
     def initialize(self):
         """

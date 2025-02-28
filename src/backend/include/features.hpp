@@ -132,8 +132,6 @@ protected:
   std::unordered_map<dataid_t, dataid_t> data_index_map;
   std::unordered_map<devid_t, devid_t> device_index_map;
 
-  GraphSpec spec;
-
 public:
   GraphExtractor(const SchedulerState &state) : state(state) {
     source_list.reserve(400);
@@ -143,14 +141,6 @@ public:
     data_index_map.reserve(400);
     device_index_map.reserve(400);
     data_visited.reserve(400);
-  }
-
-  GraphSpec &get_spec() {
-    return spec;
-  }
-
-  void set_spec(const GraphSpec &spec) {
-    this->spec = spec;
   }
 
   [[nodiscard]] TaskIDList get_active_tasks() const {
@@ -198,6 +188,7 @@ public:
   [[nodiscard]] size_t get_k_hop_task_dependents(TaskSet &visited, TorchInt64Arr1D &initial_tasks,
                                                  int k, TorchInt64Arr1D &output) {
 
+    auto v = output.view();
     size_t max_tasks = output.size();
     std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
 
@@ -216,7 +207,7 @@ public:
       if (i >= count) {
         break;
       }
-      output(i) = static_cast<int64_t>(task);
+      v(i) = static_cast<int64_t>(task);
       i++;
     }
 
@@ -271,11 +262,13 @@ public:
 
     std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
 
+    auto v = output.view();
+
     size_t max_tasks = output.size();
     for (const auto &task_id_64_bit : initial_tasks_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_dependencies(visited, task_id, k, max_tasks);
-      if (visited.size() >= spec.max_tasks) {
+      if (visited.size() >= max_tasks) {
         break;
       }
     }
@@ -287,7 +280,7 @@ public:
       if (i >= count) {
         break;
       }
-      output(i) = static_cast<int64_t>(task);
+      v(i) = static_cast<int64_t>(task);
       i++;
     }
 
@@ -348,7 +341,7 @@ public:
 
   size_t get_k_hop_task_bidirectional(TaskSet &visited, TorchInt64Arr1D &initial_tasks, int k,
                                       TorchInt64Arr1D &output) {
-
+    auto v = output.view();
     size_t max_tasks = output.size();
     std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
 
@@ -367,7 +360,7 @@ public:
       if (i >= count) {
         break;
       }
-      output(i) = static_cast<int64_t>(task);
+      v(i) = static_cast<int64_t>(task);
       i++;
     }
 
@@ -385,6 +378,8 @@ public:
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
+
+    auto v = output.view();
 
     // Clear data structures before use
     task_index_map.clear();
@@ -409,8 +404,8 @@ public:
       for (const auto &dep_id : dependencies) {
         auto it = task_index_map.find(dep_id);
         if (it != task_index_map.end()) {
-          output(0, edge_count) = static_cast<int64_t>(source_idx);
-          output(1, edge_count) = static_cast<int64_t>(it->second);
+          v(0, edge_count) = static_cast<int64_t>(source_idx);
+          v(1, edge_count) = static_cast<int64_t>(it->second);
           edge_count++;
         }
       }
@@ -424,6 +419,8 @@ public:
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
+
+    auto v = output.view();
 
     // Clear data structures before use
     task_index_map.clear();
@@ -448,8 +445,8 @@ public:
       for (const auto &dep_id : dependents) {
         auto it = task_index_map.find(dep_id);
         if (it != task_index_map.end()) {
-          output(0, edge_count) = static_cast<int64_t>(source_idx);
-          output(1, edge_count) = static_cast<int64_t>(it->second);
+          v(0, edge_count) = static_cast<int64_t>(source_idx);
+          v(1, edge_count) = static_cast<int64_t>(it->second);
           edge_count++;
         }
       }
@@ -462,6 +459,7 @@ public:
     data_visited.reserve(400);
 
     const auto max_data = output.size();
+    auto v = output.view();
 
     std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
 
@@ -488,7 +486,7 @@ public:
       if (i >= count) {
         break;
       }
-      output(i) = static_cast<int64_t>(data_id);
+      v(i) = static_cast<int64_t>(data_id);
       i++;
     }
     return count;
@@ -508,6 +506,8 @@ public:
     data_index_map.clear();
     data_index_map.reserve(data_ids.size());
 
+    auto v = output.view();
+
     const auto &task_manager = state.get().get_task_manager();
     const auto &tasks = task_manager.get_tasks();
 
@@ -525,8 +525,8 @@ public:
       for (auto data_id : task.get_unique()) {
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          output(0, edge_count) = static_cast<int64_t>(i);
-          output(1, edge_count) = static_cast<int64_t>(it->second);
+          v(0, edge_count) = static_cast<int64_t>(i);
+          v(1, edge_count) = static_cast<int64_t>(it->second);
           edge_count++;
           if (edge_count >= max_edges) {
             break;
@@ -546,6 +546,8 @@ public:
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
 
+    auto v = output.view();
+
     std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
     const auto max_edges = output.shape(1);
@@ -558,8 +560,8 @@ public:
     for (std::size_t i = 0; i < data_ids_span.size(); i++) {
       for (std::size_t j = 0; j < devices.size(); j++) {
         if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
-          output(0, i) = static_cast<int64_t>(i);
-          output(1, i) = static_cast<int64_t>(j);
+          v(0, i) = static_cast<int64_t>(i);
+          v(1, i) = static_cast<int64_t>(j);
           edge_count++;
           if (edge_count >= max_edges) {
             break;
@@ -703,19 +705,19 @@ template <typename Derived> struct StateEdgeFeature : EdgeFeature<Derived> {
   }
 };
 
-template <typename Derived> struct IntFeature : Feature<Derived> {
+template <typename Derived> struct IntFeature : StateFeature<Derived> {
   const size_t v;
-  const NodeType node_type;
 
-  IntFeature(size_t v, NodeType node_type) : v(v), node_type(node_type) {
+  IntFeature(SchedulerState &state, size_t v, NodeType node_type)
+      : StateFeature<Derived>(state, node_type), v(v) {
   }
 };
 
-template <typename Derived> struct IntEdgeFeature : EdgeFeature<Derived> {
+template <typename Derived> struct IntEdgeFeature : StateEdgeFeature<Derived> {
   const size_t v;
-  const EdgeType edge_type;
 
-  IntEdgeFeature(size_t v, EdgeType edge_type) : v(v), edge_type(edge_type) {
+  IntEdgeFeature(SchedulerState &state, size_t v, EdgeType edge_type)
+      : StateEdgeFeature<Derived>(state, edge_type), v(v) {
   }
 };
 
@@ -799,8 +801,8 @@ struct MemoryTaskFeature : public StateFeature<MemoryTaskFeature> {
 
 struct EmptyTaskFeature : public IntFeature<EmptyTaskFeature> {
   size_t dimension;
-  EmptyTaskFeature(size_t dimension)
-      : IntFeature<EmptyTaskFeature>(dimension, NodeType::TASK), dimension(dimension) {
+  EmptyTaskFeature(SchedulerState &state, size_t dimension)
+      : IntFeature<EmptyTaskFeature>(state, dimension, NodeType::TASK), dimension(dimension) {
   }
 
   size_t getFeatureDimImpl() const {
@@ -849,8 +851,8 @@ struct TaskStateFeature : public StateFeature<TaskStateFeature> {
 
 struct EmptyDataFeature : public IntFeature<EmptyDataFeature> {
   size_t dimension;
-  EmptyDataFeature(size_t dimension)
-      : IntFeature<EmptyDataFeature>(dimension, NodeType::DATA_BLOCK), dimension(dimension) {
+  EmptyDataFeature(SchedulerState &state, size_t dimension)
+      : IntFeature<EmptyDataFeature>(state, dimension, NodeType::DATA_BLOCK), dimension(dimension) {
   }
 
   size_t getFeatureDimImpl() const {
@@ -935,8 +937,8 @@ struct DataSizeFeature : public StateFeature<DataSizeFeature> {
 
 struct EmptyDeviceFeature : public IntFeature<EmptyDeviceFeature> {
   size_t dimension;
-  EmptyDeviceFeature(size_t dimension)
-      : IntFeature<EmptyDeviceFeature>(dimension, NodeType::DEVICE), dimension(dimension) {
+  EmptyDeviceFeature(SchedulerState &state, size_t dimension)
+      : IntFeature<EmptyDeviceFeature>(state, dimension, NodeType::DEVICE), dimension(dimension) {
   }
 
   size_t getFeatureDimImpl() const {
@@ -1021,8 +1023,9 @@ struct DeviceArchitectureFeature : public StateFeature<DeviceArchitectureFeature
 
 struct EmptyTaskTaskFeature : public IntEdgeFeature<EmptyTaskTaskFeature> {
   size_t dimension;
-  EmptyTaskTaskFeature(size_t dimension)
-      : IntEdgeFeature<EmptyTaskTaskFeature>(dimension, EdgeType::TASK_TASK), dimension(dimension) {
+  EmptyTaskTaskFeature(SchedulerState &state, size_t dimension)
+      : IntEdgeFeature<EmptyTaskTaskFeature>(state, dimension, EdgeType::TASK_TASK),
+        dimension(dimension) {
   }
 
   size_t getFeatureDimImpl() const {
@@ -1070,8 +1073,9 @@ struct TaskTaskSharedDataFeature : public StateEdgeFeature<TaskTaskSharedDataFea
 
 struct EmptyTaskDataFeature : public IntEdgeFeature<EmptyTaskDataFeature> {
   size_t dimension;
-  EmptyTaskDataFeature(size_t dimension)
-      : IntEdgeFeature<EmptyTaskDataFeature>(dimension, EdgeType::TASK_DATA), dimension(dimension) {
+  EmptyTaskDataFeature(SchedulerState &state, size_t dimension)
+      : IntEdgeFeature<EmptyTaskDataFeature>(state, dimension, EdgeType::TASK_DATA),
+        dimension(dimension) {
   }
 
   size_t getFeatureDimImpl() const {
