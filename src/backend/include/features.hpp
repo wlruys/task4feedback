@@ -118,14 +118,14 @@ public:
   }
 };
 
-using TaskSet = std::set<taskid_t>;
+using TaskSet = std::unordered_set<taskid_t>;
 
 class GraphExtractor {
 protected:
   std::reference_wrapper<const SchedulerState> state;
   std::vector<op_t> source_list;
   std::vector<op_t> target_list;
-  std::set<taskid_t> visited;
+  TaskSet visited;
   std::unordered_set<dataid_t> data_visited;
   std::unordered_set<taskid_t> local_visited;
   std::unordered_map<taskid_t, taskid_t> task_index_map;
@@ -136,6 +136,7 @@ public:
   GraphExtractor(const SchedulerState &state) : state(state) {
     source_list.reserve(400);
     target_list.reserve(400);
+    visited.reserve(400);
     local_visited.reserve(400);
     task_index_map.reserve(400);
     data_index_map.reserve(400);
@@ -294,9 +295,7 @@ public:
 
   void _get_k_hop_task_bidirectional(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
 
-    const auto &s = this->state.get();
-    const auto &task_manager = s.get_task_manager();
-    const auto &tasks = task_manager.get_tasks();
+    const auto &tasks = this->state.get().get_task_manager().get_tasks();
 
     local_visited.clear();
 
@@ -381,7 +380,7 @@ public:
 
     auto v = output.view();
 
-    // Clear data structures before use
+    // Clear map
     task_index_map.clear();
     task_index_map.reserve(sources.size());
 
@@ -391,8 +390,7 @@ public:
       task_index_map[static_cast<taskid_t>(sources_span[i])] = i;
     }
 
-    const auto &task_manager = state.get().get_task_manager();
-    const auto &tasks = task_manager.get_tasks();
+    const auto &tasks = state.get().get_task_manager().get_tasks();
     std::size_t edge_count = 0;
 
     for (std::size_t source_idx = 0; source_idx < sources_span.size(); source_idx++) {

@@ -119,8 +119,8 @@ void get_features_batch(const E &extractor, const TorchInt64Arr1D &object_ids,
                         TorchFloatArr2D &tensor) {
   float *data = tensor.data();
   auto v = object_ids.view();
-  auto num_cols = extractor.getFeatureDim();
-  for (size_t i = 0; i < object_ids.size(); ++i) {
+  int num_cols = extractor.getFeatureDim();
+  for (int i = 0; i < object_ids.size(); ++i) {
     std::span<float> row(data + i * num_cols, num_cols);
     extractor.getFeatures(static_cast<uint32_t>(v(i)), row);
   }
@@ -129,9 +129,9 @@ void get_features_batch(const E &extractor, const TorchInt64Arr1D &object_ids,
 template <typename E>
 void get_edge_features_batch(const E &extractor, TorchInt64Arr2D &edges, TorchFloatArr2D &tensor) {
   float *data = tensor.data();
-  auto num_cols = extractor.getFeatureDim();
+  int num_cols = extractor.getFeatureDim();
   auto v = edges.view();
-  for (size_t i = 0; i < edges.shape(1); ++i) {
+  for (int i = 0; i < edges.shape(1); ++i) {
     std::span<float> row(data + i * num_cols, num_cols);
     extractor.getFeatures(static_cast<uint32_t>(v(0, i)), static_cast<uint32_t>(v(1, i)), row);
   }
