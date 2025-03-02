@@ -7,12 +7,12 @@ CompileFlags:
   - -Werror
   - -Wshadow
   - -Wconversion
-  - -I/home/popdesk/workspace/task_scheduling/task4feedback/external/tabulate/include
-  - -I/home/popdesk/workspace/task_scheduling/task4feedback/external/doctest
-  - -I/home/popdesk/workspace/task_scheduling/task4feedback/src/backend
-  - -I/home/popdesk/workspace/task_scheduling/task4feedback/src/backend/include
-  - -I/home/popdesk/workspace/task_scheduling/task4feedback/external
-  - -I/home/popdesk/micromamba/envs/py311/lib/python3.11/site-packages/nanobind/include
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/external/tabulate/include
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/external/doctest
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/src/backend
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/src/backend/include
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/external
+  - -I/Users/wlruys/mamba/envs/simdev_311/lib/python3.11/site-packages/nanobind/include
 Diagnostics:
   UnusedIncludes: Strict
   ClangTidy:

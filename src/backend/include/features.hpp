@@ -371,7 +371,8 @@ public:
     return get_k_hop_task_bidirectional(visited, initial_tasks, k, output);
   }
 
-  size_t get_task_task_edges(TorchInt64Arr1D &sources, TorchInt64Arr2D &output) {
+  size_t get_task_task_edges(TorchInt64Arr1D &sources, TorchInt64Arr2D &output,
+                             TorchInt64Arr2D &global_output) {
 
     // Check first dimension is 2
     if (output.shape(0) != 2) {
@@ -379,6 +380,7 @@ public:
     }
 
     auto v = output.view();
+    auto gv = global_output.view();
 
     // Clear map
     task_index_map.clear();
@@ -404,6 +406,8 @@ public:
         if (it != task_index_map.end()) {
           v(0, edge_count) = static_cast<int64_t>(source_idx);
           v(1, edge_count) = static_cast<int64_t>(it->second);
+          gv(0, edge_count) = static_cast<int64_t>(source_id);
+          gv(1, edge_count) = static_cast<int64_t>(dep_id);
           edge_count++;
         }
       }
@@ -411,7 +415,8 @@ public:
     return edge_count;
   }
 
-  size_t get_task_task_edges_reverse(TorchInt64Arr1D &sources, TorchInt64Arr2D &output) {
+  size_t get_task_task_edges_reverse(TorchInt64Arr1D &sources, TorchInt64Arr2D &output,
+                                     TorchInt64Arr2D &global_output) {
 
     // Check first dimension is 2
     if (output.shape(0) != 2) {
@@ -419,6 +424,7 @@ public:
     }
 
     auto v = output.view();
+    auto gv = global_output.view();
 
     // Clear data structures before use
     task_index_map.clear();
@@ -445,6 +451,8 @@ public:
         if (it != task_index_map.end()) {
           v(0, edge_count) = static_cast<int64_t>(source_idx);
           v(1, edge_count) = static_cast<int64_t>(it->second);
+          gv(0, edge_count) = static_cast<int64_t>(source_id);
+          gv(1, edge_count) = static_cast<int64_t>(dep_id);
           edge_count++;
         }
       }
@@ -491,7 +499,7 @@ public:
   }
 
   size_t get_task_data_edges(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
-                             TorchInt64Arr2D &output) {
+                             TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
@@ -505,6 +513,7 @@ public:
     data_index_map.reserve(data_ids.size());
 
     auto v = output.view();
+    auto gv = global_output.view();
 
     const auto &task_manager = state.get().get_task_manager();
     const auto &tasks = task_manager.get_tasks();
@@ -525,6 +534,8 @@ public:
         if (it != data_index_map.end()) {
           v(0, edge_count) = static_cast<int64_t>(i);
           v(1, edge_count) = static_cast<int64_t>(it->second);
+          gv(0, edge_count) = static_cast<int64_t>(task_id);
+          gv(1, edge_count) = static_cast<int64_t>(data_id);
           edge_count++;
           if (edge_count >= max_edges) {
             break;
@@ -538,13 +549,15 @@ public:
     return edge_count;
   }
 
-  size_t get_data_device_edges(TorchInt64Arr1D &data_ids, TorchInt64Arr2D &output) {
+  size_t get_data_device_edges(TorchInt64Arr1D &data_ids, TorchInt64Arr2D &output,
+                               TorchInt64Arr2D &global_output) {
 
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
 
     auto v = output.view();
+    auto gv = global_output.view();
 
     std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
@@ -560,6 +573,8 @@ public:
         if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
           v(0, i) = static_cast<int64_t>(i);
           v(1, i) = static_cast<int64_t>(j);
+          gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
+          gv(1, i) = static_cast<int64_t>(j);
           edge_count++;
           if (edge_count >= max_edges) {
             break;

@@ -30,6 +30,7 @@ from task4feedback.fastsim2 import (
 from task4feedback.fastsim2 import ExecutionState, start_logger
 import torch
 from tensordict.tensordict import TensorDict
+from torch_geometric.data import HeteroData, Batch
 
 
 class Graph:
@@ -475,18 +476,18 @@ class ExternalMapper:
     def __init__(self, mapper: Optional[Self] = None):
         pass
 
-    def map_tasks(
-        self, candidate_tasks: list, simulator: "SimulatorDriver"
-    ) -> list[fastsim.Action]:
+    def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
         # print(candidate_tasks)
-        global_task_id = candidate_tasks[0]
+        candidates = torch.zeros((1), dtype=torch.int64)
+        simulator.simulator.get_mappable_candidates(candidates)
+        global_task_id = candidates[0]
         local_id = 0
         device = 0
         state = simulator.simulator.get_state()
         mapping_priority = state.get_mapping_priority(global_task_id)
         return [
             fastsim.Action(
-                candidate_tasks[0], local_id, device, mapping_priority, mapping_priority
+                candidates[0], local_id, device, mapping_priority, mapping_priority
             )
         ]
 
@@ -597,7 +598,8 @@ class ExternalObserverFactory:
     task_device_feature_factory: Optional[EdgeFeatureExtractorFactory]
     data_device_feature_factory: Optional[EdgeFeatureExtractorFactory]
 
-    def create(self, state: fastsim.SchedulerState):
+    def create(self, simulator: Simulator):
+        state = simulator.get_state()
         graph_spec = self.graph_spec
         graph_extractor = self.graph_extractor_t(state)
         task_feature_extractor = self.task_feature_factory.create(state)
@@ -617,6 +619,7 @@ class ExternalObserverFactory:
         )
 
         return ExternalObserver(
+            simulator,
             graph_spec,
             graph_extractor,
             task_feature_extractor,
@@ -641,7 +644,8 @@ class CompiledDefaultObserverFactory:
         self.task_device_feature_factory = None
         self.data_device_feature_factory = None
 
-    def create(self, state: fastsim.SchedulerState):
+    def create(self, simulator: Simulator):
+        state = simulator.get_state()
         graph_spec = self.spec
         graph_extractor = self.graph_extractor_t(state)
         task_feature_extractor = self.task_feature_factory(
@@ -674,6 +678,7 @@ class CompiledDefaultObserverFactory:
         data_device_feature_extractor = None
 
         return ExternalObserver(
+            simulator,
             graph_spec,
             graph_extractor,
             task_feature_extractor,
@@ -727,8 +732,24 @@ class DefaultObserverFactory(ExternalObserverFactory):
         )
 
 
+def observation_to_heterodata(observation: TensorDict) -> HeteroData:
+    hetero_data = HeteroData()
+
+    for node_type, node_data in observation["nodes"].items():
+        hetero_data[f"{node_type}"].x = node_data["attr"]
+
+    for edge_key, edge_data in observation["edges"].items():
+        target, source = edge_key.split("_")
+
+        hetero_data[source, "uses", target].edge_index = edge_data["idx"]
+        hetero_data[source, "uses", target].edge_attr = edge_data["attr"]
+
+    return hetero_data
+
+
 @dataclass
 class ExternalObserver:
+    simulator: Simulator
     graph_spec: fastsim.GraphSpec
     graph_extractor: fastsim.GraphExtractor
     task_features: fastsim.RuntimeFeatureExtractor
@@ -789,15 +810,19 @@ class ExternalObserver:
             workspace = workspace[:length]
         return workspace, length
 
-    def get_task_task_edges(self, task_ids, workspace):
-        length = self.graph_extractor.get_task_task_edges(task_ids, workspace)
+    def get_task_task_edges(self, task_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_task_task_edges(
+            task_ids, workspace, global_workspace
+        )
 
         if self.truncate:
             workspace = workspace[:, :length]
         return workspace, length
 
-    def get_task_data_edges(self, task_ids, data_ids, workspace):
-        length = self.graph_extractor.get_task_data_edges(task_ids, data_ids, workspace)
+    def get_task_data_edges(self, task_ids, data_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_task_data_edges(
+            task_ids, data_ids, workspace, global_workspace
+        )
 
         if self.truncate:
             workspace = workspace[:, :length]
@@ -852,6 +877,14 @@ class ExternalObserver:
                 }
             )
 
+        def _make_index_tensor(n):
+            return TensorDict(
+                {
+                    "idx": torch.zeros((n), dtype=torch.int64),
+                    "count": torch.zeros((1), dtype=torch.int64),
+                }
+            )
+
         node_tensor = TensorDict(
             {
                 "tasks": _make_node_tensor(
@@ -868,10 +901,10 @@ class ExternalObserver:
 
         edge_tensor = TensorDict(
             {
-                "task_task": _make_edge_tensor(
+                "tasks_tasks": _make_edge_tensor(
                     spec.max_edges_tasks_tasks, self.task_task_features.feature_dim
                 ),
-                "task_data": _make_edge_tensor(
+                "tasks_data": _make_edge_tensor(
                     spec.max_edges_tasks_data, self.task_data_features.feature_dim
                 ),
             }
@@ -879,7 +912,8 @@ class ExternalObserver:
 
         aux_tensor = TensorDict(
             {
-                "candidates": torch.zeros((spec.max_candidates), dtype=torch.int64),
+                "candidates": _make_index_tensor(spec.max_candidates),
+                "time": torch.zeros((1), dtype=torch.int64),
             }
         )
 
@@ -893,7 +927,13 @@ class ExternalObserver:
 
         return obs_tensor
 
-    def task_observation(self, task_ids, output: TensorDict):
+    def task_observation(
+        self, output: TensorDict, task_ids: Optional[torch.Tensor] = None
+    ):
+        if task_ids is None:
+            n_candidates = output["aux"]["candidates"]["count"][0]
+            task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
+
         _, count = self.get_bidirectional_neighborhood(
             task_ids, output["nodes"]["tasks"]["glb"]
         )
@@ -928,19 +968,14 @@ class ExternalObserver:
 
         _, count = self.get_task_task_edges(
             output["nodes"]["tasks"]["glb"][:ntasks],
-            output["edges"]["task_task"]["idx"],
+            output["edges"]["tasks_tasks"]["idx"],
+            output["edges"]["tasks_tasks"]["glb"],
         )
-        output["edges"]["task_task"]["count"][0] = count
-
-        self._local_to_global2D_same(
-            output["nodes"]["tasks"]["glb"],
-            output["edges"]["task_task"]["idx"][:, :count],
-            output["edges"]["task_task"]["glb"],
-        )
+        output["edges"]["tasks_tasks"]["count"][0] = count
 
         self.get_task_task_features(
-            output["edges"]["task_task"]["glb"][:, :count],
-            output["edges"]["task_task"]["attr"],
+            output["edges"]["tasks_tasks"]["glb"][:, :count],
+            output["edges"]["tasks_tasks"]["attr"],
         )
 
     def task_data_observation(self, output: TensorDict):
@@ -949,36 +984,40 @@ class ExternalObserver:
         _, count = self.get_task_data_edges(
             output["nodes"]["tasks"]["glb"][:ntasks],
             output["nodes"]["data"]["glb"][:ndata],
-            output["edges"]["task_data"]["idx"],
+            output["edges"]["tasks_data"]["idx"],
+            output["edges"]["tasks_data"]["glb"],
         )
-        output["edges"]["task_data"]["count"][0] = count
-
-        self._local_to_global2D(
-            output["nodes"]["tasks"]["glb"],
-            output["nodes"]["data"]["glb"],
-            output["edges"]["task_data"]["idx"][:, :count],
-            output["edges"]["task_data"]["glb"],
-        )
+        output["edges"]["tasks_data"]["count"][0] = count
 
         self.get_task_data_features(
-            output["edges"]["task_data"]["glb"][:, :count],
-            output["edges"]["task_data"]["attr"],
+            output["edges"]["tasks_data"]["glb"][:, :count],
+            output["edges"]["tasks_data"]["attr"],
         )
 
-    def get_observation(self, candidates, output: Optional[TensorDict] = None):
+    def candidate_observation(self, output: TensorDict):
+        count = self.simulator.get_mappable_candidates(
+            output["aux"]["candidates"]["idx"]
+        )
+        output["aux"]["candidates"]["count"][0] = count
+
+    def get_observation(self, output: Optional[TensorDict] = None):
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
 
-        output["aux"]["candidates"] = candidates
+        # Get mappable candidates
+        self.candidate_observation(output)
 
         # Node observations (all nodes must be processed before edges)
-        self.task_observation(output["aux"]["candidates"], output)
+        self.task_observation(output)
         self.data_observation(output)
         self.device_observation(output)
 
         # Edge observations (edges depend on ids collected during node observation)
         self.task_task_observation(output)
         self.task_data_observation(output)
+
+        # Auxiliary observations
+        output["aux"]["time"][0] = self.simulator.get_current_time()
 
         return output
 
@@ -989,7 +1028,7 @@ class SimulatorDriver:
     internal_mapper: fastsim.Mapper
     external_mapper: ExternalMapper
     simulator: fastsim.Simulator
-    observer_t: Optional[Type[ExternalObserver]]
+    observer_factory: Optional[ExternalObserverFactory]
     observer: Optional[ExternalObserver]
 
     def __init__(
@@ -998,7 +1037,7 @@ class SimulatorDriver:
         internal_mapper: fastsim.Mapper
         | Type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
         external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
-        observer_t: Optional[Type[ExternalObserver]] = None,
+        observer_factory: Optional[ExternalObserverFactory] = None,
         simulator: Optional[fastsim.Simulator] = None,
     ):
         """
@@ -1034,8 +1073,12 @@ class SimulatorDriver:
             self.simulator = simulator
             self.simulator.set_mapper(self.internal_mapper)
 
-        if observer_t is not None:
-            self.observer = observer_t(self.simulator.get_state())
+        if observer_factory is not None:
+            self.observer_factory = observer_factory
+            self.observer = observer_factory.create(self.simulator)
+
+    def get_state(self):
+        return self.simulator.get_state()
 
     def initialize(self):
         """
@@ -1054,10 +1097,18 @@ class SimulatorDriver:
         """
         self.simulator.initialize_data()
 
-    def enable_external_mapper(self):
+    def enable_external_mapper(
+        self, external_mapper: Optional[ExternalMapper | Type[ExternalMapper]] = None
+    ):
         """
         Use external mapper for mapping tasks (run Python callback).
         """
+        if external_mapper is not None:
+            if isinstance(external_mapper, type):
+                external_mapper = external_mapper()
+
+            self.external_mapper = external_mapper
+
         self.simulator.enable_python_mapper()
 
     def disable_external_mapper(self):
@@ -1072,14 +1123,26 @@ class SimulatorDriver:
         """
         internal_mapper_t = type(self.internal_mapper)
         external_mapper_t = type(self.external_mapper)
-        observer_t = type(self.observer)
 
         internal_mapper_copy = internal_mapper_t()
         external_mapper_copy = external_mapper_t()
 
+        observer_factory = self.observer_factory
+
         return SimulatorDriver(
-            self.input, internal_mapper_copy, external_mapper_copy, observer_t
+            input=self.input,
+            internal_mapper=internal_mapper_copy,
+            external_mapper=external_mapper_copy,
+            observer_factory=observer_factory,
+            simulator=None,
         )
+
+    def reset(self):
+        """
+        Return a fresh copy of the simulator driver with the same initial input and configuration.
+        (This is equivalent to calling fresh_copy()).
+        """
+        return self.fresh_copy()
 
     def time(self) -> int:
         """
@@ -1094,24 +1157,35 @@ class SimulatorDriver:
         """
         internal_mapper_t = type(self.internal_mapper)
         external_mapper_t = type(self.external_mapper)
-        observer_t = type(self.observer)
 
         internal_mapper_copy = internal_mapper_t(self.internal_mapper)
         external_mapper_copy = external_mapper_t(self.external_mapper)
 
+        observer_factory = self.observer_factory
+
         simulator_copy = fastsim.Simulator(self.simulator)
         return SimulatorDriver(
-            self.input,
-            internal_mapper_copy,
-            external_mapper_copy,
-            observer_t,
-            simulator_copy,
+            input=self.input,
+            internal_mapper=internal_mapper_copy,
+            external_mapper=external_mapper_copy,
+            observer_factory=observer_factory,
+            simulator=simulator_copy,
         )
+
+    def run_until_external_mapping(self) -> ExecutionState:
+        """
+        Run the simulator until a breakpoint, error, completion, or external mapping is reached.
+        Will return the current state of the simulator at the exitpoint.
+        """
+        sim_state = self.simulator.run()
+        return sim_state
 
     def run(self) -> ExecutionState:
         """
         Run the simulator until a breakpoint, error, or completion is reached.
-        This function will return the current state of the simulator at the exitpoint.
+        This DOES NOT STOP for external mapping. Use run_until_external_mapping() for that.
+        External mapping will be called, if enabled, inside this function.
+        Will return the current state of the simulator at the exitpoint.
         """
         sim_state = ExecutionState.RUNNING
         while sim_state == ExecutionState.RUNNING:
@@ -1124,12 +1198,62 @@ class SimulatorDriver:
                 return sim_state
 
             if sim_state == ExecutionState.EXTERNAL_MAPPING:
-                print("External Mapping")
-                candidates = self.simulator.get_mappable_candidates()
-                actions = self.external_mapper.map_tasks(candidates, self)
+                actions = self.external_mapper.map_tasks(self)
                 self.simulator.map_tasks(actions)
                 sim_state = ExecutionState.RUNNING
         return sim_state
+
+
+def create_graph_spec(
+    max_tasks: int = 30,
+    max_data: int = 30,
+    max_devices: int = 5,
+    max_edges_tasks_tasks: int = 30,
+    max_edges_tasks_data: int = 30,
+    max_candidates: int = 1,
+):
+    spec = fastsim.GraphSpec()
+    spec.max_tasks = max_tasks
+    spec.max_data = max_data
+    spec.max_devices = max_devices
+    spec.max_edges_tasks_tasks = max_edges_tasks_tasks
+    spec.max_edges_tasks_data = max_edges_tasks_data
+    spec.max_candidates = max_candidates
+    return spec
+
+
+class SimulatorFactory:
+    def __init__(
+        self,
+        input: SimulatorInput,
+        graph_spec: fastsim.GraphSpec,
+        observer_factory: ExternalObserverFactory | Type[ExternalObserverFactory],
+    ):
+        self.input = input
+        self.graph_spec = graph_spec
+
+        if isinstance(observer_factory, type):
+            observer_factory = observer_factory(graph_spec)
+        self.observer_factory = observer_factory
+
+    def create(
+        self,
+        seed: int = 0,
+        priority_seed: Optional[int] = None,
+        comm_seed: Optional[int] = None,
+    ):
+        if priority_seed is None:
+            priority_seed = seed
+        if comm_seed is None:
+            comm_seed = seed
+
+        self.input.noise.task_noise.set_seed(seed)
+        self.input.noise.task_noise.set_pseed(priority_seed)
+        simulator = SimulatorDriver(self.input, observer_factory=self.observer_factory)
+        simulator.initialize()
+        simulator.initialize_data()
+        simulator.enable_external_mapper()
+        return simulator
 
 
 def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth: int):

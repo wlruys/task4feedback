@@ -61,6 +61,16 @@ public:
     generate_priority();
   }
 
+  void set_seed(unsigned int seed_) {
+    seed = seed_;
+    gen.seed(seed);
+  }
+
+  void set_pseed(unsigned int pseed_) {
+    pseed = pseed_;
+    pgen.seed(pseed);
+  }
+
   [[nodiscard]] timecount_t get(taskid_t task_id, DeviceType arch) const {
     return task_durations.at(task_id * num_device_types + static_cast<std::size_t>(arch));
   }

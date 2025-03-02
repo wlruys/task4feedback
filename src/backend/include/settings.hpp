@@ -41,6 +41,12 @@ using dataid_t = uint32_t;
 using devid_t = uint32_t;
 using depcount_t = uint32_t;
 
+// using priority_t = int32_t;
+// using taskid_t = int32_t;
+// using dataid_t = int32_t;
+// using devid_t = int32_t;
+// using depcount_t = int32_t;
+
 using TaskIDList = std::vector<taskid_t>;
 using TaskIDLinkedList = std::list<taskid_t>;
 

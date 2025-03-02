@@ -13,6 +13,8 @@ using namespace nb::literals;
 void init_task_noise_ext(nb::module_ &m) {
   nb::class_<TaskNoise>(m, "TaskNoise")
       .def(nb::init<Tasks &, unsigned int, unsigned int>(), "tasks"_a, "seed"_a = 0, "pseed"_a = 0)
+      .def("set_seed", &TaskNoise::set_seed, "seed"_a)
+      .def("set_pseed", &TaskNoise::set_pseed, "pseed"_a)
       .def("get", &TaskNoise::get, "task_id"_a, "arch"_a)
       .def("set", nb::overload_cast<taskid_t, DeviceType, timecount_t>(&TaskNoise::set),
            "task_id"_a, "arch"_a, "noise"_a)
