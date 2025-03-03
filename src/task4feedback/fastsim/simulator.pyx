@@ -764,3 +764,6 @@ cdef class PyObserver:
         
     def get_n_tasks(self):
         return self.observer.get_n_tasks()
+    
+    def get_task_finish_time(self, taskid_t task_id):
+        return self.observer.get_task_finish_time(task_id)

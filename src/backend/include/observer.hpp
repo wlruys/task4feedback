@@ -140,7 +140,7 @@ public:
     }
   }
 
-  void get_mapping(devid_t *mapping, std::size_t n){
+  void get_mapping(devid_t *mapping, std::size_t n) {
     get_mapping(std::span<devid_t>(mapping, n));
   }
 
@@ -873,5 +873,9 @@ public:
     }
 
     return features;
+  }
+
+  timecount_t get_task_finish_time(taskid_t task_id) const {
+    return state.get().get_task_manager().records.get_completed_time(task_id);
   }
 };

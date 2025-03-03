@@ -776,6 +776,9 @@ class Observer:
 
         return g
 
+    def get_task_finish_time(self, task_id: int) -> int:
+        return self.observer.get_task_finish_time(task_id)
+
 
 @dataclass
 class Simulator:
