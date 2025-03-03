@@ -598,6 +598,8 @@ void TaskCostInfo::count_data_completed(devid_t device_id, timecount_t time) {
 // Scheduler
 
 size_t Scheduler::get_mappable_candidates(TorchInt64Arr1D &output_tensor) {
+
+  auto v = output_tensor.view();
   auto &s = this->state;
   bool condition = queues.has_mappable() && conditions.get().should_map(s, queues);
 
@@ -610,8 +612,10 @@ size_t Scheduler::get_mappable_candidates(TorchInt64Arr1D &output_tensor) {
 
   const auto copy_size = std::min(output_tensor.size(), top_k_tasks.size());
 
+  std::cout << "First task: " << top_k_tasks[0] << std::endl;
+
   for (size_t i = 0; i < copy_size; i++) {
-    output_tensor(i) = top_k_tasks[i];
+    v(i) = top_k_tasks[i];
   }
   return copy_size;
 }
@@ -628,6 +632,9 @@ TaskIDList &Scheduler::get_mappable_candidates() {
 
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
+
+  std::cout << "First task: " << top_k_tasks[0] << std::endl;
+
   task_buffer.insert(task_buffer.end(), top_k_tasks.begin(), top_k_tasks.end());
   return task_buffer;
 }

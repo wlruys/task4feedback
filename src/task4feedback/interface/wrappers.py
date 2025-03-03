@@ -998,6 +998,8 @@ class ExternalObserver:
         count = self.simulator.get_mappable_candidates(
             output["aux"]["candidates"]["idx"]
         )
+        print(f"Count: {count}")
+        print(f"Output: {output['aux']['candidates']['idx'][:count]}")
         output["aux"]["candidates"]["count"][0] = count
 
     def get_observation(self, output: Optional[TensorDict] = None):
