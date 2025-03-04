@@ -28,15 +28,17 @@ from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
-from torchrl.envs import StepCounter, TransformedEnv
+from torchrl.envs import StepCounter, TrajCounter, TransformedEnv
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 from torchrl.modules import ProbabilisticActor
+import tensordict
 from tensordict.nn import (
     TensorDictModule,
     ProbabilisticTensorDictModule,
     TensorDictSequential,
 )
+import torchrl
 import torch_geometric
 import aim
 from aim.pytorch import track_gradients_dists, track_params_dists
@@ -164,8 +166,8 @@ class FastSimEnv(EnvBase):
         else:
             obs = self._reset()
             baseline_time = self._get_baseline()
-            print(f"Baseline time: {baseline_time}")
-            print(f"Simulator time: {time}")
+            # print(f"Baseline time: {baseline_time}")
+            # print(f"Simulator time: {time}")
             reward[0] = 1 + (baseline_time - time) / baseline_time
 
         out = obs
@@ -209,6 +211,7 @@ def make_env():
     return TransformedEnv(
         env,
         StepCounter(),
+        TrajCounter(),
     )
 
 
@@ -220,7 +223,7 @@ class HeteroGATConfig:
     task_data_edge_dim: int = 3
     task_device_edge_dim: int = 2
     task_task_edge_dim: int = 1
-    hidden_channels: int = 16
+    hidden_channels: int = 64
     n_heads: int = 1
 
     @staticmethod
@@ -446,11 +449,11 @@ class OutputHead(nn.Module):
         super(OutputHead, self).__init__()
 
         self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        # self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.layer_norm1 = nn.LayerNorm(hidden_dim)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
         self.fc2 = layer_init(nn.Linear(hidden_dim, output_dim))
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        # self.fc2 = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
         # print(x.shape)
@@ -517,7 +520,7 @@ class DeviceAssignmentNet(nn.Module):
 
         # Output head
         self.output_head = OutputHead(
-            config.hidden_channels * 3,
+            config.hidden_channels * 2,
             config.hidden_channels,
             n_devices,
         )
@@ -530,12 +533,12 @@ class DeviceAssignmentNet(nn.Module):
 
     def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
         if not self._is_batch(obs):
-            _obs = observation_to_heterodata(obs)
+            _obs = observation_to_heterodata_truncate(obs)
             return _obs
 
         _h_data = []
         for i in range(obs.batch_size[0]):
-            _obs = observation_to_heterodata(obs[i])
+            _obs = observation_to_heterodata_truncate(obs[i])
             _h_data.append(_obs)
 
         return Batch.from_data_list(_h_data)
@@ -553,42 +556,22 @@ class DeviceAssignmentNet(nn.Module):
             batch = None
             candidate_embedding = task_embeddings[0]
 
-        task_batch = data["tasks"].batch if is_batch else None
-        data_batch = data["data"].batch if is_batch else None
+        # task_batch = data["tasks"].batch if is_batch else None
+        # data_batch = data["data"].batch if is_batch else None
 
-        task_pool = global_mean_pool(task_embeddings, task_batch)
-        data_pool = global_mean_pool(data_task_embeddings["data"], data_batch)
+        # task_pool = global_mean_pool(task_embeddings, task_batch)
+        # data_pool = global_mean_pool(data_task_embeddings["data"], data_batch)
 
-        global_embedding = self.combine_layer(task_pool, data_pool)
+        # global_embedding = self.combine_layer(task_pool, data_pool)
         candidate_embedding = (
             candidate_embedding.unsqueeze(0) if not is_batch else candidate_embedding
         )
 
-        output_embedding = torch.cat([global_embedding, candidate_embedding], dim=-1)
+        # output_embedding = torch.cat([global_embedding, candidate_embedding], dim=-1)
+        output_embedding = candidate_embedding
 
         x = self.output_head(output_embedding)
         return x
-
-
-class DeviceAttentionLayer(nn.Module):
-    def __init__(self, config: HeteroGATConfig, n_heads: int, input_channels: int):
-        super(DeviceAttentionLayer, self).__init__()
-        self.config = config
-
-        self.fully_connected_edges = torch.zeros()
-
-        self.attention = GATConv(
-            (config.device_feature_dim, input_channels),
-            config.hidden_channels,
-            heads=n_heads,
-            concat=True,
-            residual=True,
-            dropout=0,
-            edge_dim=config.task_device_edge_dim,
-            add_self_loops=False,
-        )
-        self.norm = nn.LayerNorm(config.hidden_channels)
-        self.activation = nn.LeakyReLU(negative_slope=0.01)
 
 
 class ValueNet(nn.Module):
@@ -664,7 +647,7 @@ if __name__ == "__main__":
     from torchrl.modules import ValueOperator
 
     t = time.perf_counter()
-    workers = 1
+    workers = 4
 
     # penv = ParallelEnv(
     #     workers,
@@ -674,7 +657,7 @@ if __name__ == "__main__":
     penv = make_env()
 
     network_conf = HeteroGATConfig.from_observer(
-        penv.simulator.observer, hidden_channels=16
+        penv.simulator.observer, hidden_channels=32
     )
     action_spec = penv.action_spec
 
@@ -689,6 +672,8 @@ if __name__ == "__main__":
         in_keys=["logits"],
         out_keys=["action"],
         distribution_class=torch.distributions.Categorical,
+        default_interaction_type=tensordict.nn.InteractionType.RANDOM,
+        cache_dist=True,
         return_log_prob=True,
     )
 
@@ -708,17 +693,29 @@ if __name__ == "__main__":
         f"Number of trainable parameters: {count_parameters(_internal_policy_module)}"
     )
 
+    frames_per_batch = 1000
+    subbatch_size = 250
+    num_epochs = 4
+
     # policy_module = torch_geometric.compile(policy_module, dynamic=False)
     # value_module = torch_geometric.compile(value_module, dynamic=False)
 
-    collector = SyncDataCollector(make_env, policy_module, frames_per_batch=2000)
+    collector = SyncDataCollector(
+        make_env, policy_module, frames_per_batch=frames_per_batch
+    )
+
+    # collector = MultiSyncDataCollector(
+    #     [make_env for _ in range(workers)],
+    #     policy_module,
+    #     frames_per_batch=frames_per_batch,
+    # )
     replay_buffer = ReplayBuffer(
-        storage=LazyTensorStorage(max_size=2000),
+        storage=LazyTensorStorage(max_size=1000),
         sampler=SamplerWithoutReplacement(),
     )
 
     advantage_module = GAE(
-        gamma=0.999, lmbda=0.999, value_network=value_module, average_gae=True
+        gamma=1, lmbda=1, value_network=value_module, average_gae=False
     )
 
     loss_module = ClipPPOLoss(
@@ -726,32 +723,59 @@ if __name__ == "__main__":
         critic_network=value_module,
         clip_epsilon=0.2,
         entropy_bonus=True,
-        entropy_coef=1e-4,
-        critic_coef=1,
+        entropy_coef=0.01,
+        critic_coef=0.5,
         loss_critic_type="l2",
     )
 
-    frames_per_batch = 2000
-    subbatch_size = 500
-    num_epochs = 4
-
     aim_run = aim.Run(experiment="debug-ppo-torchrl")
 
-    optim = torch.optim.Adam(loss_module.parameters(), lr=2e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=2000, eta_min=0)
+    optim = torch.optim.Adam(loss_module.parameters(), lr=2.5e-4)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     optim, T_max=frames_per_batch, eta_min=0
+    # )
     logs = defaultdict(list)
-
-    # Set up gradient tracking with Aim
-    track_params_dists(policy_module, aim_run)
-    track_gradients_dists(policy_module, aim_run)
-
-    track_gradients_dists(value_module, aim_run)
-    track_params_dists(value_module, aim_run)
 
     epoch_idx = 0  # Global counter for tracking steps across iterations
 
     for i, tensordict_data in enumerate(collector):
         print("Optimization Step: ", i)
+        tensordict_data = tensordict_data.reshape(-1)
+
+        print(tensordict_data["logits"].requires_grad)
+        print(tensordict_data["action"].requires_grad)
+
+        with torch.no_grad():
+            advantage_module(tensordict_data)
+
+            # print(tensordict_data["value_target"])
+            # print(tensordict_data["next", "reward"][tensordict_data["next", "done"]])
+            # print(tensordict_data["state_value"])
+
+            # print(
+            #     "Reward / Cumulative Diff",
+            #     tensordict_data["advantage"].view(-1)
+            #     - (
+            #         tensordict_data["value_target"].view(-1)
+            #         - tensordict_data["state_value"].view(-1)
+            #     ),
+            # )
+            # print(
+            #     "Advantage Diff",
+            #     tensordict_data["advantage"]
+            #     - (tensordict_data["value_target"] - tensordict_data["state_value"]),
+            # )
+
+            # print(tensordict_data["advantage"])
+            # print(tensordict_data["state_value"])
+            # # print(tensordict_data["traj_count"])
+            # print(tensordict_data["next", "step_count"])
+            # print(tensordict_data["next", "done"])
+            # print(tensordict_data["done"])
+            # import sys
+
+            # sys.exit(0)
+
         episode_reward = tensordict_data["next", "reward"].mean().item()
 
         # Log mean reward per episode
@@ -759,20 +783,26 @@ if __name__ == "__main__":
         aim_run.track(
             tensordict_data["next", "reward"].max().item(),
             name="reward/episode_max",
-            step=i,
+            step=epoch_idx,
         )
         aim_run.track(
             tensordict_data["next", "reward"].min().item(),
             name="reward/episode_min",
-            step=i,
+            step=epoch_idx,
         )
+
+        non_zero_rewards = tensordict_data["next", "reward"][
+            tensordict_data["next", "reward"] != 0
+        ]
+        if len(non_zero_rewards) > 0:
+            avg_non_zero_reward = non_zero_rewards.mean().item()
+            aim_run.track(
+                avg_non_zero_reward, name="reward/average_non_zero", step=epoch_idx
+            )
+            print("Average non-zero reward: ", avg_non_zero_reward)
 
         for j in range(num_epochs):
             print("Epoch: ", j)
-            with torch.no_grad():
-                advantage_module(tensordict_data)
-
-            # Log advantage statistics
             aim_run.track(
                 tensordict_data["advantage"].mean().item(),
                 name="advantage/mean",
@@ -798,25 +828,17 @@ if __name__ == "__main__":
                 print("Batch: ", k)
                 subdata = replay_buffer.sample(subbatch_size)
                 loss_vals = loss_module(subdata)
-
-                # Calculate total loss
                 loss_value = (
                     loss_vals["loss_objective"]
                     + loss_vals["loss_critic"]
                     + loss_vals["loss_entropy"]
                 )
-
-                # Backward pass
+                optim.zero_grad()
                 loss_value.backward()
-
-                # Calculate gradient norm before clipping
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     loss_module.parameters(), max_norm=0.5, norm_type=2
                 )
-
-                # Update parameters
                 optim.step()
-                optim.zero_grad()
 
                 # Accumulate batch losses for logging
                 batch_loss_objective += loss_vals["loss_objective"].item()
@@ -825,7 +847,6 @@ if __name__ == "__main__":
                 batch_loss_total += loss_value.item()
                 batch_grad_norm += grad_norm.item()
 
-            # Log average batch losses
             aim_run.track(
                 batch_loss_objective / nbatches, name="loss/objective", step=epoch_idx
             )
@@ -842,7 +863,6 @@ if __name__ == "__main__":
                 batch_grad_norm / nbatches, name="gradients/norm", step=epoch_idx
             )
 
-            # Track learning rate
             aim_run.track(
                 scheduler.get_last_lr()[0], name="learning_rate", step=epoch_idx
             )
@@ -850,10 +870,15 @@ if __name__ == "__main__":
             epoch_idx += 1
 
         logs["reward"].append(episode_reward)
-        scheduler.step()
 
-        # Log additional training metrics
+        track_params_dists(policy_module, aim_run)
+        track_gradients_dists(policy_module, aim_run)
+
+        track_gradients_dists(value_module, aim_run)
+        track_params_dists(value_module, aim_run)
+        # scheduler.step()
         aim_run.track(time.perf_counter() - t, name="time/total_seconds", step=i)
+        collector.update_policy_weights_()
 
-    # Close the Aim run when training is complete
+    collector.shutdown()
     aim_run.close()
