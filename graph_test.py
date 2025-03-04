@@ -11,12 +11,45 @@ from task4feedback.interface.wrappers import (
     SimulatorDriver,
     SimulatorFactory,
     create_graph_spec,
+    start_logger,
+    observation_to_heterodata,
+    observation_to_heterodata_truncate,
 )
 from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
 from torchrl.envs.utils import make_composite_from_td
 from tensordict.nn import set_composite_lp_aggregate
 from torchrl.envs import check_env_specs
 from tensordict import TensorDict
+from torch_geometric.data import HeteroData, Batch
+import torch.nn as nn
+from torch_geometric.loader import DataLoader
+from torch_geometric.nn import GATConv, global_mean_pool, HeteroConv
+
+from torchrl.modules import ProbabilisticActor
+from tensordict.nn import (
+    TensorDictModule,
+    ProbabilisticTensorDictModule,
+    TensorDictSequential,
+)
+import torch_geometric
+
+# start_logger()
+
+
+def layer_init(layer, a=0.01, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.kaiming_uniform_(layer.weight, a=a, nonlinearity="leaky_relu")
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
+
+
+def init_weights(model):
+    for m in model.modules():
+        if isinstance(m, nn.Linear) or isinstance(m, GATConv):
+            layer_init(m)
+        elif isinstance(m, nn.LayerNorm):
+            # Initialize LayerNorm weights and biases
+            nn.init.constant_(m.weight, 1.0)
+            nn.init.constant_(m.bias, 0.0)
 
 
 def make_test_cholesky_graph():
@@ -33,7 +66,7 @@ def make_test_cholesky_graph():
 
         return placement_info
 
-    data_config = CholeskyDataGraphConfig(data_size=100)
+    data_config = CholeskyDataGraphConfig(data_size=1000000)
     config = CholeskyConfig(blocks=4, task_config=task_config)
     tasks, data = make_graph(config, data_config=data_config)
     return tasks, data
@@ -42,20 +75,34 @@ def make_test_cholesky_graph():
 class FastSimEnv(EnvBase):
     def __init__(self, simulator_factory, seed: int = 0, device="cpu"):
         super().__init__(device=device)
-        self.batch_size = torch.Size([])
 
         self.simulator_factory = simulator_factory
         self.simulator = simulator_factory.create(seed)
 
+        self.time_spec = Unbounded(shape=(1,), device=self.device, dtype=torch.int64)
         self.observation_spec = self._create_observation_spec()
         self.action_spec = self._create_action_spec()
         self.reward_spec = self._create_reward_spec()
         self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool)
 
+        self.workspace = self.simulator.observer.new_observation_buffer()
+
+    def _get_baseline(self):
+        # simulator_copy = self.simulator.fresh_copy()
+        # simulator_copy.initialize()
+        # simulator_copy.initialize_data()
+        # simulator_copy.disable_external_mapper()
+        # final_state = simulator_copy.run()
+        # assert final_state == fastsim.ExecutionState.COMPLETE, (
+        #     f"Baseline returned unexpected final state: {final_state}"
+        # )
+        # return simulator_copy.time()
+        return 10000
+
     def _create_observation_spec(self) -> TensorSpec:
         obs = self.simulator.observer.get_observation()
         comp = make_composite_from_td(obs)
-        comp = Composite(observation=comp)
+        comp = Composite(observation=comp, time=self.time_spec)
         return comp
 
     def _create_action_spec(self, ndevices: int = 5) -> TensorSpec:
@@ -63,7 +110,7 @@ class FastSimEnv(EnvBase):
         out = Bounded(
             shape=(1,),
             device=self.device,
-            dtype=torch.int32,
+            dtype=torch.int64,
             low=torch.tensor(0, device=self.device),
             high=torch.tensor(n_devices, device=self.device),
         )
@@ -75,30 +122,19 @@ class FastSimEnv(EnvBase):
 
     def _get_observation(self) -> TensorDict:
         obs = self.simulator.observer.get_observation()
-        td = TensorDict(observation=obs)
+        td = TensorDict(observation=obs, time=obs["aux"]["time"])
         return td
 
     def _step(self, td: TensorDict) -> TensorDict:
-        candidate_tasks = td["observation"]["aux"]["candidates"]["idx"]
         chosen_device = td["action"].item()
-
-        # print(f"candidate_tasks: {candidate_tasks}")
-        # print(f"chosen_device: {chosen_device}")
-
-        # print("TD", td)
-
-        candidate = candidate_tasks[0].item()
         local_id = 0
-        device = 0
+        device = chosen_device
         state = self.simulator.get_state()
-        mapping_priority = state.get_mapping_priority(candidate)
+        mapping_priority = 0
         reserving_priority = mapping_priority
         launching_priority = mapping_priority
-
         actions = [
-            fastsim.Action(
-                candidate, local_id, device, reserving_priority, launching_priority
-            )
+            fastsim.Action(local_id, device, reserving_priority, launching_priority)
         ]
         self.simulator.simulator.map_tasks(actions)
         simulator_status = self.simulator.run_until_external_mapping()
@@ -111,20 +147,24 @@ class FastSimEnv(EnvBase):
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
         reward[0] = 0
 
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"][0].item()
+
         if not done:
             assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
                 f"Unexpected simulator status: {simulator_status}"
             )
-            obs = self._get_observation()
         else:
             obs = self._reset()
+            baseline_time = self._get_baseline()
+            print(f"Baseline time: {baseline_time}")
+            print(f"Simulator time: {time}")
+            reward[0] = 1 + (baseline_time - time) / baseline_time
 
         out = obs
         out.set("reward", reward)
         out.set("done", done)
-
-        print("OUT")
-
+        out.set("time", torch.tensor([time], device=self.device, dtype=torch.int64))
         return out
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
@@ -134,7 +174,12 @@ class FastSimEnv(EnvBase):
             f"Unexpected simulator status: {simulator_status}"
         )
 
-        return self._get_observation()
+        obs = self._get_observation()
+        # obs.set("time", obs["observation"]["aux"]["time"])
+        # print("Reset: ", obs["observation"]["aux"]["candidates"]["idx"])
+        # print("Reset: ", obs["observation"]["nodes"]["tasks"]["glb"])
+
+        return obs
 
     def _set_seed(self, seed: Optional[int] = None):
         rng = torch.manual_seed(seed)
@@ -142,7 +187,7 @@ class FastSimEnv(EnvBase):
 
 
 def make_env():
-    s = uniform_connected_devices(5, 100000, 1, 1000)
+    s = uniform_connected_devices(5, 1000000000, 1, 2000)
     tasks, data = make_test_cholesky_graph()
     d = DataBlocks.create_from_legacy_data(data, s)
     m = Graph.create_from_legacy_graph(tasks, data)
@@ -150,50 +195,519 @@ def make_env():
     spec = create_graph_spec()
     input = SimulatorInput(m, d, s)
     print(f"Max devices: {spec.max_devices}")
-    return FastSimEnv(SimulatorFactory(input, spec, DefaultObserverFactory))
+    print(f"N tasks: {len(tasks)}")
+    print(f"N data: {len(data)}")
+    return FastSimEnv(
+        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+    )
 
 
-# s = uniform_connected_devices(5, 100000, 1, 1000)
-# tasks, data = make_test_cholesky_graph()
-# d = DataBlocks.create_from_legacy_data(data, s)
-# # print(d)
+@dataclass
+class HeteroGATConfig:
+    task_feature_dim: int = 12
+    data_feature_dim: int = 5
+    device_feature_dim: int = 12
+    task_data_edge_dim: int = 3
+    task_device_edge_dim: int = 2
+    task_task_edge_dim: int = 1
+    hidden_channels: int = 16
+    n_heads: int = 1
 
-# n_tasks = len(tasks)
-# m = Graph.create_from_legacy_graph(tasks, data)
-# m.finalize_tasks()
-# # print(m)
+    @staticmethod
+    def from_observer(
+        observer: ExternalObserver, n_heads: int = 1, hidden_channels: int = 16
+    ):
+        return HeteroGATConfig(
+            task_feature_dim=observer.task_feature_dim,
+            data_feature_dim=observer.data_feature_dim,
+            device_feature_dim=observer.device_feature_dim,
+            task_data_edge_dim=observer.task_data_edge_dim,
+            task_device_edge_dim=observer.task_device_edge_dim,
+            task_task_edge_dim=observer.task_task_edge_dim,
+            hidden_channels=hidden_channels,
+            n_heads=n_heads,
+        )
 
-# spec = create_graph_spec()
-# input = SimulatorInput(m, d, s)
 
-# env = FastSimEnv(SimulatorFactory(input, spec, DefaultObserverFactory))
+class DatatoTaskLayer(nn.Module):
+    """
+    Performs a single GAT convolution from data features onto task features.
+    """
 
-# create_env = lambda: FastSimEnv(SimulatorFactory(input, spec, DefaultObserverFactory))
+    def __init__(self, config: HeteroGATConfig):
+        super(DatatoTaskLayer, self).__init__()
+        self.config = config
+        self.gnn_tasks_data = GATConv(
+            (config.data_feature_dim, config.task_feature_dim),
+            config.hidden_channels,
+            heads=config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=config.task_data_edge_dim,
+            add_self_loops=False,
+        )
+        self.layer_norm_data_tasks = nn.LayerNorm(config.hidden_channels)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+    def forward(self, obs: HeteroData) -> torch.Tensor:
+        data_fused_tasks = self.gnn_tasks_data(
+            (obs["data"].x, obs["tasks"].x),
+            obs["data", "uses", "tasks"].edge_index,
+            obs["data", "uses", "tasks"].edge_attr,
+        )
+        data_fused_tasks = self.layer_norm_data_tasks(data_fused_tasks)
+        data_fused_tasks = self.activation(data_fused_tasks)
+        return data_fused_tasks
 
 
-from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
-import time
+class DataTaskBipartiteLayer(nn.Module):
+    def __init__(self, n_heads: int, config: HeteroGATConfig):
+        super(DataTaskBipartiteLayer, self).__init__()
+        self.config = config
+        self.data_task_conv = HeteroConv(
+            {
+                ("data", "to", "tasks"): GATConv(
+                    (config.data_feature_dim, config.task_feature_dim),
+                    config.hidden_channels,
+                    heads=n_heads,
+                    concat=True,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=config.task_data_edge_dim,
+                    add_self_loops=False,
+                ),
+                ("tasks", "to", "data"): GATConv(
+                    (config.task_feature_dim, config.data_feature_dim),
+                    config.hidden_channels,
+                    heads=n_heads,
+                    concat=True,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=config.task_data_edge_dim,
+                    add_self_loops=False,
+                ),
+            }
+        )
+
+        hidden_channels_with_heads = config.hidden_channels * n_heads
+
+        self.task_data_conv = HeteroConv(
+            {
+                ("tasks", "to", "data"): GATConv(
+                    (hidden_channels_with_heads, hidden_channels_with_heads),
+                    config.hidden_channels,
+                    heads=1,
+                    concat=False,
+                    add_self_loops=False,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=config.task_data_edge_dim,
+                ),
+                ("data", "to", "tasks"): GATConv(
+                    (hidden_channels_with_heads, hidden_channels_with_heads),
+                    config.hidden_channels,
+                    heads=1,
+                    concat=False,
+                    add_self_loops=False,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=config.task_data_edge_dim,
+                ),
+            }
+        )
+
+        self.norm_tasks = nn.LayerNorm(config.hidden_channels)
+        self.norm_data = nn.LayerNorm(config.hidden_channels)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+    def forward(self, data: HeteroData | Batch):
+        x_dict = data.x_dict
+        edge_index_dict = data.edge_index_dict
+        edge_attr_dict = (
+            data.edge_attr_dict if hasattr(data, "edge_attr_dict") else None
+        )
+
+        # print(x_dict)
+        # print(edge_index_dict)
+        # print(edge_attr_dict)
+
+        x_dict = self.data_task_conv(x_dict, edge_index_dict, edge_attr_dict)
+
+        x_dict = {node_type: self.activation(x) for node_type, x in x_dict.items()}
+        x_dict = {
+            "tasks": self.norm_tasks(x_dict["tasks"]),
+            "data": self.norm_data(x_dict["data"]),
+        }
+        x_dict = self.task_data_conv(x_dict, edge_index_dict, edge_attr_dict)
+
+        return x_dict
+
+
+class TaskTaskLayer(nn.Module):
+    """
+    Tasks-to-tasks encodes task -> dependency information
+
+    This module performs two depth 2 GAT convolutions on the task nodes:
+    - Two accumulations of task -> dependency information
+    - Two accumulations of task -> dependant information
+
+    These results are then concatenated and returned as the output (hidden_channels * 2)
+    """
+
+    def __init__(self, input_dim: int, n_heads: int, config: HeteroGATConfig):
+        super(TaskTaskLayer, self).__init__()
+
+        self.conv_dependency_1 = GATConv(
+            (input_dim, input_dim),
+            config.hidden_channels,
+            heads=n_heads,
+            concat=True,
+            residual=True,
+            dropout=0,
+            edge_dim=config.task_task_edge_dim,
+            add_self_loops=False,
+        )
+
+        self.conv_dependent_1 = GATConv(
+            (input_dim, input_dim),
+            config.hidden_channels,
+            heads=n_heads,
+            concat=True,
+            residual=True,
+            dropout=0,
+            edge_dim=config.task_task_edge_dim,
+            add_self_loops=False,
+        )
+
+        self.conv_dependency_2 = GATConv(
+            (config.hidden_channels * n_heads, config.hidden_channels * n_heads),
+            config.hidden_channels,
+            heads=1,
+            concat=True,
+            residual=True,
+            dropout=0,
+            edge_dim=config.task_task_edge_dim,
+            add_self_loops=False,
+        )
+
+        self.conv_dependent_2 = GATConv(
+            (config.hidden_channels * n_heads, config.hidden_channels * n_heads),
+            config.hidden_channels,
+            heads=1,
+            concat=True,
+            residual=True,
+            edge_dim=config.task_task_edge_dim,
+            add_self_loops=False,
+        )
+
+        self.norm_dependency = nn.LayerNorm(config.hidden_channels)
+        self.norm_dependant = nn.LayerNorm(config.hidden_channels)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+    def forward(self, task_embedding, data: HeteroData | Batch):
+        tasks = task_embedding
+        edge_dependency_index = data.edge_index_dict["tasks", "to", "tasks"]
+        edge_dependant_index = edge_dependency_index.flip(0)
+        edge_attr = data.edge_attr_dict["tasks", "to", "tasks"]
+
+        tasks_dependency = self.conv_dependency_1(
+            tasks, edge_dependency_index, edge_attr
+        )
+        tasks_dependency = self.norm_dependency(tasks_dependency)
+        tasks_dependency = self.activation(tasks_dependency)
+
+        tasks_dependant = self.conv_dependent_1(tasks, edge_dependant_index, edge_attr)
+        tasks_dependant = self.norm_dependant(tasks_dependant)
+        tasks_dependant = self.activation(tasks_dependant)
+
+        tasks_dependency = self.conv_dependency_2(
+            tasks_dependency, edge_dependency_index, edge_attr
+        )
+        tasks_dependant = self.conv_dependent_2(
+            tasks_dependant, edge_dependant_index, edge_attr
+        )
+
+        return torch.cat([tasks_dependency, tasks_dependant], dim=-1)
+
+
+class OutputHead(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(OutputHead, self).__init__()
+
+        self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
+        self.layer_norm1 = nn.LayerNorm(hidden_dim)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+        self.fc2 = layer_init(nn.Linear(hidden_dim, output_dim))
+
+    def forward(self, x):
+        # print(x.shape)
+        x = self.fc1(x)
+        x = self.layer_norm1(x)
+        x = self.activation(x)
+        x = self.fc2(x)
+        # print(x.shape)
+        return x
+
+
+class CombineTwoLayer(nn.Module):
+    def __init__(self, x_shape, y_shape, hidden_shape, output_shape):
+        super(CombineTwoLayer, self).__init__()
+        self.fc_x = layer_init(nn.Linear(x_shape, hidden_shape))
+        self.fc_y = layer_init(nn.Linear(y_shape, hidden_shape))
+        self.fc_c = layer_init(nn.Linear(hidden_shape, output_shape))
+        self.layer_norm_x = nn.LayerNorm(hidden_shape)
+        self.layer_norm_y = nn.LayerNorm(hidden_shape)
+        self.layer_norm_c = nn.LayerNorm(output_shape)
+
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+    def forward(self, x, y):
+        x = self.fc_x(x)
+        x = self.layer_norm_x(x)
+        x = self.activation(x)
+
+        y = self.fc_y(y)
+        y = self.layer_norm_y(y)
+        y = self.activation(y)
+
+        z = x + y
+        z = self.fc_c(z)
+        z = self.layer_norm_c(z)
+        z = self.activation(z)
+
+        return z
+
+
+class DeviceAssignmentNet(nn.Module):
+    def __init__(self, config: HeteroGATConfig, n_devices: int = 5):
+        super(DeviceAssignmentNet, self).__init__()
+
+        self.config = config
+
+        # Returns embeddings for tasks and data nodes at depth 2
+        # Output feature dim:
+        # dict of ("tasks": hidden_channels, "data": hidden_channels)
+        self.data_task_layer = DataTaskBipartiteLayer(1, config)
+
+        # Returns concatenated embeddings for tasks at depth 2
+        # Two directions of task -> task information (dependency and dependant)
+        # Output feature dim: hidden_channels * 2
+        self.task_task_layer = TaskTaskLayer(config.hidden_channels, 1, config)
+
+        # Combination layer
+        self.combine_layer = CombineTwoLayer(
+            config.hidden_channels * 2,
+            config.hidden_channels,
+            config.hidden_channels,
+            config.hidden_channels,
+        )
+
+        # Output head
+        self.output_head = OutputHead(
+            config.hidden_channels * 3,
+            config.hidden_channels,
+            n_devices,
+        )
+
+    def _is_batch(self, obs: TensorDict) -> bool:
+        # print("Batch size: ", obs.batch_size)
+        if not obs.batch_size:
+            return False
+        return True
+
+    def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+        if not self._is_batch(obs):
+            _obs = observation_to_heterodata(obs)
+            return _obs
+
+        _h_data = []
+        for i in range(obs.batch_size[0]):
+            _obs = observation_to_heterodata(obs[i])
+            _h_data.append(_obs)
+
+        return Batch.from_data_list(_h_data)
+
+    def forward(self, obs: TensorDict, batch=None):
+        data = self._convert_to_heterodata(obs)
+        data_task_embeddings = self.data_task_layer(data)
+        task_embeddings = data_task_embeddings["tasks"]
+        task_embeddings = self.task_task_layer(task_embeddings, data)
+
+        task_pool = global_mean_pool(task_embeddings, data["tasks"].batch)
+        data_pool = global_mean_pool(data_task_embeddings["data"], data["data"].batch)
+
+        global_embedding = self.combine_layer(task_pool, data_pool)
+
+        if self._is_batch(obs):
+            candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
+        else:
+            candidate_embedding = task_embeddings[0]
+
+        output_embedding = torch.cat([global_embedding, candidate_embedding], dim=-1)
+
+        x = self.output_head(output_embedding)
+        return x
+
+
+class ValueNet(nn.Module):
+    def __init__(self, config: HeteroGATConfig, n_devices: int = 5):
+        super(DeviceAssignmentNet, self).__init__()
+
+        self.config = config
+
+        # Returns embeddings for tasks and data nodes at depth 2
+        # Output feature dim:
+        # dict of ("tasks": hidden_channels, "data": hidden_channels)
+        self.data_task_layer = DataTaskBipartiteLayer(1, config)
+
+        # Returns concatenated embeddings for tasks at depth 2
+        # Two directions of task -> task information (dependency and dependant)
+        # Output feature dim: hidden_channels * 2
+        self.task_task_layer = TaskTaskLayer(config.hidden_channels, 1, config)
+
+        # Combination layer
+        self.combine_layer = CombineTwoLayer(
+            config.hidden_channels * 2,
+            config.hidden_channels,
+            config.hidden_channels,
+            config.hidden_channels,
+        )
+
+        # Output head
+        self.output_head = OutputHead(
+            config.hidden_channels,
+            config.hidden_channels,
+            1,
+        )
+
+    def _is_batch(self, obs: TensorDict) -> bool:
+        # print("Batch size: ", obs.batch_size)
+        if not obs.batch_size:
+            return False
+        return True
+
+    def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+        if not self._is_batch(obs):
+            _obs = observation_to_heterodata(obs)
+            return _obs
+
+        _h_data = []
+        for i in range(obs.batch_size[0]):
+            _obs = observation_to_heterodata(obs[i])
+            _h_data.append(_obs)
+
+        return Batch.from_data_list(_h_data)
+
+    def forward(self, obs: TensorDict, batch=None):
+        data = self._convert_to_heterodata(obs)
+        data_task_embeddings = self.data_task_layer(data)
+        task_embeddings = data_task_embeddings["tasks"]
+        task_embeddings = self.task_task_layer(task_embeddings, data)
+
+        task_pool = global_mean_pool(task_embeddings, data["tasks"].batch)
+        data_pool = global_mean_pool(data_task_embeddings["data"], data["data"].batch)
+
+        global_embedding = self.combine_layer(task_pool, data_pool)
+
+        x = self.output_head(global_embedding)
+        return x
+
 
 if __name__ == "__main__":
+    from torchrl.envs import ParallelEnv
+
     t = time.perf_counter()
-    workers = 4
+    workers = 1
+
+    # penv = ParallelEnv(
+    #     workers,
+    #     [make_env for _ in range(workers)],
+    #     use_buffers=True,
+    # )
+    penv = make_env()
+
+    network_conf = HeteroGATConfig.from_observer(penv.simulator.observer)
+    action_spec = penv.action_spec
+
+    _internal_policy_module = TensorDictModule(
+        DeviceAssignmentNet(network_conf, n_devices=5),
+        in_keys=["observation"],
+        out_keys=["logits"],
+    )
+
+    # _internal_policy_module = torch_geometric.compile(
+    #     _internal_policy_module, dynamic=False
+    # )
+
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    # print(network_conf)
+
+    # check_env_specs(penv)
+    r = penv.rollout(3)
+
+    o = r[0]
+    print(r)
+
+    start_t = time.perf_counter()
+    _internal_policy_module(r)
+    end_t = time.perf_counter()
+    print(f"Time taken: {end_t - start_t:.4f} seconds")
+
+    # start_t = time.perf_counter()
+    # _internal_policy_module(r)
+    # end_t = time.perf_counter()
+    # print(f"Time taken: {end_t - start_t:.4f} seconds")
+
+    # start_t = time.perf_counter()
+    # _internal_policy_module(r)
+    # end_t = time.perf_counter()
+    # print(f"Time taken: {end_t - start_t:.4f} seconds")
+
+    # start_t = time.perf_counter()
+    # _internal_policy_module(r)
+    # end_t = time.perf_counter()
+    # print(f"Time taken: {end_t - start_t:.4f} seconds")
+
+    # print(r["logits"])
+
+    print(
+        f"Number of trainable parameters: {count_parameters(_internal_policy_module)}"
+    )
+
+    # print(r["next"]["reward"])
+
+    # print(r["observation"]["nodes"]["tasks"]["glb"])
+    # print(len(r))
+    # print(r)
+    # print(r.shape)
+    # import sys
+
+    # sys.exit()
 
     # collector = SyncDataCollector(make_env, frames_per_batch=1000)
-    collector = MultiSyncDataCollector(
-        [make_env for _ in range(workers)], frames_per_batch=1000, total_frames=-1
-    )
-    for data in collector:
-        print(data.shape)
-        break
-    t = time.perf_counter() - t
-    print(f"Time: {t}")
+    # collector = MultiSyncDataCollector(
+    #     [make_env for _ in range(workers)],
+    #     frames_per_batch=1000,
+    #     total_frames=-1,
+    #     use_buffers=False,
+    # )
+    # for data in collector:
+    #     print(data.shape)
+    #     print(data["observation"]["nodes"]["tasks"]["glb"])
+    #     break
+    # t = time.perf_counter() - t
+    # print(f"Time: {t}")
 
-    t = time.perf_counter()
-    i = 0
-    for data in collector:
-        print(data.shape)
-        i += 1
-        if i == 10:
-            break
-    t = time.perf_counter() - t
-    print(f"Time: {t}")
+    # t = time.perf_counter()
+    # i = 0
+    # for data in collector:
+    #     print(data.shape)
+    #     i += 1
+    #     if i == 10:
+    #         break
+    # t = time.perf_counter() - t
+    # print(f"Time: {t}")
+    # collector.shutdown()
