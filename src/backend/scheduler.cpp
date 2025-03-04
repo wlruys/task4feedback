@@ -269,6 +269,8 @@ ResourceRequest SchedulerState::request_launch_resources(taskid_t task_id,
   // non_local_mem +=
   //     data_manager.non_local_size_launched(task.get_write(), device_id);
   // assert(non_local_mem == 0);
+  SPDLOG_DEBUG("Requesting launch resources for task {} on device {}", task_id, device_id);
+  SPDLOG_DEBUG("Task resources: VCU: {}, MEM: {}", task_resources.vcu, task_resources.mem);
   Resources requested = {task_resources.vcu, task_resources.mem};
   auto missing_vcu = device_manager.overflow_vcu<TaskState::LAUNCHED>(device_id, requested.vcu);
   return {requested, Resources(missing_vcu, 0)};
@@ -612,8 +614,6 @@ size_t Scheduler::get_mappable_candidates(TorchInt64Arr1D &output_tensor) {
 
   const auto copy_size = std::min(output_tensor.size(), top_k_tasks.size());
 
-  std::cout << "First task: " << top_k_tasks[0] << std::endl;
-
   for (size_t i = 0; i < copy_size; i++) {
     v(i) = top_k_tasks[i];
   }
@@ -633,17 +633,14 @@ TaskIDList &Scheduler::get_mappable_candidates() {
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
 
-  std::cout << "First task: " << top_k_tasks[0] << std::endl;
-
   task_buffer.insert(task_buffer.end(), top_k_tasks.begin(), top_k_tasks.end());
   return task_buffer;
 }
 
-const TaskIDList &Scheduler::map_task(Action &action) {
+const TaskIDList &Scheduler::map_task(taskid_t task_id, Action &action) {
   auto &s = this->state;
   auto current_time = s.global_time;
 
-  taskid_t task_id = action.task_id;
   devid_t chosen_device = action.device;
 
   SPDLOG_DEBUG("Mapping task {} to device {}", s.get_task_name(task_id), chosen_device);
@@ -697,10 +694,14 @@ void Scheduler::remove_mapped_tasks(ActionList &action_list) {
 
 void Scheduler::map_tasks_from_python(ActionList &action_list, EventManager &event_manager) {
   success_count = 0;
+  auto &mappable = queues.mappable;
+  auto top_k_tasks = mappable.get_top_k();
+
   if (!action_list.empty()) {
     TaskIDList nmt;
     for (auto &action : action_list) {
-      const auto &tasks = map_task(action);
+      const auto task_id = top_k_tasks[action.pos];
+      const auto &tasks = map_task(task_id, action);
       nmt.insert(nmt.end(), tasks.begin(), tasks.end());
     }
     remove_mapped_tasks(action_list);
@@ -744,7 +745,7 @@ void Scheduler::map_tasks(Event &map_event, EventManager &event_manager, Mapper 
     Action action = mapper.map_task(task_id, s);
     // spdlog::info("Mapping task {} at time {} to device {}",
     //              s.get_task_name(task_id), s.global_time, action.device);
-    const auto &newly_mappable_tasks = map_task(action);
+    const auto &newly_mappable_tasks = map_task(task_id, action);
     // spdlog::debug("Newly mappable tasks: {}", newly_mappable_tasks.size());
     push_mappable(newly_mappable_tasks);
   }

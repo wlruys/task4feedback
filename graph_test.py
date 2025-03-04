@@ -24,7 +24,13 @@ from torch_geometric.data import HeteroData, Batch
 import torch.nn as nn
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GATConv, global_mean_pool, HeteroConv
-
+from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
+from torchrl.data.replay_buffers import ReplayBuffer
+from torchrl.data.replay_buffers.storages import LazyTensorStorage
+from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
+from torchrl.envs import StepCounter, TransformedEnv
+from torchrl.objectives import ClipPPOLoss
+from torchrl.objectives.value import GAE
 from torchrl.modules import ProbabilisticActor
 from tensordict.nn import (
     TensorDictModule,
@@ -32,7 +38,8 @@ from tensordict.nn import (
     TensorDictSequential,
 )
 import torch_geometric
-
+import aim
+from aim.pytorch import track_gradients_dists, track_params_dists
 # start_logger()
 
 
@@ -197,8 +204,12 @@ def make_env():
     print(f"Max devices: {spec.max_devices}")
     print(f"N tasks: {len(tasks)}")
     print(f"N data: {len(data)}")
-    return FastSimEnv(
+    env = FastSimEnv(
         SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+    )
+    return TransformedEnv(
+        env,
+        StepCounter(),
     )
 
 
@@ -436,9 +447,11 @@ class OutputHead(nn.Module):
         super(OutputHead, self).__init__()
 
         self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.layer_norm1 = nn.LayerNorm(hidden_dim)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
         self.fc2 = layer_init(nn.Linear(hidden_dim, output_dim))
+        self.fc2 = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
         # print(x.shape)
@@ -529,20 +542,28 @@ class DeviceAssignmentNet(nn.Module):
         return Batch.from_data_list(_h_data)
 
     def forward(self, obs: TensorDict, batch=None):
+        is_batch = self._is_batch(obs)
         data = self._convert_to_heterodata(obs)
         data_task_embeddings = self.data_task_layer(data)
         task_embeddings = data_task_embeddings["tasks"]
         task_embeddings = self.task_task_layer(task_embeddings, data)
 
-        task_pool = global_mean_pool(task_embeddings, data["tasks"].batch)
-        data_pool = global_mean_pool(data_task_embeddings["data"], data["data"].batch)
-
-        global_embedding = self.combine_layer(task_pool, data_pool)
-
-        if self._is_batch(obs):
+        if is_batch:
             candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
         else:
+            batch = None
             candidate_embedding = task_embeddings[0]
+
+        task_batch = data["tasks"].batch if is_batch else None
+        data_batch = data["data"].batch if is_batch else None
+
+        task_pool = global_mean_pool(task_embeddings, task_batch)
+        data_pool = global_mean_pool(data_task_embeddings["data"], data_batch)
+
+        global_embedding = self.combine_layer(task_pool, data_pool)
+        candidate_embedding = (
+            candidate_embedding.unsqueeze(0) if not is_batch else candidate_embedding
+        )
 
         output_embedding = torch.cat([global_embedding, candidate_embedding], dim=-1)
 
@@ -550,9 +571,30 @@ class DeviceAssignmentNet(nn.Module):
         return x
 
 
+class DeviceAttentionLayer(nn.Module):
+    def __init__(self, config: HeteroGATConfig, n_heads: int, input_channels: int):
+        super(DeviceAttentionLayer, self).__init__()
+        self.config = config
+
+        self.fully_connected_edges = torch.zeros()
+
+        self.attention = GATConv(
+            (config.device_feature_dim, input_channels),
+            config.hidden_channels,
+            heads=n_heads,
+            concat=True,
+            residual=True,
+            dropout=0,
+            edge_dim=config.task_device_edge_dim,
+            add_self_loops=False,
+        )
+        self.norm = nn.LayerNorm(config.hidden_channels)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+
 class ValueNet(nn.Module):
     def __init__(self, config: HeteroGATConfig, n_devices: int = 5):
-        super(DeviceAssignmentNet, self).__init__()
+        super(ValueNet, self).__init__()
 
         self.config = config
 
@@ -600,13 +642,17 @@ class ValueNet(nn.Module):
         return Batch.from_data_list(_h_data)
 
     def forward(self, obs: TensorDict, batch=None):
+        is_batch = self._is_batch(obs)
         data = self._convert_to_heterodata(obs)
         data_task_embeddings = self.data_task_layer(data)
         task_embeddings = data_task_embeddings["tasks"]
         task_embeddings = self.task_task_layer(task_embeddings, data)
 
-        task_pool = global_mean_pool(task_embeddings, data["tasks"].batch)
-        data_pool = global_mean_pool(data_task_embeddings["data"], data["data"].batch)
+        task_batch = data["tasks"].batch if is_batch else None
+        data_batch = data["data"].batch if is_batch else None
+
+        task_pool = global_mean_pool(task_embeddings, task_batch)
+        data_pool = global_mean_pool(data_task_embeddings["data"], data_batch)
 
         global_embedding = self.combine_layer(task_pool, data_pool)
 
@@ -616,6 +662,7 @@ class ValueNet(nn.Module):
 
 if __name__ == "__main__":
     from torchrl.envs import ParallelEnv
+    from torchrl.modules import ValueOperator
 
     t = time.perf_counter()
     workers = 1
@@ -627,13 +674,28 @@ if __name__ == "__main__":
     # )
     penv = make_env()
 
-    network_conf = HeteroGATConfig.from_observer(penv.simulator.observer)
+    network_conf = HeteroGATConfig.from_observer(
+        penv.simulator.observer, hidden_channels=16
+    )
     action_spec = penv.action_spec
 
     _internal_policy_module = TensorDictModule(
         DeviceAssignmentNet(network_conf, n_devices=5),
         in_keys=["observation"],
         out_keys=["logits"],
+    )
+
+    policy_module = ProbabilisticActor(
+        module=_internal_policy_module,
+        in_keys=["logits"],
+        out_keys=["action"],
+        distribution_class=torch.distributions.Categorical,
+        return_log_prob=True,
+    )
+
+    value_module = ValueOperator(
+        module=ValueNet(network_conf, n_devices=5),
+        in_keys=["observation"],
     )
 
     # _internal_policy_module = torch_geometric.compile(
@@ -643,71 +705,152 @@ if __name__ == "__main__":
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    # print(network_conf)
-
-    # check_env_specs(penv)
-    r = penv.rollout(3)
-
-    o = r[0]
-    print(r)
-
-    start_t = time.perf_counter()
-    _internal_policy_module(r)
-    end_t = time.perf_counter()
-    print(f"Time taken: {end_t - start_t:.4f} seconds")
-
-    # start_t = time.perf_counter()
-    # _internal_policy_module(r)
-    # end_t = time.perf_counter()
-    # print(f"Time taken: {end_t - start_t:.4f} seconds")
-
-    # start_t = time.perf_counter()
-    # _internal_policy_module(r)
-    # end_t = time.perf_counter()
-    # print(f"Time taken: {end_t - start_t:.4f} seconds")
-
-    # start_t = time.perf_counter()
-    # _internal_policy_module(r)
-    # end_t = time.perf_counter()
-    # print(f"Time taken: {end_t - start_t:.4f} seconds")
-
-    # print(r["logits"])
-
     print(
         f"Number of trainable parameters: {count_parameters(_internal_policy_module)}"
     )
 
-    # print(r["next"]["reward"])
+    policy_module = torch_geometric.compile(policy_module, dynamic=False)
+    value_module = torch_geometric.compile(value_module, dynamic=False)
 
-    # print(r["observation"]["nodes"]["tasks"]["glb"])
-    # print(len(r))
-    # print(r)
-    # print(r.shape)
-    # import sys
+    collector = SyncDataCollector(make_env, policy_module, frames_per_batch=2000)
+    replay_buffer = ReplayBuffer(
+        storage=LazyTensorStorage(max_size=2000),
+        sampler=SamplerWithoutReplacement(),
+    )
 
-    # sys.exit()
+    advantage_module = GAE(
+        gamma=0.999, lmbda=0.999, value_network=value_module, average_gae=True
+    )
 
-    # collector = SyncDataCollector(make_env, frames_per_batch=1000)
-    # collector = MultiSyncDataCollector(
-    #     [make_env for _ in range(workers)],
-    #     frames_per_batch=1000,
-    #     total_frames=-1,
-    #     use_buffers=False,
-    # )
-    # for data in collector:
-    #     print(data.shape)
-    #     print(data["observation"]["nodes"]["tasks"]["glb"])
-    #     break
-    # t = time.perf_counter() - t
-    # print(f"Time: {t}")
+    loss_module = ClipPPOLoss(
+        actor_network=policy_module,
+        critic_network=value_module,
+        clip_epsilon=0.2,
+        entropy_bonus=True,
+        entropy_coef=1e-4,
+        critic_coef=1,
+        loss_critic_type="l2",
+    )
 
-    # t = time.perf_counter()
-    # i = 0
-    # for data in collector:
-    #     print(data.shape)
-    #     i += 1
-    #     if i == 10:
-    #         break
-    # t = time.perf_counter() - t
-    # print(f"Time: {t}")
-    # collector.shutdown()
+    frames_per_batch = 2000
+    subbatch_size = 500
+    num_epochs = 4
+
+    aim_run = aim.Run(experiment="debug-ppo-torchrl")
+
+    optim = torch.optim.Adam(loss_module.parameters(), lr=1e-3)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=2000, eta_min=0)
+    logs = defaultdict(list)
+
+    # Set up gradient tracking with Aim
+    track_params_dists(loss_module, aim_run)
+    track_gradients_dists(loss_module, aim_run)
+
+    epoch_idx = 0  # Global counter for tracking steps across iterations
+
+    for i, tensordict_data in enumerate(collector):
+        print("Optimization Step: ", i)
+        episode_reward = tensordict_data["next", "reward"].mean().item()
+
+        # Log mean reward per episode
+        aim_run.track(episode_reward, name="reward/episode_mean", step=i)
+        aim_run.track(
+            tensordict_data["next", "reward"].max().item(),
+            name="reward/episode_max",
+            step=i,
+        )
+        aim_run.track(
+            tensordict_data["next", "reward"].min().item(),
+            name="reward/episode_min",
+            step=i,
+        )
+
+        for j in range(num_epochs):
+            print("Epoch: ", j)
+            advantage_module(tensordict_data)
+
+            # Log advantage statistics
+            aim_run.track(
+                tensordict_data["advantage"].mean().item(),
+                name="advantage/mean",
+                step=epoch_idx,
+            )
+            aim_run.track(
+                tensordict_data["advantage"].std().item(),
+                name="advantage/std",
+                step=epoch_idx,
+            )
+
+            data_view = tensordict_data.reshape(-1)
+            replay_buffer.extend(data_view)
+            nbatches = frames_per_batch // subbatch_size
+
+            batch_loss_objective = 0
+            batch_loss_critic = 0
+            batch_loss_entropy = 0
+            batch_loss_total = 0
+            batch_grad_norm = 0
+
+            for k in range(nbatches):
+                print("Batch: ", k)
+                subdata = replay_buffer.sample(subbatch_size)
+                loss_vals = loss_module(subdata)
+
+                # Calculate total loss
+                loss_value = (
+                    loss_vals["loss_objective"]
+                    + loss_vals["loss_critic"]
+                    + loss_vals["loss_entropy"]
+                )
+
+                # Backward pass
+                loss_value.backward()
+
+                # Calculate gradient norm before clipping
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    loss_module.parameters(), max_norm=0.5, norm_type=2
+                )
+
+                # Update parameters
+                optim.step()
+                optim.zero_grad()
+
+                # Accumulate batch losses for logging
+                batch_loss_objective += loss_vals["loss_objective"].item()
+                batch_loss_critic += loss_vals["loss_critic"].item()
+                batch_loss_entropy += loss_vals["loss_entropy"].item()
+                batch_loss_total += loss_value.item()
+                batch_grad_norm += grad_norm.item()
+
+            # Log average batch losses
+            aim_run.track(
+                batch_loss_objective / nbatches, name="loss/objective", step=epoch_idx
+            )
+            aim_run.track(
+                batch_loss_critic / nbatches, name="loss/critic", step=epoch_idx
+            )
+            aim_run.track(
+                batch_loss_entropy / nbatches, name="loss/entropy", step=epoch_idx
+            )
+            aim_run.track(
+                batch_loss_total / nbatches, name="loss/total", step=epoch_idx
+            )
+            aim_run.track(
+                batch_grad_norm / nbatches, name="gradients/norm", step=epoch_idx
+            )
+
+            # Track learning rate
+            aim_run.track(
+                scheduler.get_last_lr()[0], name="learning_rate", step=epoch_idx
+            )
+
+            epoch_idx += 1
+
+        logs["reward"].append(episode_reward)
+        scheduler.step()
+
+        # Log additional training metrics
+        aim_run.track(time.perf_counter() - t, name="time/total_seconds", step=i)
+
+    # Close the Aim run when training is complete
+    aim_run.close()

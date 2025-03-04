@@ -787,8 +787,8 @@ struct DurationTaskFeature : public StateFeature<DurationTaskFeature> {
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
-    output[0] = log(get_duration(task, DeviceType::CPU));
-    output[1] = log(get_duration(task, DeviceType::GPU));
+    output[0] = log(get_duration(task, DeviceType::CPU) + 1);
+    output[1] = log(get_duration(task, DeviceType::GPU) + 1);
   }
 };
 
@@ -944,7 +944,7 @@ struct DataSizeFeature : public StateFeature<DataSizeFeature> {
 
   template <typename ID, typename Span> void extractFeatureImpl(ID data_id, Span output) const {
     const auto &data = state.get_data_manager().get_data();
-    output[0] = log(static_cast<f_t>(data.get_size(data_id)));
+    output[0] = log(static_cast<f_t>(data.get_size(data_id)) + 1);
   }
 };
 
@@ -976,9 +976,9 @@ struct DeviceMemoryFeature : public StateFeature<DeviceMemoryFeature> {
     auto mapped_mem = static_cast<double>(device_manager.get_mem<TaskState::MAPPED>(device_id));
     auto reserved_mem = static_cast<double>(device_manager.get_mem<TaskState::RESERVED>(device_id));
     auto launched_mem = static_cast<double>(device_manager.get_mem<TaskState::LAUNCHED>(device_id));
-    output[0] = log(mapped_mem);
-    output[1] = log(reserved_mem);
-    output[2] = log(launched_mem);
+    output[0] = log(mapped_mem + 1);
+    output[1] = log(reserved_mem + 1);
+    output[2] = log(launched_mem + 1);
   }
 };
 
@@ -997,9 +997,9 @@ struct DeviceTimeFeature : public StateFeature<DeviceTimeFeature> {
     auto mapped_time = static_cast<double>(s.costs.get_mapped_time(device_id));
     auto reserved_time = static_cast<double>(s.costs.get_reserved_time(device_id));
     auto launched_time = static_cast<double>(s.costs.get_launched_time(device_id));
-    output[0] = log(mapped_time);
-    output[1] = log(reserved_time);
-    output[2] = log(launched_time);
+    output[0] = log(mapped_time + 1);
+    output[1] = log(reserved_time + 1);
+    output[2] = log(launched_time + 1);
   }
 };
 

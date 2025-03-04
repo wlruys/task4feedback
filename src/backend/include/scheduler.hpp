@@ -241,8 +241,6 @@ struct ResourceRequest {
   Resources missing{0, 0};
 };
 
-class Mapper;
-
 struct SchedulerInput {
   std::reference_wrapper<Tasks> tasks;
   std::reference_wrapper<Data> data;
@@ -611,7 +609,7 @@ public:
   size_t get_mappable_candidates(TorchInt64Arr1D &output_tensor);
   TaskIDList &get_mappable_candidates();
 
-  const TaskIDList &map_task(Action &action);
+  const TaskIDList &map_task(taskid_t task_id, Action &action);
   void remove_mapped_tasks(ActionList &action_list);
 
   void map_tasks(Event &map_event, EventManager &event_manager, Mapper &mapper);
@@ -782,7 +780,7 @@ public:
   virtual Action map_task(taskid_t task_id, const SchedulerState &state) {
     MONUnusedParameter(state);
     SPDLOG_WARN("Mapping task {} with unset mapper", task_id);
-    return Action(task_id, 0);
+    return Action(0, 0);
   }
 
   virtual ActionList map_tasks(const TaskIDList &task_ids, const SchedulerState &state) {
@@ -820,7 +818,7 @@ public:
   Action map_task(taskid_t task_id, const SchedulerState &state) override {
     fill_device_targets(task_id, state);
     devid_t device_id = choose_random_device(device_buffer);
-    return Action(task_id, 0, device_id);
+    return Action(0, device_id);
   }
 };
 
@@ -836,7 +834,7 @@ public:
     auto mp = state.get_mapping_priorities()[task_id];
     devid_t device_id = device_buffer[device_index];
     device_index = (device_index + 1) % device_buffer.size();
-    return Action(task_id, 0, device_id, mp, mp);
+    return Action(0, device_id, mp, mp);
   }
 };
 
@@ -901,7 +899,7 @@ public:
     assert(check_supported_architecture(device_id, task_id, state));
     assert(device_id < state.get_device_manager().size());
 
-    return Action(task_id, 0, device_id, rp, lp);
+    return Action(0, device_id, rp, lp);
   }
 };
 
@@ -1064,7 +1062,7 @@ public:
     auto [best_device, min_time] = get_best_device(task_id, state);
     record_finish_time(task_id, min_time);
     auto mp = state.get_mapping_priorities()[task_id];
-    return Action(task_id, 0, best_device, mp, mp);
+    return Action(0, best_device, mp, mp);
   }
 };
 
@@ -1104,7 +1102,7 @@ public:
     record_finish_time(task_id, min_time);
     set_device_available_time(best_device, min_time);
     auto mp = state.get_mapping_priorities()[task_id];
-    return Action(task_id, 0, best_device, mp, mp);
+    return Action(0, best_device, mp, mp);
   }
 };
 

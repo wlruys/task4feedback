@@ -187,11 +187,17 @@ class Graph:
             if any_cpu_flag:
                 placement_info = task.runtime[Device(Architecture.CPU, -1)][0]
                 vcu = int(placement_info.device_fraction * fastsim.MAX_VCUS)
-                g.graph.add_variant(i, DeviceType.CPU, 0, vcu, placement_info.task_time)
+                mem = placement_info.memory
+                g.graph.add_variant(
+                    i, DeviceType.CPU, vcu, mem, placement_info.task_time
+                )
             elif cpu_0_flag:
                 placement_info = task.runtime[Device(Architecture.CPU, 0)][0]
                 vcu = int(placement_info.device_fraction * fastsim.MAX_VCUS)
-                g.graph.add_variant(i, DeviceType.CPU, 0, vcu, placement_info.task_time)
+                mem = placement_info.memory
+                g.graph.add_variant(
+                    i, DeviceType.CPU, vcu, mem, placement_info.task_time
+                )
 
             any_gpu_flag = Device(Architecture.GPU, -1) in task.runtime
             gpu_0_flag = Device(Architecture.GPU, 0) in task.runtime
@@ -199,11 +205,17 @@ class Graph:
             if any_gpu_flag:
                 placement_info = task.runtime[Device(Architecture.GPU, -1)][0]
                 vcu = int(placement_info.device_fraction * fastsim.MAX_VCUS)
-                g.graph.add_variant(i, DeviceType.GPU, 0, vcu, placement_info.task_time)
+                mem = placement_info.memory
+                g.graph.add_variant(
+                    i, DeviceType.GPU, vcu, mem, placement_info.task_time
+                )
             elif gpu_0_flag:
                 placement_info = task.runtime[Device(Architecture.GPU, 0)][0]
                 vcu = int(placement_info.device_fraction * fastsim.MAX_VCUS)
-                g.graph.add_variant(i, DeviceType.GPU, 0, vcu, placement_info.task_time)
+                mem = placement_info.memory
+                g.graph.add_variant(
+                    i, DeviceType.GPU, vcu, mem, placement_info.task_time
+                )
 
         return g
 
@@ -485,11 +497,7 @@ class ExternalMapper:
         device = 0
         state = simulator.simulator.get_state()
         mapping_priority = state.get_mapping_priority(global_task_id)
-        return [
-            fastsim.Action(
-                candidates[0], local_id, device, mapping_priority, mapping_priority
-            )
-        ]
+        return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
 
 
 @dataclass
@@ -732,17 +740,50 @@ class DefaultObserverFactory(ExternalObserverFactory):
         )
 
 
+def observation_to_heterodata_truncate(observation: TensorDict) -> HeteroData:
+    hetero_data = HeteroData()
+
+    for node_type, node_data in observation["nodes"].items():
+        count = node_data["count"]
+        hetero_data[f"{node_type}"].x = node_data["attr"][:count]
+
+    for edge_key, edge_data in observation["edges"].items():
+        target, source = edge_key.split("_")
+        count = edge_data["count"]
+        hetero_data[source, "to", target].edge_index = edge_data["idx"][:, :count]
+        hetero_data[source, "to", target].edge_attr = edge_data["attr"][:count]
+
+        if source != target:
+            hetero_data[target, "to", source].edge_index = hetero_data[
+                source, "to", target
+            ].edge_index.flip(0)
+            hetero_data[target, "to", source].edge_attr = hetero_data[
+                source, "to", target
+            ].edge_attr
+
+    return hetero_data
+
+
 def observation_to_heterodata(observation: TensorDict) -> HeteroData:
     hetero_data = HeteroData()
 
     for node_type, node_data in observation["nodes"].items():
+        count = node_data["count"]
         hetero_data[f"{node_type}"].x = node_data["attr"]
 
     for edge_key, edge_data in observation["edges"].items():
         target, source = edge_key.split("_")
+        count = edge_data["count"]
+        hetero_data[source, "to", target].edge_index = edge_data["idx"]
+        hetero_data[source, "to", target].edge_attr = edge_data["attr"]
 
-        hetero_data[source, "uses", target].edge_index = edge_data["idx"]
-        hetero_data[source, "uses", target].edge_attr = edge_data["attr"]
+        if source != target:
+            hetero_data[target, "to", source].edge_index = hetero_data[
+                source, "to", target
+            ].edge_index.flip(0)
+            hetero_data[target, "to", source].edge_attr = hetero_data[
+                source, "to", target
+            ].edge_attr
 
     return hetero_data
 
@@ -760,6 +801,42 @@ class ExternalObserver:
     task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
     data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
     truncate: bool = True
+
+    @property
+    def task_feature_dim(self):
+        if self.task_features is None:
+            return 0
+        return self.task_features.feature_dim
+
+    @property
+    def data_feature_dim(self):
+        if self.data_features is None:
+            return 0
+        return self.data_features.feature_dim
+
+    @property
+    def device_feature_dim(self):
+        if self.device_features is None:
+            return 0
+        return self.device_features.feature_dim
+
+    @property
+    def task_data_edge_dim(self):
+        if self.task_data_features is None:
+            return
+        return self.task_data_features.feature_dim
+
+    @property
+    def task_device_edge_dim(self):
+        if self.task_device_features is None:
+            return 0
+        return self.task_device_features.feature_dim
+
+    @property
+    def task_task_edge_dim(self):
+        if self.task_task_features is None:
+            return 0
+        return self.task_task_features.feature_dim
 
     def get_task_features(self, task_ids, workspace):
         length = self.task_features.get_features_batch(task_ids, workspace)
@@ -998,8 +1075,6 @@ class ExternalObserver:
         count = self.simulator.get_mappable_candidates(
             output["aux"]["candidates"]["idx"]
         )
-        print(f"Count: {count}")
-        print(f"Output: {output['aux']['candidates']['idx'][:count]}")
         output["aux"]["candidates"]["count"][0] = count
 
     def get_observation(self, output: Optional[TensorDict] = None):

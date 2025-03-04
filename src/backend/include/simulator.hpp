@@ -14,13 +14,23 @@
 #include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <sstream>
+#include <unistd.h>
 
 void init_simulator_logger() {
-  auto new_logger = spdlog::stdout_color_mt("console");
-  spdlog::set_default_logger(new_logger);
-  spdlog::set_level(spdlog::level::debug);
-}
+  try {
+    // Create unique name using process ID and thread ID
+    std::stringstream ss;
+    ss << "console_" << getpid() << "_" << std::this_thread::get_id();
+    std::string logger_name = ss.str();
 
+    auto logger = spdlog::stdout_color_mt(logger_name);
+    spdlog::set_default_logger(logger);
+    spdlog::set_level(spdlog::level::debug);
+  } catch (const spdlog::spdlog_ex &ex) {
+    std::cerr << "Logger initialization failed: " << ex.what() << std::endl;
+  }
+}
 enum class ExecutionState {
   NONE = 0,
   RUNNING = 1,

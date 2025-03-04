@@ -5,7 +5,6 @@
 
 class Action {
 public:
-  taskid_t task_id = 0;
   std::size_t pos = 0;
   devid_t device = 0;
   priority_t reservable_priority = 0;
