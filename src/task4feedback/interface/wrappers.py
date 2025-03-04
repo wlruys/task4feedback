@@ -876,6 +876,13 @@ class ExternalObserver:
             workspace = workspace[:length]
         return workspace, length
 
+    def get_task_device_features(self, task_ids, workspace):
+        length = self.task_device_features.get_features_batch(task_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
     def get_bidirectional_neighborhood(self, task_ids, workspace):
         length = self.graph_extractor.get_k_hop_bidirectional(task_ids, 1, workspace)
 
@@ -910,7 +917,7 @@ class ExternalObserver:
 
     def get_task_device_edges(self, task_ids, device_ids, workspace, global_workspace):
         length = self.graph_extractor.get_task_device_edges(
-            task_ids, device_ids, workspace, global_workspace
+            task_ids, workspace, global_workspace
         )
 
         if self.truncate:
@@ -997,7 +1004,7 @@ class ExternalObserver:
                     spec.max_edges_tasks_data, self.task_data_features.feature_dim
                 ),
                 "tasks_devices": _make_edge_tensor(
-                    spec.max_edges_tasks_data, self.task_device_features.feature_dim
+                    spec.max_edges_tasks_devices, self.task_device_features.feature_dim
                 ),
             }
         )
@@ -1081,16 +1088,29 @@ class ExternalObserver:
         )
         output["edges"]["tasks_data"]["count"][0] = count
 
-        # print(f"output[node][tasks][count]: {output['nodes']['tasks']['count']}")
-        # print(f"output[node][tasks][glb]: {output['nodes']['tasks']['glb']}")
-        # print(f"output[node][data][count]: {output['nodes']['data']['count']}")
-        # print(f"output[node][data][glb]: {output['nodes']['data']['glb']}")
-        # print(f"output[edges][tasks_data][idx]: {output['edges']['tasks_data']['idx']}")
-        # print(f"output[edges][tasks_data][glb]: {output['edges']['tasks_data']['glb']}")
-
         self.get_task_data_features(
             output["edges"]["tasks_data"]["glb"][:, :count],
             output["edges"]["tasks_data"]["attr"],
+        )
+
+    def task_device_observation(self, output: TensorDict):
+        ncandidates = output["aux"]["candidates"]["count"][0]
+        task_ids = output["aux"]["candidates"]["idx"][:ncandidates]
+        ndevices = output["nodes"]["devices"]["count"][0]
+        device_ids = output["nodes"]["devices"]["glb"][:ndevices]
+
+        _, count = self.get_task_device_edges(
+            task_ids,
+            device_ids,
+            output["edges"]["tasks_devices"]["idx"],
+            output["edges"]["tasks_devices"]["glb"],
+        )
+
+        output["edges"]["tasks_devices"]["count"][0] = count
+
+        self.get_task_device_features(
+            output["edges"]["tasks_devices"]["glb"][:, :count],
+            output["edges"]["tasks_devices"]["attr"],
         )
 
     def candidate_observation(self, output: TensorDict):
@@ -1114,6 +1134,7 @@ class ExternalObserver:
         # Edge observations (edges depend on ids collected during node observation)
         self.task_task_observation(output)
         self.task_data_observation(output)
+        self.task_device_observation(output)
 
         # Auxiliary observations
         output["aux"]["time"][0] = self.simulator.get_current_time()
