@@ -1188,3 +1188,18 @@ struct TaskDataUsageFeature : public StateEdgeFeature<TaskDataUsageFeature> {
     output[1] = static_cast<f_t>(is_write_access);
   }
 };
+
+struct TaskDeviceDefaultEdgeFeature : public StateEdgeFeature<TaskDeviceDefaultEdgeFeature> {
+  TaskDeviceDefaultEdgeFeature(const SchedulerState &state)
+      : StateEdgeFeature<TaskDeviceDefaultEdgeFeature>(state, EdgeType::TASK_DEVICE) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
+    output[0] = 1.0;
+  }
+};

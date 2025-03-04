@@ -724,7 +724,10 @@ class DefaultObserverFactory(ExternalObserverFactory):
         task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
         task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
         task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
-        task_device_feature_factory = None
+
+        task_device_feature_factory = EdgeFeatureExtractorFactory()
+        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
         data_device_feature_factory = None
 
         super().__init__(
@@ -992,6 +995,9 @@ class ExternalObserver:
                 ),
                 "tasks_data": _make_edge_tensor(
                     spec.max_edges_tasks_data, self.task_data_features.feature_dim
+                ),
+                "tasks_devices": _make_edge_tensor(
+                    spec.max_edges_tasks_data, self.task_device_features.feature_dim
                 ),
             }
         )
@@ -1312,6 +1318,7 @@ def create_graph_spec(
     spec.max_edges_tasks_tasks = max_edges_tasks_tasks
     spec.max_edges_tasks_data = max_edges_tasks_data
     spec.max_candidates = max_candidates
+    spec.max_edges_tasks_devices = max_devices * max_candidates
     return spec
 
 

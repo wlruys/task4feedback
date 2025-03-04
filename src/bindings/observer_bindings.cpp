@@ -270,6 +270,7 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_edge_feature<TaskDataUsageFeature>(m, "TaskDataUsageFeature");
 
   // Task Device Features
+  bind_state_edge_feature<TaskDeviceDefaultEdgeFeature>(m, "TaskDeviceDefaultEdgeFeature");
 
   // Data Device Features
 
