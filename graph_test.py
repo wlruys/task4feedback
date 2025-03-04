@@ -189,8 +189,7 @@ class FastSimEnv(EnvBase):
         return obs
 
     def _set_seed(self, seed: Optional[int] = None):
-        rng = torch.manual_seed(seed)
-        self.rng = rng
+        pass
 
 
 def make_env():
@@ -709,8 +708,8 @@ if __name__ == "__main__":
         f"Number of trainable parameters: {count_parameters(_internal_policy_module)}"
     )
 
-    policy_module = torch_geometric.compile(policy_module, dynamic=False)
-    value_module = torch_geometric.compile(value_module, dynamic=False)
+    # policy_module = torch_geometric.compile(policy_module, dynamic=False)
+    # value_module = torch_geometric.compile(value_module, dynamic=False)
 
     collector = SyncDataCollector(make_env, policy_module, frames_per_batch=2000)
     replay_buffer = ReplayBuffer(
@@ -738,13 +737,16 @@ if __name__ == "__main__":
 
     aim_run = aim.Run(experiment="debug-ppo-torchrl")
 
-    optim = torch.optim.Adam(loss_module.parameters(), lr=1e-3)
+    optim = torch.optim.Adam(loss_module.parameters(), lr=2e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=2000, eta_min=0)
     logs = defaultdict(list)
 
     # Set up gradient tracking with Aim
-    track_params_dists(loss_module, aim_run)
-    track_gradients_dists(loss_module, aim_run)
+    track_params_dists(policy_module, aim_run)
+    track_gradients_dists(policy_module, aim_run)
+
+    track_gradients_dists(value_module, aim_run)
+    track_params_dists(value_module, aim_run)
 
     epoch_idx = 0  # Global counter for tracking steps across iterations
 
@@ -767,7 +769,8 @@ if __name__ == "__main__":
 
         for j in range(num_epochs):
             print("Epoch: ", j)
-            advantage_module(tensordict_data)
+            with torch.no_grad():
+                advantage_module(tensordict_data)
 
             # Log advantage statistics
             aim_run.track(
