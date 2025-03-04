@@ -750,15 +750,15 @@ def observation_to_heterodata_truncate(observation: TensorDict) -> HeteroData:
     for edge_key, edge_data in observation["edges"].items():
         target, source = edge_key.split("_")
         count = edge_data["count"]
-        hetero_data[source, "to", target].edge_index = edge_data["idx"][:, :count]
-        hetero_data[source, "to", target].edge_attr = edge_data["attr"][:count]
+        hetero_data[target, "to", source].edge_index = edge_data["idx"][:, :count]
+        hetero_data[target, "to", source].edge_attr = edge_data["attr"][:count]
 
         if source != target:
-            hetero_data[target, "to", source].edge_index = hetero_data[
-                source, "to", target
+            hetero_data[source, "to", target].edge_index = hetero_data[
+                target, "to", source
             ].edge_index.flip(0)
-            hetero_data[target, "to", source].edge_attr = hetero_data[
-                source, "to", target
+            hetero_data[source, "to", target].edge_attr = hetero_data[
+                target, "to", source
             ].edge_attr
 
     return hetero_data
@@ -774,15 +774,15 @@ def observation_to_heterodata(observation: TensorDict) -> HeteroData:
     for edge_key, edge_data in observation["edges"].items():
         target, source = edge_key.split("_")
         count = edge_data["count"]
-        hetero_data[source, "to", target].edge_index = edge_data["idx"]
-        hetero_data[source, "to", target].edge_attr = edge_data["attr"]
+        hetero_data[target, "to", source].edge_index = edge_data["idx"]
+        hetero_data[target, "to", source].edge_attr = edge_data["attr"]
 
         if source != target:
-            hetero_data[target, "to", source].edge_index = hetero_data[
-                source, "to", target
+            hetero_data[source, "to", target].edge_index = hetero_data[
+                target, "to", source
             ].edge_index.flip(0)
-            hetero_data[target, "to", source].edge_attr = hetero_data[
-                source, "to", target
+            hetero_data[source, "to", target].edge_attr = hetero_data[
+                target, "to", source
             ].edge_attr
 
     return hetero_data
@@ -899,6 +899,15 @@ class ExternalObserver:
     def get_task_data_edges(self, task_ids, data_ids, workspace, global_workspace):
         length = self.graph_extractor.get_task_data_edges(
             task_ids, data_ids, workspace, global_workspace
+        )
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+        return workspace, length
+
+    def get_task_device_edges(self, task_ids, device_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_task_device_edges(
+            task_ids, device_ids, workspace, global_workspace
         )
 
         if self.truncate:
@@ -1065,6 +1074,13 @@ class ExternalObserver:
             output["edges"]["tasks_data"]["glb"],
         )
         output["edges"]["tasks_data"]["count"][0] = count
+
+        print(f"output[node][tasks][count]: {output['nodes']['tasks']['count']}")
+        print(f"output[node][tasks][glb]: {output['nodes']['tasks']['glb']}")
+        print(f"output[node][data][count]: {output['nodes']['data']['count']}")
+        print(f"output[node][data][glb]: {output['nodes']['data']['glb']}")
+        print(f"output[edges][tasks_data][idx]: {output['edges']['tasks_data']['idx']}")
+        print(f"output[edges][tasks_data][glb]: {output['edges']['tasks_data']['glb']}")
 
         self.get_task_data_features(
             output["edges"]["tasks_data"]["glb"][:, :count],

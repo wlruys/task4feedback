@@ -549,6 +549,45 @@ public:
     return edge_count;
   }
 
+  size_t get_task_device_edges(TorchInt64Arr1D &task_ids, TorchInt64Arr2D &output,
+                               TorchInt64Arr2D &global_output) {
+    if (output.shape(0) != 2) {
+      throw std::runtime_error("Edge output shape must be 2 x N");
+    }
+
+    auto v = output.view();
+    auto gv = global_output.view();
+
+    std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
+
+    // All tasks use all devices
+    const auto max_edges = output.shape(1);
+
+    const auto &device_manager = state.get().get_device_manager();
+    const std::size_t device_count = device_manager.get_devices().size();
+    const auto &tasks = state.get().get_task_manager().get_tasks();
+
+    std::size_t edge_count = 0;
+
+    for (std::size_t i = 0; i < task_ids_span.size(); i++) {
+      for (std::size_t j = 0; j < device_count; j++) {
+        v(0, edge_count) = static_cast<int64_t>(i);
+        v(1, edge_count) = static_cast<int64_t>(j);
+        gv(0, edge_count) = static_cast<int64_t>(task_ids_span[i]);
+        gv(1, edge_count) = static_cast<int64_t>(j);
+        edge_count++;
+        if (edge_count >= max_edges) {
+          break;
+        }
+      }
+      if (edge_count >= max_edges) {
+        break;
+      }
+    }
+
+    return edge_count;
+  }
+
   size_t get_data_device_edges(TorchInt64Arr1D &data_ids, TorchInt64Arr2D &output,
                                TorchInt64Arr2D &global_output) {
 
