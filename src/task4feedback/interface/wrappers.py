@@ -1075,12 +1075,12 @@ class ExternalObserver:
         )
         output["edges"]["tasks_data"]["count"][0] = count
 
-        print(f"output[node][tasks][count]: {output['nodes']['tasks']['count']}")
-        print(f"output[node][tasks][glb]: {output['nodes']['tasks']['glb']}")
-        print(f"output[node][data][count]: {output['nodes']['data']['count']}")
-        print(f"output[node][data][glb]: {output['nodes']['data']['glb']}")
-        print(f"output[edges][tasks_data][idx]: {output['edges']['tasks_data']['idx']}")
-        print(f"output[edges][tasks_data][glb]: {output['edges']['tasks_data']['glb']}")
+        # print(f"output[node][tasks][count]: {output['nodes']['tasks']['count']}")
+        # print(f"output[node][tasks][glb]: {output['nodes']['tasks']['glb']}")
+        # print(f"output[node][data][count]: {output['nodes']['data']['count']}")
+        # print(f"output[node][data][glb]: {output['nodes']['data']['glb']}")
+        # print(f"output[edges][tasks_data][idx]: {output['edges']['tasks_data']['idx']}")
+        # print(f"output[edges][tasks_data][glb]: {output['edges']['tasks_data']['glb']}")
 
         self.get_task_data_features(
             output["edges"]["tasks_data"]["glb"][:, :count],
