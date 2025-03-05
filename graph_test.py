@@ -15,6 +15,10 @@ from task4feedback.interface.wrappers import (
     observation_to_heterodata,
     observation_to_heterodata_truncate,
 )
+
+# from task4feedback.interface.wrappers import (
+#     observation_to_heterodata_truncate as observation_to_heterodata,
+# )
 from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
 from torchrl.envs.utils import make_composite_from_td
 from tensordict.nn import set_composite_lp_aggregate
@@ -616,7 +620,8 @@ class DeprecatedValueNet(nn.Module):
         self.critic_head = OutputHead(gat_output_dim, config.hidden_channels, 1)
 
     def _is_batch(self, obs: TensorDict) -> bool:
-        # print("Batch size: ", obs.batch_size)
+        print("Batch size: ", obs.batch_size)
+        print("Obs0: ", obs[0].batch_size)
         if not obs.batch_size:
             return False
         return True
@@ -639,17 +644,17 @@ class DeprecatedValueNet(nn.Module):
 
     def forward(self, obs: TensorDict, batch=None):
         data = self._convert_to_heterodata(obs)
-        print("Length of data: ", len(data))
+        # print("Length of data: ", len(data))
         task_embeddings = self.hetero_gat(data)
 
-        print("Task Embedding Shape: ", task_embeddings.shape)
+        # print("Task Embedding Shape: ", task_embeddings.shape)
         is_batch = self._is_batch(obs)
 
         task_batch = data["tasks"].batch if is_batch else None
         v = self.critic_head(task_embeddings)
         v = global_mean_pool(v, task_batch)
 
-        print(v.shape)
+        # print(v.shape)
         return v
 
 
@@ -833,7 +838,7 @@ if __name__ == "__main__":
     penv = make_env()
 
     network_conf = HeteroGATConfig.from_observer(
-        penv.simulator.observer, hidden_channels=32
+        penv.simulator.observer, hidden_channels=64, n_heads=2
     )
     action_spec = penv.action_spec
 
@@ -877,7 +882,10 @@ if __name__ == "__main__":
     # value_module = torch_geometric.compile(value_module, dynamic=False)
 
     collector = SyncDataCollector(
-        make_env, policy_module, frames_per_batch=frames_per_batch
+        make_env,
+        policy_module,
+        frames_per_batch=frames_per_batch,
+        exploration_type=torchrl.envs.utils.ExplorationType.RANDOM,
     )
 
     # collector = MultiSyncDataCollector(
@@ -917,6 +925,12 @@ if __name__ == "__main__":
     for i, tensordict_data in enumerate(collector):
         print("Optimization Step: ", i)
 
+        with torch.no_grad():
+            # print(tensordict_data["next", "reward"].shape)
+            # print(tensordict_data["next", "done"].shape)
+            # print(tensordict_data)
+            advantage_module(tensordict_data)
+
         # print("Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"])
         # tensordict_data = tensordict_data.reshape(-1)
         # print(
@@ -926,9 +940,9 @@ if __name__ == "__main__":
         # print(tensordict_data["logits"].requires_grad)
         # print(tensordict_data["action"].requires_grad)
 
-        # print(tensordict_data["value_target"])
-        # print(tensordict_data["next", "reward"][tensordict_data["next", "done"]])
-        # print(tensordict_data["state_value"])
+        print(tensordict_data["value_target"])
+        print(tensordict_data["next", "reward"][tensordict_data["next", "done"]])
+        print(tensordict_data["state_value"])
 
         # print(
         #     "Reward / Cumulative Diff",
@@ -938,11 +952,11 @@ if __name__ == "__main__":
         #         - tensordict_data["state_value"].view(-1)
         #     ),
         # )
-        # print(
-        #     "Advantage Diff",
-        #     tensordict_data["advantage"]
-        #     - (tensordict_data["value_target"] - tensordict_data["state_value"]),
-        # )
+        print(
+            "Advantage Diff",
+            tensordict_data["advantage"]
+            - (tensordict_data["value_target"] - tensordict_data["state_value"]),
+        )
 
         # print(tensordict_data["advantage"])
         # print(tensordict_data["state_value"])
@@ -980,11 +994,6 @@ if __name__ == "__main__":
             print("Average non-zero reward: ", avg_non_zero_reward)
 
         for j in range(num_epochs):
-            with torch.no_grad():
-                print(tensordict_data["next", "reward"].shape)
-                print(tensordict_data["next", "done"].shape)
-                print(tensordict_data)
-                advantage_module(tensordict_data)
             print("Epoch: ", j)
             aim_run.track(
                 tensordict_data["advantage"].mean().item(),
