@@ -743,12 +743,22 @@ class DefaultObserverFactory(ExternalObserverFactory):
         )
 
 
-def observation_to_heterodata_truncate(observation: TensorDict) -> HeteroData:
+def observation_to_heterodata_truncate(
+    observation: TensorDict, idx: int = 0
+) -> HeteroData:
     hetero_data = HeteroData()
 
     for node_type, node_data in observation["nodes"].items():
-        count = node_data["count"]
-        hetero_data[f"{node_type}"].x = node_data["attr"][:count]
+        print("Index: ", idx)
+        print("Node type: ", node_type)
+        print("Node Data", node_data)
+
+        print("Internals:")
+        print(node_data["count"].shape, node_data["count"])
+        print(node_data["attr"].shape)
+        print(node_data["glb"].shape)
+        # print(node_data["attr"][:count].shape)
+        hetero_data[f"{node_type}"].x = node_data["attr"][: node_data["count"]]
 
     for edge_key, edge_data in observation["edges"].items():
         target, source = edge_key.split("_")
@@ -767,10 +777,18 @@ def observation_to_heterodata_truncate(observation: TensorDict) -> HeteroData:
     return hetero_data
 
 
-def observation_to_heterodata(observation: TensorDict) -> HeteroData:
+def observation_to_heterodata(observation: TensorDict, idx: int = 0) -> HeteroData:
     hetero_data = HeteroData()
 
     for node_type, node_data in observation["nodes"].items():
+        # print("Index: ", idx)
+        # print("Node type: ", node_type)
+        # print("Node Data", node_data)
+
+        # print("Internals:")
+        # print(node_data["count"].shape)
+        # print(node_data["attr"].shape)
+        # print(node_data["glb"].shape)
         count = node_data["count"]
         hetero_data[f"{node_type}"].x = node_data["attr"]
 
@@ -959,7 +977,8 @@ class ExternalObserver:
                 {
                     "glb": torch.zeros((nodes), dtype=torch.int64),
                     "attr": torch.zeros((nodes, dim), dtype=torch.float32),
-                    "count": torch.zeros((1), dtype=torch.int64),
+                    # "count": torch.zeros((1), dtype=torch.int64),
+                    "count": torch.tensor([0], dtype=torch.int64),
                 }
             )
 
@@ -969,7 +988,8 @@ class ExternalObserver:
                     "glb": torch.zeros((2, edges), dtype=torch.int64),
                     "idx": torch.zeros((2, edges), dtype=torch.int64),
                     "attr": torch.zeros((edges, dim), dtype=torch.float32),
-                    "count": torch.zeros((1), dtype=torch.int64),
+                    # "count": torch.zeros((1), dtype=torch.int64),
+                    "count": torch.tensor([0], dtype=torch.int64),
                 }
             )
 
@@ -977,7 +997,7 @@ class ExternalObserver:
             return TensorDict(
                 {
                     "idx": torch.zeros((n), dtype=torch.int64),
-                    "count": torch.zeros((1), dtype=torch.int64),
+                    "count": torch.tensor([0], dtype=torch.int64),
                 }
             )
 
@@ -1012,7 +1032,8 @@ class ExternalObserver:
         aux_tensor = TensorDict(
             {
                 "candidates": _make_index_tensor(spec.max_candidates),
-                "time": torch.zeros((1), dtype=torch.int64),
+                # "time": torch.zeros((1), dtype=torch.int64),
+                "time": torch.tensor([0], dtype=torch.int64),
             }
         )
 
@@ -1030,30 +1051,30 @@ class ExternalObserver:
         self, output: TensorDict, task_ids: Optional[torch.Tensor] = None
     ):
         if task_ids is None:
-            n_candidates = output["aux"]["candidates"]["count"][0]
+            n_candidates = output["aux"]["candidates"]["count"]
             task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
 
         _, count = self.get_bidirectional_neighborhood(
             task_ids, output["nodes"]["tasks"]["glb"]
         )
-        output["nodes"]["tasks"]["count"][0] = count
+        output["nodes"]["tasks"]["count"] = count
         self.get_task_features(
             output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
         )
 
     def data_observation(self, output: TensorDict):
-        ntasks = output["nodes"]["tasks"]["count"][0]
+        ntasks = output["nodes"]["tasks"]["count"]
         _, count = self.get_used_data(
             output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
         )
-        output["nodes"]["data"]["count"][0] = count
+        output["nodes"]["data"]["count"] = count
         self.get_data_features(
             output["nodes"]["data"]["glb"][:count], output["nodes"]["data"]["attr"]
         )
 
     def device_observation(self, output: TensorDict):
         count = output["nodes"]["devices"]["glb"].shape[0]
-        output["nodes"]["devices"]["count"][0] = count
+        output["nodes"]["devices"]["count"] = count
         output["nodes"]["devices"]["glb"][:count] = torch.arange(
             count, dtype=torch.int64
         )
@@ -1063,14 +1084,14 @@ class ExternalObserver:
         )
 
     def task_task_observation(self, output: TensorDict):
-        ntasks = output["nodes"]["tasks"]["count"][0]
+        ntasks = output["nodes"]["tasks"]["count"]
 
         _, count = self.get_task_task_edges(
             output["nodes"]["tasks"]["glb"][:ntasks],
             output["edges"]["tasks_tasks"]["idx"],
             output["edges"]["tasks_tasks"]["glb"],
         )
-        output["edges"]["tasks_tasks"]["count"][0] = count
+        output["edges"]["tasks_tasks"]["count"] = count
 
         self.get_task_task_features(
             output["edges"]["tasks_tasks"]["glb"][:, :count],
@@ -1078,25 +1099,30 @@ class ExternalObserver:
         )
 
     def task_data_observation(self, output: TensorDict):
-        ntasks = output["nodes"]["tasks"]["count"][0]
-        ndata = output["nodes"]["data"]["count"][0]
+        ntasks = output["nodes"]["tasks"]["count"]
+        ndata = output["nodes"]["data"]["count"]
         _, count = self.get_task_data_edges(
             output["nodes"]["tasks"]["glb"][:ntasks],
             output["nodes"]["data"]["glb"][:ndata],
             output["edges"]["tasks_data"]["idx"],
             output["edges"]["tasks_data"]["glb"],
         )
-        output["edges"]["tasks_data"]["count"][0] = count
+        output["edges"]["tasks_data"]["count"] = count
 
         self.get_task_data_features(
             output["edges"]["tasks_data"]["glb"][:, :count],
             output["edges"]["tasks_data"]["attr"],
         )
 
-    def task_device_observation(self, output: TensorDict):
-        ncandidates = output["aux"]["candidates"]["count"][0]
-        task_ids = output["aux"]["candidates"]["idx"][:ncandidates]
-        ndevices = output["nodes"]["devices"]["count"][0]
+    def task_device_observation(self, output: TensorDict, use_all_tasks=True):
+        if not use_all_tasks:
+            ncandidates = output["aux"]["candidates"]["count"]
+            task_ids = output["aux"]["candidates"]["idx"][:ncandidates]
+        else:
+            ntasks = output["nodes"]["tasks"]["count"]
+            task_ids = output["nodes"]["tasks"]["glb"][:ntasks]
+
+        ndevices = output["nodes"]["devices"]["count"]
         device_ids = output["nodes"]["devices"]["glb"][:ndevices]
 
         _, count = self.get_task_device_edges(
@@ -1106,7 +1132,7 @@ class ExternalObserver:
             output["edges"]["tasks_devices"]["glb"],
         )
 
-        output["edges"]["tasks_devices"]["count"][0] = count
+        output["edges"]["tasks_devices"]["count"] = count
 
         self.get_task_device_features(
             output["edges"]["tasks_devices"]["glb"][:, :count],
@@ -1117,7 +1143,7 @@ class ExternalObserver:
         count = self.simulator.get_mappable_candidates(
             output["aux"]["candidates"]["idx"]
         )
-        output["aux"]["candidates"]["count"][0] = count
+        output["aux"]["candidates"]["count"] = count
 
     def get_observation(self, output: Optional[TensorDict] = None):
         if output is None:
@@ -1137,7 +1163,7 @@ class ExternalObserver:
         self.task_device_observation(output)
 
         # Auxiliary observations
-        output["aux"]["time"][0] = self.simulator.get_current_time()
+        output["aux"]["time"] = self.simulator.get_current_time()
 
         return output
 
@@ -1339,7 +1365,10 @@ def create_graph_spec(
     spec.max_edges_tasks_tasks = max_edges_tasks_tasks
     spec.max_edges_tasks_data = max_edges_tasks_data
     spec.max_candidates = max_candidates
-    spec.max_edges_tasks_devices = max_devices * max_candidates
+
+    # This should be max_candidates, but reverting to max_tasks to implement original NN architecture
+    # spec.max_edges_tasks_devices = max_devices * max_candidates
+    spec.max_edges_tasks_devices = max_devices * max_tasks
     return spec
 
 

@@ -88,7 +88,7 @@ class FastSimEnv(EnvBase):
         self.simulator_factory = simulator_factory
         self.simulator = simulator_factory.create(seed)
 
-        self.time_spec = Unbounded(shape=(1,), device=self.device, dtype=torch.int64)
+        # self.time_spec = Unbounded(shape=(1,), device=self.device, dtype=torch.int64)
         self.observation_spec = self._create_observation_spec()
         self.action_spec = self._create_action_spec()
         self.reward_spec = self._create_reward_spec()
@@ -111,7 +111,7 @@ class FastSimEnv(EnvBase):
     def _create_observation_spec(self) -> TensorSpec:
         obs = self.simulator.observer.get_observation()
         comp = make_composite_from_td(obs)
-        comp = Composite(observation=comp, time=self.time_spec)
+        comp = Composite(observation=comp)
         return comp
 
     def _create_action_spec(self, ndevices: int = 5) -> TensorSpec:
@@ -148,16 +148,17 @@ class FastSimEnv(EnvBase):
         self.simulator.simulator.map_tasks(actions)
         simulator_status = self.simulator.run_until_external_mapping()
 
-        terminated = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        # terminated = torch.tensor((1,), device=self.device, dtype=torch.bool)
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        # time = torch.tensor((1,), device=self.device, dtype=torch.int64)
 
-        terminated[0] = False
+        # terminated[0] = simulator_status == fastsim.ExecutionState.COMPLETE
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
         reward[0] = 0
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"][0].item()
+        time = obs["observation"]["aux"]["time"].item()
 
         if not done:
             assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
@@ -166,14 +167,14 @@ class FastSimEnv(EnvBase):
         else:
             obs = self._reset()
             baseline_time = self._get_baseline()
-            # print(f"Baseline time: {baseline_time}")
-            # print(f"Simulator time: {time}")
+            print(f"Baseline time: {baseline_time}")
+            print(f"Simulator time: {time}")
             reward[0] = 1 + (baseline_time - time) / baseline_time
 
         out = obs
         out.set("reward", reward)
         out.set("done", done)
-        out.set("time", torch.tensor([time], device=self.device, dtype=torch.int64))
+        # out.set("time", torch.tensor([time], device=self.device, dtype=torch.int64))
         return out
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
@@ -272,6 +273,68 @@ class DatatoTaskLayer(nn.Module):
         data_fused_tasks = self.layer_norm_data_tasks(data_fused_tasks)
         data_fused_tasks = self.activation(data_fused_tasks)
         return data_fused_tasks
+
+
+class DeprecatedHeteroGAT(nn.Module):
+    def __init__(self, n_heads: int, config: HeteroGATConfig):
+        super(DeprecatedHeteroGAT, self).__init__()
+        self.config = config
+
+        self.conv_1 = HeteroConv(
+            {
+                ("data", "to", "tasks"): GATConv(
+                    (config.data_feature_dim, config.task_feature_dim),
+                    config.hidden_channels,
+                    heads=n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=config.task_data_edge_dim,
+                    add_self_loops=False,
+                ),
+                ("tasks", "to", "tasks"): GATConv(
+                    (config.task_feature_dim, config.task_feature_dim),
+                    config.hidden_channels,
+                    heads=n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=config.task_task_edge_dim,
+                    add_self_loops=False,
+                ),
+                ("devices", "to", "tasks"): GATConv(
+                    (config.device_feature_dim, config.task_feature_dim),
+                    config.hidden_channels,
+                    heads=n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=config.task_device_edge_dim,
+                    add_self_loops=False,
+                ),
+            },
+            aggr="cat",
+        )
+
+        # self.linear = nn.Linear(config.hidden_channels * 3 + config.task_feature_dim, config.task_feature_dim)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+        self.layernorm_post_gat = nn.LayerNorm(
+            config.task_feature_dim + config.hidden_channels * 3
+        )
+        # self.layernorm_post_linear = nn.LayerNorm(config.task_feature_dim)
+
+    def forward(self, data):
+        tasks = data.x_dict["tasks"]
+        x_dict = self.conv_1(data.x_dict, data.edge_index_dict, data.edge_attr_dict)
+        x = x_dict["tasks"]
+        x = torch.cat([tasks, x], dim=-1)
+        x = self.layernorm_post_gat(x)
+        x = self.activation(x)
+        # x = self.linear(x)
+        # x = self.layernorm_post_linear(x)
+        # x = self.activation(x)
+        return x
 
 
 class DataTaskBipartiteLayer(nn.Module):
@@ -494,6 +557,97 @@ class CombineTwoLayer(nn.Module):
         return z
 
 
+class DeprecatedDeviceAssignmentNet(nn.Module):
+    def __init__(
+        self,
+        config: HeteroGATConfig,
+        n_devices: int,
+    ):
+        super(DeprecatedDeviceAssignmentNet, self).__init__()
+        self.config = config
+
+        self.hetero_gat = DeprecatedHeteroGAT(config.n_heads, config)
+        gat_output_dim = config.hidden_channels * 3 + config.task_feature_dim
+        self.actor_head = OutputHead(gat_output_dim, config.hidden_channels, n_devices)
+
+    def _is_batch(self, obs: TensorDict) -> bool:
+        # print("Batch size: ", obs.batch_size)
+        if not obs.batch_size:
+            return False
+        return True
+
+    def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+        print("Counts", obs["nodes"]["tasks"]["count"])
+        if not self._is_batch(obs):
+            _obs = observation_to_heterodata(obs)
+            return _obs
+
+        _h_data = []
+        for i in range(obs.batch_size[0]):
+            _obs = observation_to_heterodata(obs[i])
+            _h_data.append(_obs)
+
+        return Batch.from_data_list(_h_data)
+
+    def forward(self, obs: TensorDict, batch=None):
+        data = self._convert_to_heterodata(obs)
+        task_embeddings = self.hetero_gat(data)
+        is_batch = self._is_batch(obs)
+
+        task_batch = data["tasks"].batch if is_batch else None
+
+        if task_batch is not None:
+            candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
+        else:
+            candidate_embedding = task_embeddings[0]
+
+        d_logits = self.actor_head(candidate_embedding)
+
+        return d_logits
+
+
+class DeprecatedValueNet(nn.Module):
+    def __init__(self, config: HeteroGATConfig, n_devices: int):
+        super(DeprecatedValueNet, self).__init__()
+        self.config = config
+
+        self.hetero_gat = DeprecatedHeteroGAT(config.n_heads, config)
+        gat_output_dim = config.hidden_channels * 3 + config.task_feature_dim
+        self.critic_head = OutputHead(gat_output_dim, config.hidden_channels, 1)
+
+    def _is_batch(self, obs: TensorDict) -> bool:
+        # print("Batch size: ", obs.batch_size)
+        if not obs.batch_size:
+            return False
+        return True
+
+    def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+        print("INPUT TENSOR SHAPE", obs.shape)
+        print("Counts", obs["nodes"]["tasks"]["count"])
+        if not self._is_batch(obs):
+            print("NOT BATCH")
+            _obs = observation_to_heterodata(obs)
+            return _obs
+
+        _h_data = []
+        print("BATCH", obs.batch_size[0])
+        for i in range(obs.batch_size[0]):
+            _obs = observation_to_heterodata(obs[i], idx=i)
+            _h_data.append(_obs)
+
+        return Batch.from_data_list(_h_data)
+
+    def forward(self, obs: TensorDict, batch=None):
+        data = self._convert_to_heterodata(obs)
+        task_embeddings = self.hetero_gat(data)
+        is_batch = self._is_batch(obs)
+
+        task_batch = data["tasks"].batch if is_batch else None
+        v = self.critic_head(task_embeddings)
+        v = global_mean_pool(task_embeddings, task_batch)
+        return v
+
+
 class DeviceAssignmentNet(nn.Module):
     def __init__(self, config: HeteroGATConfig, n_devices: int = 5):
         super(DeviceAssignmentNet, self).__init__()
@@ -533,12 +687,12 @@ class DeviceAssignmentNet(nn.Module):
 
     def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
         if not self._is_batch(obs):
-            _obs = observation_to_heterodata_truncate(obs)
+            _obs = observation_to_heterodata(obs)
             return _obs
 
         _h_data = []
         for i in range(obs.batch_size[0]):
-            _obs = observation_to_heterodata_truncate(obs[i])
+            _obs = observation_to_heterodata(obs[i])
             _h_data.append(_obs)
 
         return Batch.from_data_list(_h_data)
@@ -611,14 +765,31 @@ class ValueNet(nn.Module):
             return False
         return True
 
+    # def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+    #     if not self._is_batch(obs):
+    #         _obs = observation_to_heterodata(obs)
+    #         return _obs
+
+    #     _h_data = []
+    #     for i in range(obs.batch_size[0]):
+    #         _obs = observation_to_heterodata(obs[i])
+    #         _h_data.append(_obs)
+
+    #     return Batch.from_data_list(_h_data)
+
     def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+        print("INPUT TENSOR SHAPE", obs.shape)
+        print("Counts", obs["nodes"]["tasks"]["count"])
         if not self._is_batch(obs):
+            print("NOT BATCH")
             _obs = observation_to_heterodata(obs)
             return _obs
 
         _h_data = []
+        print("BATCH", obs.batch_size[0])
+        print("SHAPE", obs["nodes"]["tasks"]["count"].shape)
         for i in range(obs.batch_size[0]):
-            _obs = observation_to_heterodata(obs[i])
+            _obs = observation_to_heterodata(obs[i], idx=i)
             _h_data.append(_obs)
 
         return Batch.from_data_list(_h_data)
@@ -693,8 +864,8 @@ if __name__ == "__main__":
         f"Number of trainable parameters: {count_parameters(_internal_policy_module)}"
     )
 
-    frames_per_batch = 1000
-    subbatch_size = 250
+    frames_per_batch = 40
+    subbatch_size = 20
     num_epochs = 4
 
     # policy_module = torch_geometric.compile(policy_module, dynamic=False)
@@ -740,41 +911,43 @@ if __name__ == "__main__":
 
     for i, tensordict_data in enumerate(collector):
         print("Optimization Step: ", i)
+
+        print("Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"])
         tensordict_data = tensordict_data.reshape(-1)
+        print(
+            "Reshaped Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"]
+        )
 
-        print(tensordict_data["logits"].requires_grad)
-        print(tensordict_data["action"].requires_grad)
+        # print(tensordict_data["logits"].requires_grad)
+        # print(tensordict_data["action"].requires_grad)
 
-        with torch.no_grad():
-            advantage_module(tensordict_data)
+        # print(tensordict_data["value_target"])
+        # print(tensordict_data["next", "reward"][tensordict_data["next", "done"]])
+        # print(tensordict_data["state_value"])
 
-            # print(tensordict_data["value_target"])
-            # print(tensordict_data["next", "reward"][tensordict_data["next", "done"]])
-            # print(tensordict_data["state_value"])
+        # print(
+        #     "Reward / Cumulative Diff",
+        #     tensordict_data["advantage"].view(-1)
+        #     - (
+        #         tensordict_data["value_target"].view(-1)
+        #         - tensordict_data["state_value"].view(-1)
+        #     ),
+        # )
+        # print(
+        #     "Advantage Diff",
+        #     tensordict_data["advantage"]
+        #     - (tensordict_data["value_target"] - tensordict_data["state_value"]),
+        # )
 
-            # print(
-            #     "Reward / Cumulative Diff",
-            #     tensordict_data["advantage"].view(-1)
-            #     - (
-            #         tensordict_data["value_target"].view(-1)
-            #         - tensordict_data["state_value"].view(-1)
-            #     ),
-            # )
-            # print(
-            #     "Advantage Diff",
-            #     tensordict_data["advantage"]
-            #     - (tensordict_data["value_target"] - tensordict_data["state_value"]),
-            # )
+        # print(tensordict_data["advantage"])
+        # print(tensordict_data["state_value"])
+        # # print(tensordict_data["traj_count"])
+        # print(tensordict_data["next", "step_count"])
+        # print(tensordict_data["next", "done"])
+        # print(tensordict_data["done"])
+        # import sys
 
-            # print(tensordict_data["advantage"])
-            # print(tensordict_data["state_value"])
-            # # print(tensordict_data["traj_count"])
-            # print(tensordict_data["next", "step_count"])
-            # print(tensordict_data["next", "done"])
-            # print(tensordict_data["done"])
-            # import sys
-
-            # sys.exit(0)
+        # sys.exit(0)
 
         episode_reward = tensordict_data["next", "reward"].mean().item()
 
@@ -802,6 +975,8 @@ if __name__ == "__main__":
             print("Average non-zero reward: ", avg_non_zero_reward)
 
         for j in range(num_epochs):
+            with torch.no_grad():
+                advantage_module(tensordict_data)
             print("Epoch: ", j)
             aim_run.track(
                 tensordict_data["advantage"].mean().item(),
@@ -863,9 +1038,9 @@ if __name__ == "__main__":
                 batch_grad_norm / nbatches, name="gradients/norm", step=epoch_idx
             )
 
-            aim_run.track(
-                scheduler.get_last_lr()[0], name="learning_rate", step=epoch_idx
-            )
+            # aim_run.track(
+            #     scheduler.get_last_lr()[0], name="learning_rate", step=epoch_idx
+            # )
 
             epoch_idx += 1
 
