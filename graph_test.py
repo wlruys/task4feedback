@@ -131,7 +131,7 @@ class FastSimEnv(EnvBase):
 
     def _get_observation(self) -> TensorDict:
         obs = self.simulator.observer.get_observation()
-        td = TensorDict(observation=obs, time=obs["aux"]["time"])
+        td = TensorDict(observation=obs)
         return td
 
     def _step(self, td: TensorDict) -> TensorDict:
@@ -577,7 +577,7 @@ class DeprecatedDeviceAssignmentNet(nn.Module):
         return True
 
     def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
-        print("Counts", obs["nodes"]["tasks"]["count"])
+        # print("Counts", obs["nodes"]["tasks"]["count"])
         if not self._is_batch(obs):
             _obs = observation_to_heterodata(obs)
             return _obs
@@ -622,15 +622,15 @@ class DeprecatedValueNet(nn.Module):
         return True
 
     def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
-        print("INPUT TENSOR SHAPE", obs.shape)
-        print("Counts", obs["nodes"]["tasks"]["count"])
+        # print("INPUT TENSOR SHAPE", obs.shape)
+        # print("Counts", obs["nodes"]["tasks"]["count"])
         if not self._is_batch(obs):
-            print("NOT BATCH")
+            # print("NOT BATCH")
             _obs = observation_to_heterodata(obs)
             return _obs
 
         _h_data = []
-        print("BATCH", obs.batch_size[0])
+        # print("BATCH", obs.batch_size[0])
         for i in range(obs.batch_size[0]):
             _obs = observation_to_heterodata(obs[i], idx=i)
             _h_data.append(_obs)
@@ -639,12 +639,17 @@ class DeprecatedValueNet(nn.Module):
 
     def forward(self, obs: TensorDict, batch=None):
         data = self._convert_to_heterodata(obs)
+        print("Length of data: ", len(data))
         task_embeddings = self.hetero_gat(data)
+
+        print("Task Embedding Shape: ", task_embeddings.shape)
         is_batch = self._is_batch(obs)
 
         task_batch = data["tasks"].batch if is_batch else None
         v = self.critic_head(task_embeddings)
-        v = global_mean_pool(task_embeddings, task_batch)
+        v = global_mean_pool(v, task_batch)
+
+        print(v.shape)
         return v
 
 
@@ -778,16 +783,16 @@ class ValueNet(nn.Module):
     #     return Batch.from_data_list(_h_data)
 
     def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
-        print("INPUT TENSOR SHAPE", obs.shape)
-        print("Counts", obs["nodes"]["tasks"]["count"])
+        # print("INPUT TENSOR SHAPE", obs.shape)
+        # print("Counts", obs["nodes"]["tasks"]["count"])
         if not self._is_batch(obs):
-            print("NOT BATCH")
+            # print("NOT BATCH")
             _obs = observation_to_heterodata(obs)
             return _obs
 
         _h_data = []
-        print("BATCH", obs.batch_size[0])
-        print("SHAPE", obs["nodes"]["tasks"]["count"].shape)
+        # print("BATCH", obs.batch_size[0])
+        # print("SHAPE", obs["nodes"]["tasks"]["count"].shape)
         for i in range(obs.batch_size[0]):
             _obs = observation_to_heterodata(obs[i], idx=i)
             _h_data.append(_obs)
@@ -833,7 +838,7 @@ if __name__ == "__main__":
     action_spec = penv.action_spec
 
     _internal_policy_module = TensorDictModule(
-        DeviceAssignmentNet(network_conf, n_devices=5),
+        DeprecatedDeviceAssignmentNet(network_conf, n_devices=5),
         in_keys=["observation"],
         out_keys=["logits"],
     )
@@ -849,7 +854,7 @@ if __name__ == "__main__":
     )
 
     value_module = ValueOperator(
-        module=ValueNet(network_conf, n_devices=5),
+        module=DeprecatedValueNet(network_conf, n_devices=5),
         in_keys=["observation"],
     )
 
@@ -864,8 +869,8 @@ if __name__ == "__main__":
         f"Number of trainable parameters: {count_parameters(_internal_policy_module)}"
     )
 
-    frames_per_batch = 40
-    subbatch_size = 20
+    frames_per_batch = 1000
+    subbatch_size = 250
     num_epochs = 4
 
     # policy_module = torch_geometric.compile(policy_module, dynamic=False)
@@ -912,11 +917,11 @@ if __name__ == "__main__":
     for i, tensordict_data in enumerate(collector):
         print("Optimization Step: ", i)
 
-        print("Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"])
-        tensordict_data = tensordict_data.reshape(-1)
-        print(
-            "Reshaped Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"]
-        )
+        # print("Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"])
+        # tensordict_data = tensordict_data.reshape(-1)
+        # print(
+        #    "Reshaped Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"]
+        # )
 
         # print(tensordict_data["logits"].requires_grad)
         # print(tensordict_data["action"].requires_grad)
@@ -976,6 +981,9 @@ if __name__ == "__main__":
 
         for j in range(num_epochs):
             with torch.no_grad():
+                print(tensordict_data["next", "reward"].shape)
+                print(tensordict_data["next", "done"].shape)
+                print(tensordict_data)
                 advantage_module(tensordict_data)
             print("Epoch: ", j)
             aim_run.track(
