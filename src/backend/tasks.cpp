@@ -16,6 +16,11 @@ std::vector<DeviceType> ComputeTask::get_supported_architectures() const {
   return supported_architectures;
 }
 
+bool ComputeTask::is_supported_architecture(DeviceType arch) const {
+  const auto &variant = variants[static_cast<std::size_t>(arch)];
+  return variant.get_arch() == arch;
+}
+
 std::vector<Variant> ComputeTask::get_variant_vector() const {
   std::vector<Variant> variant_vector;
   for (const auto &variant : variants) {
@@ -106,7 +111,7 @@ void Tasks::set_tag(taskid_t id, int tag) {
   compute_tasks[id].set_tag(tag);
 }
 
-void Tasks::set_type(taskid_t id, int type){
+void Tasks::set_type(taskid_t id, int type) {
   compute_tasks[id].set_type(type);
 }
 

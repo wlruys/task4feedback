@@ -379,6 +379,7 @@ void init_observer_ext(nb::module_ &m) {
 
   nb::class_<GraphExtractor>(m, "GraphExtractor")
       .def(nb::init<SchedulerState &>())
+      .def("get_device_selection_mask", &GraphExtractor::get_device_selection_mask)
       .def("get_k_hop_dependencies", &GraphExtractor::get_k_hop_dependencies)
       .def("get_k_hop_dependents", &GraphExtractor::get_k_hop_dependents)
       .def("get_k_hop_bidirectional", &GraphExtractor::get_k_hop_bidirectional)

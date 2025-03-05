@@ -203,6 +203,8 @@ public:
     this->id = id;
   }
 
+  bool is_supported_architecture(DeviceType arch) const;
+
   void add_variant(DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time) {
     variants.at(static_cast<std::size_t>(arch)) = Variant(arch, vcu, mem, time);
   }

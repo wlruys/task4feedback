@@ -149,6 +149,21 @@ public:
     return s.counts.get_active_task_list();
   }
 
+  void get_device_selection_mask(taskid_t task_id, TorchArr1D<int8_t> &mask) {
+    auto v = mask.view();
+    // Loop over each device, check its architecture and fill the mask if it is supported
+    const auto &s = this->state.get();
+    const auto &device_manager = s.get_device_manager();
+    const auto &devices = device_manager.get_devices();
+    const auto &compute_task = s.get_task_manager().get_tasks().get_compute_task(task_id);
+
+    for (int i = 0; i < devices.size(); i++) {
+      const auto &device_type = devices.get_type(i);
+      bool is_supported = compute_task.is_supported_architecture(device_type);
+      v(i) = is_supported ? 1 : 0;
+    }
+  }
+
   void _get_k_hop_task_dependents(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
 
     const auto &s = this->state.get();
