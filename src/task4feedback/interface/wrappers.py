@@ -710,7 +710,7 @@ class DefaultObserverFactory(ExternalObserverFactory):
         task_feature_factory.add(fastsim.EmptyTaskFeature, 1)
 
         data_feature_factory = FeatureExtractorFactory()
-        #data_feature_factory.add(fastsim.DataSizeFeature)
+        # data_feature_factory.add(fastsim.DataSizeFeature)
         data_feature_factory.add(fastsim.DataMappedLocationsFeature)
 
         device_feature_factory = FeatureExtractorFactory()
@@ -752,8 +752,8 @@ def observation_to_heterodata_truncate(
     for node_type, node_data in observation["nodes"].items():
         count = node_data["count"][0]
         hetero_data[f"{node_type}"].x = node_data["attr"][:count]
-        #print(f"{node_type} count: {count}")
-        #print(f"{node_type} attr: {node_data['attr'][:count]}")
+        # print(f"{node_type} count: {count}")
+        # print(f"{node_type} attr: {node_data['attr'][:count]}")
 
     for edge_key, edge_data in observation["edges"].items():
         target, source = edge_key.split("_")
@@ -1049,6 +1049,7 @@ class ExternalObserver:
         if task_ids is None:
             n_candidates = output["aux"]["candidates"]["count"][0]
             task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
+            output["nodes"]["tasks"]["attr"][:n_candidates, -1] = 1
 
         _, count = self.get_bidirectional_neighborhood(
             task_ids, output["nodes"]["tasks"]["glb"]
@@ -1057,9 +1058,6 @@ class ExternalObserver:
         self.get_task_features(
             output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
         )
-        #print("Candidates: ", task_ids)
-        #print(output["nodes"]["tasks"]["glb"][:count])
-        
 
     def data_observation(self, output: TensorDict):
         ntasks = output["nodes"]["tasks"]["count"][0]

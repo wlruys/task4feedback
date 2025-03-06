@@ -27,7 +27,7 @@ from tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
 import torch.nn as nn
 from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GATConv, global_mean_pool, HeteroConv
+from torch_geometric.nn import GATConv, global_mean_pool, global_add_pool, HeteroConv
 from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
@@ -171,8 +171,7 @@ class FastSimEnv(EnvBase):
         else:
             obs = self._reset()
             baseline_time = self._get_baseline()
-            print(f"Baseline time: {baseline_time}")
-            print(f"Simulator time: {time}")
+            # print(f"Simulator time: {time}")
             reward[0] = 1 + (baseline_time - time) / baseline_time
 
         out = obs
@@ -620,7 +619,7 @@ class DeprecatedValueNet(nn.Module):
         self.critic_head = OutputHead(gat_output_dim, config.hidden_channels, 1)
 
     def _is_batch(self, obs: TensorDict) -> bool:
-        print("Batch size: ", obs.batch_size)
+        # print("Batch size: ", obs.batch_size)
         # print("Obs0: ", obs[0].batch_size)
         if not obs.batch_size:
             return False
@@ -652,9 +651,9 @@ class DeprecatedValueNet(nn.Module):
 
         task_batch = data["tasks"].batch if is_batch else None
         v = self.critic_head(task_embeddings)
-        v = global_mean_pool(v, task_batch)
+        v = global_add_pool(v, task_batch)
+        v = torch.div(v, obs["nodes"]["tasks"]["count"].float())
 
-        # print(v.shape)
         return v
 
 
@@ -735,6 +734,7 @@ class DeviceAssignmentNet(nn.Module):
         output_embedding = candidate_embedding
 
         x = self.output_head(output_embedding)
+
         return x
 
 
@@ -820,6 +820,7 @@ class ValueNet(nn.Module):
         global_embedding = self.combine_layer(task_pool, data_pool)
 
         x = self.output_head(global_embedding)
+
         return x
 
 
@@ -907,8 +908,8 @@ if __name__ == "__main__":
         critic_network=value_module,
         clip_epsilon=0.2,
         entropy_bonus=True,
-        entropy_coef=0.01,
-        critic_coef=0.5,
+        entropy_coef=0.001,
+        critic_coef=0.25,
         loss_critic_type="l2",
     )
 
@@ -926,62 +927,9 @@ if __name__ == "__main__":
         print("Optimization Step: ", i)
 
         with torch.no_grad():
-            # print(tensordict_data["next", "reward"].shape)
-            # print(tensordict_data["next", "done"].shape)
-            # print(tensordict_data)
             advantage_module(tensordict_data)
 
-        # print("Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"])
-        # tensordict_data = tensordict_data.reshape(-1)
-        # print(
-        #    "Reshaped Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"]
-        # )
-
-        # print(tensordict_data["logits"].requires_grad)
-        # print(tensordict_data["action"].requires_grad)
-
-        # print(tensordict_data["value_target"])
-        # print(tensordict_data["next", "reward"][tensordict_data["next", "done"]])
-        # print(tensordict_data["state_value"])
-
-        # print(
-        #     "Reward / Cumulative Diff",
-        #     tensordict_data["advantage"].view(-1)
-        #     - (
-        #         tensordict_data["value_target"].view(-1)
-        #         - tensordict_data["state_value"].view(-1)
-        #     ),
-        # )
-        # print(
-        #     "Advantage Diff",
-        #     tensordict_data["advantage"]
-        #     - (tensordict_data["value_target"] - tensordict_data["state_value"]),
-        # )
-
-        # print(tensordict_data["advantage"])
-        # print(tensordict_data["state_value"])
-        # # print(tensordict_data["traj_count"])
-        # print(tensordict_data["next", "step_count"])
-        # print(tensordict_data["next", "done"])
-        # print(tensordict_data["done"])
-        # import sys
-
-        # sys.exit(0)
-
         episode_reward = tensordict_data["next", "reward"].mean().item()
-
-        # Log mean reward per episode
-        aim_run.track(episode_reward, name="reward/episode_mean", step=i)
-        aim_run.track(
-            tensordict_data["next", "reward"].max().item(),
-            name="reward/episode_max",
-            step=epoch_idx,
-        )
-        aim_run.track(
-            tensordict_data["next", "reward"].min().item(),
-            name="reward/episode_min",
-            step=epoch_idx,
-        )
 
         non_zero_rewards = tensordict_data["next", "reward"][
             tensordict_data["next", "reward"] != 0
@@ -993,21 +941,11 @@ if __name__ == "__main__":
             )
             print("Average non-zero reward: ", avg_non_zero_reward)
 
+        replay_buffer.extend(tensordict_data)
+
         for j in range(num_epochs):
             print("Epoch: ", j)
-            aim_run.track(
-                tensordict_data["advantage"].mean().item(),
-                name="advantage/mean",
-                step=epoch_idx,
-            )
-            aim_run.track(
-                tensordict_data["advantage"].std().item(),
-                name="advantage/std",
-                step=epoch_idx,
-            )
 
-            data_view = tensordict_data.reshape(-1)
-            replay_buffer.extend(data_view)
             nbatches = frames_per_batch // subbatch_size
 
             batch_loss_objective = 0
@@ -1017,9 +955,9 @@ if __name__ == "__main__":
             batch_grad_norm = 0
 
             for k in range(nbatches):
-                print("Batch: ", k)
+                # print("Batch: ", k)
                 subdata = replay_buffer.sample(subbatch_size)
-                optim.zero_grad()
+
                 loss_vals = loss_module(subdata)
                 loss_value = (
                     loss_vals["loss_objective"]
@@ -1027,12 +965,12 @@ if __name__ == "__main__":
                     + loss_vals["loss_entropy"]
                 )
 
+                optim.zero_grad()
                 loss_value.backward()
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     loss_module.parameters(), max_norm=0.5, norm_type=2
                 )
                 optim.step()
-                optim.zero_grad()
 
                 # Accumulate batch losses for logging
                 batch_loss_objective += loss_vals["loss_objective"].item()
@@ -1050,29 +988,8 @@ if __name__ == "__main__":
             aim_run.track(
                 batch_loss_entropy / nbatches, name="loss/entropy", step=epoch_idx
             )
-            aim_run.track(
-                batch_loss_total / nbatches, name="loss/total", step=epoch_idx
-            )
-            aim_run.track(
-                batch_grad_norm / nbatches, name="gradients/norm", step=epoch_idx
-            )
-
-            # aim_run.track(
-            #     scheduler.get_last_lr()[0], name="learning_rate", step=epoch_idx
-            # )
 
             epoch_idx += 1
-
-        logs["reward"].append(episode_reward)
-
-        track_params_dists(policy_module, aim_run)
-        track_gradients_dists(policy_module, aim_run)
-
-        track_gradients_dists(value_module, aim_run)
-        track_params_dists(value_module, aim_run)
-        # scheduler.step()
-        aim_run.track(time.perf_counter() - t, name="time/total_seconds", step=i)
-        collector.update_policy_weights_()
 
     collector.shutdown()
     aim_run.close()
