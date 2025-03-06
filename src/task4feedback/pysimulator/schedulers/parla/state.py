@@ -1,4 +1,4 @@
-from task4feedback.simulator import task
+from task4feedback.pysimulator import task
 from ....legacy_types import *
 from ...data import *
 from ...device import *

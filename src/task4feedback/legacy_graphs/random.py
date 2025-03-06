@@ -5,7 +5,7 @@ from typing_extensions import runtime
 from numpy import average
 from sympy import limit
 
-from task4feedback.simulator import data
+from task4feedback.pysimulator import data
 from .utilities import *
 from ..legacy_types import *
 

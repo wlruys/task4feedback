@@ -745,15 +745,13 @@ class DefaultObserverFactory(ExternalObserverFactory):
 
 
 def observation_to_heterodata_truncate(
-    observation: TensorDict, idx: int = 0
+    observation: TensorDict, idx: int = 0, device="cpu"
 ) -> HeteroData:
     hetero_data = HeteroData()
 
     for node_type, node_data in observation["nodes"].items():
         count = node_data["count"][0]
         hetero_data[f"{node_type}"].x = node_data["attr"][:count]
-        # print(f"{node_type} count: {count}")
-        # print(f"{node_type} attr: {node_data['attr'][:count]}")
 
     for edge_key, edge_data in observation["edges"].items():
         target, source = edge_key.split("_")
@@ -769,21 +767,15 @@ def observation_to_heterodata_truncate(
                 target, "to", source
             ].edge_attr
 
-    return hetero_data
+    return hetero_data.to(device)
 
 
-def observation_to_heterodata(observation: TensorDict, idx: int = 0) -> HeteroData:
+def observation_to_heterodata(
+    observation: TensorDict, idx: int = 0, device="cpu"
+) -> HeteroData:
     hetero_data = HeteroData()
 
     for node_type, node_data in observation["nodes"].items():
-        # print("Index: ", idx)
-        # print("Node type: ", node_type)
-        # print("Node Data", node_data)
-
-        # print("Internals:")
-        # print(node_data["count"].shape)
-        # print(node_data["attr"].shape)
-        # print(node_data["glb"].shape)
         count = node_data["count"]
         hetero_data[f"{node_type}"].x = node_data["attr"]
 
@@ -801,7 +793,7 @@ def observation_to_heterodata(observation: TensorDict, idx: int = 0) -> HeteroDa
                 target, "to", source
             ].edge_attr
 
-    return hetero_data
+    return hetero_data.to(device)
 
 
 @dataclass

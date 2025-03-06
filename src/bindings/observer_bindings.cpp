@@ -263,11 +263,13 @@ void init_observer_ext(nb::module_ &m) {
   // Task Task Features
   bind_int_edge_feature<EmptyTaskTaskFeature>(m, "EmptyTaskTaskFeature");
   bind_state_edge_feature<TaskTaskSharedDataFeature>(m, "TaskTaskSharedDataFeature");
+  bind_state_edge_feature<TaskTaskDefaultEdgeFeature>(m, "TaskTaskDefaultEdgeFeature");
 
   // Task Data Features
   bind_int_edge_feature<EmptyTaskDataFeature>(m, "EmptyTaskDataFeature");
   bind_state_edge_feature<TaskDataRelativeSizeFeature>(m, "TaskDataRelativeSizeFeature");
   bind_state_edge_feature<TaskDataUsageFeature>(m, "TaskDataUsageFeature");
+  bind_state_edge_feature<TaskDataDefaultEdgeFeature>(m, "TaskDataDefaultEdgeFeature");
 
   // Task Device Features
   bind_state_edge_feature<TaskDeviceDefaultEdgeFeature>(m, "TaskDeviceDefaultEdgeFeature");

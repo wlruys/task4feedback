@@ -1,8 +1,8 @@
 from z3 import *
 
-from task4feedback.simulator.analysis import recorder
-from task4feedback.simulator.analysis.recorder import ComputeTaskRecorder
-from task4feedback.simulator.simulator import *
+from task4feedback.pysimulator.analysis import recorder
+from task4feedback.pysimulator.analysis.recorder import ComputeTaskRecorder
+from task4feedback.pysimulator.simulator import *
 from ...legacy_types import *
 
 

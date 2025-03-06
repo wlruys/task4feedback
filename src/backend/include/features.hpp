@@ -1134,6 +1134,21 @@ struct EmptyTaskTaskFeature : public IntEdgeFeature<EmptyTaskTaskFeature> {
   }
 };
 
+struct TaskTaskDefaultEdgeFeature : public StateEdgeFeature<TaskTaskDefaultEdgeFeature> {
+  TaskTaskDefaultEdgeFeature(const SchedulerState &state)
+      : StateEdgeFeature<TaskTaskDefaultEdgeFeature>(state, EdgeType::TASK_TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
+    output[0] = 1.0;
+  }
+};
+
 struct TaskTaskSharedDataFeature : public StateEdgeFeature<TaskTaskSharedDataFeature> {
   TaskTaskSharedDataFeature(const SchedulerState &state)
       : StateEdgeFeature<TaskTaskSharedDataFeature>(state, EdgeType::TASK_TASK) {
@@ -1231,6 +1246,21 @@ struct TaskDataUsageFeature : public StateEdgeFeature<TaskDataUsageFeature> {
 
     output[0] = static_cast<f_t>(is_read_access);
     output[1] = static_cast<f_t>(is_write_access);
+  }
+};
+
+struct TaskDataDefaultEdgeFeature : public StateEdgeFeature<TaskDataDefaultEdgeFeature> {
+  TaskDataDefaultEdgeFeature(const SchedulerState &state)
+      : StateEdgeFeature<TaskDataDefaultEdgeFeature>(state, EdgeType::TASK_DATA) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
+    output[0] = 1.0;
   }
 };
 

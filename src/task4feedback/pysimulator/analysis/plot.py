@@ -5,7 +5,7 @@ from pandas import *
 import matplotlib.pyplot as plt
 from ...legacy_types import *
 from typing import cast
-from task4feedback.simulator.simulator import *
+from task4feedback.pysimulator.simulator import *
 import pydot
 from mplcursors import cursor  # separate package must be installed
 

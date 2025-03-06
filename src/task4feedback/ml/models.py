@@ -1,7 +1,19 @@
+from task4feedback import fastsim2 as fastsim
+from task4feedback.interface import *
 import torch
+from typing import Optional, Self
+
+from torchrl.envs import EnvBase
+from task4feedback.interface.wrappers import observation_to_heterodata
+from dataclasses import dataclass
+# from task4feedback.interface.wrappers import (
+#     observation_to_heterodata_truncate as observation_to_heterodata,
+# )
+
+from tensordict import TensorDict
+from torch_geometric.data import HeteroData, Batch
 import torch.nn as nn
-from torch_geometric.nn import GATConv
-from torch_geometric.nn import global_mean_pool
+from torch_geometric.nn import GATConv, global_mean_pool, global_add_pool, HeteroConv
 import numpy as np
 
 
@@ -11,187 +23,351 @@ def layer_init(layer, a=0.01, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-def init_weights(model):
-    for m in model.modules():
-        if isinstance(m, nn.Linear) or isinstance(m, GATConv):
-            layer_init(m)
-        elif isinstance(m, nn.LayerNorm):
-            # Initialize LayerNorm weights and biases
-            nn.init.constant_(m.weight, 1.0)
-            nn.init.constant_(m.bias, 0.0)
+def init_weights(m):
+    """
+    Initializes LayerNorm layers.
+    """
+    if isinstance(m, nn.LayerNorm):
+        nn.init.constant_(m.weight, 1.0)
+        nn.init.constant_(m.bias, 0.0)
 
 
-class HeteroGAT(nn.Module):
-    def __init__(self, hidden_channels, data):
-        super(HeteroGAT, self).__init__()
+class HeteroDataWrapper(nn.Module):
+    def __init__(self, network: nn.Module):
+        super(HeteroDataWrapper, self).__init__()
+        self.network = network
 
-        self.in_channels_tasks = data["tasks"].x.shape[1]
-        self.in_channels_data = data["data"].x.shape[1]
-        self.in_channels_devices = data["devices"].x.shape[1]
+    def _is_batch(self, obs: TensorDict) -> bool:
+        if not obs.batch_size:
+            return False
+        return True
 
-        self.task_data_edge_dim = data[("data", "used_by", "tasks")].edge_attr.shape[1]
-        self.task_device_edge_dim = data[
-            ("devices", "variant", "tasks")
-        ].edge_attr.shape[1]
-        self.task_task_edge_dim = data[
-            ("tasks", "depends_on", "tasks")
-        ].edge_attr.shape[1]
+    def _convert_to_heterodata(
+        self, obs: TensorDict, is_batch: bool = False
+    ) -> HeteroData:
+        if not is_batch:
+            _obs = observation_to_heterodata(obs)
+            return _obs
 
-        self.n_heads = 2
+        _h_data = []
+        for i in range(obs.batch_size[0]):
+            _obs = observation_to_heterodata(obs[i])
+            _h_data.append(_obs)
 
-        self.gnn_tasks_data = GATConv(
-            (self.in_channels_data, self.in_channels_tasks),
-            hidden_channels,
-            heads=self.n_heads,
-            concat=False,
-            residual=True,
-            dropout=0,
-            edge_dim=self.task_data_edge_dim,
-            add_self_loops=False,
+        return Batch.from_data_list(_h_data)
+
+    def forward(self, obs: TensorDict):
+        is_batch = self._is_batch(obs)
+        data = self._convert_to_heterodata(obs, is_batch)
+        return self.network(data)
+
+
+@dataclass
+class FeatureDimConfig:
+    task_feature_dim: int = 12
+    data_feature_dim: int = 5
+    device_feature_dim: int = 12
+    task_data_edge_dim: int = 3
+    task_device_edge_dim: int = 2
+    task_task_edge_dim: int = 1
+
+    @staticmethod
+    def from_observer(observer: ExternalObserver):
+        return FeatureDimConfig(
+            task_feature_dim=observer.task_feature_dim,
+            data_feature_dim=observer.data_feature_dim,
+            device_feature_dim=observer.device_feature_dim,
+            task_data_edge_dim=observer.task_data_edge_dim,
+            task_device_edge_dim=observer.task_device_edge_dim,
+            task_task_edge_dim=observer.task_task_edge_dim,
         )
 
-        self.gnn_tasks_devices = GATConv(
-            (self.in_channels_devices, self.in_channels_tasks),
-            hidden_channels,
-            heads=self.n_heads,
+    @staticmethod
+    def from_config(other: Self, **overrides):
+        return FeatureDimConfig(
+            task_feature_dim=overrides.get("task_feature_dim", other.task_feature_dim),
+            data_feature_dim=overrides.get("data_feature_dim", other.data_feature_dim),
+            device_feature_dim=overrides.get(
+                "device_feature_dim", other.device_feature_dim
+            ),
+            task_data_edge_dim=overrides.get(
+                "task_data_edge_dim", other.task_data_edge_dim
+            ),
+            task_device_edge_dim=overrides.get(
+                "task_device_edge_dim", other.task_device_edge_dim
+            ),
+            task_task_edge_dim=overrides.get(
+                "task_task_edge_dim", other.task_task_edge_dim
+            ),
+        )
+
+
+@dataclass
+class LayerConfig:
+    hidden_channels: int = 16
+    n_heads: int = 1
+    input_dim: Optional[int] = None
+    output_dim: Optional[int] = None
+
+
+class HeteroGAT1Layer(nn.Module):
+    def __init__(self, feature_config: FeatureDimConfig, layer_config: LayerConfig):
+        super(HeteroGAT1Layer, self).__init__()
+
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.gnn_tasks_data = GATConv(
+            (feature_config.data_feature_dim, feature_config.task_feature_dim),
+            layer_config.hidden_channels,
+            heads=layer_config.n_heads,
             concat=False,
             residual=True,
             dropout=0,
-            edge_dim=self.task_device_edge_dim,
+            edge_dim=feature_config.task_data_edge_dim,
             add_self_loops=False,
         )
 
         self.gnn_tasks_tasks = GATConv(
-            self.in_channels_tasks,
-            hidden_channels,
-            heads=self.n_heads,
+            (feature_config.task_feature_dim, feature_config.task_feature_dim),
+            layer_config.hidden_channels,
+            heads=layer_config.n_heads,
             concat=False,
             residual=True,
             dropout=0,
-            edge_dim=self.task_task_edge_dim,
-            add_self_loops=True,
+            edge_dim=feature_config.task_task_edge_dim,
+            add_self_loops=False,
         )
 
-        self.linear = nn.Linear(
-            (hidden_channels * 3),
-            self.in_channels_tasks,
+        self.gnn_tasks_devices = GATConv(
+            (feature_config.device_feature_dim, feature_config.task_feature_dim),
+            layer_config.hidden_channels,
+            heads=layer_config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=feature_config.task_device_edge_dim,
+            add_self_loops=False,
         )
 
-        # Layer normalization layers
-        self.layer_norm1 = nn.LayerNorm(hidden_channels)
-        # self.batch_norm1 = nn.BatchNorm1d(hidden_channels)
-
-        self.layer_norm2 = nn.LayerNorm(hidden_channels)
-        # self.batch_norm2 = nn.BatchNorm1d(hidden_channels)
-
-        # self.layer_norm3 = nn.LayerNorm(self.in_channels_tasks * self.n_heads)
-        self.layer_norm4 = nn.LayerNorm(hidden_channels)
-        # self.batch_norm4 = nn.BatchNorm1d(hidden_channels)
-
-        # Activation function
+        self.layer_norm1 = nn.LayerNorm(layer_config.hidden_channels)
+        self.layer_norm2 = nn.LayerNorm(layer_config.hidden_channels)
+        self.layer_norm3 = nn.LayerNorm(layer_config.hidden_channels)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
 
+        self.output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        )
+
     def forward(self, data):
-        # Process data to tasks
         data_fused_tasks = self.gnn_tasks_data(
             (data["data"].x, data["tasks"].x),
-            data["data", "used_by", "tasks"].edge_index,
-            data["data", "used_by", "tasks"].edge_attr,
+            data["data", "to", "tasks"].edge_index,
+            data["data", "to", "tasks"].edge_attr,
         )
 
-        # Check device placements for all
-        # print(f"data_fused_tasks device: {data_fused_tasks.device}")
+        tasks_fused_tasks = self.gnn_tasks_tasks(
+            (data["tasks"].x, data["tasks"].x),
+            data["tasks", "to", "tasks"].edge_index,
+            data["tasks", "to", "tasks"].edge_attr,
+        )
+
+        devices_fused_tasks = self.gnn_tasks_devices(
+            (data["devices"].x, data["tasks"].x),
+            data["devices", "to", "tasks"].edge_index,
+            data["devices", "to", "tasks"].edge_attr,
+        )
 
         data_fused_tasks = self.layer_norm1(data_fused_tasks)
-        # print(f"data_fused_tasks after layer_norm1 device: {data_fused_tasks.device}")
+        tasks_fused_tasks = self.layer_norm2(tasks_fused_tasks)
+        devices_fused_tasks = self.layer_norm3(devices_fused_tasks)
+
         data_fused_tasks = self.activation(data_fused_tasks)
-        # print(f"data_fused_tasks after activation device: {data_fused_tasks.device}")
+        tasks_fused_tasks = self.activation(tasks_fused_tasks)
+        devices_fused_tasks = self.activation(devices_fused_tasks)
 
-        # Process devices to tasks
-        device_fused_tasks = self.gnn_tasks_devices(
-            (data["devices"].x, data["tasks"].x),
-            data["devices", "variant", "tasks"].edge_index,
-            data["devices", "variant", "tasks"].edge_attr,
-        )
-        device_fused_tasks = self.layer_norm2(device_fused_tasks)
-        device_fused_tasks = self.activation(device_fused_tasks)
-
-        task_fused_tasks = self.gnn_tasks_tasks(
-            data["tasks"].x,
-            data["tasks", "depends_on", "tasks"].edge_index,
-            data["tasks", "depends_on", "tasks"].edge_attr,
-        )
-        task_fused_tasks = self.layer_norm4(task_fused_tasks)
-        task_fused_tasks = self.activation(task_fused_tasks)
-
-        # Concatenate the processed feature
-        x = torch.cat(
-            [data["tasks"].x, task_fused_tasks, data_fused_tasks, device_fused_tasks],
-            dim=1,
+        return torch.cat(
+            [data["tasks"].x, data_fused_tasks, tasks_fused_tasks, devices_fused_tasks],
+            dim=-1,
         )
 
-        # x = self.linear(tasks)
-        # x = self.layer_norm3(x)
-        # x = self.activation(x)
 
-        # x = torch.dropout(x, p=0.1, train=self.training)
+class DataTaskGAT2Layer(nn.Module):
+    def __init__(self, feature_config: FeatureDimConfig, layer_config: LayerConfig):
+        super(DataTaskGAT2Layer, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
 
-        return x
+        self.data_task_conv = HeteroConv(
+            {
+                ("data", "to", "tasks"): GATConv(
+                    (feature_config.data_feature_dim, feature_config.task_feature_dim),
+                    layer_config.hidden_channels,
+                    heads=layer_config.n_heads,
+                    concat=True,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=feature_config.task_data_edge_dim,
+                    add_self_loops=False,
+                ),
+                ("tasks", "to", "data"): GATConv(
+                    (feature_config.task_feature_dim, feature_config.data_feature_dim),
+                    layer_config.hidden_channels,
+                    heads=layer_config.n_heads,
+                    concat=True,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=feature_config.task_data_edge_dim,
+                    add_self_loops=False,
+                ),
+            }
+        )
 
+        hidden_channels_with_heads = layer_config.hidden_channels * layer_config.n_heads
 
-class HeteroVec(nn.Module):
-    def __init__(self, hidden_channels, data):
-        super(HeteroVec, self).__init__()
+        self.task_data_conv = HeteroConv(
+            {
+                ("tasks", "to", "data"): GATConv(
+                    (hidden_channels_with_heads, hidden_channels_with_heads),
+                    layer_config.hidden_channels,
+                    heads=1,
+                    concat=False,
+                    add_self_loops=False,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=feature_config.task_data_edge_dim,
+                ),
+                ("data", "to", "tasks"): GATConv(
+                    (hidden_channels_with_heads, hidden_channels_with_heads),
+                    layer_config.hidden_channels,
+                    heads=1,
+                    concat=False,
+                    add_self_loops=False,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=feature_config.task_data_edge_dim,
+                ),
+            }
+        )
 
-        self.hidden_channels = hidden_channels
-
-        self.in_channels_tasks = data["tasks"].x.shape[1]
-        self.in_channels_data = data["data"].x.shape[1]
-        self.in_channels_devices = data["devices"].x.shape[1]
-
-        # Activation function
+        self.norm_tasks = nn.LayerNorm(layer_config.hidden_channels)
+        self.norm_data = nn.LayerNorm(layer_config.hidden_channels)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
 
-        self.layer_norm_output = nn.LayerNorm(hidden_channels)
-        self.linear_output = nn.Linear(
-            (self.in_channels_tasks + self.in_channels_devices * 4),
-            self.hidden_channels,
+        self.output_dim = layer_config.hidden_channels
+
+    def forward(self, data: HeteroData | Batch):
+        x_dict = data.x_dict
+        edge_index_dict = data.edge_index_dict
+        edge_attr_dict = (
+            data.edge_attr_dict if hasattr(data, "edge_attr_dict") else None
+        )
+        x_dict = self.data_task_conv(x_dict, edge_index_dict, edge_attr_dict)
+
+        x_dict = {node_type: self.activation(x) for node_type, x in x_dict.items()}
+        x_dict = {
+            "tasks": self.norm_tasks(x_dict["tasks"]),
+            "data": self.norm_data(x_dict["data"]),
+        }
+        x_dict = self.task_data_conv(x_dict, edge_index_dict, edge_attr_dict)
+
+        return x_dict
+
+
+class TaskTaskGAT2Layer(nn.Module):
+    """
+    Tasks-to-tasks encodes task -> dependency information
+
+    This module performs two depth 2 GAT convolutions on the task nodes:
+    - Two accumulations of task -> dependency information
+    - Two accumulations of task -> dependant information
+
+    These results are then concatenated and returned as the output (hidden_channels * 2)
+    """
+
+    def __init__(self, feature_config: FeatureDimConfig, layer_config: LayerConfig):
+        super(TaskTaskGAT2Layer, self).__init__()
+
+        self.conv_dependency_1 = GATConv(
+            (feature_config.task_feature_dim, feature_config.task_feature_dim),
+            layer_config.hidden_channels,
+            heads=layer_config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=feature_config.task_task_edge_dim,
+            add_self_loops=False,
         )
 
-    def forward(self, data):
-        # Get subgraph for candidate task
+        self.conv_dependent_1 = GATConv(
+            (feature_config.task_feature_dim, feature_config.task_feature_dim),
+            layer_config.hidden_channels,
+            heads=layer_config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=feature_config.task_task_edge_dim,
+            add_self_loops=False,
+        )
 
-        subset_dict = {"tasks": torch.tensor([0])}
+        self.conv_dependency_2 = GATConv(
+            (layer_config.hidden_channels, layer_config.hidden_channels),
+            layer_config.hidden_channels,
+            heads=1,
+            concat=True,
+            residual=True,
+            dropout=0,
+            edge_dim=feature_config.task_task_edge_dim,
+            add_self_loops=False,
+        )
 
-        subgraph = data.subgraph(subset_dict)
+        self.conv_dependent_2 = GATConv(
+            (layer_config.hidden_channels, layer_config.hidden_channels),
+            layer_config.hidden_channels,
+            heads=1,
+            concat=True,
+            residual=True,
+            edge_dim=feature_config.task_task_edge_dim,
+            add_self_loops=False,
+        )
 
-        candidate_data = subgraph["data"].x[
-            subgraph[("data", "used_by", "tasks")].edge_index[0]
-        ]
+        self.norm_dependency = nn.LayerNorm(layer_config.hidden_channels)
+        self.norm_dependant = nn.LayerNorm(layer_config.hidden_channels)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+        self.output_dim = layer_config.hidden_channels * 2
 
-        candidate_devices = subgraph["devices"].x[
-            subgraph[("devices", "variant", "tasks")].edge_index[0]
-        ]
-        candidate_task = subgraph["tasks"].x
+    def forward(self, task_embedding, data: HeteroData | Batch):
+        tasks = task_embedding
+        edge_dependency_index = data.edge_index_dict["tasks", "to", "tasks"]
+        edge_dependant_index = edge_dependency_index.flip(0)
+        edge_attr = data.edge_attr_dict["tasks", "to", "tasks"]
 
-        flattened_task = torch.flatten(candidate_task)
-        flattened_devices = torch.flatten(candidate_devices)
+        tasks_dependency = self.conv_dependency_1(
+            tasks, edge_dependency_index, edge_attr
+        )
+        tasks_dependency = self.norm_dependency(tasks_dependency)
+        tasks_dependency = self.activation(tasks_dependency)
 
-        x = torch.cat([flattened_task, flattened_devices], dim=0)
+        tasks_dependant = self.conv_dependent_1(tasks, edge_dependant_index, edge_attr)
+        tasks_dependant = self.norm_dependant(tasks_dependant)
+        tasks_dependant = self.activation(tasks_dependant)
 
-        x = self.linear_output(x)
-        x = self.layer_norm_output(x)
-        x = self.activation(x)
+        tasks_dependency = self.conv_dependency_2(
+            tasks_dependency, edge_dependency_index, edge_attr
+        )
+        tasks_dependant = self.conv_dependent_2(
+            tasks_dependant, edge_dependant_index, edge_attr
+        )
 
-        return x
+        return torch.cat([tasks_dependency, tasks_dependant], dim=-1)
 
 
-class ActorCriticHead(nn.Module):
+class OutputHead(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
-        super(ActorCriticHead, self).__init__()
+        super(OutputHead, self).__init__()
+
         self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
         self.layer_norm1 = nn.LayerNorm(hidden_dim)
-        # self.batch_norm1 = nn.BatchNorm1d(hidden_dim)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
         self.fc2 = layer_init(nn.Linear(hidden_dim, output_dim))
 
@@ -199,168 +375,199 @@ class ActorCriticHead(nn.Module):
         x = self.fc1(x)
         x = self.layer_norm1(x)
         x = self.activation(x)
-        # x = torch.dropout(x, p=0.1, train=self.training)
         x = self.fc2(x)
         return x
 
 
-class VectorTaskAssignmentNet(nn.Module):
-    def __init__(self, ndevices, priority_levels, hidden_channels, data):
-        super(VectorTaskAssignmentNet, self).__init__()
+class CombineTwoLayer(nn.Module):
+    def __init__(self, x_shape, y_shape, hidden_shape, output_shape):
+        super(CombineTwoLayer, self).__init__()
+        self.fc_x = layer_init(nn.Linear(x_shape, hidden_shape))
+        self.fc_y = layer_init(nn.Linear(y_shape, hidden_shape))
+        self.fc_c = layer_init(nn.Linear(hidden_shape, output_shape))
+        self.layer_norm_x = nn.LayerNorm(hidden_shape)
+        self.layer_norm_y = nn.LayerNorm(hidden_shape)
+        self.layer_norm_c = nn.LayerNorm(output_shape)
 
-        self.in_channels_tasks = data["tasks"].x.shape[1]
-        self.in_channels_data = data["data"].x.shape[1]
-        self.in_channels_devices = data["devices"].x.shape[1]
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
 
-        self.hetero_vec = HeteroVec(hidden_channels, data)
-        self.ndevices = ndevices
-        self.priority_levels = priority_levels
-        self.n_heads = 3
+    def forward(self, x, y):
+        x = self.fc_x(x)
+        x = self.layer_norm_x(x)
+        x = self.activation(x)
 
-        # input dimension
-        critic_input_dim = hidden_channels * 3 + self.in_channels_tasks
-        actor_input_dim = hidden_channels * 3 + self.in_channels_tasks
+        y = self.fc_y(y)
+        y = self.layer_norm_y(y)
+        y = self.activation(y)
 
-        # Critic Head
-        self.critic_head = ActorCriticHead(critic_input_dim, hidden_channels, 1)
+        z = x + y
+        z = self.fc_c(z)
+        z = self.layer_norm_c(z)
+        z = self.activation(z)
 
-        # Actor Head for Priority
-        self.actor_p_head = ActorCriticHead(
-            actor_input_dim, hidden_channels, priority_levels
+        return z
+
+
+class CombineThreeLayer(nn.Module):
+    def __init__(self, x_shape, y_shape, z_shape, hidden_shape, output_shape):
+        super(CombineTwoLayer, self).__init__()
+        self.fc_x = layer_init(nn.Linear(x_shape, hidden_shape))
+        self.fc_y = layer_init(nn.Linear(y_shape, hidden_shape))
+        self.fc_z = layer_init(nn.Linear(z_shape, hidden_shape))
+        self.fc_c = layer_init(nn.Linear(hidden_shape, output_shape))
+        self.layer_norm_x = nn.LayerNorm(hidden_shape)
+        self.layer_norm_y = nn.LayerNorm(hidden_shape)
+        self.layer_norm_z = nn.LayerNorm(hidden_shape)
+        self.layer_norm_c = nn.LayerNorm(output_shape)
+
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+    def forward(self, x, y):
+        x = self.fc_x(x)
+        x = self.layer_norm_x(x)
+        x = self.activation(x)
+
+        y = self.fc_y(y)
+        y = self.layer_norm_y(y)
+        y = self.activation(y)
+
+        z = self.fc_z(z)
+        z = self.layer_norm_z(z)
+        z = self.activation(z)
+
+        c = x + y + z
+        c = self.fc_c(c)
+        c = self.layer_norm_c(c)
+        c = self.activation(c)
+
+        return z
+
+
+class OldCombinedNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldCombinedNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
+        gat_output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
         )
 
-        # Actor Head for Device Assignment
-        self.actor_d_head = ActorCriticHead(actor_input_dim, hidden_channels, ndevices)
+        self.actor_head = OutputHead(
+            gat_output_dim, layer_config.hidden_channels, n_devices
+        )
+        self.critic_head = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
 
-    def forward(self, data, task_batch=None):
-        # Get features from HeteroGAT
-        x = self.hetero_vec(data)
+    def forward(self, data: HeteroData | Batch, counts=None):
+        task_embeddings = self.hetero_gat(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
 
-        # Critic Head
-        v = self.critic_head(x)
-        v = global_mean_pool(v, task_batch)
+        if task_batch is not None:
+            candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
+        else:
+            candidate_embedding = task_embeddings[0]
 
-        z = data[: len(data["candidate_list"])]
+        d_logits = self.actor_head(candidate_embedding)
 
-        # Actor Head for Priority
-        p_logits = self.actor_p_head(z)
+        if counts is None:
+            v = self.critic_head(task_embeddings)
+            v = global_mean_pool(v, task_batch)
+        else:
+            v = self.critic_head(task_embeddings)
+            v = global_add_pool(v, task_batch)
+            v = torch.div(v, counts)
 
-        # Actor Head for Device Assignment
-        d_logits = self.actor_d_head(z)
-
-        return p_logits, d_logits, v
+        return d_logits, v
 
 
-class TaskAssignmentNet(nn.Module):
-    def __init__(self, ndevices, priority_levels, hidden_channels, data, device):
-        super(TaskAssignmentNet, self).__init__()
+class OldTaskAssignmentNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldTaskAssignmentNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
 
-        self.in_channels_tasks = data["tasks"].x.shape[1]
-        self.in_channels_data = data["data"].x.shape[1]
-        self.in_channels_devices = data["devices"].x.shape[1]
-
-        self.task_data_edge_dim = data[("data", "used_by", "tasks")].edge_attr.shape[1]
-        self.task_device_edge_dim = data[
-            ("devices", "variant", "tasks")
-        ].edge_attr.shape[1]
-        self.task_task_edge_dim = data[
-            ("tasks", "depends_on", "tasks")
-        ].edge_attr.shape[1]
-
-        self.hetero_gat_actor = HeteroGAT(hidden_channels, data).to(device)
-        self.hetero_gat_critic = HeteroGAT(hidden_channels, data).to(device)
-        self.ndevices = ndevices
-        self.priority_levels = priority_levels
-
-        # input dimension
-        critic_input_dim = hidden_channels * 3 + self.in_channels_tasks
-        actor_input_dim = hidden_channels * 3 + self.in_channels_tasks
-
-        # Critic Head
-        self.critic_head = ActorCriticHead(critic_input_dim, hidden_channels, 1).to(
-            device
+        self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
+        gat_output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        )
+        self.actor_head = OutputHead(
+            gat_output_dim, layer_config.hidden_channels, n_devices
         )
 
-        # Actor Head for Priority
-        self.actor_p_head = ActorCriticHead(
-            critic_input_dim, hidden_channels, priority_levels
-        ).to(device)
-
-        # Actor Head for Device Assignment
-        self.actor_d_head = ActorCriticHead(
-            actor_input_dim, hidden_channels, ndevices
-        ).to(device)
-
-    def forward(self, data, task_batch=None):
-        # Get features from HeteroGAT
-        x = self.hetero_gat_critic(data)
-
-        # Critic Head
-        v = self.critic_head(x)
-        v = global_mean_pool(v, task_batch)
-
-        z = self.hetero_gat_actor(data)
+    def forward(self, data: HeteroData | Batch, counts=None):
+        task_embeddings = self.hetero_gat(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
 
         if task_batch is not None:
-            z = z[data["tasks"].ptr[:-1]]
+            candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
         else:
-            z = z[0]
+            candidate_embedding = task_embeddings[0]
 
-        # Actor Head for Priority
-        p_logits = self.actor_p_head(z)
+        d_logits = self.actor_head(candidate_embedding)
 
-        # Actor Head for Device Assignment
-        d_logits = self.actor_d_head(z)
-
-        return p_logits, d_logits, v
+        return d_logits
 
 
-class TaskAssignmentNetDeviceOnly(nn.Module):
-    def __init__(self, ndevices, hidden_channels, data):
-        super(TaskAssignmentNetDeviceOnly, self).__init__()
+class OldValueNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldTaskAssignmentNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
 
-        self.in_channels_tasks = data["tasks"].x.shape[1]
-        self.in_channels_data = data["data"].x.shape[1]
-        self.in_channels_devices = data["devices"].x.shape[1]
+        self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
+        gat_output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        )
+        self.actor_head = OutputHead(
+            gat_output_dim, layer_config.hidden_channels, n_devices
+        )
 
-        self.task_data_edge_dim = data[("data", "used_by", "tasks")].edge_attr.shape[1]
-        self.task_device_edge_dim = data[
-            ("devices", "variant", "tasks")
-        ].edge_attr.shape[1]
-        self.task_task_edge_dim = data[
-            ("tasks", "depends_on", "tasks")
-        ].edge_attr.shape[1]
+    def forward(self, data: HeteroData | Batch, counts=None):
+        task_embeddings = self.hetero_gat(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
 
-        self.hetero_gat_actor = HeteroGAT(hidden_channels, data)
-        self.hetero_gat_critic = HeteroGAT(hidden_channels, data)
-        self.ndevices = ndevices
-
-        # input dimension
-        critic_input_dim = hidden_channels * 3 + self.in_channels_tasks
-        actor_input_dim = hidden_channels * 3 + self.in_channels_tasks
-
-        # Critic Head
-        self.critic_head = ActorCriticHead(critic_input_dim, hidden_channels, 1)
-
-        # Actor Head for Device Assignment
-        self.actor_d_head = ActorCriticHead(actor_input_dim, hidden_channels, ndevices)
-
-    def forward(self, data, task_batch=None):
-        # Get features from HeteroGAT
-        x = self.hetero_gat_critic(data)
-
-        # Critic Head
-        v = self.critic_head(x)
-        v = global_mean_pool(v, task_batch)
-
-        z = self.hetero_gat_actor(data)
-
-        if task_batch is not None:
-            z = z[data["tasks"].ptr[:-1]]
+        if counts is None:
+            v = self.critic_head(task_embeddings)
+            v = global_mean_pool(v, task_batch)
         else:
-            z = z[0]
+            v = self.critic_head(task_embeddings)
+            v = global_add_pool(v, task_batch)
+            v = torch.div(v, counts)
 
-        # Actor Head for Device Assignment
-        d_logits = self.actor_d_head(z)
+        return v
 
+
+class OldSeparateNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldSeparateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = OldTaskAssignmentNet(feature_config, layer_config, n_devices)
+        self.critic = OldValueNet(feature_config, layer_config, n_devices)
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        d_logits = self.actor(data, counts)
+        v = self.critic(data, counts)
         return d_logits, v
