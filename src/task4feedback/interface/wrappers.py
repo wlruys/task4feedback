@@ -723,7 +723,6 @@ class DefaultObserverFactory(ExternalObserverFactory):
         task_data_feature_factory = EdgeFeatureExtractorFactory()
         task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
         task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
-        task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
 
         task_device_feature_factory = EdgeFeatureExtractorFactory()
         task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
