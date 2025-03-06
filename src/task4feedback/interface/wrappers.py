@@ -750,7 +750,7 @@ def observation_to_heterodata_truncate(
 
     for node_type, node_data in observation["nodes"].items():
         count = node_data["count"][0]
-        print(count)
+        #print(count)
         hetero_data[f"{node_type}"].x = node_data["attr"][:count]
 
     for edge_key, edge_data in observation["edges"].items():
