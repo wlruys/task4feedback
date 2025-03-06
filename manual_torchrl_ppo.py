@@ -16,9 +16,9 @@ from task4feedback.interface.wrappers import (
     observation_to_heterodata_truncate,
 )
 
-# from task4feedback.interface.wrappers import (
-#     observation_to_heterodata_truncate as observation_to_heterodata,
-# )
+from task4feedback.interface.wrappers import (
+    observation_to_heterodata_truncate as observation_to_heterodata,
+)
 from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
 from torchrl.envs.utils import make_composite_from_td
 from tensordict.nn import set_composite_lp_aggregate
@@ -140,9 +140,10 @@ class FastSimEnv(EnvBase):
 
     def _step(self, td: TensorDict) -> TensorDict:
         chosen_device = td["action"].item()
+        # print("Chosen Device: ", chosen_device)
         local_id = 0
         device = chosen_device
-        state = self.simulator.get_state()
+        # state = self.simulator.get_state()
         mapping_priority = 0
         reserving_priority = mapping_priority
         launching_priority = mapping_priority
@@ -171,7 +172,7 @@ class FastSimEnv(EnvBase):
         else:
             obs = self._reset()
             baseline_time = self._get_baseline()
-            print(f"Baseline time: {baseline_time}")
+            # print(f"Baseline time: {baseline_time}")
             print(f"Simulator time: {time}")
             reward[0] = 1 + (baseline_time - time) / baseline_time
 
@@ -213,11 +214,9 @@ def make_env():
     env = FastSimEnv(
         SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
     )
-    return TransformedEnv(
-        env,
-        StepCounter(),
-        TrajCounter(),
-    )
+    env = TransformedEnv(env, StepCounter())
+    env = TransformedEnv(env, TrajCounter())
+    return env
 
 
 @dataclass
@@ -603,9 +602,12 @@ class DeprecatedDeviceAssignmentNet(nn.Module):
         if task_batch is not None:
             candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
         else:
+            # print("Not batch")
             candidate_embedding = task_embeddings[0]
 
         d_logits = self.actor_head(candidate_embedding)
+
+        # print("Logits: ", d_logits)
 
         return d_logits
 
@@ -620,7 +622,7 @@ class DeprecatedValueNet(nn.Module):
         self.critic_head = OutputHead(gat_output_dim, config.hidden_channels, 1)
 
     def _is_batch(self, obs: TensorDict) -> bool:
-        print("Batch size: ", obs.batch_size)
+        # print("Batch size: ", obs.batch_size)
         # print("Obs0: ", obs[0].batch_size)
         if not obs.batch_size:
             return False
@@ -823,6 +825,35 @@ class ValueNet(nn.Module):
         return x
 
 
+def compute_advantage(td: TensorDict):
+    state_values = td["state_value"].view(-1)
+
+    # Get trajectory IDs and rewards
+    traj_ids = td["next", "traj_count"].view(-1)
+    rewards = td["next", "reward"].view(-1)
+
+    # Sum the rewards along each trajectory
+    # Add a td["returns"] key to the TensorDict with the cumulative reward at each step in the trajectory
+    cumulative_rewards = torch.zeros_like(rewards, dtype=torch.float32)
+    for traj in traj_ids.unique():
+        mask = traj_ids == traj
+        traj_rewards = rewards[mask]
+        # print(traj_rewards)
+        # Compute cumulative sum in reverse order so that each element
+        # contains the sum of rewards from that step to the end of the trajectory
+        traj_cum_rewards = torch.flip(
+            torch.cumsum(torch.flip(traj_rewards, dims=[0]), dim=0), dims=[0]
+        )
+        # print(traj_cum_rewards)
+        cumulative_rewards[mask] = traj_cum_rewards.to(torch.float32)
+
+    # print("Cumulative Rewards: ", cumulative_rewards.mean())
+    td["returns"] = cumulative_rewards
+    td["advantage"] = cumulative_rewards - state_values
+
+    return td
+
+
 if __name__ == "__main__":
     from torchrl.envs import ParallelEnv
     from torchrl.modules import ValueOperator
@@ -853,7 +884,6 @@ if __name__ == "__main__":
         in_keys=["logits"],
         out_keys=["action"],
         distribution_class=torch.distributions.Categorical,
-        default_interaction_type=tensordict.nn.InteractionType.RANDOM,
         cache_dist=True,
         return_log_prob=True,
     )
@@ -882,19 +912,15 @@ if __name__ == "__main__":
     # value_module = torch_geometric.compile(value_module, dynamic=False)
 
     collector = SyncDataCollector(
-        make_env,
-        policy_module,
-        frames_per_batch=frames_per_batch,
-        exploration_type=torchrl.envs.utils.ExplorationType.RANDOM,
+        make_env, policy_module, frames_per_batch=frames_per_batch
     )
-
     # collector = MultiSyncDataCollector(
     #     [make_env for _ in range(workers)],
     #     policy_module,
     #     frames_per_batch=frames_per_batch,
     # )
     replay_buffer = ReplayBuffer(
-        storage=LazyTensorStorage(max_size=1000),
+        storage=LazyTensorStorage(max_size=frames_per_batch),
         sampler=SamplerWithoutReplacement(),
     )
 
@@ -912,167 +938,161 @@ if __name__ == "__main__":
         loss_critic_type="l2",
     )
 
-    aim_run = aim.Run(experiment="debug-ppo-torchrl")
+    aim_run = aim.Run(experiment="debug-ppo-torchrl-manual")
 
-    optim = torch.optim.Adam(loss_module.parameters(), lr=2.5e-4)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    #     optim, T_max=frames_per_batch, eta_min=0
-    # )
+    # optim = torch.optim.Adam(loss_module.parameters(), lr=2.5e-4)
+    optim_policy = torch.optim.Adam(policy_module.parameters(), lr=2.5e-4)
+    optim_value = torch.optim.Adam(value_module.parameters(), lr=2.5e-4)
     logs = defaultdict(list)
+    epoch_idx = 0
 
-    epoch_idx = 0  # Global counter for tracking steps across iterations
-
-    for i, tensordict_data in enumerate(collector):
-        print("Optimization Step: ", i)
+    for i, samples in enumerate(collector):
+        print("Collection Step: ", i)
 
         with torch.no_grad():
-            # print(tensordict_data["next", "reward"].shape)
-            # print(tensordict_data["next", "done"].shape)
-            # print(tensordict_data)
-            advantage_module(tensordict_data)
+            samples = value_module(samples)
+            samples = compute_advantage(samples)
 
-        # print("Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"])
-        # tensordict_data = tensordict_data.reshape(-1)
-        # print(
-        #    "Reshaped Counts", tensordict_data["observation"]["nodes"]["tasks"]["count"]
-        # )
+        # print(samples.shape)
+        replay_buffer.extend(samples)
 
-        # print(tensordict_data["logits"].requires_grad)
-        # print(tensordict_data["action"].requires_grad)
-
-        # print(tensordict_data["value_target"])
-        # print(tensordict_data["next", "reward"][tensordict_data["next", "done"]])
-        # print(tensordict_data["state_value"])
-
-        # print(
-        #     "Reward / Cumulative Diff",
-        #     tensordict_data["advantage"].view(-1)
-        #     - (
-        #         tensordict_data["value_target"].view(-1)
-        #         - tensordict_data["state_value"].view(-1)
-        #     ),
-        # )
-        # print(
-        #     "Advantage Diff",
-        #     tensordict_data["advantage"]
-        #     - (tensordict_data["value_target"] - tensordict_data["state_value"]),
-        # )
-
-        # print(tensordict_data["advantage"])
-        # print(tensordict_data["state_value"])
-        # # print(tensordict_data["traj_count"])
-        # print(tensordict_data["next", "step_count"])
-        # print(tensordict_data["next", "done"])
-        # print(tensordict_data["done"])
-        # import sys
-
-        # sys.exit(0)
-
-        episode_reward = tensordict_data["next", "reward"].mean().item()
-
-        # Log mean reward per episode
-        aim_run.track(episode_reward, name="reward/episode_mean", step=i)
-        aim_run.track(
-            tensordict_data["next", "reward"].max().item(),
-            name="reward/episode_max",
-            step=epoch_idx,
-        )
-        aim_run.track(
-            tensordict_data["next", "reward"].min().item(),
-            name="reward/episode_min",
-            step=epoch_idx,
-        )
-
-        non_zero_rewards = tensordict_data["next", "reward"][
-            tensordict_data["next", "reward"] != 0
-        ]
-        if len(non_zero_rewards) > 0:
-            avg_non_zero_reward = non_zero_rewards.mean().item()
-            aim_run.track(
-                avg_non_zero_reward, name="reward/average_non_zero", step=epoch_idx
-            )
-            print("Average non-zero reward: ", avg_non_zero_reward)
+        # print(replay_buffer)
 
         for j in range(num_epochs):
-            print("Epoch: ", j)
-            aim_run.track(
-                tensordict_data["advantage"].mean().item(),
-                name="advantage/mean",
-                step=epoch_idx,
-            )
-            aim_run.track(
-                tensordict_data["advantage"].std().item(),
-                name="advantage/std",
-                step=epoch_idx,
-            )
-
-            data_view = tensordict_data.reshape(-1)
-            replay_buffer.extend(data_view)
             nbatches = frames_per_batch // subbatch_size
-
-            batch_loss_objective = 0
-            batch_loss_critic = 0
-            batch_loss_entropy = 0
-            batch_loss_total = 0
-            batch_grad_norm = 0
-
             for k in range(nbatches):
-                print("Batch: ", k)
-                subdata = replay_buffer.sample(subbatch_size)
-                optim.zero_grad()
-                loss_vals = loss_module(subdata)
-                loss_value = (
-                    loss_vals["loss_objective"]
-                    + loss_vals["loss_critic"]
-                    + loss_vals["loss_entropy"]
+                minibatch = replay_buffer.sample(subbatch_size)
+                eval_batch = minibatch.clone()
+
+                sample_logprob = minibatch["sample_log_prob"].clone().detach().view(-1)
+                sample_value = minibatch["state_value"].clone().detach().view(-1)
+                sample_advantage = minibatch["advantage"].clone().detach().view(-1)
+                sample_returns = minibatch["returns"].clone().detach().view(-1)
+
+                # Track return distribution metrics
+                aim_run.track(
+                    sample_returns.mean().item(), name="returns/mean", epoch=epoch_idx
+                )
+                aim_run.track(
+                    sample_returns.std().item(), name="returns/std", epoch=epoch_idx
+                )
+                aim_run.track(
+                    sample_returns.min().item(), name="returns/min", epoch=epoch_idx
+                )
+                aim_run.track(
+                    sample_returns.max().item(), name="returns/max", epoch=epoch_idx
                 )
 
-                loss_value.backward()
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    loss_module.parameters(), max_norm=0.5, norm_type=2
+                eval_batch = policy_module.forward(eval_batch)
+                eval_batch = value_module.forward(eval_batch)
+
+                new_logprob = eval_batch["sample_log_prob"].view(-1)
+                new_value = eval_batch["state_value"].view(-1)
+
+                probs = torch.distributions.Categorical(logits=eval_batch["logits"])
+                new_entropy = probs.entropy()
+
+                with torch.no_grad():
+                    print("Average Return:", sample_returns.mean())
+
+                # Policy Loss
+
+                logratio = new_logprob.view(-1) - sample_logprob.detach().view(-1)
+                ratio = logratio.exp()
+
+                # print("Sample Advantage: ", sample_advantage.shape)
+                # print("New logprob: ", new_logprob.shape)
+                # print("Logratio: ", logratio.shape)
+                # print("Ratio: ", ratio.shape)
+
+                # with torch.no_grad():
+                #     clipfracs += [((ratio - 1.0).abs() > 0.2).float().mean().item()]
+                policy_loss_1 = sample_advantage * ratio.view(-1)
+
+                policy_loss_2 = sample_advantage * torch.clamp(
+                    ratio.view(-1), 1 - 0.2, 1 + 0.2
                 )
-                optim.step()
-                optim.zero_grad()
+                policy_loss = torch.min(policy_loss_1, policy_loss_2).mean()
 
-                # Accumulate batch losses for logging
-                batch_loss_objective += loss_vals["loss_objective"].item()
-                batch_loss_critic += loss_vals["loss_critic"].item()
-                batch_loss_entropy += loss_vals["loss_entropy"].item()
-                batch_loss_total += loss_value.item()
-                batch_grad_norm += grad_norm.item()
+                # Value Loss
+                v_loss_unclipped = (new_value - sample_returns).pow(2)
+                v_clipped = sample_value + torch.clamp(
+                    new_value - sample_value, -0.2, 0.2
+                )
+                v_loss_clipped = (v_clipped - sample_returns).pow(2)
+                v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                v_loss = 0.5 * v_loss_max
 
-            aim_run.track(
-                batch_loss_objective / nbatches, name="loss/objective", step=epoch_idx
-            )
-            aim_run.track(
-                batch_loss_critic / nbatches, name="loss/critic", step=epoch_idx
-            )
-            aim_run.track(
-                batch_loss_entropy / nbatches, name="loss/entropy", step=epoch_idx
-            )
-            aim_run.track(
-                batch_loss_total / nbatches, name="loss/total", step=epoch_idx
-            )
-            aim_run.track(
-                batch_grad_norm / nbatches, name="gradients/norm", step=epoch_idx
-            )
+                # Entropy Loss
+                entropy_loss = new_entropy.mean()
 
-            # aim_run.track(
-            #     scheduler.get_last_lr()[0], name="learning_rate", step=epoch_idx
-            # )
+                loss = -1 * policy_loss + v_loss - 0.01 * entropy_loss
 
-            epoch_idx += 1
+                aim_run.track(
+                    policy_loss.item(), name="losses/policy_loss", epoch=epoch_idx
+                )
+                aim_run.track(v_loss.item(), name="losses/value_loss", epoch=epoch_idx)
+                aim_run.track(
+                    entropy_loss.item(), name="losses/entropy_loss", epoch=epoch_idx
+                )
+                aim_run.track(loss.item(), name="losses/total_loss", epoch=epoch_idx)
 
-        logs["reward"].append(episode_reward)
+                # Increment epoch counter for logging purposes
+                epoch_idx += 1
 
-        track_params_dists(policy_module, aim_run)
-        track_gradients_dists(policy_module, aim_run)
+                optim_policy.zero_grad()
+                optim_value.zero_grad()
+                loss.backward()
 
-        track_gradients_dists(value_module, aim_run)
-        track_params_dists(value_module, aim_run)
-        # scheduler.step()
-        aim_run.track(time.perf_counter() - t, name="time/total_seconds", step=i)
-        collector.update_policy_weights_()
+                nn.utils.clip_grad_norm_(policy_module.parameters(), 0.5)
+                nn.utils.clip_grad_norm_(value_module.parameters(), 0.5)
+
+                optim_policy.step()
+                optim_value.step()
+
+                total_norm = 0.0
+
+                # Track policy module gradients
+                # total_norm_policy = 0.0
+                # for name, param in policy_module.named_parameters():
+                #     if param.grad is not None:
+                #         param_norm = param.grad.data.norm(2).item()
+                #         total_norm_policy += param_norm**2
+                #         aim_run.track(
+                #             param_norm,
+                #             name=f"gradients_policy/{name}_norm",
+                #             epoch=epoch_idx,
+                #         )
+                # total_norm_policy = total_norm_policy**0.5
+                # aim_run.track(
+                #     total_norm_policy,
+                #     name="gradients_policy/total_norm",
+                #     epoch=epoch_idx,
+                # )
+
+                # # Track value module gradients
+                # total_norm_value = 0.0
+                # for name, param in value_module.named_parameters():
+                #     if param.grad is not None:
+                #         param_norm = param.grad.data.norm(2).item()
+                #         total_norm_value += param_norm**2
+                #         aim_run.track(
+                #             param_norm,
+                #             name=f"gradients_value/{name}_norm",
+                #             epoch=epoch_idx,
+                #         )
+                # total_norm_value = total_norm_value**0.5
+                # aim_run.track(
+                #     total_norm_value, name="gradients_value/total_norm", epoch=epoch_idx
+                # )
+
+                # # Use Aim's PyTorch tracking for detailed gradient distributions
+                # track_gradients_dists(policy_module, aim_run)
+                # track_gradients_dists(value_module, aim_run)
+                # track_params_dists(policy_module, aim_run)
+                # track_params_dists(value_module, aim_run)
+
+        # collector.update_policy_weights_()
 
     collector.shutdown()
     aim_run.close()
