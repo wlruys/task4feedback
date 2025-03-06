@@ -644,6 +644,8 @@ const TaskIDList &Scheduler::map_task(taskid_t task_id, Action &action) {
   devid_t chosen_device = action.device;
 
   SPDLOG_DEBUG("Mapping task {} to device {}", s.get_task_name(task_id), chosen_device);
+  // std::cout << "Mapping task " << s.get_task_name(task_id) << " to device " << chosen_device
+  //           << std::endl;
 
   assert(s.is_mappable(task_id));
   assert(s.is_compute_task(task_id));
@@ -696,6 +698,10 @@ void Scheduler::map_tasks_from_python(ActionList &action_list, EventManager &eve
   success_count = 0;
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
+
+  // std::cout << "Mapping tasks from python" << std::endl;
+  // std::cout << "Len action list" << action_list.size() << std::endl;
+  // std::cout << "Len top k tasks" << top_k_tasks.size() << std::endl;
 
   if (!action_list.empty()) {
     TaskIDList nmt;

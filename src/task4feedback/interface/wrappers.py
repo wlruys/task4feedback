@@ -749,20 +749,13 @@ def observation_to_heterodata_truncate(
     hetero_data = HeteroData()
 
     for node_type, node_data in observation["nodes"].items():
-        # print("Index: ", idx)
-        # print("Node type: ", node_type)
-        # print("Node Data", node_data)
-
-        # print("Internals:")
-        # print(node_data["count"].shape, node_data["count"])
-        # print(node_data["attr"].shape)
-        # print(node_data["glb"].shape)
-        # print(node_data["attr"][:count].shape)
-        hetero_data[f"{node_type}"].x = node_data["attr"][: node_data["count"]]
+        count = node_data["count"][0]
+        print(count)
+        hetero_data[f"{node_type}"].x = node_data["attr"][:count]
 
     for edge_key, edge_data in observation["edges"].items():
         target, source = edge_key.split("_")
-        count = edge_data["count"]
+        count = edge_data["count"][0]
         hetero_data[target, "to", source].edge_index = edge_data["idx"][:, :count]
         hetero_data[target, "to", source].edge_attr = edge_data["attr"][:count]
 
@@ -997,7 +990,8 @@ class ExternalObserver:
             return TensorDict(
                 {
                     "idx": torch.zeros((n), dtype=torch.int64),
-                    "count": torch.tensor([0], dtype=torch.int64),
+                    "count": torch.zeros((1), dtype=torch.int64),
+                    # "count": torch.tensor([0], dtype=torch.int64),
                 }
             )
 
@@ -1107,7 +1101,7 @@ class ExternalObserver:
             output["edges"]["tasks_data"]["idx"],
             output["edges"]["tasks_data"]["glb"],
         )
-        output["edges"]["tasks_data"]["count"] = count
+        output["edges"]["tasks_data"]["count"][0] = count
 
         self.get_task_data_features(
             output["edges"]["tasks_data"]["glb"][:, :count],
@@ -1163,7 +1157,7 @@ class ExternalObserver:
         self.task_device_observation(output)
 
         # Auxiliary observations
-        output["aux"]["time"] = self.simulator.get_current_time()
+        output["aux"]["time"][0] = self.simulator.get_current_time()
 
         return output
 
