@@ -16,9 +16,9 @@ from task4feedback.interface.wrappers import (
     observation_to_heterodata_truncate,
 )
 
-from task4feedback.interface.wrappers import (
-    observation_to_heterodata_truncate as observation_to_heterodata,
-)
+# from task4feedback.interface.wrappers import (
+#     observation_to_heterodata_truncate as observation_to_heterodata,
+# )
 from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
 from torchrl.envs.utils import make_composite_from_td
 from tensordict.nn import set_composite_lp_aggregate
@@ -48,6 +48,11 @@ import aim
 from aim.pytorch import track_gradients_dists, track_params_dists
 # start_logger()
 
+seed = 1
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.backends.cudnn.deterministic = True
 
 def layer_init(layer, a=0.01, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.kaiming_uniform_(layer.weight, a=a, nonlinearity="leaky_relu")
@@ -55,14 +60,13 @@ def layer_init(layer, a=0.01, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-def init_weights(model):
-    for m in model.modules():
-        if isinstance(m, nn.Linear) or isinstance(m, GATConv):
-            layer_init(m)
-        elif isinstance(m, nn.LayerNorm):
-            # Initialize LayerNorm weights and biases
-            nn.init.constant_(m.weight, 1.0)
-            nn.init.constant_(m.bias, 0.0)
+def init_weights(m):
+    """
+    Initializes LayerNorm layers.
+    """
+    if isinstance(m, nn.LayerNorm):
+        nn.init.constant_(m.weight, 1.0)
+        nn.init.constant_(m.bias, 0.0)
 
 
 def make_test_cholesky_graph():
@@ -173,8 +177,9 @@ class FastSimEnv(EnvBase):
             obs = self._reset()
             baseline_time = self._get_baseline()
             # print(f"Baseline time: {baseline_time}")
-            print(f"Simulator time: {time}")
+            
             reward[0] = 1 + (baseline_time - time) / baseline_time
+            print(f"Simulator time: {time}", f"Reward: {reward[0]}")
 
         out = obs
         out.set("reward", reward)
@@ -197,7 +202,7 @@ class FastSimEnv(EnvBase):
         return obs
 
     def _set_seed(self, seed: Optional[int] = None):
-        torch.manual_seed(seed)
+        pass
 
 
 def make_env():
@@ -277,6 +282,82 @@ class DatatoTaskLayer(nn.Module):
         data_fused_tasks = self.activation(data_fused_tasks)
         return data_fused_tasks
 
+
+class ExactOldHeteroGAT(nn.Module):
+    
+    def __init__(self, config: HeteroGATConfig):
+        super(ExactOldHeteroGAT, self).__init__()
+        self.gnn_tasks_data = GATConv(
+            (config.data_feature_dim, config.task_feature_dim),
+            config.hidden_channels,
+            heads=config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=config.task_data_edge_dim,
+            add_self_loops=False,
+        )
+        
+        self.gnn_tasks_tasks = GATConv(
+            (config.task_feature_dim, config.task_feature_dim),
+            config.hidden_channels,
+            heads=config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=config.task_task_edge_dim,
+            add_self_loops=False,
+        )
+        
+        self.gnn_tasks_devices = GATConv(
+            (config.device_feature_dim, config.task_feature_dim),
+            config.hidden_channels,
+            heads=config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=config.task_device_edge_dim,
+            add_self_loops=False,
+        )
+        
+        self.layer_norm1 = nn.LayerNorm(config.hidden_channels)
+        self.layer_norm2 = nn.LayerNorm(config.hidden_channels)
+        self.layer_norm3 = nn.LayerNorm(config.hidden_channels)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+        
+        
+    def forward(self, data):
+        
+        data_fused_tasks = self.gnn_tasks_data(
+            (data["data"].x, data["tasks"].x),
+            data["data", "to", "tasks"].edge_index,
+            data["data", "to", "tasks"].edge_attr,
+        )
+        
+        tasks_fused_tasks = self.gnn_tasks_tasks(
+            (data["tasks"].x, data["tasks"].x),
+            data["tasks", "to", "tasks"].edge_index,
+            data["tasks", "to", "tasks"].edge_attr,
+        )
+        
+        
+        devices_fused_tasks = self.gnn_tasks_devices(
+            (data["devices"].x, data["tasks"].x),
+            data["devices", "to", "tasks"].edge_index,
+            data["devices", "to", "tasks"].edge_attr,
+        )
+        
+        data_fused_tasks = self.layer_norm1(data_fused_tasks)
+        tasks_fused_tasks = self.layer_norm2(tasks_fused_tasks)
+        devices_fused_tasks = self.layer_norm3(devices_fused_tasks)
+        
+        data_fused_tasks = self.activation(data_fused_tasks)
+        tasks_fused_tasks = self.activation(tasks_fused_tasks)
+        devices_fused_tasks = self.activation(devices_fused_tasks)
+        
+        return torch.cat([data["tasks"].x, data_fused_tasks, tasks_fused_tasks, devices_fused_tasks], dim=-1)
+            
+        
 
 class DeprecatedHeteroGAT(nn.Module):
     def __init__(self, n_heads: int, config: HeteroGATConfig):
@@ -515,19 +596,15 @@ class OutputHead(nn.Module):
         super(OutputHead, self).__init__()
 
         self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
-        # self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.layer_norm1 = nn.LayerNorm(hidden_dim)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
         self.fc2 = layer_init(nn.Linear(hidden_dim, output_dim))
-        # self.fc2 = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
-        # print(x.shape)
         x = self.fc1(x)
         x = self.layer_norm1(x)
         x = self.activation(x)
         x = self.fc2(x)
-        # print(x.shape)
         return x
 
 
@@ -611,6 +688,53 @@ class DeprecatedDeviceAssignmentNet(nn.Module):
 
         return d_logits
 
+
+class OldTaskAssignmentNet(nn.Module):
+    
+    def __init__(self, config: HeteroGATConfig, n_devices: int):
+        super(OldTaskAssignmentNet, self).__init__()
+        self.config = config
+
+        self.hetero_gat = ExactOldHeteroGAT(config)
+        gat_output_dim = config.hidden_channels * 3 + config.task_feature_dim
+        self.actor_head = OutputHead(gat_output_dim, config.hidden_channels, n_devices)
+        self.critic_head = OutputHead(gat_output_dim, config.hidden_channels, 1)
+        
+    def _is_batch(self, obs: TensorDict) -> bool:
+        if not obs.batch_size:
+            return False
+        return True
+    
+    def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+        if not self._is_batch(obs):
+            _obs = observation_to_heterodata(obs)
+            return _obs
+        
+        _h_data = []
+        for i in range(obs.batch_size[0]):
+            _obs = observation_to_heterodata(obs[i])
+            _h_data.append(_obs)
+            
+        return Batch.from_data_list(_h_data)
+    
+    def forward(self, obs: TensorDict, batch=None):
+        data = self._convert_to_heterodata(obs)
+        is_batch = self._is_batch(obs)
+        task_embeddings = self.hetero_gat(data)
+        
+        task_batch = data["tasks"].batch if is_batch else None
+        
+        if task_batch is not None:
+            candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
+        else:
+            candidate_embedding = task_embeddings[0]
+            
+        d_logits = self.actor_head(candidate_embedding)
+        
+        v = self.critic_head(task_embeddings)
+        v = global_mean_pool(v, task_batch)
+        
+        return d_logits, v
 
 class DeprecatedValueNet(nn.Module):
     def __init__(self, config: HeteroGATConfig, n_devices: int):
@@ -890,12 +1014,15 @@ if __name__ == "__main__":
     penv = make_env()
 
     network_conf = HeteroGATConfig.from_observer(
-        penv.simulator.observer, hidden_channels=16, n_heads=1
+        penv.simulator.observer, hidden_channels=64, n_heads=2
     )
     action_spec = penv.action_spec
+    
+    h = OldTaskAssignmentNet(network_conf, n_devices=5)
+    h.apply(init_weights)
 
     _internal_policy_module = TensorDictModule(
-        DeprecatedActorCritic(network_conf, n_devices=5),
+        h,
         in_keys=["observation"],
         out_keys=["logits", "state_value"],
     )
@@ -1036,18 +1163,18 @@ if __name__ == "__main__":
                 policy_loss = torch.min(policy_loss_1, policy_loss_2).mean()
 
                 # Value Loss
-                v_loss_unclipped = (new_value - sample_returns).pow(2)
+                v_loss_unclipped = (new_value - sample_returns)**2
                 v_clipped = sample_value + torch.clamp(
                     new_value - sample_value, -0.2, 0.2
                 )
-                v_loss_clipped = (v_clipped - sample_returns).pow(2)
+                v_loss_clipped = (v_clipped - sample_returns)**2
                 v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped).mean()
                 v_loss = 0.5 * v_loss_max
 
                 # Entropy Loss
                 entropy_loss = new_entropy.mean()
 
-                loss = -1 * policy_loss - 0.01 * entropy_loss + v_loss * 0.5
+                loss = -1 * policy_loss - 0.001 * entropy_loss + v_loss * 0.5
 
                 aim_run.track(
                     policy_loss.item(), name="losses/policy_loss", epoch=epoch_idx

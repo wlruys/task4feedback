@@ -217,7 +217,17 @@ public:
     }
 
     auto count = min(max_tasks, visited.size());
+
+    // Always print the initial tasks first (remove them from visisted)
+    // Then fill the rest
+
     size_t i = 0;
+    for (auto task_id_64_bit : initial_tasks_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
+      visited.erase(task_id);
+      v(i) = task_id_64_bit;
+      i++;
+    }
 
     for (auto task : visited) {
       if (i >= count) {
@@ -291,7 +301,17 @@ public:
 
     auto count = min(max_tasks, visited.size());
 
+    // Always print the initial tasks first (remove them from visisted)
+    // Then fill the rest
+
     size_t i = 0;
+    for (auto task_id_64_bit : initial_tasks_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
+      visited.erase(task_id);
+      v(i) = task_id_64_bit;
+      i++;
+    }
+
     for (auto task : visited) {
       if (i >= count) {
         break;
@@ -369,7 +389,17 @@ public:
 
     auto count = min(max_tasks, visited.size());
 
+    // Always print the initial tasks first (remove them from visisted)
+    // Then fill the rest
+
     size_t i = 0;
+    for (auto task_id_64_bit : initial_tasks_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
+      visited.erase(task_id);
+      v(i) = task_id_64_bit;
+      i++;
+    }
+
     for (auto task : visited) {
       if (i >= count) {
         break;

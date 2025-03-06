@@ -705,10 +705,12 @@ class DefaultObserverFactory(ExternalObserverFactory):
         task_feature_factory = FeatureExtractorFactory()
         task_feature_factory.add(fastsim.InDegreeTaskFeature)
         task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        task_feature_factory.add(fastsim.TaskStateFeature)
         task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+        task_feature_factory.add(fastsim.EmptyTaskFeature, 1)
 
         data_feature_factory = FeatureExtractorFactory()
-        data_feature_factory.add(fastsim.DataSizeFeature)
+        #data_feature_factory.add(fastsim.DataSizeFeature)
         data_feature_factory.add(fastsim.DataMappedLocationsFeature)
 
         device_feature_factory = FeatureExtractorFactory()
@@ -749,8 +751,9 @@ def observation_to_heterodata_truncate(
 
     for node_type, node_data in observation["nodes"].items():
         count = node_data["count"][0]
-        #print(count)
         hetero_data[f"{node_type}"].x = node_data["attr"][:count]
+        #print(f"{node_type} count: {count}")
+        #print(f"{node_type} attr: {node_data['attr'][:count]}")
 
     for edge_key, edge_data in observation["edges"].items():
         target, source = edge_key.split("_")
@@ -1054,6 +1057,9 @@ class ExternalObserver:
         self.get_task_features(
             output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
         )
+        #print("Candidates: ", task_ids)
+        #print(output["nodes"]["tasks"]["glb"][:count])
+        
 
     def data_observation(self, output: TensorDict):
         ntasks = output["nodes"]["tasks"]["count"][0]
