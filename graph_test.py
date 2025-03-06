@@ -55,14 +55,13 @@ def layer_init(layer, a=0.01, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-def init_weights(model):
-    for m in model.modules():
-        if isinstance(m, nn.Linear) or isinstance(m, GATConv):
-            layer_init(m)
-        elif isinstance(m, nn.LayerNorm):
-            # Initialize LayerNorm weights and biases
-            nn.init.constant_(m.weight, 1.0)
-            nn.init.constant_(m.bias, 0.0)
+def init_weights(m):
+    """
+    Initializes LayerNorm layers.
+    """
+    if isinstance(m, nn.LayerNorm):
+        nn.init.constant_(m.weight, 1.0)
+        nn.init.constant_(m.bias, 0.0)
 
 
 def make_test_cholesky_graph():
@@ -842,9 +841,11 @@ if __name__ == "__main__":
         penv.simulator.observer, hidden_channels=64, n_heads=2
     )
     action_spec = penv.action_spec
+    h = DeprecatedDeviceAssignmentNet(network_conf, n_devices=5)
+    h.apply(init_weights)
 
     _internal_policy_module = TensorDictModule(
-        DeprecatedDeviceAssignmentNet(network_conf, n_devices=5),
+        h,
         in_keys=["observation"],
         out_keys=["logits"],
     )
@@ -854,7 +855,6 @@ if __name__ == "__main__":
         in_keys=["logits"],
         out_keys=["action"],
         distribution_class=torch.distributions.Categorical,
-        default_interaction_type=tensordict.nn.InteractionType.RANDOM,
         cache_dist=True,
         return_log_prob=True,
     )
@@ -886,7 +886,6 @@ if __name__ == "__main__":
         make_env,
         policy_module,
         frames_per_batch=frames_per_batch,
-        exploration_type=torchrl.envs.utils.ExplorationType.RANDOM,
     )
 
     # collector = MultiSyncDataCollector(

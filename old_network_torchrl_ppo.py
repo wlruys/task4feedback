@@ -27,7 +27,7 @@ from tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
 import torch.nn as nn
 from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GATConv, global_mean_pool, HeteroConv
+from torch_geometric.nn import GATConv, global_mean_pool, global_add_pool, HeteroConv
 from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
@@ -688,6 +688,101 @@ class DeprecatedDeviceAssignmentNet(nn.Module):
         return d_logits
 
 
+class OldNetActor(nn.Module):
+    def __init__(self, config: HeteroGATConfig, n_devices: int):
+        super(OldNetActor, self).__init__()
+        self.config = config
+
+        self.hetero_gat = ExactOldHeteroGAT(config)
+
+        self.actor_head = OutputHead(
+            config.hidden_channels * 3 + config.task_feature_dim,
+            config.hidden_channels,
+            n_devices,
+        )
+
+    def _is_batch(self, obs: TensorDict) -> bool:
+        # print("Batch size: ", obs.batch_size)
+        if not obs.batch_size:
+            return False
+        return True
+
+    def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+        if not self._is_batch(obs):
+            _obs = observation_to_heterodata(obs)
+            return _obs
+
+        _h_data = []
+        for i in range(obs.batch_size[0]):
+            _obs = observation_to_heterodata(obs[i], idx=i)
+            _h_data.append(_obs)
+
+        return Batch.from_data_list(_h_data)
+
+    def forward(self, obs):
+        data = self._convert_to_heterodata(obs)
+        is_batch = self._is_batch(obs)
+
+        task_embeddings = self.hetero_gat(data)
+
+        task_ptr = data["tasks"].ptr if is_batch else None
+
+        if task_ptr is not None:
+            candidate_embedding = task_embeddings[task_ptr[:-1]]
+        else:
+            candidate_embedding = task_embeddings[0]
+
+        d_logits = self.actor_head(candidate_embedding)
+        return d_logits
+
+
+class OldNetCritic(nn.Module):
+    def __init__(self, config: HeteroGATConfig, n_devices: int):
+        super(OldNetCritic, self).__init__()
+        self.config = config
+
+        self.hetero_gat = ExactOldHeteroGAT(config)
+
+        self.critic_head = OutputHead(
+            config.hidden_channels * 3 + config.task_feature_dim,
+            config.hidden_channels,
+            1,
+        )
+
+    def _is_batch(self, obs: TensorDict) -> bool:
+        if not obs.batch_size:
+            return False
+        return True
+
+    def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+        if not self._is_batch(obs):
+            _obs = observation_to_heterodata(obs)
+            return _obs
+
+        _h_data = []
+        for i in range(obs.batch_size[0]):
+            _obs = observation_to_heterodata(obs[i], idx=i)
+            _h_data.append(_obs)
+
+        return Batch.from_data_list(_h_data)
+
+    def forward(self, obs):
+        data = self._convert_to_heterodata(obs)
+        is_batch = self._is_batch(obs)
+        task_embeddings = self.hetero_gat(data)
+
+        task_batch = data["tasks"].batch if is_batch else None
+        # print("Input: Task Embedding Shape: ", task_embeddings.shape)
+
+        v = self.critic_head(task_embeddings)
+        task_counts = obs["nodes"]["tasks"]["count"]
+        v = global_add_pool(v, task_batch)
+        v = torch.div(v, task_counts)
+        # print("V Shape", v.shape)
+        v.batch_size = [len(task_counts)]
+        return v
+
+
 class OldTaskAssignmentNet(nn.Module):
     def __init__(self, config: HeteroGATConfig, n_devices: int):
         super(OldTaskAssignmentNet, self).__init__()
@@ -895,34 +990,16 @@ class ValueNet(nn.Module):
         )
 
     def _is_batch(self, obs: TensorDict) -> bool:
-        # print("Batch size: ", obs.batch_size)
         if not obs.batch_size:
             return False
         return True
 
-    # def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
-    #     if not self._is_batch(obs):
-    #         _obs = observation_to_heterodata(obs)
-    #         return _obs
-
-    #     _h_data = []
-    #     for i in range(obs.batch_size[0]):
-    #         _obs = observation_to_heterodata(obs[i])
-    #         _h_data.append(_obs)
-
-    #     return Batch.from_data_list(_h_data)
-
     def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
-        # print("INPUT TENSOR SHAPE", obs.shape)
-        # print("Counts", obs["nodes"]["tasks"]["count"])
         if not self._is_batch(obs):
-            # print("NOT BATCH")
             _obs = observation_to_heterodata(obs)
             return _obs
 
         _h_data = []
-        # print("BATCH", obs.batch_size[0])
-        # print("SHAPE", obs["nodes"]["tasks"]["count"].shape)
         for i in range(obs.batch_size[0]):
             _obs = observation_to_heterodata(obs[i], idx=i)
             _h_data.append(_obs)
@@ -985,7 +1062,7 @@ def compute_advantage(td: TensorDict):
         cumulative_rewards[mask] = traj_cum_rewards.to(torch.float32)
 
     # print("Cumulative Rewards: ", cumulative_rewards.mean())
-    td["returns"] = cumulative_rewards
+    td["value_target"] = cumulative_rewards
     td["advantage"] = cumulative_rewards - state_values
 
     return td
@@ -998,7 +1075,12 @@ def logits_to_action(logits: torch.Tensor, action):
 
 if __name__ == "__main__":
     from torchrl.envs import ParallelEnv
-    from torchrl.modules import ValueOperator
+    from torchrl.modules import (
+        ValueOperator,
+        ActorValueOperator,
+        ActorCriticWrapper,
+        ProbabilisticActor,
+    )
 
     t = time.perf_counter()
     workers = 8
@@ -1014,19 +1096,22 @@ if __name__ == "__main__":
     network_conf = HeteroGATConfig.from_observer(
         penv.simulator.observer, hidden_channels=64, n_heads=2
     )
-    action_spec = penv.action_spec
 
-    h = OldTaskAssignmentNet(network_conf, n_devices=5)
-    h.apply(init_weights)
-
-    _internal_policy_module = TensorDictModule(
-        h,
+    module_action = TensorDictModule(
+        module=OldNetActor(network_conf, n_devices=5),
         in_keys=["observation"],
-        out_keys=["logits", "state_value"],
+        out_keys=["logits"],
     )
 
-    policy_module = ProbabilisticActor(
-        module=_internal_policy_module,
+    td_module_value = ValueOperator(
+        module=OldNetCritic(network_conf, n_devices=5),
+        in_keys=["observation"],
+    )
+
+    action_spec = penv.action_spec
+
+    td_module_action = ProbabilisticActor(
+        module=module_action,
         in_keys=["logits"],
         out_keys=["action"],
         distribution_class=torch.distributions.Categorical,
@@ -1034,21 +1119,22 @@ if __name__ == "__main__":
         return_log_prob=True,
     )
 
-    # value_module = ValueOperator(
-    #     module=DeprecatedValueNet(network_conf, n_devices=5),
-    #     in_keys=["observation"],
-    # )
+    td_module = ActorCriticWrapper(
+        td_module_action,
+        td_module_value,
+    )
 
-    # _internal_policy_module = torch_geometric.compile(
-    #     _internal_policy_module, dynamic=False
-    # )
+    advantage_module = GAE(
+        gamma=1,
+        lmbda=1,
+        value_network=td_module.get_value_operator(),
+        average_gae=False,
+    )
 
     def count_parameters(model):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print(
-        f"Number of trainable parameters: {count_parameters(_internal_policy_module)}"
-    )
+    print(f"Number of trainable parameters: {count_parameters(td_module)}")
 
     frames_per_batch = 1000
     subbatch_size = 250
@@ -1056,185 +1142,115 @@ if __name__ == "__main__":
 
     # policy_module = torch_geometric.compile(policy_module, dynamic=False)
     # value_module = torch_geometric.compile(value_module, dynamic=False)
-    policy_module = policy_module.to("cpu")
-    # policy_module = torch.compile(policy_module, dynamic=True)
 
     collector = SyncDataCollector(
         make_env,
-        policy_module,
+        td_module.get_policy_operator(),
         frames_per_batch=frames_per_batch,
         reset_at_each_iter=True,
         use_buffers=False,
-    )
-    replay_buffer = ReplayBuffer(
-        storage=LazyTensorStorage(max_size=frames_per_batch),
-        sampler=SamplerWithoutReplacement(),
     )
 
     # collector = MultiSyncDataCollector(
     #     [make_env for _ in range(workers)],
     #     policy_module,
     #     frames_per_batch=frames_per_batch,
-    #     reset_at_each_iter=True,
-    #     cat_results=0,
-    #     device="cpu",
     # )
+    replay_buffer = ReplayBuffer(
+        storage=LazyTensorStorage(max_size=frames_per_batch),
+        sampler=SamplerWithoutReplacement(),
+    )
 
-    aim_run = aim.Run(experiment="debug-ppo-torchrl-manual")
+    loss_module = ClipPPOLoss(
+        actor_network=td_module.get_policy_operator(),
+        critic_network=td_module.get_value_operator(),
+        clip_epsilon=0.2,
+        entropy_bonus=True,
+        entropy_coef=0.001,
+        critic_coef=0.5,
+        loss_critic_type="l2",
+    )
 
-    optim = torch.optim.Adam(policy_module.parameters(), lr=2.5e-4)
+    aim_run = aim.Run(experiment="debug-ppo-torchrl-old-network")
+
+    optim = torch.optim.Adam(loss_module.parameters(), lr=2.5e-4)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     optim, T_max=frames_per_batch, eta_min=0
+    # )
     logs = defaultdict(list)
-    epoch_idx = 0
 
-    for i, samples in enumerate(collector):
-        print("Collection Step: ", i)
-        # samples = samples.view(-1)
-        # samples = samples.reshape(-1)
+    epoch_idx = 0  # Global counter for tracking steps across iterations
 
-        # print(samples.shape)
+    for i, tensordict_data in enumerate(collector):
+        print("Optimization Step: ", i)
 
         with torch.no_grad():
-            # print("Samples: ", samples.view(-1))
-            samples = compute_advantage(samples)
-            # advantage_module(samples)
+            # tensordict_data = compute_advantage(tensordict_data)
+            advantage_module(tensordict_data)
 
-        # print(samples.shape)
-        replay_buffer.extend(samples.reshape(-1))
+        episode_reward = tensordict_data["next", "reward"].mean().item()
 
-        # print(replay_buffer)
+        non_zero_rewards = tensordict_data["next", "reward"][
+            tensordict_data["next", "reward"] != 0
+        ]
+        if len(non_zero_rewards) > 0:
+            avg_non_zero_reward = non_zero_rewards.mean().item()
+            aim_run.track(
+                avg_non_zero_reward, name="reward/average_non_zero", step=epoch_idx
+            )
+            print("Average non-zero reward: ", avg_non_zero_reward)
+
+        replay_buffer.extend(tensordict_data.reshape(-1))
 
         for j in range(num_epochs):
+            print("Epoch: ", j)
+
             nbatches = frames_per_batch // subbatch_size
+
+            batch_loss_objective = 0
+            batch_loss_critic = 0
+            batch_loss_entropy = 0
+            batch_loss_total = 0
+            batch_grad_norm = 0
+
             for k in range(nbatches):
-                minibatch = replay_buffer.sample(subbatch_size)
-                # print("Minibatch: ", minibatch.shape)
-                eval_batch = minibatch.clone()
+                # print("Batch: ", k)
+                subdata = replay_buffer.sample(subbatch_size)
 
-                sample_logprob = minibatch["sample_log_prob"].detach().view(-1)
-                sample_value = minibatch["state_value"].detach().view(-1)
-                sample_advantage = minibatch["advantage"].detach().view(-1)
-                sample_returns = minibatch["returns"].detach().view(-1)
-                sample_action = minibatch["action"].detach().view(-1)
+                # print(subdata)
 
-                # Track return distribution metrics
-                aim_run.track(
-                    sample_returns.mean().item(), name="returns/mean", epoch=epoch_idx
+                loss_vals = loss_module(subdata)
+                loss_value = (
+                    loss_vals["loss_objective"]
+                    + loss_vals["loss_critic"]
+                    + loss_vals["loss_entropy"]
                 )
-                aim_run.track(
-                    sample_returns.std().item(), name="returns/std", epoch=epoch_idx
-                )
-                aim_run.track(
-                    sample_returns.min().item(), name="returns/min", epoch=epoch_idx
-                )
-                aim_run.track(
-                    sample_returns.max().item(), name="returns/max", epoch=epoch_idx
-                )
-
-                eval_batch = policy_module.forward(eval_batch)
-
-                new_logprob, new_entropy = logits_to_action(
-                    eval_batch["logits"], sample_action
-                )
-                new_logprob = new_logprob.view(-1)
-                new_entropy = new_entropy.view(-1)
-
-                new_value = eval_batch["state_value"].view(-1)
-
-                with torch.no_grad():
-                    print("Average Return:", sample_returns.mean())
-
-                # Policy Loss
-
-                logratio = new_logprob.view(-1) - sample_logprob.detach().view(-1)
-                ratio = logratio.exp().view(-1)
-
-                # print("Advantage: ", sample_advantage[0].item())
-
-                # print("Sample Advantage: ", sample_advantage.shape)
-                # print("New logprob: ", new_logprob.shape)
-                # print("Logratio: ", logratio.shape)
-                # print("Ratio: ", ratio.shape)
-
-                # with torch.no_grad():
-                #     clipfracs += [((ratio - 1.0).abs() > 0.2).float().mean().item()]
-                policy_loss_1 = sample_advantage * ratio.view(-1)
-
-                policy_loss_2 = sample_advantage * torch.clamp(ratio, 1 - 0.2, 1 + 0.2)
-                policy_loss = torch.min(policy_loss_1, policy_loss_2).mean()
-
-                # Value Loss
-                v_loss_unclipped = (new_value - sample_returns) ** 2
-                v_clipped = sample_value + torch.clamp(
-                    new_value - sample_value, -0.2, 0.2
-                )
-                v_loss_clipped = (v_clipped - sample_returns) ** 2
-                v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped).mean()
-                v_loss = 0.5 * v_loss_max
-
-                # Entropy Loss
-                entropy_loss = new_entropy.mean()
-
-                loss = -1 * policy_loss - 0.001 * entropy_loss + v_loss * 0.5
-
-                aim_run.track(
-                    policy_loss.item(), name="losses/policy_loss", epoch=epoch_idx
-                )
-                aim_run.track(v_loss.item(), name="losses/value_loss", epoch=epoch_idx)
-                aim_run.track(
-                    entropy_loss.item(), name="losses/entropy_loss", epoch=epoch_idx
-                )
-                # aim_run.track(loss.item(), name="losses/total_loss", epoch=epoch_idx)
-
-                # Increment epoch counter for logging purposes
-                epoch_idx += 1
 
                 optim.zero_grad()
-                loss.backward()
-
-                nn.utils.clip_grad_norm_(policy_module.parameters(), 0.5)
-
+                loss_value.backward()
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    loss_module.parameters(), max_norm=0.5
+                )
                 optim.step()
 
-                # total_norm = 0.0
-                # Track policy module gradients
-                # total_norm_policy = 0.0
-                # for name, param in policy_module.named_parameters():
-                #     if param.grad is not None:
-                #         param_norm = param.grad.data.norm(2).item()
-                #         total_norm_policy += param_norm**2
-                #         aim_run.track(
-                #             param_norm,
-                #             name=f"gradients_policy/{name}_norm",
-                #             epoch=epoch_idx,
-                #         )
-                # total_norm_policy = total_norm_policy**0.5
-                # aim_run.track(
-                #     total_norm_policy,
-                #     name="gradients_policy/total_norm",
-                #     epoch=epoch_idx,
-                # )
+                # Accumulate batch losses for logging
+                batch_loss_objective += loss_vals["loss_objective"].item()
+                batch_loss_critic += loss_vals["loss_critic"].item()
+                batch_loss_entropy += loss_vals["loss_entropy"].item()
+                batch_loss_total += loss_value.item()
+                batch_grad_norm += grad_norm.item()
 
-                # # Track value module gradients
-                # total_norm_value = 0.0
-                # for name, param in value_module.named_parameters():
-                #     if param.grad is not None:
-                #         param_norm = param.grad.data.norm(2).item()
-                #         total_norm_value += param_norm**2
-                #         aim_run.track(
-                #             param_norm,
-                #             name=f"gradients_value/{name}_norm",
-                #             epoch=epoch_idx,
-                #         )
-                # total_norm_value = total_norm_value**0.5
-                # aim_run.track(
-                #     total_norm_value, name="gradients_value/total_norm", epoch=epoch_idx
-                # )
+            aim_run.track(
+                batch_loss_objective / nbatches, name="loss/objective", step=epoch_idx
+            )
+            aim_run.track(
+                batch_loss_critic / nbatches, name="loss/critic", step=epoch_idx
+            )
+            aim_run.track(
+                batch_loss_entropy / nbatches, name="loss/entropy", step=epoch_idx
+            )
 
-                # # Use Aim's PyTorch tracking for detailed gradient distributions
-                # track_gradients_dists(policy_module, aim_run)
-                # track_gradients_dists(value_module, aim_run)
-                # track_params_dists(policy_module, aim_run)
-                # track_params_dists(value_module, aim_run)
+            epoch_idx += 1
 
     collector.shutdown()
     aim_run.close()
