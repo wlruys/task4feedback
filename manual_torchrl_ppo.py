@@ -197,7 +197,7 @@ class FastSimEnv(EnvBase):
         return obs
 
     def _set_seed(self, seed: Optional[int] = None):
-        pass
+        torch.manual_seed(seed)
 
 
 def make_env():
@@ -823,13 +823,29 @@ class ValueNet(nn.Module):
 
         x = self.output_head(global_embedding)
         return x
+    
+    
+class DeprecatedActorCritic(nn.Module):
+    
+    def __init__(self, config: HeteroGATConfig, n_devices: int = 5):
+        super(DeprecatedActorCritic, self).__init__()
+        
+        self.actor = DeprecatedDeviceAssignmentNet(config, n_devices)
+        self.critic = DeprecatedValueNet(config, n_devices)
+        
+    def forward(self, obs: TensorDict):
+        logits = self.actor(obs)
+        value = self.critic(obs)
+        return logits, value
 
 
 def compute_advantage(td: TensorDict):
+    #rint("TD: ", td)
     state_values = td["state_value"].view(-1)
+    
 
     # Get trajectory IDs and rewards
-    traj_ids = td["next", "traj_count"].view(-1)
+    traj_ids = td["collector", "traj_ids"].view(-1)
     rewards = td["next", "reward"].view(-1)
 
     # Sum the rewards along each trajectory
@@ -853,13 +869,18 @@ def compute_advantage(td: TensorDict):
 
     return td
 
+def logits_to_action(logits: torch.Tensor, action):
+    probs = torch.distributions.Categorical(logits=logits)
+    return probs.log_prob(action), probs.entropy()
+
 
 if __name__ == "__main__":
     from torchrl.envs import ParallelEnv
     from torchrl.modules import ValueOperator
 
     t = time.perf_counter()
-    workers = 4
+    workers = 8
+    torch.set_num_threads(8)
 
     # penv = ParallelEnv(
     #     workers,
@@ -869,14 +890,14 @@ if __name__ == "__main__":
     penv = make_env()
 
     network_conf = HeteroGATConfig.from_observer(
-        penv.simulator.observer, hidden_channels=64, n_heads=2
+        penv.simulator.observer, hidden_channels=16, n_heads=1
     )
     action_spec = penv.action_spec
 
     _internal_policy_module = TensorDictModule(
-        DeprecatedDeviceAssignmentNet(network_conf, n_devices=5),
+        DeprecatedActorCritic(network_conf, n_devices=5),
         in_keys=["observation"],
-        out_keys=["logits"],
+        out_keys=["logits", "state_value"],
     )
 
     policy_module = ProbabilisticActor(
@@ -888,10 +909,10 @@ if __name__ == "__main__":
         return_log_prob=True,
     )
 
-    value_module = ValueOperator(
-        module=DeprecatedValueNet(network_conf, n_devices=5),
-        in_keys=["observation"],
-    )
+    # value_module = ValueOperator(
+    #     module=DeprecatedValueNet(network_conf, n_devices=5),
+    #     in_keys=["observation"],
+    # )
 
     # _internal_policy_module = torch_geometric.compile(
     #     _internal_policy_module, dynamic=False
@@ -910,51 +931,48 @@ if __name__ == "__main__":
 
     # policy_module = torch_geometric.compile(policy_module, dynamic=False)
     # value_module = torch_geometric.compile(value_module, dynamic=False)
+    policy_module = policy_module.to("cpu")
+    #policy_module = torch.compile(policy_module, dynamic=True)
 
     collector = SyncDataCollector(
-        make_env, policy_module, frames_per_batch=frames_per_batch
+        make_env, policy_module, frames_per_batch=frames_per_batch, 
+        reset_at_each_iter=True,
+        use_buffers=False,
     )
-    # collector = MultiSyncDataCollector(
-    #     [make_env for _ in range(workers)],
-    #     policy_module,
-    #     frames_per_batch=frames_per_batch,
-    # )
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(max_size=frames_per_batch),
         sampler=SamplerWithoutReplacement(),
     )
 
-    advantage_module = GAE(
-        gamma=1, lmbda=1, value_network=value_module, average_gae=False
-    )
-
-    loss_module = ClipPPOLoss(
-        actor_network=policy_module,
-        critic_network=value_module,
-        clip_epsilon=0.2,
-        entropy_bonus=True,
-        entropy_coef=0.01,
-        critic_coef=0.5,
-        loss_critic_type="l2",
-    )
+    # collector = MultiSyncDataCollector(
+    #     [make_env for _ in range(workers)],
+    #     policy_module,
+    #     frames_per_batch=frames_per_batch,
+    #     reset_at_each_iter=True,
+    #     cat_results=0,
+    #     device="cpu",
+    # )
 
     aim_run = aim.Run(experiment="debug-ppo-torchrl-manual")
 
-    # optim = torch.optim.Adam(loss_module.parameters(), lr=2.5e-4)
-    optim_policy = torch.optim.Adam(policy_module.parameters(), lr=2.5e-4)
-    optim_value = torch.optim.Adam(value_module.parameters(), lr=2.5e-4)
+    optim = torch.optim.Adam(policy_module.parameters(), lr=2.5e-4)
     logs = defaultdict(list)
     epoch_idx = 0
 
     for i, samples in enumerate(collector):
         print("Collection Step: ", i)
+        #samples = samples.view(-1)
+        #samples = samples.reshape(-1)
+        
+        #print(samples.shape)
 
         with torch.no_grad():
-            samples = value_module(samples)
+            #print("Samples: ", samples.view(-1))
             samples = compute_advantage(samples)
+            # advantage_module(samples)
 
         # print(samples.shape)
-        replay_buffer.extend(samples)
+        replay_buffer.extend(samples.reshape(-1))
 
         # print(replay_buffer)
 
@@ -962,12 +980,14 @@ if __name__ == "__main__":
             nbatches = frames_per_batch // subbatch_size
             for k in range(nbatches):
                 minibatch = replay_buffer.sample(subbatch_size)
+                #print("Minibatch: ", minibatch.shape)
                 eval_batch = minibatch.clone()
 
-                sample_logprob = minibatch["sample_log_prob"].clone().detach().view(-1)
-                sample_value = minibatch["state_value"].clone().detach().view(-1)
-                sample_advantage = minibatch["advantage"].clone().detach().view(-1)
-                sample_returns = minibatch["returns"].clone().detach().view(-1)
+                sample_logprob = minibatch["sample_log_prob"].detach().view(-1)
+                sample_value = minibatch["state_value"].detach().view(-1)
+                sample_advantage = minibatch["advantage"].detach().view(-1)
+                sample_returns = minibatch["returns"].detach().view(-1)
+                sample_action = minibatch["action"].detach().view(-1)
 
                 # Track return distribution metrics
                 aim_run.track(
@@ -984,13 +1004,12 @@ if __name__ == "__main__":
                 )
 
                 eval_batch = policy_module.forward(eval_batch)
-                eval_batch = value_module.forward(eval_batch)
 
-                new_logprob = eval_batch["sample_log_prob"].view(-1)
+                new_logprob, new_entropy = logits_to_action(eval_batch["logits"], sample_action)
+                new_logprob = new_logprob.view(-1)
+                new_entropy = new_entropy.view(-1)
+                
                 new_value = eval_batch["state_value"].view(-1)
-
-                probs = torch.distributions.Categorical(logits=eval_batch["logits"])
-                new_entropy = probs.entropy()
 
                 with torch.no_grad():
                     print("Average Return:", sample_returns.mean())
@@ -998,7 +1017,9 @@ if __name__ == "__main__":
                 # Policy Loss
 
                 logratio = new_logprob.view(-1) - sample_logprob.detach().view(-1)
-                ratio = logratio.exp()
+                ratio = logratio.exp().view(-1)
+                
+                #print("Advantage: ", sample_advantage[0].item())
 
                 # print("Sample Advantage: ", sample_advantage.shape)
                 # print("New logprob: ", new_logprob.shape)
@@ -1010,7 +1031,7 @@ if __name__ == "__main__":
                 policy_loss_1 = sample_advantage * ratio.view(-1)
 
                 policy_loss_2 = sample_advantage * torch.clamp(
-                    ratio.view(-1), 1 - 0.2, 1 + 0.2
+                    ratio, 1 - 0.2, 1 + 0.2
                 )
                 policy_loss = torch.min(policy_loss_1, policy_loss_2).mean()
 
@@ -1026,7 +1047,7 @@ if __name__ == "__main__":
                 # Entropy Loss
                 entropy_loss = new_entropy.mean()
 
-                loss = -1 * policy_loss + v_loss - 0.01 * entropy_loss
+                loss = -1 * policy_loss - 0.01 * entropy_loss + v_loss * 0.5
 
                 aim_run.track(
                     policy_loss.item(), name="losses/policy_loss", epoch=epoch_idx
@@ -1035,23 +1056,19 @@ if __name__ == "__main__":
                 aim_run.track(
                     entropy_loss.item(), name="losses/entropy_loss", epoch=epoch_idx
                 )
-                aim_run.track(loss.item(), name="losses/total_loss", epoch=epoch_idx)
+                #aim_run.track(loss.item(), name="losses/total_loss", epoch=epoch_idx)
 
                 # Increment epoch counter for logging purposes
                 epoch_idx += 1
 
-                optim_policy.zero_grad()
-                optim_value.zero_grad()
+                optim.zero_grad()
                 loss.backward()
 
                 nn.utils.clip_grad_norm_(policy_module.parameters(), 0.5)
-                nn.utils.clip_grad_norm_(value_module.parameters(), 0.5)
 
-                optim_policy.step()
-                optim_value.step()
+                optim.step()
 
-                total_norm = 0.0
-
+                #total_norm = 0.0
                 # Track policy module gradients
                 # total_norm_policy = 0.0
                 # for name, param in policy_module.named_parameters():
@@ -1092,7 +1109,6 @@ if __name__ == "__main__":
                 # track_params_dists(policy_module, aim_run)
                 # track_params_dists(value_module, aim_run)
 
-        # collector.update_policy_weights_()
 
     collector.shutdown()
     aim_run.close()
