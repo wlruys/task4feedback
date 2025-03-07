@@ -113,7 +113,7 @@ if __name__ == "__main__":
         layer_config=layer_config,
         n_devices=5,
     )
-    # model = torch.compile(model, dynamic=False)
+    #model = torch.compile(model, dynamic=False)
 
-    config = PPOConfig()
-    run_ppo_cleanrl_no_rb(model, make_env, config)
+    config = PPOConfig(train_device="cuda")
+    run_ppo_torchrl(model, make_env, config)

@@ -465,6 +465,8 @@ class OldCombinedNet(nn.Module):
         self.critic_head = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
 
     def forward(self, data: HeteroData | Batch, counts=None):
+        if next(self.parameters()).is_cuda:
+            data = data.to("cuda")
         task_embeddings = self.hetero_gat(data)
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
 
@@ -506,6 +508,9 @@ class OldTaskAssignmentNet(nn.Module):
         )
 
     def forward(self, data: HeteroData | Batch, counts=None):
+        if next(self.parameters()).is_cuda:
+            data = data.to("cuda")
+        
         task_embeddings = self.hetero_gat(data)
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
 
@@ -537,6 +542,8 @@ class OldValueNet(nn.Module):
         self.critic_head = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
 
     def forward(self, data: HeteroData | Batch, counts=None):
+        if next(self.parameters()).is_cuda:
+            data = data.to("cuda")
         task_embeddings = self.hetero_gat(data)
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
 
@@ -566,6 +573,9 @@ class OldSeparateNet(nn.Module):
         self.critic = OldValueNet(feature_config, layer_config, n_devices)
 
     def forward(self, data: HeteroData | Batch, counts=None):
+        #check the device of data["tasks"].x
+        if next(self.actor.parameters()).is_cuda:
+            data = data.to("cuda")
         d_logits = self.actor(data, counts)
         v = self.critic(data, counts)
         return d_logits, v
