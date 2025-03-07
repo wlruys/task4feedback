@@ -37,11 +37,15 @@ class PPOConfig:
     ent_coef: float = 0.001
     val_coef: float = 0.5
     max_grad_norm: float = 0.5
+    threads_per_worker: int = 1
 
 
 def run_ppo_cleanrl_no_rb(
     actor_critic_base: nn.Module, make_env: Callable[[], EnvBase], config: PPOConfig
 ):
+    """
+    I don't know if this one works. Use the others for now.
+    """
     _actor_critic_td = HeteroDataWrapper(actor_critic_base)
 
     _actor_critic_module = TensorDictModule(
@@ -59,21 +63,21 @@ def run_ppo_cleanrl_no_rb(
         return_log_prob=True,
     )
 
-    collector = SyncDataCollector(
-        make_env,
-        actor_critic,
-        frames_per_batch=config.states_per_collection,
-        reset_at_each_iter=True,
-    )
-
-    # collector = MultiSyncDataCollector(
-    #     [make_env for _ in range(config.workers)],
+    # collector = SyncDataCollector(
+    #     make_env,
     #     actor_critic,
     #     frames_per_batch=config.states_per_collection,
     #     reset_at_each_iter=True,
-    #     cat_results=0,
-    #     # replay_buffer=replay_buffer,
     # )
+
+    collector = MultiSyncDataCollector(
+        [make_env for _ in range(config.workers)],
+        actor_critic,
+        frames_per_batch=config.states_per_collection,
+        reset_at_each_iter=True,
+        cat_results=0,
+        # replay_buffer=replay_buffer,
+    )
     out_seed = collector.set_seed(config.seed)
 
     optimizer = torch.optim.Adam(actor_critic_base.parameters(), lr=config.lr)
@@ -90,14 +94,13 @@ def run_ppo_cleanrl_no_rb(
             state[l]["sample_log_prob"] = td[l]["sample_log_prob"]
             state[l]["state_value"] = td[l]["state_value"]
             state[l]["advantage"] = td[l]["advantage"]
-            state[l]["returns"] = td[l]["returns"]
+            state[l]["value_target"] = td[l]["value_target"]
             state[l]["task_counts"] = td[l]["observation"]["nodes"]["tasks"]["count"]
 
         for j in range(config.num_epochs_per_collection):
             loader = DataLoader(state, batch_size=config.minibatch_size, shuffle=True)
 
             for j, batch in enumerate(loader):
-                # print(batch, batch["task_counts"])
                 new_logits, new_value = actor_critic_base(
                     batch, batch["task_counts"].unsqueeze(-1)
                 )
@@ -108,7 +111,7 @@ def run_ppo_cleanrl_no_rb(
                 sample_logprob = batch["sample_log_prob"].detach().view(-1)
                 sample_value = batch["state_value"].detach().view(-1)
                 sample_advantage = batch["advantage"].detach().view(-1)
-                sample_returns = batch["returns"].detach().view(-1)
+                sample_returns = batch["value_target"].detach().view(-1)
                 sample_action = batch["action"].detach().view(-1)
 
                 new_logprob, new_entropy = logits_to_action(new_logits, sample_action)
@@ -149,7 +152,7 @@ def run_ppo_cleanrl_no_rb(
                 optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(
-                    actor_critic_base.parameters(), config.max_grad_norm
+                    actor_critic.parameters(), config.max_grad_norm
                 )
                 optimizer.step()
         collector.update_policy_weights_()
@@ -200,6 +203,10 @@ def run_ppo_cleanrl(
         with torch.no_grad():
             td = compute_advantage(td)
 
+            td["record_state_value"] = td["state_value"].clone()
+            td["record_log_prob"] = td["sample_log_prob"].clone()
+            td["record_logits"] = td["logits"].clone()
+
         replay_buffer.extend(td.reshape(-1))
 
         for j in range(config.num_epochs_per_collection):
@@ -207,15 +214,14 @@ def run_ppo_cleanrl(
 
             for k in range(n_batches):
                 batch = replay_buffer.sample(config.minibatch_size)
-                eval_batch = batch.clone()
 
-                sample_logprob = batch["sample_log_prob"].detach().view(-1)
-                sample_value = batch["state_value"].detach().view(-1)
+                sample_logprob = batch["record_log_prob"].detach().view(-1)
+                sample_value = batch["record_state_value"].detach().view(-1)
                 sample_advantage = batch["advantage"].detach().view(-1)
-                sample_returns = batch["returns"].detach().view(-1)
+                sample_returns = batch["value_target"].detach().view(-1)
                 sample_action = batch["action"].detach().view(-1)
 
-                eval_batch = actor_critic.forward(eval_batch)
+                eval_batch = actor_critic(batch)
 
                 new_logprob, new_entropy = logits_to_action(
                     eval_batch["logits"], sample_action
@@ -262,6 +268,8 @@ def run_ppo_cleanrl(
                     actor_critic.parameters(), config.max_grad_norm
                 )
                 optimizer.step()
+        collector.update_policy_weights_()
+    collector.shutdown()
 
 
 def run_ppo_torchrl(
@@ -303,13 +311,6 @@ def run_ppo_torchrl(
         average_gae=False,
     )
 
-    # collector = SyncDataCollector(
-    #     make_env,
-    #     td_module_action,
-    #     frames_per_batch=config.states_per_collection,
-    #     reset_at_each_iter=True,
-    # )
-
     collector = MultiSyncDataCollector(
         [make_env for _ in range(config.workers)],
         td_module_action,
@@ -317,7 +318,7 @@ def run_ppo_torchrl(
         reset_at_each_iter=True,
         cat_results=0,
     )
-    collector.set_seed(config.seed)
+    out_seed = collector.set_seed(config.seed)
 
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(max_size=config.states_per_collection),
@@ -370,5 +371,6 @@ def run_ppo_torchrl(
                     loss_module.parameters(), max_norm=config.max_grad_norm
                 )
                 optimizer.step()
+        collector.update_policy_weights_()
 
     collector.shutdown()

@@ -107,13 +107,13 @@ if __name__ == "__main__":
     env = make_env()
 
     feature_config = FeatureDimConfig.from_observer(env.observer)
-    layer_config = LayerConfig(hidden_channels=16, n_heads=1)
-    model = OldCombinedNet(
+    layer_config = LayerConfig(hidden_channels=64, n_heads=2)
+    model = OldSeparateNet(
         feature_config=feature_config,
         layer_config=layer_config,
         n_devices=5,
     )
-    model = torch.compile(model, dynamic=False)
+    # model = torch.compile(model, dynamic=False)
 
     config = PPOConfig()
     run_ppo_cleanrl_no_rb(model, make_env, config)
