@@ -410,7 +410,7 @@ class CombineTwoLayer(nn.Module):
 
 class CombineThreeLayer(nn.Module):
     def __init__(self, x_shape, y_shape, z_shape, hidden_shape, output_shape):
-        super(CombineTwoLayer, self).__init__()
+        super(CombineThreeLayer, self).__init__()
         self.fc_x = layer_init(nn.Linear(x_shape, hidden_shape))
         self.fc_y = layer_init(nn.Linear(y_shape, hidden_shape))
         self.fc_z = layer_init(nn.Linear(z_shape, hidden_shape))
@@ -526,7 +526,7 @@ class OldValueNet(nn.Module):
         layer_config: LayerConfig,
         n_devices: int,
     ):
-        super(OldTaskAssignmentNet, self).__init__()
+        super(OldValueNet, self).__init__()
         self.feature_config = feature_config
         self.layer_config = layer_config
 
@@ -534,9 +534,7 @@ class OldValueNet(nn.Module):
         gat_output_dim = (
             layer_config.hidden_channels * 3 + feature_config.task_feature_dim
         )
-        self.actor_head = OutputHead(
-            gat_output_dim, layer_config.hidden_channels, n_devices
-        )
+        self.critic_head = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         task_embeddings = self.hetero_gat(data)

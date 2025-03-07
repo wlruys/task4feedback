@@ -27,7 +27,7 @@ from tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
 import torch.nn as nn
 from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GATConv, global_mean_pool, HeteroConv
+from torch_geometric.nn import GATConv, global_mean_pool, global_add_pool, HeteroConv
 from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
@@ -203,7 +203,7 @@ class FastSimEnv(EnvBase):
         return obs
 
     def _set_seed(self, seed: Optional[int] = None):
-        pass
+        torch.manual_seed(seed)
 
 
 def make_env():
@@ -493,12 +493,12 @@ class DataTaskBipartiteLayer(nn.Module):
 
         x_dict = self.data_task_conv(x_dict, edge_index_dict, edge_attr_dict)
 
-        x_dict = {node_type: self.activation(x) for node_type, x in x_dict.items()}
-        x_dict = {
-            "tasks": self.norm_tasks(x_dict["tasks"]),
-            "data": self.norm_data(x_dict["data"]),
-        }
-        x_dict = self.task_data_conv(x_dict, edge_index_dict, edge_attr_dict)
+        # x_dict = {node_type: self.activation(x) for node_type, x in x_dict.items()}
+        # x_dict = {
+        #    "tasks": self.norm_tasks(x_dict["tasks"]),
+        #    "data": self.norm_data(x_dict["data"]),
+        # }
+        # x_dict = self.task_data_conv(x_dict, edge_index_dict, edge_attr_dict)
 
         return x_dict
 
@@ -939,8 +939,11 @@ class ValueNet(nn.Module):
         task_batch = data["tasks"].batch if is_batch else None
         data_batch = data["data"].batch if is_batch else None
 
-        task_pool = global_mean_pool(task_embeddings, task_batch)
-        data_pool = global_mean_pool(data_task_embeddings["data"], data_batch)
+        task_pool = global_add_pool(task_embeddings, task_batch)
+        data_pool = global_add_pool(data_task_embeddings["data"], data_batch)
+
+        task_pool = torch.div(task_pool, obs["nodes"]["tasks"]["count"])
+        data_pool = torch.div(data_pool, obs["nodes"]["data"]["count"])
 
         global_embedding = self.combine_layer(task_pool, data_pool)
 
@@ -948,12 +951,12 @@ class ValueNet(nn.Module):
         return x
 
 
-class DeprecatedActorCritic(nn.Module):
+class ActorCritic(nn.Module):
     def __init__(self, config: HeteroGATConfig, n_devices: int = 5):
-        super(DeprecatedActorCritic, self).__init__()
+        super(ActorCritic, self).__init__()
 
-        self.actor = DeprecatedDeviceAssignmentNet(config, n_devices)
-        self.critic = DeprecatedValueNet(config, n_devices)
+        self.actor = DeviceAssignmentNet(config, n_devices)
+        self.critic = ValueNet(config, n_devices)
 
     def forward(self, obs: TensorDict):
         logits = self.actor(obs)
@@ -1002,7 +1005,7 @@ if __name__ == "__main__":
 
     t = time.perf_counter()
     workers = 8
-    torch.set_num_threads(8)
+    # torch.set_num_threads(8)
 
     # penv = ParallelEnv(
     #     workers,
@@ -1012,11 +1015,11 @@ if __name__ == "__main__":
     penv = make_env()
 
     network_conf = HeteroGATConfig.from_observer(
-        penv.simulator.observer, hidden_channels=64, n_heads=2
+        penv.simulator.observer, hidden_channels=16, n_heads=2
     )
     action_spec = penv.action_spec
 
-    h = OldTaskAssignmentNet(network_conf, n_devices=5)
+    h = ActorCritic(network_conf, n_devices=5)
     h.apply(init_weights)
 
     _internal_policy_module = TensorDictModule(
@@ -1059,26 +1062,28 @@ if __name__ == "__main__":
     policy_module = policy_module.to("cpu")
     # policy_module = torch.compile(policy_module, dynamic=True)
 
-    collector = SyncDataCollector(
-        make_env,
-        policy_module,
-        frames_per_batch=frames_per_batch,
-        reset_at_each_iter=True,
-        use_buffers=False,
-    )
+    # collector = SyncDataCollector(
+    #     make_env,
+    #     policy_module,
+    #     frames_per_batch=frames_per_batch,
+    #     reset_at_each_iter=True,
+    #     use_buffers=True,
+    # )
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(max_size=frames_per_batch),
         sampler=SamplerWithoutReplacement(),
     )
 
-    # collector = MultiSyncDataCollector(
-    #     [make_env for _ in range(workers)],
-    #     policy_module,
-    #     frames_per_batch=frames_per_batch,
-    #     reset_at_each_iter=True,
-    #     cat_results=0,
-    #     device="cpu",
-    # )
+    collector = MultiSyncDataCollector(
+        [make_env for _ in range(workers)],
+        policy_module,
+        frames_per_batch=frames_per_batch,
+        reset_at_each_iter=True,
+        cat_results=0,
+        device="cpu",
+    )
+    out_seed = collector.set_seed(1)
+    print(out_seed)
 
     aim_run = aim.Run(experiment="debug-ppo-torchrl-manual")
 

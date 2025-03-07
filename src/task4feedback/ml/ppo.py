@@ -9,7 +9,7 @@ from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torch_geometric.data import HeteroData, Batch
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
-from torchrl.modules import ProbabilisticActor
+from torchrl.modules import ProbabilisticActor, ValueOperator, ActorCriticWrapper
 import tensordict
 from tensordict.nn import (
     TensorDictModule,
@@ -34,7 +34,7 @@ class PPOConfig:
     seed: int = 0
     lr: float = 2.5e-4
     clip_eps: float = 0.2
-    ent_coef: float = 0.01
+    ent_coef: float = 0.001
     val_coef: float = 0.5
     max_grad_norm: float = 0.5
 
@@ -59,14 +59,21 @@ def run_ppo_cleanrl_no_rb(
         return_log_prob=True,
     )
 
-    collector = MultiSyncDataCollector(
-        [make_env for _ in range(config.workers)],
+    collector = SyncDataCollector(
+        make_env,
         actor_critic,
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
-        cat_results=0,
-        # replay_buffer=replay_buffer,
     )
+
+    # collector = MultiSyncDataCollector(
+    #     [make_env for _ in range(config.workers)],
+    #     actor_critic,
+    #     frames_per_batch=config.states_per_collection,
+    #     reset_at_each_iter=True,
+    #     cat_results=0,
+    #     # replay_buffer=replay_buffer,
+    # )
     out_seed = collector.set_seed(config.seed)
 
     optimizer = torch.optim.Adam(actor_critic_base.parameters(), lr=config.lr)
@@ -91,7 +98,7 @@ def run_ppo_cleanrl_no_rb(
 
             for j, batch in enumerate(loader):
                 # print(batch, batch["task_counts"])
-                new_logits, new_value = actor_critic_base.forward(
+                new_logits, new_value = actor_critic_base(
                     batch, batch["task_counts"].unsqueeze(-1)
                 )
 
@@ -188,6 +195,8 @@ def run_ppo_cleanrl(
     optimizer = torch.optim.Adam(actor_critic.parameters(), lr=config.lr)
 
     for i, td in enumerate(collector):
+        print(f"Collection: {i}")
+
         with torch.no_grad():
             td = compute_advantage(td)
 
@@ -255,18 +264,18 @@ def run_ppo_cleanrl(
                 optimizer.step()
 
 
-def ppo_torchrl(
+def run_ppo_torchrl(
     actor_critic_base: nn.Module, make_env: Callable[[], EnvBase], config: PPOConfig
 ):
-    # Implement version using torchrl built ins
+    # using torchrl built ins
 
-    # Set up the actor-critic modules
-    _actor_crtic_td = HeteroDataWrapper(actor_critic_base)
+    _actor_td = HeteroDataWrapper(actor_critic_base.actor)
+    _critic_td = HeteroDataWrapper(actor_critic_base.critic)
 
     module_action = TensorDictModule(
-        _actor_crtic_td,
+        _actor_td,
         in_keys=["observation"],
-        out_keys=["logits", "state_value"],
+        out_keys=["logits"],
     )
 
     td_module_action = ProbabilisticActor(
@@ -278,19 +287,29 @@ def ppo_torchrl(
         return_log_prob=True,
     )
 
-    # Set up the advantage module
+    td_critic_module = ValueOperator(
+        module=_critic_td,
+        in_keys=["observation"],
+    )
+
+    td_actor_critic_module = ActorCriticWrapper(
+        policy_operator=td_module_action, value_operator=td_critic_module
+    )
+
     advantage_module = GAE(
         gamma=1.0,
-        lmbda=0.95,
-        value_network=TensorDictModule(
-            lambda td: td["state_value"],
-            in_keys=["state_value"],
-            out_keys=["state_value"],
-        ),
+        lmbda=1.0,
+        value_network=td_critic_module,
         average_gae=False,
     )
 
-    # Set up collector
+    # collector = SyncDataCollector(
+    #     make_env,
+    #     td_module_action,
+    #     frames_per_batch=config.states_per_collection,
+    #     reset_at_each_iter=True,
+    # )
+
     collector = MultiSyncDataCollector(
         [make_env for _ in range(config.workers)],
         td_module_action,
@@ -300,20 +319,14 @@ def ppo_torchrl(
     )
     collector.set_seed(config.seed)
 
-    # Set up replay buffer
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(max_size=config.states_per_collection),
         sampler=SamplerWithoutReplacement(),
     )
 
-    # Set up loss module
     loss_module = ClipPPOLoss(
         actor_network=td_module_action,
-        critic_network=TensorDictModule(
-            lambda td: td["state_value"],
-            in_keys=["state_value"],
-            out_keys=["state_value"],
-        ),
+        critic_network=td_critic_module,
         clip_epsilon=config.clip_eps,
         entropy_bonus=True,
         entropy_coef=config.ent_coef,
@@ -321,57 +334,29 @@ def ppo_torchrl(
         loss_critic_type="l2",
     )
 
-    # Set up optimizer
-    optimizer = torch.optim.Adam(actor_critic_base.parameters(), lr=config.lr)
+    optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
-    # Set up logging
-    aim_run = aim.Run(experiment="ppo-torchrl")
-    track_params_dists(aim_run, actor_critic_base)
-
-    epoch_idx = 0
-
-    # Main training loop
     for i, tensordict_data in enumerate(collector):
         print(f"Collection: {i}")
 
-        # Compute advantages
         with torch.no_grad():
             advantage_module(tensordict_data)
 
-        # Track rewards
-        episode_reward = tensordict_data["next", "reward"].mean().item()
-        aim_run.track(episode_reward, name="reward/average", step=i)
-
-        # Log non-zero rewards
         non_zero_rewards = tensordict_data["next", "reward"][
             tensordict_data["next", "reward"] != 0
         ]
         if len(non_zero_rewards) > 0:
             avg_non_zero_reward = non_zero_rewards.mean().item()
-            aim_run.track(avg_non_zero_reward, name="reward/average_non_zero", step=i)
             print(f"Average non-zero reward: {avg_non_zero_reward}")
 
-        # Extend replay buffer
         replay_buffer.extend(tensordict_data.reshape(-1))
 
-        # Training epochs
         for j in range(config.num_epochs_per_collection):
-            print(f"Epoch: {j}")
-
-            # Calculate number of minibatches
             n_batches = config.states_per_collection // config.minibatch_size
 
-            batch_loss_objective = 0
-            batch_loss_critic = 0
-            batch_loss_entropy = 0
-            batch_loss_total = 0
-
-            # Update policy on minibatches
             for k in range(n_batches):
-                # Sample minibatch
                 subdata = replay_buffer.sample(config.minibatch_size)
 
-                # Compute losses
                 loss_vals = loss_module(subdata)
                 loss_value = (
                     loss_vals["loss_objective"]
@@ -379,39 +364,11 @@ def ppo_torchrl(
                     + loss_vals["loss_entropy"]
                 )
 
-                # Update parameters
                 optimizer.zero_grad()
                 loss_value.backward()
                 grad_norm = torch.nn.utils.clip_grad_norm_(
-                    actor_critic_base.parameters(), max_norm=config.max_grad_norm
+                    loss_module.parameters(), max_norm=config.max_grad_norm
                 )
                 optimizer.step()
 
-                # Track losses
-                batch_loss_objective += loss_vals["loss_objective"].item()
-                batch_loss_critic += loss_vals["loss_critic"].item()
-                batch_loss_entropy += loss_vals["loss_entropy"].item()
-                batch_loss_total += loss_value.item()
-
-            # Log average losses for this epoch
-            avg_loss_objective = batch_loss_objective / n_batches
-            avg_loss_critic = batch_loss_critic / n_batches
-            avg_loss_entropy = batch_loss_entropy / n_batches
-            avg_loss_total = batch_loss_total / n_batches
-
-            aim_run.track(avg_loss_objective, name="loss/objective", step=epoch_idx)
-            aim_run.track(avg_loss_critic, name="loss/critic", step=epoch_idx)
-            aim_run.track(avg_loss_entropy, name="loss/entropy", step=epoch_idx)
-            aim_run.track(avg_loss_total, name="loss/total", step=epoch_idx)
-
-            epoch_idx += 1
-
-        # Stop if we've reached the desired number of collections
-        if i >= config.num_collections - 1:
-            break
-
-    # Clean up
     collector.shutdown()
-    aim_run.close()
-
-    return actor_critic_base
