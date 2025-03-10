@@ -39,7 +39,7 @@ class Graph:
         self.ctasks = None
 
     def add_task(self, name, tag):
-        self.graph.add_task(name, tag)
+        return self.graph.add_task(name, tag)
 
     def get_task(self, task, convert=False):
         if convert and isinstance(task, str):
@@ -69,6 +69,9 @@ class Graph:
 
     def get_id(self, name):
         return self.graph.get_id(name)
+
+    def get_name(self, task):
+        return self.graph.get_name(task)
 
     def add_dependencies(self, task, dependencies, convert=False):
         if convert and isinstance(task, str):
@@ -135,9 +138,29 @@ class Graph:
         if verbose:
             print(f"..created {self.ctasks.data_size()} data tasks.")
 
+    def fill_data_flow_dependencies(self):
+        self.graph.fill_dependencies_from_data_usage()
+
     def get_c_tasks(self):
         assert self.ctasks is not None
         return self.ctasks
+
+    def __iter__(self):
+        for i in range(self.graph.size()):
+            yield self.get_task(i)
+
+    def to_networkx(self):
+        import networkx as nx
+
+        G = nx.DiGraph()
+
+        for task in self:
+            G.add_node(task.id, label=task.name)
+
+            for dep_id in task.dependencies:
+                G.add_edge(dep_id, task.id)
+
+        return G
 
     @staticmethod
     def create_from_legacy_graph(graph, datamap):
