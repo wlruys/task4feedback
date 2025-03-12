@@ -96,7 +96,7 @@ def create_mesh_plot(
 
 
 def shade_partitioning(
-    ax, points, cells, partition_vector, cmap=None, edgecolor="black", alpha=0.6
+    ax, points, cells, partition_vector, cmap=None, edgecolor="black", alpha=0.6, z_order=5
 ):
     """
     Shade each cell according to its partition membership.
@@ -123,7 +123,7 @@ def shade_partitioning(
     collection = PolyCollection(
         polys, facecolors=colors, edgecolors=edgecolor, alpha=alpha, zorder=5
     )
-    ax.add_collection(collection)
+    ax.add_collection(collection, z_order=z_order)
     return collection
 
 

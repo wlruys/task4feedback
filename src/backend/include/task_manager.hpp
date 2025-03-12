@@ -168,10 +168,9 @@ public:
   [[nodiscard]] timecount_t get_completed_time(taskid_t id) const;
   [[nodiscard]] TaskState get_state_at_time(taskid_t id, timecount_t time) const;
 
-  std::vector<timecount_t>& get_time_record() {
+  std::vector<timecount_t> &get_time_record() {
     return state_times;
   }
-
 };
 
 #define TASK_MANAGER_TASK_BUFFER_SIZE 10
@@ -190,7 +189,7 @@ public:
 
   bool initialized = false;
 
-  TaskManager(Tasks &tasks, TaskNoise &noise) : tasks(tasks), noise(noise) {};
+  TaskManager(Tasks &tasks, TaskNoise &noise) : tasks(tasks), noise(noise){};
   [[nodiscard]] std::size_t size() const {
     return tasks.get().size();
   }
@@ -199,7 +198,7 @@ public:
 
   void initialize(bool create_data_tasks = false) {
     task_buffer.reserve(TASK_MANAGER_TASK_BUFFER_SIZE);
-    //GraphManager::finalize(tasks, create_data_tasks);
+    // GraphManager::finalize(tasks, create_data_tasks);
     assert(tasks.is_initialized());
     initialize_state();
     initialized = true;
@@ -293,6 +292,14 @@ public:
   }
 
   void print_task(taskid_t id);
+
+  [[nodiscard]] bool is_data_task_virtual(taskid_t task_id) const {
+    return state.get_data_task_virtual(task_id);
+  }
+
+  [[nodiscard]] devid_t get_data_task_source(taskid_t task_id) const {
+    return state.get_data_task_source(task_id);
+  }
 
   friend class SchedulerState;
 };

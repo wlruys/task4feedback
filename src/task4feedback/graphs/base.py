@@ -1,5 +1,5 @@
 from .mesh.base import Geometry, Cell, Edge
-from ..interface import DataBlocks
+from ..interface import DataBlocks, Graph
 from dataclasses import dataclass, field
 from collections import defaultdict
 import networkx as nx
@@ -157,3 +157,16 @@ class DataGeometry:
 
     def get_blocks(self, object: Cell | Edge):
         return self.map.get_blocks(object)
+
+
+class ComputeDataGraph(Graph):
+    
+    def ___init__(self, data: DataGeometry):
+        super(ComputeDataGraph, self).__init__()
+        self.data = data
+
+    def get_blocks(self):
+        return self.data.blocks
+
+    def get_data_geometry(self):
+        return self.data
