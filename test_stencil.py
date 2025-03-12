@@ -23,6 +23,7 @@ torch.backends.cudnn.deterministic = True
 n_devices = 4  # including CPU
 task_duration = 1000
 bandwidth = 2000
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def make_simple_env(tasks, data):
@@ -33,7 +34,7 @@ def make_simple_env(tasks, data):
     spec = create_graph_spec(max_devices=n_devices)
     input = SimulatorInput(m, d, s)
     env = RuntimeEnv(
-        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+        SimulatorFactory(input, spec, DefaultObserverFactory), device=device
     )
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
@@ -87,5 +88,5 @@ if __name__ == "__main__":
         layer_config=layer_config,
         n_devices=n_devices,
     )
-    config = PPOConfig(train_device="cpu")
+    config = PPOConfig(train_device=device)
     run_ppo_torchrl(model, make_env, config)
