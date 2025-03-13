@@ -52,6 +52,8 @@ void init_scheduler_ext(nb::module_ &m) {
       .def("get_reserved_mem_events", &SchedulerState::get_reserved_mem_events, "device_id"_a)
       .def("get_launched_mem_events", &SchedulerState::get_launched_mem_events, "device_id"_a)
       .def("get_state_at", &SchedulerState::get_state_at, "task_id"_a, "time"_a)
+      .def("is_data_task_virtual", &SchedulerState::is_data_task_virtual, "task_id"_a)
+      .def("get_data_task_source", &SchedulerState::get_data_task_source, "task_id"_a)
       .def("get_valid_intervals_mapped", &SchedulerState::get_valid_intervals_mapped, "data_id"_a,
            "device_id"_a)
       .def("get_valid_intervals_reserved", &SchedulerState::get_valid_intervals_reserved,

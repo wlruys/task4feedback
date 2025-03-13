@@ -1,11 +1,12 @@
 from .mesh.base import Geometry, Cell, Edge
-from ..interface import DataBlocks
+from ..interface import DataBlocks, Graph
 from dataclasses import dataclass, field
 from collections import defaultdict
 import networkx as nx
 import gravis as gv
 import os
-
+from typing import List, Optional
+from ..import fastsim2 as fastsim 
 
 def spring_layout(G):
     pos = nx.spring_layout(G, seed=5, scale=600)
@@ -138,6 +139,9 @@ class GeometryIDMap:
     def get_blocks(self, object: Cell | Edge):
         return self.object_to_blocks[object]
 
+    def get_key(self, block_id: int):
+        return self.block_to_key[block_id]
+
 
 @dataclass
 class DataGeometry:
@@ -152,8 +156,90 @@ class DataGeometry:
     def get_object(self, block_id: int):
         return self.map.get_object(block_id)
 
+    def get_key(self, block_id: int):
+        return self.map.get_key(block_id)
+
     def get_block(self, key: DataKey):
         return self.map.get_block(key)
 
     def get_blocks(self, object: Cell | Edge):
         return self.map.get_blocks(object)
+
+
+class ComputeDataGraph(Graph):
+    def ___init__(self, data: DataGeometry):
+        super(ComputeDataGraph, self).__init__()
+        self.data = data
+
+    def get_blocks(self):
+        return self.data.blocks
+
+    def get_data_geometry(self):
+        return self.data
+
+
+@dataclass
+class EnvironmentState:
+    time: int
+    compute_tasks: List[fastsim.ComputeTask]
+    data_tasks: List[fastsim.DataTask]
+    compute_tasks_by_state: dict
+    data_tasks_by_state: dict
+    mapping_dict: dict
+    data_task_source_device: dict
+    data_task_virtual: dict
+    data_task_block: dict
+
+    def parse_state(env, time: Optional[int] = None):
+        if time is None:
+            time = env.simulator.time
+        graph = env.simulator_factory.input.graph
+        data = env.simulator_factory.input.data
+        sim = env.simulator
+        assert graph.ctasks is not None
+        compute_tasks = graph.ctasks.get_compute_tasks()
+        data_tasks = graph.ctasks.get_data_tasks()
+        simulator_state = sim.state
+
+        compute_tasks_by_state = defaultdict(lambda: list())
+        mapping_dict = {}
+
+        for task in compute_tasks:
+            # print(f"Supported arch: {task.supported_architectures}")
+            task_state = simulator_state.get_state_at(task.id, time)
+            compute_tasks_by_state[task_state].append(task.id)
+            device_id = simulator_state.get_mapping(task.id)
+            mapping_dict[task.id] = device_id
+
+        data_tasks_by_state = defaultdict(lambda: list())
+        data_task_source_device = {}
+        data_task_virtual = {}
+        data_task_block = {}
+        for task in data_tasks:
+            task_state = simulator_state.get_state_at(task.id, time)
+            data_tasks_by_state[task_state].append(task.id)
+            associated_compute_task_id = task.get_compute_task()
+            device_id = simulator_state.get_mapping(associated_compute_task_id)
+            source_device = simulator_state.get_data_task_source(task.id)
+            data_task_source_device[task.id] = source_device
+            is_virtual = simulator_state.is_data_task_virtual(task.id)
+            data_task_virtual[task.id] = is_virtual
+            mapping_dict[task.id] = device_id
+            data_task_block[task.id] = task.get_data_id()
+            # print(task.id, task_state, device_id, source_device, is_virtual)
+
+        return EnvironmentState(
+            time=time,
+            compute_tasks=compute_tasks,
+            data_tasks=data_tasks,
+            compute_tasks_by_state=compute_tasks_by_state,
+            data_tasks_by_state=data_tasks_by_state,
+            mapping_dict=mapping_dict,
+            data_task_source_device=data_task_source_device,
+            data_task_virtual=data_task_virtual,
+            data_task_block=data_task_block,
+        )
+        
+    @staticmethod
+    def from_env(env, time: Optional[int] = None):
+        return EnvironmentState.parse_state(env, time)

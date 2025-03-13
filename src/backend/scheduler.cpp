@@ -415,6 +415,14 @@ void SchedulerState::update_completed_cost(taskid_t task_id, devid_t device_id) 
   costs.count_completed(device_id, time);
 }
 
+bool SchedulerState::is_data_task_virtual(taskid_t task_id) const {
+  return task_manager.is_data_task_virtual(task_id);
+}
+
+devid_t SchedulerState::get_data_task_source(taskid_t task_id) const {
+  return task_manager.get_data_task_source(task_id);
+}
+
 // Scheduler Queues
 void SchedulerQueues::push_mappable(taskid_t id, priority_t p) {
   mappable.push(id, p);

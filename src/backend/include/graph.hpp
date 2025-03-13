@@ -22,7 +22,7 @@ public:
   std::vector<std::string> task_names;
   std::vector<std::vector<taskid_t>> read_data;
   std::vector<std::vector<taskid_t>> write_data;
-  std::vector<std::array<std::array<uint64_t, 4>, num_device_types>> variant_info;
+  std::vector<std::array<std::array<int, 4>, num_device_types>> variant_info;
   std::vector<std::vector<taskid_t>> dependencies;
 
   std::unordered_map<std::string, taskid_t> task_name_to_id;
@@ -60,7 +60,7 @@ public:
     read_data.push_back(std::vector<taskid_t>());
     write_data.push_back(std::vector<taskid_t>());
 
-    std::array<std::array<uint64_t, 4>, num_device_types> zero_variant_array{};
+    std::array<std::array<int, 4>, num_device_types> zero_variant_array{};
     variant_info.push_back(zero_variant_array);
     dependencies.push_back(std::vector<taskid_t>());
     return task_id;
@@ -106,46 +106,46 @@ public:
     return write_data[task_id];
   }
 
-  void add_variant_info(taskid_t task_id, DeviceType device_type, uint64_t vcus, uint64_t memory,
-                        uint64_t time) {
-    std::size_t arch_idx = static_cast<std::size_t>(device_type);
-    variant_info[task_id].at(arch_idx) = {1, vcus, memory, time};
+  void add_variant_info(taskid_t task_id, DeviceType device_type, vcu_t vcus, mem_t memory,
+                        timecount_t time) {
+    int64_t arch_idx = static_cast<int64_t>(device_type);
+    variant_info[task_id].at(arch_idx) = {arch_idx, vcus, memory, time};
   }
 
   vcu_t get_vcu(taskid_t task_id, DeviceType device_type) {
-    std::size_t arch_idx = static_cast<std::size_t>(device_type);
+    int64_t arch_idx = static_cast<int64_t>(device_type);
     return variant_info[task_id].at(arch_idx)[1];
   }
 
   mem_t get_memory(taskid_t task_id, DeviceType device_type) {
-    std::size_t arch_idx = static_cast<std::size_t>(device_type);
+    int64_t arch_idx = static_cast<int64_t>(device_type);
     return variant_info[task_id].at(arch_idx)[2];
   }
 
   timecount_t get_time(taskid_t task_id, DeviceType device_type) {
-    std::size_t arch_idx = static_cast<std::size_t>(device_type);
+    int64_t arch_idx = static_cast<int64_t>(device_type);
     return variant_info[task_id].at(arch_idx)[3];
   }
 
-  void set_vcu(taskid_t task_id, DeviceType device_type, uint64_t vcus) {
-    std::size_t arch_idx = static_cast<std::size_t>(device_type);
+  void set_vcu(taskid_t task_id, DeviceType device_type, int64_t vcus) {
+    int64_t arch_idx = static_cast<int64_t>(device_type);
     variant_info[task_id].at(arch_idx)[1] = vcus;
   }
 
-  void set_memory(taskid_t task_id, DeviceType device_type, uint64_t memory) {
-    std::size_t arch_idx = static_cast<std::size_t>(device_type);
+  void set_memory(taskid_t task_id, DeviceType device_type, int64_t memory) {
+    int64_t arch_idx = static_cast<int64_t>(device_type);
     variant_info[task_id].at(arch_idx)[2] = memory;
   }
 
-  void set_time(taskid_t task_id, DeviceType device_type, uint64_t time) {
-    std::size_t arch_idx = static_cast<std::size_t>(device_type);
+  void set_time(taskid_t task_id, DeviceType device_type, int64_t time) {
+    int64_t arch_idx = static_cast<int64_t>(device_type);
     variant_info[task_id].at(arch_idx)[3] = time;
   }
 
-  std::vector<uint64_t> get_variant_info(taskid_t task_id, DeviceType device_type) {
-    std::size_t arch_idx = static_cast<std::size_t>(device_type);
-    std::vector<uint64_t> info(4);
-    for (std::size_t i = 0; i < 4; i++) {
+  std::vector<int64_t> get_variant_info(taskid_t task_id, DeviceType device_type) {
+    int64_t arch_idx = static_cast<int64_t>(device_type);
+    std::vector<int64_t> info(4);
+    for (int64_t i = 0; i < 4; i++) {
       info[i] = variant_info[task_id].at(arch_idx)[i];
     }
     return info;
@@ -248,7 +248,7 @@ public:
         add_write_data(j + offset, write_data[j]);
 
         for (std::size_t k = 0; k < num_device_types; k++) {
-          std::array<uint64_t, 4> info = variant_info[j][k];
+          std::array<int, 4> info = variant_info[j][k];
           variant_info[j + offset][k] = info;
         }
       }
@@ -272,7 +272,7 @@ public:
         add_write_data(i + offset, graph.write_data[i]);
 
         for (std::size_t j = 0; j < num_device_types; j++) {
-          std::array<uint64_t, 4> info = graph.variant_info[i][j];
+          std::array<int, 4> info = graph.variant_info[i][j];
           variant_info[i + offset][j] = info;
         }
       }
@@ -290,7 +290,7 @@ public:
       tasks.set_write(i, get_write_data(i));
       tasks.set_type(i, get_type(i));
       for (std::size_t j = 0; j < num_device_types; j++) {
-        std::vector<uint64_t> info = get_variant_info(i, static_cast<DeviceType>(j));
+        std::vector<int> info = get_variant_info(i, static_cast<DeviceType>(j));
         if (info[0] == 1) {
           tasks.add_variant(i, static_cast<DeviceType>(j), info[1], info[2], info[3]);
         }
