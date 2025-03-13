@@ -443,6 +443,9 @@ public:
   void update_launched_cost(taskid_t task_id, devid_t device_id);
   void update_completed_cost(taskid_t task_id, devid_t device_id);
 
+  devid_t get_data_task_source(taskid_t task_id) const;
+  bool is_data_task_virtual(taskid_t task_id) const;
+
   [[nodiscard]] timecount_t get_execution_time(taskid_t task_id) const;
 
   [[nodiscard]] timecount_t get_global_time() const {
