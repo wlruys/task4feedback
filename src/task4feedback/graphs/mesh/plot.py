@@ -6,7 +6,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional
+from .base import Cell, Edge 
+from ..base import DataBlocks, DataKey
+from collections import defaultdict 
+from task4feedback.fastsim2 import TaskState 
+import task4feedback.fastsim2 as fastsim
+import copy 
+from ..base import EnvironmentState 
 
+device_to_color = ["gray", "blue", "green", "orange", "red"]
 
 def plot_edges(ax, points, edge_array, color="k", linewidth=1, alpha=0.5):
     lines = points[edge_array]  # shape: (num_edges, 2, 2)
@@ -96,7 +104,14 @@ def create_mesh_plot(
 
 
 def shade_partitioning(
-    ax, points, cells, partition_vector, cmap=None, edgecolor="black", alpha=0.6, z_order=5
+    ax,
+    points,
+    cells,
+    partition_vector,
+    cmap=None,
+    edgecolor="black",
+    alpha=0.6,
+    z_order=5,
 ):
     """
     Shade each cell according to its partition membership.
@@ -113,18 +128,60 @@ def shade_partitioning(
     Returns:
       The PolyCollection object added to the axis.
     """
+    nparts = max(partition_vector) + 1
     if cmap is None:
         cmap = plt.get_cmap("tab10")
-    nparts = max(partition_vector) + 1
+        facecolors = [cmap(i / max(1, nparts - 1)) for i in range(nparts)]
+
+    if isinstance(cmap, list):
+        facecolors = [cmap[i] for i in range(len(cmap))]
+
     # Create a list of face colors based on partition id
-    facecolors = [cmap(i / max(1, nparts - 1)) for i in range(nparts)]
     polys = points[cells]  # shape: (num_cells, vertices, 2)
     colors = [facecolors[partition_vector[i]] for i in range(len(cells))]
-    collection = PolyCollection(
-        polys, facecolors=colors, edgecolors=edgecolor, alpha=alpha, zorder=5
-    )
-    ax.add_collection(collection, z_order=z_order)
+    collection = PolyCollection(polys, facecolors=colors, alpha=alpha, zorder=z_order)
+    ax.add_collection(collection)
+
     return collection
+
+
+def label_cells(ax, points, cells, cell_labels, z_order=8):
+    """
+    Highlight cells and edges, and add labels at the center of each highlighted cell.
+
+    Parameters:
+      ax             : The matplotlib axis.
+      points         : Array of node coordinates.
+      cells          : NumPy array of cell connectivity.
+      unique_edges   : NumPy array of unique edge definitions (pairs of vertex indices).
+      cell_highlights: dict mapping color to list of cell indices.
+      edge_highlights: dict mapping color to list of edge indices.
+
+    Returns:
+      A list of matplotlib artist objects for later removal.
+    """
+    artists = []
+    # Highlight cells with custom colors and add labels at their center
+    for label, cell_ids in cell_labels.items():
+        for cid in cell_ids:
+            poly_coords = points[cells[cid]]
+            # ax.add_patch(patch)
+            # artists.append(patch)
+            # Compute centroid and add text label
+            centroid = poly_coords.mean(axis=0)
+            text = ax.text(
+                centroid[0],
+                centroid[1],
+                f"{label}",
+                fontsize=25,
+                ha="center",
+                va="center",
+                color="black",
+                zorder=z_order,
+            )
+            artists.append(text)
+
+    return artists
 
 
 def highlight_cells_edges(
@@ -152,10 +209,10 @@ def highlight_cells_edges(
             patch = Polygon(
                 poly_coords,
                 closed=True,
-                fill=True,
+                fill=False,
                 edgecolor=color,
-                linewidth=3,
-                alpha=0.5,
+                linewidth=6,
+                alpha=0.8,
                 zorder=z_order,
             )
             ax.add_patch(patch)
@@ -252,7 +309,7 @@ def highlight_boundary(ax, geom, side_highlights, zorder=6, h=0.2):
             color_list.append(color)
             count += 1
 
-    collection = PolyCollection(verts, facecolors=color_list)
+    collection = PolyCollection(verts, facecolors=color_list, alpha=0.8)
     ax.add_collection(collection)
     artists.append(collection)
 
@@ -260,7 +317,14 @@ def highlight_boundary(ax, geom, side_highlights, zorder=6, h=0.2):
 
 
 def animate_highlights(
-    fig, ax, geom, highlight_sequence, interval=500, repeat=False, z_order=8
+    fig,
+    ax,
+    geom,
+    highlight_sequence,
+    interval=500,
+    repeat=False,
+    z_order=8,
+    device_to_color=None,
 ):
     highlight_artists = []
 
@@ -268,27 +332,46 @@ def animate_highlights(
 
     def update(frame):
         nonlocal highlight_artists
+
+        # Clear text labels on plot
+        for text in ax.texts:
+            text.set_visible(False)
+
         # Remove previous highlight artists
         for art in highlight_artists:
             art.remove()
         highlight_artists.clear()
 
         # Cycle through highlight_sets
-        cell_highlights, edge_highlights, boundary_highlights = highlight_sequence[
-            frame % len(highlight_sequence)
-        ]
+        (
+            cell_highlights,
+            edge_highlights,
+            boundary_highlights,
+            cell_labels,
+            partition,
+        ) = highlight_sequence[frame % len(highlight_sequence)]
 
-        print(f"Frame: {frame}")
-        print(f"Cell Highlights: {cell_highlights}")
-        print(f"Edge Highlights: {edge_highlights}")
         new_artists = highlight_cells_edges(
             ax, points, cells, unique_edges, cell_highlights, edge_highlights, z_order
         )
         new_artists_2 = highlight_boundary(
-            ax, geom, boundary_highlights, zorder=z_order
+            ax, geom, boundary_highlights, zorder=z_order + 6
         )
+        new_artists_3 = label_cells(ax, points, cells, cell_labels, z_order=z_order)
+        shade_collection = shade_partitioning(
+            ax,
+            points,
+            cells,
+            partition,
+            cmap=device_to_color,
+            edgecolor="black",
+            alpha=0.5,
+            z_order=z_order - 1,
+        )
+        highlight_artists.append(shade_collection)
         highlight_artists.extend(new_artists)
         highlight_artists.extend(new_artists_2)
+        # highlight_artists.extend(new_artists_3)
         return highlight_artists
 
     # Create the animation (update every 1000ms)
@@ -302,3 +385,97 @@ def animate_highlights(
     )
 
     return ani
+
+
+def animate_state_list(graph, state_list):
+    geom = graph.data.geometry
+    fig, ax = create_mesh_plot(geom)
+    highlight_sequence = []
+    last_level_label = {}
+    last_partition = graph.get_cell_locations(as_dict=False)
+
+    for state in state_list:
+        cell_highlights = defaultdict(list)
+        cell_labels = defaultdict(list)
+
+        for state_type, tasks in state.compute_tasks_by_state.items():
+            for task in tasks:
+                cell_id = graph.task_to_cell[task]
+                if cell_id < len(graph.data.geometry.cells):
+                    if state_type == fastsim.TaskState.LAUNCHED:
+                        mapped_device = state.mapping_dict[task]
+                        cell_highlights[device_to_color[mapped_device]].append(
+                            cell_id
+                        )
+                        last_level_label[cell_id] = graph.task_to_level[task]
+                        last_partition[cell_id] = mapped_device
+
+        edge_highlights = defaultdict(lambda: list())
+        boundary_highlights = defaultdict(lambda: dict())
+
+        for state_type, tasks in state.data_tasks_by_state.items():
+            for task in tasks:
+                if state_type == fastsim.TaskState.LAUNCHED:
+                    block_id = state.data_task_block[task]
+                    obj = graph.data.get_key(block_id)
+                    if isinstance(obj, Cell) or isinstance(obj, Edge):
+                        continue
+                    elif isinstance(obj, DataKey):
+                        edge = obj.object
+                        if isinstance(edge, Edge):
+                            cell = obj.id[0]
+                            edge_id = edge.id
+                            cell_id = cell.id
+                            target_device = state.mapping_dict[task]
+                            boundary_highlights[edge_id].update(
+                                {cell_id: device_to_color[target_device]}
+                            )
+
+        for cellid, level in last_level_label.items():
+            cell_labels[level].append(cellid)
+        highlight_sequence.append(
+            (
+                cell_highlights,
+                edge_highlights,
+                boundary_highlights,
+                cell_labels,
+                copy.deepcopy(last_partition),
+            )
+        )
+
+    # Update title with time information
+    def update_title():
+        # Create update_title.frame attribute if it doesn't exist
+        if not hasattr(update_title, "frame"):
+            update_title.frame = 0
+        update_title.frame += 1
+        update_title.frame %= len(state_list)
+        ax.set_title(f"Simulation Time: {state_list[update_title.frame].time}μs")
+
+    update_title.frame = 0
+    ani = animate_highlights(
+        fig, ax, geom, highlight_sequence, device_to_color=device_to_color
+    )
+    ani.event_source.add_callback(update_title)
+    return ani
+
+def make_mesh_graph_animation(graph, state_list, title="mesh_animation", show=True):
+    title = f"{title}.mp4"
+    ani = animate_state_list(graph, state_list)
+    try:
+        ani.save(title, writer="ffmpeg", fps=30)
+    except Exception as e:
+        print(f"Error saving animation: {e}")
+    if show:
+        plt.show()
+    return ani
+    
+def animate_mesh_graph(env, time_interval=250, show=True):
+    current_time = env.simulator.time 
+    state_list = []
+    for t in range(0, current_time, time_interval):
+        state = EnvironmentState.from_env(env, t)
+        state_list.append(state)
+
+    return make_mesh_graph_animation(env.simulator.input.graph, state_list, title="mesh_animation", show=show)
+    

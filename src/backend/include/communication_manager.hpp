@@ -28,13 +28,13 @@ struct CommunicationRequest {
   devid_t destination = 0;
   mem_t size = 0;
 
-  bool operator==(const CommunicationRequest& other) const {
+  bool operator==(const CommunicationRequest &other) const {
     return data_task_id == other.data_task_id && source == other.source &&
            destination == other.destination && size == other.size;
   }
 
   struct Hash {
-    std::size_t operator()(const CommunicationRequest& req) const {
+    std::size_t operator()(const CommunicationRequest &req) const {
       // NOTE(wlr): I have no idea what the collision rate of this is
       //            Keep this in mind if something starts failing
       return std::hash<taskid_t>()(req.data_task_id) ^ std::hash<devid_t>()(req.source) ^
@@ -42,7 +42,7 @@ struct CommunicationRequest {
     }
   };
 
-  bool operator<(const CommunicationRequest& other) const {
+  bool operator<(const CommunicationRequest &other) const {
     return data_task_id < other.data_task_id ||
            (data_task_id == other.data_task_id &&
             (source < other.source || (source == other.source &&
@@ -107,7 +107,7 @@ protected:
 
     request_high_precision() = default;
 
-    request_high_precision(const CommunicationRequest& req) {
+    request_high_precision(const CommunicationRequest &req) {
       data_task_id = req.data_task_id;
       source = req.source;
       destination = req.destination;
@@ -116,26 +116,26 @@ protected:
   };
 
   struct stats_high_precision {
-    uint64_t latency = 0;
-    uint64_t bandwidth = 0;
+    int64_t latency = 0;
+    int64_t bandwidth = 0;
 
     stats_high_precision() = default;
 
-    stats_high_precision(const CommunicationStats& stats) {
+    stats_high_precision(const CommunicationStats &stats) {
       latency = stats.latency;
       bandwidth = stats.bandwidth;
     }
   };
 
-  [[nodiscard]] virtual CommunicationStats sample_stats(const CommunicationRequest& req) const {
+  [[nodiscard]] virtual CommunicationStats sample_stats(const CommunicationRequest &req) const {
     auto bw = topology.get().get_bandwidth(req.source, req.destination);
     auto latency = topology.get().get_latency(req.source, req.destination);
     return {bw, latency};
   };
 
-  static uint64_t
-  calculate_checksum(const std::unordered_map<CommunicationRequest, CommunicationStats,
-                                              CommunicationRequest::Hash>& data) {
+  static uint64_t calculate_checksum(
+      const std::unordered_map<CommunicationRequest, CommunicationStats, CommunicationRequest::Hash>
+          &data) {
     const uint64_t prime = 0x100000001B3ull; // FNV prime
     uint64_t hash = 0xcbf29ce484222325ull;   // FNV offset basis
 
@@ -144,9 +144,9 @@ protected:
                                                                            data.end());
 
     std::sort(sdata.begin(), sdata.end(),
-              [](const auto& a, const auto& b) { return a.first < b.first; });
+              [](const auto &a, const auto &b) { return a.first < b.first; });
 
-    for (const auto& [req, stats] : sdata) {
+    for (const auto &[req, stats] : sdata) {
       hash ^= static_cast<uint64_t>(req.source);
       hash *= prime;
       hash ^= static_cast<uint64_t>(req.destination);
@@ -157,7 +157,7 @@ protected:
       hash *= prime;
 
       // Hash CommunicationStats
-      const char* stats_data = reinterpret_cast<const char*>(&stats);
+      const char *stats_data = reinterpret_cast<const char *>(&stats);
       for (size_t i = 0; i < sizeof(CommunicationStats); ++i) {
         hash ^= static_cast<uint64_t>(stats_data[i]);
         hash *= prime;
@@ -171,11 +171,11 @@ public:
   static constexpr uint32_t FILE_VERSION = 1;
   static constexpr size_t BUFFER_SIZE = 8192;
 
-  CommunicationNoise(Topology& topology_, unsigned int seed_ = 0)
+  CommunicationNoise(Topology &topology_, unsigned int seed_ = 0)
       : seed(seed_), gen(seed_), topology(topology_) {
   }
 
-  [[nodiscard]] CommunicationStats get(const CommunicationRequest& req) {
+  [[nodiscard]] CommunicationStats get(const CommunicationRequest &req) {
     auto it = record.find(req);
     if (it != record.end()) {
       return it->second;
@@ -184,7 +184,7 @@ public:
     return record[req];
   }
 
-  void set(const CommunicationRequest& req, const CommunicationStats& stats) {
+  void set(const CommunicationRequest &req, const CommunicationStats &stats) {
     record[req] = stats;
   }
 
@@ -193,19 +193,19 @@ public:
     record = std::move(record_);
   }
 
-  [[nodiscard]] CommunicationStats operator()(const CommunicationRequest& req) {
+  [[nodiscard]] CommunicationStats operator()(const CommunicationRequest &req) {
     return get(req);
   }
 
-  void operator()(const CommunicationRequest& req, const CommunicationStats& stats) {
+  void operator()(const CommunicationRequest &req, const CommunicationStats &stats) {
     set(req, stats);
   }
 
-  void operator()(const CommunicationRequest& req, timecount_t latency, mem_t bandwidth) {
+  void operator()(const CommunicationRequest &req, timecount_t latency, mem_t bandwidth) {
     set(req, {latency, bandwidth});
   }
 
-  void dump_to_binary(const std::string& filename) const {
+  void dump_to_binary(const std::string &filename) const {
 
     std::ofstream file(filename, std::ios::binary);
     if (!file) {
@@ -218,30 +218,30 @@ public:
 
     // Write header
     file.write("COMM", 4);
-    file.write(reinterpret_cast<const char*>(&FILE_VERSION), sizeof(FILE_VERSION));
+    file.write(reinterpret_cast<const char *>(&FILE_VERSION), sizeof(FILE_VERSION));
 
     // Write data size
     uint64_t data_size = record.size();
-    file.write(reinterpret_cast<const char*>(&data_size), sizeof(data_size));
+    file.write(reinterpret_cast<const char *>(&data_size), sizeof(data_size));
 
     // Write data
-    for (const auto& [lreq, lstats] : record) {
+    for (const auto &[lreq, lstats] : record) {
       request_high_precision req(lreq);
       stats_high_precision stats(lstats);
-      file.write(reinterpret_cast<const char*>(&req), sizeof(request_high_precision));
-      file.write(reinterpret_cast<const char*>(&stats), sizeof(stats_high_precision));
+      file.write(reinterpret_cast<const char *>(&req), sizeof(request_high_precision));
+      file.write(reinterpret_cast<const char *>(&stats), sizeof(stats_high_precision));
     }
 
     // Write checksum
     uint64_t checksum = calculate_checksum(record);
-    file.write(reinterpret_cast<const char*>(&checksum), sizeof(checksum));
+    file.write(reinterpret_cast<const char *>(&checksum), sizeof(checksum));
 
     if (file.fail()) {
       throw std::runtime_error("Error writing to file: " + filename);
     }
   }
 
-  void load_from_binary(const std::string& filename) {
+  void load_from_binary(const std::string &filename) {
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
       throw std::runtime_error("Unable to open file for reading: " + filename);
@@ -259,22 +259,22 @@ public:
     }
 
     uint32_t version;
-    file.read(reinterpret_cast<char*>(&version), sizeof(version));
+    file.read(reinterpret_cast<char *>(&version), sizeof(version));
     if (version != FILE_VERSION) {
       throw std::runtime_error("Unsupported file version");
     }
 
     // Read data size
     uint64_t data_size;
-    file.read(reinterpret_cast<char*>(&data_size), sizeof(data_size));
+    file.read(reinterpret_cast<char *>(&data_size), sizeof(data_size));
 
     // Read data
     record.clear();
     for (uint64_t i = 0; i < data_size; ++i) {
       request_high_precision hreq;
       stats_high_precision hstats;
-      file.read(reinterpret_cast<char*>(&hreq), sizeof(request_high_precision));
-      file.read(reinterpret_cast<char*>(&hstats), sizeof(stats_high_precision));
+      file.read(reinterpret_cast<char *>(&hreq), sizeof(request_high_precision));
+      file.read(reinterpret_cast<char *>(&hstats), sizeof(stats_high_precision));
       CommunicationRequest req = {
           static_cast<taskid_t>(hreq.data_task_id), static_cast<devid_t>(hreq.source),
           static_cast<devid_t>(hreq.destination), static_cast<mem_t>(hreq.size)};
@@ -285,7 +285,7 @@ public:
 
     // Read and verify checksum
     uint64_t stored_checksum;
-    file.read(reinterpret_cast<char*>(&stored_checksum), sizeof(stored_checksum));
+    file.read(reinterpret_cast<char *>(&stored_checksum), sizeof(stored_checksum));
     uint64_t calculated_checksum = calculate_checksum(record);
 
     if (stored_checksum != calculated_checksum) {
@@ -304,7 +304,7 @@ public:
 
 class UniformCommunicationNoise : public CommunicationNoise {
 protected:
-  CommunicationStats sample_stats(const CommunicationRequest& req) const override {
+  CommunicationStats sample_stats(const CommunicationRequest &req) const override {
     auto mean_bw = topology.get().get_bandwidth(req.source, req.destination);
     auto mean_latency = topology.get().get_latency(req.source, req.destination);
 
@@ -318,7 +318,7 @@ protected:
   }
 
 public:
-  UniformCommunicationNoise(Topology& topology_, unsigned int seed_ = 0)
+  UniformCommunicationNoise(Topology &topology_, unsigned int seed_ = 0)
       : CommunicationNoise(topology_, seed_) {
   }
 };
@@ -348,14 +348,14 @@ class CommunicationManager {
   }
 
 public:
-  CommunicationManager(Topology& topology_, Devices& devices_, CommunicationNoise& noise_)
+  CommunicationManager(Topology &topology_, Devices &devices_, CommunicationNoise &noise_)
       : devices(devices_), topology(topology_), noise(noise_), incoming(devices_.size(), 0),
         outgoing(devices_.size(), 0), active_links(devices_.size() * devices_.size(), 0) {
   }
 
-  CommunicationManager(const CommunicationManager& c) = default;
+  CommunicationManager(const CommunicationManager &c) = default;
 
-  CommunicationManager& operator=(const CommunicationManager& c) = default;
+  CommunicationManager &operator=(const CommunicationManager &c) = default;
 
   void initialize() {
   }
@@ -475,7 +475,7 @@ public:
   }
 
   [[nodiscard]] SourceRequest
-  get_best_available_source(devid_t dst, const DeviceIDList& possible_sources) const {
+  get_best_available_source(devid_t dst, const DeviceIDList &possible_sources) const {
     // Return the source with the highest bandwidth
     // If no source is available, return found=false
 
@@ -501,7 +501,7 @@ public:
   }
 
   [[nodiscard]] SourceRequest get_best_source(devid_t dst,
-                                              const DeviceIDList& possible_source) const {
+                                              const DeviceIDList &possible_source) const {
     // Return the source with the highest bandwidth
     // If no source is available, return found=false
 

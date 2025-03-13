@@ -26,6 +26,7 @@ void init_task_ext(nb::module_ &m) {
       .export_values();
 
   nb::bind_vector<std::vector<Variant>>(m, "VariantVector");
+  nb::bind_vector<std::vector<DeviceType>>(m, "DeviceTypeVector");
   nb::class_<Variant>(m, "Variant")
       .def(nb::init<>()) // default constructor
       .def(nb::init<DeviceType, vcu_t, mem_t, timecount_t>(), "arch"_a, "vcu"_a, "mem"_a, "time"_a)
