@@ -2,27 +2,18 @@ from .models import *
 from .util import *
 from dataclasses import dataclass
 from typing import Callable
-from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
+from torchrl.collectors import MultiSyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
-from torch_geometric.data import HeteroData, Batch
+from torchrl.record.loggers.wandb import WandbLogger
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 from torchrl.modules import ProbabilisticActor, ValueOperator, ActorCriticWrapper
-import tensordict
-from tensordict.nn import (
-    TensorDictModule,
-    ProbabilisticTensorDictModule,
-    TensorDictSequential,
-)
-import torchrl
-import torch_geometric
-import aim
-from aim.pytorch import track_gradients_dists, track_params_dists
-from torchrl.envs.transforms import Reward2GoTransform
+from tensordict.nn import TensorDictModule
 from torch_geometric.loader import DataLoader
-import copy 
+import copy
+
 
 @dataclass
 class PPOConfig:
@@ -72,11 +63,11 @@ def run_ppo_cleanrl_no_rb(
         cat_results=0,
         policy_device="cpu",
         env_device="cpu",
-        #storing_device=config.train_device,
+        # storing_device=config.train_device,
         # replay_buffer=replay_buffer,
     )
     out_seed = collector.set_seed(config.seed)
-    
+
     actor_critic_base_t = copy.deepcopy(actor_critic_base)
     actor_critic_base_t = actor_critic_base_t.to(config.train_device)
 
@@ -156,8 +147,10 @@ def run_ppo_cleanrl_no_rb(
                     actor_critic_base_t.parameters(), config.max_grad_norm
                 )
                 optimizer.step()
-        
-        collector.policy.module[0].module.network.load_state_dict(actor_critic_base_t.state_dict())
+
+        collector.policy.module[0].module.network.load_state_dict(
+            actor_critic_base_t.state_dict()
+        )
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
 
 
@@ -168,8 +161,7 @@ def run_ppo_cleanrl(
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(max_size=config.states_per_collection),
         sampler=SamplerWithoutReplacement(),
-        pin_memory=True,
-        
+        pin_memory=torch.cuda.is_available(),
         # transform=r2g,
     )
 
@@ -190,21 +182,20 @@ def run_ppo_cleanrl(
         return_log_prob=True,
     )
 
-
     collector = MultiSyncDataCollector(
         [make_env for _ in range(config.workers)],
         actor_critic,
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
         cat_results=0,
-        #storing_device=config.train_device,
+        # storing_device=config.train_device,
         env_device="cpu",
         policy_device="cpu",
         # replay_buffer=replay_buffer,
     )
     out_seed = collector.set_seed(config.seed)
-    
-    #Create a copy of the actor_critic model to be used for training
+
+    # Create a copy of the actor_critic model to be used for training
     actor_critic_t = copy.deepcopy(actor_critic)
     actor_critic_t = actor_critic_t.to(config.train_device)
 
@@ -224,7 +215,7 @@ def run_ppo_cleanrl(
 
         for j in range(config.num_epochs_per_collection):
             n_batches = len(replay_buffer) // config.minibatch_size
-            #actor_critic_t = actor_critic.to(config.train_device)
+            # actor_critic_t = actor_critic.to(config.train_device)
 
             for k in range(n_batches):
                 batch = replay_buffer.sample(config.minibatch_size)
@@ -283,15 +274,23 @@ def run_ppo_cleanrl(
                     actor_critic_t.parameters(), config.max_grad_norm
                 )
                 optimizer.step()
-        
+
         collector.policy.load_state_dict(actor_critic_t.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
     collector.shutdown()
 
 
 def run_ppo_torchrl(
-    actor_critic_base: nn.Module, make_env: Callable[[], EnvBase], config: PPOConfig
+    actor_critic_base: nn.Module,
+    make_env: Callable[[], EnvBase],
+    config: PPOConfig,
+    wandb_project: str = "run_ppo_torchrl",
+    wandb_exp_name: str = "run_ppo_torchrl",
 ):
+    logger = WandbLogger(
+        project=wandb_project,
+        exp_name=wandb_exp_name,
+    )
     # using torchrl built ins
 
     _actor_td = HeteroDataWrapper(actor_critic_base.actor)
@@ -320,7 +319,7 @@ def run_ppo_torchrl(
     td_actor_critic_module = ActorCriticWrapper(
         policy_operator=td_module_action, value_operator=td_critic_module
     )
-    
+
     collector = MultiSyncDataCollector(
         [make_env for _ in range(config.workers)],
         td_module_action,
@@ -334,14 +333,16 @@ def run_ppo_torchrl(
     out_seed = collector.set_seed(config.seed)
 
     replay_buffer = ReplayBuffer(
-        storage=LazyTensorStorage(max_size=config.states_per_collection, device=config.train_device),
+        storage=LazyTensorStorage(
+            max_size=config.states_per_collection, device=config.train_device
+        ),
         sampler=SamplerWithoutReplacement(),
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
-    
-    train_actor_network= copy.deepcopy(td_module_action).to(config.train_device)
+
+    train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
     train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
-    
+
     advantage_module = GAE(
         gamma=1.0,
         lmbda=1.0,
@@ -349,7 +350,6 @@ def run_ppo_torchrl(
         average_gae=False,
         device=config.train_device,
     )
-    
 
     loss_module = ClipPPOLoss(
         actor_network=train_actor_network,
@@ -359,7 +359,6 @@ def run_ppo_torchrl(
         entropy_coef=config.ent_coef,
         critic_coef=config.val_coef,
         loss_critic_type="l2",
-        
     ).to(config.train_device)
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
@@ -400,9 +399,14 @@ def run_ppo_torchrl(
                     loss_module.parameters(), max_norm=config.max_grad_norm
                 )
                 optimizer.step()
-        
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
+        logger.log_scalar("Average Return", avg_non_zero_reward)
+        logger.log_scalar("loss_objective", loss_vals["loss_objective"].item())
+        logger.log_scalar("loss_critic", loss_vals["loss_critic"].item())
+        logger.log_scalar("loss_entropy", loss_vals["loss_entropy"].item())
+        logger.log_scalar("loss_total", loss_value.item())
+        logger.log_scalar("grad_norm", grad_norm)
 
     collector.shutdown()

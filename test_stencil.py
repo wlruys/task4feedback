@@ -89,4 +89,10 @@ if __name__ == "__main__":
         n_devices=n_devices,
     )
     config = PPOConfig(train_device=device)
-    run_ppo_torchrl(model, make_env, config)
+    run_ppo_torchrl(
+        model,
+        make_env,
+        config,
+        wandb_project="test_stencil",
+        wandb_exp_name="test_stencil",
+    )
