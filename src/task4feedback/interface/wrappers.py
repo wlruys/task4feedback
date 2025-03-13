@@ -39,7 +39,7 @@ class Graph:
         self.ctasks = None
 
     def add_task(self, name, tag):
-        self.graph.add_task(name, tag)
+        return self.graph.add_task(name, tag)
 
     def get_task(self, task, convert=False):
         if convert and isinstance(task, str):
@@ -54,6 +54,9 @@ class Graph:
         type = self.graph.get_type(id)
 
         return TaskTuple(id, name, tag, dependencies, read, write, type)
+    
+    def __len__(self):
+        return self.graph.size()
 
     def convert_list_to_ids(self, tasklist):
         return [
@@ -69,6 +72,9 @@ class Graph:
 
     def get_id(self, name):
         return self.graph.get_id(name)
+
+    def get_name(self, task):
+        return self.graph.get_name(task)
 
     def add_dependencies(self, task, dependencies, convert=False):
         if convert and isinstance(task, str):
@@ -92,7 +98,7 @@ class Graph:
             task = self.graph.get_id(task)
         self.graph.add_write_data(task, dataidlist)
 
-    def apply_variant(self, variant_builder: VariantBuilder):
+    def apply_variant(self, variant_builder: type[VariantBuilder]):
         for i in range(self.graph.size()):
             task = self.get_task(i)
             for arch in DeviceType:
@@ -100,14 +106,16 @@ class Graph:
                     continue
 
                 variant = variant_builder.build_variant(arch, task)
-
+                
                 if variant is None:
                     continue
+                
+                vcu_usage =int(variant.vcu_usage * fastsim.MAX_VCUS)
                 self.graph.add_variant(
                     i,
                     arch,
+                    vcu_usage,
                     variant.memory_usage,
-                    variant.vcu_usage,
                     variant.expected_time,
                 )
 
@@ -135,9 +143,29 @@ class Graph:
         if verbose:
             print(f"..created {self.ctasks.data_size()} data tasks.")
 
+    def fill_data_flow_dependencies(self):
+        self.graph.fill_dependencies_from_data_usage()
+
     def get_c_tasks(self):
         assert self.ctasks is not None
         return self.ctasks
+
+    def __iter__(self):
+        for i in range(self.graph.size()):
+            yield self.get_task(i)
+
+    def to_networkx(self):
+        import networkx as nx
+
+        G = nx.DiGraph()
+
+        for task in self:
+            G.add_node(task.id, label=task.name)
+
+            for dep_id in task.dependencies:
+                G.add_edge(dep_id, task.id)
+
+        return G
 
     @staticmethod
     def create_from_legacy_graph(graph, datamap):
@@ -282,6 +310,11 @@ class DataBlocks:
 
     def get_id(self, name):
         return self.data.get_id(name)
+    
+    def get_location(self, block):
+        if isinstance(block, str):
+            block = self.data.get_id(block)
+        return self.data.get_location(block)
 
     def convert_list_to_ids(self, blocklist):
         return [
@@ -295,7 +328,7 @@ class DataBlocks:
             for block in blocklist
         ]
 
-    def apply(self, transformer):
+    def apply(self, transformer: DataBlockTransformer):
         for i in range(self.data.size()):
             block = self.get_block(i)
             if block is None:
@@ -499,6 +532,30 @@ class ExternalMapper:
         mapping_priority = state.get_mapping_priority(global_task_id)
         return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
 
+class StaticExternalMapper:
+    def __init__(self, mapper: Optional[Self] = None, mapping_dict: Optional[dict] = None):
+        if mapper is not None:
+            self.mapping_dict = mapper.mapping_dict
+        
+        elif mapping_dict is not None:
+            self.mapping_dict = mapping_dict
+        else:
+            self.mapping_dict = {}
+        
+    def set_mapping_dict(self, mapping_dict):
+        self.mapping_dict = mapping_dict    
+        
+    def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        candidates = torch.zeros((1), dtype=torch.int64)
+        simulator.simulator.get_mappable_candidates(candidates)
+        global_task_id = candidates[0].item()
+        local_id = 0
+        device = self.mapping_dict[global_task_id]
+        state = simulator.simulator.get_state()
+        mapping_priority = state.get_mapping_priority(global_task_id)
+        return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
+    
+    
 
 @dataclass
 class SimulatorInput:
@@ -517,7 +574,8 @@ class SimulatorInput:
         transition_conditions: Optional[fastsim.TransitionConditions] = None,
     ):
         if transition_conditions is None:
-            transition_conditions = fastsim.RangeTransitionConditions(5, 5, 8)
+            #transition_conditions = fastsim.RangeTransitionConditions(50, 50, 80)
+            transition_conditions = DefaultTransitionConditions()
         if noise is None:
             noise = NoiseConfig(graph, system)
         self.noise = noise
@@ -1214,6 +1272,14 @@ class SimulatorDriver:
 
     def get_state(self):
         return self.simulator.get_state()
+    
+    @property
+    def state(self):
+        return self.simulator.get_state()
+    
+    @property
+    def status(self):
+        return self.simulator.last_execution_state
 
     def initialize(self):
         """
@@ -1284,6 +1350,14 @@ class SimulatorDriver:
         Returns the current time (in microseconds) of the simulator state.
         """
         return self.simulator.get_current_time()
+    
+    @property
+    def time(self) -> int:
+        """
+        Returns the current time (in microseconds) of the simulator state.
+        """
+        return self.simulator.get_current_time()
+    
 
     def copy(self) -> "SimulatorDriver":
         """

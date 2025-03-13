@@ -193,7 +193,7 @@ def spring_layout(G):
 
 def draw(G, filename="graph.html"):
     # spring_layout(G)
-    fig = gv.d3(
+    fig = gv.three(
         G,
         layout_algorithm_active=True,
         graph_height=1000,

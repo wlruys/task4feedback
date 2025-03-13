@@ -16,6 +16,7 @@ from torchrl.envs import StepCounter, TrajCounter, TransformedEnv
 import tensordict
 from tensordict import TensorDict
 from aim.pytorch import track_gradients_dists, track_params_dists
+from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph, DataGeometry
 
 
 class RuntimeEnv(EnvBase):
@@ -159,7 +160,7 @@ class RuntimeEnv(EnvBase):
         torch.manual_seed(seed)
 
 
-def make_simple_env(tasks, data):
+def make_simple_env_from_legacy(tasks, data):
     s = uniform_connected_devices(5, 1000000000, 1, 2000)
     d = DataBlocks.create_from_legacy_data(data, s)
     m = Graph.create_from_legacy_graph(tasks, data)
@@ -171,4 +172,23 @@ def make_simple_env(tasks, data):
     )
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
+    return env
+
+
+def make_simple_env(graph: ComputeDataGraph):
+    s = uniform_connected_devices(5, 1000000000, 1, 2000)
+    d = graph.get_blocks()
+    m = graph
+    m.finalize_tasks()
+
+    spec = create_graph_spec()
+    input = SimulatorInput(m, d, s)
+
+    env = RuntimeEnv(
+        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+    )
+
+    env = TransformedEnv(env, StepCounter())
+    env = TransformedEnv(env, TrajCounter())
+
     return env
