@@ -62,6 +62,13 @@ public:
     write_data.push_back(std::vector<taskid_t>());
 
     std::array<std::array<int64_t, 4>, num_device_types> zero_variant_array{};
+    // Disable all variants initially
+    for (int64_t i = 0; i < num_device_types; i++) {
+      zero_variant_array[i][0] = static_cast<int64_t>(DeviceType::NONE);
+      zero_variant_array[i][1] = 0;
+      zero_variant_array[i][2] = 0;
+      zero_variant_array[i][3] = 0;
+    }
     variant_info.push_back(zero_variant_array);
     dependencies.push_back(std::vector<taskid_t>());
     return task_id;
