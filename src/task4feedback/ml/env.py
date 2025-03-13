@@ -108,7 +108,13 @@ class RuntimeEnv(EnvBase):
         chosen_device = td["action"].item()
         local_id = 0
         device = chosen_device
-        mapping_priority = 0
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        global_task_id = candidate_workspace[local_id].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
         reserving_priority = mapping_priority
         launching_priority = mapping_priority
         actions = [
@@ -174,6 +180,31 @@ def make_simple_env_from_legacy(tasks, data):
     env = TransformedEnv(env, TrajCounter())
     return env
 
+
+class InternalMapperRuntimeEnv(RuntimeEnv):
+    
+    def _step(self, td: TensorDict) -> TensorDict:
+        internal_mapper = self.simulator.internal_mapper
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        global_task_id = candidate_workspace[0].item()
+        scheduler_state: SchedulerState = self.simulator.state 
+
+        
+        action = internal_mapper.map_task(
+            global_task_id,
+            scheduler_state,
+        )
+        print("Action: ", action)
+        new_action = torch.zeros(
+            (1,), dtype=torch.int64
+        )
+        new_action[0] = action.device   
+        td.set_("action", new_action)
+        return super()._step(td)
 
 def make_simple_env(graph: ComputeDataGraph):
     s = uniform_connected_devices(5, 1000000000, 1, 2000)

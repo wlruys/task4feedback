@@ -19,6 +19,11 @@ void init_mapper_ext(nb::module_ &m) {
   nb::bind_vector<std::vector<Action>>(m, "ActionVector");
   nb::class_<Action>(m, "Action")
       .def(nb::init<std::size_t, devid_t, priority_t, priority_t>())
+      .def_rw("pos", &Action::pos)
+      .def_rw("device", &Action::device)
+      .def_rw("reservable_priority", &Action::reservable_priority)
+      .def_rw("launchable_priority", &Action::launchable_priority)
+
       .def("__str__", [](const Action &a) {
         return "Action(pos=" + std::to_string(a.pos) + ", device=" + std::to_string(a.device) +
                ", res_pri=" + std::to_string(a.reservable_priority) +

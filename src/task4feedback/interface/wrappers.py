@@ -1223,6 +1223,7 @@ class SimulatorDriver:
     simulator: fastsim.Simulator
     observer_factory: Optional[ExternalObserverFactory]
     observer: Optional[ExternalObserver]
+    use_external_mapper: bool = False
 
     def __init__(
         self,
@@ -1280,6 +1281,18 @@ class SimulatorDriver:
     @property
     def status(self):
         return self.simulator.last_execution_state
+    
+    def get_mappable_candidates(self, candidates: torch.Tensor):
+        """
+        Get the mappable candidates from the simulator.
+        """
+        return self.simulator.get_mappable_candidates(candidates)
+    
+    def get_mapping_priority(self, task_id: int):
+        """
+        Get the mapping priority for a task.
+        """
+        return self.state.get_mapping_priority(task_id)
 
     def initialize(self):
         """
@@ -1297,6 +1310,12 @@ class SimulatorDriver:
         The DATA input SHOULD NOT be modified after this is called.
         """
         self.simulator.initialize_data()
+        
+    @property
+    def mapper(self):
+        if self.use_external_mapper:
+            return self.external_mapper
+        return self.internal_mapper
 
     def enable_external_mapper(
         self, external_mapper: Optional[ExternalMapper | Type[ExternalMapper]] = None
@@ -1310,12 +1329,14 @@ class SimulatorDriver:
 
             self.external_mapper = external_mapper
 
+        self.use_external_mapper = True
         self.simulator.enable_python_mapper()
 
     def disable_external_mapper(self):
         """
         Use internal mapper for mapping tasks (do not run Python callback).
         """
+        self.use_external_mapper = False
         self.simulator.disable_python_mapper()
 
     def fresh_copy(self) -> "SimulatorDriver":

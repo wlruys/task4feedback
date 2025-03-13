@@ -8,21 +8,6 @@ from typing import Optional
 from itertools import permutations
 from collections import defaultdict
 
-# def create_jacobi_graph(edge_dict, cell)
-# array of cell to points
-# dict of cell to neighbor (cells)
-# dict of cell to edges
-
-# create 2 data blocks per cell  (data id to cell or edge id)
-# create 2 data blocks per edge
-# loop over cells for each
-# create task that reads from cell-block (it % 2) and writes to edge-block (it+1 % 2)
-
-# def create_jacobi_graph(geom: Geometry, num_iterations: int):
-#     blocks = DataBlocks()
-#     for i in range(num_iterations):
-#         blocks.add_block()
-
 
 class JacobiData(DataGeometry):
     @staticmethod
@@ -80,7 +65,6 @@ class JacobiData(DataGeometry):
 
     def set_locations_from_list(self, location_list: list[int]):
         for i, location in enumerate(location_list):
-            print(f"Setting location for cell {i} to {location}")
             self.set_location(Cell(i), location)
 
     def randomize_locations(self, num_changes: int, location_list: list[int]):
@@ -255,3 +239,24 @@ class JacobiGraph(ComputeDataGraph):
 
     def get_num_iterations(self):
         return self.num_iterations
+
+
+@dataclass
+class JacobiConfig:
+    L: int = 4
+    n: int = 4 
+    steps: int = 1
+    n_part: int = 4
+    randomness: float = 0
+    permute_idx: int = 0
+    
+class JacobiVariant(VariantBuilder):
+    @staticmethod
+    def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
+        memory_usage = 0
+        vcu_usage = 1
+        expected_time = 1000
+        if arch == DeviceType.GPU:
+            return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
+        else:
+            return None 
