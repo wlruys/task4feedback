@@ -220,6 +220,14 @@ class JacobiGraph(ComputeDataGraph):
 
     def get_cell_locations(self, as_dict: bool = True) -> list[int] | dict[int, int]:
         return self.data.get_locations(as_dict=as_dict)
+    
+    def task_mapping_to_level_mapping(self, task_to_device: dict[int, int]):
+        level_map = defaultdict(dict)
+        for task_id, device in task_to_device.items():
+            cell = self.task_to_cell[task_id]
+            level = self.task_to_level[task_id]
+            level_map[level][cell] = device
+        return level_map
 
     def get_mapping_from_locations(self, as_dict=True) -> list[int] | dict[int, int]:
         mapping = []
