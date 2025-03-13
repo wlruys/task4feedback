@@ -1483,25 +1483,21 @@ class SimulatorFactory:
 
     def create(
         self,
-        seed: Optional[int] = None,
+        duration_seed: Optional[int] = None,
         priority_seed: Optional[int] = None,
         comm_seed: Optional[int] = None,
         use_external_mapper: bool = True,
     ):
-        if seed is None: 
-            seed = self.seed
+        if duration_seed is None: 
+            duration_seed = self.seed
             
         if priority_seed is None:
             priority_seed = self.pseed 
             
         if comm_seed is None:
             comm_seed = self.cseed
-    
-        print(f"Using seed {seed} for task noise")
-        print(f"Using seed {priority_seed} for priority noise")
-        print(f"Using seed {comm_seed} for communication noise")
 
-        self.input.noise.task_noise.set_seed(seed)
+        self.input.noise.task_noise.set_seed(duration_seed)
         self.input.noise.task_noise.set_pseed(priority_seed)
         simulator = SimulatorDriver(self.input, observer_factory=self.observer_factory, internal_mapper=self.internal_mapper, external_mapper=self.external_mapper)
         simulator.initialize()
