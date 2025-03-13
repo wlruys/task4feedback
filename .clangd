@@ -7,13 +7,14 @@ CompileFlags:
   - -Werror
   - -Wshadow
   - -Wconversion
-  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/external/tabulate/include
-  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/external/doctest
-  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/src/backend
-  - -I/home/wlruys/syncthing/workspace/simulator_dev/task4feedback/src/backend/include
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/external/tabulate/include
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/external/doctest
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/src/backend
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/src/backend/include
+  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/external
+  - -I/Users/wlruys/mamba/envs/simdev_311/lib/python3.11/site-packages/nanobind/include
 Diagnostics:
   UnusedIncludes: Strict
-  MissingIncludes: Strict
   ClangTidy:
     Add:
     - modernize*

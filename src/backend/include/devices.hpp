@@ -41,4 +41,7 @@ public:
   Device(devid_t id, DeviceType arch, vcu_t vcu, mem_t mem)
       : id(id), arch(arch), max_resources(vcu, mem) {
   }
+
+  [[nodiscard]] mem_t get_mem() const { return max_resources.mem; }
+  [[nodiscard]] vcu_t get_vcu() const { return max_resources.vcu; }
 };

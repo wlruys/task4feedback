@@ -3,16 +3,17 @@
 #include "scheduler.hpp"
 #include "settings.hpp"
 #include "simulator.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <math.h>
+#include <memory>
 #include <span>
 #include <sys/types.h>
 #include <unordered_map>
-#include <array>
-#include <math.h>
 
 using op_t = uint32_t;
 using f_t = float_t;
@@ -43,140 +44,224 @@ void one_hot(int index, std::span<f_t> output) {
   }
 }
 
-template <typename Derived>
-struct Feature {
-    const SchedulerState &state;
-    const NodeType node_type;
-    
-    Feature(const SchedulerState &state, NodeType node_type) : state(state), node_type(node_type) {}
+template <typename Derived> struct Feature {
+  const SchedulerState &state;
+  const NodeType node_type;
 
-    [[nodiscard]] size_t getFeatureDim() const { return static_cast<const Derived*>(this)->getFeatureDimImpl(); }
-    
-    template <typename ID, typename Span>
-    void extractFeature(ID object_id, Span output) const {
-        static_cast<const Derived*>(this)->extractFeatureImpl(object_id, output );
-    }
+  Feature(const SchedulerState &state, NodeType node_type) : state(state), node_type(node_type) {
+  }
+
+  [[nodiscard]] size_t getFeatureDim() const {
+    return static_cast<const Derived *>(this)->getFeatureDimImpl();
+  }
+
+  template <typename ID, typename Span> void extractFeature(ID object_id, Span output) const {
+    static_cast<const Derived *>(this)->extractFeatureImpl(object_id, output);
+  }
 };
 
-template <typename... Features>
-class FeatureExtractor {
-  protected:
-    std::tuple<Features...> features;
+template <typename Derived> struct SimpleFeature {
 
-    template <size_t... Is>
-    size_t computeFeatureDim(std::index_sequence<Is...>) const {
-        return (std::get<Is>(features).getFeatureDim() + ...);
-    }
+  [[nodiscard]] size_t getFeatureDim() const {
+    return static_cast<const Derived *>(this)->getFeatureDimImpl();
+  }
+
+  template <typename ID, typename Span> void extractFeature(ID object_id, Span output) const {
+    static_cast<const Derived *>(this)->extractFeatureImpl(object_id, output);
+  }
+};
+
+template <typename... Features> class FeatureExtractor {
+  std::tuple<Features...> features;
+
+  // Helper to compute total feature dimension at compile-time
+  template <size_t... Is> size_t computeFeatureDim(std::index_sequence<Is...>) const {
+    return (std::get<Is>(features).getFeatureDim() + ...);
+  }
 
 public:
-    FeatureExtractor(Features... feats) : features(std::move(feats)...) {}
+  FeatureExtractor(Features... feats) : features(std::move(feats)...) {
+  }
 
-    [[nodiscard]] size_t getFeatureDim() const {
-        return computeFeatureDim(std::make_index_sequence<sizeof...(Features)>{});
-    }
+  size_t getFeatureDim() const {
+    return computeFeatureDim(std::make_index_sequence<sizeof...(Features)>{});
+  }
 
-    template <typename ID, typename Span>
-    void getFeatures(ID object_id, Span output) const {
-        size_t offset = 0;
-        std::apply([&](const auto&... feats) {
-            (..., (feats.extractFeature(object_id, output.subspan(offset, feats.getFeatureDim())), offset += feats.getFeatureDim()));
-        }, features);
-    }
+  template <typename Span> void getFeatures(int task_id, Span output) const {
+    size_t offset = 0;
+    std::apply(
+        [&](const auto &...feats) {
+          (..., (feats.extractFeature(task_id, output.subspan(offset, feats.getFeatureDim())),
+                 offset += feats.getFeatureDim()));
+        },
+        features);
+  }
 };
 
+class RuntimeExtractorInterface {
+public:
+  virtual ~RuntimeExtractorInterface() = default;
+  virtual size_t getFeatureDim() const = 0;
+  template <typename ID, typename Span>
+  virtual void RuntimeExtractorInterface(ID object_id, Span output) const = 0;
+};
+
+template <typename Extractor> class ExtractorWrapper : public RuntimeExtractorInterface {
+  Extractor extractor;
+
+public:
+  ExtractorWrapper(Extractor ext) : extractor(std::move(ext)) {
+  }
+
+  size_t getFeatureDim() const override {
+    return extractor.getFeatureDim();
+  }
+
+  void getFeatures(int task_id, std::span<float> output) const override {
+    extractor.getFeatures(task_id, output);
+  }
+};
+
+class NewObserver {
+
+private:
+  std::unique_ptr<RuntimeExtractorInterface> task_extractor;
+  std::unique_ptr<RuntimeExtractorInterface> data_extractor;
+
+public:
+  template <typename Extractor> void setTaskExtractor(Extractor extractor) {
+    task_extractor = std::make_unique<ExtractorWrapper<Extractor>>(std::move(extractor));
+  }
+
+  template <typename Extractor> void setDataExtractor(Extractor extractor) {
+    data_extractor = std::make_unique<ExtractorWrapper<Extractor>>(std::move(extractor));
+  }
+
+  size_t getTaskFeatureDim() const {
+    return task_extractor->getFeatureDim();
+  }
+
+  size_t getDataFeatureDim() const {
+    return data_extractor->getFeatureDim();
+  }
+
+  void getTaskFeatures(taskid_t task_id, std::span<float> output) const {
+    task_extractor->getFeatures(task_id, output);
+  }
+
+  void getDataFeatures(dataid_t data_id, std::span<float> output) const {
+    data_extractor->getFeatures(data_id, output);
+  }
+
+}
 
 struct InDegreeTaskFeature : public Feature<InDegreeTaskFeature> {
-    InDegreeTaskFeature(const SchedulerState &state) : Feature<InDegreeTaskFeature>(state, NodeType::TASK) {}
+  InDegreeTaskFeature(const SchedulerState &state)
+      : Feature<InDegreeTaskFeature>(state, NodeType::TASK) {
+  }
 
-    size_t getFeatureDimImpl() const { return 1; }
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
 
-    static f_t get_in_degree(const ComputeTask &task) {
-      return static_cast<f_t>(task.get_dependencies().size());
-    }
+  static f_t get_in_degree(const ComputeTask &task) {
+    return static_cast<f_t>(task.get_dependencies().size());
+  }
 
-    template <typename ID, typename Span>
-    void extractFeatureImpl(ID task_id, Span&& output) const {
-        const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
-        output[0] = log(get_in_degree(task));
-    }
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span &&output) const {
+    const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+    output[0] = log(get_in_degree(task));
+  }
 };
 
 struct OutDegreeTaskFeature : public Feature<OutDegreeTaskFeature> {
-    OutDegreeTaskFeature(const SchedulerState &state) : Feature<OutDegreeTaskFeature>(state, NodeType::TASK) {}
+  OutDegreeTaskFeature(const SchedulerState &state)
+      : Feature<OutDegreeTaskFeature>(state, NodeType::TASK) {
+  }
 
-    size_t getFeatureDimImpl() const { return 1; }
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
 
-    static f_t get_out_degree(const ComputeTask &task) {
-      return static_cast<f_t>(task.get_dependents().size());
-    }
+  static f_t get_out_degree(const ComputeTask &task) {
+    return static_cast<f_t>(task.get_dependents().size());
+  }
 
-    template <typename ID, typename Span>
-    void extractFeatureImpl(ID task_id, Span&& output) const {
-        const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
-        output[0] = log(get_out_degree(task));
-    }
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span &&output) const {
+    const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+    output[0] = log(get_out_degree(task));
+  }
 };
 
 struct DurationTaskFeature : public Feature<DurationTaskFeature> {
-    DurationTaskFeature(const SchedulerState &state) : Feature<DurationTaskFeature>(state, NodeType::TASK) {}
+  DurationTaskFeature(const SchedulerState &state)
+      : Feature<DurationTaskFeature>(state, NodeType::TASK) {
+  }
 
-    size_t getFeatureDimImpl() const { return 2; }
+  size_t getFeatureDimImpl() const {
+    return 2;
+  }
 
-    static f_t get_duration(const ComputeTask &task, DeviceType arch) {
-      return static_cast<f_t>(task.get_variant(arch).get_observed_time());
-    }
+  static f_t get_duration(const ComputeTask &task, DeviceType arch) {
+    return static_cast<f_t>(task.get_variant(arch).get_observed_time());
+  }
 
-    template <typename ID, typename Span>
-    void extractFeatureImpl(ID task_id, Span&& output) const {
-        const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
-        output[0] = log(get_duration(task, DeviceType::CPU));
-        output[1] = log(get_duration(task, DeviceType::GPU));
-    }
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span &&output) const {
+    const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+    output[0] = log(get_duration(task, DeviceType::CPU));
+    output[1] = log(get_duration(task, DeviceType::GPU));
+  }
 };
 
 struct MemoryTaskFeature : public Feature<MemoryTaskFeature> {
-    MemoryTaskFeature(const SchedulerState &state) : Feature<MemoryTaskFeature>(state, NodeType::TASK) {}
+  MemoryTaskFeature(const SchedulerState &state)
+      : Feature<MemoryTaskFeature>(state, NodeType::TASK) {
+  }
 
-    size_t getFeatureDimImpl() const { return 2; }
+  size_t getFeatureDimImpl() const {
+    return 2;
+  }
 
-    static f_t get_task_memcost(const ComputeTask &task, DeviceType arch) {
-      return static_cast<f_t>(task.get_variant(arch).get_mem());
-    }
+  static f_t get_task_memcost(const ComputeTask &task, DeviceType arch) {
+    return static_cast<f_t>(task.get_variant(arch).get_mem());
+  }
 
-    template <typename ID, typename Span>
-    void extractFeatureImpl(ID task_id, Span&& output) const {
-        const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
-        output[0] = log(get_task_memcost(task, DeviceType::CPU));
-        output[1] = log(get_task_memcost(task, DeviceType::GPU));
-    }
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span &&output) const {
+    const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+    output[0] = log(get_task_memcost(task, DeviceType::CPU));
+    output[1] = log(get_task_memcost(task, DeviceType::GPU));
+  }
 };
 
 struct EmptyTaskFeature : public Feature<EmptyTaskFeature> {
-    size_t dimension;
-    EmptyTaskFeature(const SchedulerState &state, size_t dimension) : Feature<EmptyTaskFeature>(state, NodeType::TASK), dimension(dimension) {}
+  size_t dimension;
+  EmptyTaskFeature(const SchedulerState &state, size_t dimension)
+      : Feature<EmptyTaskFeature>(state, NodeType::TASK), dimension(dimension) {
+  }
 
-    size_t getFeatureDimImpl() const { return dimension; }
+  size_t getFeatureDimImpl() const {
+    return dimension;
+  }
 
-    template <typename ID, typename Span>
-    void extractFeatureImpl(ID task_id, Span&& output) const {}
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span &&output) const {
+  }
 };
 
 struct OneHotMappedDeviceTaskFeature : public Feature<OneHotMappedDeviceTaskFeature> {
-    OneHotMappedDeviceTaskFeature(const SchedulerState &state) : Feature<OneHotMappedDeviceTaskFeature>(state, NodeType::TASK) {}
+  OneHotMappedDeviceTaskFeature(const SchedulerState &state)
+      : Feature<OneHotMappedDeviceTaskFeature>(state, NodeType::TASK) {
+  }
 
-    size_t getFeatureDimImpl() const { 
-          const auto &devices = this->state.get_device_manager().get_devices();
-          return devices.size();
-    }
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_device_manager().get_devices();
+    return devices.size();
+  }
 
-    template <typename ID, typename Span>
-    void extractFeatureImpl(ID task_id, Span&& output) const {
-        const auto &task_manager = state.get_task_manager();
-        one_hot(task_manager.state.get_mapping(task_id), output);
-    }
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span &&output) const {
+    const auto &task_manager = state.get_task_manager();
+    one_hot(task_manager.state.get_mapping(task_id), output);
+  }
 };
-
-
 
 struct NormalizationInfo {
   depcount_t max_in_degree;
@@ -198,7 +283,6 @@ struct NormalizationInfo {
   double stddev_data_size;
 };
 
-
 struct FeatureDimSpec {
   std::size_t max_candidates = 5;
   std::size_t max_devices = 8;
@@ -219,11 +303,23 @@ struct FeatureDimSpec {
 
   FeatureDimSpec() = default;
 
-  FeatureDimSpec(std::size_t max_candidates, std::size_t max_devices, std::size_t max_edges_tasks_tasks,
-              std::size_t max_edges_tasks_data)
+  FeatureDimSpec(std::size_t max_candidates, std::size_t max_devices,
+                 std::size_t max_edges_tasks_tasks, std::size_t max_edges_tasks_data)
       : max_candidates(max_candidates), max_devices(max_devices),
         max_edges_tasks_tasks(max_edges_tasks_tasks), max_edges_tasks_data(max_edges_tasks_data),
-        max_tasks(max_candidates * max_devices), max_data(max_tasks * max_edges_tasks_data) {}
+        max_tasks(max_candidates * max_devices), max_data(max_tasks * max_edges_tasks_data) {
+  }
+};
+
+template <typename... TaskFeatures> class NewObserverBase {
+
+public:
+  std::reference_wrapper<const SchedulerState> state;
+
+  FeatureExtractor<... TaskFeatures> task_feature_extractor;
+
+  NewObserverBase(const Simulator &simulator) : state(simulator.get_state()) {
+  }
 };
 
 struct Features {
@@ -258,7 +354,6 @@ struct DataDeviceEdges : public Features {
 struct TaskTaskEdges : public Features {
   op_t *edges;
 };
-
 
 class Observer {
 private:

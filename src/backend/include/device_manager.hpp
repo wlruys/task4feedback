@@ -4,60 +4,56 @@
 #include "tasks.hpp"
 #include <cassert>
 #include <functional>
+#include <unordered_map>
 
 class DeviceManager;
 
-template<typename T>
-struct ResourceEventArray{
-  timecount_t* times = NULL;
-  T* resources = NULL;
-  std::size_t size = 0;
+template <typename T> struct ResourceEventArray {
+  std::vector<timecount_t> times;
+  std::vector<T> resources;
+  std::size_t size;
 };
 
-template<typename T>
-struct ResourceEvent{
+template <typename T> struct ResourceEvent {
   timecount_t time = 0;
   T resource = 0;
 };
 
-template<typename T>
-class ResourceTracker {
+template <typename T> class ResourceTracker {
   std::vector<ResourceEvent<T>> events;
 
 public:
-
   ResourceTracker() {
-    #ifdef SIM_TRACK_RESOURCES
+#ifdef SIM_TRACK_RESOURCES
     events.reserve(2000);
-    #endif //SIM_TRACK_RESOURCES
+#endif // SIM_TRACK_RESOURCES
   }
 
   void add_set(timecount_t time, T resource) {
-    #ifdef SIM_TRACK_RESOURCES
+#ifdef SIM_TRACK_RESOURCES
     events.emplace_back(time, resource);
-    #endif //SIM_TRACK_RESOURCES
+#endif // SIM_TRACK_RESOURCES
   }
 
   void add_change(timecount_t time, T resource) {
-    #ifdef SIM_TRACK_RESOURCES
+#ifdef SIM_TRACK_RESOURCES
     events.emplace_back(time, resource);
-    #endif //SIM_TRACK_RESOURCES
+#endif // SIM_TRACK_RESOURCES
   }
 
   [[nodiscard]] T get_resource(timecount_t time) const {
-    //Assume events are sorted access with binary search
+    // Assume events are sorted access with binary search
 
-    #ifndef SIM_TRACK_RESOURCES
+#ifndef SIM_TRACK_RESOURCES
     return 0;
-    #endif //SIM_TRACK_RESOURCES
+#endif // SIM_TRACK_RESOURCES
 
     if (events.empty()) {
       return 0;
     }
 
-    auto it = std::lower_bound(events.begin(), events.end(), time, [](const ResourceEvent<T> &e, timecount_t t) {
-      return e.time < t;
-    });
+    auto it = std::lower_bound(events.begin(), events.end(), time,
+                               [](const ResourceEvent<T> &e, timecount_t t) { return e.time < t; });
     if (it == events.end()) {
       return events.back().resource;
     }
@@ -69,31 +65,30 @@ public:
   }
 
   ResourceEventArray<T> get_events() const {
-    //Returns a copy of the events
+    // Returns a copy of the events
     ResourceEventArray<T> result;
 
     result.size = events.size();
 
     if (result.size == 0) {
-      //If no events, return a single event with time 0 and resource 0
-      result.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t)));
-      result.resources = static_cast<T*>(malloc(sizeof(T)));
+      // If no events, return a single event with time 0 and resource 0
+      result.times.resize(1);
+      result.resources.resize(1);
       result.times[0] = 0;
       result.resources[0] = 0;
       return result;
     }
 
-    result.times = static_cast<timecount_t*>(malloc(sizeof(timecount_t) * events.size()));
-    result.resources = static_cast<T*>(malloc(sizeof(T) * events.size()));
+    result.times.resize(events.size());
+    result.resources.resize(events.size());
 
-    for(int i = 0; i < events.size(); i++){
+    for (int i = 0; i < events.size(); i++) {
       result.times[i] = events[i].time;
       result.resources[i] = events[i].resource;
     }
 
     return result;
   }
-
 };
 
 class DeviceResources {
@@ -114,7 +109,8 @@ public:
 
   DeviceResources(){};
 
-  DeviceResources(std::size_t n) : vcu(n, 0), mem(n, 0), vcu_tracker(n), mem_tracker(n) {}
+  DeviceResources(std::size_t n) : vcu(n, 0), mem(n, 0), vcu_tracker(n), mem_tracker(n) {
+  }
 
   DeviceResources(const DeviceResources &other) {
     vcu = other.vcu;
@@ -235,13 +231,15 @@ public:
   friend class DeviceManager;
 };
 
-
 class Devices {
 
 protected:
   std::vector<Device> devices;
   std::array<DeviceIDList, num_device_types> type_map;
   std::vector<std::string> device_names;
+
+  std::unordered_map<std::string, devid_t> device_name_map;
+  std::unordered_map<devid_t, devid_t> global_to_local;
 
   void resize(std::size_t n_devices) {
     devices.resize(n_devices);
@@ -285,12 +283,38 @@ public:
     return devices.at(id).arch;
   }
 
+  [[nodiscard]] devid_t get_device_id(std::string name) const {
+    return device_name_map.at(name);
+  }
+
+  [[nodiscard]] devid_t get_local_id(devid_t global_id) const {
+    return global_to_local.at(global_id);
+  }
+
+  [[nodiscard]] devid_t get_global_id(DeviceType arch, devid_t local_id) const {
+    return type_map.at(static_cast<std::size_t>(arch)).at(local_id);
+  }
+
   void create_device(devid_t id, std::string name, DeviceType arch, vcu_t vcu, mem_t mem) {
+    if (id >= devices.size()) {
+      resize(id + 1);
+    }
+
     assert(id < devices.size());
     devices.at(id) = Device(id, arch, vcu, mem);
     type_map.at(static_cast<std::size_t>(arch)).push_back(id);
 
+    device_name_map[name] = id;
+    devid_t local_id = type_map.at(static_cast<std::size_t>(arch)).size() - 1;
+    global_to_local[id] = local_id;
+
     device_names.at(id) = std::move(name);
+  }
+
+  devid_t append_device(std::string name, DeviceType arch, vcu_t vcu, mem_t mem) {
+    devid_t id = devices.size();
+    create_device(id, std::move(name), arch, vcu, mem);
+    return id;
   }
 
   friend class DeviceManager;
@@ -317,7 +341,7 @@ public:
 
   DeviceManager(Devices &devices_)
       : devices(devices_), mapped(devices_.size()), reserved(devices_.size()),
-        launched(devices_.size()) {};
+        launched(devices_.size()){};
 
   DeviceManager(const DeviceManager &other) = default;
 
@@ -417,12 +441,14 @@ public:
     return state_resources.overflow_vcu(id, vcu_, device_max_resources.vcu);
   }
 
-  template <TaskState State> void add_resources(devid_t id, const Resources &r, timecount_t current_time) {
+  template <TaskState State>
+  void add_resources(devid_t id, const Resources &r, timecount_t current_time) {
     auto &state_resources = get_resources<State>();
     state_resources.add_resources(id, r, current_time);
   }
 
-  template <TaskState State> void remove_resources(devid_t id, const Resources &r, timecount_t current_time) {
+  template <TaskState State>
+  void remove_resources(devid_t id, const Resources &r, timecount_t current_time) {
     auto &state_resources = get_resources<State>();
     state_resources.remove_resources(id, r, current_time);
   }
@@ -434,12 +460,14 @@ public:
     return state_resources.overflow_resources(id, r, device_max_resources);
   }
 
-  template <TaskState State> [[nodiscard]] vcu_t get_vcu_at_time(devid_t id, timecount_t time) const {
+  template <TaskState State>
+  [[nodiscard]] vcu_t get_vcu_at_time(devid_t id, timecount_t time) const {
     auto &state_resources = get_resources<State>();
     return state_resources.get_vcu_at_time(id, time);
   }
 
-  template <TaskState State> [[nodiscard]] mem_t get_mem_at_time(devid_t id, timecount_t time) const {
+  template <TaskState State>
+  [[nodiscard]] mem_t get_mem_at_time(devid_t id, timecount_t time) const {
     auto &state_resources = get_resources<State>();
     return state_resources.get_mem_at_time(id, time);
   }

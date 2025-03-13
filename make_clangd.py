@@ -1,5 +1,7 @@
 import os
 import yaml
+import nanobind
+import site
 
 
 def generate_clangd_config(output_file):
@@ -9,6 +11,16 @@ def generate_clangd_config(output_file):
     spdlog_path = os.path.join(current_dir, "external")
     backend_path = os.path.join(current_dir, "src", "backend")
     backend_inc_path = os.path.join(current_dir, "src", "backend", "include")
+    # Dynamically find nanobind include path
+    try:
+        nb_path = os.path.dirname(os.path.dirname(nanobind.__file__))
+        nanobind_inc_path = f"-I{os.path.join(nb_path, 'nanobind', 'include')}"
+    except ImportError:
+        print("Warning: nanobind package not found. Using default path.")
+        nanobind_inc_path = (
+            f"-I{os.path.join(site.getsitepackages()[0], 'nanobind', 'include')}"
+        )
+    print(f"nanobind include path: {nanobind_inc_path}")
 
     config = {
         "CompileFlags": {
@@ -25,6 +37,7 @@ def generate_clangd_config(output_file):
                 f"-I{backend_path}",
                 f"-I{backend_inc_path}",
                 f"-I{spdlog_path}",
+                f"{nanobind_inc_path}",
             ]
         },
         "Diagnostics": {
