@@ -1462,9 +1462,20 @@ class SimulatorFactory:
         input: SimulatorInput,
         graph_spec: fastsim.GraphSpec,
         observer_factory: ExternalObserverFactory | Type[ExternalObserverFactory],
+        internal_mapper: fastsim.Mapper | Type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
+        external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
+        seed: int = 0,
+        priority_seed:int = 0,
+        comm_seed:int = 0
     ):
         self.input = input
         self.graph_spec = graph_spec
+        self.internal_mapper = internal_mapper
+        self.external_mapper = external_mapper
+        
+        self.seed = seed
+        self.pseed = priority_seed
+        self.cseed = comm_seed
 
         if isinstance(observer_factory, type):
             observer_factory = observer_factory(graph_spec)
@@ -1472,22 +1483,43 @@ class SimulatorFactory:
 
     def create(
         self,
-        seed: int = 0,
+        seed: Optional[int] = None,
         priority_seed: Optional[int] = None,
         comm_seed: Optional[int] = None,
+        use_external_mapper: bool = True,
     ):
+        if seed is None: 
+            seed = self.seed
+            
         if priority_seed is None:
-            priority_seed = seed
+            priority_seed = self.pseed 
+            
         if comm_seed is None:
-            comm_seed = seed
+            comm_seed = self.cseed
+    
+        print(f"Using seed {seed} for task noise")
+        print(f"Using seed {priority_seed} for priority noise")
+        print(f"Using seed {comm_seed} for communication noise")
 
         self.input.noise.task_noise.set_seed(seed)
         self.input.noise.task_noise.set_pseed(priority_seed)
-        simulator = SimulatorDriver(self.input, observer_factory=self.observer_factory)
+        simulator = SimulatorDriver(self.input, observer_factory=self.observer_factory, internal_mapper=self.internal_mapper, external_mapper=self.external_mapper)
         simulator.initialize()
         simulator.initialize_data()
-        simulator.enable_external_mapper()
+        if use_external_mapper:
+            simulator.enable_external_mapper()
         return simulator
+    
+    def set_seed(self, seed: Optional[int] = None, priority_seed: Optional[int] = None, comm_seed: Optional[int] = None):
+        """
+        Set the seed for the simulator.
+        """
+        if seed is not None:
+            self.seed = seed
+        if priority_seed is not None:
+            self.pseed = priority_seed
+        if comm_seed is not None:
+            self.cseed = comm_seed
 
 
 def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth: int):
