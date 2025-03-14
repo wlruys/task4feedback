@@ -299,7 +299,9 @@ public:
       tasks.set_type(i, get_type(i));
       for (std::size_t j = 0; j < num_device_types; j++) {
         std::vector<int64_t> info = get_variant_info(i, static_cast<DeviceType>(j));
-        if (info[0] == 1) {
+        // GraphTemplate::add_task initializes all variants to DeviceType::NONE
+        // setting info[0] to -1
+        if (info[0] != -1) {
           tasks.add_variant(i, static_cast<DeviceType>(j), info[1], info[2], info[3]);
         }
       }
