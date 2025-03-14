@@ -6,15 +6,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional
-from .base import Cell, Edge 
+from .base import Cell, Edge
 from ..base import DataBlocks, DataKey
-from collections import defaultdict 
-from task4feedback.fastsim2 import TaskState 
+from collections import defaultdict
+from task4feedback.fastsim2 import TaskState
 import task4feedback.fastsim2 as fastsim
-import copy 
-from ..base import EnvironmentState 
+import copy
+from ..base import EnvironmentState
 
 device_to_color = ["gray", "blue", "green", "orange", "red"]
+
 
 def plot_edges(ax, points, edge_array, color="k", linewidth=1, alpha=0.5):
     lines = points[edge_array]  # shape: (num_edges, 2, 2)
@@ -404,9 +405,7 @@ def animate_state_list(graph, state_list):
                 if cell_id < len(graph.data.geometry.cells):
                     if state_type == fastsim.TaskState.LAUNCHED:
                         mapped_device = state.mapping_dict[task]
-                        cell_highlights[device_to_color[mapped_device]].append(
-                            cell_id
-                        )
+                        cell_highlights[device_to_color[mapped_device]].append(cell_id)
                         last_level_label[cell_id] = graph.task_to_level[task]
                         last_partition[cell_id] = mapped_device
 
@@ -459,6 +458,7 @@ def animate_state_list(graph, state_list):
     ani.event_source.add_callback(update_title)
     return ani
 
+
 def make_mesh_graph_animation(graph, state_list, title="mesh_animation", show=True):
     title = f"{title}.mp4"
     ani = animate_state_list(graph, state_list)
@@ -469,13 +469,16 @@ def make_mesh_graph_animation(graph, state_list, title="mesh_animation", show=Tr
     if show:
         plt.show()
     return ani
-    
-def animate_mesh_graph(env, time_interval=250, show=True):
-    current_time = env.simulator.time 
+
+
+def animate_mesh_graph(env, time_interval=250, show=True, title="mesh_animation"):
+    current_time = env.simulator.time
     state_list = []
     for t in range(0, current_time, time_interval):
         state = EnvironmentState.from_env(env, t)
         state_list.append(state)
 
-    return make_mesh_graph_animation(env.simulator.input.graph, state_list, title="mesh_animation", show=show)
-    
+    print(f"Number of states: {len(state_list)}")
+    return make_mesh_graph_animation(
+        env.simulator.input.graph, state_list, title=title, show=show
+    )

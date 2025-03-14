@@ -33,7 +33,10 @@ def init_weights(m):
 
 
 class HeteroDataWrapper(nn.Module):
-    def __init__(self, network: nn.Module):
+    def __init__(
+        self,
+        network: nn.Module,
+    ):
         super(HeteroDataWrapper, self).__init__()
         self.network = network
 
@@ -43,22 +46,34 @@ class HeteroDataWrapper(nn.Module):
         return True
 
     def _convert_to_heterodata(
-        self, obs: TensorDict, is_batch: bool = False
+        self,
+        obs: TensorDict,
+        is_batch: bool = False,
+        actions: Optional[TensorDict] = None,
     ) -> HeteroData:
+        # print("obs", obs.shape)
+        # if actions is not None:
+        #     print("actions", actions.shape)
         if not is_batch:
-            _obs = observation_to_heterodata(obs)
+            if actions is not None:
+                _obs = observation_to_heterodata(obs, actions=actions)
+            else:
+                _obs = observation_to_heterodata(obs)
             return _obs
 
         _h_data = []
         for i in range(obs.batch_size[0]):
-            _obs = observation_to_heterodata(obs[i])
+            if actions is not None:
+                _obs = observation_to_heterodata(obs[i], actions=actions[i])
+            else:
+                _obs = observation_to_heterodata(obs[i])
             _h_data.append(_obs)
 
         return Batch.from_data_list(_h_data)
 
-    def forward(self, obs: TensorDict):
+    def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
-        data = self._convert_to_heterodata(obs, is_batch)
+        data = self._convert_to_heterodata(obs, is_batch, actions=actions)
         return self.network(data)
 
 
@@ -510,7 +525,7 @@ class OldTaskAssignmentNet(nn.Module):
     def forward(self, data: HeteroData | Batch, counts=None):
         if next(self.parameters()).is_cuda:
             data = data.to("cuda")
-        
+
         task_embeddings = self.hetero_gat(data)
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
 
@@ -542,8 +557,6 @@ class OldValueNet(nn.Module):
         self.critic_head = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
 
     def forward(self, data: HeteroData | Batch, counts=None):
-        if next(self.parameters()).is_cuda:
-            data = data.to("cuda")
         task_embeddings = self.hetero_gat(data)
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
 
@@ -554,6 +567,48 @@ class OldValueNet(nn.Module):
             v = self.critic_head(task_embeddings)
             v = global_add_pool(v, task_batch)
             v = torch.div(v, counts)
+
+        return v
+
+
+class OldActionValueNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldActionValueNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
+        gat_output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        )
+
+        self.critic_head = OutputHead(
+            gat_output_dim + 1, layer_config.hidden_channels, 1
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        task_embeddings = self.hetero_gat(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+
+        if counts is None:
+            v = global_mean_pool(task_embeddings, task_batch)
+            actions = data["actions"].x
+            actions = actions.unsqueeze(1)
+            v = torch.cat([v, actions], dim=-1)
+            v = self.critic_head(v)
+
+        else:
+            v = global_mean_pool(task_embeddings, task_batch)
+            v = torch.div(v, counts)
+            actions = data["actions"].x
+            actions = actions.unsqueeze(1)
+            v = torch.cat([v, actions], dim=-1)
+            v = self.critic_head(v)
 
         return v
 
@@ -573,7 +628,7 @@ class OldSeparateNet(nn.Module):
         self.critic = OldValueNet(feature_config, layer_config, n_devices)
 
     def forward(self, data: HeteroData | Batch, counts=None):
-        #check the device of data["tasks"].x
+        # check the device of data["tasks"].x
         if next(self.actor.parameters()).is_cuda:
             data = data.to("cuda")
         d_logits = self.actor(data, counts)
