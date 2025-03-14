@@ -7,6 +7,7 @@ from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import (
     DefaultObserverFactory,
     SimulatorFactory,
+    SimulatorDriver,
     create_graph_spec,
 )
 
@@ -21,7 +22,12 @@ from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph, DataG
 
 class RuntimeEnv(EnvBase):
     def __init__(
-        self, simulator_factory, seed: int = 0, device="cpu", baseline_time=10000
+        self,
+        simulator_factory: SimulatorFactory,
+        seed: int = 0,
+        device="cpu",
+        baseline_time=10000,
+        use_eft=False,
     ):
         super().__init__(device=device)
 
@@ -36,18 +42,19 @@ class RuntimeEnv(EnvBase):
 
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
+        self.use_eft = use_eft
 
-    def _get_baseline(self, use_eft=False):
-        if use_eft:
+    def _get_baseline(self):
+        if self.use_eft:
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, (
-                f"Baseline returned unexpected final state: {final_state}"
-            )
-            return simulator_copy.time()
+            assert (
+                final_state == fastsim.ExecutionState.COMPLETE
+            ), f"Baseline returned unexpected final state: {final_state}"
+            return simulator_copy.time
         return self.baseline_time
 
     def _create_observation_spec(self) -> TensorSpec:
@@ -132,12 +139,13 @@ class RuntimeEnv(EnvBase):
         time = obs["observation"]["aux"]["time"].item()
 
         if not done:
-            assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-                f"Unexpected simulator status: {simulator_status}"
-            )
+            assert (
+                simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+            ), f"Unexpected simulator status: {simulator_status}"
         else:
-            obs = self._reset()
             baseline_time = self._get_baseline()
+            obs = self._reset()
+            print(f"Baseline time: {baseline_time}, time: {time}")
             reward[0] = 1 + (baseline_time - time) / baseline_time
 
         out = obs
@@ -148,9 +156,9 @@ class RuntimeEnv(EnvBase):
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.simulator = self.simulator_factory.create()
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-            f"Unexpected simulator status: {simulator_status}"
-        )
+        assert (
+            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+        ), f"Unexpected simulator status: {simulator_status}"
 
         obs = self._get_observation()
         # obs.set("time", obs["observation"]["aux"]["time"])
@@ -182,7 +190,7 @@ def make_simple_env_from_legacy(tasks, data):
 
 
 class InternalMapperRuntimeEnv(RuntimeEnv):
-    
+
     def _step(self, td: TensorDict) -> TensorDict:
         internal_mapper = self.simulator.internal_mapper
         candidate_workspace = torch.zeros(
@@ -191,20 +199,18 @@ class InternalMapperRuntimeEnv(RuntimeEnv):
         )
         self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[0].item()
-        scheduler_state: SchedulerState = self.simulator.state 
+        scheduler_state: SchedulerState = self.simulator.state
 
-        
         action = internal_mapper.map_task(
             global_task_id,
             scheduler_state,
         )
         print("Action: ", action)
-        new_action = torch.zeros(
-            (1,), dtype=torch.int64
-        )
-        new_action[0] = action.device   
+        new_action = torch.zeros((1,), dtype=torch.int64)
+        new_action[0] = action.device
         td.set_("action", new_action)
         return super()._step(td)
+
 
 def make_simple_env(graph: ComputeDataGraph):
     s = uniform_connected_devices(5, 1000000000, 1, 2000)

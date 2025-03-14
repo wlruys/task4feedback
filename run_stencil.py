@@ -44,8 +44,10 @@ def make_simple_env(tasks, data):
 
 
 def make_test_stencil_graph():
-    interior_size = task_duration * bandwidth
-    boundary_size = task_duration * bandwidth
+    # interior_size = task_duration * bandwidth
+    # boundary_size = task_duration * bandwidth
+    interior_size = 0
+    boundary_size = 0
     all_combinations = [list(c) for c in itertools.permutations(range(4))]
 
     def task_config(task_id: TaskID) -> TaskPlacementInfo:
@@ -86,7 +88,7 @@ def make_test_stencil_graph():
     data_config.width = 4
     data_config.initial_placement = blocked_initial_placement
     data_config.initial_sizes = sizes
-    config = StencilConfig(width=4, steps=14, task_config=task_config)
+    config = StencilConfig(width=4, steps=14, task_config=task_config, dimensions=2)
     tasks, data = make_graph(config, data_config=data_config)
     return tasks, data
 
@@ -94,23 +96,19 @@ def make_test_stencil_graph():
 if __name__ == "__main__":
     tasks, blocks = make_test_stencil_graph()
 
-    def make_env():
+    def make_env() -> RuntimeEnv:
         return make_simple_env(tasks, blocks)
 
     env = make_env()
 
-    feature_config = FeatureDimConfig.from_observer(env.observer)
-    layer_config = LayerConfig(hidden_channels=64, n_heads=2)
-    model = OldSeparateNet(
-        feature_config=feature_config,
-        layer_config=layer_config,
-        n_devices=n_devices,
-    )
-    config = PPOConfig(train_device=device)
-    run_ppo_torchrl(
-        model,
-        make_env,
-        config,
-        wandb_project="test_stencil",
-        wandb_exp_name="test_stencil",
-    )
+    start_logger()
+
+    sim = env.simulator
+    stencil_graph = env.simulator_factory.input.graph
+    # mapping = stencil_graph.get_mapping_from_locations()
+
+    # sim.disable_external_mapper()
+    sim.run()
+
+    print(f"Final state: {sim.status}")
+    print(f"Final time: {sim.time}")
