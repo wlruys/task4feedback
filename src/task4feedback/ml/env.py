@@ -7,7 +7,6 @@ from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import (
     DefaultObserverFactory,
     SimulatorFactory,
-    SimulatorDriver,
     create_graph_spec,
 )
 
@@ -23,17 +22,17 @@ from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph, DataG
 class RuntimeEnv(EnvBase):
     def __init__(
         self,
-        simulator_factory: SimulatorFactory,
+        simulator_factory,
         seed: int = 0,
         device="cpu",
         baseline_time=10000,
-        use_eft=False,
+        change_priority=False,
+        change_duration=False,
     ):
         super().__init__(device=device)
-        
+
         self.change_priority = change_priority
         self.change_duration = change_duration
-        
 
         self.simulator_factory = simulator_factory
         self.simulator = simulator_factory.create(seed)
@@ -47,10 +46,9 @@ class RuntimeEnv(EnvBase):
 
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
-        self.use_eft = use_eft
 
-    def _get_baseline(self):
-        if self.use_eft:
+    def _get_baseline(self, use_eft=True):
+        if use_eft:
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
@@ -148,10 +146,10 @@ class RuntimeEnv(EnvBase):
                 simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
             ), f"Unexpected simulator status: {simulator_status}"
         else:
-            baseline_time = self._get_baseline()
             obs = self._reset()
-            print(f"Baseline time: {baseline_time}, time: {time}")
+            baseline_time = self._get_baseline()
             reward[0] = 1 + (baseline_time - time) / baseline_time
+            print(f"Reward: {reward[0]}, baseline: {baseline_time}, time: {time}")
 
         out = obs
         out.set("reward", reward)
@@ -170,8 +168,10 @@ class RuntimeEnv(EnvBase):
             new_duration_seed = current_duration_seed + self.resets
         else:
             new_duration_seed = current_duration_seed
-        
-        self.simulator = self.simulator_factory.create(priority_seed=new_priority_seed, duration_seed=new_duration_seed)
+
+        self.simulator = self.simulator_factory.create(
+            priority_seed=new_priority_seed, duration_seed=new_duration_seed
+        )
         simulator_status = self.simulator.run_until_external_mapping()
         assert (
             simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
@@ -207,16 +207,28 @@ def make_simple_env_from_legacy(tasks, data):
     return env
 
 
-
 class MapperRuntimeEnv(RuntimeEnv):
-    
+
     def __init__(
-        self, simulator_factory, seed: int = 0, device="cpu", baseline_time=10000, 
-        use_external_mapper: bool = False, change_priority=False, change_duration=False
+        self,
+        simulator_factory,
+        seed: int = 0,
+        device="cpu",
+        baseline_time=10000,
+        use_external_mapper: bool = False,
+        change_priority=False,
+        change_duration=False,
     ):
-        super().__init__(simulator_factory, seed, device, baseline_time, change_priority, change_duration)
+        super().__init__(
+            simulator_factory,
+            seed,
+            device,
+            baseline_time,
+            change_priority,
+            change_duration,
+        )
         self.use_external_mapper = use_external_mapper
-    
+
     def _step(self, td: TensorDict) -> TensorDict:
         candidate_workspace = torch.zeros(
             self.simulator_factory.graph_spec.max_candidates,
@@ -225,6 +237,7 @@ class MapperRuntimeEnv(RuntimeEnv):
         self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[0].item()
         scheduler_state: SchedulerState = self.simulator.state
+
         if self.use_external_mapper:
             print("Using external mapper")
             external_mapper = self.simulator.external_mapper
@@ -238,33 +251,33 @@ class MapperRuntimeEnv(RuntimeEnv):
                 global_task_id,
                 scheduler_state,
             )
+
         print("Action: ", action)
         new_action = torch.zeros((1,), dtype=torch.int64)
         new_action[0] = action.device
         td.set_("action", new_action)
         return super()._step(td)
-    
+
     def set_internal_mapper(self, internal_mapper):
         self.simulator.internal_mapper = internal_mapper
-        
+
     def set_external_mapper(self, external_mapper):
         self.simulator.external_mapper = external_mapper
-        
+
     def enable_external_mapper(self):
         self.use_external_mapper = True
-        
+
     def disable_external_mapper(self):
         self.use_external_mapper = False
-        
+
     def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
         if seed is None:
             seed = 0
         else:
             seed = seed + 100
-            
+
         self.simulator_factory.set_seed(priority_seed=seed)
         return seed
-        
 
 
 def make_simple_env(graph: ComputeDataGraph):
