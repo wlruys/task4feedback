@@ -161,7 +161,7 @@ def run_ppo_cleanrl(
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(max_size=config.states_per_collection),
         sampler=SamplerWithoutReplacement(),
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=True,
         # transform=r2g,
     )
 
@@ -399,6 +399,7 @@ def run_ppo_torchrl(
                     loss_module.parameters(), max_norm=config.max_grad_norm
                 )
                 optimizer.step()
+
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))

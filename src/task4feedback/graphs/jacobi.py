@@ -220,7 +220,7 @@ class JacobiGraph(ComputeDataGraph):
 
     def get_cell_locations(self, as_dict: bool = True) -> list[int] | dict[int, int]:
         return self.data.get_locations(as_dict=as_dict)
-    
+
     def task_mapping_to_level_mapping(self, task_to_device: dict[int, int]):
         level_map = defaultdict(dict)
         for task_id, device in task_to_device.items():
@@ -248,16 +248,22 @@ class JacobiGraph(ComputeDataGraph):
     def get_num_iterations(self):
         return self.num_iterations
 
+    def permute_locations(
+        self, location_map: dict[int, int], permutation_idx: Optional[int] = None
+    ):
+        return self.data.permute_locations(location_map, permutation_idx)
+
 
 @dataclass
 class JacobiConfig:
     L: int = 4
-    n: int = 4 
+    n: int = 4
     steps: int = 1
     n_part: int = 4
     randomness: float = 0
     permute_idx: int = 0
-    
+
+
 class JacobiVariant(VariantBuilder):
     @staticmethod
     def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
@@ -267,4 +273,4 @@ class JacobiVariant(VariantBuilder):
         if arch == DeviceType.GPU:
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
         else:
-            return None 
+            return VariantTuple(arch, memory_usage, vcu_usage, expected_time)

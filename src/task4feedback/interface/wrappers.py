@@ -54,7 +54,7 @@ class Graph:
         type = self.graph.get_type(id)
 
         return TaskTuple(id, name, tag, dependencies, read, write, type)
-    
+
     def __len__(self):
         return self.graph.size()
 
@@ -106,11 +106,11 @@ class Graph:
                     continue
 
                 variant = variant_builder.build_variant(arch, task)
-                
+
                 if variant is None:
                     continue
-                
-                vcu_usage =int(variant.vcu_usage * fastsim.MAX_VCUS)
+
+                vcu_usage = int(variant.vcu_usage * fastsim.MAX_VCUS)
                 self.graph.add_variant(
                     i,
                     arch,
@@ -310,7 +310,7 @@ class DataBlocks:
 
     def get_id(self, name):
         return self.data.get_id(name)
-    
+
     def get_location(self, block):
         if isinstance(block, str):
             block = self.data.get_id(block)
@@ -532,19 +532,22 @@ class ExternalMapper:
         mapping_priority = state.get_mapping_priority(global_task_id)
         return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
 
+
 class StaticExternalMapper:
-    def __init__(self, mapper: Optional[Self] = None, mapping_dict: Optional[dict] = None):
+    def __init__(
+        self, mapper: Optional[Self] = None, mapping_dict: Optional[dict] = None
+    ):
         if mapper is not None:
             self.mapping_dict = mapper.mapping_dict
-        
+
         elif mapping_dict is not None:
             self.mapping_dict = mapping_dict
         else:
             self.mapping_dict = {}
-        
+
     def set_mapping_dict(self, mapping_dict):
-        self.mapping_dict = mapping_dict    
-        
+        self.mapping_dict = mapping_dict
+
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
         candidates = torch.zeros((1), dtype=torch.int64)
         simulator.simulator.get_mappable_candidates(candidates)
@@ -554,8 +557,7 @@ class StaticExternalMapper:
         state = simulator.simulator.get_state()
         mapping_priority = state.get_mapping_priority(global_task_id)
         return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
-    
-    
+
 
 @dataclass
 class SimulatorInput:
@@ -574,7 +576,7 @@ class SimulatorInput:
         transition_conditions: Optional[fastsim.TransitionConditions] = None,
     ):
         if transition_conditions is None:
-            #transition_conditions = fastsim.RangeTransitionConditions(50, 50, 80)
+            # transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
             transition_conditions = DefaultTransitionConditions()
         if noise is None:
             noise = NoiseConfig(graph, system)
@@ -803,9 +805,12 @@ class DefaultObserverFactory(ExternalObserverFactory):
 
 
 def observation_to_heterodata_truncate(
-    observation: TensorDict, idx: int = 0, device="cpu"
+    observation: TensorDict, idx: int = 0, device="cpu", actions=None
 ) -> HeteroData:
     hetero_data = HeteroData()
+
+    if actions is not None:
+        hetero_data["actions"].x = actions
 
     for node_type, node_data in observation["nodes"].items():
         count = node_data["count"][0]
@@ -829,9 +834,13 @@ def observation_to_heterodata_truncate(
 
 
 def observation_to_heterodata(
-    observation: TensorDict, idx: int = 0, device="cpu"
+    observation: TensorDict, idx: int = 0, device="cpu", actions=None
 ) -> HeteroData:
     hetero_data = HeteroData()
+
+    if actions is not None:
+        # print("setting actions", actions.shape)
+        hetero_data["actions"].x = actions
 
     for node_type, node_data in observation["nodes"].items():
         count = node_data["count"]
@@ -1273,21 +1282,21 @@ class SimulatorDriver:
 
     def get_state(self):
         return self.simulator.get_state()
-    
+
     @property
     def state(self):
         return self.simulator.get_state()
-    
+
     @property
     def status(self):
         return self.simulator.last_execution_state
-    
+
     def get_mappable_candidates(self, candidates: torch.Tensor):
         """
         Get the mappable candidates from the simulator.
         """
         return self.simulator.get_mappable_candidates(candidates)
-    
+
     def get_mapping_priority(self, task_id: int):
         """
         Get the mapping priority for a task.
@@ -1310,7 +1319,7 @@ class SimulatorDriver:
         The DATA input SHOULD NOT be modified after this is called.
         """
         self.simulator.initialize_data()
-        
+
     @property
     def mapper(self):
         if self.use_external_mapper:
@@ -1371,14 +1380,13 @@ class SimulatorDriver:
         Returns the current time (in microseconds) of the simulator state.
         """
         return self.simulator.get_current_time()
-    
+
     @property
     def time(self) -> int:
         """
         Returns the current time (in microseconds) of the simulator state.
         """
         return self.simulator.get_current_time()
-    
 
     def copy(self) -> "SimulatorDriver":
         """
@@ -1462,17 +1470,18 @@ class SimulatorFactory:
         input: SimulatorInput,
         graph_spec: fastsim.GraphSpec,
         observer_factory: ExternalObserverFactory | Type[ExternalObserverFactory],
-        internal_mapper: fastsim.Mapper | Type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
+        internal_mapper: fastsim.Mapper
+        | Type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
         external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
         seed: int = 0,
-        priority_seed:int = 0,
-        comm_seed:int = 0
+        priority_seed: int = 0,
+        comm_seed: int = 0,
     ):
         self.input = input
         self.graph_spec = graph_spec
         self.internal_mapper = internal_mapper
         self.external_mapper = external_mapper
-        
+
         self.seed = seed
         self.pseed = priority_seed
         self.cseed = comm_seed
@@ -1488,25 +1497,37 @@ class SimulatorFactory:
         comm_seed: Optional[int] = None,
         use_external_mapper: bool = True,
     ):
-        if duration_seed is None: 
+        if duration_seed is None:
             duration_seed = self.seed
-            
+
         if priority_seed is None:
-            priority_seed = self.pseed 
-            
+            priority_seed = self.pseed
+
         if comm_seed is None:
             comm_seed = self.cseed
 
         self.input.noise.task_noise.set_seed(duration_seed)
         self.input.noise.task_noise.set_pseed(priority_seed)
-        simulator = SimulatorDriver(self.input, observer_factory=self.observer_factory, internal_mapper=self.internal_mapper, external_mapper=self.external_mapper)
+        simulator = SimulatorDriver(
+            self.input,
+            observer_factory=self.observer_factory,
+            internal_mapper=self.internal_mapper,
+            external_mapper=self.external_mapper,
+        )
         simulator.initialize()
         simulator.initialize_data()
+        self.input.noise.task_noise.randomize_duration()
+        self.input.noise.task_noise.randomize_priority()
         if use_external_mapper:
             simulator.enable_external_mapper()
         return simulator
-    
-    def set_seed(self, seed: Optional[int] = None, priority_seed: Optional[int] = None, comm_seed: Optional[int] = None):
+
+    def set_seed(
+        self,
+        seed: Optional[int] = None,
+        priority_seed: Optional[int] = None,
+        comm_seed: Optional[int] = None,
+    ):
         """
         Set the seed for the simulator.
         """

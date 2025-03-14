@@ -25,7 +25,7 @@ class RuntimeEnv(EnvBase):
         simulator_factory,
         seed: int = 0,
         device="cpu",
-        baseline_time=10000,
+        baseline_time=56000,
         change_priority=False,
         change_duration=False,
     ):
@@ -146,10 +146,12 @@ class RuntimeEnv(EnvBase):
                 simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
             ), f"Unexpected simulator status: {simulator_status}"
         else:
-            obs = self._reset()
+            # obs = self._reset()
             baseline_time = self._get_baseline()
             reward[0] = 1 + (baseline_time - time) / baseline_time
-            print(f"Reward: {reward[0]}, baseline: {baseline_time}, time: {time}")
+            print(
+                f"Reward: {reward[0].item()}, Time: {time}, Baseline: {baseline_time}"
+            )
 
         out = obs
         out.set("reward", reward)
@@ -164,13 +166,22 @@ class RuntimeEnv(EnvBase):
             new_priority_seed = current_priority_seed + self.resets
         else:
             new_priority_seed = current_priority_seed
+        # print("New priority seed: ", new_priority_seed)
         if self.change_duration:
             new_duration_seed = current_duration_seed + self.resets
         else:
             new_duration_seed = current_duration_seed
 
+        new_priority_seed = int(new_priority_seed)
+        new_duration_seed = int(new_duration_seed)
+
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
+        )
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
+            f"Unexpected simulator status: {simulator_status}"
         )
         simulator_status = self.simulator.run_until_external_mapping()
         assert (
@@ -208,15 +219,14 @@ def make_simple_env_from_legacy(tasks, data):
 
 
 class MapperRuntimeEnv(RuntimeEnv):
-
     def __init__(
         self,
         simulator_factory,
         seed: int = 0,
         device="cpu",
-        baseline_time=10000,
+        baseline_time=56000,
         use_external_mapper: bool = False,
-        change_priority=False,
+        change_priority=True,
         change_duration=False,
     ):
         super().__init__(
@@ -239,20 +249,17 @@ class MapperRuntimeEnv(RuntimeEnv):
         scheduler_state: SchedulerState = self.simulator.state
 
         if self.use_external_mapper:
-            print("Using external mapper")
             external_mapper = self.simulator.external_mapper
             action = external_mapper.map_tasks(
                 self.simulator,
             )[0]
         else:
-            print("Using internal mapper")
             internal_mapper = self.simulator.internal_mapper
             action = internal_mapper.map_task(
                 global_task_id,
                 scheduler_state,
             )
 
-        print("Action: ", action)
         new_action = torch.zeros((1,), dtype=torch.int64)
         new_action[0] = action.device
         td.set_("action", new_action)
@@ -274,7 +281,7 @@ class MapperRuntimeEnv(RuntimeEnv):
         if seed is None:
             seed = 0
         else:
-            seed = seed + 100
+            seed = seed + 1e7
 
         self.simulator_factory.set_seed(priority_seed=seed)
         return seed
