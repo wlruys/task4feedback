@@ -33,7 +33,7 @@ void init_device_ext(nb::module_ &m) {
       .def_ro("vcus", &Resources::vcu)
       .def_ro("mem", &Resources::mem);
 
-  using ResourceEventType = ResourceEvent<uint64_t>;
+  using ResourceEventType = ResourceEvent<int64_t>;
   nb::class_<ResourceEventType>(m, "ResourceEvent")
       .def(nb::init<>())
       .def(nb::init<timecount_t, mem_t>())
