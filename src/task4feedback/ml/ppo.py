@@ -2,25 +2,15 @@ from .models import *
 from .util import *
 from dataclasses import dataclass
 from typing import Callable
-from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
+from torchrl.collectors import MultiSyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
-from torch_geometric.data import HeteroData, Batch
+from torchrl.record.loggers.wandb import WandbLogger
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 from torchrl.modules import ProbabilisticActor, ValueOperator, ActorCriticWrapper
-import tensordict
-from tensordict.nn import (
-    TensorDictModule,
-    ProbabilisticTensorDictModule,
-    TensorDictSequential,
-)
-import torchrl
-import torch_geometric
-import aim
-from aim.pytorch import track_gradients_dists, track_params_dists
-from torchrl.envs.transforms import Reward2GoTransform
+from tensordict.nn import TensorDictModule
 from torch_geometric.loader import DataLoader
 import copy
 
@@ -291,8 +281,16 @@ def run_ppo_cleanrl(
 
 
 def run_ppo_torchrl(
-    actor_critic_base: nn.Module, make_env: Callable[[], EnvBase], config: PPOConfig
+    actor_critic_base: nn.Module,
+    make_env: Callable[[], EnvBase],
+    config: PPOConfig,
+    wandb_project: str = "run_ppo_torchrl",
+    wandb_exp_name: str = "run_ppo_torchrl",
 ):
+    logger = WandbLogger(
+        project=wandb_project,
+        exp_name=wandb_exp_name,
+    )
     # using torchrl built ins
 
     _actor_td = HeteroDataWrapper(actor_critic_base.actor)
@@ -339,7 +337,7 @@ def run_ppo_torchrl(
             max_size=config.states_per_collection, device=config.train_device
         ),
         sampler=SamplerWithoutReplacement(),
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
 
     train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
@@ -405,5 +403,11 @@ def run_ppo_torchrl(
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
+        logger.log_scalar("Average Return", avg_non_zero_reward)
+        logger.log_scalar("loss_objective", loss_vals["loss_objective"].item())
+        logger.log_scalar("loss_critic", loss_vals["loss_critic"].item())
+        logger.log_scalar("loss_entropy", loss_vals["loss_entropy"].item())
+        logger.log_scalar("loss_total", loss_value.item())
+        logger.log_scalar("grad_norm", grad_norm)
 
     collector.shutdown()

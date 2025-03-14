@@ -7,12 +7,14 @@ CompileFlags:
   - -Werror
   - -Wshadow
   - -Wconversion
-  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/external/tabulate/include
-  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/external/doctest
-  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/src/backend
-  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/src/backend/include
-  - -I/Users/wlruys/workspace/simulator_jacobi/task4feedback/external
-  - -I/Users/wlruys/mamba/envs/simdev_311/lib/python3.11/site-packages/nanobind/include
+  - -I/Users/jaeyoung/work/nanobind_task4feedback/external/tabulate/include
+  - -I/Users/jaeyoung/work/nanobind_task4feedback/external/doctest
+  - -I/Users/jaeyoung/work/nanobind_task4feedback/src/backend
+  - -I/Users/jaeyoung/work/nanobind_task4feedback/src/backend/include
+  - -I/Users/jaeyoung/work/nanobind_task4feedback/external
+  - -I/Users/jaeyoung/work/nanobind_task4feedback/venv/lib/python3.11/site-packages/nanobind/include
+  - -I/opt/homebrew/Cellar/llvm/19.1.2/include/c++/v1
+  - -I/Library/Frameworks/Python.framework/Versions/3.11/include/python3.11
 Diagnostics:
   UnusedIncludes: Strict
   ClangTidy:

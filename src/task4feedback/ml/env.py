@@ -47,17 +47,17 @@ class RuntimeEnv(EnvBase):
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
 
-    def _get_baseline(self, use_eft=False):
+    def _get_baseline(self, use_eft=True):
         if use_eft:
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, (
-                f"Baseline returned unexpected final state: {final_state}"
-            )
-            return simulator_copy.time()
+            assert (
+                final_state == fastsim.ExecutionState.COMPLETE
+            ), f"Baseline returned unexpected final state: {final_state}"
+            return simulator_copy.time
         return self.baseline_time
 
     def _create_observation_spec(self) -> TensorSpec:
@@ -142,9 +142,9 @@ class RuntimeEnv(EnvBase):
         time = obs["observation"]["aux"]["time"].item()
 
         if not done:
-            assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-                f"Unexpected simulator status: {simulator_status}"
-            )
+            assert (
+                simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+            ), f"Unexpected simulator status: {simulator_status}"
         else:
             # obs = self._reset()
             baseline_time = self._get_baseline()
@@ -183,6 +183,10 @@ class RuntimeEnv(EnvBase):
         assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
             f"Unexpected simulator status: {simulator_status}"
         )
+        simulator_status = self.simulator.run_until_external_mapping()
+        assert (
+            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+        ), f"Unexpected simulator status: {simulator_status}"
 
         obs = self._get_observation()
         # obs.set("time", obs["observation"]["aux"]["time"])
