@@ -180,10 +180,6 @@ class RuntimeEnv(EnvBase):
         )
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-            f"Unexpected simulator status: {simulator_status}"
-        )
-        simulator_status = self.simulator.run_until_external_mapping()
         assert (
             simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
         ), f"Unexpected simulator status: {simulator_status}"
