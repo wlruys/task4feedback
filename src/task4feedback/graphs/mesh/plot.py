@@ -394,7 +394,7 @@ def animate_state_list(graph, state_list):
     highlight_sequence = []
     last_level_label = {}
     last_partition = graph.get_cell_locations(as_dict=False)
-
+    s = 0
     for state in state_list:
         cell_highlights = defaultdict(list)
         cell_labels = defaultdict(list)
@@ -402,6 +402,7 @@ def animate_state_list(graph, state_list):
         for state_type, tasks in state.compute_tasks_by_state.items():
             for task in tasks:
                 cell_id = graph.task_to_cell[task]
+
                 if cell_id < len(graph.data.geometry.cells):
                     if state_type == fastsim.TaskState.LAUNCHED:
                         mapped_device = state.mapping_dict[task]

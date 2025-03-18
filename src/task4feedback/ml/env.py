@@ -2,6 +2,7 @@ from task4feedback import fastsim2 as fastsim
 from task4feedback.interface import *
 import torch
 from typing import Optional, List
+import numpy as np
 
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import (
@@ -17,6 +18,7 @@ import tensordict
 from tensordict import TensorDict
 from aim.pytorch import track_gradients_dists, track_params_dists
 from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph, DataGeometry
+import random
 
 
 class RuntimeEnv(EnvBase):
@@ -118,6 +120,7 @@ class RuntimeEnv(EnvBase):
         chosen_device = td["action"].item()
         local_id = 0
         device = chosen_device
+        # print("Chosen device: ", chosen_device)
         candidate_workspace = torch.zeros(
             self.simulator_factory.graph_spec.max_candidates,
             dtype=torch.int64,
@@ -149,6 +152,7 @@ class RuntimeEnv(EnvBase):
             # obs = self._reset()
             baseline_time = self._get_baseline()
             reward[0] = 1 + (baseline_time - time) / baseline_time
+            # reward[0] = time
             print(
                 f"Reward: {reward[0].item()}, Time: {time}, Baseline: {baseline_time}"
             )
@@ -196,6 +200,8 @@ class RuntimeEnv(EnvBase):
 
     def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
         torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
         self.simulator_factory.set_seed(priority_seed=seed)
 
 
@@ -300,3 +306,93 @@ def make_simple_env(graph: ComputeDataGraph):
     env = TransformedEnv(env, TrajCounter())
 
     return env
+
+
+class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
+    def __init__(
+        self,
+        simulator_factory,
+        seed: int = 0,
+        device="cpu",
+        baseline_time=56000,
+        use_external_mapper: bool = False,
+        change_priority=True,
+        change_duration=False,
+        change_locations=False,
+        location_seed=0,
+        location_randomness=1,
+        location_list=[1, 2, 3, 4],
+    ):
+        super().__init__(
+            simulator_factory=simulator_factory,
+            seed=seed,
+            device=device,
+            baseline_time=baseline_time,
+            use_external_mapper=use_external_mapper,
+            change_priority=change_priority,
+            change_duration=change_duration,
+        )
+        self.change_locations = change_locations
+        self.location_seed = 0
+
+        graph = simulator_factory.input.graph
+        assert hasattr(graph, "get_cell_locations")
+        assert hasattr(graph, "set_cell_locations")
+        assert hasattr(graph, "randomize_locations")
+        self.initial_location_list = graph.get_cell_locations()
+        self.location_randomness = location_randomness
+        self.location_list = location_list
+
+        random.seed(self.location_seed)
+
+        if change_locations:
+            graph.randomize_locations(
+                self.location_randomness, self.location_list, verbose=True
+            )
+
+    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+        self.resets += 1
+        current_priority_seed = self.simulator_factory.pseed
+        current_duration_seed = self.simulator_factory.seed
+
+        if self.change_locations:
+            new_location_seed = self.location_seed + self.resets
+            # Load initial location list
+            graph = self.simulator_factory.input.graph
+            graph.set_cell_locations(self.initial_location_list)
+
+            random.seed(new_location_seed)
+            graph.randomize_locations(
+                self.location_randomness, self.location_list, verbose=True
+            )
+
+        if self.change_priority:
+            new_priority_seed = current_priority_seed + self.resets
+        else:
+            new_priority_seed = current_priority_seed
+
+        if self.change_duration:
+            new_duration_seed = current_duration_seed + self.resets
+        else:
+            new_duration_seed = current_duration_seed
+
+        new_priority_seed = int(new_priority_seed)
+        new_duration_seed = int(new_duration_seed)
+
+        self.simulator = self.simulator_factory.create(
+            priority_seed=new_priority_seed, duration_seed=new_duration_seed
+        )
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
+            f"Unexpected simulator status: {simulator_status}"
+        )
+
+        obs = self._get_observation()
+        return obs
+
+    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
+        s = super()._set_seed(seed, static_seed)
+        # if s is not None:
+        #     self.location_seed = s
+        return s

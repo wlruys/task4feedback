@@ -21,7 +21,9 @@ def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
 
     jgraph.set_cell_locations(partition)
 
-    jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
+    jgraph.randomize_locations(
+        config.randomness, location_list=[1, 2, 3, 4], verbose=True
+    )
 
     location_map = {
         1: 1,

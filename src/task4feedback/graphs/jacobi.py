@@ -7,6 +7,10 @@ import random
 from typing import Optional
 from itertools import permutations
 from collections import defaultdict
+from ..interface.wrappers import ExternalMapper
+import torch
+from typing import Self
+from task4feedback import fastsim2 as fastsim
 
 
 class JacobiData(DataGeometry):
@@ -170,10 +174,6 @@ class JacobiGraph(ComputeDataGraph):
 
         self.fill_data_flow_dependencies()
 
-        # print tasks and dependencies
-        # for task in self:
-        #   print(task)
-
     def __init__(self, geometry: Geometry, num_iterations: int):
         super(JacobiGraph, self).__init__()
         data = JacobiData.from_mesh(geometry)
@@ -274,3 +274,63 @@ class JacobiVariant(VariantBuilder):
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
         else:
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
+
+
+class PartitionMapper:
+    def __init__(
+        self, mapper: Optional[Self] = None, cell_to_mapping: Optional[dict] = None
+    ):
+        if mapper is not None:
+            self.cell_to_mapping = mapper.cell_to_mapping
+
+        elif cell_to_mapping is not None:
+            self.cell_to_mapping = cell_to_mapping
+        else:
+            self.cell_to_mapping = {}
+
+    def set_mapping_dict(self, cell_to_mapping):
+        self.cell_to_mapping = cell_to_mapping
+
+    def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        candidates = torch.zeros((1), dtype=torch.int64)
+        simulator.simulator.get_mappable_candidates(candidates)
+        global_task_id = candidates[0].item()
+        local_id = 0
+        graph = simulator.input.graph
+        assert isinstance(graph, JacobiGraph)
+        cell_id = graph.task_to_cell[global_task_id]
+
+        device = self.cell_to_mapping[cell_id]
+        state = simulator.simulator.get_state()
+        mapping_priority = state.get_mapping_priority(global_task_id)
+        return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
+
+
+class LevelPartitionMapper:
+    def __init__(
+        self, mapper: Optional[Self] = None, level_cell_mapping: Optional[dict] = None
+    ):
+        if mapper is not None:
+            self.level_cell_mapping = mapper.level_cell_mapping
+
+        elif level_cell_mapping is not None:
+            self.level_cell_mapping = level_cell_mapping
+        else:
+            self.level_cell_mapping = {}
+
+    def set_mapping_dict(self, level_cell_mapping):
+        self.level_cell_mapping = level_cell_mapping
+
+    def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        candidates = torch.zeros((1), dtype=torch.int64)
+        simulator.simulator.get_mappable_candidates(candidates)
+        global_task_id = candidates[0].item()
+        local_id = 0
+        graph = simulator.input.graph
+        assert isinstance(graph, JacobiGraph)
+        level = graph.task_to_level[global_task_id]
+        cell_id = graph.task_to_cell[global_task_id]
+        device = self.level_cell_mapping[level][cell_id]
+        state = simulator.simulator.get_state()
+        mapping_priority = state.get_mapping_priority(global_task_id)
+        return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
