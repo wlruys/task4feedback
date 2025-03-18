@@ -18,3 +18,5 @@ runs/
 env/
 test/run_tests.sh
 wandb/
+*.rpb/
+*.pth

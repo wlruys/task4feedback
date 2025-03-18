@@ -7,10 +7,10 @@ import random
 from typing import Optional
 from itertools import permutations
 from collections import defaultdict
-from ..interface.wrappers import ExternalMapper
 import torch
 from typing import Self
 from task4feedback import fastsim2 as fastsim
+from ..interface.wrappers import *
 
 
 class JacobiData(DataGeometry):
@@ -334,3 +334,120 @@ class LevelPartitionMapper:
         state = simulator.simulator.get_state()
         mapping_priority = state.get_mapping_priority(global_task_id)
         return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
+
+
+@dataclass(kw_only=True)
+class XYExternalObserver(ExternalObserver):
+    graph: Graph
+
+    def task_observation(
+        self, output: TensorDict, task_ids: Optional[torch.Tensor] = None
+    ):
+        if task_ids is None:
+            n_candidates = output["aux"]["candidates"]["count"][0]
+            task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
+            output["nodes"]["tasks"]["attr"][:n_candidates, -1] = 1
+        _, count = self.get_bidirectional_neighborhood(
+            task_ids, output["nodes"]["tasks"]["glb"]
+        )
+        output["nodes"]["tasks"]["count"][0] = count
+        self.get_task_features(
+            output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
+        )
+        for i, id in enumerate(output["nodes"]["tasks"]["glb"][:count]):
+            id = int(id)
+            cell_id = self.graph.task_to_cell[id]
+            centroid = self.graph.data.geometry.cell_points[
+                self.graph.data.geometry.cells[cell_id]
+            ].mean(axis=0)
+            centroid = np.round(centroid, 2)
+            output["nodes"]["tasks"]["attr"][i][-3] = centroid[0] / 4
+            output["nodes"]["tasks"]["attr"][i][-2] = centroid[1] / 4
+
+
+@dataclass(kw_only=True)
+class XYExternalObserverFactory(ExternalObserverFactory):
+    graph: Graph
+
+    def create(self, simulator: Simulator):
+        state = simulator.get_state()
+        graph_spec = self.graph_spec
+        graph_extractor = self.graph_extractor_t(state)
+        task_feature_extractor = self.task_feature_factory.create(state)
+        data_feature_extractor = self.data_feature_factory.create(state)
+        device_feature_extractor = self.device_feature_factory.create(state)
+        task_task_feature_extractor = self.task_task_feature_factory.create(state)
+        task_data_feature_extractor = self.task_data_feature_factory.create(state)
+        task_device_feature_extractor = (
+            self.task_device_feature_factory.create(state)
+            if self.task_device_feature_factory is not None
+            else None
+        )
+        data_device_feature_extractor = (
+            self.data_device_feature_factory.create(state)
+            if self.data_device_feature_factory is not None
+            else None
+        )
+
+        return XYExternalObserver(
+            simulator,
+            graph_spec,
+            graph_extractor,
+            task_feature_extractor,
+            data_feature_extractor,
+            device_feature_extractor,
+            task_task_feature_extractor,
+            task_data_feature_extractor,
+            task_device_feature_extractor,
+            data_device_feature_extractor,
+            graph=self.graph,
+        )
+
+
+class XYObserverFactory(XYExternalObserverFactory):
+    def __init__(self, spec: fastsim.GraphSpec, graph: Graph):
+        self.graph = graph
+        graph_extractor_t = fastsim.GraphExtractor
+        task_feature_factory = FeatureExtractorFactory()
+        task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        task_feature_factory.add(fastsim.TaskStateFeature)
+        task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+        task_feature_factory.add(
+            fastsim.EmptyTaskFeature, 3
+        )  # 2 for x, y position, last for whether it is mapped
+
+        data_feature_factory = FeatureExtractorFactory()
+        # data_feature_factory.add(fastsim.DataSizeFeature)
+        data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+
+        device_feature_factory = FeatureExtractorFactory()
+        device_feature_factory.add(fastsim.DeviceArchitectureFeature)
+        device_feature_factory.add(fastsim.DeviceIDFeature)
+        device_feature_factory.add(fastsim.DeviceMemoryFeature)
+        device_feature_factory.add(fastsim.DeviceTimeFeature)
+
+        task_task_feature_factory = EdgeFeatureExtractorFactory()
+        task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
+
+        task_data_feature_factory = EdgeFeatureExtractorFactory()
+        task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
+        task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
+
+        task_device_feature_factory = EdgeFeatureExtractorFactory()
+        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
+        data_device_feature_factory = None
+
+        super().__init__(
+            spec,
+            graph_extractor_t,
+            task_feature_factory,
+            data_feature_factory,
+            device_feature_factory,
+            task_task_feature_factory,
+            task_data_feature_factory,
+            task_device_feature_factory,
+            data_device_feature_factory,
+            graph=graph,
+        )

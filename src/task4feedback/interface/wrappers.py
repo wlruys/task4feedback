@@ -1237,8 +1237,9 @@ class SimulatorDriver:
     def __init__(
         self,
         input: SimulatorInput,
-        internal_mapper: fastsim.Mapper
-        | Type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
+        internal_mapper: (
+            fastsim.Mapper | Type[fastsim.Mapper]
+        ) = fastsim.DequeueEFTMapper,
         external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
         observer_factory: Optional[ExternalObserverFactory] = None,
         simulator: Optional[fastsim.Simulator] = None,
@@ -1470,8 +1471,9 @@ class SimulatorFactory:
         input: SimulatorInput,
         graph_spec: fastsim.GraphSpec,
         observer_factory: ExternalObserverFactory | Type[ExternalObserverFactory],
-        internal_mapper: fastsim.Mapper
-        | Type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
+        internal_mapper: (
+            fastsim.Mapper | Type[fastsim.Mapper]
+        ) = fastsim.DequeueEFTMapper,
         external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
         seed: int = 0,
         priority_seed: int = 0,
