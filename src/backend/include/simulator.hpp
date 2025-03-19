@@ -275,6 +275,10 @@ public:
     return scheduler.get_state().get_global_time();
   }
 
+  [[nodiscard]] timecount_t get_task_finish_time(taskid_t task_id) const {
+    return scheduler.get_state().get_task_manager().records.get_completed_time(task_id);
+  }
+
   void add_task_breakpoint(EventType type, taskid_t task) {
     scheduler.breakpoints.add_breakpoint(type, task);
   }

@@ -13,6 +13,7 @@ from torchrl.modules import ProbabilisticActor, ValueOperator, ActorCriticWrappe
 from tensordict.nn import TensorDictModule
 from torch_geometric.loader import DataLoader
 import copy
+from tensordict import TensorDictBase, TensorDict
 
 
 @dataclass
@@ -364,6 +365,8 @@ def run_ppo_torchrl(
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
     for i, tensordict_data in enumerate(collector):
+        if i >= config.num_collections:
+            break
         print(f"Collection: {i}")
         tensordict_data = tensordict_data.to(config.train_device, non_blocking=True)
 

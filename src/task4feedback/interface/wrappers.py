@@ -1389,6 +1389,12 @@ class SimulatorDriver:
         """
         return self.simulator.get_current_time()
 
+    def task_finish_time(self, task_id: int) -> int:
+        """
+        Returns the finish time (in microseconds) of a task.
+        """
+        return self.simulator.get_task_finish_time(task_id)
+
     def copy(self) -> "SimulatorDriver":
         """
         Initialize a copy of the simulator driver at the current state (may be initialized if the source simulator is).
@@ -1498,7 +1504,7 @@ class SimulatorFactory:
         priority_seed: Optional[int] = None,
         comm_seed: Optional[int] = None,
         use_external_mapper: bool = True,
-    ):
+    ) -> SimulatorDriver:
         if duration_seed is None:
             duration_seed = self.seed
 
