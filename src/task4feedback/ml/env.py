@@ -22,7 +22,7 @@ from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph, DataG
 class RuntimeEnv(EnvBase):
     def __init__(
         self,
-        simulator_factory,
+        simulator_factory: SimulatorFactory,
         seed: int = 0,
         device="cpu",
         baseline_time=56000,
@@ -35,7 +35,8 @@ class RuntimeEnv(EnvBase):
         self.change_duration = change_duration
 
         self.simulator_factory = simulator_factory
-        self.simulator = simulator_factory.create(seed)
+        self.simulator: SimulatorDriver = simulator_factory.create(seed)
+
         self.buffer_idx = 0
         self.resets = 0
 
@@ -46,6 +47,7 @@ class RuntimeEnv(EnvBase):
 
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
+        self.mapping_history = [-1 for _ in range(16)]
 
     def _get_baseline(self, use_eft=True):
         if use_eft:
@@ -115,9 +117,9 @@ class RuntimeEnv(EnvBase):
         self.buffer_idx += 1
 
     def _step(self, td: TensorDict) -> TensorDict:
+        assert self.makespan > 0, "Makespan not set"
         chosen_device = td["action"].item()
         local_id = 0
-        device = chosen_device
         candidate_workspace = torch.zeros(
             self.simulator_factory.graph_spec.max_candidates,
             dtype=torch.int64,
@@ -128,30 +130,33 @@ class RuntimeEnv(EnvBase):
         reserving_priority = mapping_priority
         launching_priority = mapping_priority
         actions = [
-            fastsim.Action(local_id, device, reserving_priority, launching_priority)
+            fastsim.Action(
+                local_id, chosen_device, reserving_priority, launching_priority
+            )
         ]
         self.simulator.simulator.map_tasks(actions)
+        dummy_sim = self.simulator.copy()
+        dummy_sim.disable_external_mapper()
+        dummy_sim.run()
         simulator_status = self.simulator.run_until_external_mapping()
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
-
+        self.mapping_history[global_task_id % 16] = chosen_device
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
-        reward[0] = 0
+        if dummy_sim.time > self.makespan:
+            reward[0] = -1
+        elif dummy_sim.time < self.makespan:
+            reward[0] = 1
+        else:
+            reward[0] = 0
+        self.makespan = dummy_sim.time
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
 
-        if not done:
-            assert (
-                simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
-            ), f"Unexpected simulator status: {simulator_status}"
-        else:
-            # obs = self._reset()
+        if done:
             baseline_time = self._get_baseline()
-            reward[0] = 1 + (baseline_time - time) / baseline_time
-            print(
-                f"Reward: {reward[0].item()}, Time: {time}, Baseline: {baseline_time}"
-            )
+            print(f"Time: {time}, Baseline: {baseline_time}")
 
         out = obs
         out.set("reward", reward)
@@ -166,7 +171,6 @@ class RuntimeEnv(EnvBase):
             new_priority_seed = current_priority_seed + self.resets
         else:
             new_priority_seed = current_priority_seed
-        # print("New priority seed: ", new_priority_seed)
         if self.change_duration:
             new_duration_seed = current_duration_seed + self.resets
         else:
@@ -174,10 +178,14 @@ class RuntimeEnv(EnvBase):
 
         new_priority_seed = int(new_priority_seed)
         new_duration_seed = int(new_duration_seed)
-
+        self.taskid_history = []
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
+        dummy_sim = self.simulator.copy()
+        dummy_sim.disable_external_mapper()
+        dummy_sim.run()
+        self.makespan = dummy_sim.time
 
         simulator_status = self.simulator.run_until_external_mapping()
         assert (
@@ -185,9 +193,6 @@ class RuntimeEnv(EnvBase):
         ), f"Unexpected simulator status: {simulator_status}"
 
         obs = self._get_observation()
-        # obs.set("time", obs["observation"]["aux"]["time"])
-        # print("Reset: ", obs["observation"]["aux"]["candidates"]["idx"])
-        # print("Reset: ", obs["observation"]["nodes"]["tasks"]["glb"])
         return obs
 
     @property
