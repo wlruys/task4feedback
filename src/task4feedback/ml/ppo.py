@@ -373,12 +373,10 @@ def run_ppo_torchrl(
         with torch.no_grad():
             advantage_module(tensordict_data)
 
-        non_zero_rewards = tensordict_data["next", "reward"][
-            tensordict_data["next", "reward"] != 0
-        ]
+        non_zero_rewards = tensordict_data["next", "reward"]
         if len(non_zero_rewards) > 0:
             avg_non_zero_reward = non_zero_rewards.mean().item()
-            print(f"Average non-zero reward: {avg_non_zero_reward}")
+            print(f"Average reward: {avg_non_zero_reward}")
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
