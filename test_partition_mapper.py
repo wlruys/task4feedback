@@ -85,11 +85,11 @@ class JacobiVariant(VariantBuilder):
     def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
         memory_usage = 0
         vcu_usage = 1
-        expected_time = 0
+        expected_time = 1000
         if arch == DeviceType.GPU:
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
         else:
-            return VariantTuple(DeviceType.NONE, 0, 0, 0)
+            return None
 
 
 def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
@@ -105,7 +105,6 @@ def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
     partition = [x + 1 for x in partition]
 
     jgraph.set_cell_locations(partition)
-    jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
 
     return jgraph
 
@@ -120,7 +119,7 @@ def make_jacobi_env(config: JacobiConfig):
     m.finalize_tasks()
     spec = create_graph_spec()
     input = SimulatorInput(
-        m, d, s, transition_conditions=fastsim.RangeTransitionConditions(5, 5, 16)
+        m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
     )
     env = RuntimeEnv(
         SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
@@ -132,7 +131,7 @@ def make_jacobi_env(config: JacobiConfig):
 
 
 if __name__ == "__main__":
-    jacobi_config = JacobiConfig(steps=3, randomness=1)
+    jacobi_config = JacobiConfig(steps=14, randomness=1)
 
     def make_env() -> RuntimeEnv:
         return make_jacobi_env(jacobi_config)
@@ -144,14 +143,47 @@ if __name__ == "__main__":
     sim = env.simulator
     jgraph = env.simulator_factory.input.graph
     mappings = jgraph.get_mapping_from_locations()
+    cell_locations = jgraph.get_cell_locations()
+
+    relabel_dict = {}
+    for i in range(1, 5):
+        relabel_dict[i] = i
+
+    # Form all permutations of relabel_dict
+
+    import itertools
+
+    p = list(itertools.permutations(relabel_dict.values()))
+    print(p)
+
+    jgraph.randomize_locations(1, location_list=[1, 2, 3, 4])
     # print(mappings)
 
-    sim.external_mapper = StaticExternalMapper(mapping_dict=mappings)
-    # sim.enable_external_mapper()
-    sim.disable_external_mapper()
+    # # save cell locations to pickle file
+    # with open("cell_locations.pkl", "wb") as f:
+    #     import pickle
+
+    #     pickle.dump(cell_locations, f)
+
+    # #save cell location dict to json
+    # import json
+    # with open("cell_locations.json", "w") as f:
+    #     json.dump(cell_locations, f)
+
+    # load cell locations from pickle file
+    import pickle
+
+    with open("cell_locations.pkl", "rb") as f:
+        cell_locations = pickle.load(f)
+
+    print("Cell locations saved to cell_locations.pkl")
+
+    sim.external_mapper = PartitionMapper(cell_to_mapping=cell_locations, level_start=0)
+    sim.enable_external_mapper()
+    # sim.disable_external_mapper()
     sim.run()
 
     print(f"Final state: {sim.status}")
     print(f"Final time: {sim.time}")
 
-    animate_mesh_graph(env, time_interval=250, show=False, title="eft_tri_wait")
+    animate_mesh_graph(env, time_interval=250, show=False, title="test_part_mapper")

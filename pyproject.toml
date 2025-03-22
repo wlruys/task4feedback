@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core>=0.5", "pyyaml", "cython", "numpy"]
+requires = ["scikit-build-core>=0.5", "pyyaml", "nanobind", "numpy"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -42,8 +42,8 @@ ninja.minimum-version = "1.11"
 
 
 [tool.scikit-build.cmake.define]
-SIM_TRACK_RESOURCES = { env = "SIM_TRACK_RESOURCES", default = "ON" }
-SIM_TRACK_LOCATION = { env = "SIM_TRACK_LOCATION", default = "ON" }
+SIM_TRACK_RESOURCES = { env = "SIM_TRACK_RESOURCES", default = "OFF" }
+SIM_TRACK_LOCATION = { env = "SIM_TRACK_LOCATION", default = "OFF" }
 SPDLOG_ACTIVE_LEVEL = { env = "SPDLOG_ACTIVE_LEVEL", default = "SPDLOG_LEVEL_DEBUG" }
 
 [tool.cython-lint]

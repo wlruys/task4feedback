@@ -61,8 +61,17 @@ class HeteroDataWrapper(nn.Module):
                 _obs = observation_to_heterodata(obs)
             return _obs
 
+        # print("BATCH DIMS", obs.batch_dims)
+        # print("BATCH SIZE", obs.batch_size)
+
+        # flatten and save the batch size
+        self.batch_size = obs.batch_size
+        obs = obs.reshape(-1)
+
         _h_data = []
+        # print("obs", obs.shape)
         for i in range(obs.batch_size[0]):
+            # print("obs[i]", obs[i].shape)
             if actions is not None:
                 _obs = observation_to_heterodata(obs[i], actions=actions[i])
             else:
@@ -74,7 +83,12 @@ class HeteroDataWrapper(nn.Module):
     def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
         data = self._convert_to_heterodata(obs, is_batch, actions=actions)
-        return self.network(data)
+        out = self.network(data)
+
+        # rehape the output to the original batch size
+        if is_batch:
+            out = out.reshape(self.batch_size[0], -1, out.shape[-1])
+        return out
 
 
 @dataclass
@@ -88,6 +102,13 @@ class FeatureDimConfig:
 
     @staticmethod
     def from_observer(observer: ExternalObserver):
+        print(f"task_feature_dim: {observer.task_feature_dim}")
+        print(f"data_feature_dim: {observer.data_feature_dim}")
+        print(f"device_feature_dim: {observer.device_feature_dim}")
+        print(f"task_data_edge_dim: {observer.task_data_edge_dim}")
+        print(f"task_device_edge_dim: {observer.task_device_edge_dim}")
+        print(f"task_task_edge_dim: {observer.task_task_edge_dim}")
+
         return FeatureDimConfig(
             task_feature_dim=observer.task_feature_dim,
             data_feature_dim=observer.data_feature_dim,
@@ -186,6 +207,10 @@ class HeteroGAT1Layer(nn.Module):
             data["tasks", "to", "tasks"].edge_index,
             data["tasks", "to", "tasks"].edge_attr,
         )
+
+        # with torch.no_grad():
+        #     mean_devices = torch.mean(data["devices"].x, dim=0, keepdim=True)
+        #     data["devices"].x = data["devices"].x / mean_devices
 
         devices_fused_tasks = self.gnn_tasks_devices(
             (data["devices"].x, data["tasks"].x),
@@ -519,12 +544,12 @@ class OldTaskAssignmentNet(nn.Module):
             layer_config.hidden_channels * 3 + feature_config.task_feature_dim
         )
         self.actor_head = OutputHead(
-            gat_output_dim, layer_config.hidden_channels, n_devices
+            gat_output_dim, layer_config.hidden_channels, n_devices - 1
         )
 
     def forward(self, data: HeteroData | Batch, counts=None):
-        if next(self.parameters()).is_cuda:
-            data = data.to("cuda")
+        # if next(self.parameters()).is_cuda:
+        #     data = data.to("cuda")
 
         task_embeddings = self.hetero_gat(data)
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
@@ -534,7 +559,11 @@ class OldTaskAssignmentNet(nn.Module):
         else:
             candidate_embedding = task_embeddings[0]
 
+        # print("candidate_embedding", candidate_embedding)
+
         d_logits = self.actor_head(candidate_embedding)
+
+        # print(f"d_logits: {d_logits}, {d_logits.shape}")
 
         return d_logits
 
@@ -568,6 +597,8 @@ class OldValueNet(nn.Module):
             v = global_add_pool(v, task_batch)
             v = torch.div(v, counts)
 
+        # print(f"v: {v}, {v.shape}")
+
         return v
 
 
@@ -588,7 +619,7 @@ class OldActionValueNet(nn.Module):
         )
 
         self.critic_head = OutputHead(
-            gat_output_dim + 1, layer_config.hidden_channels, 1
+            gat_output_dim, layer_config.hidden_channels, n_devices - 1
         )
 
     def forward(self, data: HeteroData | Batch, counts=None):
@@ -597,19 +628,14 @@ class OldActionValueNet(nn.Module):
 
         if counts is None:
             v = global_mean_pool(task_embeddings, task_batch)
-            actions = data["actions"].x
-            actions = actions.unsqueeze(1)
-            v = torch.cat([v, actions], dim=-1)
             v = self.critic_head(v)
 
         else:
             v = global_mean_pool(task_embeddings, task_batch)
             v = torch.div(v, counts)
-            actions = data["actions"].x
-            actions = actions.unsqueeze(1)
-            v = torch.cat([v, actions], dim=-1)
             v = self.critic_head(v)
 
+        # print(f"av: {v}, {v.shape}")
         return v
 
 

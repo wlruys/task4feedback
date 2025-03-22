@@ -865,7 +865,7 @@ def observation_to_heterodata(
 
 @dataclass
 class ExternalObserver:
-    simulator: Simulator
+    simulator: "SimulatorDriver"
     graph_spec: fastsim.GraphSpec
     graph_extractor: fastsim.GraphExtractor
     task_features: fastsim.RuntimeFeatureExtractor
@@ -1196,7 +1196,7 @@ class ExternalObserver:
         )
 
     def candidate_observation(self, output: TensorDict):
-        count = self.simulator.get_mappable_candidates(
+        count = self.simulator.simulator.get_mappable_candidates(
             output["aux"]["candidates"]["idx"]
         )
         output["aux"]["candidates"]["count"][0] = count
@@ -1219,7 +1219,7 @@ class ExternalObserver:
         self.task_device_observation(output)
 
         # Auxiliary observations
-        output["aux"]["time"][0] = self.simulator.get_current_time()
+        output["aux"]["time"][0] = self.simulator.simulator.get_current_time()
 
         return output
 
@@ -1279,7 +1279,7 @@ class SimulatorDriver:
 
         if observer_factory is not None:
             self.observer_factory = observer_factory
-            self.observer = observer_factory.create(self.simulator)
+            self.observer = observer_factory.create(self)
 
     def get_state(self):
         return self.simulator.get_state()

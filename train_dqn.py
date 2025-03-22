@@ -44,7 +44,11 @@ import torch.nn as nn
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GATConv, global_mean_pool, global_add_pool, HeteroConv
 from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
-from torchrl.data.replay_buffers import ReplayBuffer
+from torchrl.data.replay_buffers import (
+    TensorDictReplayBuffer,
+    ReplayBufferEnsemble,
+    StorageEnsemble,
+)
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.envs import StepCounter, TrajCounter, TransformedEnv
@@ -62,7 +66,7 @@ import torch_geometric
 import aim
 from aim.pytorch import track_gradients_dists, track_params_dists
 from task4feedback.ml.test_envs import *
-from task4feedback.ml.iql import *
+from task4feedback.ml.dqn_td1 import *
 from task4feedback.ml.models import *
 
 
@@ -85,16 +89,16 @@ class JacobiVariant(VariantBuilder):
         if arch == DeviceType.GPU:
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
         else:
-            return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
+            return VariantTuple(DeviceType.NONE, memory_usage, vcu_usage, expected_time)
 
 
 if __name__ == "__main__":
-    randomness = 1
+    randomness = 0
 
     rtc = False
-    step = 9900
+
     config_list = [
-        JacobiConfig(L=4, n=4, steps=14, n_part=4, randomness=randomness, permute_idx=i)
+        JacobiConfig(L=2, n=2, steps=3, n_part=4, randomness=randomness, permute_idx=i)
         for i in range(1)
     ]
 
@@ -120,18 +124,9 @@ if __name__ == "__main__":
         m = graph
         m.finalize_tasks()
         spec = create_graph_spec()
-
-        if rtc:
-            input = SimulatorInput(
-                m,
-                d,
-                s,
-                transition_conditions=fastsim.RangeTransitionConditions(5, 5, 16),
-            )
-        else:
-            input = SimulatorInput(
-                m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
-            )
+        input = SimulatorInput(
+            m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
+        )
         env = RuntimeEnv(
             SimulatorFactory(
                 input,
@@ -147,65 +142,20 @@ if __name__ == "__main__":
 
     env = env_wrapper(config_list[0])
     feature_config = FeatureDimConfig.from_observer(env.observer)
+
     layer_config = LayerConfig(hidden_channels=64, n_heads=2)
     actor_model = OldTaskAssignmentNet(
         feature_config=feature_config,
         layer_config=layer_config,
         n_devices=5,
     )
-    value_model = OldValueNet(
-        feature_config=feature_config,
-        layer_config=layer_config,
-        n_devices=5,
-    )
-    action_value_model = OldActionValueNet(
-        feature_config=feature_config,
-        layer_config=layer_config,
-        n_devices=5,
-    )
 
-    actor_model_td = HeteroDataWrapper(actor_model)
-    value_model_td = HeteroDataWrapper(value_model)
-    action_value_model_td = HeteroDataWrapper(action_value_model)
-
-    _actor_model = TensorDictModule(
-        actor_model_td,
-        in_keys=["observation"],
-        out_keys=["logits"],
-    )
-
-    actor = ProbabilisticActor(
-        module=_actor_model,
-        in_keys=["logits"],
-        out_keys=["action"],
-        distribution_class=torch.distributions.Categorical,
-        default_interaction_type=ExplorationType.DETERMINISTIC,
-        cache_dist=True,
-        return_log_prob=True,
-    )
-
-    value = ValueOperator(
-        module=value_model_td,
-        in_keys=["observation"],
-        out_keys=["state_value"],
-    )
-
-    action_value = ValueOperator(
-        module=action_value_model_td,
-        in_keys=["observation"],
-        out_keys=["state_action_value"],
-    )
-
-    model = torch.nn.ModuleList([actor, value, action_value])
-    step = 9800
-    state_dict = torch.load(f"partition_level_model_checkpoint_{step}_False.pth")
-    model.load_state_dict(state_dict)
-
-    evaluate_loaded_model(
-        model,
+    run_dqn(
+        graph_func,
+        sys_func,
+        config_list,
+        actor_model,
         eval_set,
-        rtc,
-        animate=True,
-        title=f"partition_level_{step}_{rtc}",
-        observer_type=XYDataObserverFactory,
+        steps=10000,
+        rtc=False,
     )
