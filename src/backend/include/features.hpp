@@ -349,6 +349,7 @@ public:
 
         const auto &task = tasks.get_compute_task(current_task_id);
         for (const auto &dep_id : task.get_dependencies()) {
+
           if (local_visited.insert(dep_id).second) {
             if (visited.size() >= max_tasks) {
               return;
@@ -917,12 +918,16 @@ struct OneHotMappedDeviceTaskFeature : public StateFeature<OneHotMappedDeviceTas
 
   size_t getFeatureDimImpl() const {
     const auto &devices = this->state.get_device_manager().get_devices();
-    return devices.size();
+    return devices.size() + 1;
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task_manager = state.get_task_manager();
-    one_hot(task_manager.state.get_mapping(task_id), output);
+    if (!task_manager.state.is_mapped(task_id)) {
+      one_hot(0, output);
+      return;
+    }
+    one_hot(task_manager.state.get_mapping(task_id) + 1, output);
   }
 };
 

@@ -235,9 +235,6 @@ void GraphManager::add_missing_writer_dependencies(std::unordered_map<dataid_t, 
 
   for (auto data_id : task.get_write()) {
     auto [found, writer_id] = find_writer(writers, data_id);
-    // std::cout << "Looking for writer of data_id: " << data_id << std::endl;
-    // std::cout << "Found: " << found << std::endl;
-    // std::cout << "Writer ID: " << writer_id << std::endl;
 
     if (found) {
       auto &writer_task = tasks.get_compute_task(writer_id);
@@ -260,16 +257,18 @@ void GraphManager::create_data_tasks(std::unordered_map<dataid_t, taskid_t> &wri
   }
 }
 
-void GraphManager::populate_data_dependencies(TaskIDList &sorted, Tasks &tasks, bool add_missing_writers = true, bool add_data_tasks = true) {
+void GraphManager::populate_data_dependencies(TaskIDList &sorted, Tasks &tasks,
+                                              bool add_missing_writers = true,
+                                              bool add_data_tasks = true) {
   std::unordered_map<dataid_t, taskid_t> writers;
 
   for (auto task_id : sorted) {
     auto &task = tasks.get_compute_task(task_id);
     task.find_unique_data();
-    if (add_data_tasks){
+    if (add_data_tasks) {
       create_data_tasks(writers, task, tasks);
     }
-    if (add_missing_writers){
+    if (add_missing_writers) {
       add_missing_writer_dependencies(writers, task, tasks);
     }
     update_writers(writers, task.get_write(), task_id);
