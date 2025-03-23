@@ -300,7 +300,8 @@ class RuntimeEnv(EnvBase):
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.resets += 1
         if self.resets % (self.snapshot_interval * 2) == 0 and self.resets > 0:
-            plot_8x8_matrix(self.mapping_history, self.resets / 2)
+            plot_8x8_matrix(self.mapping_history, int(self.resets / 2))
+
         # tasks, data = make_test_stencil_graph()
         # s = uniform_connected_devices(4, 1000000000, 0, bandwidth=2000)
 

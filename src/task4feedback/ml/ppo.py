@@ -6,7 +6,6 @@ from torchrl.collectors import MultiSyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
-from torchrl.record.loggers.wandb import WandbLogger
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 from torchrl.modules import ProbabilisticActor, ValueOperator, ActorCriticWrapper
@@ -14,6 +13,8 @@ from tensordict.nn import TensorDictModule
 from torch_geometric.loader import DataLoader
 import copy
 from tensordict import TensorDictBase, TensorDict
+import wandb
+import os
 
 
 @dataclass
@@ -285,15 +286,7 @@ def run_ppo_torchrl(
     actor_critic_base: nn.Module,
     make_env: Callable[[], EnvBase],
     config: PPOConfig,
-    wandb_project: str = "run_ppo_torchrl",
-    wandb_exp_name: str = "run_ppo_torchrl",
 ):
-    logger = WandbLogger(
-        project=wandb_project,
-        exp_name=wandb_exp_name,
-    )
-    # using torchrl built ins
-
     _actor_td = HeteroDataWrapper(actor_critic_base.actor)
     _critic_td = HeteroDataWrapper(actor_critic_base.critic)
 
@@ -404,11 +397,18 @@ def run_ppo_torchrl(
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
-        logger.log_scalar("Average Return", avg_non_zero_reward)
-        logger.log_scalar("loss_objective", loss_vals["loss_objective"].item())
-        logger.log_scalar("loss_critic", loss_vals["loss_critic"].item())
-        logger.log_scalar("loss_entropy", loss_vals["loss_entropy"].item())
-        logger.log_scalar("loss_total", loss_value.item())
-        logger.log_scalar("grad_norm", grad_norm)
+        filename = f"device_mapping_{int(i-5)}.png"
+        if os.path.isfile(filename):
+            wandb.log({"device_mapping": wandb.Image(filename)}, commit=False)
+        wandb.log(
+            {
+                "Average Return": avg_non_zero_reward,
+                "loss_objective": loss_vals["loss_objective"].item(),
+                "loss_critic": loss_vals["loss_critic"].item(),
+                "loss_entropy": loss_vals["loss_entropy"].item(),
+                "loss_total": loss_value.item(),
+                "grad_norm": grad_norm,
+            },
+        )
 
     collector.shutdown()
