@@ -32,6 +32,8 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     threads_per_worker: int = 1
     train_device: str = "cpu"
+    gae_gamma: float = 1
+    gae_lmbda: float = 0.1
 
 
 def run_ppo_cleanrl_no_rb(
@@ -159,12 +161,10 @@ def run_ppo_cleanrl_no_rb(
 def run_ppo_cleanrl(
     actor_critic_base: nn.Module, make_env: Callable[[], EnvBase], config: PPOConfig
 ):
-    # r2g = Reward2GoTransform(gamma=1, out_keys=["reward_to_go"])
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(max_size=config.states_per_collection),
         sampler=SamplerWithoutReplacement(),
         pin_memory=True,
-        # transform=r2g,
     )
 
     _actor_critic_td = HeteroDataWrapper(actor_critic_base)
@@ -320,9 +320,8 @@ def run_ppo_torchrl(
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
         cat_results=0,
+        device=config.train_device,
         env_device="cpu",
-        policy_device="cpu",
-        storing_device=config.train_device,
     )
     out_seed = collector.set_seed(config.seed)
 
@@ -338,8 +337,8 @@ def run_ppo_torchrl(
     train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
 
     advantage_module = GAE(
-        gamma=1.0,
-        lmbda=1.0,
+        gamma=config.gae_gamma,
+        lmbda=config.gae_lmbda,
         value_network=train_critic_network,
         average_gae=False,
         device=config.train_device,
@@ -397,9 +396,6 @@ def run_ppo_torchrl(
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
-        filename = f"device_mapping_{int(i-5)}.png"
-        if os.path.isfile(filename):
-            wandb.log({"device_mapping": wandb.Image(filename)}, commit=False)
         wandb.log(
             {
                 "Average Return": avg_non_zero_reward,

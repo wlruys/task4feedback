@@ -24,104 +24,19 @@ from matplotlib.colors import ListedColormap
 import matplotlib.patches as mpatches
 from task4feedback.legacy_graphs import *
 
-# def make_test_stencil_graph():
-#     interior_size = 1000 * 2000
-#     boundary_size = 1000 * 2000
 
-#     def task_config(task_id: TaskID) -> TaskPlacementInfo:
-#         placement_info = TaskPlacementInfo()
-#         placement_info.add(
-#             (Device(Architecture.GPU, -1),),
-#             TaskRuntimeInfo(task_time=1000, device_fraction=1),
-#         )
-#         placement_info.add(
-#             (Device(Architecture.CPU, -1),),
-#             TaskRuntimeInfo(task_time=1000, device_fraction=1),
-#         )
+def plot_matrix(arr, number):
+    # Determine the shape based on the length of arr
+    if len(arr) == 16:
+        matrix = np.array(arr).reshape((4, 4))
+        title = "Device Mapping Result (4x4)"
+    elif len(arr) == 64:
+        matrix = np.array(arr).reshape((8, 8))
+        title = "Device Mapping Result (8x8)"
+    else:
+        raise ValueError("Input array must have exactly 16 or 64 elements.")
 
-#         return placement_info
-
-#     def sizes(data_id: DataID) -> int:
-#         return boundary_size if data_id.idx[1] == 1 else interior_size
-
-#     def blocked_initial_placement(data_id: DataID) -> List[Device]:
-#         batch = data_config.width // (4 // 2)
-
-#         device_id_i = int(data_id.idx[-2] // batch)
-#         device_id_j = int(data_id.idx[-1] // batch)
-#         idx = device_id_i + (4 // 2) * device_id_j
-
-#         dev_id = idx % 4
-#         if dev_id == 0:
-#             return Device(Architecture.CPU, 0)
-#         else:
-#             return Device(Architecture.GPU, dev_id - 1)
-
-#     def cpu_placement(data_id: DataID) -> List[Device]:
-#         return Device(Architecture.CPU, 0)
-
-#     def random_placement(data_id: DataID) -> List[Device]:
-#         dev_id = random.randint(0, 4 - 1)
-#         if dev_id == 0:
-#             return Device(Architecture.CPU, 0)
-#         else:
-#             return Device(Architecture.GPU, dev_id - 1)
-
-#     data_config = StencilDataGraphConfig()
-#     data_config.n_devices = 4
-#     data_config.dimensions = 2
-#     data_config.width = 4
-#     data_config.initial_placement = random_placement
-#     data_config.initial_sizes = sizes
-#     config = StencilConfig(width=4, steps=20, task_config=task_config, dimensions=2)
-#     tasks, data = make_graph(config, data_config=data_config)
-#     return tasks, data
-
-#     # Validate input length
-#     if len(arr) != 16:
-#         raise ValueError("Input array must have exactly 16 elements.")
-
-#     # Reshape the list into a 4x4 numpy array
-#     matrix = np.array(arr).reshape((4, 4))
-
-#     # Define a color map: mapping 0->black, 1->red, 2->green, 3->blue.
-#     cmap = ListedColormap(
-#         ["black", "red", "green", "blue", "yellow", "purple", "orange", "cyan"]
-#     )
-
-#     # Create the plot
-#     plt.imshow(matrix, cmap=cmap, vmin=0, vmax=7)
-#     plt.xticks([])
-#     plt.yticks([])
-#     plt.title("Device Mapping Result")
-
-#     # Create legend handles for each device color
-#     patches = [
-#         mpatches.Patch(color="black", label="Device 0"),
-#         mpatches.Patch(color="red", label="Device 1"),
-#         mpatches.Patch(color="green", label="Device 2"),
-#         mpatches.Patch(color="blue", label="Device 3"),
-#         mpatches.Patch(color="yellow", label="Device 4"),
-#         mpatches.Patch(color="purple", label="Device 5"),
-#         mpatches.Patch(color="orange", label="Device 6"),
-#         mpatches.Patch(color="cyan", label="Device 7"),
-#     ]
-
-#     # Add the legend to the plot; position it outside the plot area
-#     plt.legend(handles=patches, loc="upper right", bbox_to_anchor=(1.15, 1))
-
-#     plt.savefig(f"device_mapping_{number}.png")
-
-
-def plot_8x8_matrix(arr, number):
-    # Validate input length
-    if len(arr) != 64:
-        raise ValueError("Input array must have exactly 16 elements.")
-
-    # Reshape the list into a 4x4 numpy array
-    matrix = np.array(arr).reshape((8, 8))
-
-    # Define a color map: mapping 0->black, 1->red, 2->green, 3->blue.
+    # Define a color map with 8 colors
     cmap = ListedColormap(
         ["black", "red", "green", "blue", "yellow", "purple", "orange", "cyan"]
     )
@@ -130,7 +45,7 @@ def plot_8x8_matrix(arr, number):
     plt.imshow(matrix, cmap=cmap, vmin=0, vmax=7)
     plt.xticks([])
     plt.yticks([])
-    plt.title("Device Mapping Result")
+    plt.title(title)
 
     # Create legend handles for each device color
     patches = [
@@ -148,6 +63,7 @@ def plot_8x8_matrix(arr, number):
     plt.legend(handles=patches, loc="upper right", bbox_to_anchor=(1.15, 1))
 
     plt.savefig(f"device_mapping_{number}.png")
+    plt.close()  # Close the plot to free up memory
 
 
 class RuntimeEnv(EnvBase):
@@ -161,12 +77,14 @@ class RuntimeEnv(EnvBase):
         change_priority=False,
         change_duration=False,
         snapshot_interval=5,
+        width=8,
     ):
         super().__init__(device=device)
 
         self.change_priority = change_priority
         self.change_duration = change_duration
         self.snapshot_interval = snapshot_interval
+        self.width = width
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(seed)
@@ -181,7 +99,8 @@ class RuntimeEnv(EnvBase):
 
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
-        self.mapping_history = [-1 for _ in range(64)]
+        self.mapping_history = [-1 for _ in range(self.width**2)]
+        self.header = False  # Later set in _set_seed
 
     def _get_baseline(self, use_eft=True):
         if use_eft:
@@ -275,7 +194,7 @@ class RuntimeEnv(EnvBase):
         simulator_status = self.simulator.run_until_external_mapping()
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
-        self.mapping_history[global_task_id % 64] = chosen_device
+        self.mapping_history[global_task_id % (self.width**2)] = chosen_device
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
         if dummy_sim.time > self.makespan:
             reward[0] = -1
@@ -299,8 +218,12 @@ class RuntimeEnv(EnvBase):
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.resets += 1
-        if self.resets % (self.snapshot_interval * 2) == 0 and self.resets > 0:
-            plot_8x8_matrix(self.mapping_history, int(self.resets / 2))
+        if (
+            self.resets % (self.snapshot_interval * 2) == 0
+            and self.resets > 0
+            and self.header
+        ):
+            plot_matrix(self.mapping_history, int(self.resets / 2))
 
         # tasks, data = make_test_stencil_graph()
         # s = uniform_connected_devices(4, 1000000000, 0, bandwidth=2000)
@@ -342,7 +265,10 @@ class RuntimeEnv(EnvBase):
 
     def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
         torch.manual_seed(seed)
-        self.simulator_factory.set_seed(priority_seed=seed)
+        # When instantiating DataCollector, collector.set_seed(config.seed), config.seed should be 0
+        self.header = seed == 0
+        if self.change_priority:
+            self.simulator_factory.set_seed(priority_seed=seed)
 
 
 def make_simple_env_from_legacy(tasks, data):
