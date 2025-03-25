@@ -352,13 +352,14 @@ def run_ppo_torchrl(
         entropy_coef=config.ent_coef,
         critic_coef=config.val_coef,
         loss_critic_type="l2",
-    ).to(config.train_device)
+    )
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
     for i, tensordict_data in enumerate(collector):
         if i >= config.num_collections:
             break
+
         print(f"Collection: {i}")
         tensordict_data = tensordict_data.to(config.train_device, non_blocking=True)
 
