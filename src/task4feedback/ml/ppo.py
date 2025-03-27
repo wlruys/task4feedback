@@ -314,7 +314,7 @@ def run_ppo_torchrl(
     td_critic_module = td_critic_module.to(config.train_device)
     train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
     train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
-
+    model = torch.nn.ModuleList([train_actor_network, train_critic_network])
     collector = MultiSyncDataCollector(
         [make_env for _ in range(config.workers)],
         td_module_action,
@@ -337,14 +337,14 @@ def run_ppo_torchrl(
     advantage_module = GAE(
         gamma=config.gae_gamma,
         lmbda=config.gae_lmbda,
-        value_network=train_critic_network,
+        value_network=model[1],
         average_gae=False,
         device=config.train_device,
     )
 
     loss_module = ClipPPOLoss(
-        actor_network=train_actor_network,
-        critic_network=train_critic_network,
+        actor_network=model[0],
+        critic_network=model[1],
         clip_epsilon=config.clip_eps,
         entropy_bonus=True,
         entropy_coef=config.ent_coef,
@@ -355,9 +355,16 @@ def run_ppo_torchrl(
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
     for i, tensordict_data in enumerate(collector):
+        if (i + 1) % 50 == 0:
+            if wandb.run.dir is None:
+                path = "."
+            else:
+                path = wandb.run.dir
+            torch.save(
+                model.state_dict(), os.path.join(wandb.run.dir, f"model_{i+1}.pth")
+            )
         if i >= config.num_collections:
             break
-
         print(f"Collection: {i}")
         tensordict_data = tensordict_data.to(config.train_device, non_blocking=True)
 
