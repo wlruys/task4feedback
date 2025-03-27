@@ -6,6 +6,7 @@ from typing import Optional, Self
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import observation_to_heterodata
 from dataclasses import dataclass
+
 # from task4feedback.interface.wrappers import (
 #     observation_to_heterodata_truncate as observation_to_heterodata,
 # )
@@ -33,12 +34,15 @@ def init_weights(m):
 
 
 class HeteroDataWrapper(nn.Module):
-    def __init__(
-        self,
-        network: nn.Module,
-    ):
+    def __init__(self, network: nn.Module, device: None):
         super(HeteroDataWrapper, self).__init__()
         self.network = network
+        if device is None:
+            self.device = (
+                torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
+            )
+        else:
+            self.device = device
 
     def _is_batch(self, obs: TensorDict) -> bool:
         if not obs.batch_size:
@@ -74,6 +78,7 @@ class HeteroDataWrapper(nn.Module):
     def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
         data = self._convert_to_heterodata(obs, is_batch, actions=actions)
+        data = data.to(self.device)
         return self.network(data)
 
 

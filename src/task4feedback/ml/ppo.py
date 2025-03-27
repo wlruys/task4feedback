@@ -287,8 +287,8 @@ def run_ppo_torchrl(
     make_env: Callable[[], EnvBase],
     config: PPOConfig,
 ):
-    _actor_td = HeteroDataWrapper(actor_critic_base.actor)
-    _critic_td = HeteroDataWrapper(actor_critic_base.critic)
+    _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
+    _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
 
     module_action = TensorDictModule(
         _actor_td,
@@ -310,9 +310,10 @@ def run_ppo_torchrl(
         in_keys=["observation"],
     )
 
-    td_actor_critic_module = ActorCriticWrapper(
-        policy_operator=td_module_action, value_operator=td_critic_module
-    )
+    td_module_action = td_module_action.to(config.train_device)
+    td_critic_module = td_critic_module.to(config.train_device)
+    train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
+    train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
 
     collector = MultiSyncDataCollector(
         [make_env for _ in range(config.workers)],
@@ -332,9 +333,6 @@ def run_ppo_torchrl(
         sampler=SamplerWithoutReplacement(),
         pin_memory=torch.cuda.is_available(),
     )
-
-    train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
-    train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
 
     advantage_module = GAE(
         gamma=config.gae_gamma,
@@ -367,9 +365,16 @@ def run_ppo_torchrl(
             advantage_module(tensordict_data)
 
         non_zero_rewards = tensordict_data["next", "reward"]
+        improvements = tensordict_data["next", "observation", "aux", "improvement"]
+        mask = improvements > -1.5
+        filtered_improvements = improvements[mask]
+        if filtered_improvements.numel() > 0:
+            avg_improvement = filtered_improvements.mean()
         if len(non_zero_rewards) > 0:
             avg_non_zero_reward = non_zero_rewards.mean().item()
-            print(f"Average reward: {avg_non_zero_reward}")
+            print(
+                f"Average reward: {avg_non_zero_reward}, Average Improvement: {avg_improvement}"
+            )
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
@@ -400,6 +405,7 @@ def run_ppo_torchrl(
         wandb.log(
             {
                 "Average Return": avg_non_zero_reward,
+                "Average Improvement": avg_improvement,
                 "loss_objective": loss_vals["loss_objective"].item(),
                 "loss_critic": loss_vals["loss_critic"].item(),
                 "loss_entropy": loss_vals["loss_entropy"].item(),

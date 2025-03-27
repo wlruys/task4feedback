@@ -225,6 +225,9 @@ class RuntimeEnv(EnvBase):
         )
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
         # reward[0] = (self.makespan - dummy_sim.time) / self.makespan
+        # if dummy_sim.time < self.makespan:
+        #     self.makespan = dummy_sim.time
+
         if dummy_sim.time > self.makespan:
             reward[0] = -1
         elif dummy_sim.time < self.makespan:
@@ -235,10 +238,14 @@ class RuntimeEnv(EnvBase):
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
-
         if done:
             baseline_time = self._get_baseline()
-            print(f"Time: {time}, Baseline: {baseline_time}")
+            obs["observation"]["aux"]["improvement"][0] = (
+                self.EFT_baseline / self.makespan - 1
+            )
+            print(
+                f"Time: {time}, Baseline: {baseline_time}, Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
 
         out = obs
         out.set("reward", reward)
@@ -286,6 +293,7 @@ class RuntimeEnv(EnvBase):
         dummy_sim.disable_external_mapper()
         dummy_sim.run()
         self.makespan = dummy_sim.time
+        self.EFT_baseline = self.makespan
 
         simulator_status = self.simulator.run_until_external_mapping()
         assert (
