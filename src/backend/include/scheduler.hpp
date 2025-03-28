@@ -378,6 +378,7 @@ public:
 
   void set_mapping(taskid_t task_id, devid_t device_id);
   [[nodiscard]] devid_t get_mapping(taskid_t task_id) const;
+  [[nodiscard]] std::vector<devid_t> &get_mappings();
 
   [[nodiscard]] timecount_t get_mapped_time(taskid_t task_id) const;
   [[nodiscard]] timecount_t get_reserved_time(taskid_t task_id) const;
@@ -1105,6 +1106,7 @@ public:
     record_finish_time(task_id, min_time);
     set_device_available_time(best_device, min_time);
     auto mp = state.get_mapping_priorities()[task_id];
+    auto task_name = state.get_task_manager().get_tasks().get_name(task_id);
     return Action(0, best_device, mp, mp);
   }
 };

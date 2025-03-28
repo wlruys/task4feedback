@@ -355,6 +355,10 @@ devid_t SchedulerState::get_mapping(taskid_t task_id) const {
   return task_manager.state.get_mapping(task_id);
 }
 
+std::vector<devid_t> &SchedulerState::get_mappings() {
+  return task_manager.state.get_mappings();
+}
+
 const PriorityList &SchedulerState::get_mapping_priorities() const {
   return task_manager.get_mapping_priorities();
 }

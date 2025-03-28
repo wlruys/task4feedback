@@ -23,6 +23,10 @@ void init_task_noise_ext(nb::module_ &m) {
            "task_id"_a, "p"_a)
       .def("set_priority", nb::overload_cast<std::vector<priority_t>>(&TaskNoise::set_priority),
            "noise"_a)
+      .def("get_priorities", nb::overload_cast<>(&TaskNoise::get_priorities, nb::const_),
+           nb::rv_policy::reference_internal)
+      .def("get_durations", nb::overload_cast<>(&TaskNoise::get_durations, nb::const_),
+           nb::rv_policy::reference_internal)
       .def("randomize_duration", &TaskNoise::generate_duration)
       .def("randomize_priority", &TaskNoise::generate_priority)
       .def("dump_to_binary", &TaskNoise::dump_to_binary, "filename"_a)

@@ -9,7 +9,7 @@ from .types import (
     _bytes_to_readable,
 )
 from .lambdas import VariantBuilder, TaskLabeler, DataBlockTransformer
-
+from rich import print
 import numpy as np
 import task4feedback.fastsim2 as fastsim
 from task4feedback.fastsim2 import (
@@ -1533,18 +1533,22 @@ class SimulatorFactory:
 
         self.input.noise.task_noise.set_seed(duration_seed)
         self.input.noise.task_noise.set_pseed(priority_seed)
+
         simulator = SimulatorDriver(
             self.input,
             observer_factory=self.observer_factory,
             internal_mapper=self.internal_mapper,
             external_mapper=self.external_mapper,
         )
-        simulator.initialize()
-        simulator.initialize_data()
         self.input.noise.task_noise.randomize_duration()
         self.input.noise.task_noise.randomize_priority()
+        simulator.initialize()
+        simulator.initialize_data()
         if use_external_mapper:
             simulator.enable_external_mapper()
+        else:
+            simulator.disable_external_mapper()
+
         return simulator
 
     def set_seed(
