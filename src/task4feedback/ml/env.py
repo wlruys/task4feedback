@@ -192,11 +192,14 @@ class RuntimeEnv(EnvBase):
     def _step(self, td: TensorDict) -> TensorDict:
         assert self.makespan > 0, "Makespan not set"
         chosen_device = td["action"].item()
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
         local_id = 0
         candidate_workspace = torch.zeros(
             self.simulator_factory.graph_spec.max_candidates,
             dtype=torch.int64,
         )
+
         self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[local_id].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
@@ -208,12 +211,22 @@ class RuntimeEnv(EnvBase):
             )
         ]
         self.simulator.simulator.map_tasks(actions)
+
         dummy_sim = self.simulator.copy()
         dummy_sim.disable_external_mapper()
         dummy_sim.run()
+        if dummy_sim.time > self.makespan:
+            reward[0] = -1
+        elif dummy_sim.time < self.makespan:
+            reward[0] = 1
+        else:
+            reward[0] = 0
+        self.makespan = dummy_sim.time
+
+
         simulator_status = self.simulator.run_until_external_mapping()
-        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
-        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+        
         cell_id = self.simulator_factory.input.graph.task_to_cell[global_task_id]
         centroid = np.floor(
             self.simulator_factory.input.graph.data.geometry.cell_points[
@@ -223,28 +236,16 @@ class RuntimeEnv(EnvBase):
         self.mapping_history[int(centroid[0] * self.width + centroid[1])] = (
             chosen_device
         )
-        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
-        # reward[0] = (self.makespan - dummy_sim.time) / self.makespan
-        # if dummy_sim.time < self.makespan:
-        #     self.makespan = dummy_sim.time
-
-        if dummy_sim.time > self.makespan:
-            reward[0] = -1
-        elif dummy_sim.time < self.makespan:
-            reward[0] = 1
-        else:
-            reward[0] = 0
-        self.makespan = dummy_sim.time
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
             baseline_time = self._get_baseline()
             obs["observation"]["aux"]["improvement"][0] = (
-                self.EFT_baseline / self.makespan - 1
+                baseline_time / time - 1
             )
             print(
-                f"Time: {time}, Baseline: {baseline_time}, Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time}, Baseline: {baseline_time}, {self.makespan}, Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs

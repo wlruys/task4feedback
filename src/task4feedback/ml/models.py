@@ -479,10 +479,8 @@ class OldCombinedNet(nn.Module):
             layer_config.hidden_channels * 3 + feature_config.task_feature_dim
         )
 
-        self.actor_head = OutputHead(
-            gat_output_dim, layer_config.hidden_channels, n_devices
-        )
-        self.critic_head = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
+        self.actor = OutputHead(gat_output_dim, layer_config.hidden_channels, n_devices)
+        self.critic = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         if next(self.parameters()).is_cuda:
@@ -495,13 +493,13 @@ class OldCombinedNet(nn.Module):
         else:
             candidate_embedding = task_embeddings[0]
 
-        d_logits = self.actor_head(candidate_embedding)
+        d_logits = self.actor(candidate_embedding)
 
         if counts is None:
-            v = self.critic_head(task_embeddings)
+            v = self.critic(task_embeddings)
             v = global_mean_pool(v, task_batch)
         else:
-            v = self.critic_head(task_embeddings)
+            v = self.critic(task_embeddings)
             v = global_add_pool(v, task_batch)
             v = torch.div(v, counts)
 
