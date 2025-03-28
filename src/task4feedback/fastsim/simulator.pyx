@@ -637,8 +637,8 @@ cdef class PySimulator:
             action_list.push_back(deref(action_ptr))
         self.simulator.map_tasks(action_list)
 
-    def add_task_breakpoint(self, event_type, taskid_t task_id):
-        self.simulator.add_task_breakpoint(convert_py_event_type(event_type), task_id)
+    def add_task_breakpoint(self, event_type, taskid_t task_id, collective):
+        self.simulator.add_task_breakpoint(convert_py_event_type(event_type), task_id, collective)
 
     def add_time_breakpoint(self, timecount_t time):
         self.simulator.add_time_breakpoint(time)
