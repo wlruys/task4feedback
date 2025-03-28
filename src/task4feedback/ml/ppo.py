@@ -325,6 +325,7 @@ def run_ppo_torchrl(
         env_device="cpu",
     )
     out_seed = collector.set_seed(config.seed)
+    print(f"Seed: {out_seed}")
 
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(

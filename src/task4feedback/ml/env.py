@@ -24,6 +24,7 @@ import matplotlib.patches as mpatches
 from task4feedback.legacy_graphs import *
 import os
 import wandb
+from task4feedback.graphs.jacobi import JacobiGraph
 
 
 def plot_matrix(arr, path):
@@ -223,10 +224,9 @@ class RuntimeEnv(EnvBase):
             reward[0] = 0
         self.makespan = dummy_sim.time
 
-
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
-        
+
         cell_id = self.simulator_factory.input.graph.task_to_cell[global_task_id]
         centroid = np.floor(
             self.simulator_factory.input.graph.data.geometry.cell_points[
@@ -240,12 +240,10 @@ class RuntimeEnv(EnvBase):
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            baseline_time = self._get_baseline()
-            obs["observation"]["aux"]["improvement"][0] = (
-                baseline_time / time - 1
-            )
+            # baseline_time = self._get_baseline()
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
             print(
-                f"Time: {time}, Baseline: {baseline_time}, {self.makespan}, Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -283,17 +281,16 @@ class RuntimeEnv(EnvBase):
         new_priority_seed = int(new_priority_seed)
         new_duration_seed = int(new_duration_seed)
         self.taskid_history = []
-        if self.change_locations:
+        if self.change_locations and isinstance(
+            self.simulator_factory.input.graph, JacobiGraph
+        ):
             self.simulator_factory.input.graph.randomize_locations(
                 1, location_list=range(self.simulator_factory.graph_spec.max_devices)
             )
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
-        dummy_sim = self.simulator.copy()
-        dummy_sim.disable_external_mapper()
-        dummy_sim.run()
-        self.makespan = dummy_sim.time
+        self.makespan = self._get_baseline(use_eft=True)
         self.EFT_baseline = self.makespan
 
         simulator_status = self.simulator.run_until_external_mapping()
