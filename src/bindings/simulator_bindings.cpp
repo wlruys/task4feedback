@@ -54,6 +54,8 @@ void init_simulator_ext(nb::module_ &m) {
       .def("initialize_data", &Simulator::initialize_data_manager)
       .def("enable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(true); })
       .def("disable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(false); })
+      .def("skip_external_mapping", &Simulator::skip_external_mapping,
+           "enqueue_mapping_event"_a = true)
       .def("set_mapper", &Simulator::set_mapper, "mapper"_a)
       .def("get_state", nb::overload_cast<>(&Simulator::get_state, nb::const_),
            nb::rv_policy::reference_internal)

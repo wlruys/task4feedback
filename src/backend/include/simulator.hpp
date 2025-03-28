@@ -195,6 +195,21 @@ public:
     last_state = ExecutionState::RUNNING;
   }
 
+  void skip_external_mapping(bool enqueue_mapping_event = true) {
+    if (last_state != ExecutionState::EXTERNAL_MAPPING) {
+      spdlog::critical("Simulator not in external mapping state.");
+      return;
+    }
+    // Set the state back to running
+    last_state = ExecutionState::RUNNING;
+
+    // Create a new event to run the mapper
+    if (enqueue_mapping_event) {
+      const auto current_time = scheduler.get_state().get_global_time();
+      event_manager.create_event(EventType::MAPPER, current_time, TaskIDList());
+    }
+  }
+
   [[nodiscard]] ExecutionState check_breakpoints(ExecutionState ex_state) {
     if (scheduler.is_breakpoint()) {
       scheduler.breakpoints.reset_breakpoint();

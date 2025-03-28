@@ -1350,6 +1350,9 @@ class SimulatorDriver:
         self.use_external_mapper = False
         self.simulator.disable_python_mapper()
 
+        if self.simulator.last_execution_state == ExecutionState.EXTERNAL_MAPPING:
+            self.simulator.skip_external_mapping()
+
     def fresh_copy(self) -> "SimulatorDriver":
         """
         Initialize a fresh (uninitialized) copy of the simulator driver with the same initial input and configuration.
@@ -1410,13 +1413,15 @@ class SimulatorDriver:
         observer_factory = self.observer_factory
 
         simulator_copy = fastsim.Simulator(self.simulator)
-        return SimulatorDriver(
+
+        new_sim_driver = SimulatorDriver(
             input=self.input,
             internal_mapper=internal_mapper_copy,
             external_mapper=external_mapper_copy,
             observer_factory=observer_factory,
             simulator=simulator_copy,
         )
+        return new_sim_driver
 
     def run_until_external_mapping(self) -> ExecutionState:
         """
