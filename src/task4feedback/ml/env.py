@@ -94,6 +94,7 @@ class RuntimeEnv(EnvBase):
         change_priority=False,
         change_duration=False,
         change_locations=False,
+        only_gpu=False,
         snapshot_interval=-1,
         width=8,
         path=".",
@@ -106,6 +107,7 @@ class RuntimeEnv(EnvBase):
         self.change_locations = change_locations
         self.width = width
         self.path = path
+        self.only_gpu = only_gpu
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(seed)
@@ -193,6 +195,8 @@ class RuntimeEnv(EnvBase):
     def _step(self, td: TensorDict) -> TensorDict:
         assert self.makespan > 0, "Makespan not set"
         chosen_device = td["action"].item()
+        if self.only_gpu:
+            chosen_device = chosen_device + 1
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
         local_id = 0
@@ -234,7 +238,7 @@ class RuntimeEnv(EnvBase):
             ].mean(axis=0)
         )
         self.mapping_history[int(centroid[0] * self.width + centroid[1])] = (
-            chosen_device
+            chosen_device - 1 if self.only_gpu else chosen_device
         )
 
         obs = self._get_observation()

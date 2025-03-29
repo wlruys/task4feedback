@@ -21,3 +21,4 @@ wandb/
 *.rpb/
 *.pth
 outputs/
+nano/

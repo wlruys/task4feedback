@@ -1469,7 +1469,7 @@ def create_graph_spec(
     Parameters:
     max_tasks (int): The maximum number of task nodes.
     max_data (int): The maximum number of data nodes.
-    max_devices (int): The maximum number of device nodes. Also determines the action space.
+    max_devices (int): The maximum number of device nodes.
     max_edges_tasks_tasks (int): The maximum number of edges between task nodes.
     max_edges_tasks_data (int): The maximum number of edges between task and data nodes.
     max_candidates (int): The maximum number of candidate tasks to consider for mapping.

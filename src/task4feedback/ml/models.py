@@ -617,6 +617,15 @@ class OldActionValueNet(nn.Module):
 
 
 class OldSeparateNet(nn.Module):
+    """
+    Wrapper module for separate actor and critic networks using individual HeteroGAT1Layer instances.
+
+    Unlike `OldCombinedNet`, this class assigns a distinct HeteroGAT1Layer to each of the actor and critic networks.
+
+    Args:
+        n_devices (int): The number of mappable devices. Check whether this includes the CPU.
+    """
+
     def __init__(
         self,
         feature_config: FeatureDimConfig,
