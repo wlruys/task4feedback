@@ -9,7 +9,7 @@ from .types import (
     _bytes_to_readable,
 )
 from .lambdas import VariantBuilder, TaskLabeler, DataBlockTransformer
-
+from rich import print
 import numpy as np
 import task4feedback.fastsim2 as fastsim
 from task4feedback.fastsim2 import (
@@ -1088,6 +1088,7 @@ class ExternalObserver:
             {
                 "candidates": _make_index_tensor(spec.max_candidates),
                 "time": torch.zeros((1), dtype=torch.int64),
+                "improvement": torch.zeros((1), dtype=torch.float32),
                 # "time": torch.tensor([0], dtype=torch.int64),
             }
         )
@@ -1220,7 +1221,7 @@ class ExternalObserver:
 
         # Auxiliary observations
         output["aux"]["time"][0] = self.simulator.get_current_time()
-
+        output["aux"]["improvement"][0] = -2.0
         return output
 
 
@@ -1462,6 +1463,17 @@ def create_graph_spec(
     max_edges_tasks_data: int = 30,
     max_candidates: int = 1,
 ):
+    """
+    Create a graph spec with the specified limits for tasks, data, devices, edges, and candidates.
+
+    Parameters:
+    max_tasks (int): The maximum number of task nodes.
+    max_data (int): The maximum number of data nodes.
+    max_devices (int): The maximum number of device nodes. Also determines the action space.
+    max_edges_tasks_tasks (int): The maximum number of edges between task nodes.
+    max_edges_tasks_data (int): The maximum number of edges between task and data nodes.
+    max_candidates (int): The maximum number of candidate tasks to consider for mapping.
+    """
     spec = fastsim.GraphSpec()
     spec.max_tasks = max_tasks
     spec.max_data = max_data
@@ -1521,18 +1533,22 @@ class SimulatorFactory:
 
         self.input.noise.task_noise.set_seed(duration_seed)
         self.input.noise.task_noise.set_pseed(priority_seed)
+
         simulator = SimulatorDriver(
             self.input,
             observer_factory=self.observer_factory,
             internal_mapper=self.internal_mapper,
             external_mapper=self.external_mapper,
         )
-        simulator.initialize()
-        simulator.initialize_data()
         self.input.noise.task_noise.randomize_duration()
         self.input.noise.task_noise.randomize_priority()
+        simulator.initialize()
+        simulator.initialize_data()
         if use_external_mapper:
             simulator.enable_external_mapper()
+        else:
+            simulator.disable_external_mapper()
+
         return simulator
 
     def set_seed(

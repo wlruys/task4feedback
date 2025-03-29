@@ -257,12 +257,26 @@ class JacobiGraph(ComputeDataGraph):
 
 @dataclass
 class JacobiConfig:
+    """
+    Configuration settings for Jacobi mesh generation.
+
+    Attributes:
+        L (int): Length of the domain side.
+        n (int): Number of elements per side.
+        steps (int): Number of simulation steps.
+        n_part (int): Number of partitions.
+        randomness (float): Percentage (0 ~ 1) of cells to randomize.
+        permute_idx (int): Permutation index for reproducibility.
+        n_devices (int): Number of computational devices.
+    """
+
     L: int = 4
     n: int = 4
     steps: int = 1
     n_part: int = 4
     randomness: float = 0
     permute_idx: int = 0
+    n_devices: int = 4
 
 
 class JacobiVariant(VariantBuilder):

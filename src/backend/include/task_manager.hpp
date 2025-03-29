@@ -99,6 +99,10 @@ public:
     return mapping[id];
   };
 
+  [[nodiscard]] std::vector<devid_t> &get_mappings() {
+    return mapping;
+  }
+
   [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const {
     assert(id < reserving_priority.size());
     return reserving_priority.at(id);

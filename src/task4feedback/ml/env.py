@@ -15,8 +15,73 @@ from torchrl.envs.utils import make_composite_from_td
 from torchrl.envs import StepCounter, TrajCounter, TransformedEnv
 import tensordict
 from tensordict import TensorDict
-from aim.pytorch import track_gradients_dists, track_params_dists
 from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph, DataGeometry
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+import matplotlib.patches as mpatches
+from task4feedback.legacy_graphs import *
+import os
+import wandb
+from task4feedback.graphs.jacobi import JacobiGraph
+
+
+def plot_matrix(arr, path):
+    """
+    Plot a device mapping matrix and save it as a PNG image.
+
+    The function reshapes the input list into either a 4x4 or 8x8 matrix,
+    applies a color map, and annotates the plot with a legend. The output
+    image is saved using the provided number in the filename.
+
+    Parameters:
+        arr (list or array-like): A list containing exactly 16 or 64 integers.
+        number (int or str): An identifier for the output filename.
+
+    Raises:
+        ValueError: If the input array does not have exactly 16 or 64 elements.
+    """
+    # Determine the number of devices (assumes devices are labeled starting from 0)
+    num_devices = max(arr) + 1
+
+    # Reshape the array based on its length and set the plot title accordingly.
+    if len(arr) == 16:
+        matrix = np.array(arr).reshape((4, 4))
+        title = f"Device Mapping Result (4x4) for {num_devices} Devices"
+    elif len(arr) == 64:
+        matrix = np.array(arr).reshape((8, 8))
+        title = f"Device Mapping Result (8x8) for {num_devices} Devices"
+    else:
+        raise ValueError("Input array must have exactly 16 or 64 elements.")
+
+    # Define a color map with eight colors.
+    cmap = ListedColormap(
+        ["black", "red", "green", "blue", "yellow", "purple", "orange", "cyan"]
+    )
+
+    # Create the plot.
+    plt.figure()
+    plt.imshow(matrix, cmap=cmap, vmin=0, vmax=7)
+    plt.xticks([])
+    plt.yticks([])
+    plt.title(title)
+
+    # Build legend handles depending on the number of devices.
+    if num_devices == 8:
+        colors = ["black", "red", "green", "blue", "yellow", "purple", "orange", "cyan"]
+    else:
+        colors = ["black", "red", "green", "blue"]
+
+    patches = [
+        mpatches.Patch(color=color, label=f"Device {i}")
+        for i, color in enumerate(colors)
+    ]
+    plt.legend(handles=patches, loc="upper right", bbox_to_anchor=(1.15, 1))
+
+    # Save the plot and close the figure.
+    plt.savefig(path)
+    plt.close()
 
 
 class RuntimeEnv(EnvBase):
@@ -28,11 +93,19 @@ class RuntimeEnv(EnvBase):
         baseline_time=56000,
         change_priority=False,
         change_duration=False,
+        change_locations=False,
+        snapshot_interval=-1,
+        width=8,
+        path=".",
     ):
         super().__init__(device=device)
 
         self.change_priority = change_priority
         self.change_duration = change_duration
+        self.snapshot_interval = snapshot_interval
+        self.change_locations = change_locations
+        self.width = width
+        self.path = path
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(seed)
@@ -47,7 +120,8 @@ class RuntimeEnv(EnvBase):
 
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
-        self.mapping_history = [-1 for _ in range(16)]
+        self.mapping_history = [-1 for _ in range(self.width**2)]
+        self.header = False  # Later set in _set_seed
 
     def _get_baseline(self, use_eft=True):
         if use_eft:
@@ -119,11 +193,14 @@ class RuntimeEnv(EnvBase):
     def _step(self, td: TensorDict) -> TensorDict:
         assert self.makespan > 0, "Makespan not set"
         chosen_device = td["action"].item()
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
         local_id = 0
         candidate_workspace = torch.zeros(
             self.simulator_factory.graph_spec.max_candidates,
             dtype=torch.int64,
         )
+
         self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[local_id].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
@@ -135,14 +212,10 @@ class RuntimeEnv(EnvBase):
             )
         ]
         self.simulator.simulator.map_tasks(actions)
+
         dummy_sim = self.simulator.copy()
         dummy_sim.disable_external_mapper()
         dummy_sim.run()
-        simulator_status = self.simulator.run_until_external_mapping()
-        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
-        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
-        self.mapping_history[global_task_id % 16] = chosen_device
-        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
         if dummy_sim.time > self.makespan:
             reward[0] = -1
         elif dummy_sim.time < self.makespan:
@@ -151,12 +224,27 @@ class RuntimeEnv(EnvBase):
             reward[0] = 0
         self.makespan = dummy_sim.time
 
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        cell_id = self.simulator_factory.input.graph.task_to_cell[global_task_id]
+        centroid = np.floor(
+            self.simulator_factory.input.graph.data.geometry.cell_points[
+                self.simulator_factory.input.graph.data.geometry.cells[cell_id]
+            ].mean(axis=0)
+        )
+        self.mapping_history[int(centroid[0] * self.width + centroid[1])] = (
+            chosen_device
+        )
+
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
-
         if done:
-            baseline_time = self._get_baseline()
-            print(f"Time: {time}, Baseline: {baseline_time}")
+            # baseline_time = self._get_baseline()
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
 
         out = obs
         out.set("reward", reward)
@@ -165,6 +253,20 @@ class RuntimeEnv(EnvBase):
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.resets += 1
+        if (
+            self.resets % (self.snapshot_interval * 2) == 0
+            and self.resets > 0
+            and self.header
+        ):
+            plot_matrix(
+                self.mapping_history,
+                os.path.join(self.path, f"device_mapping_{int(self.resets / 2)}.png"),
+            )
+
+        # tasks, data = make_test_stencil_graph()
+        # s = uniform_connected_devices(4, 1000000000, 0, bandwidth=2000)
+
+        # self.simulator_factory.input.data = DataBlocks.create_from_legacy_data(data, s)
         current_priority_seed = self.simulator_factory.pseed
         current_duration_seed = self.simulator_factory.seed
         if self.change_priority:
@@ -179,13 +281,17 @@ class RuntimeEnv(EnvBase):
         new_priority_seed = int(new_priority_seed)
         new_duration_seed = int(new_duration_seed)
         self.taskid_history = []
+        if self.change_locations and isinstance(
+            self.simulator_factory.input.graph, JacobiGraph
+        ):
+            self.simulator_factory.input.graph.randomize_locations(
+                1, location_list=range(self.simulator_factory.graph_spec.max_devices)
+            )
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
-        dummy_sim = self.simulator.copy()
-        dummy_sim.disable_external_mapper()
-        dummy_sim.run()
-        self.makespan = dummy_sim.time
+        self.makespan = self._get_baseline(use_eft=True)
+        self.EFT_baseline = self.makespan
 
         simulator_status = self.simulator.run_until_external_mapping()
         assert (
@@ -201,7 +307,10 @@ class RuntimeEnv(EnvBase):
 
     def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
         torch.manual_seed(seed)
-        self.simulator_factory.set_seed(priority_seed=seed)
+        # When instantiating DataCollector, collector.set_seed(config.seed), config.seed should be 0
+        self.header = seed == 0
+        if self.change_priority:
+            self.simulator_factory.set_seed(priority_seed=seed)
 
 
 def make_simple_env_from_legacy(tasks, data):
