@@ -18,7 +18,7 @@ using namespace nb::literals;
 void init_mapper_ext(nb::module_ &m) {
   nb::bind_vector<std::vector<Action>>(m, "ActionVector");
   nb::class_<Action>(m, "Action")
-      .def(nb::init<std::size_t, int32_t, priority_t, priority_t>())
+      .def(nb::init<std::size_t, devid_t, priority_t, priority_t>())
       .def_rw("pos", &Action::pos)
       .def_rw("device", &Action::device)
       .def_rw("reservable_priority", &Action::reservable_priority)

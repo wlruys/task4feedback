@@ -31,46 +31,6 @@ void init_simulator_logger() {
     std::cerr << "Logger initialization failed: " << ex.what() << std::endl;
   }
 }
-enum class ExecutionState {
-  NONE = 0,
-  RUNNING = 1,
-  COMPLETE = 2,
-  BREAKPOINT = 3,
-  EXTERNAL_MAPPING = 4,
-  ERROR = 5,
-};
-constexpr std::size_t num_execution_states = 6;
-
-inline std::string to_string(const ExecutionState &state) {
-  switch (state) {
-  case ExecutionState::NONE:
-    return "NONE";
-    break;
-  case ExecutionState::RUNNING:
-    return "RUNNING";
-    break;
-  case ExecutionState::COMPLETE:
-    return "COMPLETE";
-    break;
-  case ExecutionState::BREAKPOINT:
-    return "BREAKPOINT";
-    break;
-  case ExecutionState::EXTERNAL_MAPPING:
-    return "EXTERNAL_MAPPING";
-    break;
-  case ExecutionState::ERROR:
-    return "ERROR";
-    break;
-  default:
-    return "UNKNOWN";
-  }
-}
-
-inline std::ostream &operator<<(std::ostream &os, const ExecutionState &state) {
-  os << to_string(state);
-  return os;
-}
-
 class Simulator {
 protected:
   void add_initial_event() {
@@ -185,14 +145,14 @@ public:
 
   void map_tasks(ActionList &action_list) {
 
-    if (last_state != ExecutionState::EXTERNAL_MAPPING) {
+    if (this->last_state != ExecutionState::EXTERNAL_MAPPING) {
       spdlog::critical("Simulator not in external mapping state.");
       return;
     }
 
-    scheduler.map_tasks_from_python(action_list, event_manager);
+    ExecutionState new_state = scheduler.map_tasks_from_python(action_list, event_manager);
     // Set the state back to running
-    last_state = ExecutionState::RUNNING;
+    this->last_state = new_state;
   }
 
   void skip_external_mapping(bool enqueue_mapping_event = true) {
@@ -201,7 +161,7 @@ public:
       return;
     }
     // Set the state back to running
-    last_state = ExecutionState::RUNNING;
+    this->last_state = ExecutionState::RUNNING;
 
     // Create a new event to run the mapper
     if (enqueue_mapping_event) {
@@ -259,8 +219,8 @@ public:
     }
 
     if (last_state == ExecutionState::EXTERNAL_MAPPING) {
-      spdlog::debug("Python Mapping has not been completed.");
-      return ExecutionState::ERROR;
+      spdlog::debug("Python Mapping has not been completed. Returning control to Python layer.");
+      return ExecutionState::EXTERNAL_MAPPING;
     }
 
     Event current_event = Event(EventType::MAPPER, 0, TaskIDList());

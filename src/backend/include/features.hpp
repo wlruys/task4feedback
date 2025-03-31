@@ -22,7 +22,7 @@
 
 namespace nb = nanobind;
 
-using op_t = uint32_t;
+using op_t = int32_t;
 using f_t = float_t;
 using namespace nb::literals;
 
@@ -349,7 +349,6 @@ public:
 
         const auto &task = tasks.get_compute_task(current_task_id);
         for (const auto &dep_id : task.get_dependencies()) {
-
           if (local_visited.insert(dep_id).second) {
             if (visited.size() >= max_tasks) {
               return;
@@ -434,14 +433,14 @@ public:
 
     std::span<int64_t> sources_span(sources.data(), sources.size());
 
-    for (std::size_t i = 0; i < sources_span.size(); i++) {
+    for (int64_t i = 0; i < sources_span.size(); i++) {
       task_index_map[static_cast<taskid_t>(sources_span[i])] = i;
     }
 
     const auto &tasks = state.get().get_task_manager().get_tasks();
     std::size_t edge_count = 0;
 
-    for (std::size_t source_idx = 0; source_idx < sources_span.size(); source_idx++) {
+    for (int64_t source_idx = 0; source_idx < sources_span.size(); source_idx++) {
       const auto source_id = sources_span[source_idx];
       const auto &source_task = tasks.get_compute_task(source_id);
       const auto &dependencies = source_task.get_dependencies();
@@ -478,7 +477,7 @@ public:
 
     std::span<int64_t> sources_span(sources.data(), sources.size());
 
-    for (std::size_t i = 0; i < sources_span.size(); i++) {
+    for (int64_t i = 0; i < sources_span.size(); i++) {
       task_index_map[static_cast<taskid_t>(sources_span[i])] = i;
     }
 
@@ -486,7 +485,7 @@ public:
     const auto &tasks = task_manager.get_tasks();
     std::size_t edge_count = 0;
 
-    for (std::size_t source_idx = 0; source_idx < sources_span.size(); source_idx++) {
+    for (int64_t source_idx = 0; source_idx < sources_span.size(); source_idx++) {
       const auto source_id = sources_span[source_idx];
       const auto &source_task = tasks.get_compute_task(source_id);
       const auto &dependents = source_task.get_dependents();
@@ -565,14 +564,14 @@ public:
     const auto &tasks = task_manager.get_tasks();
 
     std::size_t edge_count = 0;
-    for (std::size_t i = 0; i < data_ids_span.size(); i++) {
+    for (int64_t i = 0; i < data_ids_span.size(); i++) {
       // if (data_index_map.find(static_cast<dataid_t>(data_ids_span[i])) == data_index_map.end()) {
       //   data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
       // }
       data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
     }
 
-    for (std::size_t i = 0; i < task_ids_span.size(); i++) {
+    for (int64_t i = 0; i < task_ids_span.size(); i++) {
       const auto &task_id = static_cast<taskid_t>(task_ids_span[i]);
       const auto &task = tasks.get_compute_task(task_id);
       for (auto data_id : task.get_unique()) {
@@ -615,8 +614,8 @@ public:
 
     std::size_t edge_count = 0;
 
-    for (std::size_t i = 0; i < task_ids_span.size(); i++) {
-      for (std::size_t j = 0; j < device_count; j++) {
+    for (int64_t i = 0; i < task_ids_span.size(); i++) {
+      for (int64_t j = 0; j < device_count; j++) {
         v(0, edge_count) = static_cast<int64_t>(i);
         v(1, edge_count) = static_cast<int64_t>(j);
         gv(0, edge_count) = static_cast<int64_t>(task_ids_span[i]);
@@ -653,8 +652,8 @@ public:
     const auto &data_manager = state.get().get_data_manager();
 
     std::size_t edge_count = 0;
-    for (std::size_t i = 0; i < data_ids_span.size(); i++) {
-      for (std::size_t j = 0; j < devices.size(); j++) {
+    for (int64_t i = 0; i < data_ids_span.size(); i++) {
+      for (int64_t j = 0; j < devices.size(); j++) {
         if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
           v(0, i) = static_cast<int64_t>(i);
           v(1, i) = static_cast<int64_t>(j);
@@ -693,12 +692,12 @@ template <typename Derived> struct Feature {
     return static_cast<const Derived *>(this)->getFeatureDimImpl();
   }
 
-  void extractFeature(uint32_t object_id, TorchArr &output) const {
+  void extractFeature(int32_t object_id, TorchArr &output) const {
     std::span<float> sp(output.data(), output.size());
     static_cast<const Derived *>(this)->extractFeatureImpl(object_id, sp);
   }
 
-  template <typename Span> void extractFeature(uint32_t object_id, Span output) const {
+  template <typename Span> void extractFeature(int32_t object_id, Span output) const {
     static_cast<const Derived *>(this)->extractFeatureImpl(object_id, output);
   }
 };
@@ -708,13 +707,13 @@ template <typename Derived> struct EdgeFeature {
     return static_cast<const Derived *>(this)->getFeatureDimImpl();
   }
 
-  void extractFeature(uint32_t source_id, uint32_t target_id, TorchArr &output) const {
+  void extractFeature(int32_t source_id, int32_t target_id, TorchArr &output) const {
     std::span<float> sp(output.data(), output.size());
     static_cast<const Derived *>(this)->extractFeatureImpl(source_id, target_id, sp);
   }
 
   template <typename Span>
-  void extractFeature(uint32_t source_id, uint32_t target_id, Span output) const {
+  void extractFeature(int32_t source_id, int32_t target_id, Span output) const {
     static_cast<const Derived *>(this)->extractFeatureImpl(source_id, target_id, output);
   }
 };
@@ -918,16 +917,12 @@ struct OneHotMappedDeviceTaskFeature : public StateFeature<OneHotMappedDeviceTas
 
   size_t getFeatureDimImpl() const {
     const auto &devices = this->state.get_device_manager().get_devices();
-    return devices.size() + 1;
+    return devices.size();
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task_manager = state.get_task_manager();
-    if (!task_manager.state.is_mapped(task_id)) {
-      one_hot(0, output);
-      return;
-    }
-    one_hot(task_manager.state.get_mapping(task_id) + 1, output);
+    one_hot(task_manager.state.get_mapping(task_id), output);
   }
 };
 
