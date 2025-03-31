@@ -40,6 +40,46 @@ class TransitionConditions;
 class Scheduler;
 class Mapper;
 
+enum class ExecutionState {
+  NONE = 0,
+  RUNNING = 1,
+  COMPLETE = 2,
+  BREAKPOINT = 3,
+  EXTERNAL_MAPPING = 4,
+  ERROR = 5,
+};
+constexpr std::size_t num_execution_states = 6;
+
+inline std::string to_string(const ExecutionState &state) {
+  switch (state) {
+  case ExecutionState::NONE:
+    return "NONE";
+    break;
+  case ExecutionState::RUNNING:
+    return "RUNNING";
+    break;
+  case ExecutionState::COMPLETE:
+    return "COMPLETE";
+    break;
+  case ExecutionState::BREAKPOINT:
+    return "BREAKPOINT";
+    break;
+  case ExecutionState::EXTERNAL_MAPPING:
+    return "EXTERNAL_MAPPING";
+    break;
+  case ExecutionState::ERROR:
+    return "ERROR";
+    break;
+  default:
+    return "UNKNOWN";
+  }
+}
+
+inline std::ostream &operator<<(std::ostream &os, const ExecutionState &state) {
+  os << to_string(state);
+  return os;
+}
+
 class SchedulerQueues {
 protected:
   TaskQueue3 mappable;
@@ -477,6 +517,7 @@ public:
 template <typename T>
 concept TransitionConditionConcept = requires(T t, SchedulerState &state, SchedulerQueues &queues) {
   { t.should_map(state, queues) } -> std::convertible_to<bool>;
+  { t.update_map(state, queues) } -> std::convertible_to<bool>;
   { t.should_reserve(state, queues) } -> std::convertible_to<bool>;
   { t.should_launch(state, queues) } -> std::convertible_to<bool>;
   { t.should_launch_data(state, queues) } -> std::convertible_to<bool>;
@@ -484,25 +525,31 @@ concept TransitionConditionConcept = requires(T t, SchedulerState &state, Schedu
 
 class TransitionConditions {
 public:
-  virtual bool should_map(SchedulerState &state, SchedulerQueues &queues) const {
+  virtual bool should_map(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool should_reserve(SchedulerState &state, SchedulerQueues &queues) const {
+  virtual bool update_map(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool should_launch(SchedulerState &state, SchedulerQueues &queues) const {
+  virtual bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool should_launch_data(SchedulerState &state, SchedulerQueues &queues) const {
+  virtual bool should_launch(SchedulerState &state, SchedulerQueues &queues) {
+    MONUnusedParameter(state);
+    MONUnusedParameter(queues);
+    return true;
+  }
+
+  virtual bool should_launch_data(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
@@ -526,7 +573,7 @@ public:
         total_in_flight(total_in_flight_) {
   }
 
-  bool should_map(SchedulerState &state, SchedulerQueues &queues) const override {
+  bool should_map(SchedulerState &state, SchedulerQueues &queues) override {
     MONUnusedParameter(queues);
 
     auto n_mapped = state.counts.n_mapped();
@@ -537,7 +584,7 @@ public:
     return flag;
   }
 
-  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) const override {
+  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) override {
     MONUnusedParameter(queues);
     auto n_reserved = state.counts.n_reserved();
     auto n_launched = state.counts.n_launched();
@@ -548,9 +595,66 @@ public:
   }
 };
 
+class BatchTransitionConditions : public TransitionConditions {
+public:
+  std::size_t batch_size = 20;
+  std::size_t active_batch = 0;
+  std::size_t queue_threshold = 2;
+  std::size_t max_in_flight = 16;
+  timecount_t last_accessed = 0;
+
+  BatchTransitionConditions(std::size_t batch_size_, std::size_t queue_threshold_,
+                            std::size_t max_in_flight_)
+      : batch_size(batch_size_), queue_threshold(queue_threshold_), max_in_flight(max_in_flight_) {
+  }
+
+  bool should_map(SchedulerState &state, SchedulerQueues &queues) override {
+    MONUnusedParameter(queues);
+    auto &counts = state.counts;
+    auto n_mapped = counts.n_mapped();
+    bool space_flag = (n_mapped <= max_in_flight + active_batch);
+    // std::cout << "n_mapped: " << n_mapped << "\n";
+    // std::cout << "Max in flight: " << max_in_flight << "\n";
+    // std::cout << "Active batch: " << active_batch << "\n";
+    // if (space_flag) {
+    //   std::cout << "Remaining space: " << (max_in_flight + active_batch - n_mapped) << "\n";
+    // } else {
+    //   std::cout << "Overfill: " << (n_mapped - max_in_flight - active_batch) << "\n";
+    // }
+
+    bool workqueue_flag = false;
+
+    const devid_t n_devices = state.get_device_manager().get_devices().size();
+
+    for (int i = 1; i < n_devices; i++) {
+      if (counts.n_mapped(i) < queue_threshold) {
+        workqueue_flag = true;
+        // std::cout << "Device " << i << " only has " << counts.n_mapped(i) << " mapped tasks.\n";
+        break;
+      }
+    }
+
+    bool flag = space_flag || workqueue_flag;
+
+    if (flag) {
+      if (active_batch == 0) {
+        // std::cout << "Setting active batch to " << batch_size << "at time "
+        //           << state.get_global_time() << "\n";
+        last_accessed = state.get_global_time();
+        active_batch = batch_size;
+      }
+    } else {
+      // std::cout << "Resetting active batch to 0 at time " << state.get_global_time() << "\n";
+      active_batch = 0;
+    }
+
+    return flag;
+  }
+};
+
 #define INITIAL_TASK_BUFFER_SIZE 10
 #define INITIAL_DEVICE_BUFFER_SIZE 10
-#define INITIAL_EVENT_BUFFER_SIZE 10
+#define INITIAL_EVENT_BUFFER_SIZE 500
 
 struct SuccessPair {
   bool success = false;
@@ -617,7 +721,7 @@ public:
   void remove_mapped_tasks(ActionList &action_list);
 
   void map_tasks(Event &map_event, EventManager &event_manager, Mapper &mapper);
-  void map_tasks_from_python(ActionList &action_list, EventManager &event_manager);
+  ExecutionState map_tasks_from_python(ActionList &action_list, EventManager &event_manager);
 
   SuccessPair reserve_task(taskid_t task_id, devid_t device_id);
   void reserve_tasks(Event &reserve_event, EventManager &event_manager);

@@ -82,4 +82,13 @@ void init_scheduler_ext(nb::module_ &m) {
       .def_ro("mapped_reserved_gap", &RangeTransitionConditions::mapped_reserved_gap)
       .def_ro("reserved_launched_gap", &RangeTransitionConditions::reserved_launched_gap)
       .def_ro("total_in_flight", &RangeTransitionConditions::total_in_flight);
+
+  nb::class_<BatchTransitionConditions, TransitionConditions>(m, "BatchTransitionConditions")
+      .def(nb::init<std::size_t, std::size_t, std::size_t>(), "batch_size"_a, "queue_threshold"_a,
+           "max_in_flight"_a)
+      .def_ro("batch_size", &BatchTransitionConditions::batch_size)
+      .def_ro("queue_threshold", &BatchTransitionConditions::queue_threshold)
+      .def_ro("max_in_flight", &BatchTransitionConditions::max_in_flight)
+      .def_ro("last_accessed", &BatchTransitionConditions::last_accessed)
+      .def_ro("active_batch", &BatchTransitionConditions::active_batch);
 }

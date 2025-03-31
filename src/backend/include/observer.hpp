@@ -15,7 +15,7 @@
 #include <sys/types.h>
 #include <unordered_map>
 
-using op_t = uint32_t;
+using op_t = int32_t;
 using f_t = float_t;
 
 enum class NodeType {
@@ -436,11 +436,11 @@ public:
     for (const auto &task : tasks.get_compute_tasks()) {
       in_degree_sum += get_in_degree(task);
       in_degree_sum2 += get_in_degree(task) * get_in_degree(task);
-      max_in_degree = std::max(max_in_degree, (uint32_t)task.get_dependencies().size());
+      max_in_degree = std::max(max_in_degree, (int32_t)task.get_dependencies().size());
 
       out_degree_sum += get_out_degree(task);
       out_degree_sum2 += get_out_degree(task) * get_out_degree(task);
-      max_out_degree = std::max(max_out_degree, (uint32_t)task.get_dependents().size());
+      max_out_degree = std::max(max_out_degree, (int32_t)task.get_dependents().size());
 
       double task_data_memcost = get_task_data_memcost(task, data);
 
@@ -912,7 +912,7 @@ public:
     std::span task_ids(task_ids_pointer, n);
     TaskDataEdges edges;
 
-    std::unordered_map<dataid_t, uint32_t> data_map;
+    std::unordered_map<dataid_t, int32_t> data_map;
 
     source_list.clear();
     target_list.clear();
@@ -966,7 +966,7 @@ public:
     std::span task_ids(task_ids_pointer, n);
     TaskDeviceEdges edges;
 
-    std::map<devid_t, uint32_t> device_map;
+    std::map<devid_t, int32_t> device_map;
 
     source_list.clear();
     target_list.clear();
@@ -1037,7 +1037,7 @@ public:
       edges.data2id[data_id.second] = data_id.first;
     }
 
-    std::map<devid_t, uint32_t> device_map;
+    std::map<devid_t, int32_t> device_map;
 
     for (const auto &data_id : data_map) {
       const auto &valid_sources =

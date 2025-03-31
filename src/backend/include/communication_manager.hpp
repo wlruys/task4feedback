@@ -55,10 +55,10 @@ class Topology {
   std::vector<timecount_t> latency;
   std::vector<mem_t> bandwidths;
   std::vector<copy_t> links;
-  std::size_t num_devices = 0;
+  devid_t num_devices = 0;
 
 public:
-  Topology(std::size_t num_devices)
+  Topology(devid_t num_devices)
       : latency(num_devices * num_devices), bandwidths(num_devices * num_devices),
         links(num_devices * num_devices), num_devices(num_devices) {
   }

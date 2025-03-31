@@ -140,20 +140,20 @@ protected:
 
 public:
   taskid_t id = 0;
-  uint64_t depth = 0;
+  int32_t depth = 0;
 
   Task() = default;
   Task(taskid_t id) : id(id) {
   }
 
-  void set_depth(uint64_t depth_) {
+  void set_depth(int32_t depth_) {
     this->depth = depth_;
   }
 
   [[nodiscard]] taskid_t get_id() const {
     return id;
   }
-  [[nodiscard]] uint64_t get_depth() const {
+  [[nodiscard]] int64_t get_depth() const {
     return depth;
   }
 
