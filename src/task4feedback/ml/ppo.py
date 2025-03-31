@@ -6,13 +6,15 @@ from torchrl.collectors import MultiSyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
-from torchrl.record.loggers.wandb import WandbLogger
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 from torchrl.modules import ProbabilisticActor, ValueOperator, ActorCriticWrapper
 from tensordict.nn import TensorDictModule
 from torch_geometric.loader import DataLoader
 import copy
+from tensordict import TensorDictBase, TensorDict
+import wandb
+import os
 
 
 @dataclass
@@ -30,6 +32,8 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     threads_per_worker: int = 1
     train_device: str = "cpu"
+    gae_gamma: float = 1
+    gae_lmbda: float = 0.1
 
 
 def run_ppo_cleanrl_no_rb(
@@ -157,12 +161,10 @@ def run_ppo_cleanrl_no_rb(
 def run_ppo_cleanrl(
     actor_critic_base: nn.Module, make_env: Callable[[], EnvBase], config: PPOConfig
 ):
-    # r2g = Reward2GoTransform(gamma=1, out_keys=["reward_to_go"])
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(max_size=config.states_per_collection),
         sampler=SamplerWithoutReplacement(),
         pin_memory=True,
-        # transform=r2g,
     )
 
     _actor_critic_td = HeteroDataWrapper(actor_critic_base)
@@ -284,17 +286,9 @@ def run_ppo_torchrl(
     actor_critic_base: nn.Module,
     make_env: Callable[[], EnvBase],
     config: PPOConfig,
-    wandb_project: str = "run_ppo_torchrl",
-    wandb_exp_name: str = "run_ppo_torchrl",
 ):
-    logger = WandbLogger(
-        project=wandb_project,
-        exp_name=wandb_exp_name,
-    )
-    # using torchrl built ins
-
-    _actor_td = HeteroDataWrapper(actor_critic_base.actor)
-    _critic_td = HeteroDataWrapper(actor_critic_base.critic)
+    _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
+    _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
 
     module_action = TensorDictModule(
         _actor_td,
@@ -316,21 +310,22 @@ def run_ppo_torchrl(
         in_keys=["observation"],
     )
 
-    td_actor_critic_module = ActorCriticWrapper(
-        policy_operator=td_module_action, value_operator=td_critic_module
-    )
-
+    td_module_action = td_module_action.to(config.train_device)
+    td_critic_module = td_critic_module.to(config.train_device)
+    train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
+    train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
+    model = torch.nn.ModuleList([train_actor_network, train_critic_network])
     collector = MultiSyncDataCollector(
         [make_env for _ in range(config.workers)],
         td_module_action,
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
         cat_results=0,
+        device=config.train_device,
         env_device="cpu",
-        policy_device="cpu",
-        storing_device=config.train_device,
     )
     out_seed = collector.set_seed(config.seed)
+    print(f"Seed: {out_seed}")
 
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(
@@ -340,42 +335,54 @@ def run_ppo_torchrl(
         pin_memory=torch.cuda.is_available(),
     )
 
-    train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
-    train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
-
     advantage_module = GAE(
-        gamma=1.0,
-        lmbda=1.0,
-        value_network=train_critic_network,
+        gamma=config.gae_gamma,
+        lmbda=config.gae_lmbda,
+        value_network=model[1],
         average_gae=False,
         device=config.train_device,
     )
 
     loss_module = ClipPPOLoss(
-        actor_network=train_actor_network,
-        critic_network=train_critic_network,
+        actor_network=model[0],
+        critic_network=model[1],
         clip_epsilon=config.clip_eps,
         entropy_bonus=True,
         entropy_coef=config.ent_coef,
         critic_coef=config.val_coef,
         loss_critic_type="l2",
-    ).to(config.train_device)
+    )
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
     for i, tensordict_data in enumerate(collector):
+        if (i + 1) % 50 == 0:
+            if wandb.run.dir is None:
+                path = "."
+            else:
+                path = wandb.run.dir
+            torch.save(
+                model.state_dict(), os.path.join(wandb.run.dir, f"model_{i+1}.pth")
+            )
+        if i >= config.num_collections:
+            break
         print(f"Collection: {i}")
         tensordict_data = tensordict_data.to(config.train_device, non_blocking=True)
 
         with torch.no_grad():
             advantage_module(tensordict_data)
 
-        non_zero_rewards = tensordict_data["next", "reward"][
-            tensordict_data["next", "reward"] != 0
-        ]
+        non_zero_rewards = tensordict_data["next", "reward"]
+        improvements = tensordict_data["next", "observation", "aux", "improvement"]
+        mask = improvements > -1.5
+        filtered_improvements = improvements[mask]
+        if filtered_improvements.numel() > 0:
+            avg_improvement = filtered_improvements.mean()
         if len(non_zero_rewards) > 0:
             avg_non_zero_reward = non_zero_rewards.mean().item()
-            print(f"Average non-zero reward: {avg_non_zero_reward}")
+            print(
+                f"Average reward: {avg_non_zero_reward}, Average Improvement: {avg_improvement}"
+            )
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
@@ -403,11 +410,16 @@ def run_ppo_torchrl(
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
-        logger.log_scalar("Average Return", avg_non_zero_reward)
-        logger.log_scalar("loss_objective", loss_vals["loss_objective"].item())
-        logger.log_scalar("loss_critic", loss_vals["loss_critic"].item())
-        logger.log_scalar("loss_entropy", loss_vals["loss_entropy"].item())
-        logger.log_scalar("loss_total", loss_value.item())
-        logger.log_scalar("grad_norm", grad_norm)
+        wandb.log(
+            {
+                "Average Return": avg_non_zero_reward,
+                "Average Improvement": avg_improvement,
+                "loss_objective": loss_vals["loss_objective"].item(),
+                "loss_critic": loss_vals["loss_critic"].item(),
+                "loss_entropy": loss_vals["loss_entropy"].item(),
+                "loss_total": loss_value.item(),
+                "grad_norm": grad_norm,
+            },
+        )
 
     collector.shutdown()

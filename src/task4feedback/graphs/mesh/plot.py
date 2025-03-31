@@ -14,7 +14,16 @@ import task4feedback.fastsim2 as fastsim
 import copy
 from ..base import EnvironmentState
 
-device_to_color = ["gray", "blue", "green", "orange", "red"]
+device_to_color = [
+    "black",
+    "red",
+    "green",
+    "blue",
+    "yellow",
+    "purple",
+    "orange",
+    "cyan",
+]
 
 
 def plot_edges(ax, points, edge_array, color="k", linewidth=1, alpha=0.5):

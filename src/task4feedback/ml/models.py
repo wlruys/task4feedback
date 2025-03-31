@@ -6,6 +6,7 @@ from typing import Optional, Self
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import observation_to_heterodata
 from dataclasses import dataclass
+
 # from task4feedback.interface.wrappers import (
 #     observation_to_heterodata_truncate as observation_to_heterodata,
 # )
@@ -33,12 +34,15 @@ def init_weights(m):
 
 
 class HeteroDataWrapper(nn.Module):
-    def __init__(
-        self,
-        network: nn.Module,
-    ):
+    def __init__(self, network: nn.Module, device: None):
         super(HeteroDataWrapper, self).__init__()
         self.network = network
+        if device is None:
+            self.device = (
+                torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
+            )
+        else:
+            self.device = device
 
     def _is_batch(self, obs: TensorDict) -> bool:
         if not obs.batch_size:
@@ -83,6 +87,7 @@ class HeteroDataWrapper(nn.Module):
     def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
         data = self._convert_to_heterodata(obs, is_batch, actions=actions)
+        data = data.to(self.device)
         out = self.network(data)
 
         # rehape the output to the original batch size
@@ -499,10 +504,8 @@ class OldCombinedNet(nn.Module):
             layer_config.hidden_channels * 3 + feature_config.task_feature_dim
         )
 
-        self.actor_head = OutputHead(
-            gat_output_dim, layer_config.hidden_channels, n_devices
-        )
-        self.critic_head = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
+        self.actor = OutputHead(gat_output_dim, layer_config.hidden_channels, n_devices)
+        self.critic = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         if next(self.parameters()).is_cuda:
@@ -515,13 +518,13 @@ class OldCombinedNet(nn.Module):
         else:
             candidate_embedding = task_embeddings[0]
 
-        d_logits = self.actor_head(candidate_embedding)
+        d_logits = self.actor(candidate_embedding)
 
         if counts is None:
-            v = self.critic_head(task_embeddings)
+            v = self.critic(task_embeddings)
             v = global_mean_pool(v, task_batch)
         else:
-            v = self.critic_head(task_embeddings)
+            v = self.critic(task_embeddings)
             v = global_add_pool(v, task_batch)
             v = torch.div(v, counts)
 
@@ -640,6 +643,15 @@ class OldActionValueNet(nn.Module):
 
 
 class OldSeparateNet(nn.Module):
+    """
+    Wrapper module for separate actor and critic networks using individual HeteroGAT1Layer instances.
+
+    Unlike `OldCombinedNet`, this class assigns a distinct HeteroGAT1Layer to each of the actor and critic networks.
+
+    Args:
+        n_devices (int): The number of mappable devices. Check whether this includes the CPU.
+    """
+
     def __init__(
         self,
         feature_config: FeatureDimConfig,

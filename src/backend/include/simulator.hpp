@@ -195,6 +195,21 @@ public:
     last_state = ExecutionState::RUNNING;
   }
 
+  void skip_external_mapping(bool enqueue_mapping_event = true) {
+    if (last_state != ExecutionState::EXTERNAL_MAPPING) {
+      spdlog::critical("Simulator not in external mapping state.");
+      return;
+    }
+    // Set the state back to running
+    last_state = ExecutionState::RUNNING;
+
+    // Create a new event to run the mapper
+    if (enqueue_mapping_event) {
+      const auto current_time = scheduler.get_state().get_global_time();
+      event_manager.create_event(EventType::MAPPER, current_time, TaskIDList());
+    }
+  }
+
   [[nodiscard]] ExecutionState check_breakpoints(ExecutionState ex_state) {
     if (scheduler.is_breakpoint()) {
       scheduler.breakpoints.reset_breakpoint();
@@ -273,6 +288,10 @@ public:
 
   [[nodiscard]] timecount_t get_current_time() const {
     return scheduler.get_state().get_global_time();
+  }
+
+  [[nodiscard]] timecount_t get_task_finish_time(taskid_t task_id) const {
+    return scheduler.get_state().get_task_manager().records.get_completed_time(task_id);
   }
 
   void add_task_breakpoint(EventType type, taskid_t task) {
