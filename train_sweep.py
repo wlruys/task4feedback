@@ -128,7 +128,7 @@ def make_sweep_env(config: SweepConfig):
         m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
     )
     env = RuntimeEnv(
-        SimulatorFactory(input, spec, DefaultObserverFactory),
+        SimulatorFactory(input, spec, XYMinimalObserverFactory),
         device="cpu",
         change_priority=True,
         seed=10000,

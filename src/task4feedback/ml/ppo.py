@@ -374,14 +374,15 @@ def run_ppo_torchrl(
 
         non_zero_rewards = tensordict_data["next", "reward"]
         improvements = tensordict_data["next", "observation", "aux", "improvement"]
-        mask = improvements > -1.5
-        filtered_improvements = improvements[mask]
-        if filtered_improvements.numel() > 0:
-            avg_improvement = filtered_improvements.mean()
+        # mask = improvements > -1.5
+        # filtered_improvements = improvements[mask]
+        # if filtered_improvements.numel() > 0:
+        avg_improvement = improvements.mean()
 
         if len(non_zero_rewards) > 0:
             avg_non_zero_reward = non_zero_rewards.mean().item()
             print(f"Average reward: {avg_non_zero_reward}")
+            print(f"Average improvement: {avg_improvement}")
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
@@ -413,6 +414,7 @@ def run_ppo_torchrl(
             {
                 "Average Return": avg_non_zero_reward,
                 "loss_objective": loss_vals["loss_objective"].item(),
+                "average_improvement": avg_improvement.item(),
                 "loss_critic": loss_vals["loss_critic"].item(),
                 "loss_entropy": loss_vals["loss_entropy"].item(),
                 "loss_total": loss_value.item(),
