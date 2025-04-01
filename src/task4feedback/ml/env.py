@@ -62,6 +62,7 @@ class RuntimeEnv(EnvBase):
         self.width = width
         self.path = path
         self.only_gpu = only_gpu
+        self.s = 0
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(
@@ -214,8 +215,22 @@ class RuntimeEnv(EnvBase):
             reward[0] = 0
         self.makespan = dummy_sim.time
 
+        # print(
+        #     "Step: ",
+        #     self.s,
+        #     "Action: ",
+        #     chosen_device,
+        #     "Reward: ",
+        #     reward[0],
+        #     "Time: ",
+        #     dummy_sim.time,
+        # )
+
         simulator_status = self.simulator.run_until_external_mapping()
+        # print(f"Simulator status: {simulator_status}, Time: {self.simulator.time}")
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        self.s += 1
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
@@ -232,6 +247,7 @@ class RuntimeEnv(EnvBase):
             # reward[0] = 100
             # if done:
             # baseline_time = self._get_baseline()
+
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
             print(
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
@@ -246,6 +262,7 @@ class RuntimeEnv(EnvBase):
         self.resets += 1
         current_priority_seed = self.simulator_factory.pseed
         current_duration_seed = self.simulator_factory.seed
+        self.s = 0
 
         if self.change_locations:
             new_location_seed = self.location_seed + self.resets
