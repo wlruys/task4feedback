@@ -43,9 +43,10 @@ class RuntimeEnv(EnvBase):
         change_locations=False,
         only_gpu=True,
         snapshot_interval=-1,
-        location_seed = 0,
+        location_seed=0,
+        priority_seed=0,
         location_randomness=1,
-        location_list=[1,2,3,4],
+        location_list=[1, 2, 3, 4],
         width=8,
         path=".",
     ):
@@ -63,12 +64,15 @@ class RuntimeEnv(EnvBase):
         self.only_gpu = only_gpu
 
         self.simulator_factory = simulator_factory
-        self.simulator: SimulatorDriver = simulator_factory.create(seed)
+        self.simulator: SimulatorDriver = simulator_factory.create(
+            seed, priority_seed=priority_seed
+        )
 
         self.buffer_idx = 0
         self.resets = 0
-        
+
         if self.change_locations:
+            graph = simulator_factory.input.graph
             assert hasattr(graph, "get_cell_locations")
             assert hasattr(graph, "set_cell_locations")
             assert hasattr(graph, "randomize_locations")
@@ -76,7 +80,6 @@ class RuntimeEnv(EnvBase):
             self.location_randomness = location_randomness
             self.location_list = location_list
             random.seed(self.location_seed)
-            
 
         self.observation_spec = self._create_observation_spec()
         self.action_spec = self._create_action_spec()
@@ -85,7 +88,7 @@ class RuntimeEnv(EnvBase):
 
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
-        
+
         if change_locations:
             graph.randomize_locations(
                 self.location_randomness, self.location_list, verbose=False
@@ -158,10 +161,10 @@ class RuntimeEnv(EnvBase):
     def _step(self, td: TensorDict) -> TensorDict:
         assert self.makespan > 0, "Makespan not set"
         chosen_device = td["action"].item()
-        
+
         if self.only_gpu:
             chosen_device = chosen_device + 1
-            
+
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
         local_id = 0
@@ -197,7 +200,6 @@ class RuntimeEnv(EnvBase):
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
-
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
 
@@ -206,12 +208,12 @@ class RuntimeEnv(EnvBase):
                 f"Unexpected simulator status: {simulator_status}"
             )
         else:
-            #obs = self._reset()
-            #baseline_time = self._get_baseline()
-            #reward[0] = 1 + (baseline_time - time) / baseline_time
+            # obs = self._reset()
+            # baseline_time = self._get_baseline()
+            # reward[0] = 1 + (baseline_time - time) / baseline_time
             # reward[0] = reward[0] * 100
             # reward[0] = 100
-            #if done:
+            # if done:
             # baseline_time = self._get_baseline()
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
             print(
@@ -227,7 +229,7 @@ class RuntimeEnv(EnvBase):
         self.resets += 1
         current_priority_seed = self.simulator_factory.pseed
         current_duration_seed = self.simulator_factory.seed
-        
+
         if self.change_locations:
             new_location_seed = self.location_seed + self.resets
             # Load initial location list
@@ -238,12 +240,12 @@ class RuntimeEnv(EnvBase):
             graph.randomize_locations(
                 self.location_randomness, self.location_list, verbose=False
             )
-        
+
         if self.change_priority:
             new_priority_seed = current_priority_seed + self.resets
         else:
             new_priority_seed = current_priority_seed
-            
+
         if self.change_duration:
             new_duration_seed = current_duration_seed + self.resets
         else:
@@ -251,11 +253,11 @@ class RuntimeEnv(EnvBase):
 
         new_priority_seed = int(new_priority_seed)
         new_duration_seed = int(new_duration_seed)
-            
+
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
-        
+
         self.makespan = self._get_baseline(use_eft=True)
         self.EFT_baseline = self.makespan
 
@@ -335,7 +337,7 @@ class MapperRuntimeEnv(RuntimeEnv):
                 scheduler_state,
             )
 
-        td.set_("action", action.device-1)
+        td.set_("action", action.device - 1)
         return super()._step(td)
 
     def set_internal_mapper(self, internal_mapper):
