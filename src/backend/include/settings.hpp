@@ -35,11 +35,11 @@ using TorchInt64Arr1D = TorchArr1D<int64_t>;
 using TorchUInt32Arr1D = TorchArr1D<uint32_t>;
 using TorchUInt64Arr1D = TorchArr1D<uint64_t>;
 
-using priority_t = uint32_t;
-using taskid_t = uint32_t;
-using dataid_t = uint32_t;
-using devid_t = uint32_t;
-using depcount_t = uint32_t;
+using priority_t = int32_t;
+using taskid_t = int32_t;
+using dataid_t = int32_t;
+using devid_t = int32_t;
+using depcount_t = int32_t;
 
 // using priority_t = int32_t;
 // using taskid_t = int32_t;

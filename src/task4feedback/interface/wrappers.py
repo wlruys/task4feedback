@@ -24,6 +24,7 @@ from task4feedback.fastsim2 import (
     SchedulerInput,
     RangeTransitionConditions,
     DefaultTransitionConditions,
+    BatchTransitionConditions,
     SchedulerState,
     Simulator,
 )
@@ -576,8 +577,8 @@ class SimulatorInput:
         transition_conditions: Optional[fastsim.TransitionConditions] = None,
     ):
         if transition_conditions is None:
-            # transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
-            transition_conditions = DefaultTransitionConditions()
+            transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
+            # transition_conditions = DefaultTransitionConditions()
         if noise is None:
             noise = NoiseConfig(graph, system)
         self.noise = noise
