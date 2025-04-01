@@ -40,7 +40,7 @@ void init_device_ext(nb::module_ &m) {
       .def_ro("time", &ResourceEventType::time)
       .def_ro("resource", &ResourceEventType::resource);
 
-  using ResourceArrayType = ResourceEventArray<uint64_t>;
+  using ResourceArrayType = ResourceEventArray<int64_t>;
   nb::class_<ResourceArrayType>(m, "ResourceEventVector")
       .def(nb::init<>())
       .def_rw("size", &ResourceArrayType::size)

@@ -706,7 +706,8 @@ void Scheduler::remove_mapped_tasks(ActionList &action_list) {
   queues.mappable.remove(positions);
 }
 
-void Scheduler::map_tasks_from_python(ActionList &action_list, EventManager &event_manager) {
+ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
+                                                EventManager &event_manager) {
   success_count = 0;
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
@@ -729,11 +730,23 @@ void Scheduler::map_tasks_from_python(ActionList &action_list, EventManager &eve
   /*If we still should be mapping, continue making calls to the mapper */
 
   if (queues.has_mappable() && conditions.get().should_map(state, queues)) {
-    timecount_t mapper_time = state.global_time;
-    event_manager.create_event(EventType::MAPPER, mapper_time, TaskIDList());
+    // timecount_t mapper_time = state.global_time;
+    // event_manager.create_event(EventType::MAPPER, mapper_time, TaskIDList());
+    return ExecutionState::EXTERNAL_MAPPING;
   } else {
+
+    if (is_breakpoint()) {
+      // TODO(wlr): This needs to be tested.
+      SPDLOG_DEBUG("Breaking from mapper at time {}", state.global_time);
+      timecount_t mapper_time = state.global_time;
+      event_manager.create_event(EventType::MAPPER, mapper_time, TaskIDList());
+      return ExecutionState::BREAKPOINT;
+    }
+
+    SPDLOG_DEBUG("Ending mapper at time {}", state.global_time);
     timecount_t reserver_time = state.global_time + TIME_TO_RESERVE;
     event_manager.create_event(EventType::RESERVER, reserver_time, TaskIDList());
+    return ExecutionState::RUNNING;
   }
 }
 
