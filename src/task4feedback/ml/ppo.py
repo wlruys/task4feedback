@@ -377,7 +377,7 @@ def run_ppo_torchrl(
         mask = improvements > -1.5
         filtered_improvements = improvements[mask]
         if filtered_improvements.numel() > 0:
-            avg_improvement = improvements.mean()
+            avg_improvement = filtered_improvements.mean()
 
         if len(non_zero_rewards) > 0:
             avg_non_zero_reward = non_zero_rewards.mean().item()
