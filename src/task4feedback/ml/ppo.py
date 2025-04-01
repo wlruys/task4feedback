@@ -362,7 +362,7 @@ def run_ppo_torchrl(
             else:
                 path = wandb.run.dir
             torch.save(
-                model.state_dict(), os.path.join(wandb.run.dir, f"model_{i+1}.pth")
+                model.state_dict(), os.path.join(wandb.run.dir, f"model_{i + 1}.pth")
             )
         if i >= config.num_collections:
             break
@@ -378,11 +378,10 @@ def run_ppo_torchrl(
         filtered_improvements = improvements[mask]
         if filtered_improvements.numel() > 0:
             avg_improvement = filtered_improvements.mean()
+
         if len(non_zero_rewards) > 0:
             avg_non_zero_reward = non_zero_rewards.mean().item()
-            print(
-                f"Average reward: {avg_non_zero_reward}, Average Improvement: {avg_improvement}"
-            )
+            print(f"Average reward: {avg_non_zero_reward}")
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
@@ -413,7 +412,6 @@ def run_ppo_torchrl(
         wandb.log(
             {
                 "Average Return": avg_non_zero_reward,
-                "Average Improvement": avg_improvement,
                 "loss_objective": loss_vals["loss_objective"].item(),
                 "loss_critic": loss_vals["loss_critic"].item(),
                 "loss_entropy": loss_vals["loss_entropy"].item(),

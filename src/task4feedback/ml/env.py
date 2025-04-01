@@ -115,10 +115,27 @@ class RuntimeEnv(EnvBase):
 
     def _create_action_spec(self, ndevices: int = 5) -> TensorSpec:
         n_devices = self.simulator_factory.graph_spec.max_devices
+        # if self.only_gpu:
+        #     out = Categorical(n=n_devices - 1, dtype=torch.int64)
+        # else:
+        #     out = Categorical(n=n_devices, dtype=torch.int64)
+
         if self.only_gpu:
-            out = Categorical(n=n_devices - 1, dtype=torch.int64)
+            out = Bounded(
+                shape=(1,),
+                device=self.device,
+                dtype=torch.int64,
+                low=torch.tensor(0, device=self.device),
+                high=torch.tensor(n_devices - 1, device=self.device),
+            )
         else:
-            out = Categorical(n=n_devices, dtype=torch.int64)
+            out = Bounded(
+                shape=(1,),
+                device=self.device,
+                dtype=torch.int64,
+                low=torch.tensor(0, device=self.device),
+                high=torch.tensor(n_devices, device=self.device),
+            )
         out = Composite(action=out)
         return out
 
@@ -337,7 +354,8 @@ class MapperRuntimeEnv(RuntimeEnv):
                 scheduler_state,
             )
 
-        td.set_("action", action.device - 1)
+        new_action = torch.tensor([action.device - 1], dtype=torch.int64)
+        td.set_("action", new_action)
         return super()._step(td)
 
     def set_internal_mapper(self, internal_mapper):

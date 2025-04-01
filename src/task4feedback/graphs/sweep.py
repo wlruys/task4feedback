@@ -30,66 +30,76 @@ class SweepConfig:
 
 
 class SweepData(DataGeometry):
-    
     @staticmethod
     def from_mesh(geometry: Geometry, config: SweepConfig = SweepConfig()):
         return SweepData(geometry, config)
 
     def _create_blocks(
-        self, interior_size: int = 1000000, boundary_size: int = 1000000, directions: Optional[np.ndarray] = None
+        self,
+        interior_size: int = 1000000,
+        boundary_size: int = 1000000,
+        directions: Optional[np.ndarray] = None,
     ):
-        
         if directions is None:
             directions = np.array([[1, 0], [0, 1], [-1, 0], [0, -1]])
             directions = np.array([[-1, -1], [1, 1]])
-        
+
         directions = directions.astype(np.float64)
-        
-        for i, direction in enumerate(directions):
-            directions[i] = direction / np.linalg.norm(direction)
-            
-        self.directions = directions
-        
-        self.centroid_projections = []
-        
-        # Loop over cells
-        for cell in range(len(self.geometry.cells)):
-            
-            # Create 1 shared block per cell
-            self.add_block(DataKey(Cell(cell), 0), size=self.config.interior_size, location=0)
 
         for i, direction in enumerate(directions):
-            
-            #print(f"Creating blocks in direction {i}: {direction}")
-            
+            directions[i] = direction / np.linalg.norm(direction)
+
+        self.directions = directions
+
+        self.centroid_projections = []
+
+        # Loop over cells
+        for cell in range(len(self.geometry.cells)):
+            # Create 1 shared block per cell
+            self.add_block(
+                DataKey(Cell(cell), 0), size=self.config.interior_size, location=0
+            )
+
+        for i, direction in enumerate(directions):
+            # print(f"Creating blocks in direction {i}: {direction}")
+
             self.centroid_projections.append(np.zeros(len(self.geometry.cells)))
-            
-             # Loop over cells
+
+            # Loop over cells
             for cell in range(len(self.geometry.cells)):
-            
                 # Create 1 block per cell per direction
-                self.add_block(DataKey(Cell(cell), i+1), size=self.config.interior_size, location=0)
-                
+                self.add_block(
+                    DataKey(Cell(cell), i + 1),
+                    size=self.config.interior_size,
+                    location=0,
+                )
+
                 for edge in self.geometry.cell_edges[cell]:
-                    normal_to_edge = self.geometry.get_normal_to_edge(edge, cell, round_in=self.config.round_in, round_out=self.config.round_out)
+                    normal_to_edge = self.geometry.get_normal_to_edge(
+                        edge,
+                        cell,
+                        round_in=self.config.round_in,
+                        round_out=self.config.round_out,
+                    )
                     prod_with_direction = np.dot(normal_to_edge, direction)
-                    
-                    centroid = self.geometry.get_centroid(cell, round_out=self.config.round_out)
+
+                    centroid = self.geometry.get_centroid(
+                        cell, round_out=self.config.round_out
+                    )
                     self.centroid_projections[i][cell] = np.dot(centroid, direction)
-                    
-                    #print(f"Normal to edge {edge}: {normal_to_edge}, {prod_with_direction}")
+
+                    # print(f"Normal to edge {edge}: {normal_to_edge}, {prod_with_direction}")
                     if prod_with_direction > self.config.threshold:
                         # Create boundary blocks for each edge
-                        
+
                         self.add_block(
-                            DataKey(Edge(edge), (Cell(cell), i+1)),
+                            DataKey(Edge(edge), (Cell(cell), i + 1)),
                             size=self.config.boundary_size,
                             location=0,
                         )
-                    
-                    #print(f"Creating block for (cell, edge) {(cell, edge)} in direction {i}: {direction}")
-                    #print(f"Product with direction: {prod_with_direction}")
-                                            
+
+                    # print(f"Creating block for (cell, edge) {(cell, edge)} in direction {i}: {direction}")
+                    # print(f"Product with direction: {prod_with_direction}")
 
     def __init__(self, geometry: Geometry, config: SweepConfig = SweepConfig()):
         super().__init__(geometry, DataBlocks(), GeometryIDMap())
@@ -103,13 +113,13 @@ class SweepData(DataGeometry):
         return [self.map.block_to_key[i] for i in blocks]
 
     def get_block_at_direction(self, object: Cell | tuple[Cell, Edge], direction: int):
-        idx = direction + 1  
+        idx = direction + 1
         if isinstance(object, tuple):
             return self.map.get_block(DataKey(object[1], (object[0], idx)))
         return self.map.get_block(DataKey(object, idx))
 
     def get_shared_block(self, object: Cell | tuple[Cell, Edge]):
-        idx = 0 
+        idx = 0
         if isinstance(object, tuple):
             return self.map.get_block(DataKey(object[1], (object[0], idx)))
         return self.map.get_block(DataKey(object, idx))
@@ -186,86 +196,89 @@ class SweepData(DataGeometry):
 
 
 class SweepGraph(ComputeDataGraph):
-    
-    
     def _build_sweep_tasks(self, step: int = 0, direction: int = 0):
-        #Note this assumes that dependencies will only occur in the order of the cells sorted by the centroid projections
-        #This is not true for all geometries
-        #Likewise this (should) prevent most cycles from occuring 
-        
-        
+        # Note this assumes that dependencies will only occur in the order of the cells sorted by the centroid projections
+        # This is not true for all geometries
+        # Likewise this (should) prevent most cycles from occuring
+
         direction_vec = self.data.directions[direction]
         centroid_projections = self.data.centroid_projections[direction]
         n_cells = len(self.data.geometry.cells)
-        
+
         sort_cell_idx = np.argsort(centroid_projections)
 
         for i, idx in enumerate(sort_cell_idx):
-            cell = idx 
+            cell = idx
             edges = self.data.geometry.cell_edges[cell]
-                        
-            #Create task that reads its upstream edges and writes to its downstream edges
-            
+
+            # Create task that reads its upstream edges and writes to its downstream edges
+
             name = f"Task(SWEEP, Cell({cell}), {step}, {direction_vec})"
-            task_id = self.add_task(name, i + direction* n_cells)
-            
+            task_id = self.add_task(name, i + direction * n_cells)
+
             self.task_to_cell[task_id] = cell
             self.task_to_level[task_id] = step
             self.task_to_type[task_id] = "SWEEP"
             self.task_to_direction[task_id] = direction
-            
+
             self.type_to_task["SWEEP"].append(task_id)
             self.level_to_task[step]["SWEEP"].append(task_id)
             self.direction_to_task["SWEEP"][direction].append(task_id)
-            
+
             read_blocks = []
             write_blocks = []
-            
-            #Read shared block (material properties, etc)
+
+            # Read shared block (material properties, etc)
             shared_block = self.data.get_shared_block(Cell(cell))
             read_blocks.append(shared_block)
-            
-            #Read and write to own interior block for this step 
+
+            # Read and write to own interior block for this step
             interior_block = self.data.get_block_at_direction(Cell(cell), direction)
             read_blocks.append(interior_block)
             write_blocks.append(interior_block)
-            
-            #Read upstream edges
+
+            # Read upstream edges
             for edge in edges:
-                normal_to_edge = self.data.geometry.get_normal_to_edge(edge, cell, round_in=self.config.round_in, round_out=self.config.round_out)
+                normal_to_edge = self.data.geometry.get_normal_to_edge(
+                    edge,
+                    cell,
+                    round_in=self.config.round_in,
+                    round_out=self.config.round_out,
+                )
                 prod_with_direction = np.dot(normal_to_edge, direction_vec)
-                
+
                 for neighbor_cell in self.data.geometry.edge_cell_dict[edge]:
                     if neighbor_cell != cell:
-                        
                         if prod_with_direction < -self.config.threshold:
-                            #Read from upstream neighbor
-                            block = self.data.get_block_at_direction((Cell(neighbor_cell), Edge(edge)), direction)
-                            
+                            # Read from upstream neighbor
+                            block = self.data.get_block_at_direction(
+                                (Cell(neighbor_cell), Edge(edge)), direction
+                            )
+
                             if isinstance(block, int):
                                 read_blocks.append(block)
-                    
+
                         if prod_with_direction > self.config.threshold:
-                            #Read and write to all self edges 
-                            block = self.data.get_block_at_direction((Cell(cell), Edge(edge)), direction)
+                            # Read and write to all self edges
+                            block = self.data.get_block_at_direction(
+                                (Cell(cell), Edge(edge)), direction
+                            )
                             if isinstance(block, int):
                                 read_blocks.append(block)
                                 write_blocks.append(block)
-                            
-                    
+
             self.add_read_data(task_id, read_blocks)
             self.add_write_data(task_id, write_blocks)
-            
+
     def _build_reduction_tasks(self, step: int = 0):
-        #For each cell, create a task that reads the interior blocks for all directions and reads/writes to the shared block
-        
+        # For each cell, create a task that reads the interior blocks for all directions and reads/writes to the shared block
+
         for i in range(len(self.data.geometry.cells)):
-            
-            #Create task that reads its upstream edges and writes to its downstream edges
-            
+            # Create task that reads its upstream edges and writes to its downstream edges
+
             name = f"Task(REDUCE, Cell({i}), {step})"
             task_id = self.add_task(name, i + step * len(self.data.geometry.cells))
-            
+
             self.task_to_cell[task_id] = i
             self.task_to_level[task_id] = step
             self.task_to_type[task_id] = "REDUCE"
@@ -273,22 +286,21 @@ class SweepGraph(ComputeDataGraph):
             self.direction_to_task["REDUCE"][-1].append(task_id)
             self.type_to_task["REDUCE"].append(task_id)
             self.level_to_task[step]["REDUCE"].append(task_id)
-            
+
             read_blocks = []
             write_blocks = []
-            
-            #Read/write shared block (material properties, etc)
+
+            # Read/write shared block (material properties, etc)
             shared_block = self.data.get_shared_block(Cell(i))
             read_blocks.append(shared_block)
             write_blocks.append(shared_block)
-            
+
             for d in range(len(self.data.directions)):
-                #Read interior block for this step 
+                # Read interior block for this step
                 interior_block = self.data.get_block_at_direction(Cell(i), d)
                 read_blocks.append(interior_block)
 
-            
-                #Read all edges, skip blocks that don't exist 
+                # Read all edges, skip blocks that don't exist
                 edges = self.data.geometry.cell_edges[i]
                 for edge in edges:
                     block = self.data.get_block_at_direction((Cell(i), Edge(edge)), d)
@@ -296,19 +308,16 @@ class SweepGraph(ComputeDataGraph):
                         read_blocks.append(block)
                     # else:
                     #     print("Block does not exist", block, Cell(i), Edge(edge), d)
-                        
+
             self.add_read_data(task_id, read_blocks)
             self.add_write_data(task_id, write_blocks)
-                        
-    
+
     def _build_graph(self):
-        
         types = ["SWEEP", "REDUCE"]
-        
+
         def make_type_dict():
             return defaultdict(list)
-        
-        
+
         self.task_to_cell = {}
         self.task_to_level = {}
         self.task_to_type = {}
@@ -316,11 +325,11 @@ class SweepGraph(ComputeDataGraph):
         self.level_to_task = defaultdict(make_type_dict)
         self.direction_to_task = defaultdict(make_type_dict)
         self.task_to_direction = {}
-        
+
         for s in range(self.config.steps):
             for d, direction in enumerate(self.data.directions):
                 self._build_sweep_tasks(step=s, direction=d)
-            
+
             if self.config.reduce:
                 self._build_reduction_tasks(step=s)
 

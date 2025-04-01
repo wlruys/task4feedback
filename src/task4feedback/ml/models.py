@@ -70,7 +70,7 @@ class HeteroDataWrapper(nn.Module):
 
         # flatten and save the batch size
         self.batch_size = obs.batch_size
-        obs = obs.reshape(-1)
+        # obs = obs.reshape(-1)
 
         _h_data = []
         # print("obs", obs.shape)
@@ -91,8 +91,8 @@ class HeteroDataWrapper(nn.Module):
         out = self.network(data)
 
         # rehape the output to the original batch size
-        if is_batch:
-            out = out.reshape(self.batch_size[0], -1, out.shape[-1])
+        # if is_batch:
+        #    out = out.reshape(self.batch_size[0], -1, out.shape[-1])
         return out
 
 
