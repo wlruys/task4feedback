@@ -374,10 +374,10 @@ def run_ppo_torchrl(
 
         non_zero_rewards = tensordict_data["next", "reward"]
         improvements = tensordict_data["next", "observation", "aux", "improvement"]
-        # mask = improvements > -1.5
-        # filtered_improvements = improvements[mask]
-        # if filtered_improvements.numel() > 0:
-        avg_improvement = improvements.mean()
+        mask = improvements > -1.5
+        filtered_improvements = improvements[mask]
+        if filtered_improvements.numel() > 0:
+            avg_improvement = improvements.mean()
 
         if len(non_zero_rewards) > 0:
             avg_non_zero_reward = non_zero_rewards.mean().item()
