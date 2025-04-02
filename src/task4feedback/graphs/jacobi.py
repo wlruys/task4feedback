@@ -377,6 +377,18 @@ class JacobiVariantGPUOnly(VariantBuilder):
             return None
 
 
+class JacobiVariantGPUOnly(VariantBuilder):
+    @staticmethod
+    def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
+        memory_usage = 0
+        vcu_usage = 1
+        expected_time = 1000
+        if arch == DeviceType.GPU:
+            return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
+        else:
+            return None
+
+
 @dataclass(kw_only=True)
 class XYExternalObserver(ExternalObserver):
     def task_observation(

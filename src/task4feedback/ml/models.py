@@ -88,12 +88,7 @@ class HeteroDataWrapper(nn.Module):
         is_batch = self._is_batch(obs)
         data = self._convert_to_heterodata(obs, is_batch, actions=actions)
         data = data.to(self.device)
-        out = self.network(data)
-
-        # rehape the output to the original batch size
-        # if is_batch:
-        #    out = out.reshape(self.batch_size[0], -1, out.shape[-1])
-        return out
+        return self.network(data)
 
 
 @dataclass
