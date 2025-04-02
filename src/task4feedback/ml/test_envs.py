@@ -8,7 +8,7 @@ from ..graphs.mesh.partition import *
 from typing import Type
 
 
-def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
+def build_jacobi_graph(config: JacobiConfig, randomize=True) -> JacobiGraph:
     mesh = generate_quad_mesh(L=config.L, n=config.n)
     geom = build_geometry(mesh)
 
@@ -21,7 +21,10 @@ def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
 
     jgraph.set_cell_locations(partition)
 
-    jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
+    if randomize:
+        jgraph.randomize_locations(
+            config.randomness, location_list=[1, 2, 3, 4], verbose=True
+        )
 
     location_map = {
         1: 1,

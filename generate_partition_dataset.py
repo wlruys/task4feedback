@@ -34,7 +34,13 @@ from task4feedback.interface.wrappers import (
 # from task4feedback.interface.wrappers import (
 #     observation_to_heterodata_truncate as observation_to_heterodata,
 # )
-from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
+from torchrl.data import (
+    Composite,
+    TensorSpec,
+    Unbounded,
+    Binary,
+    Bounded,
+)
 from torchrl.envs.utils import make_composite_from_td
 from tensordict.nn import set_composite_lp_aggregate
 from torchrl.envs import check_env_specs
@@ -61,13 +67,9 @@ import torchrl
 import torch_geometric
 import aim
 from aim.pytorch import track_gradients_dists, track_params_dists
-
-
-seed = 1
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-torch.backends.cudnn.deterministic = True
+from task4feedback.ml.test_envs import *
+from task4feedback.ml.iql import *
+from task4feedback.graphs.mesh.plot import *
 
 
 @dataclass
@@ -85,73 +87,50 @@ class JacobiVariant(VariantBuilder):
     def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
         memory_usage = 0
         vcu_usage = 1
-        expected_time = 0
+        expected_time = 1000
         if arch == DeviceType.GPU:
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
         else:
-            return VariantTuple(DeviceType.NONE, 0, 0, 0)
-
-
-def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
-    mesh = generate_quad_mesh(L=config.L, n=config.n)
-    geom = build_geometry(mesh)
-
-    jgraph = JacobiGraph(geom, config.steps)
-
-    jgraph.apply_variant(JacobiVariant)
-
-    partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
-    # offset by 1 to ignore cpu
-    partition = [x + 1 for x in partition]
-
-    jgraph.set_cell_locations(partition)
-    jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
-
-    return jgraph
-
-
-def make_jacobi_env(config: JacobiConfig):
-    gmsh.initialize()
-    s = uniform_connected_devices(5, 1000000000, 1, 2000)
-    jgraph = build_jacobi_graph(config)
-
-    d = jgraph.get_blocks()
-    m = jgraph
-    m.finalize_tasks()
-    spec = create_graph_spec()
-    input = SimulatorInput(
-        m, d, s, transition_conditions=fastsim.RangeTransitionConditions(5, 5, 16)
-    )
-    env = RuntimeEnv(
-        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
-    )
-    env = TransformedEnv(env, StepCounter())
-    env = TransformedEnv(env, TrajCounter())
-
-    return env
+            return None
 
 
 if __name__ == "__main__":
-    jacobi_config = JacobiConfig(steps=3, randomness=1)
+    randomness = 0
 
-    def make_env() -> RuntimeEnv:
-        return make_jacobi_env(jacobi_config)
+    for i in range(0, 1):
+        randomness = 1
+        config_list = [
+            JacobiConfig(
+                L=4, n=4, steps=14, n_part=4, randomness=randomness, permute_idx=j
+            )
+            for j in range(1)
+        ]
 
-    env = make_env()
+        def make_graph(config):
+            # from task4feedback.interface import start_logger
 
-    # start_logger()
+            # start_logger()
+            gmsh.initialize()
+            graph = build_jacobi_graph(config, randomize=False)
+            graph.apply_variant(JacobiVariant)
 
-    sim = env.simulator
-    jgraph = env.simulator_factory.input.graph
-    mappings = jgraph.get_mapping_from_locations()
-    # print(mappings)
+            return graph
 
-    sim.external_mapper = StaticExternalMapper(mapping_dict=mappings)
-    # sim.enable_external_mapper()
-    sim.disable_external_mapper()
-    sim.run()
+        def make_sys():
+            s = uniform_connected_devices(5, 1000000000, 1, 2000)
+            return s
 
-    print(f"Final state: {sim.status}")
-    print(f"Final time: {sim.time}")
+        filename = f"one_permute_partition_4x4_16_{i}.rpb"
 
-    animate_mesh_graph(env, time_interval=250, show=False, title="eft_tri_wait")
+        replay_buffer = collect_partition_map_runs(
+            make_graph,
+            make_sys,
+            config_list,
+            samples=100 * 24,
+            workers=8,
+            filename=filename,
+            level_start=i,
+            rtc=False,
+        )
+
+        # animate_mesh_graph(env, time_interval=250, show=False, title="test_part_mapper")

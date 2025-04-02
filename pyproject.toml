@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core>=0.5", "pyyaml", "cython", "numpy"]
+requires = ["scikit-build-core>=0.5", "pyyaml", "nanobind", "numpy"]
 build-backend = "scikit_build_core.build"
 
 [project]

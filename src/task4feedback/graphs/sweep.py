@@ -13,32 +13,98 @@ from task4feedback import fastsim2 as fastsim
 from ..interface.wrappers import *
 
 
-class JacobiData(DataGeometry):
+@dataclass
+class SweepConfig:
+    L: int = 4
+    n: int = 4
+    randomness: float = 0
+    permute_idx: int = 0
+    directions: Optional[np.ndarray] = None
+    threshold: float = 0.1
+    steps: int = 1
+    round_in: int = 2
+    round_out: int = 2
+    reduce: bool = True
+    interior_size: int = 1000000
+    boundary_size: int = 1000000
+
+
+class SweepData(DataGeometry):
     @staticmethod
-    def from_mesh(geometry: Geometry):
-        return JacobiData(geometry)
+    def from_mesh(geometry: Geometry, config: SweepConfig = SweepConfig()):
+        return SweepData(geometry, config)
 
     def _create_blocks(
-        self, interior_size: int = 1000000, boundary_size: int = 1000000
+        self,
+        interior_size: int = 1000000,
+        boundary_size: int = 1000000,
+        directions: Optional[np.ndarray] = None,
     ):
+        if directions is None:
+            directions = np.array([[1, 0], [0, 1], [-1, 0], [0, -1]])
+            directions = np.array([[-1, -1], [1, 1]])
+
+        directions = directions.astype(np.float64)
+
+        for i, direction in enumerate(directions):
+            directions[i] = direction / np.linalg.norm(direction)
+
+        self.directions = directions
+
+        self.centroid_projections = []
+
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
-            # Create 2 data blocks per cell
-            for i in range(2):
-                self.add_block(DataKey(Cell(cell), i), size=interior_size, location=0)
+            # Create 1 shared block per cell
+            self.add_block(
+                DataKey(Cell(cell), 0), size=self.config.interior_size, location=0
+            )
 
-            # Create 2 data blocks per edge
-            for edge in self.geometry.cell_edges[cell]:
-                for i in range(2):
-                    self.add_block(
-                        DataKey(Edge(edge), (Cell(cell), i)),
-                        size=boundary_size,
-                        location=0,
+        for i, direction in enumerate(directions):
+            # print(f"Creating blocks in direction {i}: {direction}")
+
+            self.centroid_projections.append(np.zeros(len(self.geometry.cells)))
+
+            # Loop over cells
+            for cell in range(len(self.geometry.cells)):
+                # Create 1 block per cell per direction
+                self.add_block(
+                    DataKey(Cell(cell), i + 1),
+                    size=self.config.interior_size,
+                    location=0,
+                )
+
+                for edge in self.geometry.cell_edges[cell]:
+                    normal_to_edge = self.geometry.get_normal_to_edge(
+                        edge,
+                        cell,
+                        round_in=self.config.round_in,
+                        round_out=self.config.round_out,
                     )
+                    prod_with_direction = np.dot(normal_to_edge, direction)
 
-    def __init__(self, geometry: Geometry):
+                    centroid = self.geometry.get_centroid(
+                        cell, round_out=self.config.round_out
+                    )
+                    self.centroid_projections[i][cell] = np.dot(centroid, direction)
+
+                    # print(f"Normal to edge {edge}: {normal_to_edge}, {prod_with_direction}")
+                    if prod_with_direction > self.config.threshold:
+                        # Create boundary blocks for each edge
+
+                        self.add_block(
+                            DataKey(Edge(edge), (Cell(cell), i + 1)),
+                            size=self.config.boundary_size,
+                            location=0,
+                        )
+
+                    # print(f"Creating block for (cell, edge) {(cell, edge)} in direction {i}: {direction}")
+                    # print(f"Product with direction: {prod_with_direction}")
+
+    def __init__(self, geometry: Geometry, config: SweepConfig = SweepConfig()):
         super().__init__(geometry, DataBlocks(), GeometryIDMap())
-        self._create_blocks()
+        self.config = config
+        self._create_blocks(directions=config.directions)
 
     def blocks_to_objects(self, blocks: list[int]):
         return [self.map.get_object(i) for i in blocks]
@@ -46,14 +112,17 @@ class JacobiData(DataGeometry):
     def blocks_to_keys(self, blocks: list[int]):
         return [self.map.block_to_key[i] for i in blocks]
 
-    def get_block_at_step(self, object: Cell | tuple[Cell, Edge], step: int):
-        idx = step % 2
+    def get_block_at_direction(self, object: Cell | tuple[Cell, Edge], direction: int):
+        idx = direction + 1
         if isinstance(object, tuple):
             return self.map.get_block(DataKey(object[1], (object[0], idx)))
         return self.map.get_block(DataKey(object, idx))
 
-    def idx_at_step(self, step: int):
-        return step % 2
+    def get_shared_block(self, object: Cell | tuple[Cell, Edge]):
+        idx = 0
+        if isinstance(object, tuple):
+            return self.map.get_block(DataKey(object[1], (object[0], idx)))
+        return self.map.get_block(DataKey(object, idx))
 
     def set_location(self, obj: Cell | Edge, location: int):
         id_list = self.map.key_to_block.get_leaves(obj)
@@ -126,60 +195,151 @@ class JacobiData(DataGeometry):
         return permutation_idx
 
 
-class JacobiGraph(ComputeDataGraph):
+class SweepGraph(ComputeDataGraph):
+    def _build_sweep_tasks(self, step: int = 0, direction: int = 0):
+        # Note this assumes that dependencies will only occur in the order of the cells sorted by the centroid projections
+        # This is not true for all geometries
+        # Likewise this (should) prevent most cycles from occuring
+
+        direction_vec = self.data.directions[direction]
+        centroid_projections = self.data.centroid_projections[direction]
+        n_cells = len(self.data.geometry.cells)
+
+        sort_cell_idx = np.argsort(centroid_projections)
+
+        for i, idx in enumerate(sort_cell_idx):
+            cell = idx
+            edges = self.data.geometry.cell_edges[cell]
+
+            # Create task that reads its upstream edges and writes to its downstream edges
+
+            name = f"Task(SWEEP, Cell({cell}), {step}, {direction_vec})"
+            task_id = self.add_task(name, i + direction * n_cells)
+
+            self.task_to_cell[task_id] = cell
+            self.task_to_level[task_id] = step
+            self.task_to_type[task_id] = "SWEEP"
+            self.task_to_direction[task_id] = direction
+
+            self.type_to_task["SWEEP"].append(task_id)
+            self.level_to_task[step]["SWEEP"].append(task_id)
+            self.direction_to_task["SWEEP"][direction].append(task_id)
+
+            read_blocks = []
+            write_blocks = []
+
+            # Read shared block (material properties, etc)
+            shared_block = self.data.get_shared_block(Cell(cell))
+            read_blocks.append(shared_block)
+
+            # Read and write to own interior block for this step
+            interior_block = self.data.get_block_at_direction(Cell(cell), direction)
+            read_blocks.append(interior_block)
+            write_blocks.append(interior_block)
+
+            # Read upstream edges
+            for edge in edges:
+                normal_to_edge = self.data.geometry.get_normal_to_edge(
+                    edge,
+                    cell,
+                    round_in=self.config.round_in,
+                    round_out=self.config.round_out,
+                )
+                prod_with_direction = np.dot(normal_to_edge, direction_vec)
+
+                for neighbor_cell in self.data.geometry.edge_cell_dict[edge]:
+                    if neighbor_cell != cell:
+                        if prod_with_direction < -self.config.threshold:
+                            # Read from upstream neighbor
+                            block = self.data.get_block_at_direction(
+                                (Cell(neighbor_cell), Edge(edge)), direction
+                            )
+
+                            if isinstance(block, int):
+                                read_blocks.append(block)
+
+                        if prod_with_direction > self.config.threshold:
+                            # Read and write to all self edges
+                            block = self.data.get_block_at_direction(
+                                (Cell(cell), Edge(edge)), direction
+                            )
+                            if isinstance(block, int):
+                                read_blocks.append(block)
+                                write_blocks.append(block)
+
+            self.add_read_data(task_id, read_blocks)
+            self.add_write_data(task_id, write_blocks)
+
+    def _build_reduction_tasks(self, step: int = 0):
+        # For each cell, create a task that reads the interior blocks for all directions and reads/writes to the shared block
+
+        for i in range(len(self.data.geometry.cells)):
+            # Create task that reads its upstream edges and writes to its downstream edges
+
+            name = f"Task(REDUCE, Cell({i}), {step})"
+            task_id = self.add_task(name, i + step * len(self.data.geometry.cells))
+
+            self.task_to_cell[task_id] = i
+            self.task_to_level[task_id] = step
+            self.task_to_type[task_id] = "REDUCE"
+            self.task_to_direction[task_id] = -1
+            self.direction_to_task["REDUCE"][-1].append(task_id)
+            self.type_to_task["REDUCE"].append(task_id)
+            self.level_to_task[step]["REDUCE"].append(task_id)
+
+            read_blocks = []
+            write_blocks = []
+
+            # Read/write shared block (material properties, etc)
+            shared_block = self.data.get_shared_block(Cell(i))
+            read_blocks.append(shared_block)
+            write_blocks.append(shared_block)
+
+            for d in range(len(self.data.directions)):
+                # Read interior block for this step
+                interior_block = self.data.get_block_at_direction(Cell(i), d)
+                read_blocks.append(interior_block)
+
+                # Read all edges, skip blocks that don't exist
+                edges = self.data.geometry.cell_edges[i]
+                for edge in edges:
+                    block = self.data.get_block_at_direction((Cell(i), Edge(edge)), d)
+                    if isinstance(block, int):
+                        read_blocks.append(block)
+                    # else:
+                    #     print("Block does not exist", block, Cell(i), Edge(edge), d)
+
+            self.add_read_data(task_id, read_blocks)
+            self.add_write_data(task_id, write_blocks)
+
     def _build_graph(self):
+        types = ["SWEEP", "REDUCE"]
+
+        def make_type_dict():
+            return defaultdict(list)
+
         self.task_to_cell = {}
         self.task_to_level = {}
-        self.level_to_task = defaultdict(list)
-        for i in range(self.num_iterations):
-            for j, (cell, edges) in enumerate(self.data.geometry.cell_edges.items()):
-                # Create task that:
-                # -reads all of its block (interior and edges) and the edges of its neighbors
-                # -writes to blocks of its self (interior and edges)
+        self.task_to_type = {}
+        self.type_to_task = defaultdict(list)
+        self.level_to_task = defaultdict(make_type_dict)
+        self.direction_to_task = defaultdict(make_type_dict)
+        self.task_to_direction = {}
 
-                idx = self.data.idx_at_step(i)
+        for s in range(self.config.steps):
+            for d, direction in enumerate(self.data.directions):
+                self._build_sweep_tasks(step=s, direction=d)
 
-                name = f"Task(Cell({cell}), {i})"
-                task_id = self.add_task(name, j)
-
-                self.task_to_cell[task_id] = cell
-                self.task_to_level[task_id] = i
-                self.level_to_task[i].append(task_id)
-
-                # print(f"Task {task_id} created with name {name}")
-
-                interior_block = self.data.get_block_at_step(Cell(cell), i)
-                interior_edges = []
-                exterior_edges = []
-                for edge in edges:
-                    cell_dict = self.data.get_block(Edge(edge))
-                    for neighbor, v in cell_dict.items():
-                        if neighbor.id != cell:
-                            exterior_edges.append(v[idx])
-                        else:
-                            interior_edges.append(v[idx])
-
-                next_interior_block = self.data.get_block_at_step(Cell(cell), i + 1)
-                next_interior_edges = []
-                for edge in edges:
-                    next_interior_edges.append(
-                        self.data.get_block_at_step((Cell(cell), Edge(edge)), i + 1)
-                    )
-
-                read_blocks = interior_edges + exterior_edges + [interior_block]
-                write_blocks = next_interior_edges + [next_interior_block]
-
-                self.add_read_data(task_id, read_blocks)
-                self.add_write_data(task_id, write_blocks)
+            if self.config.reduce:
+                self._build_reduction_tasks(step=s)
 
         self.fill_data_flow_dependencies()
 
-    def __init__(self, geometry: Geometry, num_iterations: int):
-        super(JacobiGraph, self).__init__()
-        data = JacobiData.from_mesh(geometry)
+    def __init__(self, geometry: Geometry, config: SweepConfig = SweepConfig()):
+        super(SweepGraph, self).__init__()
+        data = SweepData.from_mesh(geometry, config)
         self.data = data
-        self.task_to_cell = {}
-        self.num_iterations = num_iterations
+        self.config = config
         self._build_graph()
 
     def randomize_locations(
@@ -254,31 +414,7 @@ class JacobiGraph(ComputeDataGraph):
         return self.data.permute_locations(location_map, permutation_idx)
 
 
-@dataclass
-class JacobiConfig:
-    """
-    Configuration settings for Jacobi mesh generation.
-
-    Attributes:
-        L (int): Length of the domain side.
-        n (int): Number of elements per side.
-        steps (int): Number of simulation steps.
-        n_part (int): Number of partitions.
-        randomness (float): Percentage (0 ~ 1) of cells to randomize.
-        permute_idx (int): Permutation index for reproducibility.
-        n_devices (int): Number of computational devices.
-    """
-
-    L: int = 4
-    n: int = 4
-    steps: int = 1
-    n_part: int = 4
-    randomness: float = 0
-    permute_idx: int = 0
-    n_devices: int = 4
-
-
-class JacobiVariant(VariantBuilder):
+class SweepVariant(VariantBuilder):
     @staticmethod
     def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
         memory_usage = 0
@@ -319,7 +455,7 @@ class PartitionMapper:
         global_task_id = candidates[0].item()
         local_id = 0
         graph = simulator.input.graph
-        assert isinstance(graph, JacobiGraph)
+        assert isinstance(graph, SweepGraph)
         level = graph.task_to_level[global_task_id]
 
         cell_id = graph.task_to_cell[global_task_id]
@@ -356,25 +492,13 @@ class LevelPartitionMapper:
         global_task_id = candidates[0].item()
         local_id = 0
         graph = simulator.input.graph
-        assert isinstance(graph, JacobiGraph)
+        assert isinstance(graph, SweepGraph)
         level = graph.task_to_level[global_task_id]
         cell_id = graph.task_to_cell[global_task_id]
         device = self.level_cell_mapping[level][cell_id]
         state = simulator.simulator.get_state()
         mapping_priority = state.get_mapping_priority(global_task_id)
         return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
-
-
-class JacobiVariantGPUOnly(VariantBuilder):
-    @staticmethod
-    def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
-        memory_usage = 0
-        vcu_usage = 1
-        expected_time = 1000
-        if arch == DeviceType.GPU:
-            return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
-        else:
-            return None
 
 
 class JacobiVariantGPUOnly(VariantBuilder):
@@ -558,6 +682,50 @@ class XYDataObserverFactory(XYExternalObserverFactory):
         task_feature_factory.add(
             fastsim.EmptyTaskFeature, 3
         )  # 2 for x, y position, last for whether it is mapped
+
+        data_feature_factory = FeatureExtractorFactory()
+        # data_feature_factory.add(fastsim.DataSizeFeature)
+        data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+
+        device_feature_factory = FeatureExtractorFactory()
+        # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
+        device_feature_factory.add(fastsim.DeviceIDFeature)
+        # device_feature_factory.add(fastsim.DeviceMemoryFeature)
+        device_feature_factory.add(fastsim.DeviceTimeFeature)
+
+        task_task_feature_factory = EdgeFeatureExtractorFactory()
+        task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
+
+        task_data_feature_factory = EdgeFeatureExtractorFactory()
+        # task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
+        task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
+
+        task_device_feature_factory = EdgeFeatureExtractorFactory()
+        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
+        data_device_feature_factory = None
+
+        super().__init__(
+            spec,
+            graph_extractor_t,
+            task_feature_factory,
+            data_feature_factory,
+            device_feature_factory,
+            task_task_feature_factory,
+            task_data_feature_factory,
+            task_device_feature_factory,
+            data_device_feature_factory,
+        )
+
+
+class DataObserverFactory(ExternalObserverFactory):
+    def __init__(self, spec: fastsim.GraphSpec):
+        graph_extractor_t = fastsim.GraphExtractor
+        task_feature_factory = FeatureExtractorFactory()
+        task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        # task_feature_factory.add(fastsim.TaskStateFeature)
+        # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
 
         data_feature_factory = FeatureExtractorFactory()
         # data_feature_factory.add(fastsim.DataSizeFeature)

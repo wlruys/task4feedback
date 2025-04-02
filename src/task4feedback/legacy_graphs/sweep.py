@@ -216,6 +216,7 @@ class SweepConfig(GraphConfig):
     steps: int = 1
     max_iter: int = 1
     direction_list: List[int] = field(default_factory=list)
+    reduce: bool = True 
 
 
 def create_sweep_iteration(

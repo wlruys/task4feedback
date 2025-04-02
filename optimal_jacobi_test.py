@@ -85,15 +85,15 @@ class JacobiVariant(VariantBuilder):
     def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
         memory_usage = 0
         vcu_usage = 1
-        expected_time = 0
+        expected_time = 1000
         if arch == DeviceType.GPU:
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
         else:
-            return VariantTuple(DeviceType.NONE, 0, 0, 0)
+            return None
 
 
 def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
-    mesh = generate_quad_mesh(L=config.L, n=config.n)
+    mesh = generate_tri_mesh(L=config.L, n=config.n)
     geom = build_geometry(mesh)
 
     jgraph = JacobiGraph(geom, config.steps)
@@ -103,9 +103,7 @@ def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
     partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
     # offset by 1 to ignore cpu
     partition = [x + 1 for x in partition]
-
     jgraph.set_cell_locations(partition)
-    jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
 
     return jgraph
 
@@ -120,7 +118,7 @@ def make_jacobi_env(config: JacobiConfig):
     m.finalize_tasks()
     spec = create_graph_spec()
     input = SimulatorInput(
-        m, d, s, transition_conditions=fastsim.RangeTransitionConditions(5, 5, 16)
+        m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
     )
     env = RuntimeEnv(
         SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
@@ -132,14 +130,14 @@ def make_jacobi_env(config: JacobiConfig):
 
 
 if __name__ == "__main__":
-    jacobi_config = JacobiConfig(steps=3, randomness=1)
+    jacobi_config = JacobiConfig(steps=10)
 
     def make_env() -> RuntimeEnv:
         return make_jacobi_env(jacobi_config)
 
     env = make_env()
 
-    # start_logger()
+    start_logger()
 
     sim = env.simulator
     jgraph = env.simulator_factory.input.graph
@@ -154,4 +152,4 @@ if __name__ == "__main__":
     print(f"Final state: {sim.status}")
     print(f"Final time: {sim.time}")
 
-    animate_mesh_graph(env, time_interval=250, show=False, title="eft_tri_wait")
+    animate_mesh_graph(env, time_interval=250, show=False)

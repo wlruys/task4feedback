@@ -19,11 +19,11 @@ import os
 
 @dataclass
 class PPOConfig:
-    states_per_collection: int = 1000
+    states_per_collection: int = 1920
     minibatch_size: int = 250
     num_epochs_per_collection: int = 4
     num_collections: int = 1000
-    workers: int = 4
+    workers: int = 1
     seed: int = 0
     lr: float = 2.5e-4
     clip_eps: float = 0.2
@@ -286,6 +286,7 @@ def run_ppo_torchrl(
     actor_critic_base: nn.Module,
     make_env: Callable[[], EnvBase],
     config: PPOConfig,
+    model_name: str = "model",
 ):
     _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
     _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
@@ -362,7 +363,8 @@ def run_ppo_torchrl(
             else:
                 path = wandb.run.dir
             torch.save(
-                model.state_dict(), os.path.join(wandb.run.dir, f"model_{i+1}.pth")
+                model.state_dict(),
+                os.path.join(wandb.run.dir, model_name + f"_{i + 1}.pth"),
             )
         if i >= config.num_collections:
             break
