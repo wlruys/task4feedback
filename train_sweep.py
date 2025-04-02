@@ -110,7 +110,7 @@ def build_sweep_graph(config: SweepConfig) -> SweepGraph:
     partition = [x + 1 for x in partition]
     jgraph.set_cell_locations(partition)
 
-    jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
+    # jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
 
     return jgraph
 
@@ -128,11 +128,11 @@ def make_sweep_env(config: SweepConfig):
         m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
     )
     env = RuntimeEnv(
-        SimulatorFactory(input, spec, XYMinimalObserverFactory),
+        SimulatorFactory(input, spec, DataObserverFactory),
         device="cpu",
-        change_priority=True,
+        change_priority=False,
         seed=10000,
-        change_locations=True,
+        change_locations=False,
     )
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
@@ -164,7 +164,7 @@ if __name__ == "__main__":
         threshold=0.1,
         round_in=2,
         round_out=2,
-        steps=10,
+        steps=3,
         reduce=True,
         interior_size=1000000,
         boundary_size=1000000,
@@ -179,6 +179,7 @@ if __name__ == "__main__":
 
     wandb.init(
         project="sweep",
+        name="small_sweep_4_3_data_only",
     )
 
     feature_config = FeatureDimConfig.from_observer(env.observer)
@@ -190,5 +191,5 @@ if __name__ == "__main__":
     )
     # model = torch.compile(model, dynamic=False)
 
-    mconfig = PPOConfig(train_device="cpu")
-    run_ppo_torchrl(model, make_env, mconfig)
+    mconfig = PPOConfig(train_device="gpu", states_per_collection=144 * 18, workers=3)
+    run_ppo_torchrl(model, make_env, mconfig, model_name="small_sweep_xy")
