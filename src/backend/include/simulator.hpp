@@ -258,6 +258,10 @@ public:
     scheduler.breakpoints.add_breakpoint(type, task);
   }
 
+  void clear_breakpoints() {
+    scheduler.breakpoints.clear();
+  }
+
   void add_time_breakpoint(timecount_t time) {
     scheduler.breakpoints.add_time_breakpoint(time);
   }

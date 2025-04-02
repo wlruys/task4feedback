@@ -28,7 +28,7 @@ from task4feedback.fastsim2 import (
     SchedulerState,
     Simulator,
 )
-from task4feedback.fastsim2 import ExecutionState, start_logger
+from task4feedback.fastsim2 import ExecutionState, start_logger, EventType
 import torch
 from tensordict.tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
@@ -1399,6 +1399,12 @@ class SimulatorDriver:
         Returns the finish time (in microseconds) of a task.
         """
         return self.simulator.get_task_finish_time(task_id)
+
+    def set_task_breakpoint(self, event: EventType, task_id: int) -> int:
+        self.simulator.add_task_breakpoint(event, task_id)
+
+    def clear_breakpoints(self):
+        self.simulator.clear_breakpoints()
 
     def copy(self) -> "SimulatorDriver":
         """

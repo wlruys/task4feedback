@@ -63,5 +63,7 @@ void init_simulator_ext(nb::module_ &m) {
       .def("get_current_time", &Simulator::get_current_time)
       .def("get_task_finish_time", &Simulator::get_task_finish_time)
       .def("get_mappable_candidates", &Simulator::get_mappable_candidates)
-      .def("map_tasks", &Simulator::map_tasks);
+      .def("map_tasks", &Simulator::map_tasks)
+      .def("add_task_breakpoint", &Simulator::add_task_breakpoint)
+      .def("clear_breakpoints", &Simulator::clear_breakpoints);
 }
