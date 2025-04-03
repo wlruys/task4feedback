@@ -501,12 +501,13 @@ class EFTIncrementalEnv(EnvBase):
             1,
             dtype=torch.int64,
         )
+        self.simulator.get_mappable_candidates(candidate_workspace)
+
         dependents = torch.zeros(16, dtype=torch.int64)
         dep_count = self.graph_extractor.get_k_hop_dependents(
             candidate_workspace, 2, dependents
         )
 
-        self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[0].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
         reserving_priority = mapping_priority
