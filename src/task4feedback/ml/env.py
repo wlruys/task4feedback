@@ -43,25 +43,19 @@ class RuntimeEnv(EnvBase):
         change_duration=False,
         change_locations=False,
         only_gpu=True,
-        snapshot_interval=-1,
         location_seed=0,
         priority_seed=0,
         location_randomness=1,
         location_list=[1, 2, 3, 4],
-        width=8,
-        path=".",
     ):
         super().__init__(device=device)
 
         self.change_priority = change_priority
         self.change_duration = change_duration
-        self.snapshot_interval = snapshot_interval
         self.change_locations = change_locations
         self.location_seed = location_seed
         self.location_randomness = location_randomness
         self.location_list = location_list
-        self.width = width
-        self.path = path
         self.only_gpu = only_gpu
         self.s = 0
 
@@ -103,9 +97,9 @@ class RuntimeEnv(EnvBase):
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, (
-                f"Baseline returned unexpected final state: {final_state}"
-            )
+            assert (
+                final_state == fastsim.ExecutionState.COMPLETE
+            ), f"Baseline returned unexpected final state: {final_state}"
             return simulator_copy.time
         return self.baseline_time
 
@@ -267,9 +261,9 @@ class RuntimeEnv(EnvBase):
         self.EFT_baseline = self.makespan
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-            f"Unexpected simulator status: {simulator_status}"
-        )
+        assert (
+            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+        ), f"Unexpected simulator status: {simulator_status}"
 
         obs = self._get_observation()
         return obs
@@ -286,7 +280,6 @@ class RuntimeEnv(EnvBase):
             self.simulator_factory.set_seed(priority_seed=seed)
         if self.change_duration:
             self.simulator_factory.set_seed(duration_seed=seed)
-
 
 
 def make_simple_env_from_legacy(tasks, data):
@@ -389,7 +382,6 @@ def make_simple_env(graph: ComputeDataGraph):
     env = TransformedEnv(env, TrajCounter())
 
     return env
-
 
 
 class EFTIncrementalEnv(EnvBase):
@@ -534,8 +526,9 @@ class EFTIncrementalEnv(EnvBase):
         for i in range(dep_count):
             sim_eft.run()
             sim_ml.run()
-
-        reward[0] = (sim_eft.time - sim_ml.time) / sim_eft.time
+        eft_time = sim_eft.time - self.simulator.time
+        ml_time = sim_ml.time - self.simulator.time
+        reward[0] = (eft_time - ml_time) / min(eft_time, ml_time)
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
@@ -557,7 +550,7 @@ class EFTIncrementalEnv(EnvBase):
 
         current_priority_seed = self.simulator_factory.pseed
         current_duration_seed = self.simulator_factory.seed
-        
+
         if self.change_priority:
             new_priority_seed = current_priority_seed + self.resets
         else:
@@ -591,7 +584,6 @@ class EFTIncrementalEnv(EnvBase):
             simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
         ), f"Unexpected simulator status: {simulator_status}"
 
-
         obs = self._get_observation()
         return obs
 
@@ -605,4 +597,3 @@ class EFTIncrementalEnv(EnvBase):
             self.simulator_factory.set_seed(priority_seed=seed)
         if self.change_duration:
             self.simulator_factory.set_seed(duration_seed=seed)
-
