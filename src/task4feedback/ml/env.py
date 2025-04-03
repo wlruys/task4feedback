@@ -529,7 +529,7 @@ class EFTIncrementalEnv(EnvBase):
             sim_ml.run()
         eft_time = sim_eft.time - self.simulator.time
         ml_time = sim_ml.time - self.simulator.time
-        reward[0] = (eft_time - ml_time) / min(eft_time, ml_time)
+        reward[0] = (eft_time - ml_time) / self.EFT_baseline
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
