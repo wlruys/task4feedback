@@ -286,6 +286,34 @@ def run_ppo_cleanrl(
     collector.shutdown()
 
 
+def compute_gae(tensordict_data, critic, gamma=0.99, lam=0.95):
+    with torch.no_grad():
+        critic(tensordict_data)
+        critic(tensordict_data["next"])
+
+        value = tensordict_data["state_value"]
+        next_value = tensordict_data["next", "state_value"]
+        reward = tensordict_data["next", "reward"]
+        done = tensordict_data["next", "done"]
+
+        advantage = torch.zeros_like(value)
+        gae = 0.0
+        T = reward.shape[0]
+        for t in reversed(range(T)):
+            if done[t]:
+                c = 0
+            else:
+                c = 1
+            delta = reward[t] + gamma * next_value[t] * c - value[t]
+            gae = delta + gamma * lam * c * gae
+            advantage[t] = gae
+
+        value_target = advantage + value
+        tensordict_data["advantage"] = advantage
+        tensordict_data["value_target"] = value_target
+        return tensordict_data
+
+
 def run_ppo_torchrl(
     actor_critic_base: nn.Module,
     make_env: Callable[[], EnvBase],
@@ -459,32 +487,6 @@ def run_rnn_ppo_torchrl(
     config: RNNPPOConfig,
     model_name: str = "model",
 ):
-    def compute_gae(tensordict_data, critic, gamma=0.99, lam=0.95):
-        with torch.no_grad():
-            critic(tensordict_data)
-            critic(tensordict_data["next"])
-
-        value = tensordict_data["state_value"]
-        next_value = tensordict_data["next", "state_value"]
-        reward = tensordict_data["next", "reward"]
-        done = tensordict_data["next", "done"]
-
-        advantage = torch.zeros_like(value)
-        gae = 0.0
-        T = reward.shape[0]
-        for t in reversed(range(T)):
-            if done[t]:
-                c = 0
-            else:
-                c = 1
-            delta = reward[t] + gamma * next_value[t] * c - value[t]
-            gae = delta + gamma * lam * c * gae
-            advantage[t] = gae
-
-        value_target = advantage + value
-        tensordict_data["advantage"] = advantage
-        tensordict_data["value_target"] = value_target
-        return tensordict_data
 
     env = make_env()
     if config.rnn_model == "LSTM":
@@ -562,22 +564,13 @@ def run_rnn_ppo_torchrl(
     train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
     model = torch.nn.ModuleList([train_actor_network, train_critic_network])
 
-    # collector = SyncDataCollector(
-    #     transformed_env(),
-    #     td_module_action,
-    #     frames_per_batch=config.states_per_collection,
-    #     total_frames=config.states_per_collection * config.num_collections,
-    #     split_trajs=True,
-    #     device=config.train_device,
-    # )
-
     collector = MultiSyncDataCollector(
         [transformed_env for _ in range(config.workers)],
         td_module_action,
         frames_per_batch=config.states_per_collection,
         total_frames=config.states_per_collection * config.num_collections,
         split_trajs=True,
-        # reset_at_each_iter=True,
+        reset_at_each_iter=True,
         # cat_results=0,
         device=config.train_device,
         env_device="cpu",
@@ -623,7 +616,7 @@ def run_rnn_ppo_torchrl(
             tensordict_data = tensordict_data.reshape(-1)
             compute_gae(
                 tensordict_data,
-                train_critic_network,
+                model[1],
                 gamma=config.gae_gamma,
                 lam=config.gae_lmbda,
             )
