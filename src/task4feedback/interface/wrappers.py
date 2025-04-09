@@ -247,6 +247,22 @@ class Graph:
 
         return g
 
+    def print_variants(self):
+        for i in range(self.graph.size()):
+            task = self.get_task(i)
+            compute_task = self.ctasks.get_compute_task(i)
+            print(f"Task {task.id}: {task.name} (Tag: {task.tag})")
+            print("  Variants:")
+            print(compute_task.get_variants())
+            print("Dependencies:")
+            print(compute_task.get_dependencies())
+            print("Read Data:")
+            print(compute_task.get_read())
+            print("Write Data:")
+            print(compute_task.get_write())
+            print("Data Dependencies:")
+            print(compute_task.get_data_dependencies())
+
     def __str__(self):
         result = []
 

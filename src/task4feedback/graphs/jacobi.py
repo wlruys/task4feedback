@@ -13,14 +13,39 @@ from task4feedback import fastsim2 as fastsim
 from ..interface.wrappers import *
 
 
+@dataclass
+class JacobiConfig:
+    """
+    Configuration settings for Jacobi mesh generation.
+
+    Attributes:
+        L (int): Length of the domain side.
+        n (int): Number of elements per side.
+        steps (int): Number of simulation steps.
+        n_part (int): Number of partitions.
+        randomness (float): Percentage (0 ~ 1) of cells to randomize.
+        permute_idx (int): Permutation index for reproducibility.
+    """
+
+    L: int = 4
+    n: int = 4
+    steps: int = 1
+    n_part: int = 4
+    randomness: float = 0
+    permute_idx: int = 0
+    interior_size: int = 1000000
+    boundary_interior_ratio: float = 1.0
+
+
 class JacobiData(DataGeometry):
     @staticmethod
-    def from_mesh(geometry: Geometry):
-        return JacobiData(geometry)
+    def from_mesh(geometry: Geometry, config: JacobiConfig):
+        return JacobiData(geometry, config)
 
-    def _create_blocks(
-        self, interior_size: int = 1000000, boundary_size: int = 1000000
-    ):
+    def _create_blocks(self):
+        interior_size = self.config.interior_size
+        boundary_size = int(self.config.boundary_interior_ratio * interior_size)
+
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
             # Create 2 data blocks per cell
@@ -36,8 +61,9 @@ class JacobiData(DataGeometry):
                         location=0,
                     )
 
-    def __init__(self, geometry: Geometry):
+    def __init__(self, geometry: Geometry, config: JacobiConfig = JacobiConfig()):
         super().__init__(geometry, DataBlocks(), GeometryIDMap())
+        self.config = config
         self._create_blocks()
 
     def blocks_to_objects(self, blocks: list[int]):
@@ -47,7 +73,7 @@ class JacobiData(DataGeometry):
         return [self.map.block_to_key[i] for i in blocks]
 
     def get_block_at_step(self, object: Cell | tuple[Cell, Edge], step: int):
-        idx = step % 2
+        idx = self.idx_at_step(step)
         if isinstance(object, tuple):
             return self.map.get_block(DataKey(object[1], (object[0], idx)))
         return self.map.get_block(DataKey(object, idx))
@@ -55,21 +81,27 @@ class JacobiData(DataGeometry):
     def idx_at_step(self, step: int):
         return step % 2
 
-    def set_location(self, obj: Cell | Edge, location: int):
-        id_list = self.map.key_to_block.get_leaves(obj)
+    def set_location(self, obj: Cell | Edge, location: int, step: Optional[int] = None):
+        step_list = None if step is None else [step]
+        id_list = self.map.key_to_block.get_leaves(obj, values=step_list)
+
         for i in id_list:
             self.blocks.set_location(i, location)
 
         if isinstance(obj, Cell):
             # Update edges as well
             for edge in self.geometry.cell_edges[obj.id]:
-                id_list = self.map.key_to_block.get_leaves(DataKey(Edge(edge), (obj,)))
+                id_list = self.map.key_to_block.get_leaves(
+                    DataKey(Edge(edge), (obj,)), values=step_list
+                )
                 for i in id_list:
                     self.blocks.set_location(i, location)
 
-    def set_locations_from_list(self, location_list: list[int]):
+    def set_locations_from_list(
+        self, location_list: list[int], step: Optional[int] = None
+    ):
         for i, location in enumerate(location_list):
-            self.set_location(Cell(i), location)
+            self.set_location(Cell(i), location, step)
 
     def randomize_locations(self, num_changes: int, location_list: list[int]):
         new_locations = []
@@ -131,7 +163,7 @@ class JacobiGraph(ComputeDataGraph):
         self.task_to_cell = {}
         self.task_to_level = {}
         self.level_to_task = defaultdict(list)
-        for i in range(self.num_iterations):
+        for i in range(self.config.steps):
             for j, (cell, edges) in enumerate(self.data.geometry.cell_edges.items()):
                 # Create task that:
                 # -reads all of its block (interior and edges) and the edges of its neighbors
@@ -174,12 +206,10 @@ class JacobiGraph(ComputeDataGraph):
 
         self.fill_data_flow_dependencies()
 
-    def __init__(self, geometry: Geometry, num_iterations: int):
+    def __init__(self, geometry: Geometry, config: JacobiConfig):
         super(JacobiGraph, self).__init__()
-        data = JacobiData.from_mesh(geometry)
-        self.data = data
-        self.task_to_cell = {}
-        self.num_iterations = num_iterations
+        self.data = JacobiData.from_mesh(geometry, config)
+        self.config = config
         self._build_graph()
 
     def randomize_locations(
@@ -211,8 +241,8 @@ class JacobiGraph(ComputeDataGraph):
 
         return selected_cells, new_locations
 
-    def set_cell_locations(self, location_list: list[int]):
-        self.data.set_locations_from_list(location_list)
+    def set_cell_locations(self, location_list: list[int], step: Optional[int] = None):
+        self.data.set_locations_from_list(location_list, step)
 
     def set_cell_locations_from_dict(self, location_dict: dict[int, int]):
         for cell, location in location_dict.items():
@@ -252,30 +282,6 @@ class JacobiGraph(ComputeDataGraph):
         self, location_map: dict[int, int], permutation_idx: Optional[int] = None
     ):
         return self.data.permute_locations(location_map, permutation_idx)
-
-
-@dataclass
-class JacobiConfig:
-    """
-    Configuration settings for Jacobi mesh generation.
-
-    Attributes:
-        L (int): Length of the domain side.
-        n (int): Number of elements per side.
-        steps (int): Number of simulation steps.
-        n_part (int): Number of partitions.
-        randomness (float): Percentage (0 ~ 1) of cells to randomize.
-        permute_idx (int): Permutation index for reproducibility.
-        n_devices (int): Number of computational devices.
-    """
-
-    L: int = 4
-    n: int = 4
-    steps: int = 1
-    n_part: int = 4
-    randomness: float = 0
-    permute_idx: int = 0
-    n_devices: int = 4
 
 
 class JacobiVariant(VariantBuilder):

@@ -34,7 +34,7 @@ def init_weights(m):
 
 
 class HeteroDataWrapper(nn.Module):
-    def __init__(self, network: nn.Module, device: None):
+    def __init__(self, network: nn.Module, device: Optional[str] = "cpu"):
         super(HeteroDataWrapper, self).__init__()
         self.network = network
         if device is None:
@@ -486,6 +486,86 @@ class CombineThreeLayer(nn.Module):
         c = self.activation(c)
 
         return z
+
+
+# class DeviceAssignmentNet2Layer(nn.Module):
+#     def __init__(self, config: HeteroGAT1Config, n_devices: int = 5):
+#         super(DeviceAssignmentNet, self).__init__()
+
+#         self.config = config
+
+#         # Returns embeddings for tasks and data nodes at depth 2
+#         # Output feature dim:
+#         # dict of ("tasks": hidden_channels, "data": hidden_channels)
+#         self.data_task_layer = DataTaskBipartiteLayer(1, config)
+
+#         # Returns concatenated embeddings for tasks at depth 2
+#         # Two directions of task -> task information (dependency and dependant)
+#         # Output feature dim: hidden_channels * 2
+#         self.task_task_layer = TaskTaskLayer(config.hidden_channels, 1, config)
+
+#         # Combination layer
+#         self.combine_layer = CombineTwoLayer(
+#             config.hidden_channels * 2,
+#             config.hidden_channels,
+#             config.hidden_channels,
+#             config.hidden_channels,
+#         )
+
+#         # Output head
+#         self.output_head = OutputHead(
+#             config.hidden_channels * 2,
+#             config.hidden_channels,
+#             n_devices,
+#         )
+
+#     def _is_batch(self, obs: TensorDict) -> bool:
+#         # print("Batch size: ", obs.batch_size)
+#         if not obs.batch_size:
+#             return False
+#         return True
+
+#     def _convert_to_heterodata(self, obs: TensorDict) -> HeteroData:
+#         if not self._is_batch(obs):
+#             _obs = observation_to_heterodata(obs)
+#             return _obs
+
+#         _h_data = []
+#         for i in range(obs.batch_size[0]):
+#             _obs = observation_to_heterodata(obs[i])
+#             _h_data.append(_obs)
+
+#         return Batch.from_data_list(_h_data)
+
+#     def forward(self, obs: TensorDict, batch=None):
+#         is_batch = self._is_batch(obs)
+#         data = self._convert_to_heterodata(obs)
+#         data_task_embeddings = self.data_task_layer(data)
+#         task_embeddings = data_task_embeddings["tasks"]
+#         task_embeddings = self.task_task_layer(task_embeddings, data)
+
+#         if is_batch:
+#             candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
+#         else:
+#             batch = None
+#             candidate_embedding = task_embeddings[0]
+
+#         # task_batch = data["tasks"].batch if is_batch else None
+#         # data_batch = data["data"].batch if is_batch else None
+
+#         # task_pool = global_mean_pool(task_embeddings, task_batch)
+#         # data_pool = global_mean_pool(data_task_embeddings["data"], data_batch)
+
+#         # global_embedding = self.combine_layer(task_pool, data_pool)
+#         candidate_embedding = (
+#             candidate_embedding.unsqueeze(0) if not is_batch else candidate_embedding
+#         )
+
+#         # output_embedding = torch.cat([global_embedding, candidate_embedding], dim=-1)
+#         output_embedding = candidate_embedding
+
+#         x = self.output_head(output_embedding)
+#         return x
 
 
 class OldCombinedNet(nn.Module):
