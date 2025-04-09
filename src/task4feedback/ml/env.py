@@ -74,7 +74,6 @@ class RuntimeEnv(EnvBase):
             self.initial_location_list = graph.get_cell_locations()
             self.location_randomness = location_randomness
             self.location_list = location_list
-            random.seed(self.location_seed)
 
         self.observation_spec = self._create_observation_spec()
         self.action_spec = self._create_action_spec()
@@ -83,11 +82,6 @@ class RuntimeEnv(EnvBase):
 
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
-
-        if change_locations:
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
@@ -278,6 +272,8 @@ class RuntimeEnv(EnvBase):
             self.simulator_factory.set_seed(priority_seed=seed)
         if self.change_duration:
             self.simulator_factory.set_seed(duration_seed=seed)
+        if self.change_locations:
+            self.location_seed = seed
 
 
 def make_simple_env_from_legacy(tasks, data):
@@ -649,7 +645,6 @@ class LookaheadEnv(EnvBase):
             self.initial_location_list = graph.get_cell_locations()
             self.location_randomness = location_randomness
             self.location_list = location_list
-            random.seed(self.location_seed)
 
         self.observation_spec = self._create_observation_spec()
         self.action_spec = self._create_action_spec()
@@ -658,11 +653,6 @@ class LookaheadEnv(EnvBase):
 
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
-
-        if change_locations:
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
@@ -752,7 +742,7 @@ class LookaheadEnv(EnvBase):
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
         reserving_priority = mapping_priority
         launching_priority = mapping_priority
-        # print("Chosen device:", chosen_device)
+
         actions = [
             fastsim.Action(
                 local_id, chosen_device, reserving_priority, launching_priority
@@ -831,12 +821,7 @@ class LookaheadEnv(EnvBase):
         new_priority_seed = int(new_priority_seed)
         new_duration_seed = int(new_duration_seed)
         self.taskid_history = []
-        if self.change_locations and isinstance(
-            self.simulator_factory.input.graph, JacobiGraph
-        ):
-            self.simulator_factory.input.graph.randomize_locations(
-                1, location_list=range(self.simulator_factory.graph_spec.max_devices)
-            )
+
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
@@ -862,6 +847,8 @@ class LookaheadEnv(EnvBase):
             self.simulator_factory.set_seed(priority_seed=seed)
         if self.change_duration:
             self.simulator_factory.set_seed(duration_seed=seed)
+        if self.change_locations:
+            self.location_seed = seed
 
 
 # class LookaheadBinaryEnv(EnvBase):
