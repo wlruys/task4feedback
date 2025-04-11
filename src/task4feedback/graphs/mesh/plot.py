@@ -407,7 +407,6 @@ def animate_state_list(graph, state_list):
     for state in state_list:
         cell_highlights = defaultdict(list)
         cell_labels = defaultdict(list)
-        print(f"State {s}")
 
         for state_type, tasks in state.compute_tasks_by_state.items():
             for task in tasks:
@@ -445,15 +444,6 @@ def animate_state_list(graph, state_list):
                             target_device = state.mapping_dict[task]
                             boundary_highlights[edge_id].update(
                                 {cell_id: device_to_color[target_device]}
-                            )
-                            print(
-                                "Moving edge",
-                                cell_id,
-                                edge_id,
-                                block_id,
-                                obj,
-                                "to device",
-                                target_device,
                             )
 
         for cellid, level in last_level_label.items():

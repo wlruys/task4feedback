@@ -107,12 +107,12 @@ class FeatureDimConfig:
 
     @staticmethod
     def from_observer(observer: ExternalObserver):
-        print(f"task_feature_dim: {observer.task_feature_dim}")
-        print(f"data_feature_dim: {observer.data_feature_dim}")
-        print(f"device_feature_dim: {observer.device_feature_dim}")
-        print(f"task_data_edge_dim: {observer.task_data_edge_dim}")
-        print(f"task_device_edge_dim: {observer.task_device_edge_dim}")
-        print(f"task_task_edge_dim: {observer.task_task_edge_dim}")
+        # print(f"task_feature_dim: {observer.task_feature_dim}")
+        # print(f"data_feature_dim: {observer.data_feature_dim}")
+        # print(f"device_feature_dim: {observer.device_feature_dim}")
+        # print(f"task_data_edge_dim: {observer.task_data_edge_dim}")
+        # print(f"task_device_edge_dim: {observer.task_device_edge_dim}")
+        # print(f"task_task_edge_dim: {observer.task_task_edge_dim}")
 
         return FeatureDimConfig(
             task_feature_dim=observer.task_feature_dim,

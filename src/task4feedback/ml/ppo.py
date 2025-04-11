@@ -20,8 +20,8 @@ import os
 @dataclass
 class PPOConfig:
     states_per_collection: int = 1920
-    minibatch_size: int = 250
-    num_epochs_per_collection: int = 4
+    minibatch_size: int = 500
+    num_epochs_per_collection: int = 2
     num_collections: int = 1000
     workers: int = 1
     seed: int = 0
@@ -32,8 +32,8 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     threads_per_worker: int = 1
     train_device: str = "cpu"
-    gae_gamma: float = 1
-    gae_lmbda: float = 0.1
+    gae_gamma: float = 0.99
+    gae_lmbda: float = 0.99
 
 
 def run_ppo_cleanrl_no_rb(
@@ -287,6 +287,7 @@ def run_ppo_torchrl(
     make_env: Callable[[], EnvBase],
     config: PPOConfig,
     model_name: str = "model",
+    model_path: str = None,
 ):
     _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
     _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
@@ -316,6 +317,11 @@ def run_ppo_torchrl(
     train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
     train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
     model = torch.nn.ModuleList([train_actor_network, train_critic_network])
+
+    if model_path:
+        model.load_state_dict(torch.load(model_path))
+        print("Loaded model from path:", model_path)
+
     collector = MultiSyncDataCollector(
         [make_env for _ in range(config.workers)],
         td_module_action,
