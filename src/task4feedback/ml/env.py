@@ -241,7 +241,7 @@ class RuntimeEnv(EnvBase):
             self.simulator_factory.input.graph, JacobiGraph
         ):
             self.simulator_factory.input.graph.randomize_locations(
-                1, location_list=range(self.simulator_factory.graph_spec.max_devices)
+                1, location_list=self.location_list
             )
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
@@ -389,6 +389,7 @@ class EFTIncrementalEnv(EnvBase):
         change_duration=False,
         change_locations=False,
         only_gpu=False,
+        location_list=[1, 2, 3, 4],
         path=".",
     ):
         super().__init__(device=device)
@@ -564,7 +565,7 @@ class EFTIncrementalEnv(EnvBase):
             self.simulator_factory.input.graph, JacobiGraph
         ):
             self.simulator_factory.input.graph.randomize_locations(
-                1, location_list=range(self.simulator_factory.graph_spec.max_devices)
+                1, location_list=self.location_list
             )
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
