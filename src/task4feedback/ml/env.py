@@ -399,6 +399,7 @@ class EFTIncrementalEnv(EnvBase):
         self.change_locations = change_locations
         self.path = path
         self.only_gpu = only_gpu
+        self.location_list = location_list
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(seed)
