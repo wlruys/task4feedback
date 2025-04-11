@@ -203,6 +203,7 @@ class RuntimeEnv(EnvBase):
             )
         ]
         self.simulator.simulator.map_tasks(actions)
+        # print("Current Time: ", self.simulator.time)
 
         dummy_sim = self.simulator.copy()
         dummy_sim.disable_external_mapper()
