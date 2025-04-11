@@ -363,7 +363,7 @@ def run_ppo_torchrl(
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
     for i, tensordict_data in enumerate(collector):
-        if (i + 1) % 50 == 0:
+        if (i + 1) % 20 == 0:
             if wandb.run.dir is None:
                 path = "."
             else:
