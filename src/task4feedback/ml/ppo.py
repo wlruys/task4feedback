@@ -319,6 +319,7 @@ def run_ppo_torchrl(
     make_env: Callable[[], EnvBase],
     config: PPOConfig,
     model_name: str = "model",
+    do_rollout: bool = False,
 ):
     _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
     _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
@@ -348,8 +349,18 @@ def run_ppo_torchrl(
     train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
     train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
     model = torch.nn.ModuleList([train_actor_network, train_critic_network])
+    if do_rollout:
+
+        def rollout_env():
+            env = make_env()
+            env.set_policy(model[0])
+            return env
+
+        _make_env = rollout_env()
+    else:
+        _make_env = make_env()
     collector = MultiSyncDataCollector(
-        [make_env for _ in range(config.workers)],
+        [_make_env for _ in range(config.workers)],
         td_module_action,
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
