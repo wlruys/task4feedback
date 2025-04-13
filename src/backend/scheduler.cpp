@@ -806,6 +806,14 @@ void Scheduler::enqueue_data_tasks(taskid_t id) {
 
   for (auto data_task_id : data_dependencies) {
     assert(tasks.is_data(data_task_id));
+
+    // auto &data_task = task_manager.get_tasks().get_data_task(data_task_id);
+    // // print all dependencies
+    // for (auto dep : data_task.get_dependencies()) {
+    //   SPDLOG_DEBUG("Data task {} depends on {}", s.get_task_name(data_task_id),
+    //                s.get_task_name(dep));
+    // }
+
     task_manager.set_state(data_task_id, TaskState::RESERVED);
     if (s.is_launchable(data_task_id)) {
       SPDLOG_DEBUG("Data task {} is launchable at time {}", s.get_task_name(data_task_id),

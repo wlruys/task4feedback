@@ -5,8 +5,10 @@ from collections import defaultdict
 import networkx as nx
 import gravis as gv
 import os
-from typing import List, Optional
-from ..import fastsim2 as fastsim 
+from typing import List, Optional, Callable, Self
+from .. import fastsim2 as fastsim
+import numpy as np
+
 
 def spring_layout(G):
     pos = nx.spring_layout(G, seed=5, scale=600)
@@ -90,20 +92,28 @@ class NestedKeyDict(dict):
             d = d[key]
         return d
 
-    def _get_leaves(self, d, keys: Cell | Edge):
+    def _get_leaves(self, d, keys: Cell | Edge, values: Optional[list] = None):
         leaves = []
         for k, v in d.items():
+            if values is not None:
+                if isinstance(k, int):
+                    if k not in values:
+                        continue
             if isinstance(v, int):
                 leaves.append(v)
             else:
                 leaves.extend(self._get_leaves(v, k))
         return leaves
 
-    def get_leaves(self, keys: DataKey | Cell | Edge):
+    def get_leaves(self, keys: DataKey | Cell | Edge, values: Optional[list] = None):
         # Get all leaf int values from the nested dict
         d = self.get(keys)
         leaves = []
         for k, v in d.items():
+            if values is not None:
+                if isinstance(k, int):
+                    if k not in values:
+                        continue
             if isinstance(v, int):
                 leaves.append(v)
             else:
@@ -193,6 +203,7 @@ class EnvironmentState:
     def parse_state(env, time: Optional[int] = None):
         if time is None:
             time = env.simulator.time
+
         graph = env.simulator_factory.input.graph
         data = env.simulator_factory.input.data
         sim = env.simulator
@@ -226,7 +237,6 @@ class EnvironmentState:
             data_task_virtual[task.id] = is_virtual
             mapping_dict[task.id] = device_id
             data_task_block[task.id] = task.get_data_id()
-            # print(task.id, task_state, device_id, source_device, is_virtual)
 
         return EnvironmentState(
             time=time,
@@ -239,7 +249,227 @@ class EnvironmentState:
             data_task_virtual=data_task_virtual,
             data_task_block=data_task_block,
         )
-        
+
     @staticmethod
     def from_env(env, time: Optional[int] = None):
         return EnvironmentState.parse_state(env, time)
+
+
+class DynamicWorkload:
+    def __init__(self, geom: Geometry):
+        self.geom = geom
+        n_cells = len(geom.cells)
+        self.level_workload = defaultdict(lambda: np.zeros(n_cells))
+        self.sink_source_counter = 0
+
+    def set_inital_mass(self, mass_vector: list):
+        self.level_workload[0] = np.asarray(mass_vector)
+        self.level_workload[0] = np.clip(self.level_workload[0], 0, None)
+
+    @property
+    def num_cells(self) -> int:
+        return len(self.geom.cells)
+
+    @property
+    def inital_mass(self) -> list:
+        return self.level_workload[0]
+
+    def generate_initial_mass(
+        self, distribution: Callable[[int], float] = None, average_workload: int = 1000
+    ):
+        if distribution is None:
+
+            def distribution(x):
+                return 1.0
+
+        cell_weights = [distribution(i) for i in range(self.num_cells)]
+
+        weight_sum = sum(cell_weights)
+        normalized_weights = [weight / weight_sum for weight in cell_weights]
+
+        total_average_workload = average_workload * self.num_cells
+        weights = [weight * total_average_workload for weight in normalized_weights]
+
+        self.set_inital_mass(weights)
+
+    def get_workload(self, level: int) -> list:
+        return self.level_workload[level]
+
+    def generate_correlated_workload(
+        self,
+        num_levels: int,
+        start_step: int = 0,
+        correlation_matrix: np.ndarray = None,
+        step_size: float = 2000,
+        lower_bound: float = 500,
+        upper_bound: float = 3000,
+        scale: float = 0.1,
+    ):
+        if correlation_matrix is None:
+            correlation_matrix = np.eye(self.num_cells)
+            centroids = np.zeros((self.num_cells, 2))
+            for i, cell in enumerate(self.geom.cells):
+                centroids[i] = self.geom.get_centroid(i)
+
+            for i in range(self.num_cells):
+                for j in range(self.num_cells):
+                    dist = np.linalg.norm(centroids[i] - centroids[j]) ** 2
+                    correlation_matrix[i, j] = np.exp(-dist / scale)
+
+        # Shift diagonal and symmetrize just in case (if testing different kernels)
+        correlation_matrix += np.eye(self.num_cells) * 1e-3
+        correlation_matrix = (correlation_matrix + correlation_matrix.T) / 2
+
+        # Scale by max
+        max_val = np.max(correlation_matrix)
+        correlation_matrix /= max_val
+
+        L = np.linalg.cholesky(correlation_matrix)
+
+        # Clip start step into the workload range
+        start_step = max(start_step, 0)
+        self.level_workload[start_step] = np.clip(
+            self.level_workload[start_step], lower_bound, upper_bound
+        )
+
+        for i in range(start_step + 1, num_levels):
+            z = np.random.normal(size=self.num_cells)
+
+            eps = L @ z
+            new_v = self.level_workload[i - 1] + np.sqrt(step_size) * eps
+
+            for j in range(self.num_cells):
+                if new_v[j] < lower_bound:
+                    new_v[j] = lower_bound + (lower_bound - new_v[j])
+                elif new_v[j] > upper_bound:
+                    new_v[j] = upper_bound - (new_v[j] - upper_bound)
+
+            self.level_workload[i] = new_v
+
+    def work_per_level(self, level: int) -> float:
+        return np.sum(self.level_workload[level])
+
+    @property
+    def levels(self) -> list:
+        return sorted(self.level_workload.keys())
+
+    def animate_workload(
+        self,
+        filename="workload_animation.mp4",
+        interval=200,
+        colormap="viridis",
+        normalize=True,
+        show=True,
+        max_radius=0.1,
+    ):
+        """
+        Animate the workload across different levels.
+
+        Parameters:
+        -----------
+        filename : str
+            Name of the output file for the animation
+        interval : int
+            Time interval between frames in milliseconds
+        colormap : str
+            Matplotlib colormap to use for coloring the circles
+        normalize : bool
+            Whether to normalize the radii across all levels
+        show : bool
+            Whether to display the animation
+        max_radius : float
+            Maximum radius for the circles as a fraction of the domain size
+
+        Returns:
+        --------
+        Animation object
+        """
+        from matplotlib import pyplot as plt
+        import matplotlib.animation as animation
+        from matplotlib.collections import PatchCollection
+        from matplotlib.patches import Circle
+        from .mesh.plot import create_mesh_plot
+
+        fig, ax = create_mesh_plot(self.geom, title="Workload Animation")
+
+        # Get domain size for scaling
+        domain_width = self.geom.get_max_coordinate(0) - self.geom.get_min_coordinate(0)
+        domain_height = self.geom.get_max_coordinate(1) - self.geom.get_min_coordinate(
+            1
+        )
+        domain_size = min(domain_width, domain_height)
+
+        # Find global max workload for normalization if required
+        if normalize:
+            max_workload = max(
+                np.max(self.level_workload[level]) for level in self.levels
+            )
+
+        patches_collection = None
+
+        # Animation update function
+        def update(frame):
+            nonlocal patches_collection
+
+            # Remove previous circles
+            if patches_collection is not None:
+                patches_collection.remove()
+
+            # Get the workload for this level
+            level = self.levels[frame % len(self.levels)]
+            workload = self.level_workload[level]
+
+            ax.set_title(f"Workload at Level {level}")
+
+            # Calculate circle sizes (proportional to workload)
+            if normalize:
+                radius_scale = max_workload
+            else:
+                radius_scale = np.max(workload)
+
+            patches = []
+            colors = []
+            cmap = plt.get_cmap(colormap)
+
+            for i, cell in enumerate(self.geom.cells):
+                # Get cell centroid
+                centroid = self.geom.get_centroid(i)
+
+                radius = (
+                    (workload[i] / radius_scale) * domain_size * max_radius
+                    if radius_scale > 0
+                    else 0
+                )
+
+                if radius > 0:
+                    circle = Circle((centroid[0], centroid[1]), radius)
+                    patches.append(circle)
+                    colors.append(cmap(workload[i] / radius_scale))
+
+            patches_collection = PatchCollection(
+                patches, facecolors=colors, edgecolors="black", alpha=0.7, zorder=10
+            )
+
+            ax.add_collection(patches_collection)
+
+            return [patches_collection]
+
+        ani = animation.FuncAnimation(
+            fig,
+            update,
+            frames=len(self.levels),
+            interval=interval,
+            blit=True,
+            repeat=True,
+        )
+
+        if filename:
+            try:
+                ani.save(filename, writer="ffmpeg", fps=1000 / interval)
+            except Exception as e:
+                print(f"Error saving animation: {e}")
+
+        if show:
+            plt.show()
+
+        return ani

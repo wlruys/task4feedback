@@ -85,6 +85,16 @@ struct RuntimeFeatureExtractor {
       offset += dim;
     }
   }
+
+  // New method to get feature type names
+  std::vector<std::string> getFeatureTypeNames() const {
+    std::vector<std::string> names;
+    for (const auto &f : features) {
+      // Using typeid to get the name of the actual feature type
+      names.push_back(typeid(*f).name());
+    }
+    return names;
+  }
 };
 
 struct RuntimeEdgeFeatureExtractor {
@@ -110,6 +120,16 @@ struct RuntimeEdgeFeatureExtractor {
       f->extract_feature(source_id, target_id, sp);
       offset += dim;
     }
+  }
+
+  // New method to get feature type names
+  std::vector<std::string> getFeatureTypeNames() const {
+    std::vector<std::string> names;
+    for (const auto &f : features) {
+      // Using typeid to get the name of the actual feature type
+      names.push_back(typeid(*f).name());
+    }
+    return names;
   }
 };
 
@@ -236,6 +256,7 @@ void bind_edge_feature_extractor(nb::module_ &m, const char *class_name) {
 void init_observer_ext(nb::module_ &m) {
   nb::bind_vector<std::vector<std::shared_ptr<IFeature>>>(m, "IFeatureVector");
   nb::bind_vector<std::vector<std::shared_ptr<IEdgeFeature>>>(m, "IEdgeFeatureVector");
+  nb::bind_vector<std::vector<std::string>>(m, "StringVector");
 
   // Task Features
   bind_int_feature<EmptyTaskFeature>(m, "EmptyTaskFeature");
@@ -305,7 +326,8 @@ void init_observer_ext(nb::module_ &m) {
              std::span<float> sp(data, self.getFeatureDim());
              self.getFeatures(task_id, sp);
            })
-      .def("get_features_batch", &get_features_batch<RuntimeFeatureExtractor>);
+      .def("get_features_batch", &get_features_batch<RuntimeFeatureExtractor>)
+      .def_prop_ro("feature_type_names", &RuntimeFeatureExtractor::getFeatureTypeNames);
 
   nb::class_<RuntimeEdgeFeatureExtractor>(m, "RuntimeEdgeFeatureExtractor")
       .def(nb::init<>())
@@ -318,7 +340,8 @@ void init_observer_ext(nb::module_ &m) {
              std::span<float> sp(data, self.getFeatureDim());
              self.getFeatures(source_id, target_id, sp);
            })
-      .def("get_features_batch", &get_edge_features_batch<RuntimeEdgeFeatureExtractor>);
+      .def("get_features_batch", &get_edge_features_batch<RuntimeEdgeFeatureExtractor>)
+      .def_prop_ro("feature_type_names", &RuntimeEdgeFeatureExtractor::getFeatureTypeNames);
 
   nb::class_<GraphSpec>(m, "GraphSpec")
       .def(nb::init<>())

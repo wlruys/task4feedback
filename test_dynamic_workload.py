@@ -61,7 +61,7 @@ import torchrl
 import torch_geometric
 import aim
 from aim.pytorch import track_gradients_dists, track_params_dists
-from task4feedback.ml.test_envs import *
+
 
 seed = 1
 random.seed(seed)
@@ -69,27 +69,39 @@ np.random.seed(seed)
 torch.manual_seed(seed)
 torch.backends.cudnn.deterministic = True
 
-from task4feedback.graphs.dynamic_sweeps import *
+
+class JacobiVariant(VariantBuilder):
+    @staticmethod
+    def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
+        memory_usage = 0
+        vcu_usage = 1
+        expected_time = 1000
+        if arch == DeviceType.GPU:
+            return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
+        else:
+            return None
 
 
-def build_jacobi_graph(config: DynamicSweepConfig) -> DynamicSweepGraph:
+def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
     mesh = generate_quad_mesh(L=config.L, n=config.n)
     geom = build_geometry(mesh)
 
-    jgraph = DynamicSweepGraph(geom, config)
+    jgraph = JacobiGraph(geom, config)
+
+    jgraph.apply_variant(JacobiVariant)
 
     partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
     # offset by 1 to ignore cpu
     partition = [x + 1 for x in partition]
 
-    jgraph.set_cell_locations(partition, step=0)
+    jgraph.set_cell_locations(partition)
 
     return jgraph
 
 
-def make_env(config: DynamicSweepConfig):
+def make_jacobi_env(config: JacobiConfig):
     gmsh.initialize()
-    s = uniform_connected_devices(5, 1000000000000000, 1, 2000)
+    s = uniform_connected_devices(5, 1000000000, 1, 2000)
     jgraph = build_jacobi_graph(config)
 
     d = jgraph.get_blocks()
@@ -108,17 +120,25 @@ def make_env(config: DynamicSweepConfig):
     return env
 
 
+from task4feedback.graphs.dynamic_jacobi import *
+
 if __name__ == "__main__":
-    jacobi_config = DynamicSweepConfig(steps=10, step_size=50000)
+    jacobi_config = JacobiConfig(L=1, n=8)
 
-    env = make_env(jacobi_config)
+    def make_env() -> RuntimeEnv:
+        return make_jacobi_env(jacobi_config)
 
-    print(env.simulator.input.graph)
+    env = make_env()
 
-    netx = env.simulator.input.graph.to_networkx()
-    draw(netx, "graph.html")
+    jgraph = env.simulator_factory.input.graph
 
-    d = env.rollout(
-        10000,
-    )
-    # print(d)
+    geom = jgraph.data.geometry
+    # generate_transition_matrix(geom)
+
+    w = DynamicWorkload(geom)
+
+    w.generate_initial_mass()
+
+    w.generate_correlated_workload(100, scale=0.05, step_size=10000, upper_bound=1500)
+
+    w.animate_workload(max_radius=0.03)

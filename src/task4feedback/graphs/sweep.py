@@ -36,13 +36,11 @@ class SweepData(DataGeometry):
 
     def _create_blocks(
         self,
-        interior_size: int = 1000000,
-        boundary_size: int = 1000000,
         directions: Optional[np.ndarray] = None,
     ):
         if directions is None:
-            directions = np.array([[1, 0], [0, 1], [-1, 0], [0, -1]])
             directions = np.array([[-1, -1], [1, 1]])
+            self.config.directions = directions
 
         directions = directions.astype(np.float64)
 
@@ -112,33 +110,58 @@ class SweepData(DataGeometry):
     def blocks_to_keys(self, blocks: list[int]):
         return [self.map.block_to_key[i] for i in blocks]
 
-    def get_block_at_direction(self, object: Cell | tuple[Cell, Edge], direction: int):
-        idx = direction + 1
+    def idx_at_step(self, step: int) -> int:
+        return 0
+
+    def get_block_at_direction(
+        self, object: Cell | tuple[Cell, Edge], direction: int, step: Optional[int] = 0
+    ):
+        idx = self.idx_at_step(step)
+        idx += direction + 1
         if isinstance(object, tuple):
             return self.map.get_block(DataKey(object[1], (object[0], idx)))
         return self.map.get_block(DataKey(object, idx))
 
-    def get_shared_block(self, object: Cell | tuple[Cell, Edge]):
-        idx = 0
+    def get_shared_block(
+        self, object: Cell | tuple[Cell, Edge], step: Optional[int] = 0
+    ):
+        idx = self.idx_at_step(step)
         if isinstance(object, tuple):
             return self.map.get_block(DataKey(object[1], (object[0], idx)))
         return self.map.get_block(DataKey(object, idx))
 
-    def set_location(self, obj: Cell | Edge, location: int):
-        id_list = self.map.key_to_block.get_leaves(obj)
+    def set_location(self, obj: Cell | Edge, location: int, step: Optional[int] = None):
+        step = None if step is None else self.idx_at_step(step)
+
+        step_list = (
+            None
+            if step is None
+            else list(
+                range(
+                    step * (len(self.directions) + 1),
+                    (step + 1) * (len(self.directions) + 1),
+                )
+            )
+        )
+        print("Step list", step, len(self.directions), step_list)
+        id_list = self.map.key_to_block.get_leaves(obj, values=step_list)
         for i in id_list:
             self.blocks.set_location(i, location)
 
         if isinstance(obj, Cell):
             # Update edges as well
             for edge in self.geometry.cell_edges[obj.id]:
-                id_list = self.map.key_to_block.get_leaves(DataKey(Edge(edge), (obj,)))
+                id_list = self.map.key_to_block.get_leaves(
+                    DataKey(Edge(edge), (obj,)), values=step_list
+                )
                 for i in id_list:
                     self.blocks.set_location(i, location)
 
-    def set_locations_from_list(self, location_list: list[int]):
+    def set_locations_from_list(
+        self, location_list: list[int], step: Optional[int] = None
+    ):
         for i, location in enumerate(location_list):
-            self.set_location(Cell(i), location)
+            self.set_location(Cell(i), location, step=step)
 
     def randomize_locations(self, num_changes: int, location_list: list[int]):
         new_locations = []
@@ -233,7 +256,9 @@ class SweepGraph(ComputeDataGraph):
             read_blocks.append(shared_block)
 
             # Read and write to own interior block for this step
-            interior_block = self.data.get_block_at_direction(Cell(cell), direction)
+            interior_block = self.data.get_block_at_direction(
+                Cell(cell), direction, step=step
+            )
             read_blocks.append(interior_block)
             write_blocks.append(interior_block)
 
@@ -252,7 +277,7 @@ class SweepGraph(ComputeDataGraph):
                         if prod_with_direction < -self.config.threshold:
                             # Read from upstream neighbor
                             block = self.data.get_block_at_direction(
-                                (Cell(neighbor_cell), Edge(edge)), direction
+                                (Cell(neighbor_cell), Edge(edge)), direction, step=step
                             )
 
                             if isinstance(block, int):
@@ -261,7 +286,7 @@ class SweepGraph(ComputeDataGraph):
                         if prod_with_direction > self.config.threshold:
                             # Read and write to all self edges
                             block = self.data.get_block_at_direction(
-                                (Cell(cell), Edge(edge)), direction
+                                (Cell(cell), Edge(edge)), direction, step=step
                             )
                             if isinstance(block, int):
                                 read_blocks.append(block)
@@ -290,8 +315,8 @@ class SweepGraph(ComputeDataGraph):
             read_blocks = []
             write_blocks = []
 
-            # Read/write shared block (material properties, etc)
-            shared_block = self.data.get_shared_block(Cell(i))
+            # Read shared block (material properties, etc)
+            shared_block = self.data.get_shared_block(Cell(i), step=step)
             read_blocks.append(shared_block)
             write_blocks.append(shared_block)
 
@@ -371,8 +396,8 @@ class SweepGraph(ComputeDataGraph):
 
         return selected_cells, new_locations
 
-    def set_cell_locations(self, location_list: list[int]):
-        self.data.set_locations_from_list(location_list)
+    def set_cell_locations(self, location_list: list[int], step: Optional[int] = None):
+        self.data.set_locations_from_list(location_list, step)
 
     def set_cell_locations_from_dict(self, location_dict: dict[int, int]):
         for cell, location in location_dict.items():

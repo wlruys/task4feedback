@@ -189,6 +189,7 @@ public:
         for (const auto &dep_id : task.get_dependents()) {
           if (local_visited.insert(dep_id).second) {
             if (visited.size() >= max_tasks) {
+              spdlog::warn("Task count exceeded max tasks");
               return;
             }
             q.push(dep_id);
@@ -212,6 +213,7 @@ public:
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_dependents(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
+        spdlog::warn("Task count exceeded max tasks");
         break;
       }
     }
@@ -231,6 +233,7 @@ public:
 
     for (auto task : visited) {
       if (i >= count) {
+        spdlog::warn("Task count exceeded max tasks");
         break;
       }
       v(i) = static_cast<int64_t>(task);
@@ -295,6 +298,7 @@ public:
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_dependencies(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
+        spdlog::warn("Task count exceeded max tasks");
         break;
       }
     }
@@ -314,6 +318,7 @@ public:
 
     for (auto task : visited) {
       if (i >= count) {
+        spdlog::warn("Task count exceeded max tasks");
         break;
       }
       v(i) = static_cast<int64_t>(task);
@@ -351,6 +356,7 @@ public:
         for (const auto &dep_id : task.get_dependencies()) {
           if (local_visited.insert(dep_id).second) {
             if (visited.size() >= max_tasks) {
+              spdlog::warn("Task count exceeded max tasks");
               return;
             }
             q.push(dep_id);
@@ -361,6 +367,7 @@ public:
         for (const auto &dep_id : task.get_dependents()) {
           if (local_visited.insert(dep_id).second) {
             if (visited.size() >= max_tasks) {
+              spdlog::warn("Task count exceeded max tasks");
               return;
             }
             q.push(dep_id);
@@ -383,6 +390,7 @@ public:
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_bidirectional(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
+        spdlog::warn("Task count exceeded max tasks");
         break;
       }
     }
@@ -402,6 +410,7 @@ public:
 
     for (auto task : visited) {
       if (i >= count) {
+        spdlog::warn("Task count exceeded max tasks");
         break;
       }
       v(i) = static_cast<int64_t>(task);
@@ -427,7 +436,8 @@ public:
     auto v = output.view();
     auto gv = global_output.view();
 
-    // Clear map
+    const auto max_edges = output.shape(1);
+
     task_index_map.clear();
     task_index_map.reserve(sources.size());
 
@@ -454,7 +464,16 @@ public:
           gv(0, edge_count) = static_cast<int64_t>(source_id);
           gv(1, edge_count) = static_cast<int64_t>(dep_id);
           edge_count++;
+
+          if (edge_count >= max_edges) {
+            spdlog::warn("TaskTask edge count exceeded max edges");
+            break;
+          }
         }
+      }
+      if (edge_count >= max_edges) {
+        spdlog::warn("TaskTask edge count exceeded max edges");
+        break;
       }
     }
     return edge_count;
@@ -471,7 +490,8 @@ public:
     auto v = output.view();
     auto gv = global_output.view();
 
-    // Clear data structures before use
+    const auto max_edges = output.shape(1);
+
     task_index_map.clear();
     task_index_map.reserve(sources.size());
 
@@ -499,7 +519,15 @@ public:
           gv(0, edge_count) = static_cast<int64_t>(source_id);
           gv(1, edge_count) = static_cast<int64_t>(dep_id);
           edge_count++;
+          if (edge_count >= max_edges) {
+            spdlog::warn("TaskTask edge count exceeded max edges");
+            break;
+          }
         }
+      }
+      if (edge_count >= max_edges) {
+        spdlog::warn("TaskTask edge count exceeded max edges");
+        break;
       }
     }
     return edge_count;
@@ -523,10 +551,12 @@ public:
       for (auto data_id : task.get_unique()) {
         data_visited.insert(data_id);
         if (data_visited.size() >= max_data) {
+          spdlog::warn("Unique data count exceeded max data");
           break;
         }
       }
       if (data_visited.size() >= max_data) {
+        spdlog::warn("Unique data count exceeded max data");
         break;
       }
     }
@@ -535,6 +565,7 @@ public:
     size_t i = 0;
     for (auto data_id : data_visited) {
       if (i >= count) {
+        spdlog::warn("Unique data count exceeded max data");
         break;
       }
       v(i) = static_cast<int64_t>(data_id);
@@ -583,11 +614,13 @@ public:
           gv(1, edge_count) = static_cast<int64_t>(data_id);
           edge_count++;
           if (edge_count >= max_edges) {
+            spdlog::warn("TaskData edge count exceeded max edges");
             break;
           }
         }
       }
       if (edge_count >= max_edges) {
+        spdlog::warn("TaskData edge count exceeded max edges");
         break;
       }
     }
@@ -622,10 +655,12 @@ public:
         gv(1, edge_count) = static_cast<int64_t>(j);
         edge_count++;
         if (edge_count >= max_edges) {
+          spdlog::warn("TaskDevice edge count exceeded max edges");
           break;
         }
       }
       if (edge_count >= max_edges) {
+        spdlog::warn("TaskDevice edge count exceeded max edges");
         break;
       }
     }
@@ -661,11 +696,13 @@ public:
           gv(1, i) = static_cast<int64_t>(j);
           edge_count++;
           if (edge_count >= max_edges) {
+            spdlog::warn("DataDevice edge count exceeded max edges");
             break;
           }
         }
       }
       if (edge_count >= max_edges) {
+        spdlog::warn("DataDevice edge count exceeded max edges");
         break;
       }
     }
