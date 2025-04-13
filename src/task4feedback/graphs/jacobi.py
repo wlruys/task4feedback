@@ -554,12 +554,12 @@ class XYDataObserverFactory(XYExternalObserverFactory):
         )  # 2 for x, y position, last for whether it is mapped
 
         data_feature_factory = FeatureExtractorFactory()
-        # data_feature_factory.add(fastsim.DataSizeFeature)
+        data_feature_factory.add(fastsim.DataSizeFeature)
         data_feature_factory.add(fastsim.DataMappedLocationsFeature)
 
         device_feature_factory = FeatureExtractorFactory()
         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
-        device_feature_factory.add(fastsim.DeviceIDFeature)
+        # device_feature_factory.add(fastsim.DeviceIDFeature)
         # device_feature_factory.add(fastsim.DeviceMemoryFeature)
         device_feature_factory.add(fastsim.DeviceTimeFeature)
 

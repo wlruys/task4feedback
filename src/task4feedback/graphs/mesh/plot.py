@@ -14,6 +14,10 @@ import task4feedback.fastsim2 as fastsim
 import copy
 from ..base import EnvironmentState
 
+import wandb
+import os
+
+
 device_to_color = [
     "black",
     "red",
@@ -70,6 +74,7 @@ class MeshPlotConfig:
 def create_mesh_plot(
     geometry: Geometry,
     config: Optional[MeshPlotConfig] = None,
+    figsize=(8, 8),
     title="Mesh Plot",
     label_cells=False,
 ):
@@ -82,7 +87,7 @@ def create_mesh_plot(
     if config is None:
         config = MeshPlotConfig()
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=figsize)
     plot_cells(
         ax,
         points,
@@ -397,9 +402,9 @@ def animate_highlights(
     return ani
 
 
-def animate_state_list(graph, state_list):
+def animate_state_list(graph, state_list, figsize=(8, 8)):
     geom = graph.data.geometry
-    fig, ax = create_mesh_plot(geom)
+    fig, ax = create_mesh_plot(geom, figsize=figsize)
     highlight_sequence = []
     last_level_label = {}
     last_partition = graph.get_cell_locations(as_dict=False)
@@ -475,11 +480,30 @@ def animate_state_list(graph, state_list):
     return ani
 
 
-def make_mesh_graph_animation(graph, state_list, title="mesh_animation", show=True):
+def make_mesh_graph_animation(
+    graph,
+    state_list,
+    title="mesh_animation",
+    figsize=(8, 8),
+    show=True,
+    folder=None,
+    dpi=None,
+    bitrate=None,
+):
+    if folder is None:
+        if wandb.run.dir is None:
+            folder = "."
+        else:
+            folder = wandb.run.dir
+
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    title = os.path.join(folder, title)
+
     title = f"{title}.mp4"
-    ani = animate_state_list(graph, state_list)
+    ani = animate_state_list(graph, state_list, figsize=figsize)
     try:
-        ani.save(title, writer="ffmpeg", fps=30)
+        ani.save(title, writer="ffmpeg", fps=30, dpi=dpi, bitrate=bitrate)
     except Exception as e:
         print(f"Error saving animation: {e}")
     if show:
@@ -487,7 +511,16 @@ def make_mesh_graph_animation(graph, state_list, title="mesh_animation", show=Tr
     return ani
 
 
-def animate_mesh_graph(env, time_interval=250, show=True, title="mesh_animation"):
+def animate_mesh_graph(
+    env,
+    time_interval=250,
+    show=True,
+    title="mesh_animation",
+    folder=None,
+    figsize=(8, 8),
+    dpi=None,
+    bitrate=None,
+):
     current_time = env.simulator.time
     state_list = []
     for t in range(0, current_time, time_interval):
@@ -496,5 +529,12 @@ def animate_mesh_graph(env, time_interval=250, show=True, title="mesh_animation"
 
     print(f"Number of states: {len(state_list)}")
     return make_mesh_graph_animation(
-        env.simulator.input.graph, state_list, title=title, show=show
+        env.simulator.input.graph,
+        state_list,
+        title=title,
+        show=show,
+        folder=None,
+        figsize=figsize,
+        dpi=dpi,
+        bitrate=bitrate,
     )

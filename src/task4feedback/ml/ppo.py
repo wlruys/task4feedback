@@ -1,7 +1,7 @@
 from .models import *
 from .util import *
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional, List, Dict, Any, Tuple
 from torchrl.collectors import MultiSyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage
@@ -15,25 +15,162 @@ import copy
 from tensordict import TensorDictBase, TensorDict
 import wandb
 import os
+import numpy as np
+import torch
+from torchrl.envs import set_exploration_type, ExplorationType
+from task4feedback.graphs.mesh.plot import *
 
 
 @dataclass
 class PPOConfig:
     states_per_collection: int = 1920
-    minibatch_size: int = 500
-    num_epochs_per_collection: int = 2
+    minibatch_size: int = 250
+    num_epochs_per_collection: int = 4
     num_collections: int = 1000
     workers: int = 1
     seed: int = 0
     lr: float = 2.5e-4
     clip_eps: float = 0.2
+    clip_vloss: bool = True
     ent_coef: float = 0.001
     val_coef: float = 0.5
     max_grad_norm: float = 0.5
     threads_per_worker: int = 1
     train_device: str = "cpu"
-    gae_gamma: float = 0.99
+    gae_gamma: float = 1
     gae_lmbda: float = 0.99
+    normalize_advantage: bool = True
+    value_norm: str = "l2"
+    eval_interval: int = 10  # Evaluate every N collections
+    eval_episodes: int = 1  # Number of episodes to evaluate
+
+
+def log_parameter_and_gradient_norms(model):
+    """Log parameter and gradient norms to wandb"""
+    param_norms = {}
+    grad_norms = {}
+
+    # Log overall model norm
+    total_param_norm = 0.0
+    total_grad_norm = 0.0
+
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            # Calculate parameter norm
+            param_norm = param.detach().norm().item()
+            param_norms[f"param_norm/{name}"] = param_norm
+            total_param_norm += param_norm**2
+
+            # Calculate gradient norm if gradient exists
+            if param.grad is not None:
+                grad_norm = param.grad.detach().norm().item()
+                grad_norms[f"grad_norm/{name}"] = grad_norm
+                total_grad_norm += grad_norm**2
+
+    # Calculate total norms
+    total_param_norm = total_param_norm**0.5
+    total_grad_norm = total_grad_norm**0.5
+
+    return {
+        **param_norms,
+        **grad_norms,
+        "param_norm/total": total_param_norm,
+        "grad_norm/total": total_grad_norm,
+    }
+
+
+def evaluate_policy(
+    policy,
+    eval_env_fn: Callable,
+    max_steps: int = 10000,
+    num_episodes: int = 1,
+    step=0,
+) -> Dict[str, float]:
+    episode_rewards = []
+    completion_times = []
+    episode_returns = []
+
+    for i in range(num_episodes):
+        env = eval_env_fn()
+        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+            tensordict = env.rollout(
+                max_steps=max_steps,
+                policy=policy,
+            )
+
+        if "next" in tensordict and "reward" in tensordict["next"]:
+            non_zero_rewards = tensordict["next", "reward"]
+            # Filter out non-zero rewards
+            mask = non_zero_rewards > 0
+            filtered_rewards = non_zero_rewards[mask]
+            avg_non_zero_reward = filtered_rewards.mean().item()
+            std_rewards = filtered_rewards.std().item()
+            returns = tensordict["next", "reward"].sum().item()
+        else:
+            returns = 0.0
+            avg_non_zero_reward = 0.0
+            std_rewards = 0.0
+
+        episode_returns.append(returns)
+        episode_rewards.append(avg_non_zero_reward)
+
+        # Extract completion time if available
+        if hasattr(env, "simulator") and hasattr(env.simulator, "time"):
+            completion_time = env.simulator.time
+            completion_times.append(completion_time)
+
+            if i == 0 and completion_time > 0:
+                # Animate the first environment
+                max_frames = 400
+                time_interval = int(completion_time / max_frames)
+
+                title = f"network_eval_{step}_{i}"
+                print(title)
+                animate_mesh_graph(
+                    env,
+                    time_interval=time_interval,
+                    show=False,
+                    title=title,
+                    figsize=(2, 2),
+                    dpi=20,
+                    bitrate=50,
+                )
+
+                if wandb.run.dir is None:
+                    path = "."
+                else:
+                    path = wandb.run.dir
+
+                video_path = os.path.join(path, title + ".mp4")
+
+                wandb.log(
+                    {
+                        "eval/animation": wandb.Video(
+                            video_path,
+                            caption=title,
+                        )
+                    }
+                )
+
+    # Create metrics dictionary
+    metrics = {
+        "eval/mean_return": sum(episode_rewards) / max(len(episode_rewards), 1),
+        "eval/std_return": np.std(episode_rewards) if len(episode_rewards) > 1 else 0,
+        "eval/mean_nonzero_reward": sum(episode_rewards) / max(len(episode_rewards), 1),
+        "eval/std_nonzero_reward": np.std(episode_rewards)
+        if len(episode_rewards) > 1
+        else 0,
+    }
+
+    # Add completion time metrics if available
+    if completion_times:
+        metrics["eval/mean_completion_time"] = sum(completion_times) / len(
+            completion_times
+        )
+        metrics["eval/min_completion_time"] = min(completion_times)
+        metrics["eval/max_completion_time"] = max(completion_times)
+
+    return metrics
 
 
 def run_ppo_cleanrl_no_rb(
@@ -288,7 +425,16 @@ def run_ppo_torchrl(
     config: PPOConfig,
     model_name: str = "model",
     model_path: str = None,
+    eval_env_fn: Optional[Callable[[], EnvBase]] = None,
 ):
+    wandb.define_metric("batch_loss/step")
+    wandb.define_metric("collect_loss/step")
+    wandb.define_metric("batch_loss/*", step_metric="batch_loss/step")
+    wandb.define_metric("grad_norm/*", step_metric="batch_loss/step")
+    wandb.define_metric("param_norm/*", step_metric="batch_loss/step")
+    wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
+    wandb.define_metric("eval/*", step_metric="eval/step")
+
     _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
     _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
 
@@ -318,6 +464,10 @@ def run_ppo_torchrl(
     train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
     model = torch.nn.ModuleList([train_actor_network, train_critic_network])
 
+    # Create evaluation environment if not provided
+    if eval_env_fn is None:
+        eval_env_fn = make_env
+
     if model_path:
         model.load_state_dict(torch.load(model_path))
         print("Loaded model from path:", model_path)
@@ -332,7 +482,6 @@ def run_ppo_torchrl(
         env_device="cpu",
     )
     out_seed = collector.set_seed(config.seed)
-    print(f"Seed: {out_seed}")
 
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(
@@ -340,13 +489,15 @@ def run_ppo_torchrl(
         ),
         sampler=SamplerWithoutReplacement(),
         pin_memory=torch.cuda.is_available(),
+        prefetch=4,
+        batch_size=config.minibatch_size,
     )
 
     advantage_module = GAE(
         gamma=config.gae_gamma,
         lmbda=config.gae_lmbda,
         value_network=model[1],
-        average_gae=False,
+        average_gae=config.normalize_advantage,
         device=config.train_device,
     )
 
@@ -357,10 +508,22 @@ def run_ppo_torchrl(
         entropy_bonus=True,
         entropy_coef=config.ent_coef,
         critic_coef=config.val_coef,
-        loss_critic_type="l2",
+        loss_critic_type=config.value_norm,
+        clip_value=config.clip_vloss,
     )
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
+
+    # Run initial evaluation
+    if config.eval_interval > 0:
+        eval_metrics = evaluate_policy(
+            policy=td_module_action,
+            eval_env_fn=eval_env_fn,
+            num_episodes=config.eval_episodes,
+            step=0,
+        )
+        eval_metrics["eval/step"] = 0
+        wandb.log(eval_metrics)
 
     for i, tensordict_data in enumerate(collector):
         if (i + 1) % 20 == 0:
@@ -370,30 +533,45 @@ def run_ppo_torchrl(
                 path = wandb.run.dir
             torch.save(
                 model.state_dict(),
-                os.path.join(wandb.run.dir, model_name + f"_{i + 1}.pth"),
+                os.path.join(path, model_name + f"_{i + 1}.pth"),
             )
+
+        # Run evaluation at specified intervals
+        if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
+            eval_metrics = evaluate_policy(
+                policy=td_module_action,
+                eval_env_fn=eval_env_fn,
+                num_episodes=config.eval_episodes,
+                step=i + 1,
+            )
+            eval_metrics["eval/step"] = i + 1
+            wandb.log(eval_metrics)
+
         if i >= config.num_collections:
             break
+
         print(f"Collection: {i}")
         tensordict_data = tensordict_data.to(config.train_device, non_blocking=True)
 
         with torch.no_grad():
             advantage_module(tensordict_data)
 
-        non_zero_rewards = tensordict_data["next", "reward"]
-        improvements = tensordict_data["next", "observation", "aux", "improvement"]
-        mask = improvements > -1.5
-        filtered_improvements = improvements[mask]
-        if filtered_improvements.numel() > 0:
-            avg_improvement = filtered_improvements.mean()
+            non_zero_rewards = tensordict_data["next", "reward"]
+            improvements = tensordict_data["next", "observation", "aux", "improvement"]
+            mask = improvements > -1.5
+            filtered_improvements = improvements[mask]
+            if filtered_improvements.numel() > 0:
+                avg_improvement = filtered_improvements.mean()
 
-        if len(non_zero_rewards) > 0:
-            avg_non_zero_reward = non_zero_rewards.mean().item()
-            print(f"Average reward: {avg_non_zero_reward}")
-            print(f"Average improvement: {avg_improvement}")
+            if len(non_zero_rewards) > 0:
+                avg_non_zero_reward = non_zero_rewards.mean().item()
+                std_rewards = non_zero_rewards.std().item()
+                print(f"Average reward: {avg_non_zero_reward}")
+                print(f"Average improvement: {avg_improvement}")
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
+        # Training loop
         for j in range(config.num_epochs_per_collection):
             n_batches = config.states_per_collection // config.minibatch_size
 
@@ -410,24 +588,99 @@ def run_ppo_torchrl(
 
                 optimizer.zero_grad()
                 loss_value.backward()
+
+                # Log pre-clipping gradient norms
+                pre_clip_norms = log_parameter_and_gradient_norms(loss_module)
+
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     loss_module.parameters(), max_norm=config.max_grad_norm
                 )
+
+                # Log post-clipping gradient norms
+                post_clip_norms = log_parameter_and_gradient_norms(loss_module)
+                post_clip_norms = {
+                    f"post_clip_{k}": v
+                    for k, v in post_clip_norms.items()
+                    if "grad_norm" in k
+                }
+
                 optimizer.step()
+
+                # Log norms for this batch
+                step = (
+                    i * config.num_epochs_per_collection * n_batches + j * n_batches + k
+                )
+                wandb.log(
+                    {
+                        **pre_clip_norms,
+                        **post_clip_norms,
+                        "batch_loss/step": step,
+                        "batch_loss/objective": loss_vals["loss_objective"].item(),
+                        "batch_loss/critic": loss_vals["loss_critic"].item(),
+                        "batch_loss/entropy": loss_vals["loss_entropy"].item(),
+                        "batch_loss/total": loss_value.item(),
+                        "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
+                        "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),
+                        "batch_loss/value_clip_fraction": loss_vals[
+                            "value_clip_fraction"
+                        ].item(),
+                        "batch_loss/ESS": loss_vals["ESS"].item(),
+                    },
+                )
 
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
         wandb.log(
             {
-                "Average Return": avg_non_zero_reward,
-                "loss_objective": loss_vals["loss_objective"].item(),
-                "average_improvement": avg_improvement.item(),
-                "loss_critic": loss_vals["loss_critic"].item(),
-                "loss_entropy": loss_vals["loss_entropy"].item(),
-                "loss_total": loss_value.item(),
-                "grad_norm": grad_norm,
+                "collect_loss/step": i,
+                "collect_loss/mean_nonzero_reward": avg_non_zero_reward,
+                "collect_loss/std_nonzero_reward": std_rewards,
+                "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
+                "collect_loss/average_improvement": avg_improvement.item(),
+                "collect_loss/std_improvement": filtered_improvements.std().item(),
+                "collect_loss/std_return": tensordict_data["value_target"].std().item(),
+                "collect_loss/mean_return": tensordict_data["value_target"]
+                .mean()
+                .item(),
+                "collect_loss/loss_critic": loss_vals["loss_critic"].item(),
+                "collect_loss/loss_entropy": loss_vals["loss_entropy"].item(),
+                "collect_loss/loss_total": loss_value.item(),
+                "collect_loss/grad_norm": grad_norm,
+                "collect_loss/advantage_mean": tensordict_data["advantage"]
+                .mean()
+                .item(),
+                "collect_loss/advantage_std": tensordict_data["advantage"].std().item(),
             },
         )
 
+    # Final evaluation
+    if config.eval_interval > 0:
+        eval_metrics = evaluate_policy(
+            policy=td_module_action,
+            eval_env_fn=eval_env_fn,
+            num_episodes=config.eval_episodes,
+            step=config.num_collections,
+        )
+        eval_metrics["eval/step"] = config.num_collections
+        wandb.log(eval_metrics)
+
+    # save final network
+    if wandb.run.dir is None:
+        path = "."
+    else:
+        path = wandb.run.dir
+    torch.save(
+        model.state_dict(),
+        os.path.join(path, model_name + f"_{config.num_collections}.pth"),
+    )
+    # save final optimizer state
+    torch.save(
+        optimizer.state_dict(),
+        os.path.join(
+            path, "optimizer_" + model_name + f"_{config.num_collections}.pth"
+        ),
+    )
+
     collector.shutdown()
+    wandb.finish()

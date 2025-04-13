@@ -718,11 +718,6 @@ class EFTIncrementalEnv(EnvBase):
         )
         self.simulator.get_mappable_candidates(candidate_workspace)
 
-        dependents = torch.zeros(16, dtype=torch.int64)
-        dep_count = self.graph_extractor.get_k_hop_dependents(
-            candidate_workspace, 2, dependents
-        )
-
         global_task_id = candidate_workspace[0].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
         reserving_priority = mapping_priority
@@ -736,15 +731,11 @@ class EFTIncrementalEnv(EnvBase):
         # Set Reward reward[0]
         sim_eft.disable_external_mapper()
         sim_ml.disable_external_mapper()
-        # for i in range(dep_count):
-        #     sim_eft.set_task_breakpoint(EventType.COMPLETER, dependents[i])
-        #     sim_ml.set_task_breakpoint(EventType.COMPLETER, dependents[i])
-        # for i in range(dep_count):
         sim_eft.run()
         sim_ml.run()
         eft_time = sim_eft.time
         ml_time = sim_ml.time
-        reward[0] = eft_time - ml_time
+        reward[0] = (eft_time - ml_time) / self.EFT_baseline
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
@@ -949,14 +940,12 @@ class IncrementalMappingEnv(EnvBase):
         actions = [
             fastsim.Action(0, chosen_device, reserving_priority, launching_priority)
         ]
-
+        self.last_time = self.simulator.time
         self.simulator.simulator.map_tasks(actions)
 
-        incremental_time = self.simulator.time - self.last_time
-        self.last_time = self.simulator.time
-
-        reward[0] = -1 * incremental_time
         simulator_status = self.simulator.run_until_external_mapping()
+        incremental_time = self.simulator.time - self.last_time
+        reward[0] = -1 * incremental_time
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
@@ -966,6 +955,7 @@ class IncrementalMappingEnv(EnvBase):
             print(
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
+            self.last_time = 0
 
         out = obs
         out.set("reward", reward)

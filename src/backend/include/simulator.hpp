@@ -160,6 +160,7 @@ public:
       spdlog::critical("Simulator not in external mapping state.");
       return;
     }
+
     // Set the state back to running
     this->last_state = ExecutionState::RUNNING;
 

@@ -8,6 +8,7 @@ from .types import (
     ConnectionTuple,
     _bytes_to_readable,
 )
+import cxxfilt
 from .lambdas import VariantBuilder, TaskLabeler, DataBlockTransformer
 from rich import print
 import numpy as np
@@ -40,6 +41,9 @@ class Graph:
 
     def add_task(self, name, tag):
         return self.graph.add_task(name, tag)
+
+    def __len__(self):
+        return self.graph.size()
 
     def get_task(self, task, convert=False):
         if convert and isinstance(task, str):
@@ -860,11 +864,13 @@ def observation_to_heterodata(
 
     for node_type, node_data in observation["nodes"].items():
         count = node_data["count"]
+        # print("node count", node_type, count)
         hetero_data[f"{node_type}"].x = node_data["attr"]
 
     for edge_key, edge_data in observation["edges"].items():
         target, source = edge_key.split("_")
         count = edge_data["count"]
+        # print("edge count", edge_key, count)
         hetero_data[target, "to", source].edge_index = edge_data["idx"]
         hetero_data[target, "to", source].edge_attr = edge_data["attr"]
 
@@ -892,6 +898,31 @@ class ExternalObserver:
     task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
     data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
     truncate: bool = True
+
+    def store_feature_types(self):
+        """
+        Store feature type information in the provided config dictionary.
+        Includes both the feature extractor class names and the specific feature types.
+        """
+        config_dictionary = {}
+        for field_name, field_value in self.__dict__.items():
+            if field_name.endswith("features") and field_value is not None:
+                # Store the class name of the feature extractor
+                config_dictionary[field_name] = field_value.__class__.__name__
+
+                # Store the specific feature type names
+                if hasattr(field_value, "feature_type_names"):
+                    feature_types = field_value.feature_type_names
+                    feature_types = [cxxfilt.demangle(t) for t in feature_types]
+                    # Format feature type names for better readability
+                    formatted_types = [
+                        t.split("::")[-1] if "::" in t else t for t in feature_types
+                    ]
+
+                    print(f"Feature types for {field_name}: {formatted_types}")
+                    config_dictionary[f"{field_name}_types"] = formatted_types
+
+        return config_dictionary
 
     @property
     def task_feature_dim(self):
@@ -971,8 +1002,10 @@ class ExternalObserver:
             workspace = workspace[:length]
         return workspace, length
 
-    def get_bidirectional_neighborhood(self, task_ids, workspace):
-        length = self.graph_extractor.get_k_hop_bidirectional(task_ids, 1, workspace)
+    def get_bidirectional_neighborhood(self, task_ids, workspace, depth: int = 1):
+        length = self.graph_extractor.get_k_hop_bidirectional(
+            task_ids, depth, workspace
+        )
 
         if self.truncate:
             workspace = workspace[:length]
@@ -1187,7 +1220,7 @@ class ExternalObserver:
             output["edges"]["tasks_data"]["attr"],
         )
 
-    def task_device_observation(self, output: TensorDict, use_all_tasks=True):
+    def task_device_observation(self, output: TensorDict, use_all_tasks=False):
         if not use_all_tasks:
             ncandidates = output["aux"]["candidates"]["count"][0]
             task_ids = output["aux"]["candidates"]["idx"][:ncandidates]
@@ -1466,11 +1499,11 @@ class SimulatorDriver:
 
 
 def create_graph_spec(
-    max_tasks: int = 30,
-    max_data: int = 30,
+    max_tasks: int = 100,
+    max_data: int = 100,
     max_devices: int = 5,
-    max_edges_tasks_tasks: int = 30,
-    max_edges_tasks_data: int = 30,
+    max_edges_tasks_tasks: int = 100,
+    max_edges_tasks_data: int = 200,
     max_candidates: int = 1,
 ):
     """
@@ -1493,8 +1526,8 @@ def create_graph_spec(
     spec.max_candidates = max_candidates
 
     # This should be max_candidates, but reverting to max_tasks to implement original NN architecture
-    # spec.max_edges_tasks_devices = max_devices * max_candidates
-    spec.max_edges_tasks_devices = max_devices * max_tasks
+    spec.max_edges_tasks_devices = max_devices * max_candidates
+    # spec.max_edges_tasks_devices = max_devices
     return spec
 
 
