@@ -25,10 +25,11 @@ from task4feedback.fastsim2 import (
     SchedulerInput,
     RangeTransitionConditions,
     DefaultTransitionConditions,
+    BatchTransitionConditions,
     SchedulerState,
     Simulator,
 )
-from task4feedback.fastsim2 import ExecutionState, start_logger
+from task4feedback.fastsim2 import ExecutionState, start_logger, EventType
 import torch
 from tensordict.tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
@@ -596,8 +597,8 @@ class SimulatorInput:
         transition_conditions: Optional[fastsim.TransitionConditions] = None,
     ):
         if transition_conditions is None:
-            # transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
-            transition_conditions = DefaultTransitionConditions()
+            transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
+            # transition_conditions = DefaultTransitionConditions()
         if noise is None:
             noise = NoiseConfig(graph, system)
         self.noise = noise
@@ -1441,6 +1442,18 @@ class SimulatorDriver:
         Returns the finish time (in microseconds) of a task.
         """
         return self.simulator.get_task_finish_time(task_id)
+
+    def task_finish_time(self, task_id: int) -> int:
+        """
+        Returns the finish time (in microseconds) of a task.
+        """
+        return self.simulator.get_task_finish_time(task_id)
+
+    def set_task_breakpoint(self, event: EventType, task_id: int) -> int:
+        self.simulator.add_task_breakpoint(event, task_id)
+
+    def clear_breakpoints(self):
+        self.simulator.clear_breakpoints()
 
     def copy(self) -> "SimulatorDriver":
         """

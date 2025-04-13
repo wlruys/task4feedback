@@ -304,9 +304,9 @@ class PartitionMapper:
         level_start: int = 0,
     ):
         if mapper is not None:
-            assert isinstance(mapper, PartitionMapper), (
-                "Mapper must be of type PartitionMapper, is " + str(type(mapper))
-            )
+            assert isinstance(
+                mapper, PartitionMapper
+            ), "Mapper must be of type PartitionMapper, is " + str(type(mapper))
             self.cell_to_mapping = mapper.cell_to_mapping
 
         elif cell_to_mapping is not None:
@@ -560,6 +560,104 @@ class XYDataObserverFactory(XYExternalObserverFactory):
         device_feature_factory = FeatureExtractorFactory()
         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
         # device_feature_factory.add(fastsim.DeviceIDFeature)
+        # device_feature_factory.add(fastsim.DeviceMemoryFeature)
+        device_feature_factory.add(fastsim.DeviceTimeFeature)
+
+        task_task_feature_factory = EdgeFeatureExtractorFactory()
+        task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
+
+        task_data_feature_factory = EdgeFeatureExtractorFactory()
+        # task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
+        task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
+
+        task_device_feature_factory = EdgeFeatureExtractorFactory()
+        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
+        data_device_feature_factory = None
+
+        super().__init__(
+            spec,
+            graph_extractor_t,
+            task_feature_factory,
+            data_feature_factory,
+            device_feature_factory,
+            task_task_feature_factory,
+            task_data_feature_factory,
+            task_device_feature_factory,
+            data_device_feature_factory,
+        )
+
+
+class OnlyXYObserverFactory(XYExternalObserverFactory):
+    def __init__(self, spec: fastsim.GraphSpec):
+        graph_extractor_t = fastsim.GraphExtractor
+        task_feature_factory = FeatureExtractorFactory()
+        # task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        # task_feature_factory.add(fastsim.TaskStateFeature)
+        task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+        task_feature_factory.add(
+            fastsim.EmptyTaskFeature, 3
+        )  # 2 for x, y position, last for whether it is mapped
+
+        data_feature_factory = FeatureExtractorFactory()
+        # data_feature_factory.add(fastsim.DataSizeFeature)
+        # data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+        data_feature_factory.add(fastsim.EmptyDataFeature, 1)
+
+        device_feature_factory = FeatureExtractorFactory()
+        # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
+        # device_feature_factory.add(fastsim.DeviceIDFeature)
+        # device_feature_factory.add(fastsim.DeviceMemoryFeature)
+        # device_feature_factory.add(fastsim.DeviceTimeFeature)
+        device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
+
+        task_task_feature_factory = EdgeFeatureExtractorFactory()
+        # task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
+        task_task_feature_factory.add(fastsim.EmptyTaskTaskFeature, 1)
+
+        task_data_feature_factory = EdgeFeatureExtractorFactory()
+        # task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
+        # task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
+        task_data_feature_factory.add(fastsim.EmptyTaskDataFeature, 1)
+
+        task_device_feature_factory = EdgeFeatureExtractorFactory()
+        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
+        data_device_feature_factory = None
+
+        super().__init__(
+            spec,
+            graph_extractor_t,
+            task_feature_factory,
+            data_feature_factory,
+            device_feature_factory,
+            task_task_feature_factory,
+            task_data_feature_factory,
+            task_device_feature_factory,
+            data_device_feature_factory,
+        )
+
+
+class DataObserverFactory(ExternalObserverFactory):
+    def __init__(self, spec: fastsim.GraphSpec):
+        graph_extractor_t = fastsim.GraphExtractor
+        task_feature_factory = FeatureExtractorFactory()
+        # task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        # task_feature_factory.add(fastsim.TaskStateFeature)
+        task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+        task_feature_factory.add(
+            fastsim.EmptyTaskFeature, 1
+        )  # 2 for x, y position, last for whether it is mapped
+
+        data_feature_factory = FeatureExtractorFactory()
+        # data_feature_factory.add(fastsim.DataSizeFeature)
+        data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+
+        device_feature_factory = FeatureExtractorFactory()
+        # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
+        device_feature_factory.add(fastsim.DeviceIDFeature)
         # device_feature_factory.add(fastsim.DeviceMemoryFeature)
         device_feature_factory.add(fastsim.DeviceTimeFeature)
 

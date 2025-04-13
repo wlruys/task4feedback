@@ -1,4 +1,4 @@
-from task4feedback import fastsim2 as fastsim
+import task4feedback.fastsim2 as fastsim
 from task4feedback.interface import *
 import torch
 from typing import Optional, List
@@ -14,20 +14,12 @@ from task4feedback.fastsim2 import GraphExtractor, SchedulerState
 from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
 from torchrl.envs.utils import make_composite_from_td
 from torchrl.envs import StepCounter, TrajCounter, TransformedEnv
-import tensordict
 from tensordict import TensorDict
-from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph, DataGeometry
+from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph
 import random
 from task4feedback.graphs.mesh.plot import *
-from torchrl.data import Categorical
-import math
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
-import matplotlib.patches as mpatches
 from task4feedback.legacy_graphs import *
-import os
-import wandb
 from task4feedback.graphs.jacobi import JacobiGraph
 
 
@@ -42,27 +34,24 @@ class RuntimeEnv(EnvBase):
         change_duration=False,
         change_locations=False,
         only_gpu=True,
-        snapshot_interval=-1,
         location_seed=0,
         priority_seed=0,
         location_randomness=1,
-        location_list=[1, 2, 3, 4],
-        width=8,
-        path=".",
+        location_list: Optional[List[int]] = None,
     ):
         super().__init__(device=device)
 
         self.change_priority = change_priority
         self.change_duration = change_duration
-        self.snapshot_interval = snapshot_interval
         self.change_locations = change_locations
         self.location_seed = location_seed
         self.location_randomness = location_randomness
+        if location_list is None:
+            location_list = range(
+                int(only_gpu), simulator_factory.graph_spec.max_devices
+            )
         self.location_list = location_list
-        self.width = width
-        self.path = path
         self.only_gpu = only_gpu
-        self.s = 0
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(
@@ -74,13 +63,21 @@ class RuntimeEnv(EnvBase):
 
         if self.change_locations:
             graph = simulator_factory.input.graph
-            assert hasattr(graph, "get_cell_locations")
-            assert hasattr(graph, "set_cell_locations")
-            assert hasattr(graph, "randomize_locations")
-            self.initial_location_list = graph.get_cell_locations()
-            self.location_randomness = location_randomness
-            self.location_list = location_list
-            random.seed(self.location_seed)
+            if self.only_gpu and (0 in self.location_list):
+                print(
+                    "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
+                )
+            if (
+                hasattr(graph, "get_cell_locations")
+                and hasattr(graph, "set_cell_locations")
+                and hasattr(graph, "randomize_locations")
+            ):
+                self.legacy_graph = False
+            else:
+                self.legacy_graph = True
+                print(
+                    "Warning: Randomizing locations on a legacy graph. This may not work as expected. location_randomness is ignored."
+                )
 
         self.observation_spec = self._create_observation_spec()
         self.action_spec = self._create_action_spec()
@@ -90,11 +87,6 @@ class RuntimeEnv(EnvBase):
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
 
-        if change_locations:
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
     def _get_baseline(self, use_eft=False):
         if use_eft:
             simulator_copy = self.simulator.fresh_copy()
@@ -102,9 +94,9 @@ class RuntimeEnv(EnvBase):
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, (
-                f"Baseline returned unexpected final state: {final_state}"
-            )
+            assert (
+                final_state == fastsim.ExecutionState.COMPLETE
+            ), f"Baseline returned unexpected final state: {final_state}"
             return simulator_copy.time
         return self.baseline_time
 
@@ -116,27 +108,15 @@ class RuntimeEnv(EnvBase):
 
     def _create_action_spec(self, ndevices: int = 5) -> TensorSpec:
         n_devices = self.simulator_factory.graph_spec.max_devices
-        # if self.only_gpu:
-        #     out = Categorical(n=n_devices - 1, dtype=torch.int64)
-        # else:
-        #     out = Categorical(n=n_devices, dtype=torch.int64)
-
         if self.only_gpu:
-            out = Bounded(
-                shape=(1,),
-                device=self.device,
-                dtype=torch.int64,
-                low=torch.tensor(0, device=self.device),
-                high=torch.tensor(n_devices - 1, device=self.device),
-            )
-        else:
-            out = Bounded(
-                shape=(1,),
-                device=self.device,
-                dtype=torch.int64,
-                low=torch.tensor(0, device=self.device),
-                high=torch.tensor(n_devices, device=self.device),
-            )
+            n_devices -= 1
+        out = Bounded(
+            shape=(1,),
+            device=self.device,
+            dtype=torch.int64,
+            low=torch.tensor(0, device=self.device),
+            high=torch.tensor(n_devices, device=self.device),
+        )
         out = Composite(action=out)
         return out
 
@@ -177,78 +157,42 @@ class RuntimeEnv(EnvBase):
         self.buffer_idx += 1
 
     def _step(self, td: TensorDict) -> TensorDict:
-        assert self.makespan > 0, "Makespan not set"
-        chosen_device = td["action"].item()
-
-        if self.only_gpu:
-            chosen_device = chosen_device + 1
-
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.prev_makespan = self.EFT_baseline
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
-        local_id = 0
-
         candidate_workspace = torch.zeros(
             self.simulator_factory.graph_spec.max_candidates,
             dtype=torch.int64,
         )
 
         self.simulator.get_mappable_candidates(candidate_workspace)
-        global_task_id = candidate_workspace[local_id].item()
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
-        reserving_priority = mapping_priority
-        launching_priority = mapping_priority
-        actions = [
-            fastsim.Action(
-                local_id, chosen_device, reserving_priority, launching_priority
-            )
-        ]
-        self.simulator.simulator.map_tasks(actions)
-        # print("Current Time: ", self.simulator.time)
 
-        dummy_sim = self.simulator.copy()
-        dummy_sim.disable_external_mapper()
-        dummy_sim.run()
-        if dummy_sim.time > self.makespan:
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        simulator_copy = self.simulator.copy()
+        simulator_copy.disable_external_mapper()
+        simulator_copy.run()
+        if simulator_copy.time > self.prev_makespan:
             reward[0] = -1
-        elif dummy_sim.time < self.makespan:
+        elif simulator_copy.time < self.prev_makespan:
             reward[0] = 1
         else:
             reward[0] = 0
-        self.makespan = dummy_sim.time
-
-        # print(
-        #     "Step: ",
-        #     self.s,
-        #     "Action: ",
-        #     chosen_device,
-        #     "Reward: ",
-        #     reward[0],
-        #     "Time: ",
-        #     dummy_sim.time,
-        # )
+        self.prev_makespan = simulator_copy.time
 
         simulator_status = self.simulator.run_until_external_mapping()
-        # print(f"Simulator status: {simulator_status}, Time: {self.simulator.time}")
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
-
-        self.s += 1
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
-
-        if not done:
-            assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-                f"Unexpected simulator status: {simulator_status}"
-            )
-        else:
-            # obs = self._reset()
-            # baseline_time = self._get_baseline()
-            # reward[0] = 1 + (baseline_time - time) / baseline_time
-            # reward[0] = reward[0] * 100
-            # reward[0] = 100
-            # if done:
-            # baseline_time = self._get_baseline()
-
+        if done:
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
             print(
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
@@ -257,49 +201,46 @@ class RuntimeEnv(EnvBase):
         out = obs
         out.set("reward", reward)
         out.set("done", done)
+        self.step_count += 1
         return out
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.resets += 1
+        self.step_count = 0
         current_priority_seed = self.simulator_factory.pseed
         current_duration_seed = self.simulator_factory.seed
-        self.s = 0
 
         if self.change_locations:
             new_location_seed = self.location_seed + self.resets
-            # Load initial location list
             graph = self.simulator_factory.input.graph
-            graph.set_cell_locations(self.initial_location_list)
-
             random.seed(new_location_seed)
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
+            if self.legacy_graph:
+                data = self.simulator_factory.input.data.data
+                for i in range(data.size()):
+                    data.set_location(i, random.choice(self.location_list))
+            else:
+                graph.randomize_locations(
+                    self.location_randomness, self.location_list, verbose=False
+                )
 
         if self.change_priority:
-            new_priority_seed = current_priority_seed + self.resets
+            new_priority_seed = int(current_priority_seed + self.resets)
         else:
-            new_priority_seed = current_priority_seed
+            new_priority_seed = int(current_priority_seed)
 
         if self.change_duration:
-            new_duration_seed = current_duration_seed + self.resets
+            new_duration_seed = int(current_duration_seed + self.resets)
         else:
-            new_duration_seed = current_duration_seed
-
-        new_priority_seed = int(new_priority_seed)
-        new_duration_seed = int(new_duration_seed)
+            new_duration_seed = int(current_duration_seed)
 
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
 
-        self.makespan = self._get_baseline(use_eft=True)
-        self.EFT_baseline = self.makespan
-
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-            f"Unexpected simulator status: {simulator_status}"
-        )
+        assert (
+            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+        ), f"Unexpected simulator status: {simulator_status}"
 
         obs = self._get_observation()
         return obs
@@ -312,22 +253,422 @@ class RuntimeEnv(EnvBase):
         torch.manual_seed(seed)
         np.random.seed(seed)
         random.seed(seed)
-        self.simulator_factory.set_seed(priority_seed=seed)
+        if self.change_priority:
+            self.simulator_factory.set_seed(priority_seed=seed)
+        if self.change_duration:
+            self.simulator_factory.set_seed(duration_seed=seed)
+        if self.change_locations:
+            self.location_seed = seed
 
 
-def make_simple_env_from_legacy(tasks, data):
-    s = uniform_connected_devices(5, 1000000000, 1, 2000)
-    d = DataBlocks.create_from_legacy_data(data, s)
-    m = Graph.create_from_legacy_graph(tasks, data)
-    m.finalize_tasks()
-    spec = create_graph_spec()
-    input = SimulatorInput(m, d, s)
-    env = RuntimeEnv(
-        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
-    )
-    env = TransformedEnv(env, StepCounter())
-    env = TransformedEnv(env, TrajCounter())
-    return env
+class EFTIncrementalEnv(RuntimeEnv):
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+
+        sim_eft = self.simulator.copy()
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        sim_ml = self.simulator.copy()
+        sim_eft.disable_external_mapper()
+        sim_ml.disable_external_mapper()
+        sim_eft.run()
+        sim_ml.run()
+        eft_time = sim_eft.time
+        ml_time = sim_ml.time
+        reward[0] = (eft_time - ml_time) / self.EFT_baseline
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"].item()
+        if done:
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
+
+        out = obs
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
+class TerminalEnv(RuntimeEnv):
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        reward[0] = 0
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"].item()
+        if done:
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            reward[0] = obs["observation"]["aux"]["improvement"][0]
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
+
+        out = obs
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
+class kHopEFTIncrementalEnv(RuntimeEnv):
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+        dependents = torch.zeros(16, dtype=torch.int64)
+
+        sim_eft = self.simulator.copy()
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        sim_ml = self.simulator.copy()
+        sim_eft.disable_external_mapper()
+        sim_ml.disable_external_mapper()
+        dep_count = self.graph_extractor.get_k_hop_dependents(
+            candidate_workspace, 2, dependents
+        )
+        for i in range(dep_count):
+            sim_eft.set_task_breakpoint(fastsim.EventType.COMPLETER, dependents[i])
+            sim_ml.set_task_breakpoint(fastsim.EventType.COMPLETER, dependents[i])
+        for i in range(dep_count):
+            sim_eft.run()
+            sim_ml.run()
+        eft_time = sim_eft.time - self.simulator.time
+        ml_time = sim_ml.time - self.simulator.time
+        reward[0] = (eft_time - ml_time) / self.EFT_baseline
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"].item()
+        if done:
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
+
+        out = obs
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
+class EFTAllPossibleEnv(RuntimeEnv):
+    """
+    For each action, explore all the other actions using EFT and +1 if it was the best, 0 if it was the same, -1 if it was worse.
+    """
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.prev_makespan = self.EFT_baseline
+            self.action_candidates = range(
+                int(self.only_gpu), self.simulator_factory.graph_spec.max_devices
+            )
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        min_time = 999990000
+        for i in self.action_candidates:
+            if i == chosen_device:
+                continue
+            simulator_copy = self.simulator.copy()
+            simulator_copy.simulator.map_tasks(
+                [fastsim.Action(0, i, mapping_priority, mapping_priority)]
+            )
+            simulator_copy.disable_external_mapper()
+            simulator_copy.run()
+            if simulator_copy.time < min_time:
+                min_time = simulator_copy.time
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+        simulator_copy = self.simulator.copy()
+        simulator_copy.disable_external_mapper()
+        simulator_copy.run()
+        delta = ((simulator_copy.time - min_time) // 1000) * 1000
+        if delta > 0:
+            reward[0] = -1
+        elif delta < 0:
+            reward[0] = 1
+        else:
+            reward[0] = 0
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"].item()
+        if done:
+            improvement = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = improvement
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
+
+        out = obs
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
+class RolloutEnv(RuntimeEnv):
+    def set_policy(self, policy):
+        self.policy = policy
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        simulator_copy = self.simulator.copy()
+        simulator_copy.disable_external_mapper()
+        simulator_copy.run()
+        eft_time = simulator_copy.time
+        with torch.no_grad():
+            simulator_copy = self.simulator.copy()
+            state_copy = simulator_copy.run_until_external_mapping()
+            copy_workspace = torch.zeros(
+                self.simulator_factory.graph_spec.max_candidates,
+                dtype=torch.int64,
+            )
+            copy_obs = TensorDict(
+                observation=simulator_copy.observer.new_observation_buffer(
+                    simulator_copy.observer.graph_spec
+                )
+            )
+            while state_copy != fastsim.ExecutionState.COMPLETE:
+                simulator_copy.observer.get_observation(copy_obs["observation"])
+                action_logits = self.policy(copy_obs)["logits"]
+                copy_action = torch.argmax(action_logits, dim=-1).item()
+                if self.only_gpu:
+                    copy_action = copy_action + 1
+                simulator_copy.get_mappable_candidates(copy_workspace)
+                copy_task_id = copy_workspace[0].item()
+                copy_priority = simulator_copy.get_mapping_priority(copy_task_id)
+                copy_actions = [
+                    fastsim.Action(
+                        0,
+                        copy_action,
+                        copy_priority,
+                        copy_priority,
+                    )
+                ]
+                simulator_copy.simulator.map_tasks(copy_actions)
+                state_copy = simulator_copy.run_until_external_mapping()
+        if simulator_copy.time - eft_time >= 1000:
+            reward[0] = -1
+        elif simulator_copy.time - eft_time <= -1000:
+            reward[0] = 1
+        else:
+            reward[0] = 0
+        eft_time = simulator_copy.time
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"].item()
+        if done:
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
+
+        out = obs
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
+class kHopRolloutEnv(RuntimeEnv):
+    def set_policy(self, policy):
+        self.policy = policy
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+        dependents = torch.zeros(50, dtype=torch.int64)
+
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        dep_count = self.graph_extractor.get_k_hop_dependents(
+            candidate_workspace, 2, dependents
+        )
+        simulator_copy = self.simulator.copy()
+        for i in range(dep_count):
+            simulator_copy.set_task_breakpoint(
+                fastsim.EventType.LAUNCHER, dependents[i]
+            )
+        simulator_copy.disable_external_mapper()
+        for i in range(dep_count):
+            temp = simulator_copy.run()
+            if temp == fastsim.ExecutionState.COMPLETE:
+                break
+        eft_time = simulator_copy.time
+        with torch.no_grad():
+            simulator_copy = self.simulator.copy()
+            for i in range(dep_count):
+                simulator_copy.set_task_breakpoint(
+                    fastsim.EventType.LAUNCHER, dependents[i]
+                )
+            state_copy = simulator_copy.run_until_external_mapping()
+            copy_workspace = torch.zeros(
+                self.simulator_factory.graph_spec.max_candidates,
+                dtype=torch.int64,
+            )
+            finished = 0
+            copy_obs = TensorDict(observation=simulator_copy.observer.get_observation())
+            while state_copy != fastsim.ExecutionState.COMPLETE:
+                # print(state_copy)
+                if state_copy == fastsim.ExecutionState.BREAKPOINT:
+                    finished += 1
+                    if finished >= dep_count:
+                        break
+                    state_copy = simulator_copy.run_until_external_mapping()
+                    continue
+                elif state_copy == fastsim.ExecutionState.EXTERNAL_MAPPING:
+                    simulator_copy.observer.get_observation(copy_obs["observation"])
+                    action_logits = self.policy(copy_obs)["logits"]
+                    copy_action = torch.argmax(action_logits, dim=-1).item()
+                    if self.only_gpu:
+                        copy_action = copy_action + 1
+                    simulator_copy.get_mappable_candidates(copy_workspace)
+                    copy_task_id = copy_workspace[0].item()
+                    copy_priority = simulator_copy.get_mapping_priority(copy_task_id)
+                    copy_actions = [
+                        fastsim.Action(
+                            0,
+                            copy_action,
+                            copy_priority,
+                            copy_priority,
+                        )
+                    ]
+                    simulator_copy.simulator.map_tasks(copy_actions)
+                    state_copy = simulator_copy.run_until_external_mapping()
+                else:
+                    print(f"Unexpected simulator status: {state_copy}")
+                    assert False, f"Unexpected simulator status: {state_copy}"
+
+        if simulator_copy.time - eft_time >= 1000:
+            reward[0] = -1
+        elif simulator_copy.time - eft_time <= -1000:
+            reward[0] = 1
+        else:
+            reward[0] = 0
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"].item()
+        if done:
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
+
+        out = obs
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
 
 
 class MapperRuntimeEnv(RuntimeEnv):
@@ -400,6 +741,21 @@ class MapperRuntimeEnv(RuntimeEnv):
         return seed
 
 
+def make_simple_env_from_legacy(tasks, data):
+    s = uniform_connected_devices(5, 1000000000, 1, 2000)
+    d = DataBlocks.create_from_legacy_data(data, s)
+    m = Graph.create_from_legacy_graph(tasks, data)
+    m.finalize_tasks()
+    spec = create_graph_spec()
+    input = SimulatorInput(m, d, s)
+    env = RuntimeEnv(
+        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+    )
+    env = TransformedEnv(env, StepCounter())
+    env = TransformedEnv(env, TrajCounter())
+    return env
+
+
 def make_simple_env(graph: ComputeDataGraph):
     s = uniform_connected_devices(5, 1000000000, 1, 2000)
     d = graph.get_blocks()
@@ -417,7 +773,6 @@ def make_simple_env(graph: ComputeDataGraph):
     env = TransformedEnv(env, TrajCounter())
 
     return env
-
 
 class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
     def __init__(
@@ -1016,3 +1371,4 @@ class IncrementalMappingEnv(EnvBase):
             self.simulator_factory.set_seed(priority_seed=seed)
         if self.change_duration:
             self.simulator_factory.set_seed(duration_seed=seed)
+
