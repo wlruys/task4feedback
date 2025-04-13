@@ -591,6 +591,7 @@ class OldTaskAssignmentNet(nn.Module):
         self.actor_head = OutputHead(
             gat_output_dim, layer_config.hidden_channels, n_devices - 1
         )
+        print(f"actor output dim: {n_devices - 1}")
 
     def forward(self, data: HeteroData | Batch, counts=None):
         # if next(self.parameters()).is_cuda:
