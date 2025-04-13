@@ -513,10 +513,10 @@ def run_ppo_torchrl(
             env.set_policy(model[0])
             return env
 
-        _make_env = rollout_env()
+        _make_env = rollout_env
     else:
-        _make_env = make_env()
-        
+        _make_env = make_env
+
     collector = MultiSyncDataCollector(
         [_make_env for _ in range(config.workers)],
         td_module_action,
@@ -730,6 +730,7 @@ def run_ppo_torchrl(
 
     collector.shutdown()
     wandb.finish()
+
 
 @dataclass
 class RNNPPOConfig:
