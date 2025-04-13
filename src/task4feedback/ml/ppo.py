@@ -497,7 +497,7 @@ def run_ppo_torchrl(
         gamma=config.gae_gamma,
         lmbda=config.gae_lmbda,
         value_network=model[1],
-        average_gae=config.normalize_advantage,
+        average_gae=False,
         device=config.train_device,
     )
 
@@ -510,6 +510,7 @@ def run_ppo_torchrl(
         critic_coef=config.val_coef,
         loss_critic_type=config.value_norm,
         clip_value=config.clip_vloss,
+        normalize_advantage=config.normalize_advantage,
     )
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
