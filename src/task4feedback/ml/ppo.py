@@ -89,6 +89,7 @@ def evaluate_policy(
     episode_rewards = []
     completion_times = []
     episode_returns = []
+    std_rewards = []
 
     for i in range(num_episodes):
         env = eval_env_fn()
@@ -99,12 +100,9 @@ def evaluate_policy(
             )
 
         if "next" in tensordict and "reward" in tensordict["next"]:
-            non_zero_rewards = tensordict["next", "reward"]
-            # Filter out non-zero rewards
-            mask = non_zero_rewards > 0
-            filtered_rewards = non_zero_rewards[mask]
-            avg_non_zero_reward = filtered_rewards.mean().item()
-            std_rewards = filtered_rewards.std().item()
+            rewards = tensordict["next", "reward"]
+            avg_reward = rewards.mean().item()
+            std_reward = rewards.std().item()
             returns = tensordict["next", "reward"].sum().item()
         else:
             returns = 0.0
@@ -112,7 +110,8 @@ def evaluate_policy(
             std_rewards = 0.0
 
         episode_returns.append(returns)
-        episode_rewards.append(avg_non_zero_reward)
+        episode_rewards.append(avg_reward)
+        std_rewards.append(std_reward)
 
         # Extract completion time if available
         if hasattr(env, "simulator") and hasattr(env.simulator, "time"):
@@ -155,11 +154,13 @@ def evaluate_policy(
     # Create metrics dictionary
     metrics = {
         "eval/mean_return": sum(episode_rewards) / max(len(episode_rewards), 1),
-        "eval/std_return": np.std(episode_rewards) if len(episode_rewards) > 1 else 0,
-        "eval/mean_nonzero_reward": sum(episode_rewards) / max(len(episode_rewards), 1),
-        "eval/std_nonzero_reward": np.std(episode_rewards)
-        if len(episode_rewards) > 1
-        else 0,
+        # "eval/std_return": np.std(episode_rewards) if len(episode_rewards) > 1 else 0,
+        "eval/mean_reward": sum(episode_rewards) / max(len(episode_rewards), 1),
+        # "eval/std_mean_reward": np.std(episode_rewards)
+        # if len(episode_rewards) > 1
+        # else 0,
+        # "eval/std_std_reward": np.std(std_rewards) if len(std_rewards) > 1 else 0,
+        "eval/mean_std_reward": sum(std_rewards) / max(len(std_rewards), 1),
     }
 
     # Add completion time metrics if available
@@ -167,8 +168,8 @@ def evaluate_policy(
         metrics["eval/mean_completion_time"] = sum(completion_times) / len(
             completion_times
         )
-        metrics["eval/min_completion_time"] = min(completion_times)
-        metrics["eval/max_completion_time"] = max(completion_times)
+        # metrics["eval/min_completion_time"] = min(completion_times)
+        # metrics["eval/max_completion_time"] = max(completion_times)
 
     return metrics
 

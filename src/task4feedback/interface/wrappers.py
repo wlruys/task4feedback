@@ -1502,8 +1502,8 @@ def create_graph_spec(
     max_tasks: int = 100,
     max_data: int = 100,
     max_devices: int = 5,
-    max_edges_tasks_tasks: int = 100,
-    max_edges_tasks_data: int = 200,
+    max_edges_tasks_tasks: int = 2,
+    max_edges_tasks_data: int = 2,
     max_candidates: int = 1,
 ):
     """
