@@ -1539,7 +1539,7 @@ def create_graph_spec(
     spec.max_candidates = max_candidates
 
     # This should be max_candidates, but reverting to max_tasks to implement original NN architecture
-    spec.max_edges_tasks_devices = max_devices * max_candidates + 1
+    spec.max_edges_tasks_devices = max_devices * max_tasks
     # spec.max_edges_tasks_devices = max_devices
     return spec
 
