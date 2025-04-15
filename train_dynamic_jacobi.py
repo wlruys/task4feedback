@@ -435,7 +435,7 @@ if __name__ == "__main__":
             "latency": 0,
         },
         "feature_config": {
-            "observer_factory": "XYObserverFactory",
+            "observer_factory": "XYMinimalObserverFactory",
         },
         "layer_config": {
             "hidden_channels": 64,
@@ -459,7 +459,7 @@ if __name__ == "__main__":
             "seed": 1000,
         },
         "model_config": {
-            "model_architecture": "OldSeparateNet",
+            "model_architecture": "OldOldSeparateNet",
         },
         "wandb_config": {
             "project": "test",
