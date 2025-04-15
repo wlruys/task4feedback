@@ -104,7 +104,9 @@ class HeteroDataWrapper(nn.Module):
         data, task_count, data_count = self._convert_to_heterodata(
             obs, is_batch, actions=actions
         )
-        data = data.to(self.device)
+        data = data.to(self.device, non_blocking=True)
+        data_count = data_count.to(self.device, non_blocking=True)
+        task_count = task_count.to(self.device, non_blocking=True)
         out = self.network(data, (task_count, data_count))
         return out
 
