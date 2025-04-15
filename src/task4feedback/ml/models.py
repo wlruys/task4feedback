@@ -213,6 +213,167 @@ class LayerConfig:
     output_dim: Optional[int] = None
 
 
+class OldHeteroGAT1Layer(nn.Module):
+    def __init__(self, feature_config: FeatureDimConfig, layer_config: LayerConfig):
+        super(OldHeteroGAT1Layer, self).__init__()
+
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.gnn_tasks_data = GATConv(
+            (feature_config.data_feature_dim, feature_config.task_feature_dim),
+            layer_config.hidden_channels,
+            heads=layer_config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=feature_config.task_data_edge_dim,
+            add_self_loops=False,
+        )
+
+        self.gnn_tasks_tasks = GATConv(
+            (feature_config.task_feature_dim, feature_config.task_feature_dim),
+            layer_config.hidden_channels,
+            heads=layer_config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=feature_config.task_task_edge_dim,
+            add_self_loops=False,
+        )
+
+        self.gnn_tasks_devices = GATConv(
+            (feature_config.device_feature_dim, feature_config.task_feature_dim),
+            layer_config.hidden_channels,
+            heads=layer_config.n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            edge_dim=feature_config.task_device_edge_dim,
+            add_self_loops=False,
+        )
+
+        self.layer_norm1 = nn.LayerNorm(layer_config.hidden_channels)
+        self.layer_norm2 = nn.LayerNorm(layer_config.hidden_channels)
+        self.layer_norm3 = nn.LayerNorm(layer_config.hidden_channels)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+        self.output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        )
+
+    def forward(self, data):
+        data_fused_tasks = self.gnn_tasks_data(
+            (data["data"].x, data["tasks"].x),
+            data["data", "to", "tasks"].edge_index,
+            data["data", "to", "tasks"].edge_attr,
+        )
+
+        tasks_fused_tasks = self.gnn_tasks_tasks(
+            (data["tasks"].x, data["tasks"].x),
+            data["tasks", "to", "tasks"].edge_index,
+            data["tasks", "to", "tasks"].edge_attr,
+        )
+
+        # with torch.no_grad():
+        #     mean_devices = torch.mean(data["devices"].x, dim=0, keepdim=True)
+        #     data["devices"].x = data["devices"].x / mean_devices
+
+        devices_fused_tasks = self.gnn_tasks_devices(
+            (data["devices"].x, data["tasks"].x),
+            data["devices", "to", "tasks"].edge_index,
+            data["devices", "to", "tasks"].edge_attr,
+        )
+
+        data_fused_tasks = self.layer_norm1(data_fused_tasks)
+        tasks_fused_tasks = self.layer_norm2(tasks_fused_tasks)
+        devices_fused_tasks = self.layer_norm3(devices_fused_tasks)
+
+        data_fused_tasks = self.activation(data_fused_tasks)
+        tasks_fused_tasks = self.activation(tasks_fused_tasks)
+        devices_fused_tasks = self.activation(devices_fused_tasks)
+
+        return torch.cat(
+            [data["tasks"].x, data_fused_tasks, tasks_fused_tasks, devices_fused_tasks],
+            dim=-1,
+        )
+
+
+class OldOldTaskAssignmentNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldOldTaskAssignmentNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.hetero_gat = OldHeteroGAT1Layer(feature_config, layer_config)
+        gat_output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        )
+        self.actor_head = OutputHead(
+            gat_output_dim, layer_config.hidden_channels, n_devices - 1
+        )
+        print(f"actor output dim: {n_devices - 1}")
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # if next(self.parameters()).is_cuda:
+        #     data = data.to("cuda")
+
+        task_embeddings = self.hetero_gat(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+
+        if task_batch is not None:
+            candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
+        else:
+            candidate_embedding = task_embeddings[0]
+
+        # print("candidate_embedding", candidate_embedding)
+
+        d_logits = self.actor_head(candidate_embedding)
+
+        # print(f"d_logits: {d_logits}, {d_logits.shape}")
+
+        return d_logits
+
+
+class OldOldValueNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldOldValueNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.hetero_gat = OldHeteroGAT1Layer(feature_config, layer_config)
+        gat_output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        )
+        self.critic_head = OutputHead(gat_output_dim, layer_config.hidden_channels, 1)
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        task_embeddings = self.hetero_gat(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+
+        if counts is None:
+            v = self.critic_head(task_embeddings)
+            v = global_mean_pool(v, task_batch)
+        else:
+            v = self.critic_head(task_embeddings)
+            v = global_add_pool(v, task_batch)
+            v = torch.div(v, counts)
+
+        # print(f"v: {v}, {v.shape}")
+
+        return v
+
+
 class HeteroGAT1Layer(nn.Module):
     def __init__(self, feature_config: FeatureDimConfig, layer_config: LayerConfig):
         super(HeteroGAT1Layer, self).__init__()
@@ -1453,6 +1614,38 @@ class OldActionValueNet(nn.Module):
         v = torch.div(v, counts[0])
         v = self.critic_head(v)
         return v
+
+
+class OldOldSeparateNet(nn.Module):
+    """
+    Wrapper module for separate actor and critic networks using individual HeteroGAT1Layer instances.
+
+    Unlike `OldCombinedNet`, this class assigns a distinct HeteroGAT1Layer to each of the actor and critic networks.
+
+    Args:
+        n_devices (int): The number of mappable devices. Check whether this includes the CPU.
+    """
+
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldOldSeparateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = OldOldTaskAssignmentNet(feature_config, layer_config, n_devices)
+        self.critic = OldOldValueNet(feature_config, layer_config, n_devices)
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # check the device of data["tasks"].x
+        if next(self.actor.parameters()).is_cuda:
+            data = data.to("cuda")
+        d_logits = self.actor(data, counts)
+        v = self.critic(data, counts)
+        return d_logits, v
 
 
 class OldSeparateNet(nn.Module):

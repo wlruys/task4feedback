@@ -1221,7 +1221,7 @@ class ExternalObserver:
             output["edges"]["tasks_data"]["attr"],
         )
 
-    def task_device_observation(self, output: TensorDict, use_all_tasks=False):
+    def task_device_observation(self, output: TensorDict, use_all_tasks=True):
         if not use_all_tasks:
             ncandidates = output["aux"]["candidates"]["count"][0]
             task_ids = output["aux"]["candidates"]["idx"][:ncandidates]
@@ -1512,11 +1512,11 @@ class SimulatorDriver:
 
 
 def create_graph_spec(
-    max_tasks: int = 100,
-    max_data: int = 100,
+    max_tasks: int = 30,
+    max_data: int = 30,
     max_devices: int = 5,
-    max_edges_tasks_tasks: int = 200,
-    max_edges_tasks_data: int = 200,
+    max_edges_tasks_tasks: int = 30,
+    max_edges_tasks_data: int = 30,
     max_candidates: int = 1,
 ):
     """
