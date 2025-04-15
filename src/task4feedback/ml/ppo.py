@@ -556,7 +556,7 @@ def run_ppo_torchrl(
         vectorized=False,
     )
 
-    advantage_module = compile_with_warmup(advantage_module, 1)
+    # advantage_module = compile_with_warmup(advantage_module, 1)
 
     loss_module = ClipPPOLoss(
         actor_network=model[0],
@@ -601,18 +601,19 @@ def run_ppo_torchrl(
 
         return loss_vals, loss_value, grad_norm
 
-    update = compile_with_warmup(update, 1)
+    # update = compile_with_warmup(update, 1)
 
     # Run initial evaluation
     if config.eval_interval > 0:
-        eval_metrics = evaluate_policy(
-            policy=td_module_action,
-            eval_env_fn=eval_env_fn,
-            num_episodes=config.eval_episodes,
-            step=0,
-        )
-        eval_metrics["eval/step"] = 0
-        wandb.log(eval_metrics)
+        with torch.no_grad():
+            eval_metrics = evaluate_policy(
+                policy=td_module_action,
+                eval_env_fn=eval_env_fn,
+                num_episodes=config.eval_episodes,
+                step=0,
+            )
+            eval_metrics["eval/step"] = 0
+            wandb.log(eval_metrics)
 
     for i, tensordict_data in enumerate(collector):
         if (i + 1) % 20 == 0:
@@ -627,14 +628,15 @@ def run_ppo_torchrl(
 
         # Run evaluation at specified intervals
         if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
-            eval_metrics = evaluate_policy(
-                policy=td_module_action,
-                eval_env_fn=eval_env_fn,
-                num_episodes=config.eval_episodes,
-                step=i + 1,
-            )
-            eval_metrics["eval/step"] = i + 1
-            wandb.log(eval_metrics)
+            with torch.no_grad():
+                eval_metrics = evaluate_policy(
+                    policy=td_module_action,
+                    eval_env_fn=eval_env_fn,
+                    num_episodes=config.eval_episodes,
+                    step=i + 1,
+                )
+                eval_metrics["eval/step"] = i + 1
+                wandb.log(eval_metrics)
 
         if i >= config.num_collections:
             break
@@ -672,49 +674,58 @@ def run_ppo_torchrl(
                 step = (
                     i * config.num_epochs_per_collection * n_batches + j * n_batches + k
                 )
-                wandb.log(
-                    {
-                        # **pre_clip_norms,
-                        # **post_clip_norms,
-                        "batch_loss/step": step,
-                        "batch_loss/objective": loss_vals["loss_objective"].item(),
-                        "batch_loss/critic": loss_vals["loss_critic"].item(),
-                        "batch_loss/entropy": loss_vals["loss_entropy"].item(),
-                        "batch_loss/total": loss_value.item(),
-                        "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
-                        "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),
-                        # "batch_loss/value_clip_fraction": loss_vals[
-                        #    "value_clip_fraction"
-                        # ].item(),
-                        "batch_loss/ESS": loss_vals["ESS"].item(),
-                    },
-                )
+
+                with torch.no_grad():
+                    wandb.log(
+                        {
+                            # **pre_clip_norms,
+                            # **post_clip_norms,
+                            "batch_loss/step": step,
+                            "batch_loss/objective": loss_vals["loss_objective"].item(),
+                            "batch_loss/critic": loss_vals["loss_critic"].item(),
+                            "batch_loss/entropy": loss_vals["loss_entropy"].item(),
+                            "batch_loss/total": loss_value.item(),
+                            "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
+                            "batch_loss/clip_fraction": loss_vals[
+                                "clip_fraction"
+                            ].item(),
+                            # "batch_loss/value_clip_fraction": loss_vals[
+                            #    "value_clip_fraction"
+                            # ].item(),
+                            "batch_loss/ESS": loss_vals["ESS"].item(),
+                        },
+                    )
 
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
-        wandb.log(
-            {
-                "collect_loss/step": i,
-                "collect_loss/mean_nonzero_reward": avg_non_zero_reward,
-                "collect_loss/std_nonzero_reward": std_rewards,
-                "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
-                "collect_loss/average_improvement": avg_improvement.item(),
-                "collect_loss/std_improvement": filtered_improvements.std().item(),
-                "collect_loss/std_return": tensordict_data["value_target"].std().item(),
-                "collect_loss/mean_return": tensordict_data["value_target"]
-                .mean()
-                .item(),
-                "collect_loss/loss_critic": loss_vals["loss_critic"].item(),
-                "collect_loss/loss_entropy": loss_vals["loss_entropy"].item(),
-                "collect_loss/loss_total": loss_value.item(),
-                "collect_loss/grad_norm": grad_norm,
-                "collect_loss/advantage_mean": tensordict_data["advantage"]
-                .mean()
-                .item(),
-                "collect_loss/advantage_std": tensordict_data["advantage"].std().item(),
-            },
-        )
+        with torch.no_grad():
+            wandb.log(
+                {
+                    "collect_loss/step": i,
+                    "collect_loss/mean_nonzero_reward": avg_non_zero_reward,
+                    "collect_loss/std_nonzero_reward": std_rewards,
+                    "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
+                    "collect_loss/average_improvement": avg_improvement.item(),
+                    "collect_loss/std_improvement": filtered_improvements.std().item(),
+                    "collect_loss/std_return": tensordict_data["value_target"]
+                    .std()
+                    .item(),
+                    "collect_loss/mean_return": tensordict_data["value_target"]
+                    .mean()
+                    .item(),
+                    "collect_loss/loss_critic": loss_vals["loss_critic"].item(),
+                    "collect_loss/loss_entropy": loss_vals["loss_entropy"].item(),
+                    "collect_loss/loss_total": loss_value.item(),
+                    "collect_loss/grad_norm": grad_norm,
+                    "collect_loss/advantage_mean": tensordict_data["advantage"]
+                    .mean()
+                    .item(),
+                    "collect_loss/advantage_std": tensordict_data["advantage"]
+                    .std()
+                    .item(),
+                },
+            )
 
     # Final evaluation
     if config.eval_interval > 0:
