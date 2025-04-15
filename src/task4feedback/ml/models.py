@@ -698,15 +698,15 @@ class OutputHead(nn.Module):
         self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
         self.layer_norm1 = nn.LayerNorm(hidden_dim)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.fc2 = layer_init(nn.Linear(hidden_dim, output_dim))
 
         if logits:
             # nn.init.normal_(self.fc2.weight, mean=0.0, std=0.01)
-            nn.init.uniform_(self.fc2.weight, a=-0.001, b=0.001)
+            nn.init.uniform_(self.fc2.weight, a=-0.1, b=0.1)
             nn.init.constant_(self.fc2.bias, 0.0)
-        else:
-            nn.init.xavier_uniform_(self.fc2.weight)
-            nn.init.constant_(self.fc2.bias, 0.0)
+        # else:
+        #     nn.init.xavier_uniform_(self.fc2.weight)
+        #     nn.init.constant_(self.fc2.bias, 0.0)
 
     def forward(self, x):
         x = self.fc1(x)
@@ -1372,6 +1372,8 @@ class OldTaskAssignmentNet(nn.Module):
 
         d_logits = self.actor_head(candidate_embedding)
 
+        # print(d_logits)
+
         return d_logits
 
 
@@ -1409,7 +1411,7 @@ class OldValueNet(nn.Module):
         device_features = device_features.squeeze(0)
 
         global_embedding = global_add_pool(task_embeddings, task_batch)
-        global_embedding = torch.div(global_embedding, counts_0)
+        # global_embedding = torch.div(global_embedding, counts_0)
 
         global_embedding = global_embedding.squeeze(0)
 

@@ -71,7 +71,7 @@ from task4feedback.ml.env import *
 import wandb
 from task4feedback.graphs.dynamic_jacobi import *
 
-seed = 1
+seed = 1000
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
@@ -140,8 +140,8 @@ def make_env(
     system_config,
     runtime_env_t=RuntimeEnv,
     observer_factory_t=XYDataObserverFactory,
-    change_priority=True,
-    change_locations=True,
+    change_priority=False,
+    change_locations=False,
     seed=1000,
 ):
     gmsh.initialize()
@@ -278,6 +278,8 @@ def train(wandb_config):
     model_config_info = wandb_config["model_config"]
     model_class = globals()[model_config_info["model_architecture"]]
 
+    print(f"Model class: {model_class}")
+
     model = model_class(
         feature_config=feature_config,
         layer_config=layer_config,
@@ -391,7 +393,8 @@ def train(wandb_config):
 
     # Compile model if using PyTorch 2.0+
     try:
-        model = torch.compile(model, fullgraph=True)
+        # model = torch.compile(model, fullgraph=True, mode="max-autotune")
+        model = model
         print("Using compiled model")
     except AttributeError:
         print("torch.compile not available, using uncompiled model")
@@ -410,12 +413,12 @@ if __name__ == "__main__":
     wandb_config = {
         "graph_config": {
             "graph_class": "JacobiGraph",
-            "interior_size": 10000000,
-            "boundary_interior_ratio": 0.2,
+            "interior_size": 1000,
+            "boundary_interior_ratio": 1,
             "randomness": 1,
             "L": 1,
             "n": 4,
-            "steps": 5,
+            "steps": 20,
             "start_workload": 1000,
             "lower_workload": 500,
             "upper_workload": 2000,
@@ -423,32 +426,32 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "RuntimeEnv",
+            "runtime_env": "GeneralizedIncrementalEFT",
         },
         "system_config": {
             "type": "uniform_connected_devices",
             "n_devices": 5,
-            "bandwidth": 2000,
-            "latency": 1,
+            "bandwidth": 1,
+            "latency": 0,
         },
         "feature_config": {
-            "observer_factory": "XYDataObserverFactory",
+            "observer_factory": "XYObserverFactory",
         },
         "layer_config": {
-            "hidden_channels": 32,
+            "hidden_channels": 64,
             "n_heads": 2,
         },
         "mconfig": {
-            "graphs_per_collection": 10,
+            "graphs_per_collection": 4,
             "train_device": "cpu",
-            "workers": 2,
-            "ent_coef": 0.05,
+            "workers": 4,
+            "ent_coef": 0.001,
             "gae_lmbda": 0.1,
-            "gae_gamma": 0.99,
-            "normalize_advantage": True,
+            "gae_gamma": 1,
+            "normalize_advantage": False,
             "clip_eps": 0.2,
-            "clip_vloss": True,
-            "minibatch_size": 250,
+            "clip_vloss": False,
+            "minibatch_size": 320,
         },
         "env_config": {
             "change_priority": True,
@@ -456,7 +459,7 @@ if __name__ == "__main__":
             "seed": 1000,
         },
         "model_config": {
-            "model_architecture": "DataTaskSeparateNet",
+            "model_architecture": "OldSeparateNet",
         },
         "wandb_config": {
             "project": "test",

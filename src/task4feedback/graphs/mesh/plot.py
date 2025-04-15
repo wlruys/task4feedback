@@ -491,7 +491,7 @@ def make_mesh_graph_animation(
     bitrate=None,
 ):
     if folder is None:
-        if wandb.run.dir is None:
+        if wandb is None or wandb.run is None or wandb.run.dir is None:
             folder = "."
         else:
             folder = wandb.run.dir
