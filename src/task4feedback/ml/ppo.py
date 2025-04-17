@@ -469,6 +469,11 @@ def run_ppo_torchrl(
     wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
 
+
+    print(config)
+
+    print(type(actor_critic_base))
+
     _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
     _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
 
@@ -667,9 +672,9 @@ def run_ppo_torchrl(
                         "batch_loss/total": loss_value.item(),
                         "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
                         "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),
-                        "batch_loss/value_clip_fraction": loss_vals[
-                            "value_clip_fraction"
-                        ].item(),
+                        #"batch_loss/value_clip_fraction": loss_vals[
+                        #    "value_clip_fraction"
+                        #].item(),
                         "batch_loss/ESS": loss_vals["ESS"].item(),
                     },
                 )

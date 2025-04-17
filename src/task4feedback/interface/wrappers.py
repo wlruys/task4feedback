@@ -1221,7 +1221,7 @@ class ExternalObserver:
             output["edges"]["tasks_data"]["attr"],
         )
 
-    def task_device_observation(self, output: TensorDict, use_all_tasks=False):
+    def task_device_observation(self, output: TensorDict, use_all_tasks=True):
         if not use_all_tasks:
             ncandidates = output["aux"]["candidates"]["count"][0]
             task_ids = output["aux"]["candidates"]["idx"][:ncandidates]
@@ -1512,11 +1512,11 @@ class SimulatorDriver:
 
 
 def create_graph_spec(
-    max_tasks: int = 100,
+    max_tasks: int = 30,
     max_data: int = 100,
     max_devices: int = 5,
-    max_edges_tasks_tasks: int = 2,
-    max_edges_tasks_data: int = 2,
+    max_edges_tasks_tasks: int = 150,
+    max_edges_tasks_data: int = 150,
     max_candidates: int = 1,
 ):
     """
@@ -1534,12 +1534,12 @@ def create_graph_spec(
     spec.max_tasks = max_tasks
     spec.max_data = max_data
     spec.max_devices = max_devices
-    spec.max_edges_tasks_tasks = max_edges_tasks_tasks
-    spec.max_edges_tasks_data = max_edges_tasks_data
+    spec.max_edges_tasks_tasks = max_edges_tasks_tasks + 1
+    spec.max_edges_tasks_data = max_edges_tasks_data + 1
     spec.max_candidates = max_candidates
 
     # This should be max_candidates, but reverting to max_tasks to implement original NN architecture
-    spec.max_edges_tasks_devices = max_devices * max_candidates + 1
+    spec.max_edges_tasks_devices = max_devices * max_tasks + 1
     # spec.max_edges_tasks_devices = max_devices
     return spec
 

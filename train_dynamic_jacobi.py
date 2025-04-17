@@ -78,7 +78,7 @@ torch.manual_seed(seed)
 torch.backends.cudnn.deterministic = True
 
 
-def build_jacobi_graph(config: JacobiConfig, metis_init=False, nparts=4) -> JacobiGraph:
+def build_jacobi_graph(config: JacobiConfig, metis_init=True, nparts=4) -> JacobiGraph:
     mesh = generate_quad_mesh(L=config.L, n=config.n)
     geom = build_geometry(mesh)
 
@@ -141,7 +141,7 @@ def make_env(
     runtime_env_t=RuntimeEnv,
     observer_factory_t=XYDataObserverFactory,
     change_priority=True,
-    change_locations=True,
+    change_locations=False,
     seed=1000,
 ):
     gmsh.initialize()
@@ -155,6 +155,8 @@ def make_env(
     d = jgraph.get_blocks()
     m = jgraph
     m.finalize_tasks()
+
+    print(runtime_env_t)
 
     spec = create_graph_spec()
     input = SimulatorInput(
@@ -292,17 +294,17 @@ def train(wandb_config):
     train_config = PPOConfig(
         train_device=mconfig.get("train_device", "cpu"),
         workers=mconfig.get("workers", 1),
-        ent_coef=mconfig.get("ent_coef", 0.05),
-        gae_lmbda=mconfig.get("gae_lmbda", 1),
-        gae_gamma=mconfig.get("gae_gamma", 0.99),
-        normalize_advantage=mconfig.get("normalize_advantage", True),
+        ent_coef=mconfig.get("ent_coef", 0.001),
+        gae_lmbda=mconfig.get("gae_lmbda", 0.1),
+        gae_gamma=mconfig.get("gae_gamma", 1),
+        normalize_advantage=mconfig.get("normalize_advantage", False),
         clip_eps=mconfig.get("clip_eps", 0.2),
-        clip_vloss=mconfig.get("clip_vloss", True),
-        minibatch_size=mconfig.get("minibatch_size", 250),
+        clip_vloss=mconfig.get("clip_vloss", False),
+        minibatch_size=mconfig.get("minibatch_size", 320),
         eval_interval=mconfig.get("eval_interval", 50),
         eval_episodes=mconfig.get("eval_episodes", 1),
-        states_per_collection=n_tasks * mconfig.get("graphs_per_collection", 10),
-        max_grad_norm=mconfig.get("max_grad_norm", 10),
+        states_per_collection=n_tasks * mconfig.get("graphs_per_collection", 4),
+        max_grad_norm=mconfig.get("max_grad_norm", 0.5),
     )
 
     # Define environment creation function for PPO
@@ -311,6 +313,7 @@ def train(wandb_config):
             graph_function,
             graph_config,
             system_config,
+            runtime_env_t=runtime_env_type,
             observer_factory_t=observer_factory_type,
             change_priority=env_config["change_priority"],
             change_locations=env_config["change_locations"],
@@ -323,6 +326,7 @@ def train(wandb_config):
             graph_function,
             graph_config,
             system_config,
+            runtime_env_t=runtime_env_type,
             observer_factory_t=observer_factory_type,
             change_priority=False,
             change_locations=False,
@@ -340,6 +344,7 @@ def train(wandb_config):
 
     # Group system parameters
     wandb_params["system"] = system_config
+    wandb_params["runtime"] = str(type(runtime_env_type))
 
     # Group model parameters
     wandb_params["model"] = {
@@ -410,12 +415,12 @@ if __name__ == "__main__":
     wandb_config = {
         "graph_config": {
             "graph_class": "JacobiGraph",
-            "interior_size": 10000000,
-            "boundary_interior_ratio": 0.2,
+            "interior_size": 2000000,
+            "boundary_interior_ratio": 1,
             "randomness": 1,
             "L": 1,
             "n": 4,
-            "steps": 5,
+            "steps": 20,
             "start_workload": 1000,
             "lower_workload": 500,
             "upper_workload": 2000,
@@ -423,7 +428,7 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "RuntimeEnv",
+            "runtime_env": "EFTIncrementalEnv",
         },
         "system_config": {
             "type": "uniform_connected_devices",
@@ -432,35 +437,35 @@ if __name__ == "__main__":
             "latency": 1,
         },
         "feature_config": {
-            "observer_factory": "XYDataObserverFactory",
+            "observer_factory": "OnlyXYObserverFactory",
         },
         "layer_config": {
-            "hidden_channels": 32,
+            "hidden_channels": 64,
             "n_heads": 2,
         },
         "mconfig": {
-            "graphs_per_collection": 10,
+            "graphs_per_collection": 4,
             "train_device": "cpu",
-            "workers": 2,
-            "ent_coef": 0.05,
+            "workers": 4,
+            "ent_coef": 0.001,
             "gae_lmbda": 0.1,
-            "gae_gamma": 0.99,
-            "normalize_advantage": True,
+            "gae_gamma": 1,
+            "normalize_advantage": False,
             "clip_eps": 0.2,
-            "clip_vloss": True,
-            "minibatch_size": 250,
+            "clip_vloss": False,
+            "minibatch_size": 320,
         },
         "env_config": {
             "change_priority": True,
-            "change_locations": True,
+            "change_locations": False,
             "seed": 1000,
         },
         "model_config": {
-            "model_architecture": "DataTaskSeparateNet",
+            "model_architecture": "OldSeparateNetwDevice",
         },
         "wandb_config": {
-            "project": "test",
-            "name": "test",
+            "project": "StaticJacobi",
+            "name": "RevertedBranch_SmallData_IncrementalEFT",
         },
     }
 
