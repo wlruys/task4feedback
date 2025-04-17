@@ -716,6 +716,23 @@ class OutputHead(nn.Module):
         return x
 
 
+class OldOutputHead(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, logits):
+        super(OldOutputHead, self).__init__()
+
+        self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
+        self.layer_norm1 = nn.LayerNorm(hidden_dim)
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+        self.fc2 = layer_init(nn.Linear(hidden_dim, output_dim))
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.layer_norm1(x)
+        x = self.activation(x)
+        x = self.fc2(x)
+        return x
+
+
 class CombineTwoLayer(nn.Module):
     def __init__(self, x_shape, y_shape, hidden_shape, output_shape):
         super(CombineTwoLayer, self).__init__()
@@ -1473,6 +1490,110 @@ class OldSeparateNet(nn.Module):
 
         self.actor = OldTaskAssignmentNet(feature_config, layer_config, n_devices)
         self.critic = OldValueNet(feature_config, layer_config, n_devices)
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # check the device of data["tasks"].x
+        if next(self.actor.parameters()).is_cuda:
+            data = data.to("cuda")
+        d_logits = self.actor(data, counts)
+        v = self.critic(data, counts)
+        return d_logits, v
+
+
+class OldTaskAssignmentNetwDevice(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldTaskAssignmentNetwDevice, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
+        gat_output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        )
+        self.actor_head = OldOutputHead(
+            gat_output_dim, layer_config.hidden_channels, n_devices - 1, False
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        if next(self.parameters()).is_cuda:
+            data = data.to("cuda")
+
+        task_embeddings = self.hetero_gat(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+
+        if task_batch is not None:
+            candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
+        else:
+            candidate_embedding = task_embeddings[0]
+
+        d_logits = self.actor_head(candidate_embedding)
+
+        return d_logits
+
+
+class OldValueNetwDevice(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldValueNetwDevice, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
+        gat_output_dim = (
+            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        )
+        self.critic_head = OldOutputHead(
+            gat_output_dim, layer_config.hidden_channels, 1, logits=False
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        task_embeddings = self.hetero_gat(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+        counts = None
+        if counts is None:
+            v = self.critic_head(task_embeddings)
+            v = global_mean_pool(v, task_batch)
+        else:
+            v = self.critic_head(task_embeddings)
+            v = global_add_pool(v, task_batch)
+            v = torch.div(v, torch.clamp(counts[0], min=1))
+
+        return v
+
+
+class OldSeparateNetwDevice(nn.Module):
+    """
+    Wrapper module for separate actor and critic networks using individual HeteroGAT1Layer instances.
+
+    Unlike `OldCombinedNet`, this class assigns a distinct HeteroGAT1Layer to each of the actor and critic networks.
+
+    Args:
+        n_devices (int): The number of mappable devices. Check whether this includes the CPU.
+    """
+
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(OldSeparateNetwDevice, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = OldTaskAssignmentNetwDevice(
+            feature_config, layer_config, n_devices
+        )
+        self.critic = OldValueNetwDevice(feature_config, layer_config, n_devices)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         # check the device of data["tasks"].x

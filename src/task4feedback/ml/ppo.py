@@ -519,7 +519,7 @@ def run_ppo_torchrl(
 
     collector = MultiSyncDataCollector(
         [_make_env for _ in range(config.workers)],
-        td_module_action,
+        model[0],
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
         cat_results=0,
@@ -563,7 +563,7 @@ def run_ppo_torchrl(
     # Run initial evaluation
     if config.eval_interval > 0:
         eval_metrics = evaluate_policy(
-            policy=td_module_action,
+            policy=model[0],
             eval_env_fn=eval_env_fn,
             num_episodes=config.eval_episodes,
             step=0,
@@ -585,7 +585,7 @@ def run_ppo_torchrl(
         # Run evaluation at specified intervals
         if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
             eval_metrics = evaluate_policy(
-                policy=td_module_action,
+                policy=model[0],
                 eval_env_fn=eval_env_fn,
                 num_episodes=config.eval_episodes,
                 step=i + 1,
@@ -730,217 +730,3 @@ def run_ppo_torchrl(
 
     collector.shutdown()
     wandb.finish()
-
-
-@dataclass
-class RNNPPOConfig:
-    states_per_collection: int = 1920
-    minibatch_size: int = 250
-    num_epochs_per_collection: int = 4
-    num_collections: int = 1000
-    workers: int = 1
-    seed: int = 0
-    lr: float = 2.5e-4
-    clip_eps: float = 0.2
-    ent_coef: float = 0.001
-    val_coef: float = 0.5
-    max_grad_norm: float = 0.5
-    train_device: str = "cpu"
-    gae_gamma: float = 1
-    gae_lmbda: float = 0.1
-    rnn_model: str = "LSTM"  # "LSTM" or "GRU"
-    hidden_size: int = 128
-
-
-def run_rnn_ppo_torchrl(
-    feature_config: FeatureDimConfig,
-    layer_config: LayerConfig,
-    n_devices,
-    make_env,
-    config: RNNPPOConfig,
-    model_name: str = "model",
-):
-
-    env = make_env()
-    if config.rnn_model == "LSTM":
-        RNNModule = LSTMModule
-    elif config.rnn_model == "GRU":
-        RNNModule = GRUModule
-    else:
-        raise ValueError(f"Invalid RNN model: {config.rnn_model}")
-    # Actor modules ...
-    module_action_gat = TensorDictModule(
-        ActorWrapper(
-            HeteroGAT1Layer(feature_config, layer_config), device=config.train_device
-        ),
-        in_keys=["observation"],
-        out_keys=["embed"],
-    )
-    module_action_lstm = RNNModule(
-        input_size=module_action_gat(env.reset())["embed"].shape[-1],
-        hidden_size=config.hidden_size,
-        device=config.train_device,
-        in_key="embed",
-        out_key="embed",
-    )
-    module_action_fc = TensorDictModule(
-        OutputHead(config.hidden_size, layer_config.hidden_channels, n_devices),
-        in_keys=["embed"],
-        out_keys=["logits"],
-    )
-    td_module_action = ProbabilisticActor(
-        module=Sequential(module_action_gat, module_action_lstm, module_action_fc),
-        in_keys=["logits"],
-        out_keys=["action"],
-        distribution_class=torch.distributions.Categorical,
-        cache_dist=False,
-        return_log_prob=True,
-    )
-
-    module_critic_gat = TensorDictModule(
-        CriticEmbedWrapper(
-            HeteroGAT1Layer(feature_config, layer_config), device=config.train_device
-        ),
-        in_keys=["observation"],
-        out_keys=["embed"],
-    )
-    module_critic_lstm = RNNModule(
-        input_size=module_critic_gat(env.reset())["embed"].shape[-1],
-        hidden_size=config.hidden_size,
-        device=config.train_device,
-        in_key="embed",
-        out_key="embed",
-    )
-    module_critic_fc = TensorDictModule(
-        CriticHeadWrapper(
-            OutputHead(config.hidden_size, layer_config.hidden_channels, 1),
-            device=config.train_device,
-        ),
-        in_keys=["embed"],
-        out_keys=["state_value"],
-    )
-
-    def transformed_env():
-        env = make_env()
-        env = TransformedEnv(env, Compose(StepCounter(), TrajCounter(), InitTracker()))
-        env.append_transform(module_critic_lstm.make_tensordict_primer())
-        return env
-
-    td_critic_module = Sequential(
-        module_critic_gat, module_critic_lstm, module_critic_fc
-    )
-
-    td_module_action = td_module_action.to(config.train_device)
-    td_critic_module = td_critic_module.to(config.train_device)
-
-    train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
-    train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
-    model = torch.nn.ModuleList([train_actor_network, train_critic_network])
-
-    collector = MultiSyncDataCollector(
-        [transformed_env for _ in range(config.workers)],
-        td_module_action,
-        frames_per_batch=config.states_per_collection,
-        total_frames=config.states_per_collection * config.num_collections,
-        split_trajs=True,
-        reset_at_each_iter=True,
-        # cat_results=0,
-        device=config.train_device,
-        env_device="cpu",
-    )
-    out_seed = collector.set_seed(config.seed)
-    print(f"Seed: {out_seed}")
-
-    replay_buffer = ReplayBuffer(
-        storage=LazyTensorStorage(
-            max_size=config.states_per_collection, device=config.train_device
-        ),
-        sampler=SamplerWithoutReplacement(),
-        pin_memory=torch.cuda.is_available(),
-    )
-
-    loss_module = ClipPPOLoss(
-        actor_network=model[0],
-        critic_network=model[1],
-        clip_epsilon=config.clip_eps,
-        entropy_bonus=bool(config.ent_coef),
-        entropy_coef=config.ent_coef,
-        critic_coef=config.val_coef,
-        loss_critic_type="l2",
-    )
-    optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
-
-    for i, tensordict_data in enumerate(collector):
-        if (i + 1) % 50 == 0:
-            if wandb.run.dir is None:
-                path = "."
-            else:
-                path = wandb.run.dir
-            torch.save(
-                model.state_dict(),
-                os.path.join(wandb.run.dir, model_name + f"_{i + 1}.pth"),
-            )
-        if i >= config.num_collections:
-            break
-        print(f"Collection: {i}")
-        tensordict_data = tensordict_data.to(config.train_device, non_blocking=True)
-
-        with torch.no_grad():
-            tensordict_data = tensordict_data.reshape(-1)
-            compute_gae(
-                tensordict_data,
-                model[1],
-                gamma=config.gae_gamma,
-                lam=config.gae_lmbda,
-            )
-
-        non_zero_rewards = tensordict_data["next", "reward"]
-        improvements = tensordict_data["next", "observation", "aux", "improvement"]
-        mask = improvements > -1.5
-        filtered_improvements = improvements[mask]
-        if filtered_improvements.numel() > 0:
-            avg_improvement = filtered_improvements.mean()
-        if len(non_zero_rewards) > 0:
-            avg_non_zero_reward = non_zero_rewards.mean().item()
-            print(
-                f"Average reward: {avg_non_zero_reward}, "
-                f"Average Improvement: {avg_improvement}"
-            )
-
-        replay_buffer.extend(tensordict_data)
-
-        for j in range(config.num_epochs_per_collection):
-            n_batches = config.states_per_collection // config.minibatch_size
-            for k in range(n_batches):
-                subdata = replay_buffer.sample(config.minibatch_size)
-                subdata.to(config.train_device)
-
-                loss_vals = loss_module(subdata)
-                loss_value = (
-                    loss_vals["loss_objective"]
-                    + loss_vals["loss_critic"]
-                    + loss_vals["loss_entropy"]
-                )
-                optimizer.zero_grad()
-                loss_value.backward()
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    loss_module.parameters(), max_norm=config.max_grad_norm
-                )
-                optimizer.step()
-
-        collector.policy.load_state_dict(loss_module.actor_network.state_dict())
-        collector.update_policy_weights_(TensorDict.from_module(collector.policy))
-
-        wandb.log(
-            {
-                "Average Return": avg_non_zero_reward,
-                "Average Improvement": avg_improvement,
-                "loss_objective": loss_vals["loss_objective"].item(),
-                "loss_critic": loss_vals["loss_critic"].item(),
-                "loss_entropy": loss_vals["loss_entropy"].item(),
-                "loss_total": loss_value.item(),
-                "grad_norm": grad_norm,
-            }
-        )
-
-    collector.shutdown()
