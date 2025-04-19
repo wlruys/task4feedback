@@ -308,6 +308,8 @@ def run_ppo_cleanrl(
         storage=LazyTensorStorage(max_size=config.states_per_collection),
         sampler=SamplerWithoutReplacement(),
         pin_memory=torch.cuda.is_available(),
+        batch_size=config.minibatch_size,
+        prefetch=4,
     )
 
     actor_critic_base = torch.compile(actor_critic_base)
@@ -351,7 +353,7 @@ def run_ppo_cleanrl(
 
     optimizer = torch.optim.Adam(actor_critic_t.parameters(), lr=config.lr)
 
-    def update_fn(batch):
+    def update_fn(batch, actor_critic_t, optimizer):
         batch = batch.to(config.update_device, non_blocking=True)
 
         sample_logprob = batch["record_log_prob"].detach().view(-1)
@@ -360,7 +362,7 @@ def run_ppo_cleanrl(
         sample_returns = batch["value_target"].detach().view(-1)
         sample_action = batch["action"].detach().view(-1)
 
-        eval_batch = actor_critic_t(batch)
+        eval_batch = batch
 
         new_logprob, new_entropy = logits_to_action(eval_batch["logits"], sample_action)
         new_logprob = new_logprob.view(-1)
@@ -400,7 +402,7 @@ def run_ppo_cleanrl(
         nn.utils.clip_grad_norm_(actor_critic_t.parameters(), config.max_grad_norm)
         optimizer.step()
 
-    # update_fn = torch.compile(update_fn)
+    update_fn = torch.compile(update_fn)
 
     for i, td in enumerate(collector):
         print(f"Collection: {i}")
@@ -425,7 +427,8 @@ def run_ppo_cleanrl(
                 start_t = time.perf_counter()
 
                 batch = replay_buffer.sample(config.minibatch_size)
-                update_fn(batch)
+                batch = actor_critic_t(batch)
+                update_fn(batch, actor_critic_t, optimizer)
                 end_t = time.perf_counter()
 
                 print("Batch training time:", end_t - start_t)
@@ -433,34 +436,6 @@ def run_ppo_cleanrl(
         collector.policy.load_state_dict(actor_critic_t.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
     collector.shutdown()
-
-
-def compute_gae(tensordict_data, critic, gamma=0.99, lam=0.95):
-    with torch.no_grad():
-        critic(tensordict_data)
-        critic(tensordict_data["next"])
-
-        value = tensordict_data["state_value"]
-        next_value = tensordict_data["next", "state_value"]
-        reward = tensordict_data["next", "reward"]
-        done = tensordict_data["next", "done"]
-
-        advantage = torch.zeros_like(value)
-        gae = 0.0
-        T = reward.shape[0]
-        for t in reversed(range(T)):
-            if done[t]:
-                c = 0
-            else:
-                c = 1
-            delta = reward[t] + gamma * next_value[t] * c - value[t]
-            gae = delta + gamma * lam * c * gae
-            advantage[t] = gae
-
-        value_target = advantage + value
-        tensordict_data["advantage"] = advantage
-        tensordict_data["value_target"] = value_target
-        return tensordict_data
 
 
 def run_ppo_torchrl(
@@ -484,10 +459,14 @@ def run_ppo_torchrl(
     wandb.define_metric("explore/*", step_metric="explore/step")
     wandb.define_metric("exploit/*", step_metric="exploit/step")
 
-    _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.collect_device)
-    _critic_td = HeteroDataWrapper(
-        actor_critic_base.critic, device=config.collect_device
-    )
+    actor = actor_critic_base.actor
+    critic = actor_critic_base.critic
+
+    # actor = torch.compile(actor_critic_base.actor)
+    # critic = torch.compile(actor_critic_base.critic)
+
+    _actor_td = HeteroDataWrapper(actor)
+    _critic_td = HeteroDataWrapper(critic)
 
     module_action = TensorDictModule(
         _actor_td,
@@ -509,8 +488,16 @@ def run_ppo_torchrl(
         in_keys=["observation"],
     )
 
-    td_module_action = td_module_action.to(config.update_device)
-    td_critic_module = td_critic_module.to(config.update_device)
+    actor_critic = ActorCriticWrapper(
+        policy_operator=td_module_action,
+        value_operator=td_critic_module,
+    )
+
+    td_module_action = td_module_action.to(config.collect_device)
+    td_critic_module = td_critic_module.to(config.collect_device)
+
+    train_actor_critic = copy.deepcopy(actor_critic).to(config.update_device)
+
     train_actor_network = copy.deepcopy(td_module_action).to(config.update_device)
     train_critic_network = copy.deepcopy(td_critic_module).to(config.update_device)
     model = torch.nn.ModuleList([train_actor_network, train_critic_network])
@@ -536,14 +523,17 @@ def run_ppo_torchrl(
 
     collector = MultiSyncDataCollector(
         [_make_env for _ in range(config.workers)],
-        model[0],
+        actor_critic,
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
         cat_results=0,
         device=config.collect_device,
         env_device=config.collect_device,
+        compile_policy=True,
     )
     out_seed = collector.set_seed(config.seed)
+
+    # compute_gae = torch.compile(compute_gae)
 
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(
@@ -564,8 +554,8 @@ def run_ppo_torchrl(
     )
 
     loss_module = ClipPPOLoss(
-        actor_network=model[0],
-        critic_network=model[1],
+        actor_network=train_actor_critic.get_policy_operator(),
+        critic_network=train_actor_critic.get_value_operator(),
         clip_epsilon=config.clip_eps,
         entropy_bonus=True,
         entropy_coef=config.ent_coef,
@@ -574,6 +564,9 @@ def run_ppo_torchrl(
         clip_value=config.clip_vloss,
         normalize_advantage=config.normalize_advantage,
     )
+
+    loss_module = loss_module.to(config.update_device)
+    # loss_module = torch.compile(loss_module)
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
@@ -587,6 +580,32 @@ def run_ppo_torchrl(
     #     )
     #     eval_metrics["eval/step"] = 0
     # wandb.log(eval_metrics)
+
+    def update(subdata):
+        loss_vals = loss_module(subdata)
+        loss_value = (
+            loss_vals["loss_objective"]
+            + loss_vals["loss_critic"]
+            + loss_vals["loss_entropy"]
+        )
+
+        optimizer.zero_grad()
+        loss_value.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            loss_module.parameters(), max_norm=config.max_grad_norm
+        )
+
+        # Log post-clipping gradient norms
+        # post_clip_norms = log_parameter_and_gradient_norms(loss_module)
+        # post_clip_norms = {
+        #     f"post_clip_{k}": v
+        #     for k, v in post_clip_norms.items()
+        #     if "grad_norm" in k
+        # }
+
+        optimizer.step()
+
+    update = torch.compile(update)
 
     for i, tensordict_data in enumerate(collector):
         if (i + 1) % 20 == 0:
@@ -618,7 +637,7 @@ def run_ppo_torchrl(
 
         start_t = time.time()
         with torch.no_grad():
-            advantage_module(tensordict_data)
+            compute_gae(tensordict_data)
 
         end_t = time.time()
         print("Advantage computation time:", end_t - start_t)
@@ -646,32 +665,10 @@ def run_ppo_torchrl(
                 subdata = replay_buffer.sample(config.minibatch_size)
                 subdata.to(config.update_device, non_blocking=True)
 
-                loss_vals = loss_module(subdata)
-                loss_value = (
-                    loss_vals["loss_objective"]
-                    + loss_vals["loss_critic"]
-                    + loss_vals["loss_entropy"]
-                )
-
-                optimizer.zero_grad()
-                loss_value.backward()
+                update(subdata)
 
                 # Log pre-clipping gradient norms
                 # pre_clip_norms = log_parameter_and_gradient_norms(loss_module)
-
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    loss_module.parameters(), max_norm=config.max_grad_norm
-                )
-
-                # Log post-clipping gradient norms
-                # post_clip_norms = log_parameter_and_gradient_norms(loss_module)
-                # post_clip_norms = {
-                #     f"post_clip_{k}": v
-                #     for k, v in post_clip_norms.items()
-                #     if "grad_norm" in k
-                # }
-
-                optimizer.step()
 
                 # Log norms for this batch
                 step = (
@@ -698,7 +695,12 @@ def run_ppo_torchrl(
                 print("Batch training time:", end_t - start_t)
 
         # Update the policy
-        collector.policy.load_state_dict(loss_module.actor_network.state_dict())
+        collector.policy.get_policy_operator().load_state_dict(
+            loss_module.actor_network.state_dict()
+        )
+        collector.policy.get_value_operator().load_state_dict(
+            loss_module.critic_network.state_dict()
+        )
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
         # wandb.log(
         #     {

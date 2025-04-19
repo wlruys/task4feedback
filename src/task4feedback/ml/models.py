@@ -41,15 +41,12 @@ def init_weights(m):
 
 
 class HeteroDataWrapper(nn.Module):
-    def __init__(self, network: nn.Module, device: Optional[str] = "cpu"):
+    def __init__(self, network: nn.Module):
         super(HeteroDataWrapper, self).__init__()
+
         self.network = network
-        if device is None:
-            self.device = (
-                torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
-            )
-        else:
-            self.device = device
+        self.register_parameter("dummy_param", nn.Parameter(torch.randn(1)))
+        self.device = "cpu"
 
     def _is_batch(self, obs: TensorDict) -> bool:
         if not obs.batch_size:
@@ -67,6 +64,15 @@ class HeteroDataWrapper(nn.Module):
                 _obs = observation_to_heterodata(obs, actions=actions)
             else:
                 _obs = observation_to_heterodata(obs)
+
+            task_count = obs["nodes", "tasks", "count"]
+            data_count = obs["nodes", "data", "count"]
+
+            if next(self.parameters()).is_cuda:
+                _obs = obs.to("cuda", non_blocking=True)
+                task_count = task_count.to("cuda", non_blocking=True)
+                data_count = data_count.to("cuda", non_blocking=True)
+
             return (
                 _obs,
                 obs["nodes", "tasks", "count"],
@@ -96,7 +102,6 @@ class HeteroDataWrapper(nn.Module):
         data, task_count, data_count = self._convert_to_heterodata(
             obs, is_batch, actions=actions
         )
-        data = data.to(self.device)
         out = self.network(data, (task_count, data_count))
         return out
 
@@ -105,7 +110,6 @@ class ActorWrapper(HeteroDataWrapper):
     def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
         data = self._convert_to_heterodata(obs, is_batch, actions=actions)
-        data = data.to(self.device)
         # Compute task embeddings from the hetero-GAT network
         task_embeddings = self.network(data)
         # Extract candidate embedding based on batch presence
@@ -1513,7 +1517,10 @@ class OldTaskAssignmentNetwDevice(nn.Module):
 
     def forward(self, data: HeteroData | Batch, counts=None):
         if next(self.parameters()).is_cuda:
-            data = data.to("cuda")
+            data = data.to("cuda", non_blocking=True)
+            counts_0 = counts[0].to("cuda", non_blocking=True)
+            counts_1 = counts[1].to("cuda", non_blocking=True)
+            counts = (counts_0, counts_1)
 
         task_embeddings = self.hetero_gat(data)
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
@@ -1548,6 +1555,12 @@ class OldValueNetwDevice(nn.Module):
         )
 
     def forward(self, data: HeteroData | Batch, counts=None):
+        if next(self.parameters()).is_cuda:
+            data = data.to("cuda", non_blocking=True)
+            counts_0 = counts[0].to("cuda", non_blocking=True)
+            counts_1 = counts[1].to("cuda", non_blocking=True)
+            counts = (counts_0, counts_1)
+
         task_embeddings = self.hetero_gat(data)
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
         counts = None
@@ -1590,8 +1603,13 @@ class OldSeparateNetwDevice(nn.Module):
 
     def forward(self, data: HeteroData | Batch, counts=None):
         # check the device of data["tasks"].x
+
         if next(self.actor.parameters()).is_cuda:
             data = data.to("cuda")
+            counts[0] = counts[0].to("cuda")
+            counts[1] = counts[1].to("cuda")
+            counts = (counts[0], counts[1])
+
         d_logits = self.actor(data, counts)
         v = self.critic(data, counts)
 

@@ -137,7 +137,7 @@ if __name__ == "__main__":
 
     ppo_config = PPOConfig(
         collect_device=device,
-        update_device="mps",
+        update_device="cpu",
         workers=WORKERS,
         states_per_collection=WIDTH * WIDTH * STEPS * GRAPHS_PER_BATCH,
         minibatch_size=WIDTH * WIDTH * STEPS * GRAPHS_PER_BATCH // 4,
