@@ -97,7 +97,7 @@ def evaluate_policy(
 
     for i in range(num_episodes):
         env = eval_env_fn()
-        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+        with set_exploration_type(ExplorationType.RANDOM), torch.no_grad():
             tensordict = env.rollout(
                 max_steps=max_steps,
                 policy=policy,
