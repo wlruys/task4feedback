@@ -62,9 +62,6 @@ class HeteroDataWrapper(nn.Module):
         is_batch: bool = False,
         actions: Optional[TensorDict] = None,
     ) -> HeteroData:
-        # print("obs", obs.shape)
-        # if actions is not None:
-        #     print("actions", actions.shape)
         if not is_batch:
             if actions is not None:
                 _obs = observation_to_heterodata(obs, actions=actions)
@@ -76,17 +73,12 @@ class HeteroDataWrapper(nn.Module):
                 obs["nodes", "data", "count"],
             )
 
-        # print("BATCH DIMS", obs.batch_dims)
-        # print("BATCH SIZE", obs.batch_size)
-
         # flatten and save the batch size
         self.batch_size = obs.batch_size
         # obs = obs.reshape(-1)
-
         _h_data = []
-        # print("obs", obs.shape)
+
         for i in range(obs.batch_size[0]):
-            # print("obs[i]", obs[i].shape)
             if actions is not None:
                 _obs = observation_to_heterodata(obs[i], actions=actions[i])
             else:
@@ -1567,6 +1559,7 @@ class OldValueNetwDevice(nn.Module):
             v = global_add_pool(v, task_batch)
             v = torch.div(v, torch.clamp(counts[0], min=1))
 
+        v = v.squeeze(0)
         return v
 
 
@@ -1601,4 +1594,5 @@ class OldSeparateNetwDevice(nn.Module):
             data = data.to("cuda")
         d_logits = self.actor(data, counts)
         v = self.critic(data, counts)
+
         return d_logits, v

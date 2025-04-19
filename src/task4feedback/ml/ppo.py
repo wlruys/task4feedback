@@ -8,7 +8,13 @@ from torchrl.data.replay_buffers.storages import LazyTensorStorage
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
-from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
+from torchrl.modules import (
+    ProbabilisticActor,
+    ValueOperator,
+    LSTMModule,
+    GRUModule,
+    ActorCriticWrapper,
+)
 from torchrl.envs import TransformedEnv
 from torchrl.envs.transforms import StepCounter, TrajCounter, Compose, InitTracker
 from task4feedback.ml.models import ActorWrapper, CriticEmbedWrapper, CriticHeadWrapper
@@ -23,6 +29,7 @@ import torch
 from torchrl.envs import set_exploration_type, ExplorationType
 from task4feedback.graphs.mesh.plot import *
 from tensordict.nn import TensorDictSequential as Sequential
+import time
 
 
 @dataclass
@@ -40,13 +47,15 @@ class PPOConfig:
     val_coef: float = 0.5
     max_grad_norm: float = 0.5
     threads_per_worker: int = 1
-    train_device: str = "cpu"
+    update_device: str = "cpu"
+    collect_device: str = "gpu"
     gae_gamma: float = 1
     gae_lmbda: float = 0.99
     normalize_advantage: bool = True
     value_norm: str = "l2"
-    eval_interval: int = 10  # Evaluate every N collections
-    eval_episodes: int = 1  # Number of episodes to evaluate
+    eval_interval: int = 50
+    eval_episodes: int = 1
+    log_interval: int = 100
 
 
 def log_parameter_and_gradient_norms(model):
@@ -60,18 +69,15 @@ def log_parameter_and_gradient_norms(model):
 
     for name, param in model.named_parameters():
         if param.requires_grad:
-            # Calculate parameter norm
             param_norm = param.detach().norm().item()
             param_norms[f"param_norm/{name}"] = param_norm
             total_param_norm += param_norm**2
 
-            # Calculate gradient norm if gradient exists
             if param.grad is not None:
                 grad_norm = param.grad.detach().norm().item()
                 grad_norms[f"grad_norm/{name}"] = grad_norm
                 total_grad_norm += grad_norm**2
 
-    # Calculate total norms
     total_param_norm = total_param_norm**0.5
     total_grad_norm = total_grad_norm**0.5
 
@@ -89,15 +95,21 @@ def evaluate_policy(
     max_steps: int = 10000,
     num_episodes: int = 1,
     step=0,
+    exploration_type=ExplorationType.DETERMINISTIC,
 ) -> Dict[str, float]:
     episode_rewards = []
     completion_times = []
     episode_returns = []
     std_rewards = []
 
+    if exploration_type == ExplorationType.RANDOM:
+        eval_name = "explore"
+    elif exploration_type == ExplorationType.DETERMINISTIC:
+        eval_name = "exploit"
+
     for i in range(num_episodes):
         env = eval_env_fn()
-        with set_exploration_type(ExplorationType.RANDOM), torch.no_grad():
+        with set_exploration_type(exploration_type), torch.no_grad():
             tensordict = env.rollout(
                 max_steps=max_steps,
                 policy=policy,
@@ -123,11 +135,10 @@ def evaluate_policy(
             completion_times.append(completion_time)
 
             if i == 0 and completion_time > 0:
-                # Animate the first environment
                 max_frames = 400
                 time_interval = int(completion_time / max_frames)
 
-                title = f"network_eval_{step}_{i}"
+                title = f"network_{eval_name}_{step}_{i}"
                 print(title)
                 animate_mesh_graph(
                     env,
@@ -148,32 +159,22 @@ def evaluate_policy(
 
                 wandb.log(
                     {
-                        "eval/animation": wandb.Video(
+                        f"{eval_name}/animation": wandb.Video(
                             video_path,
                             caption=title,
                         )
                     }
                 )
-
-    # Create metrics dictionary
     metrics = {
-        "eval/mean_return": sum(episode_rewards) / max(len(episode_rewards), 1),
-        # "eval/std_return": np.std(episode_rewards) if len(episode_rewards) > 1 else 0,
-        "eval/mean_reward": sum(episode_rewards) / max(len(episode_rewards), 1),
-        # "eval/std_mean_reward": np.std(episode_rewards)
-        # if len(episode_rewards) > 1
-        # else 0,
-        # "eval/std_std_reward": np.std(std_rewards) if len(std_rewards) > 1 else 0,
-        "eval/mean_std_reward": sum(std_rewards) / max(len(std_rewards), 1),
+        f"{eval_name}/reward": sum(episode_rewards) / max(len(episode_rewards), 1),
+        f"{eval_name}/std_reward": sum(std_rewards) / max(len(std_rewards), 1),
     }
 
-    # Add completion time metrics if available
     if completion_times:
-        metrics["eval/mean_completion_time"] = sum(completion_times) / len(
+        metrics[f"{eval_name}/completion_time"] = sum(completion_times) / len(
             completion_times
         )
-        # metrics["eval/min_completion_time"] = min(completion_times)
-        # metrics["eval/max_completion_time"] = max(completion_times)
+        metrics[f"{eval_name}/std_completion_time"] = np.std(completion_times)
 
     return metrics
 
@@ -207,15 +208,15 @@ def run_ppo_cleanrl_no_rb(
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
         cat_results=0,
-        policy_device="cpu",
-        env_device="cpu",
+        policy_device=config.collect_device,
+        env_device=config.collect_device,
         # storing_device=config.train_device,
         # replay_buffer=replay_buffer,
     )
     out_seed = collector.set_seed(config.seed)
 
     actor_critic_base_t = copy.deepcopy(actor_critic_base)
-    actor_critic_base_t = actor_critic_base_t.to(config.train_device)
+    actor_critic_base_t = actor_critic_base_t.to(config.update_device)
 
     optimizer = torch.optim.Adam(actor_critic_base_t.parameters(), lr=config.lr)
 
@@ -238,7 +239,7 @@ def run_ppo_cleanrl_no_rb(
             loader = DataLoader(state, batch_size=config.minibatch_size, shuffle=True)
 
             for j, batch in enumerate(loader):
-                batch = batch.to(config.train_device, non_blocking=True)
+                batch = batch.to(config.update_device, non_blocking=True)
                 new_logits, new_value = actor_critic_base_t(
                     batch, batch["task_counts"].unsqueeze(-1)
                 )
@@ -306,8 +307,10 @@ def run_ppo_cleanrl(
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(max_size=config.states_per_collection),
         sampler=SamplerWithoutReplacement(),
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
+
+    actor_critic_base = torch.compile(actor_critic_base)
 
     _actor_critic_td = HeteroDataWrapper(actor_critic_base)
 
@@ -334,20 +337,75 @@ def run_ppo_cleanrl(
         cat_results=0,
         # storing_device=config.train_device,
         env_device="cpu",
-        policy_device="cpu",
+        policy_device=config.collect_device,
         # replay_buffer=replay_buffer,
     )
     out_seed = collector.set_seed(config.seed)
 
     # Create a copy of the actor_critic model to be used for training
     actor_critic_t = copy.deepcopy(actor_critic)
-    actor_critic_t = actor_critic_t.to(config.train_device)
+    actor_critic_t = actor_critic_t.to(config.update_device)
+    print(actor_critic_t.module[0])
+    print(actor_critic_t.module[0].module)
+    actor_critic_t.module[0].module.device = config.update_device
 
     optimizer = torch.optim.Adam(actor_critic_t.parameters(), lr=config.lr)
+
+    def update_fn(batch):
+        batch = batch.to(config.update_device, non_blocking=True)
+
+        sample_logprob = batch["record_log_prob"].detach().view(-1)
+        sample_value = batch["record_state_value"].detach().view(-1)
+        sample_advantage = batch["advantage"].detach().view(-1)
+        sample_returns = batch["value_target"].detach().view(-1)
+        sample_action = batch["action"].detach().view(-1)
+
+        eval_batch = actor_critic_t(batch)
+
+        new_logprob, new_entropy = logits_to_action(eval_batch["logits"], sample_action)
+        new_logprob = new_logprob.view(-1)
+        new_entropy = new_entropy.view(-1)
+
+        new_value = eval_batch["state_value"].view(-1)
+
+        # with torch.no_grad():
+        #    print("Average Return:", sample_returns.mean())
+
+        # Policy Loss
+        logratio = new_logprob.view(-1) - sample_logprob.detach().view(-1)
+        ratio = logratio.exp().view(-1)
+
+        policy_loss_1 = sample_advantage * ratio.view(-1)
+        policy_loss_2 = sample_advantage * torch.clamp(
+            ratio, 1 - config.clip_eps, 1 + config.clip_eps
+        )
+        policy_loss = -1 * torch.min(policy_loss_1, policy_loss_2).mean()
+
+        # Value Loss
+        v_loss_unclipped = (new_value - sample_returns) ** 2
+        v_clipped = sample_value + torch.clamp(
+            new_value - sample_value, -config.clip_eps, config.clip_eps
+        )
+        v_loss_clipped = (v_clipped - sample_returns) ** 2
+        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+        v_loss = 0.5 * v_loss_max
+
+        # Entropy Loss
+        entropy_loss = new_entropy.mean()
+
+        loss = policy_loss + config.val_coef * v_loss - config.ent_coef * entropy_loss
+
+        optimizer.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(actor_critic_t.parameters(), config.max_grad_norm)
+        optimizer.step()
+
+    # update_fn = torch.compile(update_fn)
 
     for i, td in enumerate(collector):
         print(f"Collection: {i}")
 
+        start_t = time.perf_counter()
         with torch.no_grad():
             td = compute_advantage(td)
 
@@ -356,68 +414,21 @@ def run_ppo_cleanrl(
             td["record_logits"] = td["logits"].clone()
 
         replay_buffer.extend(td.reshape(-1))
+        end_t = time.perf_counter()
+        print("Advantage computation time:", end_t - start_t)
 
         for j in range(config.num_epochs_per_collection):
             n_batches = len(replay_buffer) // config.minibatch_size
-            # actor_critic_t = actor_critic.to(config.train_device)
+            # actor_critic_t = actor_critic.to(config.update_device)
 
             for k in range(n_batches):
+                start_t = time.perf_counter()
+
                 batch = replay_buffer.sample(config.minibatch_size)
-                batch = batch.to(config.train_device, non_blocking=True)
+                update_fn(batch)
+                end_t = time.perf_counter()
 
-                sample_logprob = batch["record_log_prob"].detach().view(-1)
-                sample_value = batch["record_state_value"].detach().view(-1)
-                sample_advantage = batch["advantage"].detach().view(-1)
-                sample_returns = batch["value_target"].detach().view(-1)
-                sample_action = batch["action"].detach().view(-1)
-
-                eval_batch = actor_critic_t(batch)
-
-                new_logprob, new_entropy = logits_to_action(
-                    eval_batch["logits"], sample_action
-                )
-                new_logprob = new_logprob.view(-1)
-                new_entropy = new_entropy.view(-1)
-
-                new_value = eval_batch["state_value"].view(-1)
-
-                with torch.no_grad():
-                    print("Average Return:", sample_returns.mean())
-
-                # Policy Loss
-                logratio = new_logprob.view(-1) - sample_logprob.detach().view(-1)
-                ratio = logratio.exp().view(-1)
-
-                policy_loss_1 = sample_advantage * ratio.view(-1)
-                policy_loss_2 = sample_advantage * torch.clamp(
-                    ratio, 1 - config.clip_eps, 1 + config.clip_eps
-                )
-                policy_loss = -1 * torch.min(policy_loss_1, policy_loss_2).mean()
-
-                # Value Loss
-                v_loss_unclipped = (new_value - sample_returns) ** 2
-                v_clipped = sample_value + torch.clamp(
-                    new_value - sample_value, -config.clip_eps, config.clip_eps
-                )
-                v_loss_clipped = (v_clipped - sample_returns) ** 2
-                v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped).mean()
-                v_loss = 0.5 * v_loss_max
-
-                # Entropy Loss
-                entropy_loss = new_entropy.mean()
-
-                loss = (
-                    policy_loss
-                    + config.val_coef * v_loss
-                    - config.ent_coef * entropy_loss
-                )
-
-                optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(
-                    actor_critic_t.parameters(), config.max_grad_norm
-                )
-                optimizer.step()
+                print("Batch training time:", end_t - start_t)
 
         collector.policy.load_state_dict(actor_critic_t.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
@@ -461,21 +472,22 @@ def run_ppo_torchrl(
     eval_env_fn: Optional[Callable[[], EnvBase]] = None,
     do_rollout: bool = False,
 ):
-    wandb.define_metric("batch_loss/step")
-    wandb.define_metric("collect_loss/step")
-    wandb.define_metric("batch_loss/*", step_metric="batch_loss/step")
-    wandb.define_metric("grad_norm/*", step_metric="batch_loss/step")
-    wandb.define_metric("param_norm/*", step_metric="batch_loss/step")
-    wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
-    wandb.define_metric("eval/*", step_metric="eval/step")
+    wandb.define_metric("batch/step")
+    wandb.define_metric("collect/step")
+    wandb.define_metric("explore/step")
+    wandb.define_metric("exploit/step")
 
+    wandb.define_metric("batch/*", step_metric="batch/step")
+    wandb.define_metric("grad_norm/*", step_metric="batch/step")
+    wandb.define_metric("param_norm/*", step_metric="batch/step")
+    wandb.define_metric("collect/*", step_metric="collect_loss/step")
+    wandb.define_metric("explore/*", step_metric="explore/step")
+    wandb.define_metric("exploit/*", step_metric="exploit/step")
 
-    print(config)
-
-    print(type(actor_critic_base))
-
-    _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
-    _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
+    _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.collect_device)
+    _critic_td = HeteroDataWrapper(
+        actor_critic_base.critic, device=config.collect_device
+    )
 
     module_action = TensorDictModule(
         _actor_td,
@@ -497,10 +509,10 @@ def run_ppo_torchrl(
         in_keys=["observation"],
     )
 
-    td_module_action = td_module_action.to(config.train_device)
-    td_critic_module = td_critic_module.to(config.train_device)
-    train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
-    train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
+    td_module_action = td_module_action.to(config.update_device)
+    td_critic_module = td_critic_module.to(config.update_device)
+    train_actor_network = copy.deepcopy(td_module_action).to(config.update_device)
+    train_critic_network = copy.deepcopy(td_critic_module).to(config.update_device)
     model = torch.nn.ModuleList([train_actor_network, train_critic_network])
 
     # Create evaluation environment if not provided
@@ -528,14 +540,14 @@ def run_ppo_torchrl(
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
         cat_results=0,
-        device=config.train_device,
-        env_device="cpu",
+        device=config.collect_device,
+        env_device=config.collect_device,
     )
     out_seed = collector.set_seed(config.seed)
 
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(
-            max_size=config.states_per_collection, device=config.train_device
+            max_size=config.states_per_collection, device=config.update_device
         ),
         sampler=SamplerWithoutReplacement(),
         pin_memory=torch.cuda.is_available(),
@@ -548,7 +560,7 @@ def run_ppo_torchrl(
         lmbda=config.gae_lmbda,
         value_network=model[1],
         average_gae=False,
-        device=config.train_device,
+        device=config.update_device,
     )
 
     loss_module = ClipPPOLoss(
@@ -565,16 +577,16 @@ def run_ppo_torchrl(
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
-    # Run initial evaluation
-    if config.eval_interval > 0:
-        eval_metrics = evaluate_policy(
-            policy=model[0],
-            eval_env_fn=eval_env_fn,
-            num_episodes=config.eval_episodes,
-            step=0,
-        )
-        eval_metrics["eval/step"] = 0
-        wandb.log(eval_metrics)
+    # # Run initial evaluation
+    # if config.eval_interval > 0:
+    #     eval_metrics = evaluate_policy(
+    #         policy=model[0],
+    #         eval_env_fn=eval_env_fn,
+    #         num_episodes=config.eval_episodes,
+    #         step=0,
+    #     )
+    #     eval_metrics["eval/step"] = 0
+    # wandb.log(eval_metrics)
 
     for i, tensordict_data in enumerate(collector):
         if (i + 1) % 20 == 0:
@@ -587,38 +599,41 @@ def run_ppo_torchrl(
                 os.path.join(path, model_name + f"_{i + 1}.pth"),
             )
 
-        # Run evaluation at specified intervals
-        if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
-            eval_metrics = evaluate_policy(
-                policy=model[0],
-                eval_env_fn=eval_env_fn,
-                num_episodes=config.eval_episodes,
-                step=i + 1,
-            )
-            eval_metrics["eval/step"] = i + 1
-            wandb.log(eval_metrics)
+        # # Run evaluation at specified intervals
+        # if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
+        #     eval_metrics = evaluate_policy(
+        #         policy=model[0],
+        #         eval_env_fn=eval_env_fn,
+        #         num_episodes=config.eval_episodes,
+        #         step=i + 1,
+        #     )
+        #     eval_metrics["eval/step"] = i + 1
+        #     wandb.log(eval_metrics)
 
         if i >= config.num_collections:
             break
 
         print(f"Collection: {i}")
-        tensordict_data = tensordict_data.to(config.train_device, non_blocking=True)
+        tensordict_data = tensordict_data.to(config.update_device, non_blocking=True)
 
+        start_t = time.time()
         with torch.no_grad():
             advantage_module(tensordict_data)
 
-            non_zero_rewards = tensordict_data["next", "reward"]
-            improvements = tensordict_data["next", "observation", "aux", "improvement"]
-            mask = improvements > -1.5
-            filtered_improvements = improvements[mask]
-            if filtered_improvements.numel() > 0:
-                avg_improvement = filtered_improvements.mean()
+        end_t = time.time()
+        print("Advantage computation time:", end_t - start_t)
+        # non_zero_rewards = tensordict_data["next", "reward"]
+        # improvements = tensordict_data["next", "observation", "aux", "improvement"]
+        # mask = improvements > -1.5
+        # filtered_improvements = improvements[mask]
+        # if filtered_improvements.numel() > 0:
+        #     avg_improvement = filtered_improvements.mean()
 
-            if len(non_zero_rewards) > 0:
-                avg_non_zero_reward = non_zero_rewards.mean().item()
-                std_rewards = non_zero_rewards.std().item()
-                print(f"Average reward: {avg_non_zero_reward}")
-                print(f"Average improvement: {avg_improvement}")
+        # if len(non_zero_rewards) > 0:
+        #     avg_non_zero_reward = non_zero_rewards.mean().item()
+        #     std_rewards = non_zero_rewards.std().item()
+        #     print(f"Average reward: {avg_non_zero_reward}")
+        #     print(f"Average improvement: {avg_improvement}")
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
@@ -627,8 +642,9 @@ def run_ppo_torchrl(
             n_batches = config.states_per_collection // config.minibatch_size
 
             for k in range(n_batches):
+                start_t = time.perf_counter()
                 subdata = replay_buffer.sample(config.minibatch_size)
-                subdata.to(config.train_device)
+                subdata.to(config.update_device, non_blocking=True)
 
                 loss_vals = loss_module(subdata)
                 loss_value = (
@@ -641,19 +657,19 @@ def run_ppo_torchrl(
                 loss_value.backward()
 
                 # Log pre-clipping gradient norms
-                pre_clip_norms = log_parameter_and_gradient_norms(loss_module)
+                # pre_clip_norms = log_parameter_and_gradient_norms(loss_module)
 
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     loss_module.parameters(), max_norm=config.max_grad_norm
                 )
 
                 # Log post-clipping gradient norms
-                post_clip_norms = log_parameter_and_gradient_norms(loss_module)
-                post_clip_norms = {
-                    f"post_clip_{k}": v
-                    for k, v in post_clip_norms.items()
-                    if "grad_norm" in k
-                }
+                # post_clip_norms = log_parameter_and_gradient_norms(loss_module)
+                # post_clip_norms = {
+                #     f"post_clip_{k}": v
+                #     for k, v in post_clip_norms.items()
+                #     if "grad_norm" in k
+                # }
 
                 optimizer.step()
 
@@ -661,49 +677,47 @@ def run_ppo_torchrl(
                 step = (
                     i * config.num_epochs_per_collection * n_batches + j * n_batches + k
                 )
-                wandb.log(
-                    {
-                        **pre_clip_norms,
-                        **post_clip_norms,
-                        "batch_loss/step": step,
-                        "batch_loss/objective": loss_vals["loss_objective"].item(),
-                        "batch_loss/critic": loss_vals["loss_critic"].item(),
-                        "batch_loss/entropy": loss_vals["loss_entropy"].item(),
-                        "batch_loss/total": loss_value.item(),
-                        "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
-                        "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),
-                        #"batch_loss/value_clip_fraction": loss_vals[
-                        #    "value_clip_fraction"
-                        #].item(),
-                        "batch_loss/ESS": loss_vals["ESS"].item(),
-                    },
-                )
+                # wandb.log(
+                #     {
+                #         **pre_clip_norms,
+                #         **post_clip_norms,
+                #         "batch/step": step,
+                #         "batch/objective": loss_vals["loss_objective"].item(),
+                #         "batch/critic": loss_vals["loss_critic"].item(),
+                #         "batch/entropy": loss_vals["loss_entropy"].item(),
+                #         "batch/total": loss_value.item(),
+                #         "batch/kl_approx": loss_vals["kl_approx"].item(),
+                #         "batch/clip_fraction": loss_vals["clip_fraction"].item(),
+                #         # "batch/value_clip_fraction": loss_vals[
+                #         #    "value_clip_fraction"
+                #         # ].item(),
+                #         "batch/ESS": loss_vals["ESS"].item(),
+                #     },
+                # )
+                end_t = time.perf_counter()
+                print("Batch training time:", end_t - start_t)
 
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
-        wandb.log(
-            {
-                "collect_loss/step": i,
-                "collect_loss/mean_nonzero_reward": avg_non_zero_reward,
-                "collect_loss/std_nonzero_reward": std_rewards,
-                "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
-                "collect_loss/average_improvement": avg_improvement.item(),
-                "collect_loss/std_improvement": filtered_improvements.std().item(),
-                "collect_loss/std_return": tensordict_data["value_target"].std().item(),
-                "collect_loss/mean_return": tensordict_data["value_target"]
-                .mean()
-                .item(),
-                "collect_loss/loss_critic": loss_vals["loss_critic"].item(),
-                "collect_loss/loss_entropy": loss_vals["loss_entropy"].item(),
-                "collect_loss/loss_total": loss_value.item(),
-                "collect_loss/grad_norm": grad_norm,
-                "collect_loss/advantage_mean": tensordict_data["advantage"]
-                .mean()
-                .item(),
-                "collect_loss/advantage_std": tensordict_data["advantage"].std().item(),
-            },
-        )
+        # wandb.log(
+        #     {
+        #         "collect/step": i,
+        #         "collect/mean_nonzero_reward": avg_non_zero_reward,
+        #         "collect/std_nonzero_reward": std_rewards,
+        #         "collect/loss_objective": loss_vals["loss_objective"].item(),
+        #         "collect/average_improvement": avg_improvement.item(),
+        #         "collect/std_improvement": filtered_improvements.std().item(),
+        #         "collect/std_return": tensordict_data["value_target"].std().item(),
+        #         "collect/mean_return": tensordict_data["value_target"].mean().item(),
+        #         "collect/loss_critic": loss_vals["loss_critic"].item(),
+        #         "collect/loss_entropy": loss_vals["loss_entropy"].item(),
+        #         "collect/loss_total": loss_value.item(),
+        #         "collect/grad_norm": grad_norm,
+        #         "collect/advantage_mean": tensordict_data["advantage"].mean().item(),
+        #         "collect/advantage_std": tensordict_data["advantage"].std().item(),
+        #     },
+        # )
 
     # Final evaluation
     if config.eval_interval > 0:
