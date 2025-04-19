@@ -137,7 +137,7 @@ if __name__ == "__main__":
 
     ppo_config = PPOConfig(
         collect_device=device,
-        update_device="cpu",
+        update_device="cuda",
         workers=WORKERS,
         states_per_collection=WIDTH * WIDTH * STEPS * GRAPHS_PER_BATCH,
         minibatch_size=WIDTH * WIDTH * STEPS * GRAPHS_PER_BATCH // 4,
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     # os.makedirs(PATH, exist_ok=True)
     # shutil.copy(os.path.abspath(sys.argv[0]), PATH)
 
-    run_ppo_cleanrl(
+    run_ppo_torchrl(
         model,
         make_env,
         ppo_config,
