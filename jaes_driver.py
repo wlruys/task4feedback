@@ -53,12 +53,12 @@ device = torch.device("cpu")
 ENV = EFTIncrementalEnv
 
 
-
 seed = 1
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
 torch.backends.cudnn.deterministic = True
+
 
 def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
     mesh = generate_quad_mesh(L=config.L, n=config.n)
@@ -67,18 +67,18 @@ def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
     jgraph = JacobiGraph(geom, config)
 
     jgraph.apply_variant(JacobiVariant)
-   
+
     partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
 
     # offset by 1 to ignore cpu
     partition = [x + 1 for x in partition]
     jgraph.set_cell_locations(partition)
-    
+
     if N_DEVICES == 4:
         partition = [i - 1 for i in MAPPING]
-        
+
     jgraph.set_cell_locations(partition)
-    
+
     jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
 
     return jgraph
@@ -97,7 +97,7 @@ if __name__ == "__main__":
                 n_part=4,
                 randomness=1,
                 permute_idx=0,
-                interior_size=2000000
+                interior_size=2000000,
             )
         )
         s = uniform_connected_devices(N_DEVICES, 1000000000, 1, 2000)
@@ -107,9 +107,9 @@ if __name__ == "__main__":
         spec = create_graph_spec(
             max_devices=N_DEVICES,
             max_tasks=30,
-            max_data=30,
-            max_edges_tasks_data=30,
-            max_edges_tasks_tasks=30,
+            max_data=100,
+            max_edges_tasks_data=150,
+            max_edges_tasks_tasks=150,
         )
         input = SimulatorInput(
             m,
@@ -136,7 +136,8 @@ if __name__ == "__main__":
     env = make_env()
 
     ppo_config = PPOConfig(
-        train_device=device,
+        collect_device=device,
+        update_device="mps",
         workers=WORKERS,
         states_per_collection=WIDTH * WIDTH * STEPS * GRAPHS_PER_BATCH,
         minibatch_size=WIDTH * WIDTH * STEPS * GRAPHS_PER_BATCH // 4,
@@ -156,7 +157,7 @@ if __name__ == "__main__":
     )
     wandb.init(
         project="Jacobi_debug",
-        name="IncrementalEFT",
+        name="TestCombined",
         config=vars(ppo_config),
     )
     # current_file = os.path.splitext(os.path.basename(__file__))[0]
@@ -164,9 +165,8 @@ if __name__ == "__main__":
     # os.makedirs(PATH, exist_ok=True)
     # shutil.copy(os.path.abspath(sys.argv[0]), PATH)
 
-    run_ppo_torchrl(
+    run_ppo_cleanrl(
         model,
         make_env,
         ppo_config,
     )
-
