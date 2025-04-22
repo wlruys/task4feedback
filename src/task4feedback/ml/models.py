@@ -109,53 +109,6 @@ class HeteroDataWrapper(nn.Module):
         return out
 
 
-class ActorWrapper(HeteroDataWrapper):
-    def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
-        is_batch = self._is_batch(obs)
-        data = self._convert_to_heterodata(obs, is_batch, actions=actions)
-        data = data.to(self.device)
-        # Compute task embeddings from the hetero-GAT network
-        task_embeddings = self.network(data)
-        # Extract candidate embedding based on batch presence
-        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
-        if task_batch is not None:
-            candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
-        else:
-            candidate_embedding = task_embeddings[0]
-        # Return the candidate embedding wrapped in a dict with the expected key 'embed'
-        return {"embed": candidate_embedding}
-
-
-class CriticEmbedWrapper(HeteroDataWrapper):
-    def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
-        is_batch = self._is_batch(obs)
-        data = self._convert_to_heterodata(obs, is_batch, actions=actions)
-        data = data.to(self.device)
-        # Compute task embeddings from the hetero-GAT network
-        task_embeddings = self.network(data)
-
-        # Extract candidate embedding based on batch presence
-        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
-
-        # Aggregate node embeddings to get one embedding per graph/sample
-        # This ensures the resulting embedding tensor has shape [batch_size, feature_dim]
-        pooled_embeddings = global_mean_pool(task_embeddings, task_batch)
-        # Return the pooled embedding wrapped in a dict with the expected key 'embed'
-        return {"embed": pooled_embeddings}
-
-
-class CriticHeadWrapper(nn.Module):
-    def __init__(self, critic: nn.Module, device: str):
-        super().__init__()
-        self.critic = critic
-        self.device = device
-
-    def forward(self, obs: TensorDict):
-        v = self.critic(obs)
-        # v = global_mean_pool(v, obs["task_batch"])
-        return {"state_value": v}
-
-
 @dataclass
 class FeatureDimConfig:
     task_feature_dim: int = 12

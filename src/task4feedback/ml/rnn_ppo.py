@@ -11,7 +11,6 @@ from torchrl.objectives.value import GAE
 from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
 from torchrl.envs import TransformedEnv
 from torchrl.envs.transforms import StepCounter, TrajCounter, Compose, InitTracker
-from task4feedback.ml.models import ActorWrapper, CriticEmbedWrapper, CriticHeadWrapper
 from tensordict.nn import TensorDictModule, TensorDictSequential
 from torch_geometric.loader import DataLoader
 import copy
@@ -23,6 +22,7 @@ import torch
 from torchrl.envs import set_exploration_type, ExplorationType
 from task4feedback.graphs.mesh.plot import *
 from tensordict.nn import TensorDictSequential as Sequential
+from .ppo import evaluate_policy
 
 
 @dataclass
@@ -43,6 +43,8 @@ class RNNPPOConfig:
     gae_lmbda: float = 0.1
     rnn_model: str = "LSTM"  # "LSTM" or "GRU"
     hidden_size: int = 128
+    eval_interval: int = 50
+    eval_episodes: int = 1
 
 
 def compute_gae(tensordict_data, critic, gamma=0.99, lam=0.95):
@@ -71,6 +73,57 @@ def compute_gae(tensordict_data, critic, gamma=0.99, lam=0.95):
         tensordict_data["advantage"] = advantage
         tensordict_data["value_target"] = value_target
         return tensordict_data
+
+
+class ActorWrapper(HeteroDataWrapper):
+    def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
+        is_batch = self._is_batch(obs)
+        data, task_count, data_count = self._convert_to_heterodata(
+            obs, is_batch, actions=actions
+        )
+        data = data.to(self.device)
+        # Compute task embeddings from the hetero-GAT network
+        task_embeddings = self.network(data)
+        # Extract candidate embedding based on batch presence
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+        if task_batch is not None:
+            candidate_embedding = task_embeddings[data["tasks"].ptr[:-1]]
+        else:
+            candidate_embedding = task_embeddings[0]
+        # Return the candidate embedding wrapped in a dict with the expected key 'embed'
+        return {"embed": candidate_embedding}
+
+
+class CriticEmbedWrapper(HeteroDataWrapper):
+    def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
+        is_batch = self._is_batch(obs)
+        data, task_count, data_count = self._convert_to_heterodata(
+            obs, is_batch, actions=actions
+        )
+        data = data.to(self.device)
+        # Compute task embeddings from the hetero-GAT network
+        task_embeddings = self.network(data)
+
+        # Extract candidate embedding based on batch presence
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+
+        # Aggregate node embeddings to get one embedding per graph/sample
+        # This ensures the resulting embedding tensor has shape [batch_size, feature_dim]
+        pooled_embeddings = global_mean_pool(task_embeddings, task_batch)
+        # Return the pooled embedding wrapped in a dict with the expected key 'embed'
+        return {"embed": pooled_embeddings}
+
+
+class CriticHeadWrapper(nn.Module):
+    def __init__(self, critic: nn.Module, device: str):
+        super().__init__()
+        self.critic = critic
+        self.device = device
+
+    def forward(self, obs: TensorDict):
+        v = self.critic(obs)
+        # v = global_mean_pool(v, obs["task_batch"])
+        return {"state_value": v}
 
 
 class HeteroDataWrapperNoDevice(HeteroDataWrapper):
@@ -337,17 +390,19 @@ def run_rnn_ppo_torchrl(
     collector.shutdown()
 
 
-from task4feedback.ml.models import _DataTaskGAT
-
-
 def run_rnn_ppo_torchrl_noDevice(
     feature_config: FeatureDimConfig,
     layer_config: LayerConfig,
-    n_devices,
     make_env,
     config: RNNPPOConfig,
     model_name: str = "model",
+    model_path: str = None,
+    eval_env_fn: Optional[Callable[[], EnvBase]] = None,
 ):
+    wandb.define_metric("collect_loss/step")
+    wandb.define_metric("eval/step")
+    wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
+    wandb.define_metric("eval/*", step_metric="eval/step")
 
     env = make_env()
     if config.rnn_model == "LSTM":
@@ -373,9 +428,7 @@ def run_rnn_ppo_torchrl_noDevice(
         out_key="embed",
     )
     module_action_fc = TensorDictModule(
-        OutputHead(
-            config.hidden_size, layer_config.hidden_channels, n_devices, logits=True
-        ),
+        OldOutputHead(config.hidden_size, layer_config.hidden_channels, 4, logits=True),
         in_keys=["embed"],
         out_keys=["logits"],
     )
@@ -403,11 +456,8 @@ def run_rnn_ppo_torchrl_noDevice(
         out_key="embed",
     )
     module_critic_fc = TensorDictModule(
-        CriticHeadWrapper(
-            OutputHead(
-                config.hidden_size, layer_config.hidden_channels, 1, logits=False
-            ),
-            device=config.train_device,
+        OldOutputHead(
+            config.hidden_size, layer_config.hidden_channels, 1, logits=False
         ),
         in_keys=["embed"],
         out_keys=["state_value"],
@@ -450,6 +500,8 @@ def run_rnn_ppo_torchrl_noDevice(
         ),
         sampler=SamplerWithoutReplacement(),
         pin_memory=torch.cuda.is_available(),
+        batch_size=config.minibatch_size,
+        prefetch=config.states_per_collection // config.minibatch_size,
     )
 
     loss_module = ClipPPOLoss(
@@ -463,6 +515,18 @@ def run_rnn_ppo_torchrl_noDevice(
     )
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
+    if eval_env_fn is None:
+        eval_env_fn = transformed_env
+    if config.eval_interval > 0:
+        eval_metrics = evaluate_policy(
+            policy=model[0],
+            eval_env_fn=eval_env_fn,
+            num_episodes=config.eval_episodes,
+            step=0,
+        )
+        eval_metrics["eval/step"] = 0
+        wandb.log(eval_metrics)
+
     for i, tensordict_data in enumerate(collector):
         if (i + 1) % 50 == 0:
             if wandb.run.dir is None:
@@ -473,6 +537,18 @@ def run_rnn_ppo_torchrl_noDevice(
                 model.state_dict(),
                 os.path.join(wandb.run.dir, model_name + f"_{i + 1}.pth"),
             )
+
+        # Run evaluation at specified intervals
+        if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
+            eval_metrics = evaluate_policy(
+                policy=model[0],
+                eval_env_fn=eval_env_fn,
+                num_episodes=config.eval_episodes,
+                step=i + 1,
+            )
+            eval_metrics["eval/step"] = i + 1
+            wandb.log(eval_metrics)
+
         if i >= config.num_collections:
             break
         print(f"Collection: {i}")

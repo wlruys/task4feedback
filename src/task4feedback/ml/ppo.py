@@ -11,7 +11,6 @@ from torchrl.objectives.value import GAE
 from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
 from torchrl.envs import TransformedEnv
 from torchrl.envs.transforms import StepCounter, TrajCounter, Compose, InitTracker
-from task4feedback.ml.models import ActorWrapper, CriticEmbedWrapper, CriticHeadWrapper
 from tensordict.nn import TensorDictModule, TensorDictSequential
 from torch_geometric.loader import DataLoader
 import copy
