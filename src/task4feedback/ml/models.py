@@ -670,7 +670,7 @@ class OutputHead(nn.Module):
 
 
 class OldOutputHead(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, logits):
+    def __init__(self, input_dim, hidden_dim, output_dim, logits=False):
         super(OldOutputHead, self).__init__()
 
         self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))

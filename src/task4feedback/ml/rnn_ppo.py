@@ -199,10 +199,11 @@ class _DataTaskGAT(nn.Module):
 def run_rnn_ppo_torchrl(
     feature_config: FeatureDimConfig,
     layer_config: LayerConfig,
-    n_devices,
     make_env,
     config: RNNPPOConfig,
     model_name: str = "model",
+    model_path: str = None,
+    eval_env_fn: Optional[Callable[[], EnvBase]] = None,
 ):
 
     env = make_env()
@@ -228,7 +229,7 @@ def run_rnn_ppo_torchrl(
         out_key="embed",
     )
     module_action_fc = TensorDictModule(
-        OutputHead(config.hidden_size, layer_config.hidden_channels, n_devices),
+        OldOutputHead(config.hidden_size, layer_config.hidden_channels, 4),
         in_keys=["embed"],
         out_keys=["logits"],
     )
@@ -257,7 +258,7 @@ def run_rnn_ppo_torchrl(
     )
     module_critic_fc = TensorDictModule(
         CriticHeadWrapper(
-            OutputHead(config.hidden_size, layer_config.hidden_channels, 1),
+            OldOutputHead(config.hidden_size, layer_config.hidden_channels, 1),
             device=config.train_device,
         ),
         in_keys=["embed"],
@@ -283,7 +284,7 @@ def run_rnn_ppo_torchrl(
 
     collector = MultiSyncDataCollector(
         [transformed_env for _ in range(config.workers)],
-        td_module_action,
+        model[0],
         frames_per_batch=config.states_per_collection,
         total_frames=config.states_per_collection * config.num_collections,
         split_trajs=True,
@@ -301,6 +302,8 @@ def run_rnn_ppo_torchrl(
         ),
         sampler=SamplerWithoutReplacement(),
         pin_memory=torch.cuda.is_available(),
+        batch_size=config.minibatch_size,
+        prefetch=config.states_per_collection // config.minibatch_size,
     )
 
     loss_module = ClipPPOLoss(
@@ -314,6 +317,18 @@ def run_rnn_ppo_torchrl(
     )
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
+    if eval_env_fn is None:
+        eval_env_fn = transformed_env
+    if config.eval_interval > 0:
+        eval_metrics = evaluate_policy(
+            policy=model[0],
+            eval_env_fn=eval_env_fn,
+            num_episodes=config.eval_episodes,
+            step=0,
+        )
+        eval_metrics["eval/step"] = 0
+        wandb.log(eval_metrics)
+
     for i, tensordict_data in enumerate(collector):
         if (i + 1) % 50 == 0:
             if wandb.run.dir is None:
@@ -324,6 +339,18 @@ def run_rnn_ppo_torchrl(
                 model.state_dict(),
                 os.path.join(wandb.run.dir, model_name + f"_{i + 1}.pth"),
             )
+
+        # Run evaluation at specified intervals
+        if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
+            eval_metrics = evaluate_policy(
+                policy=model[0],
+                eval_env_fn=eval_env_fn,
+                num_episodes=config.eval_episodes,
+                step=i + 1,
+            )
+            eval_metrics["eval/step"] = i + 1
+            wandb.log(eval_metrics)
+
         if i >= config.num_collections:
             break
         print(f"Collection: {i}")
@@ -377,14 +404,24 @@ def run_rnn_ppo_torchrl(
 
         wandb.log(
             {
-                "Average Return": avg_non_zero_reward,
-                "Average Improvement": avg_improvement,
-                "loss_objective": loss_vals["loss_objective"].item(),
-                "loss_critic": loss_vals["loss_critic"].item(),
-                "loss_entropy": loss_vals["loss_entropy"].item(),
-                "loss_total": loss_value.item(),
-                "grad_norm": grad_norm,
-            }
+                "collect_loss/step": i,
+                "collect_loss/mean_nonzero_reward": avg_non_zero_reward,
+                "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
+                "collect_loss/average_improvement": avg_improvement.item(),
+                "collect_loss/std_improvement": filtered_improvements.std().item(),
+                "collect_loss/std_return": tensordict_data["value_target"].std().item(),
+                "collect_loss/mean_return": tensordict_data["value_target"]
+                .mean()
+                .item(),
+                "collect_loss/loss_critic": loss_vals["loss_critic"].item(),
+                "collect_loss/loss_entropy": loss_vals["loss_entropy"].item(),
+                "collect_loss/loss_total": loss_value.item(),
+                "collect_loss/grad_norm": grad_norm,
+                "collect_loss/advantage_mean": tensordict_data["advantage"]
+                .mean()
+                .item(),
+                "collect_loss/advantage_std": tensordict_data["advantage"].std().item(),
+            },
         )
 
     collector.shutdown()
@@ -482,7 +519,7 @@ def run_rnn_ppo_torchrl_noDevice(
 
     collector = MultiSyncDataCollector(
         [transformed_env for _ in range(config.workers)],
-        td_module_action,
+        model[0],
         frames_per_batch=config.states_per_collection,
         total_frames=config.states_per_collection * config.num_collections,
         split_trajs=True,
