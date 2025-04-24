@@ -11,6 +11,7 @@ import torch
 from typing import Self
 from task4feedback import fastsim2 as fastsim
 from ..interface.wrappers import *
+import re
 
 
 @dataclass
@@ -385,30 +386,28 @@ class JacobiVariantGPUOnly(VariantBuilder):
 
 @dataclass(kw_only=True)
 class XYExternalObserver(ExternalObserver):
-    def task_observation(
-        self, output: TensorDict, task_ids: Optional[torch.Tensor] = None
-    ):
-        graph = self.simulator.input.graph
-        if task_ids is None:
-            n_candidates = output["aux"]["candidates"]["count"][0]
-            task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
-            output["nodes"]["tasks"]["attr"][:n_candidates, -1] = 1
-        _, count = self.get_bidirectional_neighborhood(
-            task_ids, output["nodes"]["tasks"]["glb"]
-        )
-        output["nodes"]["tasks"]["count"][0] = count
-        self.get_task_features(
-            output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
-        )
-        for i, id in enumerate(output["nodes"]["tasks"]["glb"][:count]):
+
+    def data_observation(self, output):
+        super().data_observation(output)
+        graph: JacobiGraph = self.simulator.input.graph
+        data: JacobiData = graph.data
+
+        count = output["nodes"]["data"]["count"][0]
+        for i, id in enumerate(output["nodes"]["data"]["glb"][:count]):
             id = int(id)
-            cell_id = graph.task_to_cell[id]
+            datakey = data.get_key(id)
+            if isinstance(datakey.id, Cell):
+                datakey = datakey.id.id
+            elif isinstance(datakey.id, tuple):
+                datakey = datakey.id[0].id
+            else:
+                datakey = datakey.object.id
             centroid = graph.data.geometry.cell_points[
-                graph.data.geometry.cells[cell_id]
+                graph.data.geometry.cells[datakey]
             ].mean(axis=0)
             centroid = np.round(centroid, 2)
-            output["nodes"]["tasks"]["attr"][i][-3] = centroid[0] / 4
-            output["nodes"]["tasks"]["attr"][i][-2] = centroid[1] / 4
+            output["nodes"]["data"]["attr"][i][-2] = centroid[0]
+            output["nodes"]["data"]["attr"][i][-1] = centroid[1]
 
 
 @dataclass(kw_only=True)
@@ -456,11 +455,12 @@ class XYObserverFactory(XYExternalObserverFactory):
         # task_feature_factory.add(fastsim.TaskStateFeature)
         task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
         task_feature_factory.add(
-            fastsim.EmptyTaskFeature, 3
+            fastsim.EmptyTaskFeature, 1
         )  # 2 for x, y position, last for whether it is mapped
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.DataSizeFeature)
+        data_feature_factory.add(fastsim.EmptyDataFeature, 2)
         # data_feature_factory.add(fastsim.DataMappedLocationsFeature)
 
         device_feature_factory = FeatureExtractorFactory()
@@ -503,11 +503,12 @@ class XYMinimalObserverFactory(XYExternalObserverFactory):
         # task_feature_factory.add(fastsim.TaskStateFeature)
         # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
         task_feature_factory.add(
-            fastsim.EmptyTaskFeature, 3
+            fastsim.EmptyTaskFeature, 1
         )  # 2 for x, y position, last for whether it is mapped
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.DataSizeFeature)
+        data_feature_factory.add(fastsim.EmptyDataFeature, 2)
         # data_feature_factory.add(fastsim.DataMappedLocationsFeature)
 
         device_feature_factory = FeatureExtractorFactory()
@@ -550,12 +551,13 @@ class XYDataObserverFactory(XYExternalObserverFactory):
         # task_feature_factory.add(fastsim.TaskStateFeature)
         task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
         task_feature_factory.add(
-            fastsim.EmptyTaskFeature, 3
+            fastsim.EmptyTaskFeature, 1
         )  # 2 for x, y position, last for whether it is mapped
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.DataSizeFeature)
         data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+        data_feature_factory.add(fastsim.EmptyDataFeature, 2)
 
         device_feature_factory = FeatureExtractorFactory()
         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
@@ -597,13 +599,13 @@ class OnlyXYObserverFactory(XYExternalObserverFactory):
         # task_feature_factory.add(fastsim.TaskStateFeature)
         task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
         task_feature_factory.add(
-            fastsim.EmptyTaskFeature, 3
+            fastsim.EmptyTaskFeature, 1
         )  # 2 for x, y position, last for whether it is mapped
 
         data_feature_factory = FeatureExtractorFactory()
         # data_feature_factory.add(fastsim.DataSizeFeature)
         # data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-        data_feature_factory.add(fastsim.EmptyDataFeature, 1)
+        data_feature_factory.add(fastsim.EmptyDataFeature, 2)
 
         device_feature_factory = FeatureExtractorFactory()
         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
