@@ -423,8 +423,8 @@ public:
     return it == movement_times.end() ? 0 : it->second;
   }
 
-  void set_completion(dataid_t data_id, devid_t destination, timecount_t time) {
-    movement_times[{data_id, destination}] = time;
+  void set_completion(dataid_t data_id, devid_t destination, timecount_t global_completion_time) {
+    movement_times[{data_id, destination}] = global_completion_time;
   }
 
   void remove(dataid_t data_id, devid_t destination) {
@@ -845,13 +845,15 @@ public:
 
     bool is_moving = movement_manager.is_moving(data_id, destination);
     if (is_moving) {
-      SPDLOG_DEBUG("Data block {} already moving to device {}", data_id, destination);
-      return {true, movement_manager.get_time(data_id, destination)};
+      timecount_t time_left = movement_manager.get_time(data_id, destination) - current_time;
+      SPDLOG_DEBUG("Data block {} already moving to device {} expected to end after {}", data_id,
+                   destination, time_left);
+      return {.is_virtual = true, .duration = time_left};
     }
 
     if (launched_locations.is_valid(data_id, destination)) {
       SPDLOG_DEBUG("Data block {} already at device {}", data_id, destination);
-      return {true, 0};
+      return {.is_virtual = true, .duration = 0};
     }
 
     SPDLOG_DEBUG("Starting move of data block {} from device {} to device {}", data_id, source,
@@ -868,11 +870,11 @@ public:
                    destination);
     }
 
-    movement_manager.set_completion(data_id, destination, duration);
+    movement_manager.set_completion(data_id, destination, current_time + duration);
 
     communication_manager.get().reserve_connection(source, destination);
 
-    return {false, duration};
+    return {.is_virtual = false, .duration = duration};
   }
 
   void complete_move(dataid_t data_id, devid_t source, devid_t destination, bool is_virtual,
@@ -888,6 +890,7 @@ public:
                      "beat the real move",
                      data_id, source, destination);
         // Update will happen in the real move
+        // Not valid until the real move is completed
       } else {
         // NOTE(wlr): I'm not 100% sure about the source check
         // Could something that starts at the same time as the move completes be
