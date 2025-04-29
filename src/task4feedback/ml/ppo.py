@@ -29,7 +29,7 @@ class PPOConfig:
     num_collections: int = 1000
     workers: int = 1
     seed: int = 0
-    lr: float = 2.5e-4
+    lr: float = 5e-4
     clip_eps: float = 0.2
     clip_vloss: bool = True
     ent_coef: float = 0.001
@@ -118,7 +118,8 @@ def evaluate_policy(
             completion_time = env.simulator.time
             completion_times.append(completion_time)
 
-            if i == 0 and completion_time > 0:
+            if False:
+                # i == 0 and completion_time > 0:
                 # Animate the first environment
                 max_frames = 400
                 time_interval = int(completion_time / max_frames)
@@ -623,9 +624,9 @@ def run_ppo_torchrl(
                         "batch_loss/total": loss_value.item(),
                         "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
                         "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),
-                        "batch_loss/value_clip_fraction": loss_vals[
-                            "value_clip_fraction"
-                        ].item(),
+                        # "batch_loss/value_clip_fraction": loss_vals[
+                        #    "value_clip_fraction"
+                        # ].item(),
                         "batch_loss/ESS": loss_vals["ESS"].item(),
                     },
                 )

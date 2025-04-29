@@ -51,7 +51,7 @@ class RuntimeEnv(EnvBase):
         path=".",
     ):
         super().__init__(device=device)
-        print("Initializing environment")
+        # print("Initializing environment")
 
         self.change_priority = change_priority
         self.change_duration = change_duration
@@ -83,9 +83,9 @@ class RuntimeEnv(EnvBase):
             self.location_list = location_list
             random.seed(self.location_seed)
 
-        print("Creating environment spec")
+        # print("Creating environment spec")
         self.observation_spec = self._create_observation_spec()
-        print("Observation spec created")
+        # print("Observation spec created")
         self.action_spec = self._create_action_spec()
         self.reward_spec = self._create_reward_spec()
         self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool)
@@ -97,7 +97,7 @@ class RuntimeEnv(EnvBase):
             graph.randomize_locations(
                 self.location_randomness, self.location_list, verbose=False
             )
-        print("Environment initialized")
+        # print("Environment initialized")
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
@@ -195,7 +195,7 @@ class RuntimeEnv(EnvBase):
             self.simulator_factory.graph_spec.max_candidates,
             dtype=torch.int64,
         )
-        print("Step start")
+        # print("Step start")
         self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[local_id].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
@@ -206,11 +206,11 @@ class RuntimeEnv(EnvBase):
                 local_id, chosen_device, reserving_priority, launching_priority
             )
         ]
-        print("Step map")
+        # print("Step map")
         self.simulator.simulator.map_tasks(actions)
         # print("Current Time: ", self.simulator.time)
 
-        print("step eft")
+        # print("step eft")
         dummy_sim = self.simulator.copy()
         dummy_sim.disable_external_mapper()
         dummy_sim.run()
@@ -236,12 +236,12 @@ class RuntimeEnv(EnvBase):
         simulator_status = self.simulator.run_until_external_mapping()
         # print(f"Simulator status: {simulator_status}, Time: {self.simulator.time}")
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
-        print("step run")
+        # print("step run")
         self.s += 1
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
-        print("step obs")
+        # print("step obs")
 
         if not done:
             assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
@@ -264,11 +264,11 @@ class RuntimeEnv(EnvBase):
         out = obs
         out.set("reward", reward)
         out.set("done", done)
-        print("step done")
+        # print("step done")
         return out
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        print("Resetting environment")
+        # print("Resetting environment")
         self.resets += 1
         current_priority_seed = self.simulator_factory.pseed
         current_duration_seed = self.simulator_factory.seed
@@ -309,10 +309,10 @@ class RuntimeEnv(EnvBase):
         assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
             f"Unexpected simulator status: {simulator_status}"
         )
-        print("Run until external mapping")
+        # print("Run until external mapping")
 
         obs = self._get_observation()
-        print("Get observation")
+        # print("Get observation")
         return obs
 
     @property
@@ -370,6 +370,7 @@ class MapperRuntimeEnv(RuntimeEnv):
         self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[0].item()
         scheduler_state: SchedulerState = self.simulator.state
+        print("Mapping task:", global_task_id)
 
         if self.use_external_mapper:
             external_mapper = self.simulator.external_mapper
@@ -751,8 +752,8 @@ class EFTIncrementalEnv(EnvBase):
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
         self.cum_time += eft_time - ml_time
-        print("Difference to Step:", self.EFT_baseline - ml_time)
-        print("Cumulative Time:", self.cum_time)
+        # print("Difference to Step:", self.EFT_baseline - ml_time)
+        # print("Cumulative Time:", self.cum_time)
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
