@@ -256,20 +256,25 @@ void GraphManager::create_data_tasks(std::unordered_map<dataid_t, taskid_t> &wri
                                      ComputeTask &task, Tasks &tasks) {
   for (auto data_id : task.get_read()) {
     auto writer = find_writer(writers, data_id);
+    if (writer.found) {
+      task.add_recent_writer(writer.task_id, data_id);
+    }
     tasks.create_data_task(task, writer.found, writer.task_id, data_id);
   }
 }
 
-void GraphManager::populate_data_dependencies(TaskIDList &sorted, Tasks &tasks, bool add_missing_writers = true, bool add_data_tasks = true) {
+void GraphManager::populate_data_dependencies(TaskIDList &sorted, Tasks &tasks,
+                                              bool add_missing_writers = true,
+                                              bool add_data_tasks = true) {
   std::unordered_map<dataid_t, taskid_t> writers;
 
   for (auto task_id : sorted) {
     auto &task = tasks.get_compute_task(task_id);
     task.find_unique_data();
-    if (add_data_tasks){
+    if (add_data_tasks) {
       create_data_tasks(writers, task, tasks);
     }
-    if (add_missing_writers){
+    if (add_missing_writers) {
       add_missing_writer_dependencies(writers, task, tasks);
     }
     update_writers(writers, task.get_write(), task_id);
