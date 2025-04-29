@@ -40,7 +40,7 @@ class RuntimeEnv(EnvBase):
         location_list: Optional[List[int]] = None,
     ):
         super().__init__(device=device)
-        print("Initializing environment")
+        # print("Initializing environment")
 
         self.change_priority = change_priority
         self.change_duration = change_duration
@@ -80,9 +80,9 @@ class RuntimeEnv(EnvBase):
                     "Warning: Randomizing locations on a legacy graph. This may not work as expected. location_randomness is ignored."
                 )
 
-        print("Creating environment spec")
+        # print("Creating environment spec")
         self.observation_spec = self._create_observation_spec()
-        print("Observation spec created")
+        # print("Observation spec created")
         self.action_spec = self._create_action_spec()
         self.reward_spec = self._create_reward_spec()
         self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool)
@@ -212,7 +212,7 @@ class RuntimeEnv(EnvBase):
         return out
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        print("Resetting environment")
+        # print("Resetting environment")
         self.resets += 1
         self.step_count = 0
         current_priority_seed = self.simulator_factory.pseed
@@ -800,6 +800,7 @@ class MapperRuntimeEnv(RuntimeEnv):
         self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[0].item()
         scheduler_state: SchedulerState = self.simulator.state
+        print("Mapping task:", global_task_id)
 
         if self.use_external_mapper:
             external_mapper = self.simulator.external_mapper
@@ -1196,8 +1197,8 @@ class EFTIncrementalEnv(EnvBase):
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
         self.cum_time += eft_time - ml_time
-        print("Difference to Step:", self.EFT_baseline - ml_time)
-        print("Cumulative Time:", self.cum_time)
+        # print("Difference to Step:", self.EFT_baseline - ml_time)
+        # print("Cumulative Time:", self.cum_time)
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()

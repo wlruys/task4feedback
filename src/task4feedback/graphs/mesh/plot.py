@@ -118,6 +118,41 @@ def create_mesh_plot(
     return fig, ax
 
 
+def shade_geometry_by_partition(
+    ax,
+    geometry,
+    partition_vector,
+    cmap=None,
+    edgecolor="black",
+    alpha=0.6,
+    z_order=5,
+):
+    """
+    Shade the geometry with a color map.
+
+    Parameters:
+      ax        : The matplotlib axis.
+      geometry  : Geometry object containing points and cells.
+      cmap      : A matplotlib colormap (default 'tab10').
+      edgecolor : Color for cell edges.
+      alpha     : Transparency for cell shading.
+
+    Returns:
+      The PolyCollection object added to the axis.
+    """
+    points, cells = geometry.cell_points, geometry.cells
+    return shade_partitioning(
+        ax,
+        points,
+        cells,
+        partition_vector,
+        cmap=cmap,
+        edgecolor=edgecolor,
+        alpha=alpha,
+        z_order=z_order,
+    )
+
+
 def shade_partitioning(
     ax,
     points,

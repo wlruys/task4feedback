@@ -8,6 +8,8 @@ import os
 from typing import List, Optional, Callable, Self
 from .. import fastsim2 as fastsim
 import numpy as np
+from task4feedback.fastsim2 import DeviceType
+import pymetis
 
 
 def spring_layout(G):
@@ -187,6 +189,117 @@ class ComputeDataGraph(Graph):
     def get_data_geometry(self):
         return self.data
 
+    def get_compute_cost(self, task_id: int, arch: DeviceType):
+        return self.graph.get_time(task_id, arch)
+
+    def get_shared_data(self, task_self: int, task_other: int):
+        # Total size of all shared data blocks from task_other to task_self
+        # For example, if task_self depends on task_other it is the size of the data that task_self needs to read from task_other
+        read_self = self.graph.get_read_data(task_self)
+
+        read_other = self.graph.get_read_data(task_other)
+        write_other = self.graph.get_write_data(task_other)
+
+        shared = set(read_self) & (set(read_other) | set(write_other))
+
+        total_size = 0
+
+        for block_id in shared:
+            block = self.data.blocks.get_block(block_id)
+            size = block.size
+            total_size += size
+        return total_size
+
+    def get_weighted_graph(
+        self, arch: DeviceType, bandwidth: int = 1000, task_ids: Optional[list] = None
+    ):
+        adjacency_list = []
+        adj_starts = []
+        vweights = []
+        eweights = []
+        task_to_local = {}
+
+        if task_ids is None:
+            task_ids = range(len(self))
+
+        for i, task_id in enumerate(task_ids):
+            task_to_local[task_id] = i
+
+        for i, task_id in enumerate(task_ids):
+            adj_starts.append(len(adjacency_list))
+            compute_cost = self.get_compute_cost(task_id, arch)
+            vweights.append(compute_cost)
+
+            # print(f"task_id: {task_id}, compute_cost: {compute_cost}")
+
+            for dep_task_id in self.graph.get_dependencies(task_id):
+                if dep_task_id not in task_ids:
+                    continue
+                data_cost = self.get_shared_data(task_id, dep_task_id)
+                data_cost /= bandwidth
+                eweights.append(data_cost)
+                adjacency_list.append(dep_task_id)
+                # print(
+                #     f"task_id: {task_id}, dep_task_id: {dep_task_id}, data_cost: {data_cost}"
+                # )
+
+        adj_starts.append(len(adjacency_list))
+
+        adjacency_list = np.array(adjacency_list)
+        adj_starts = np.array(adj_starts)
+        vweights = np.array(vweights)
+        eweights = np.array(eweights)
+
+        return task_to_local, adjacency_list, adj_starts, vweights, eweights
+
+
+@dataclass
+class WeightedCellGraph:
+    cells: np.ndarray
+    adjacency: np.ndarray
+    xadj: np.ndarray
+    vweights: np.ndarray
+    eweights: np.ndarray
+
+
+def weighted_partition(
+    nparts: int,
+    adjacency_list: np.ndarray,
+    adj_starts: np.ndarray,
+    vweights: np.ndarray,
+    eweights: np.ndarray,
+):
+    adjacency_list = adjacency_list.astype(np.int32)
+    adj_starts = adj_starts.astype(np.int32)
+    vweights = vweights.astype(np.int32)
+    eweights = eweights.astype(np.int32)
+
+    return pymetis.part_graph(
+        nparts=nparts,
+        adjncy=adjacency_list,
+        xadj=adj_starts,
+        vweights=vweights,
+        eweights=eweights,
+    )
+
+
+def weighted_cell_partition(cell_graph: WeightedCellGraph, nparts: int):
+    """
+    Partition the cell graph using METIS.
+    """
+    # Convert the adjacency list to a format suitable for METIS
+    adjacency_list = cell_graph.adjacency
+    adj_starts = cell_graph.xadj
+    vweights = cell_graph.vweights
+    eweights = cell_graph.eweights
+
+    # Call METIS to partition the graph
+    edgecuts, parts = weighted_partition(
+        nparts, adjacency_list, adj_starts, vweights, eweights
+    )
+
+    return edgecuts, parts
+
 
 @dataclass
 class EnvironmentState:
@@ -295,7 +408,7 @@ class DynamicWorkload:
     def get_workload(self, level: int) -> list:
         return self.level_workload[level]
 
-    def generate_correlated_workload(
+    def generate_workload(
         self,
         num_levels: int,
         start_step: int = 0,
@@ -473,3 +586,122 @@ class DynamicWorkload:
             plt.show()
 
         return ani
+
+
+@dataclass
+class Trajectory:
+    locations: np.ndarray
+    bounds: np.ndarray
+
+
+def make_random_walk_trajectory(
+    geom: Geometry,
+    num_steps: int,
+    step_size: float = 0.1,
+):
+    """
+    Generate trajectory with gaussian random walk with relecting boundary conditions.
+    """
+
+    # Generate random walk
+    trajectory = np.zeros((num_steps, 2))
+
+    # Get random start point
+    start_idx = np.random.randint(0, len(geom.cells))
+    trajectory[0] = geom.get_centroid(start_idx)
+
+    # Adjust step size as a fraction of the domain size
+    width = geom.get_max_coordinate(0) - geom.get_min_coordinate(0)
+    height = geom.get_max_coordinate(1) - geom.get_min_coordinate(1)
+
+    step_size = min(width, height) * step_size
+
+    for i in range(1, num_steps):
+        step = np.random.normal(size=2) * step_size
+        new_location = trajectory[i - 1] + step
+
+        if new_location[0] < geom.get_min_coordinate(0):
+            new_location[0] = geom.get_min_coordinate(0) + (
+                geom.get_min_coordinate(0) - new_location[0]
+            )
+        elif new_location[0] > geom.get_max_coordinate(0):
+            new_location[0] = geom.get_max_coordinate(0) - (
+                new_location[0] - geom.get_max_coordinate(0)
+            )
+
+        trajectory[i] = new_location
+
+    return trajectory
+
+
+def make_circle_trajectory(
+    geom: Geometry, num_steps: int, radius: float = 0.5, center=None, max_angle=None
+):
+    if center is None:
+        # Get center of mesh
+        center = np.array(
+            [
+                (geom.get_min_coordinate(0) + geom.get_max_coordinate(0)) / 2,
+                (geom.get_min_coordinate(1) + geom.get_max_coordinate(1)) / 2,
+            ]
+        )
+
+    width = geom.get_max_coordinate(0) - geom.get_min_coordinate(0)
+    height = geom.get_max_coordinate(1) - geom.get_min_coordinate(1)
+
+    # Adjust radius as a fraction of the domain size
+    radius = min(width, height) * radius
+
+    if max_angle is None:
+        max_angle = 2 * np.pi
+    else:
+        max_angle = max_angle * 2 * np.pi
+
+    # Generate circle trajectory
+    theta = np.linspace(0, max_angle, num_steps)
+    trajectory = np.zeros((num_steps, 2))
+    trajectory[:, 0] = center[0] + radius * np.cos(theta)
+    trajectory[:, 1] = center[1] + radius * np.sin(theta)
+    return trajectory
+
+
+def gaussian_pdf(x, mean, std):
+    grid = np.asarray(x)
+
+    u = np.asarray(mean)
+    s = np.asarray(std)
+    d = grid.shape[1]
+
+    sq_dist = np.sum((grid - u) ** 2, axis=1)
+    norm_const = (2 * np.pi * s) ** (-0.5 * d)
+
+    pdf_vals = norm_const * np.exp(-sq_dist / (2 * s))
+    return pdf_vals
+
+
+class TrajectoryWorkload(DynamicWorkload):
+    def generate_workload(
+        self,
+        num_levels: int,
+        start_step: int = 0,
+        number_of_trajectories: int = 1,
+        upper_bound: float = 3000,
+        scale: float = 0.05,
+    ):
+        trajectory = make_circle_trajectory(
+            self.geom, num_steps=num_levels, radius=0.25, max_angle=0.5
+        )
+
+        centroids = np.zeros((self.num_cells, 2))
+        for i, cell in enumerate(self.geom.cells):
+            centroids[i] = self.geom.get_centroid(i)
+
+        for j in range(start_step + 1, num_levels):
+            self.level_workload[j] = np.copy(self.level_workload[0])
+
+            gaussian_workload = (
+                gaussian_pdf(centroids, trajectory[j], scale) * upper_bound
+            )
+            self.level_workload[j] += gaussian_workload
+
+            self.level_workload[j] = np.clip(self.level_workload[j], 0, None)
