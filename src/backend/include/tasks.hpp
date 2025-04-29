@@ -210,7 +210,7 @@ public:
     variants.at(static_cast<std::size_t>(arch)) = Variant(arch, vcu, mem, time);
   }
 
-  void add_writer(taskid_t writer_id, dataid_t data_id) {
+  void add_recent_writer(taskid_t writer_id, dataid_t data_id) {
     if (most_recent_writers.size() <= this->read.size()) {
       most_recent_writers.resize(this->read.size(), -1);
     }

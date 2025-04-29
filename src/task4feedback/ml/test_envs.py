@@ -13,7 +13,7 @@ def build_jacobi_graph(config: JacobiConfig, randomize=True) -> JacobiGraph:
     mesh = generate_quad_mesh(L=config.L, n=config.n)
     geom = build_geometry(mesh)
 
-    jgraph = DynamicJacobiGraph(geom, config.steps)
+    jgraph = DynamicJacobiGraph(geom, config)
 
     jgraph.apply_variant(JacobiVariant)
 

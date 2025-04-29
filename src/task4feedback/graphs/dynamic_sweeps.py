@@ -133,7 +133,7 @@ class DynamicSweepGraph(SweepGraph):
         self.workload.generate_initial_mass(
             distribution=lambda x: 1.0, average_workload=config.start_workload
         )
-        self.workload.generate_correlated_workload(
+        self.workload.generate_workload(
             num_levels=config.steps + 1,
             step_size=config.step_size,
             scale=config.correlation_scale,
