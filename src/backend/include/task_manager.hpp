@@ -16,8 +16,9 @@ protected:
   std::vector<DepCount> counts;
   std::vector<bool> is_virtual;
   std::vector<devid_t> sources;
-  std::size_t n_compute_tasks;
-  std::size_t n_data_tasks;
+  std::size_t n_compute_tasks = 0;
+  std::size_t n_data_tasks = 0;
+  std::size_t n_eviction_tasks = 0;
 
   void set_state(taskid_t id, TaskState _state) {
     state[id] = _state;
@@ -47,14 +48,18 @@ public:
   PriorityList reserving_priority;
   PriorityList launching_priority;
 
-  std::vector<TaskIDList> eviction_dependencies;
-  std::vector<TaskIDList> eviction_dependents;
-
   TaskStateInfo() = default;
   TaskStateInfo(const Tasks &tasks);
 
   TaskStateInfo(const TaskStateInfo &other) = default;
   TaskStateInfo &operator=(const TaskStateInfo &other) = default;
+
+  taskid_t add_eviction_task() {
+    taskid_t id = n_compute_tasks + n_data_tasks + n_eviction_tasks++;
+    state.push_back(TaskState::RESERVED);
+    counts.emplace_back();
+    return id;
+  }
 
   [[nodiscard]] TaskState get_state(taskid_t id) const {
     return state.at(id);
@@ -81,6 +86,28 @@ public:
     return counts.at(id).incomplete;
   }
 
+  depcount_t increment_unmapped(taskid_t id) {
+    // In the current implementation, no new edges are added to the graph before the reserver
+    // This means this function is unused
+    auto new_v = counts.at(id).unmapped++;
+    return new_v;
+  }
+  depcount_t increment_unreserved(taskid_t id) {
+    // In the current implementation, no new edges are added to the graph before the reserver
+    // This means this function is unused
+    auto new_v = counts.at(id).unreserved++;
+    return new_v;
+  }
+
+  depcount_t increment_incomplete(taskid_t id) {
+    // All data and compute edges are part of the shared static task graph
+    // In the current implementation, eviction tasks are added to the graph in a reserved state
+    // The incomplete count may increase when data/compute tasks depend on newly added eviction
+    // tasks
+    auto new_v = counts.at(id).incomplete++;
+    return new_v;
+  }
+
   void set_mapping(taskid_t id, devid_t devid) {
     assert(id < n_compute_tasks);
     mapping.at(id) = devid;
@@ -96,6 +123,7 @@ public:
   }
 
   [[nodiscard]] devid_t get_mapping(taskid_t id) const {
+    assert(id < n_compute_tasks);
     return mapping[id];
   };
 
@@ -152,14 +180,26 @@ public:
   static constexpr std::size_t n_tracked_states = 4;
 
   std::vector<timecount_t> state_times;
+  std::size_t n_tasks = 0;
 
   TaskRecords() = default;
   TaskRecords(const Tasks &tasks) {
-    state_times.resize(tasks.size() * n_tracked_states, 0);
+    n_tasks = tasks.size();
+    const int EXPECTED_EVICTION_TASKS = 1000;
+    const std::size_t initial_size = n_tasks * n_tracked_states;
+    const std::size_t buffer_size = initial_size + EXPECTED_EVICTION_TASKS * n_tracked_states;
+    state_times.reserve(buffer_size);
+    state_times.resize(initial_size, 0);
   }
 
   TaskRecords(const TaskRecords &other) = default;
   TaskRecords &operator=(const TaskRecords &other) = default;
+
+  taskid_t add_eviction_task() {
+    taskid_t id = n_tasks++;
+    state_times.resize(n_tasks * n_tracked_states, 0);
+    return id;
+  }
 
   void record_mapped(taskid_t id, timecount_t time);
   void record_reserved(taskid_t id, timecount_t time);
@@ -188,12 +228,15 @@ public:
   std::reference_wrapper<TaskNoise> noise;
   TaskStateInfo state;
   TaskRecords records;
+  taskid_t n_tasks = 0;
+  taskid_t n_non_eviction_tasks = 0;
+  EvictionTasks eviction_tasks;
 
   TaskIDList task_buffer;
 
   bool initialized = false;
 
-  TaskManager(Tasks &tasks, TaskNoise &noise) : tasks(tasks), noise(noise){};
+  TaskManager(Tasks &tasks, TaskNoise &noise) : tasks(tasks), noise(noise) {};
   [[nodiscard]] std::size_t size() const {
     return tasks.get().size();
   }
@@ -203,9 +246,21 @@ public:
   void initialize(bool create_data_tasks = false) {
     task_buffer.reserve(TASK_MANAGER_TASK_BUFFER_SIZE);
     // GraphManager::finalize(tasks, create_data_tasks);
-    assert(tasks.is_initialized());
+    assert(tasks.get().is_initialized());
     initialize_state();
+    n_tasks = tasks.get().size();
+    eviction_tasks = EvictionTasks(n_tasks);
     initialized = true;
+  }
+
+  [[nodiscard]] taskid_t create_eviction_task(taskid_t compute_task, dataid_t data_id,
+                                              devid_t device_id, timecount_t time) {
+    auto id = eviction_tasks.add_eviction_task(compute_task, data_id, device_id);
+    auto id_state = state.add_eviction_task();
+    auto id_records = records.add_eviction_task();
+    assert(id == id_state);
+    assert(id == id_records);
+    return id;
   }
 
   [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const {
@@ -252,6 +307,16 @@ public:
     return tasks;
   }
 
+  [[nodiscard]] bool is_data(taskid_t id) const {
+    return tasks.get().is_data(id);
+  }
+  [[nodiscard]] bool is_compute(taskid_t id) const {
+    return tasks.get().is_compute(id);
+  }
+  [[nodiscard]] bool is_eviction(taskid_t id) const {
+    return eviction_tasks.is_eviction(id);
+  }
+
   void set_state(taskid_t id, TaskState _state) {
     state.set_state(id, _state);
   }
@@ -272,11 +337,142 @@ public:
     return state.get_data_task_virtual(id);
   }
 
+  const ComputeTask &get_compute_task(taskid_t id) const {
+    assert(id < n_non_eviction_tasks);
+    return get_tasks().get_compute_task(id);
+  }
+
+  const DataTask &get_data_task(taskid_t id) const {
+    assert(id < n_non_eviction_tasks);
+    return get_tasks().get_data_task(id);
+  }
+
+  const EvictionTask &get_eviction_task(taskid_t id) const {
+    assert(id >= n_non_eviction_tasks);
+    return eviction_tasks.get_eviction_task(id);
+  }
+
+  const TaskIDList &get_compute_dependencies(taskid_t id) const {
+    if (id < n_non_eviction_tasks) {
+      return get_tasks().get_dependencies(id);
+    } else {
+      // Return eviction task compute dependencies
+      // Eviction tasks are dynamic and not part of the static task graph
+      return eviction_tasks.get_eviction_task(id).get_dependencies();
+    }
+  }
+
+  const TaskIDList &get_compute_dependents(taskid_t id) const {
+    if (id < n_non_eviction_tasks) {
+      return get_tasks().get_dependents(id);
+    } else {
+      // Return eviction task compute dependents
+      // Eviction tasks are dynamic and not part of the static shared task graph
+      return eviction_tasks.get_eviction_task(id).get_dependents();
+    }
+  }
+
+  const TaskIDList &get_data_dependencies(taskid_t id) const {
+    if (id < n_non_eviction_tasks) {
+      return get_tasks().get_data_dependencies(id);
+    } else {
+      // Process eviction task data dependencies
+      // Eviction tasks are dynamic and not part of the static shared task graph
+      return eviction_tasks.get_eviction_task(id).get_data_dependencies();
+    }
+  }
+
+  const TaskIDList &get_data_dependent(taskid_t id) const {
+    if (id < n_non_eviction_tasks) {
+      return get_tasks().get_data_dependents(id);
+    } else {
+      // Return eviction task compute dependents
+      // Eviction tasks are dynamic and not part of the static sharedtask graph
+      return eviction_tasks.get_eviction_task(id).get_data_dependents();
+    }
+  }
+
+  const TaskIDList &get_eviction_dependencies(taskid_t id) const {
+    // Process eviction task eviction dependencies
+    // Eviction tasks are dynamic and not part of the static shared task graph
+    return eviction_tasks.get_eviction_dependencies(id);
+  }
+
+  const TaskIDList &get_eviction_dependents(taskid_t id) const {
+    // Process eviction task eviction dependents
+    // Eviction tasks are dynamic and not part of the static shared task graph
+    return eviction_tasks.get_eviction_dependents(id);
+  }
+
+  void add_compute_eviction_dependency(taskid_t compute_task, taskid_t eviction_task) {
+    // Add dependent for compute task to eviction task
+    eviction_tasks.get_eviction_task(eviction_task).add_dependent(compute_task);
+    // Add dependencies for eviction task to compute task
+    eviction_tasks.add_eviction_dependency(compute_task, eviction_task);
+
+    // Increment the incomplete depencency count for the eviction task
+    state.increment_incomplete(eviction_task);
+  }
+
+  void add_eviction_compute_dependency(taskid_t eviction_task, taskid_t compute_task) {
+    // Add dependency for eviction task to compute task
+    eviction_tasks.get_eviction_task(eviction_task).add_dependency(compute_task);
+    // Add dependent for compute task to eviction task
+    eviction_tasks.add_eviction_dependent(eviction_task, compute_task);
+
+    // Increment the incomplete depencency count for the compute task
+    state.increment_incomplete(compute_task);
+  }
+
+  void add_data_eviction_dependency(taskid_t data_task, taskid_t eviction_task) {
+    // Add dependent for data task to eviction task
+    eviction_tasks.get_eviction_task(eviction_task).add_dependent(data_task);
+    // Add dependencies for eviction task to data task
+    eviction_tasks.add_eviction_dependency(data_task, eviction_task);
+
+    // Increment the incomplete depencency count for the eviction task
+    state.increment_incomplete(eviction_task);
+  }
+
+  void add_eviction_data_dependency(taskid_t eviction_task, taskid_t data_task) {
+    // Add dependency for eviction task to data task
+    eviction_tasks.get_eviction_task(eviction_task).add_dependency(data_task);
+    // Add dependent for data task to eviction task
+    eviction_tasks.add_eviction_dependent(eviction_task, data_task);
+
+    // Increment the incomplete depencency count for the data task
+    state.increment_incomplete(data_task);
+  }
+
+  [[nodiscard]] bool is_mappable(taskid_t id) const {
+    return state.is_mappable(id);
+  }
+  [[nodiscard]] bool is_reservable(taskid_t id) const {
+    return state.is_reservable(id);
+  }
+  [[nodiscard]] bool is_launchable(taskid_t id) const {
+    return state.is_launchable(id);
+  }
+
+  [[nodiscard]] bool is_mapped(taskid_t id) const {
+    return state.is_mapped(id);
+  }
+  [[nodiscard]] bool is_reserved(taskid_t id) const {
+    return state.is_reserved(id);
+  }
+  [[nodiscard]] bool is_launched(taskid_t id) const {
+    return state.is_launched(id);
+  }
+  [[nodiscard]] bool is_completed(taskid_t id) const {
+    return state.is_completed(id);
+  }
+
   const TaskIDList &notify_mapped(taskid_t id, timecount_t time);
   const TaskIDList &notify_reserved(taskid_t id, timecount_t time);
   void notify_launched(taskid_t id, timecount_t time);
   const TaskIDList &notify_completed(taskid_t id, timecount_t time);
   const TaskIDList &notify_data_completed(taskid_t id, timecount_t time);
+  const TaskIDList &notify_eviction_completed(taskid_t id, timecount_t time);
 
   [[nodiscard]] const Variant &get_task_variant(taskid_t id, DeviceType arch) const {
     return tasks.get().get_variant(id, arch);

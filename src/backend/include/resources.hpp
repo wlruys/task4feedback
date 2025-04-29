@@ -12,10 +12,6 @@ enum class ResourceType {
 };
 constexpr std::size_t num_resource_types = 3;
 
-using vcu_t = int64_t;
-using mem_t = int64_t;
-using timecount_t = int64_t;
-using copy_t = int64_t;
 
 constexpr mem_t BYTES_IN_POWER = 1024;
 

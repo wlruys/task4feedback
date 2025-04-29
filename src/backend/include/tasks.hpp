@@ -22,9 +22,10 @@ using namespace tabulate;
 
 enum class TaskType {
   COMPUTE = 0,
-  DATA = 1
+  DATA = 1,
+  EVICTION = 2,
 };
-constexpr std::size_t num_task_types = 2;
+constexpr std::size_t num_task_types = 3;
 
 enum class TaskState {
   SPAWNED = 0,
@@ -189,6 +190,7 @@ protected:
   DataIDList read;
   DataIDList write;
   DataIDList unique;
+  DataIDList retire;
 
   VariantList variants;
 
@@ -232,6 +234,9 @@ public:
   void set_write(DataIDList _write) {
     this->write = std::move(_write);
   }
+  void set_retire(DataIDList _retire) {
+    this->retire = std::move(_retire);
+  }
 
   void set_type(int type_) {
     this->type = type_;
@@ -256,6 +261,10 @@ public:
   }
   [[nodiscard]] const DataIDList &get_write() const {
     return write;
+  }
+
+  [[nodiscard]] const DataIDList &get_retire() const {
+    return retire;
   }
 
   void add_data_dependency(taskid_t dependency) {
@@ -291,7 +300,7 @@ public:
 };
 
 class DataTask : public Task {
-private:
+protected:
   dataid_t data_id;
   taskid_t compute_task;
 
@@ -316,6 +325,46 @@ public:
 
   [[nodiscard]] dataid_t get_data_id() const {
     return data_id;
+  }
+};
+
+class EvictionTask : public DataTask {
+protected:
+  TaskIDList data_dependencies;
+  TaskIDList data_dependents;
+  devid_t device_id;
+
+public:
+  static constexpr TaskType task_type = TaskType::EVICTION;
+
+  EvictionTask() = default;
+  EvictionTask(taskid_t id_) {
+    this->id = id_;
+  }
+
+  [[nodiscard]] const TaskIDList &get_data_dependencies() const {
+    return data_dependencies;
+  }
+  [[nodiscard]] const TaskIDList &get_data_dependents() const {
+    return data_dependents;
+  }
+  void add_data_dependency(taskid_t dependency) {
+    data_dependencies.push_back(dependency);
+  }
+  void add_data_dependent(taskid_t dependent) {
+    data_dependents.push_back(dependent);
+  }
+
+  [[nodiscard]] devid_t get_device_id() const {
+    return device_id;
+  }
+
+  void set_device_id(devid_t device_id_) {
+    this->device_id = device_id_;
+  }
+
+  [[nodiscard]] bool is_eviction() const {
+    return true;
   }
 };
 
@@ -374,10 +423,110 @@ struct TaskTypeBundle {
 
 using ComputeTaskList = std::vector<ComputeTask>;
 using DataTaskList = std::vector<DataTask>;
+using EvictionTaskList = std::vector<EvictionTask>;
 using TaskList = std::vector<Task>;
 using MixedTaskIDList = std::vector<TaskTypeBundle>;
 
 class GraphManager;
+
+class EvictionTasks {
+protected:
+  EvictionTaskList tasks;
+  std::vector<std::string> task_names;
+  taskid_t n_noneviction_tasks = 0;
+  taskid_t n_eviction_tasks = 0;
+
+  std::vector<std::vector<taskid_t>> eviction_dependencies;
+  std::vector<std::vector<taskid_t>> eviction_dependents;
+  std::vector<mem_t> requested_bytes;
+
+public:
+  EvictionTasks() = default;
+
+  EvictionTasks(std::size_t n_tasks) : n_noneviction_tasks(n_tasks) {
+    const int EXPECTED_EVICTION_TASKS = 1000;
+    tasks.reserve(EXPECTED_EVICTION_TASKS);
+    task_names.reserve(EXPECTED_EVICTION_TASKS);
+
+    eviction_dependencies.reserve(n_noneviction_tasks + EXPECTED_EVICTION_TASKS);
+    eviction_dependencies.resize(n_noneviction_tasks);
+    eviction_dependents.reserve(n_noneviction_tasks + EXPECTED_EVICTION_TASKS);
+    eviction_dependents.resize(n_noneviction_tasks);
+
+    requested_bytes.reserve(n_noneviction_tasks);
+    requested_bytes.resize(n_noneviction_tasks, 0);
+  }
+
+  void resize(std::size_t n_tasks) {
+    const int EXPECTED_EVICTION_TASKS = 1000;
+    n_noneviction_tasks = n_tasks;
+
+    tasks.reserve(n_tasks + EXPECTED_EVICTION_TASKS);
+    task_names.reserve(n_tasks + EXPECTED_EVICTION_TASKS);
+
+    eviction_dependencies.reserve(n_noneviction_tasks + n_tasks + EXPECTED_EVICTION_TASKS);
+    eviction_dependencies.resize(n_noneviction_tasks + n_tasks + EXPECTED_EVICTION_TASKS);
+
+    eviction_dependents.reserve(n_noneviction_tasks + n_tasks + EXPECTED_EVICTION_TASKS);
+    eviction_dependents.resize(n_noneviction_tasks + n_tasks + EXPECTED_EVICTION_TASKS);
+  }
+
+  mem_t get_remaining_requested_bytes(taskid_t id) const {
+    assert(id < n_noneviction_tasks);
+    return requested_bytes.at(id);
+  }
+
+  taskid_t get_local_eviction_task_id(taskid_t id) const {
+    assert(id < n_noneviction_tasks + n_eviction_tasks);
+    assert(id >= n_noneviction_tasks);
+    return id - n_noneviction_tasks;
+  }
+
+  taskid_t add_eviction_task(taskid_t compute_task, dataid_t data_id, devid_t device_id) {
+    taskid_t id = n_noneviction_tasks + n_eviction_tasks++;
+    tasks.emplace_back(id);
+    tasks.back().set_data_id(data_id);
+    tasks.back().set_compute_task(compute_task);
+    tasks.back().set_device_id(device_id);
+    return id;
+  }
+
+  bool is_eviction(taskid_t id) const {
+    return id >= n_noneviction_tasks;
+  }
+
+  const TaskIDList &get_eviction_dependencies(taskid_t id) const {
+    assert(id < n_noneviction_tasks + n_eviction_tasks);
+    return eviction_dependencies.at(id);
+  }
+
+  const TaskIDList &get_eviction_dependents(taskid_t id) const {
+    assert(id < n_noneviction_tasks + n_eviction_tasks);
+    return eviction_dependents.at(id);
+  }
+
+  void add_eviction_dependency(taskid_t id, taskid_t dependency) {
+    assert(id < n_noneviction_tasks + n_eviction_tasks);
+    eviction_dependencies.at(id).push_back(dependency);
+  }
+
+  void add_eviction_dependent(taskid_t id, taskid_t dependent) {
+    assert(id < n_noneviction_tasks + n_eviction_tasks);
+    eviction_dependents.at(id).push_back(dependent);
+  }
+
+  [[nodiscard]] EvictionTask &get_eviction_task(taskid_t id) {
+    return tasks.at(get_local_eviction_task_id(id));
+  }
+
+  [[nodiscard]] const EvictionTask &get_eviction_task(taskid_t id) const {
+    return tasks.at(get_local_eviction_task_id(id));
+  }
+
+  [[nodiscard]] std::size_t get_n_eviction_tasks() const {
+    return n_eviction_tasks;
+  }
+};
 
 class Tasks {
 protected:
@@ -423,6 +572,7 @@ public:
   [[nodiscard]] bool empty() const;
   [[nodiscard]] bool is_compute(taskid_t id) const;
   [[nodiscard]] bool is_data(taskid_t id) const;
+  [[nodiscard]] bool is_eviction(taskid_t id) const;
 
   void add_compute_task(ComputeTask task);
   void add_data_task(DataTask task);
@@ -431,6 +581,7 @@ public:
   void add_variant(taskid_t id, DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time);
   void set_read(taskid_t id, DataIDList read);
   void set_write(taskid_t id, DataIDList write);
+  void set_retire(taskid_t id, DataIDList retire);
   void set_type(taskid_t id, int type);
   void set_tag(taskid_t id, int tag);
 
@@ -459,6 +610,7 @@ public:
   [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const;
   [[nodiscard]] const DataIDList &get_read(taskid_t id) const;
   [[nodiscard]] const DataIDList &get_write(taskid_t id) const;
+  [[nodiscard]] const DataIDList &get_retire(taskid_t id) const;
 
   [[nodiscard]] const Resources &get_task_resources(taskid_t id) const;
   [[nodiscard]] const Resources &get_task_resources(taskid_t id, DeviceType arch) const;

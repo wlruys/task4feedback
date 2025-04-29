@@ -9,6 +9,7 @@
 #include "tasks.hpp"
 #include <algorithm>
 #include <cstddef>
+#include <eviction.hpp>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -225,6 +226,10 @@ public:
     return static_cast<std::size_t>(std::count(locations.begin(), locations.end(), true));
   }
 
+  [[nodiscard]] bool is_last_copy() const {
+    return count_valid() == 1;
+  }
+
   // Return indexes of valid locations
   [[nodiscard]] std::vector<devid_t> get_valid_locations() const {
     std::vector<devid_t> valid_locations;
@@ -259,6 +264,26 @@ public:
         set_invalid(i, current_time);
         updated.push_back(i);
       }
+    }
+    return updated;
+  }
+
+  std::vector<devid_t> invalidate_all(timecount_t current_time) {
+    std::vector<devid_t> updated;
+    for (devid_t i = 0; i < locations.size(); i++) {
+      if (is_valid(i)) {
+        set_invalid(i, current_time);
+        updated.push_back(i);
+      }
+    }
+    return updated;
+  }
+
+  std::vector<devid_t> invalidate_on(devid_t device_id, timecount_t current_time) {
+    std::vector<devid_t> updated;
+    if (is_valid(device_id)) {
+      set_invalid(device_id, current_time);
+      updated.push_back(device_id);
     }
     return updated;
   }
@@ -348,6 +373,10 @@ public:
     return block_locations.at(data_id).count_valid();
   }
 
+  [[nodiscard]] bool is_last_copy(dataid_t data_id) const {
+    return block_locations.at(data_id).is_last_copy();
+  }
+
   [[nodiscard]] std::vector<devid_t> get_valid_locations(dataid_t data_id) const {
     return block_locations.at(data_id).get_valid_locations();
   }
@@ -434,7 +463,7 @@ public:
 
 class DeviceDataCounts {
 protected:
-  using DataCount = std::unordered_map<dataid_t, std::size_t>;
+  using DataCount = std::unordered_map<dataid_t, taskid_t>;
   DataCount mapped_counts;
   DataCount reserved_counts;
   DataCount launched_counts;
@@ -444,7 +473,7 @@ protected:
   static bool increment(DataCount &counts, dataid_t data_id) {
     auto it = counts.find(data_id);
     if (it == counts.end()) {
-      counts.at(data_id) = 1;
+      counts[data_id] = 1;
       return true;
     }
     it->second++;
@@ -609,6 +638,7 @@ protected:
   LocationManager launched_locations;
   MovementManager movement_manager;
   DataCounts counts;
+  EvictionManager eviction_manager;
 
   static bool check_valid(size_t data_id, const LocationManager &locations, devid_t device_id) {
     return locations.is_valid(data_id, device_id);
@@ -631,6 +661,18 @@ protected:
     return updated_ids;
   }
 
+  static auto evict_all_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
+                               timecount_t current_time) {
+    auto updated_ids = locations[data_id].invalidate_all(current_time);
+    return updated_ids;
+  }
+
+  static auto evict_on_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
+                              timecount_t current_time) {
+    auto updated_ids = locations[data_id].invalidate_on(device_id, current_time);
+    return updated_ids;
+  }
+
 public:
   DataManager(Data &data_, DeviceManager &device_manager_,
               CommunicationManager &communication_manager_)
@@ -638,7 +680,7 @@ public:
         mapped_locations(data.get().size(), device_manager_.size()),
         reserved_locations(data.get().size(), device_manager_.size()),
         launched_locations(data.get().size(), device_manager_.size()),
-        counts(device_manager_.size()) {
+        counts(device_manager_.size()), eviction_manager(device_manager_.size()) {
   }
 
   DataManager(const DataManager &o_, DeviceManager &device_manager_,
@@ -646,7 +688,8 @@ public:
       : data(o_.data), device_manager(device_manager_),
         communication_manager(communication_manager_), mapped_locations(o_.mapped_locations),
         reserved_locations(o_.reserved_locations), launched_locations(o_.launched_locations),
-        movement_manager(o_.movement_manager), counts(o_.counts) {
+        movement_manager(o_.movement_manager), counts(o_.counts),
+        eviction_manager(o_.eviction_manager) {
   }
 
   DataManager(const DataManager &o_) = delete;
@@ -663,6 +706,9 @@ public:
                                                         0);
       device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, data.get().get_size(i),
                                                         0);
+
+      // Initial state for all data blocks is evictable
+      eviction_manager.add(i, initial_location, data.get().get_size(i));
     }
   }
 
@@ -744,6 +790,10 @@ public:
     return non_local_size;
   }
 
+  EvictionManager &get_eviction_manager() {
+    return eviction_manager;
+  }
+
   mem_t non_local_size_mapped(const DataIDList &list, devid_t device_id) const {
     return non_local_size(list, mapped_locations, device_id);
   }
@@ -766,9 +816,21 @@ public:
     return shared_size;
   }
 
+  template <TaskState state> [[nodiscard]] bool is_last_copy(dataid_t data_id) const {
+    if constexpr (state == TaskState::MAPPED) {
+      return mapped_locations.is_last_copy(data_id);
+    } else if constexpr (state == TaskState::RESERVED) {
+      return reserved_locations.is_last_copy(data_id);
+    } else if constexpr (state == TaskState::LAUNCHED) {
+      return launched_locations.is_last_copy(data_id);
+    }
+    return false;
+  }
+
   void read_update_mapped(const DataIDList &list, devid_t device_id, timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, mapped_locations, current_time);
+      counts.increment_mapped(data_id, device_id);
     }
     // Memory change is handled by task request in mapper
   }
@@ -780,9 +842,21 @@ public:
     // Memory change is handled by task complete
   }
 
+  void retire_update_mapped(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+    for (auto data_id : list) {
+      auto updated_ids = evict_all_update(data_id, device_id, mapped_locations, current_time);
+    }
+  }
+
   void read_update_reserved(const DataIDList &list, devid_t device_id, timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, reserved_locations, current_time);
+      bool newly_nonevictable = counts.increment_reserved(data_id, device_id);
+      if (newly_nonevictable) {
+        SPDLOG_DEBUG("Data block {} is now nonevictable on device {}", data_id, device_id);
+        auto data_size = data.get().get_size(data_id);
+        eviction_manager.remove(data_id, device_id);
+      }
     }
     // Memory change is handeled by task request in reserver
   }
@@ -790,8 +864,33 @@ public:
   void write_update_reserved(const DataIDList &list, devid_t device_id, timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, reserved_locations, current_time);
+
+      // Add usage count on all devices except this one
+      // This is a hack for eviction to prevent removing the last copy of a data block (where
+      // that block has reserved write operations in flight) during its invalidation
+      // Likely better ways to do this with task dependencies, but this is simpler to implement
+      for (devid_t i = 0; i < device_manager.get().size(); i++) {
+        if (i != device_id) {
+          bool newly_nonevictable = counts.increment_reserved(data_id, i);
+          if (newly_nonevictable) {
+            SPDLOG_DEBUG("Data block {} is now nonevictable on device {}. Will be invalidated by "
+                         "an inflight write operation.",
+                         data_id, i);
+            auto data_size = data.get().get_size(data_id);
+            eviction_manager.remove(data_id, i);
+          }
+        }
+      }
     }
     // Memory change is handled by task complete
+  }
+
+  void retire_update_reserved(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+    for (auto data_id : list) {
+      auto updated_ids = evict_all_update(data_id, device_id, reserved_locations, current_time);
+
+      // TODO: Possibly add usage count on all devices ?
+    }
   }
 
   void add_memory(dataid_t data_id, devid_t device_id, timecount_t current_time) {
@@ -804,9 +903,35 @@ public:
   void read_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
     for (auto data_id : list) {
       bool changed = read_update(data_id, device_id, launched_locations, current_time);
+      counts.increment_launched(data_id, device_id);
       if (changed) {
         add_memory(data_id, device_id, current_time);
       }
+    }
+  }
+
+  void finalize_mapped_usage(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+    for (auto data_id : list) {
+      counts.decrement_mapped(data_id, device_id);
+    }
+  }
+
+  void finalize_reserved_usage(const DataIDList &list, devid_t device_id,
+                               timecount_t current_time) {
+    for (auto data_id : list) {
+      bool newly_evictable = counts.decrement_reserved(data_id, device_id);
+      if (newly_evictable) {
+        SPDLOG_DEBUG("Data block {} is now evictable on device {}", data_id, device_id);
+        auto data_size = data.get().get_size(data_id);
+        eviction_manager.add(data_id, device_id, data_size);
+      }
+    }
+  }
+
+  void finalize_launched_usage(const DataIDList &list, devid_t device_id,
+                               timecount_t current_time) {
+    for (auto data_id : list) {
+      counts.decrement_launched(data_id, device_id);
     }
   }
 
@@ -872,6 +997,17 @@ public:
 
     communication_manager.get().reserve_connection(source, destination);
 
+    // Increment usage counts to prevent eviction from source device
+    bool newly_nonevictable = counts.increment_reserved(data_id, source);
+    if (newly_nonevictable) {
+      SPDLOG_DEBUG("Data block {} is now nonevictable on device {}. In use as the source device in "
+                   "an inflight data movement operation",
+                   data_id, source);
+      auto data_size = data.get().get_size(data_id);
+      eviction_manager.remove(data_id, source);
+    }
+    counts.increment_launched(data_id, source);
+
     return {false, duration};
   }
 
@@ -906,6 +1042,16 @@ public:
     movement_manager.remove(data_id, destination);
 
     communication_manager.get().release_connection(source, destination);
+
+    // Decrement usage counts to allow eviction from source device
+    bool newly_evictable = counts.decrement_reserved(data_id, source);
+    if (newly_evictable) {
+      // Block is valid on source (by assumption), so add to eviction manager if no longer in use
+      SPDLOG_DEBUG("Data block {} is now evictable on device {}", data_id, source);
+      auto data_size = data.get().get_size(data_id);
+      eviction_manager.add(data_id, source, data_size);
+    }
+    counts.decrement_launched(data_id, source);
   }
 
   void remove_memory(const DeviceIDList &device_list, dataid_t data_id, timecount_t current_time) {
@@ -915,6 +1061,9 @@ public:
       device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
       device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
       device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+
+      // Data is no longer valid on device, remove from eviction manager
+      eviction_manager.remove(data_id, device);
     }
   }
 
@@ -922,6 +1071,72 @@ public:
     for (auto data_id : list) {
       auto updated_devices = write_update(data_id, device_id, launched_locations, current_time);
       remove_memory(updated_devices, data_id, current_time);
+
+      // Decrement usage counts to allow eviction from devices that were previously blocked (by hack
+      // in write_update_reserved)
+      // Loop through all devices except this one (not just updated ones) to ensure all decremented
+
+      for (devid_t i = 0; i < device_manager.get().size(); i++) {
+        if (i != device_id) {
+          bool newly_evictable = counts.decrement_reserved(data_id, i);
+          // This is a write operation, so only the device that is writing should be valid by this
+          // step. They shouldn't have copies to evict.
+          // Removal from eviction manager of others is handled in remove_memory.
+          // Addition to eviction manager on self is handled in finalize_reserved_usage
+        }
+      }
+    }
+  }
+
+  void retire_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+    for (auto data_id : list) {
+      auto updated_devices = evict_all_update(data_id, device_id, launched_locations, current_time);
+      remove_memory(updated_devices, data_id, current_time);
+
+      // TODO: Possibly remove usage count on all devices ?
+    }
+  }
+
+  mem_t get_evictable_memory(devid_t device_id) const {
+    return eviction_manager.get_evictable_memory(device_id);
+  }
+
+  void evict_single(const dataid_t data_id, devid_t device_id, timecount_t current_time) {
+    auto updated_devices_mapped =
+        evict_on_update(data_id, device_id, mapped_locations, current_time);
+    auto updated_devices_reserved =
+        evict_on_update(data_id, device_id, reserved_locations, current_time);
+    auto updated_devices_launched =
+        evict_on_update(data_id, device_id, launched_locations, current_time);
+
+    remove_memory(updated_devices_launched, data_id, current_time);
+
+    for (auto device : updated_devices_mapped) {
+      // Check if the data has mapped usage on this device
+      // By this being eviction we should have the precondition that counts.count_reserved(data_id,
+      // device) == 0
+
+      if (counts.count_mapped(data_id, device) > 0) {
+        // If the data has mapped usage on this device, then there are tasks in flight that will
+        // bring it back here We want the mapped location to be valid for this still (and to have
+        // mapped memory be an upper bound)
+        // NOTE(wlr): I am not sure if this is the correct fix for the mapped usage table
+        auto data_size = data.get().get_size(data_id);
+        mapped_locations.set_valid(data_id, device, current_time);
+        device_manager.get().add_mem<TaskState::MAPPED>(device, data_size, current_time);
+      }
+    }
+  }
+
+  void evict_on_update_all(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+    for (auto data_id : list) {
+      auto updated_devices_mapped =
+          evict_on_update(data_id, device_id, mapped_locations, current_time);
+      auto updated_devices_reserved =
+          evict_on_update(data_id, device_id, reserved_locations, current_time);
+      auto updated_devices_launched =
+          evict_on_update(data_id, device_id, launched_locations, current_time);
+      remove_memory(updated_devices_launched, data_id, current_time);
     }
   }
 
@@ -956,6 +1171,10 @@ public:
 
   ValidEventArray get_valid_intervals_launched(dataid_t data_id, devid_t device_id) const {
     return launched_locations.get_valid_intervals(data_id, device_id);
+  }
+
+  mem_t get_data_size(dataid_t data_id) const {
+    return data.get().get_size(data_id);
   }
 
   friend class SchedulerState;

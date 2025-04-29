@@ -1,5 +1,7 @@
 #include "include/task_manager.hpp"
 #include "devices.hpp"
+#include "include/macros.hpp"
+#include "include/settings.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
 
@@ -7,16 +9,30 @@
 
 TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
   auto n = tasks.size();
+  const int EXPECTED_EVICTION_TASKS = 1000;
+  auto buffer_size = n + EXPECTED_EVICTION_TASKS;
+
   n_compute_tasks = tasks.compute_size();
   n_data_tasks = tasks.data_size();
+  state.reserve(buffer_size);
   state.resize(n, TaskState::SPAWNED);
+
+  counts.reserve(n + EXPECTED_EVICTION_TASKS);
   counts.resize(n, DepCount());
+
   mapping.resize(n_compute_tasks, 0);
-  //mapping_priority.resize(n, 0);
+
+  reserving_priority.reserve(buffer_size);
   reserving_priority.resize(n, 0);
+
+  launching_priority.reserve(buffer_size);
   launching_priority.resize(n, 0);
-  is_virtual.resize(n, false);
-  sources.resize(n, 0);
+
+  is_virtual.reserve(n_data_tasks);
+  is_virtual.resize(n_data_tasks, false);
+
+  sources.reserve(n_data_tasks);
+  sources.resize(n_data_tasks, 0);
 }
 
 TaskStatus TaskStateInfo::get_status(taskid_t id) const {
@@ -80,10 +96,6 @@ bool TaskStateInfo::decrement_incomplete(taskid_t id) {
   // return if the task just became launchable
   return (counts[id].incomplete == 0) && (state[id] == TaskState::RESERVED);
 }
-
-// void TaskStateInfo::set_mapping_priority(taskid_t id, priority_t priority) {
-//   mapping_priority[id] = priority;
-// }
 
 void TaskStateInfo::set_reserving_priority(taskid_t id, priority_t priority) {
   reserving_priority[id] = priority;
@@ -198,6 +210,7 @@ void TaskManager::set_mapping(taskid_t id, devid_t devid) {
 }
 
 const TaskIDList &TaskManager::notify_mapped(taskid_t id, timecount_t time) {
+  // Only returns compute tasks (called when compute tasks are mapped)
   const auto &task_objects = get_tasks();
 
   records.record_mapped(id, time);
@@ -218,6 +231,7 @@ const TaskIDList &TaskManager::notify_mapped(taskid_t id, timecount_t time) {
 }
 
 const TaskIDList &TaskManager::notify_reserved(taskid_t id, timecount_t time) {
+  // Only returns compute tasks (called when compute tasks are reserved)
   const auto &task_objects = get_tasks();
 
   records.record_reserved(id, time);
@@ -238,11 +252,13 @@ const TaskIDList &TaskManager::notify_reserved(taskid_t id, timecount_t time) {
 }
 
 void TaskManager::notify_launched(taskid_t id, timecount_t time) {
+  // Called when compute, data, or eviction tasks are launched
   state.set_state(id, TaskState::LAUNCHED);
   records.record_launched(id, time);
 }
 
 const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
+  // Only returns compute tasks (called when compute, data, or eviction tasks are completed)
   const auto &task_objects = get_tasks();
 
   records.record_completed(id, time);
@@ -263,6 +279,7 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
 }
 
 const TaskIDList &TaskManager::notify_data_completed(taskid_t id, timecount_t time) {
+  // Only returns data tasks (called when compute or eviction tasks are completed)
   MONUnusedParameter(time);
   const auto &task_objects = get_tasks();
   // clear task_buffer
@@ -273,6 +290,23 @@ const TaskIDList &TaskManager::notify_data_completed(taskid_t id, timecount_t ti
       task_buffer.push_back(dependent_id);
       assert(state.get_state(dependent_id) == TaskState::RESERVED);
       assert(task_objects.is_data(dependent_id));
+    }
+  }
+
+  return task_buffer;
+}
+
+const TaskIDList &TaskManager::notify_eviction_completed(taskid_t id, timecount_t time) {
+  // Only returns eviction tasks (called when compute, data, or eviction tasks are completed)
+  MONUnusedParameter(time);
+
+  task_buffer.clear();
+
+  for (auto dependent_id : get_eviction_dependents(id)) {
+    if (state.decrement_incomplete(dependent_id)) {
+      task_buffer.push_back(dependent_id);
+      assert(state.get_state(dependent_id) == TaskState::RESERVED);
+      assert(is_eviction(dependent_id));
     }
   }
 
