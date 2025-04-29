@@ -138,6 +138,7 @@ def make_env(
     graph_builder,
     graph_config,
     system_config,
+    feature_config=None,
     runtime_env_t=RuntimeEnv,
     observer_factory_t=XYDataObserverFactory,
     change_priority=True,
@@ -156,7 +157,18 @@ def make_env(
     m = jgraph
     m.finalize_tasks()
 
-    spec = create_graph_spec()
+    max_tasks = feature_config.get("max_tasks", 100)
+    max_data = feature_config.get("max_data", 100)
+    max_tasks_tasks_edges = feature_config.get("max_tasks_tasks_edges", 200)
+    max_tasks_data_edges = feature_config.get("max_tasks_data_edges", 200)
+
+    spec = create_graph_spec(
+        max_tasks=max_tasks,
+        max_data=max_data,
+        max_edges_tasks_data=max_tasks_data_edges,
+        max_edges_tasks_tasks=max_tasks_tasks_edges,
+    )
+
     input = SimulatorInput(
         m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
     )
@@ -329,19 +341,15 @@ def train(wandb_config):
             seed=42,
         )
 
-    # Organize and log config parameters to wandb in a cleaner hierarchy
     wandb_params = {}
 
-    # Group graph parameters
     wandb_params["graph"] = {
         "class": graph_class.__name__,
         "config": graph_config,
     }
 
-    # Group system parameters
     wandb_params["system"] = system_config
 
-    # Group model parameters
     wandb_params["model"] = {
         "architecture": model_class.__name__,
         "parameters": num_params,
@@ -349,34 +357,29 @@ def train(wandb_config):
         "n_heads": layer_config.n_heads,
     }
 
-    # Group feature parameters
     feature_params = env.observer.store_feature_types()
     wandb_params["features"] = {
         "observer_type": feature_config_info["observer_factory"],
     }
-    # Add feature types with cleaner names
+
     for key, value in feature_params.items():
         clean_key = key.replace("features", "").replace("_types", "")
         if isinstance(value, list):
             wandb_params["features"][clean_key] = value
 
-    # Group training parameters
     wandb_params["training"] = train_config
 
-    # Group environment parameters
     wandb_params["environment"] = {
         "change_priority": env_config["change_priority"],
         "change_locations": env_config["change_locations"],
         "seed": env_config["seed"],
     }
 
-    # Log all parameters with clean, hierarchical organization
     run.config.update(wandb_params)
 
-    # Create a visual summary of model architecture as a table
     model_layers = []
     for name, module in model.named_modules():
-        if len(list(module.children())) == 0:  # Only leaf modules
+        if len(list(module.children())) == 0:
             params = sum(p.numel() for p in module.parameters())
             if params > 0:
                 model_layers.append([name, module.__class__.__name__, params])
@@ -389,7 +392,6 @@ def train(wandb_config):
         }
     )
 
-    # Compile model if using PyTorch 2.0+
     try:
         model = torch.compile(model, fullgraph=True)
         print("Using compiled model")
@@ -433,6 +435,10 @@ if __name__ == "__main__":
         },
         "feature_config": {
             "observer_factory": "XYDataObserverFactory",
+            "max_tasks": 100,
+            "max_data": 100,
+            "max_tasks_tasks_edges": 200,
+            "max_tasks_data_edges": 200,
         },
         "layer_config": {
             "hidden_channels": 32,
