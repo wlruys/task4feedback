@@ -267,7 +267,7 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
   // clear task_buffer
   task_buffer.clear();
 
-  for (auto dependent_id : task_objects.get_dependents(id)) {
+  for (auto dependent_id : get_compute_dependents(id)) {
     if (state.decrement_incomplete(dependent_id)) {
       task_buffer.push_back(dependent_id);
       assert(state.get_state(dependent_id) == TaskState::RESERVED);
@@ -285,7 +285,7 @@ const TaskIDList &TaskManager::notify_data_completed(taskid_t id, timecount_t ti
   // clear task_buffer
   task_buffer.clear();
 
-  for (auto dependent_id : task_objects.get_data_dependents(id)) {
+  for (auto dependent_id : get_data_dependents(id)) {
     if (state.decrement_incomplete(dependent_id)) {
       task_buffer.push_back(dependent_id);
       assert(state.get_state(dependent_id) == TaskState::RESERVED);
@@ -300,10 +300,14 @@ const TaskIDList &TaskManager::notify_eviction_completed(taskid_t id, timecount_
   // Only returns eviction tasks (called when compute, data, or eviction tasks are completed)
   MONUnusedParameter(time);
 
+  std::cout << "Notify eviction tasks of completion: " << id << std::endl;
+
   task_buffer.clear();
 
   for (auto dependent_id : get_eviction_dependents(id)) {
+    std::cout << "task: " << id << " eviction dependent: " << dependent_id << std::endl;
     if (state.decrement_incomplete(dependent_id)) {
+      std::cout << "Eviction Dependent is launchable: " << dependent_id << std::endl;
       task_buffer.push_back(dependent_id);
       assert(state.get_state(dependent_id) == TaskState::RESERVED);
       assert(is_eviction(dependent_id));

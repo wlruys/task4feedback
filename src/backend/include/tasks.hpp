@@ -332,7 +332,8 @@ class EvictionTask : public DataTask {
 protected:
   TaskIDList data_dependencies;
   TaskIDList data_dependents;
-  devid_t device_id;
+  devid_t device_id = HOST_ID;         // the backup device
+  devid_t invalidate_device = HOST_ID; // the device to invalidate
 
 public:
   static constexpr TaskType task_type = TaskType::EVICTION;
@@ -357,6 +358,14 @@ public:
 
   [[nodiscard]] devid_t get_device_id() const {
     return device_id;
+  }
+
+  void set_invalidate_device(devid_t invalidate_device_) {
+    this->invalidate_device = invalidate_device_;
+  }
+
+  [[nodiscard]] devid_t get_invalidate_device() const {
+    return invalidate_device;
   }
 
   void set_device_id(devid_t device_id_) {
@@ -471,7 +480,13 @@ public:
     eviction_dependents.resize(n_noneviction_tasks + n_tasks + EXPECTED_EVICTION_TASKS);
   }
 
-  mem_t get_remaining_requested_bytes(taskid_t id) const {
+  mem_t set_requested_bytes(taskid_t id, mem_t bytes) {
+    assert(id < n_noneviction_tasks);
+    requested_bytes.at(id) = bytes;
+    return bytes;
+  }
+
+  [[nodiscard]] mem_t get_requested_bytes(taskid_t id) const {
     assert(id < n_noneviction_tasks);
     return requested_bytes.at(id);
   }
@@ -482,12 +497,17 @@ public:
     return id - n_noneviction_tasks;
   }
 
-  taskid_t add_eviction_task(taskid_t compute_task, dataid_t data_id, devid_t device_id) {
+  taskid_t add_eviction_task(taskid_t compute_task, dataid_t data_id, devid_t backup_device,
+                             devid_t invalidate_device) {
     taskid_t id = n_noneviction_tasks + n_eviction_tasks++;
     tasks.emplace_back(id);
+    eviction_dependencies.emplace_back();
+    eviction_dependents.emplace_back();
+    task_names.emplace_back("eviction[" + std::to_string(id) + "]");
     tasks.back().set_data_id(data_id);
     tasks.back().set_compute_task(compute_task);
-    tasks.back().set_device_id(device_id);
+    tasks.back().set_device_id(backup_device);
+    tasks.back().set_invalidate_device(invalidate_device);
     return id;
   }
 

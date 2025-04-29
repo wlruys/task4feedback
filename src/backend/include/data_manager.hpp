@@ -842,6 +842,23 @@ public:
     // Memory change is handled by task complete
   }
 
+  void evict_on_update_mapped(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+    for (auto data_id : list) {
+      // CHECKME: I'm being evicted so my state should be valid before evict_on is called.
+
+      auto updated_ids = evict_on_update(data_id, device_id, mapped_locations, current_time);
+
+      // Check if the data block has mapped usage that we need to adjust
+      // TODO check this logic
+      if (counts.count_mapped(data_id, device_id) > 0) {
+        auto data_size = data.get().get_size(data_id);
+        // Re-add the size and location as valid
+        mapped_locations.set_valid(data_id, device_id, current_time);
+        device_manager.get().add_mem<TaskState::MAPPED>(device_id, data_size, current_time);
+      }
+    }
+  }
+
   void retire_update_mapped(const DataIDList &list, devid_t device_id, timecount_t current_time) {
     for (auto data_id : list) {
       auto updated_ids = evict_all_update(data_id, device_id, mapped_locations, current_time);
@@ -859,6 +876,15 @@ public:
       }
     }
     // Memory change is handeled by task request in reserver
+  }
+
+  void evict_on_update_reserved(const DataIDList &list, devid_t device_id,
+                                timecount_t current_time) {
+    for (auto data_id : list) {
+      auto updated_ids = evict_on_update(data_id, device_id, reserved_locations, current_time);
+    }
+
+    // TODO: Possibly add usage counts
   }
 
   void write_update_reserved(const DataIDList &list, devid_t device_id, timecount_t current_time) {
@@ -1137,6 +1163,17 @@ public:
       auto updated_devices_launched =
           evict_on_update(data_id, device_id, launched_locations, current_time);
       remove_memory(updated_devices_launched, data_id, current_time);
+    }
+  }
+
+  void evict_on_update_launched(const DataIDList &list, devid_t device_id,
+                                timecount_t current_time) {
+    for (auto data_id : list) {
+      auto updated_devices = evict_on_update(data_id, device_id, launched_locations, current_time);
+      remove_memory(updated_devices, data_id, current_time);
+      // TODO: make sure memory is consistent across mapped,launched,and reserved locations if
+      // queues are drained at a checkpoint. Is updating for the changed locations (at launch time)
+      // sufficient? Probably not.
     }
   }
 

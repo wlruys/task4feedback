@@ -58,6 +58,8 @@ public:
     taskid_t id = n_compute_tasks + n_data_tasks + n_eviction_tasks++;
     state.push_back(TaskState::RESERVED);
     counts.emplace_back();
+    sources.push_back(0);
+    is_virtual.push_back(false);
     return id;
   }
 
@@ -254,8 +256,10 @@ public:
   }
 
   [[nodiscard]] taskid_t create_eviction_task(taskid_t compute_task, dataid_t data_id,
-                                              devid_t device_id, timecount_t time) {
-    auto id = eviction_tasks.add_eviction_task(compute_task, data_id, device_id);
+                                              devid_t backup_device, devid_t invalidate_device,
+                                              timecount_t time) {
+    auto id =
+        eviction_tasks.add_eviction_task(compute_task, data_id, backup_device, invalidate_device);
     auto id_state = state.add_eviction_task();
     auto id_records = records.add_eviction_task();
     assert(id == id_state);
@@ -382,7 +386,7 @@ public:
     }
   }
 
-  const TaskIDList &get_data_dependent(taskid_t id) const {
+  const TaskIDList &get_data_dependents(taskid_t id) const {
     if (id < n_non_eviction_tasks) {
       return get_tasks().get_data_dependents(id);
     } else {
@@ -451,6 +455,7 @@ public:
     return state.is_reservable(id);
   }
   [[nodiscard]] bool is_launchable(taskid_t id) const {
+    std::cout << "is_launchable: " << id << std::endl;
     return state.is_launchable(id);
   }
 

@@ -95,7 +95,8 @@ protected:
 
 public:
   SchedulerQueues(Devices &devices)
-      : reservable(devices.size()), launchable(devices.size()), data_launchable(devices.size()) {
+      : reservable(devices.size()), launchable(devices.size()), data_launchable(devices.size()),
+        eviction_launchable(devices.size()) {
   }
 
   SchedulerQueues(const SchedulerQueues &other) = default;
@@ -365,6 +366,7 @@ protected:
   void notify_launched(taskid_t task_id);
   const TaskIDList &notify_completed(taskid_t task_id);
   const TaskIDList &notify_data_completed(taskid_t task_id);
+  const TaskIDList &notify_eviction_completed(taskid_t task_id);
 
 public:
   TaskCountInfo counts;
@@ -417,6 +419,9 @@ public:
 
   [[nodiscard]] const std::string &get_task_name(taskid_t task_id) const {
     const auto &tasks = task_manager.get_tasks();
+    if (tasks.is_eviction(task_id)) {
+      return std::string("Eviction Task") + std::to_string(task_id);
+    }
     return tasks.get_name(task_id);
   }
   [[nodiscard]] const std::string &get_device_name(devid_t device_id) const {
@@ -839,6 +844,7 @@ public:
     taskid_t associated_compute_task = eviction_task.get_compute_task();
     priority_t p = state.task_manager.state.get_launching_priority(associated_compute_task);
     devid_t device = eviction_task.get_device_id();
+    SPDLOG_DEBUG("Pushing eviction task {} with priority {} to device {}", id, p, device);
     queues.push_launchable_eviction(id, p, device);
   }
 
