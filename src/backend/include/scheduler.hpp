@@ -660,6 +660,12 @@ struct SuccessPair {
   const TaskIDList *task_list = nullptr;
 };
 
+enum class EvictionState {
+  NONE = 0,
+  WAITING_FOR_COMPLETION = 1,
+  RUNNING = 2,
+};
+
 class Scheduler {
 
 protected:
@@ -668,13 +674,17 @@ protected:
 
   std::size_t scheduler_event_count = 1;
   std::size_t success_count = 0;
+  std::size_t eviction_count = 0;
 
   bool can_map = true;
   bool can_reserve = true;
   bool can_launch = true;
 
+  EvictionState eviction_state = EvictionState::NONE;
+
   TaskIDList task_buffer;
   DeviceIDList device_buffer;
+  TaskDeviceList tasks_requesting_eviction;
 
   void enqueue_data_tasks(taskid_t task_id);
 
@@ -687,6 +697,7 @@ public:
       : state(input), queues(input.devices), conditions(input.conditions) {
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
+    tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
   }
 
   Scheduler(const Scheduler &other) = default;

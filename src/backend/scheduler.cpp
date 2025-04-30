@@ -871,6 +871,9 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id,
 }
 
 void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
+  // Can't reserve tasks if we are in the middle of an eviction
+  assert(this->eviction_state == EvictionState::NONE);
+
   auto &s = this->state;
 
   auto &reservable = queues.reservable;
@@ -880,10 +883,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
   SPDLOG_DEBUG("Reserving tasks at time {}", s.global_time);
   SPDLOG_DEBUG("Reservable Queue Size: {}", queues.reservable.total_active_size());
   bool break_flag = false;
-
-  TaskDeviceList tasks_requesting_eviction;
-  tasks_requesting_eviction.reserve(reservable.size());
-
+  tasks_requesting_eviction.clear();
   while (queues.has_active_reservable() && conditions.get().should_reserve(s, queues)) {
 
     if (is_breakpoint()) {
@@ -929,16 +929,17 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
     return;
   }
   if (!tasks_requesting_eviction.empty()) {
-    SPDLOG_DEBUG("Eviction is not implemented and called");
-    assert(0);
-    // The next event is a eviction event
-    timecount_t launcher_time = s.global_time + TIME_TO_LAUNCH;
-    event_manager.create_event(EventType::EVICTOR, launcher_time);
-  } else {
-    // The next event is a launching event
-    timecount_t launcher_time = s.global_time + TIME_TO_LAUNCH;
-    event_manager.create_event(EventType::LAUNCHER, launcher_time);
+    // timecount_t launcher_time = s.global_time + TIME_TO_LAUNCH;
+    // // The next event is a eviction event
+    // event_manager.create_event(EventType::EVICTOR, launcher_time);
+    this->eviction_state = EvictionState::WAITING_FOR_COMPLETION; // This should be set to false
+                                                                  // after the eviction is over
   }
+  // else {
+  // The next event is a launching event
+  timecount_t launcher_time = s.global_time + TIME_TO_LAUNCH;
+  event_manager.create_event(EventType::LAUNCHER, launcher_time);
+  // }
 }
 
 bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
@@ -1119,9 +1120,12 @@ void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_ma
   }
 
   scheduler_event_count -= 1;
-
   if (scheduler_event_count == 0 and success_count > 0) {
-    event_manager.create_event(EventType::MAPPER, s.global_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
+    if (this->eviction_state == EvictionState::WAITING_FOR_COMPLETION)
+      return; // event_manager.create_event(EventType::EVICTOR, s.global_time + SCHEDULER_TIME_GAP);
+    else
+      event_manager.create_event(EventType::MAPPER,
+                                 s.global_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
     scheduler_event_count += 1;
   }
 }
@@ -1130,6 +1134,49 @@ void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_ma
 void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager) {
   MONUnusedParameter(eviction_event);
   MONUnusedParameter(event_manager);
+  auto &s = this->state;
+  auto &launchable = queues.launchable;
+  auto &data_launchable = queues.data_launchable;
+  if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
+    if (launchable.total_size() + data_launchable.total_size()) {
+      SPDLOG_DEBUG("{}: Evictor waiting for all {} compute and {} data task to finish",
+                   s.global_time, launchable.total_size(), data_launchable.total_size());
+      event_manager.create_event(EventType::LAUNCHER, s.global_time);
+      return;
+    } else {
+      SPDLOG_DEBUG("Starting evictor at {}", s.global_time);
+      eviction_count = 0;
+      for (auto &taskdevicemem : tasks_requesting_eviction) {
+        auto task_id = std::get<0>(taskdevicemem);
+        auto device_id = std::get<1>(taskdevicemem);
+        auto mem = std::get<2>(taskdevicemem);
+        const auto [requested, resource] = s.request_reserve_resources(task_id, device_id);
+        if (resource.mem) { // There is still memory to evict
+          eviction_count += 1;
+          SPDLOG_DEBUG("Launching evictor for task {} on device {} at time {}",
+                       s.get_task_name(task_id), device_id, s.global_time);
+          SPDLOG_DEBUG("Not Implemented Yet");
+          exit(1);
+        } else {
+          SPDLOG_DEBUG("No need to evict for task {} on device {} at time {}",
+                       s.get_task_name(task_id), device_id, s.global_time);
+        }
+      }
+      SPDLOG_DEBUG("Evictor launched {} tasks at time {}", eviction_count, s.global_time);
+      eviction_state = EvictionState::RUNNING;
+    }
+  }
+  if (eviction_state == EvictionState::RUNNING) {
+    if (eviction_count) {
+      SPDLOG_DEBUG("{}: Evictor waiting for all eviction tasks to finish", s.global_time);
+      event_manager.create_event(EventType::LAUNCHER, s.global_time);
+      return;
+    } else {
+      SPDLOG_DEBUG("Evictor finished at time {}", s.global_time);
+      event_manager.create_event(EventType::RESERVER, s.global_time);
+      this->eviction_state = EvictionState::NONE;
+    }
+  }
 }
 
 void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
@@ -1187,7 +1234,15 @@ void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &even
   breakpoints.check_task_breakpoint(EventType::COMPLETER, task_id);
 
   if (scheduler_event_count == 0) {
-    event_manager.create_event(EventType::MAPPER, s.global_time + TIME_TO_MAP + SCHEDULER_TIME_GAP);
+    if (this->eviction_state ==
+        EvictionState::WAITING_FOR_COMPLETION) // Maybe remove this and make it go to the mapper
+                                               // and use evict() for actually launching and
+                                               // completing the eviction
+      event_manager.create_event(EventType::EVICTOR, s.global_time + SCHEDULER_TIME_GAP,
+                                 TaskDeviceList());
+    else
+      event_manager.create_event(EventType::MAPPER,
+                                 s.global_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
     scheduler_event_count += 1;
   }
 }

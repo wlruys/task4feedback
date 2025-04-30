@@ -56,6 +56,13 @@ struct LauncherEvent {
   }
 };
 
+// struct EvictorEvent {
+//   static constexpr EventType type = EventType::EVICTOR;
+//   timecount_t time;
+//   explicit EvictorEvent(timecount_t t) : time(t) {
+//   }
+// };
+
 struct EvictorEvent {
   static constexpr EventType type = EventType::EVICTOR;
   timecount_t time;

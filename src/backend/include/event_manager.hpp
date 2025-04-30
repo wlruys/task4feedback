@@ -19,6 +19,9 @@ public:
     case EventType::LAUNCHER:
       events_.push(LauncherEvent{time});
       break;
+    // case EventType::EVICTOR:
+    //   events_.push(EvictorEvent{time});
+    //   break;
     default:
       throw std::invalid_argument("create_event(type,time) only for MAPPER/RESERVER/LAUNCHER");
     }
