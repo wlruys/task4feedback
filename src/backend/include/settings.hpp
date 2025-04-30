@@ -47,6 +47,11 @@ using depcount_t = int32_t;
 // using devid_t = int32_t;
 // using depcount_t = int32_t;
 
+using vcu_t = int64_t;
+using mem_t = int64_t;
+using timecount_t = int64_t;
+using copy_t = int64_t;
+
 using TaskIDList = std::vector<taskid_t>;
 using TaskIDLinkedList = std::list<taskid_t>;
 
@@ -57,6 +62,8 @@ using DeviceIDList = std::vector<devid_t>;
 using DeviceIDLinkedList = std::list<devid_t>;
 
 using PriorityList = std::vector<priority_t>;
+
+using TaskDeviceList = std::vector<std::tuple<taskid_t, devid_t, mem_t>>;
 
 class SchedulerState;
 

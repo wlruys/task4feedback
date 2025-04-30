@@ -654,7 +654,6 @@ public:
 
 #define INITIAL_TASK_BUFFER_SIZE 10
 #define INITIAL_DEVICE_BUFFER_SIZE 10
-#define INITIAL_EVENT_BUFFER_SIZE 500
 
 struct SuccessPair {
   bool success = false;
@@ -676,7 +675,6 @@ protected:
 
   TaskIDList task_buffer;
   DeviceIDList device_buffer;
-  EventList event_buffer;
 
   void enqueue_data_tasks(taskid_t task_id);
 
@@ -689,7 +687,6 @@ public:
       : state(input), queues(input.devices), conditions(input.conditions) {
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
-    event_buffer.reserve(INITIAL_EVENT_BUFFER_SIZE);
   }
 
   Scheduler(const Scheduler &other) = default;
@@ -720,31 +717,26 @@ public:
   const TaskIDList &map_task(taskid_t task_id, Action &action);
   void remove_mapped_tasks(ActionList &action_list);
 
-  void map_tasks(Event &map_event, EventManager &event_manager, Mapper &mapper);
+  void map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper);
   ExecutionState map_tasks_from_python(ActionList &action_list, EventManager &event_manager);
 
-  SuccessPair reserve_task(taskid_t task_id, devid_t device_id);
-  void reserve_tasks(Event &reserve_event, EventManager &event_manager);
+  SuccessPair reserve_task(taskid_t task_id, devid_t device_id,
+                           TaskDeviceList &tasks_requesting_eviction);
+  void reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager);
   bool launch_compute_task(taskid_t task_id, devid_t device_id, EventManager &event_manager);
   bool launch_data_task(taskid_t task_id, devid_t device_id, EventManager &event_manager);
-  void launch_tasks(Event &launch_event, EventManager &event_manager);
-  void evict(Event &eviction_event, EventManager &event_manager);
+  bool launch_eviction_task(taskid_t task_id, devid_t device_id, EventManager &event_manager);
+  void launch_tasks(LauncherEvent &launch_event, EventManager &event_manager);
+  void evict(EvictorEvent &eviction_event, EventManager &event_manager);
 
   void complete_compute_task(taskid_t task_id, devid_t device_id);
   void complete_data_task(taskid_t task_id, devid_t device_id);
-  void complete_task(Event &complete_event, EventManager &event_manager);
+  void complete_task(CompleterEvent &complete_event, EventManager &event_manager);
 
-  [[nodiscard]] const EventList &get_event_buffer() const {
-    return event_buffer;
-  }
   [[nodiscard]] const TaskIDList &get_task_buffer() const {
     return task_buffer;
   }
 
-  void clear_event_buffer() {
-    event_buffer.clear();
-    assert(event_buffer.empty());
-  }
   void clear_task_buffer() {
     task_buffer.clear();
     assert(task_buffer.empty());
@@ -753,11 +745,6 @@ public:
   TaskIDList &get_clear_task_buffer() {
     task_buffer.clear();
     return task_buffer;
-  }
-
-  EventList &get_clear_event_buffer() {
-    clear_event_buffer();
-    return event_buffer;
   }
 
   void update_time(timecount_t time) {

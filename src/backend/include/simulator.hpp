@@ -34,10 +34,10 @@ void init_simulator_logger() {
 class Simulator {
 protected:
   void add_initial_event() {
-    event_manager.create_event(EventType::MAPPER, 0, TaskIDList());
+    event_manager.create_event(EventType::MAPPER, 0);
   }
 
-  ExecutionState dispatch_mapper(Event &event) {
+  ExecutionState dispatch_mapper(MapperEvent &event) {
     if (use_python_mapper && scheduler.get_queues().has_mappable() &&
         scheduler.conditions.get().should_map(scheduler.get_state(), scheduler.get_queues())) {
       return ExecutionState::EXTERNAL_MAPPING;
@@ -57,7 +57,7 @@ public:
   bool use_python_mapper = false;
 
   ExecutionState last_state = ExecutionState::NONE;
-  Event last_event = Event(EventType::MAPPER, 0, TaskIDList());
+  EventVariant last_event = MapperEvent(0);
 
   Simulator(SchedulerInput &input, Mapper &mapper)
       : event_manager(EventManager()), scheduler(Scheduler(input)), mapper(mapper) {
@@ -108,35 +108,35 @@ public:
     scheduler.set_transition_conditions(conditions);
   }
 
-  ExecutionState handle_event(Event &event) {
-    auto event_type = event.get_type();
+  ExecutionState handle_event(EventVariant &event) {
+    auto event_type = get_type(event);
 
     switch (event_type) {
     case EventType::MAPPER:
-      return dispatch_mapper(event);
+      return dispatch_mapper(std::get<MapperEvent>(event));
       break;
     case EventType::RESERVER:
-      scheduler.reserve_tasks(event, event_manager);
+      scheduler.reserve_tasks(std::get<ReserverEvent>(event), event_manager);
       return ExecutionState::RUNNING;
       break;
     case EventType::LAUNCHER:
-      scheduler.launch_tasks(event, event_manager);
+      scheduler.launch_tasks(std::get<LauncherEvent>(event), event_manager);
       return ExecutionState::RUNNING;
       break;
     case EventType::EVICTOR:
-      scheduler.evict(event, event_manager);
+      scheduler.evict(std::get<EvictorEvent>(event), event_manager);
       return ExecutionState::RUNNING;
       break;
     case EventType::COMPLETER:
-      scheduler.complete_task(event, event_manager);
+      scheduler.complete_task(std::get<CompleterEvent>(event), event_manager);
       return ExecutionState::RUNNING;
       break;
     }
     return {};
   }
 
-  void update_time(Event &event) {
-    scheduler.update_time(event.get_time());
+  void update_time(EventVariant &event) {
+    scheduler.update_time(get_time(event));
   }
 
   size_t get_mappable_candidates(TorchInt64Arr1D &output_tensor) {
@@ -167,7 +167,7 @@ public:
     // Create a new event to run the mapper
     if (enqueue_mapping_event) {
       const auto current_time = scheduler.get_state().get_global_time();
-      event_manager.create_event(EventType::MAPPER, current_time, TaskIDList());
+      event_manager.create_event(EventType::MAPPER, current_time);
     }
   }
 
@@ -191,7 +191,6 @@ public:
 
     return ex_state;
   }
-
   ExecutionState run() {
 
     if (last_state == ExecutionState::NONE) {
@@ -224,7 +223,7 @@ public:
       return ExecutionState::EXTERNAL_MAPPING;
     }
 
-    Event current_event = Event(EventType::MAPPER, 0, TaskIDList());
+    EventVariant current_event = MapperEvent(0);
     ExecutionState execution_state = ExecutionState::RUNNING;
 
     while (execution_state == ExecutionState::RUNNING) {
