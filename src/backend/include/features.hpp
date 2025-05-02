@@ -838,7 +838,7 @@ public:
     const auto max_edges = output.shape(1);
 
     const auto &device_manager = state.get().get_device_manager();
-    const std::size_t device_count = state.get().get_device_manager().get_devices.size();
+    const std::size_t device_count = state.get().get_device_manager().get_devices().size();
 
     const auto &task_manager = state.get().get_task_manager();
 
@@ -846,7 +846,6 @@ public:
 
     for (int64_t i = 0; i < task_ids_span.size(); i++) {
       const auto &task_id = static_cast<taskid_t>(task_ids_span[i]);
-      const auto &task = task.get_compute_task(task_ids);
 
       devid_t mapped_device = task_manager.get_mapping(task_id);
 

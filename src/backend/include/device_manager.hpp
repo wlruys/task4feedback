@@ -107,7 +107,7 @@ public:
   std::vector<ResourceTracker<vcu_t>> vcu_tracker;
   std::vector<ResourceTracker<mem_t>> mem_tracker;
 
-  DeviceResources(){};
+  DeviceResources() {};
 
   DeviceResources(std::size_t n) : vcu(n, 0), mem(n, 0), vcu_tracker(n), mem_tracker(n) {
   }
@@ -341,7 +341,7 @@ public:
 
   DeviceManager(Devices &devices_)
       : devices(devices_), mapped(devices_.size()), reserved(devices_.size()),
-        launched(devices_.size()){};
+        launched(devices_.size()) {};
 
   DeviceManager(const DeviceManager &other) = default;
 
