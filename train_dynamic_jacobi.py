@@ -123,11 +123,11 @@ def build_sweep_graph(config: SweepConfig) -> SweepGraph:
     jgraph = SweepGraph(geom, config)
     jgraph.apply_variant(SweepVariant)
 
-    # partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
+    partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
 
     # offset by 1 to ignore cpu
-    # partition = [x + 1 for x in partition]
-    # jgraph.set_cell_locations(partition)
+    partition = [x + 1 for x in partition]
+    jgraph.set_cell_locations(partition)
 
     jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
 
@@ -156,6 +156,15 @@ def make_env(
     d = jgraph.get_blocks()
     m = jgraph
     m.finalize_tasks()
+
+    if feature_config is None:
+        feature_config = {
+            "observer_factory": "XYObserverFactory",
+            "max_tasks": 100,
+            "max_data": 100,
+            "max_tasks_tasks_edges": 200,
+            "max_tasks_data_edges": 200,
+        }
 
     max_tasks = feature_config.get("max_tasks", 100)
     max_data = feature_config.get("max_data", 100)
@@ -259,6 +268,7 @@ def train(wandb_config):
         graph_function,
         graph_config,
         system_config,
+        feature_config=feature_config_info,
         runtime_env_t=runtime_env_type,
         observer_factory_t=observer_factory_type,
         change_priority=env_config["change_priority"],
@@ -301,20 +311,24 @@ def train(wandb_config):
     # Get the mconfig dictionary safely, defaulting to an empty dict if not found
     mconfig = wandb_config.get("mconfig", {})
 
+    print("Feature config:", feature_config)
+
+    print("Feature config info:", feature_config_info)
+
     train_config = PPOConfig(
         train_device=mconfig.get("train_device", "cpu"),
         workers=mconfig.get("workers", 1),
         ent_coef=mconfig.get("ent_coef", 0.05),
         gae_lmbda=mconfig.get("gae_lmbda", 1),
         gae_gamma=mconfig.get("gae_gamma", 0.99),
-        normalize_advantage=mconfig.get("normalize_advantage", True),
+        normalize_advantage=mconfig.get("normalize_advantage", False),
         clip_eps=mconfig.get("clip_eps", 0.2),
-        clip_vloss=mconfig.get("clip_vloss", True),
+        clip_vloss=mconfig.get("clip_vloss", False),
         minibatch_size=mconfig.get("minibatch_size", 250),
         eval_interval=mconfig.get("eval_interval", 50),
         eval_episodes=mconfig.get("eval_episodes", 1),
         states_per_collection=n_tasks * mconfig.get("graphs_per_collection", 10),
-        max_grad_norm=mconfig.get("max_grad_norm", 10),
+        max_grad_norm=mconfig.get("max_grad_norm", 0.5),
     )
 
     # Define environment creation function for PPO
@@ -323,6 +337,8 @@ def train(wandb_config):
             graph_function,
             graph_config,
             system_config,
+            feature_config=feature_config_info,
+            runtime_env_t=runtime_env_type,
             observer_factory_t=observer_factory_type,
             change_priority=env_config["change_priority"],
             change_locations=env_config["change_locations"],
@@ -335,6 +351,8 @@ def train(wandb_config):
             graph_function,
             graph_config,
             system_config,
+            feature_config=feature_config_info,
+            runtime_env_t=runtime_env_type,
             observer_factory_t=observer_factory_type,
             change_priority=False,
             change_locations=False,
@@ -398,6 +416,11 @@ def train(wandb_config):
     except AttributeError:
         print("torch.compile not available, using uncompiled model")
 
+    for layer in model.modules():
+        if isinstance(layer, torch.nn.Linear):
+            torch.nn.init.orthogonal_(layer.weight, 1.0)
+            layer.bias.data.zero_()
+
     # Run PPO training
     run_ppo_torchrl(
         model,
@@ -412,8 +435,8 @@ if __name__ == "__main__":
     wandb_config = {
         "graph_config": {
             "graph_class": "JacobiGraph",
-            "interior_size": 10000000,
-            "boundary_interior_ratio": 0.2,
+            "interior_size": 1000,
+            "boundary_interior_ratio": 1,
             "randomness": 1,
             "L": 1,
             "n": 4,
@@ -425,48 +448,48 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "RuntimeEnv",
+            "runtime_env": "EFTIncrementalEnv",
         },
         "system_config": {
             "type": "uniform_connected_devices",
             "n_devices": 5,
-            "bandwidth": 2000,
+            "bandwidth": 1,
             "latency": 1,
         },
         "feature_config": {
-            "observer_factory": "XYDataObserverFactory",
-            "max_tasks": 100,
-            "max_data": 100,
-            "max_tasks_tasks_edges": 200,
-            "max_tasks_data_edges": 200,
+            "observer_factory": "XYObserverFactory",
+            "max_tasks": 30,
+            "max_data": 50,
+            "max_tasks_tasks_edges": 100,
+            "max_tasks_data_edges": 150,
         },
         "layer_config": {
-            "hidden_channels": 32,
+            "hidden_channels": 64,
             "n_heads": 2,
         },
         "mconfig": {
-            "graphs_per_collection": 10,
+            "graphs_per_collection": 16,
             "train_device": "cpu",
-            "workers": 2,
-            "ent_coef": 0.05,
-            "gae_lmbda": 0.1,
-            "gae_gamma": 0.99,
-            "normalize_advantage": True,
+            "workers": 4,
+            "ent_coef": 0.006,
+            "gae_lmbda": 0.9,
+            "gae_gamma": 1,
+            "normalize_advantage": False,
             "clip_eps": 0.2,
-            "clip_vloss": True,
+            "clip_vloss": False,
             "minibatch_size": 250,
         },
         "env_config": {
             "change_priority": True,
             "change_locations": True,
-            "seed": 1000,
+            "seed": 1,
         },
         "model_config": {
-            "model_architecture": "DataTaskSeparateNet",
+            "model_architecture": "AddConvSeparateNet",
         },
         "wandb_config": {
             "project": "test",
-            "name": "test",
+            "name": "EdgeConvNetworkDepthTagTime-Orth-IEFT-1",
         },
     }
 
