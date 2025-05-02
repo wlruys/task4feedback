@@ -1219,7 +1219,7 @@ class ExternalObserver:
             n_candidates = output["aux"]["candidates"]["count"][0]
             task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
 
-        _, count = self.get_bidirectional_neighborhood(
+        _, count = self.get_k_hop_bidirectional(
             task_ids, output["nodes"]["tasks"]["glb"]
         )
 
@@ -1232,7 +1232,7 @@ class ExternalObserver:
     def data_observation(self, output: TensorDict):
         # print("Data observation")
         ntasks = output["nodes"]["tasks"]["count"][0]
-        _, count = self.get_used_data(
+        _, count = self.get_used_filtered_data(
             output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
         )
         output["nodes"]["data"]["count"][0] = count
@@ -1340,6 +1340,113 @@ class ExternalObserver:
         self.task_task_observation(output)
         self.task_data_observation(output)
         self.task_device_observation(output)
+
+        # Auxiliary observations
+        output["aux"]["time"][0] = self.simulator.time
+        output["aux"]["improvement"][0] = -2.0
+        # print("Auxiliary observation")
+        return output
+
+
+@dataclass
+class HeterogeneousExternalObserver(ExternalObserver):
+    def __init__(
+        self,
+        simulator: "SimulatorDriver",
+        graph_spec: fastsim.GraphSpec,
+        graph_extractor: fastsim.GraphExtractor,
+        task_features: fastsim.RuntimeFeatureExtractor,
+        data_features: fastsim.RuntimeFeatureExtractor,
+        device_features: fastsim.RuntimeFeatureExtractor,
+        task_task_features: fastsim.RuntimeEdgeFeatureExtractor,
+        task_data_features: fastsim.RuntimeEdgeFeatureExtractor,
+        task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None,
+        data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None,
+    ):
+        super().__init__(
+            simulator,
+            graph_spec,
+            graph_extractor,
+            task_features,
+            data_features,
+            device_features,
+            task_task_features,
+            task_data_features,
+            task_device_features,
+            data_device_features,
+        )
+
+    def get_task_device_edges(self, task_ids, device_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_task_mapped_device_edges(
+            task_ids, device_ids, workspace, global_workspace
+        )
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+
+        return workspace, length
+
+    def get_data_device_edges(
+        self, data_ids, unique_data_ids, device_ids, workspace, global_workspace
+    ):
+        length = self.graph_extractor.get_data_device_edges_filtered(
+            data_ids, unique_data_ids, device_ids, workspace, global_workspace
+        )
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+
+        return workspace, length
+
+    def new_observation_buffer(self, spec=None):
+        buffer = super().new_observation_buffer(spec)
+        buffer["nodes"]["data"]["filtered_glb"] = torch.zeros(
+            (spec.max_data), dtype=torch.int64
+        )
+        buffer["nodes"]["data"]["filtered_count"] = torch.zeros((1), dtype=torch.int64)
+
+    def data_device_observation(self, output: TensorDict):
+        # print("Data-Device observation")
+        ndata = output["nodes"]["data"]["count"][0]
+        ndevices = output["nodes"]["devices"]["count"][0]
+
+        data_ids = output["nodes"]["data"]["glb"][:ndata]
+        device_ids = output["nodes"]["devices"]["glb"][:ndevices]
+
+        _, count = self.get_data_device_edges(
+            data_ids,
+            data_ids,
+            device_ids,
+            output["edges"]["data_devices"]["idx"],
+            output["edges"]["data_devices"]["glb"],
+        )
+
+        output["edges"]["data_devices"]["count"][0] = count
+
+        self.get_data_device_features(
+            output["edges"]["data_devices"]["glb"][:, :count],
+            output["edges"]["data_devices"]["attr"],
+        )
+
+    def get_observation(self, output=None):
+        if output is None:
+            output = self.new_observation_buffer(self.graph_spec)
+
+        # print(output)
+
+        # Get mappable candidates
+        self.candidate_observation(output)
+
+        # Node observations (all nodes must be processed before edges)
+        self.task_observation(output)
+        self.data_observation(output)
+        self.device_observation(output)
+
+        # Edge observations (edges depend on ids collected during node observation)
+        self.task_task_observation(output)
+        self.task_data_observation(output)
+        self.task_device_observation(output)
+        self.data_device_observation(output)
 
         # Auxiliary observations
         output["aux"]["time"][0] = self.simulator.time

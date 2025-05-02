@@ -624,7 +624,8 @@ class XYObserverFactory(XYExternalObserverFactory):
         task_device_feature_factory = EdgeFeatureExtractorFactory()
         task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
 
-        data_device_feature_factory = None
+        data_device_feature_factory = EdgeFeatureExtractorFactory()
+        data_device_feature_factory.add(fastsim.DataDeviceDefaultEdgeFeature)
 
         super().__init__(
             spec,

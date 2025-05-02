@@ -1808,3 +1808,18 @@ struct TaskDeviceDefaultEdgeFeature : public StateEdgeFeature<TaskDeviceDefaultE
     output[0] = 1.0;
   }
 };
+
+struct DataDeviceDefaultEdgeFeature : public StateEdgeFeature<DataDeviceDefaultEdgeFeature> {
+  DataDeviceDefaultEdgeFeature(const SchedulerState &state)
+      : StateEdgeFeature<DataDeviceDefaultEdgeFeature>(state, EdgeType::DATA_DEVICE) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
+    output[0] = 1.0;
+  }
+};
