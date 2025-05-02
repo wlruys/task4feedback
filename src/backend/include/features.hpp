@@ -972,57 +972,55 @@ public:
     }
     return edge_count;
   }
-};
 
-size_t get_data_device_edges(TorchInt64Arr1D &data_ids, TorchInt64Arr2D &output,
-                             TorchInt64Arr2D &global_output) {
+  size_t get_data_device_edges(TorchInt64Arr1D &data_ids, TorchInt64Arr2D &output,
+                               TorchInt64Arr2D &global_output) {
 
-  if (output.shape(0) != 2) {
-    throw std::runtime_error("Edge output shape must be 2 x N");
-  }
+    if (output.shape(0) != 2) {
+      throw std::runtime_error("Edge output shape must be 2 x N");
+    }
 
-  auto v = output.view();
-  auto gv = global_output.view();
-  static bool has_warned = false;
-  std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
+    auto v = output.view();
+    auto gv = global_output.view();
+    static bool has_warned = false;
+    std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
-  const auto max_edges = output.shape(1);
+    const auto max_edges = output.shape(1);
 
-  const auto &device_manager = state.get().get_device_manager();
-  const auto &devices = device_manager.get_devices();
-  const auto &data_manager = state.get().get_data_manager();
+    const auto &device_manager = state.get().get_device_manager();
+    const auto &devices = device_manager.get_devices();
+    const auto &data_manager = state.get().get_data_manager();
 
-  std::size_t edge_count = 0;
-  for (int64_t i = 0; i < data_ids_span.size(); i++) {
-    for (int64_t j = 0; j < devices.size(); j++) {
+    std::size_t edge_count = 0;
+    for (int64_t i = 0; i < data_ids_span.size(); i++) {
+      for (int64_t j = 0; j < devices.size(); j++) {
 
-      if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
-        v(0, i) = static_cast<int64_t>(i);
-        v(1, i) = static_cast<int64_t>(j);
-        gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
-        gv(1, i) = static_cast<int64_t>(j);
-        edge_count++;
-        if (edge_count >= max_edges) {
-          if (!has_warned) {
-            spdlog::warn("DataDevice edge count exceeded max edges: {}", edge_count);
-            has_warned = true;
+        if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
+          v(0, i) = static_cast<int64_t>(i);
+          v(1, i) = static_cast<int64_t>(j);
+          gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
+          gv(1, i) = static_cast<int64_t>(j);
+          edge_count++;
+          if (edge_count >= max_edges) {
+            if (!has_warned) {
+              spdlog::warn("DataDevice edge count exceeded max edges: {}", edge_count);
+              has_warned = true;
+            }
+            break;
           }
-          break;
         }
       }
-    }
-    if (edge_count >= max_edges) {
-      if (!has_warned) {
-        spdlog::warn("DataDevice edge count exceeded max edges: {}", edge_count);
-        has_warned = true;
+      if (edge_count >= max_edges) {
+        if (!has_warned) {
+          spdlog::warn("DataDevice edge count exceeded max edges: {}", edge_count);
+          has_warned = true;
+        }
+        break;
       }
-      break;
     }
+    return edge_count;
   }
-  return edge_count;
-}
-}
-;
+};
 
 f_t guarded_divide(double a, double b) {
   if (b == 0) {
