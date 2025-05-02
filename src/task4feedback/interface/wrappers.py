@@ -1013,7 +1013,21 @@ class ExternalObserver:
             workspace = workspace[:length]
         return workspace, length
 
-    def get_bidirectional_neighborhood(self, task_ids, workspace, depth: int = 1):
+    def get_data_device_features(self, data_ids, workspace):
+        length = self.data_device_features.get_features_batch(data_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_k_hop_neighborhood(self, task_ids, workspace, depth: int = 1):
+        length = self.graph_extractor.get_k_hop_neighborhood(task_ids, depth, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_k_hop_bidirectional(self, task_ids, workspace, depth: int = 1):
         length = self.graph_extractor.get_k_hop_bidirectional(
             task_ids, depth, workspace
         )
@@ -1036,6 +1050,16 @@ class ExternalObserver:
 
     def get_used_data(self, task_ids, workspace):
         length = self.graph_extractor.get_unique_data(task_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_used_filtered_data(self, task_ids, workspace):
+        """
+        Only return data whose most recent writer has been mapped
+        """
+        length = self.graph_extractor.get_unique_filtered_data(task_ids, workspace)
 
         if self.truncate:
             workspace = workspace[:length]
@@ -1161,6 +1185,9 @@ class ExternalObserver:
                 ),
                 "tasks_devices": _make_edge_tensor(
                     spec.max_edges_tasks_devices, self.task_device_features.feature_dim
+                ),
+                "data_devices": _make_edge_tensor(
+                    spec.max_edges_data_devices, self.data_device_features.feature_dim
                 ),
             }
         )

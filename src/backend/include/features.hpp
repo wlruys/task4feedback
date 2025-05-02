@@ -402,7 +402,7 @@ public:
     return count;
   }
 
-  void _get_k_hop_task_neigborhood(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
+  void _get_k_hop_task_neighborhood(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
 
     const auto &tasks = this->state.get().get_task_manager().get_tasks();
     static bool has_warned = false;
@@ -512,7 +512,7 @@ public:
     return get_k_hop_task_neighborhood(visited, initial_tasks, k, output);
   }
 
-  size_t get_k_hop_bidirectional(TorchInt64ArrID &initial_tasks, int k, TorchInt64ArrID &output) {
+  size_t get_k_hop_bidirectional(TorchInt64Arr1D &initial_tasks, int k, TorchInt64Arr1D &output) {
     visited.clear();
     return get_k_hop_task_bidirectional(visited, initial_tasks, k, output);
   }
