@@ -364,7 +364,7 @@ public:
     for (const auto &task_id_64_bit : initial_tasks_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_dependencies(visited, task_id, k, max_tasks);
-      _get_k_hop_task_dependents(visisted, task_id, k, max_tasks);
+      _get_k_hop_task_dependents(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
         if (!has_warned) {
           spdlog::warn("Task count exceeded max tasks, {}", visited.size());
