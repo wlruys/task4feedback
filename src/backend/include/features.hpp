@@ -68,6 +68,11 @@ public:
   taskid_t max_data = 0;
   taskid_t max_devices = 5;
 
+  // taskid_t std_duration = 0;
+  // taskid_t std_memcost = 0;
+  // taskid_t mean_duration = 0;
+  // taskid_t mean_memcost = 0;
+
   void compute_max_degree(const SchedulerState &state) {
     const auto &tasks = state.get_task_manager().get_tasks();
     for (const auto &task : tasks.get_compute_tasks()) {
@@ -189,7 +194,7 @@ public:
         for (const auto &dep_id : task.get_dependents()) {
           if (local_visited.insert(dep_id).second) {
             if (visited.size() >= max_tasks) {
-              spdlog::warn("Task count exceeded max tasks");
+              spdlog::warn("Task count exceeded max tasks: {}", visited.size());
               return;
             }
             q.push(dep_id);
@@ -215,7 +220,7 @@ public:
       _get_k_hop_task_dependents(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
         if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks");
+          spdlog::warn("Task count exceeded max tasks: {}", visited.size());
           has_warned = true;
         }
         break;
@@ -238,7 +243,7 @@ public:
     for (auto task : visited) {
       if (i >= count) {
         if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks");
+          spdlog::warn("Task count exceeded max tasks: {}", visited.size());
           has_warned = true;
         }
         break;
@@ -306,7 +311,7 @@ public:
       _get_k_hop_task_dependencies(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
         if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks");
+          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
           has_warned = true;
         }
         break;
@@ -329,7 +334,7 @@ public:
     for (auto task : visited) {
       if (i >= count) {
         if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks");
+          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
           has_warned = true;
         }
         break;
@@ -370,7 +375,7 @@ public:
           if (local_visited.insert(dep_id).second) {
             if (visited.size() >= max_tasks) {
               if (!has_warned) {
-                spdlog::warn("Task count exceeded max tasks");
+                spdlog::warn("Task count exceeded max tasks: {}", visited.size());
                 has_warned = true;
               }
               return;
@@ -384,7 +389,66 @@ public:
           if (local_visited.insert(dep_id).second) {
             if (visited.size() >= max_tasks) {
               if (!has_warned) {
-                spdlog::warn("Task count exceeded max tasks");
+                spdlog::warn("Task count exceeded max tasks: {}", visited.size());
+                has_warned = true;
+              }
+              return;
+            }
+            q.push(dep_id);
+            visited.insert(dep_id);
+          }
+        }
+      }
+
+      current_hop++;
+    }
+  }
+
+  // size_t get_k_hop_dependencies(TorchInt64Arr1D &initial_tasks, int k, TorchInt64Arr1D &output) {
+  //   visited.clear();
+  //   return get_k_hop_task_dependencies(visited, initial_tasks, k, output);
+  // }
+
+  void _get_k_hop_task_bidirectional_sep(TaskSet &visited, taskid_t task_id, int k,
+                                         size_t max_tasks) {
+
+    const auto &tasks = this->state.get().get_task_manager().get_tasks();
+    static bool has_warned = false;
+    local_visited.clear();
+
+    std::queue<taskid_t> q;
+    q.push(task_id);
+    visited.insert(task_id);
+
+    int current_hop = 0;
+
+    while (!q.empty() && current_hop < k) {
+      std::size_t level_size = q.size();
+
+      for (std::size_t i = 0; i < level_size; ++i) {
+        taskid_t current_task_id = q.front();
+        q.pop();
+
+        const auto &task = tasks.get_compute_task(current_task_id);
+        for (const auto &dep_id : task.get_dependencies()) {
+          if (local_visited.insert(dep_id).second) {
+            if (visited.size() >= max_tasks) {
+              if (!has_warned) {
+                spdlog::warn("Task count exceeded max tasks: {}", visited.size());
+                has_warned = true;
+              }
+              return;
+            }
+            q.push(dep_id);
+            visited.insert(dep_id);
+          }
+        }
+
+        for (const auto &dep_id : task.get_dependents()) {
+          if (local_visited.insert(dep_id).second) {
+            if (visited.size() >= max_tasks) {
+              if (!has_warned) {
+                spdlog::warn("Task count exceeded max tasks: {}", visited.size());
                 has_warned = true;
               }
               return;
@@ -410,7 +474,7 @@ public:
       _get_k_hop_task_bidirectional(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
         if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks");
+          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
           has_warned = true;
         }
         break;
@@ -494,7 +558,7 @@ public:
 
           if (edge_count >= max_edges) {
             if (!has_warned) {
-              spdlog::warn("TaskTask edge count exceeded max edges");
+              spdlog::warn("TaskTask edge count exceeded max edges: {}", edge_count);
               has_warned = true;
             }
             break;
@@ -503,7 +567,7 @@ public:
       }
       if (edge_count >= max_edges) {
         if (!has_warned) {
-          spdlog::warn("TaskTask edge count exceeded max edges");
+          spdlog::warn("TaskTask edge count exceeded max edges: {}", edge_count);
           has_warned = true;
         }
         break;
@@ -554,7 +618,7 @@ public:
           edge_count++;
           if (edge_count >= max_edges) {
             if (!has_warned) {
-              spdlog::warn("TaskTask edge count exceeded max edges");
+              spdlog::warn("TaskTask edge count exceeded max edges: {}", edge_count);
               has_warned = true;
             }
             break;
@@ -563,7 +627,7 @@ public:
       }
       if (edge_count >= max_edges) {
         if (!has_warned) {
-          spdlog::warn("TaskTask edge count exceeded max edges");
+          spdlog::warn("TaskTask edge count exceeded max edges: {}", edge_count);
           has_warned = true;
         }
         break;
@@ -580,18 +644,37 @@ public:
     auto v = output.view();
     static bool has_warned = false;
     std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
-
+    const auto &s = this->state.get();
     const auto &task_manager = state.get().get_task_manager();
     const auto &tasks = task_manager.get_tasks();
 
     for (const auto &task_id_64_bit : task_ids_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       const auto &task = tasks.get_compute_task(task_id);
-      for (auto data_id : task.get_unique()) {
-        data_visited.insert(data_id);
+      const auto &read = task.get_read();
+
+      // std::cout << "Task ID: " << task_id << " Read size: " << read.size() << std::endl;
+
+      for (int i = 0; i < read.size(); i++) {
+
+        auto data_id = read[i];
+        taskid_t recent_writer_id = task.get_recent_writer(i);
+        if (recent_writer_id != -1) {
+          // We are not the first writer.
+          // Check to see if the most recent writer has been mapped
+          const bool is_mapped = s.is_mapped(recent_writer_id);
+          // std::cout << "Data ID: " << data_id << " Recent Writer ID: " << recent_writer_id
+          //           << " Mapped: " << is_mapped << std::endl;
+          if (is_mapped) {
+            data_visited.insert(data_id);
+          }
+        } else {
+          data_visited.insert(data_id);
+          // std::cout << "Data ID: " << data_id << " No recent writer" << std::endl;
+        }
         if (data_visited.size() >= max_data) {
           if (!has_warned) {
-            spdlog::warn("Unique data count exceeded max data");
+            spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
             has_warned = true;
           }
           break;
@@ -599,7 +682,7 @@ public:
       }
       if (data_visited.size() >= max_data) {
         if (!has_warned) {
-          spdlog::warn("Unique data count exceeded max data");
+          spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
           has_warned = true;
         }
         break;
@@ -607,11 +690,13 @@ public:
     }
 
     size_t count = min(output.size(), data_visited.size());
+
+    // std::cout << "Unique data count: " << count << std::endl;
     size_t i = 0;
     for (auto data_id : data_visited) {
       if (i >= count) {
         if (!has_warned) {
-          spdlog::warn("Unique data count exceeded max data");
+          spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
           has_warned = true;
         }
         break;
@@ -663,7 +748,7 @@ public:
           edge_count++;
           if (edge_count >= max_edges) {
             if (!has_warned) {
-              spdlog::warn("TaskData edge count exceeded max edges");
+              spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
               has_warned = true;
             }
             break;
@@ -672,7 +757,7 @@ public:
       }
       if (edge_count >= max_edges) {
         if (!has_warned) {
-          spdlog::warn("TaskData edge count exceeded max edges");
+          spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
           has_warned = true;
         }
         break;
@@ -710,7 +795,7 @@ public:
         edge_count++;
         if (edge_count >= max_edges) {
           if (!has_warned) {
-            spdlog::warn("TaskDevice edge count exceeded max edges");
+            spdlog::warn("TaskDevice edge count exceeded max edges: {}", edge_count);
             has_warned = true;
           }
           break;
@@ -718,7 +803,7 @@ public:
       }
       if (edge_count >= max_edges) {
         if (!has_warned) {
-          spdlog::warn("TaskDevice edge count exceeded max edges");
+          spdlog::warn("TaskDevice edge count exceeded max edges: {}", edge_count);
           has_warned = true;
         }
         break;
@@ -757,7 +842,7 @@ public:
           edge_count++;
           if (edge_count >= max_edges) {
             if (!has_warned) {
-              spdlog::warn("DataDevice edge count exceeded max edges");
+              spdlog::warn("DataDevice edge count exceeded max edges: {}", edge_count);
               has_warned = true;
             }
             break;
@@ -766,7 +851,7 @@ public:
       }
       if (edge_count >= max_edges) {
         if (!has_warned) {
-          spdlog::warn("DataDevice edge count exceeded max edges");
+          spdlog::warn("DataDevice edge count exceeded max edges: {}", edge_count);
           has_warned = true;
         }
         break;
@@ -936,7 +1021,10 @@ struct InDegreeTaskFeature : public StateFeature<InDegreeTaskFeature> {
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
-    output[0] = log(get_in_degree(task) + 1);
+    double in_degree = static_cast<double>(get_in_degree(task));
+    double mean_in_degree = state.stats.indegree_stats.mean;
+    double std_in_degree = state.stats.indegree_stats.stddev;
+    in_degree = guarded_divide(in_degree - mean_in_degree, std_in_degree);
   }
 };
 
@@ -955,7 +1043,53 @@ struct OutDegreeTaskFeature : public StateFeature<OutDegreeTaskFeature> {
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
-    output[0] = log(get_out_degree(task) + 1);
+    double out_degree = static_cast<double>(get_out_degree(task));
+    double mean_out_degree = state.stats.outdegree_stats.mean;
+    double std_out_degree = state.stats.outdegree_stats.stddev;
+    out_degree = guarded_divide(out_degree - mean_out_degree, std_out_degree);
+  }
+};
+
+struct DepthTaskFeature : public StateFeature<DepthTaskFeature> {
+  DepthTaskFeature(const SchedulerState &state)
+      : StateFeature<DepthTaskFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  static f_t get_depth(const ComputeTask &task) {
+    return static_cast<f_t>(task.get_depth());
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+    double depth = static_cast<double>(get_depth(task));
+    double mean_depth = state.stats.depth_stats.mean;
+    double std_depth = state.stats.depth_stats.stddev;
+    depth = guarded_divide(depth - mean_depth, std_depth);
+  }
+};
+
+struct TagTaskFeature : public StateFeature<TagTaskFeature> {
+  // Generally task tags are categorical, but currently this is a standin for location within the
+  // subgraph
+  TagTaskFeature(const SchedulerState &state)
+      : StateFeature<TagTaskFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+    double tag = static_cast<double>(task.get_tag());
+    double mean_tag = state.stats.tag_stats.mean;
+    double std_tag = state.stats.tag_stats.stddev;
+    tag = guarded_divide(tag - mean_tag, std_tag);
+    output[0] = tag;
   }
 };
 
@@ -976,6 +1110,82 @@ struct DurationTaskFeature : public StateFeature<DurationTaskFeature> {
     const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
     output[0] = log(get_duration(task, DeviceType::CPU) + 1);
     output[1] = log(get_duration(task, DeviceType::GPU) + 1);
+  }
+};
+
+struct StandardizedGPUDurationTaskFeature
+    : public StateFeature<StandardizedGPUDurationTaskFeature> {
+  StandardizedGPUDurationTaskFeature(const SchedulerState &state)
+      : StateFeature<StandardizedGPUDurationTaskFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  static f_t get_duration(const ComputeTask &task, DeviceType arch) {
+    return static_cast<f_t>(task.get_variant(arch).get_observed_time());
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+    double mean_duration = state.stats.duration_stats.mean;
+    double std_duration = state.stats.duration_stats.stddev;
+    // output[0] = guarded_divide(get_duration(task, DeviceType::GPU) - mean_duration,
+    // std_duration);
+    output[0] = guarded_divide(get_duration(task, DeviceType::GPU), mean_duration);
+  }
+};
+
+struct StandardizedInputOutputTaskFeature
+    : public StateFeature<StandardizedInputOutputTaskFeature> {
+  StandardizedInputOutputTaskFeature(const SchedulerState &state)
+      : StateFeature<StandardizedInputOutputTaskFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 2;
+  }
+
+  static f_t get_input_size(const ComputeTask &task, const Data &data) {
+    const auto &read = task.get_read();
+    if (read.empty()) {
+      return 0;
+    }
+    return static_cast<f_t>(data.get_total_size(read));
+  }
+
+  static f_t get_output_size(const ComputeTask &task, const Data &data) {
+    const auto &write = task.get_write();
+    if (write.empty()) {
+      return 0;
+    }
+
+    return static_cast<f_t>(data.get_total_size(write));
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+    const auto &data = state.get_data_manager().get_data();
+    double mean_io = state.stats.io_stats.mean;
+    double std_io = state.stats.io_stats.stddev;
+    double mean_block_size = state.stats.block_size_stats.mean;
+
+    auto input_size = get_input_size(task, data);
+    auto output_size = get_output_size(task, data);
+
+    // Put it in terms of block size scale (only matters for unstandardized case)
+    // input_size = guarded_divide(input_size, mean_block_size);
+    // output_size = guarded_divide(output_size, mean_block_size);
+
+    // mean_io = guarded_divide(mean_io, mean_block_size);
+    // std_io = guarded_divide(std_io, mean_block_size);
+
+    // output[0] = guarded_divide(input_size - mean_io, std_io);
+    // output[1] = guarded_divide(output_size - mean_io, std_io);
+
+    output[0] = guarded_divide(input_size, mean_io);
+    output[1] = guarded_divide(output_size, mean_io);
   }
 };
 
@@ -1082,6 +1292,36 @@ struct DataMappedLocations : public StateFeature<DataMappedLocations> {
   }
 };
 
+struct ScaledDataMappedLocations : public StateFeature<ScaledDataMappedLocations> {
+  ScaledDataMappedLocations(const SchedulerState &state)
+      : StateFeature<ScaledDataMappedLocations>(state, NodeType::DATA_BLOCK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_device_manager().get_devices();
+    return devices.size();
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID data_id, Span output) const {
+    const auto &data = state.get_data_manager().get_data();
+    const auto &data_manager = state.get_data_manager();
+    const auto &devices = state.get_device_manager().get_devices();
+
+    // Standardize the size
+    double mean_size = state.stats.block_size_stats.mean;
+    double std_size = state.stats.block_size_stats.stddev;
+
+    // Get the size of the data
+    auto data_size = static_cast<double>(data.get_size(data_id));
+    // Scale the size
+    data_size = guarded_divide(data_size, mean_size);
+
+    for (std::size_t i = 0; i < devices.size(); i++) {
+      output[i] = static_cast<f_t>(data_manager.check_valid_mapped(data_id, i)) * data_size;
+    }
+  }
+};
+
 struct DataReservedLocations : public StateFeature<DataReservedLocations> {
   DataReservedLocations(const SchedulerState &state)
       : StateFeature<DataReservedLocations>(state, NodeType::DATA_BLOCK) {
@@ -1135,6 +1375,23 @@ struct DataSizeFeature : public StateFeature<DataSizeFeature> {
   }
 };
 
+struct StandardizedDataSizeFeature : public StateFeature<StandardizedDataSizeFeature> {
+  StandardizedDataSizeFeature(const SchedulerState &state)
+      : StateFeature<StandardizedDataSizeFeature>(state, NodeType::DATA_BLOCK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID data_id, Span output) const {
+    const auto &data = state.get_data_manager().get_data();
+    double mean_size = state.stats.block_size_stats.mean;
+    double std_size = state.stats.block_size_stats.stddev;
+    output[0] = guarded_divide(static_cast<f_t>(data.get_size(data_id)) - mean_size, std_size);
+  }
+};
+
 struct EmptyDeviceFeature : public IntFeature<EmptyDeviceFeature> {
   size_t dimension;
   EmptyDeviceFeature(SchedulerState &state, size_t dimension)
@@ -1184,9 +1441,17 @@ struct DeviceTimeFeature : public StateFeature<DeviceTimeFeature> {
     auto mapped_time = static_cast<double>(s.costs.get_mapped_time(device_id));
     auto reserved_time = static_cast<double>(s.costs.get_reserved_time(device_id));
     auto launched_time = static_cast<double>(s.costs.get_launched_time(device_id));
-    output[0] = log(mapped_time + 1);
-    output[1] = log(reserved_time + 1);
-    output[2] = log(launched_time + 1);
+
+    // Normalize by mean duration
+    auto mean_duration = static_cast<double>(s.stats.duration_stats.mean);
+    auto std_duration = static_cast<double>(s.stats.duration_stats.stddev);
+    mapped_time = guarded_divide(mapped_time, mean_duration);
+    reserved_time = guarded_divide(reserved_time, mean_duration);
+    launched_time = guarded_divide(launched_time, mean_duration);
+
+    output[0] = mapped_time;
+    output[1] = reserved_time;
+    output[2] = launched_time;
   }
 };
 

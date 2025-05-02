@@ -800,7 +800,6 @@ class MapperRuntimeEnv(RuntimeEnv):
         self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[0].item()
         scheduler_state: SchedulerState = self.simulator.state
-        print("Mapping task:", global_task_id)
 
         if self.use_external_mapper:
             external_mapper = self.simulator.external_mapper

@@ -234,6 +234,20 @@ public:
     return most_recent_writers;
   }
 
+  taskid_t get_recent_writer_by_dataid(dataid_t data_id) const {
+    auto it = std::find(this->read.begin(), this->read.end(), data_id);
+    if (it != this->read.end()) {
+      std::size_t index = std::distance(this->read.begin(), it);
+      return most_recent_writers[index];
+    }
+    return -1;
+  }
+
+  taskid_t get_recent_writer(std::size_t index) const {
+    assert(index < most_recent_writers.size());
+    return most_recent_writers[index];
+  }
+
   void add_variant(DeviceType arch, Variant variant) {
     variants.at(static_cast<std::size_t>(arch)) = variant;
   }
@@ -442,6 +456,8 @@ public:
     assert(!initialized);
     initialized = true;
   }
+
+  StatsBundle<timecount_t> get_duration_statistics(std::vector<DeviceType> &device_types) const;
 
   [[nodiscard]] std::size_t size() const;
   [[nodiscard]] std::size_t compute_size() const;

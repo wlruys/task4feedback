@@ -54,14 +54,49 @@ def make_jacobi_env(config: JacobiConfig):
     internal_mapper = fastsim.DequeueEFTMapper
     external_mapper = ExternalMapper
 
-    partition = jgraph.mincut_per_levels(arch=DeviceType.GPU, level_chunks=20)
-    aligned, perms, flips = jgraph.align_partitions()
+    # partition = jgraph.mincut_per_levels(arch=DeviceType.GPU, level_chunks=20)
+    # aligned, perms, flips = jgraph.align_partitions()
 
     env = MapperRuntimeEnv(
         SimulatorFactory(
             input,
             spec,
-            DefaultObserverFactory,
+            XYObserverFactory,
+            internal_mapper=internal_mapper,
+            external_mapper=external_mapper,
+        ),
+        device="cpu",
+    )
+    env = TransformedEnv(env, StepCounter())
+    env = TransformedEnv(env, TrajCounter())
+
+    return env
+
+
+def make_dynamic_jacobi_env(config: DynamicJacobiConfig):
+    gmsh.initialize()
+    s = uniform_connected_devices(5, 1000000000, 1, 2000)
+    jgraph = build_jacobi_graph(config)
+
+    d = jgraph.get_blocks()
+    m = jgraph
+    m.finalize_tasks()
+    spec = create_graph_spec()
+    input = SimulatorInput(
+        m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
+    )
+
+    internal_mapper = fastsim.DequeueEFTMapper
+    external_mapper = ExternalMapper
+
+    # partition = jgraph.mincut_per_levels(arch=DeviceType.GPU, level_chunks=20)
+    # aligned, perms, flips = jgraph.align_partitions()
+
+    env = MapperRuntimeEnv(
+        SimulatorFactory(
+            input,
+            spec,
+            XYObserverFactory,
             internal_mapper=internal_mapper,
             external_mapper=external_mapper,
         ),

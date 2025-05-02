@@ -108,6 +108,19 @@ public:
   [[nodiscard]] mem_t get_size(dataid_t id) const {
     return sizes[id];
   }
+
+  [[nodiscard]] mem_t get_total_size(const std::vector<dataid_t> &ids) const {
+    mem_t total_size = 0;
+    for (const auto &id : ids) {
+      total_size += sizes[id];
+    }
+    return total_size;
+  }
+
+  [[nodiscard]] mem_t get_total_size() const {
+    return std::accumulate(sizes.begin(), sizes.end(), static_cast<mem_t>(0));
+  }
+
   [[nodiscard]] devid_t get_location(dataid_t id) const {
     return initial_location.at(id);
   }
@@ -123,6 +136,19 @@ public:
   }
   [[nodiscard]] auto get_names() const {
     return data_names;
+  }
+
+  StatsBundle<mem_t> get_block_statistics(const std::vector<DeviceType> &device_types) const {
+    std::vector<mem_t> block_sizes;
+    block_sizes.reserve(sizes.size());
+
+    for (const auto &device_type : device_types) {
+      for (const auto &size : sizes) {
+        block_sizes.push_back(size);
+      }
+    }
+
+    return StatsBundle(block_sizes);
   }
 
   friend class DataManager;
@@ -708,6 +734,18 @@ public:
 
   bool check_valid_launched(dataid_t data_id, devid_t device_id) const {
     return check_valid(data_id, launched_locations, device_id);
+  }
+
+  [[nodiscard]] mem_t total_size(const DataIDList &list) const {
+    mem_t total_size = 0;
+    for (auto data_id : list) {
+      total_size += data.get().get_size(data_id);
+    }
+    return total_size;
+  }
+
+  [[nodiscard]] mem_t local_size(const DataIDList &list, devid_t device_id) const {
+    return local_size(list, mapped_locations, device_id);
   }
 
   [[nodiscard]] mem_t local_size(const DataIDList &list, const LocationManager &locations,

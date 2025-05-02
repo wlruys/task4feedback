@@ -1,6 +1,7 @@
 #pragma once
 #include "action.hpp"
 #include "communication_manager.hpp"
+#include "devices.hpp"
 #include "event_manager.hpp"
 #include "events.hpp"
 #include "scheduler.hpp"
@@ -71,6 +72,10 @@ public:
     mapper = mapper_;
   }
 
+  void gather_graph_statistics(std::vector<DeviceType> &device_types) {
+    scheduler.get_state().gather_graph_statistics(device_types);
+  }
+
   const SchedulerState &get_state() const {
     return scheduler.get_state();
   }
@@ -101,6 +106,8 @@ public:
       return;
     }
     scheduler.initialize_data_manager();
+    std::vector<DeviceType> device_types = {DeviceType::GPU};
+    this->gather_graph_statistics(device_types);
     data_initialized = true;
   }
 

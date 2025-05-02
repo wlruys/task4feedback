@@ -5,6 +5,7 @@
 #include <list>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <numeric>
 #include <unordered_map>
 #include <vector>
 
@@ -85,3 +86,32 @@ template <typename G> void labeled_print(const std::string &name, const G &g) {
   std::cout << name << " ";
   print(g);
 }
+
+template <typename T> struct StatsBundle {
+  T min = 0;
+  T max = 0;
+  double mean = 0;
+  T median = 0;
+  double stddev = 0;
+
+  StatsBundle() = default;
+
+  StatsBundle(std::vector<T> &v) {
+    if (v.empty()) {
+      return;
+    }
+
+    std::sort(v.begin(), v.end());
+
+    min = v.front();
+    max = v.back();
+    mean = std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+    median = v.size() % 2 == 0 ? (v[v.size() / 2 - 1] + v[v.size() / 2]) / 2.0 : v[v.size() / 2];
+
+    double sum = 0;
+    for (const auto &val : v) {
+      sum += (val - mean) * (val - mean);
+    }
+    stddev = std::sqrt(sum / v.size());
+  }
+};

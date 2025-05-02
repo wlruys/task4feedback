@@ -655,10 +655,10 @@ public:
     features[0] = guarded_divide(get_in_degree(task), graph_info.average_in_degree);
     features[1] = guarded_divide(get_out_degree(task), graph_info.average_out_degree);
 
-    features[2] = static_cast<f_t>(task_manager.state.is_mapped(task_id));
-    features[3] = static_cast<f_t>(task_manager.state.is_reserved(task_id));
-    features[4] = static_cast<f_t>(task_manager.state.is_launched(task_id));
-    features[5] = static_cast<f_t>(task_manager.state.is_completed(task_id));
+    features[2] = static_cast<f_t>(s.is_mapped(task_id));
+    features[3] = static_cast<f_t>(s.is_reserved(task_id));
+    features[4] = static_cast<f_t>(s.is_launched(task_id));
+    features[5] = static_cast<f_t>(s.is_completed(task_id));
     if (task_manager.state.get_state(task_id) != TaskState::SPAWNED) {
       // One-hot encode the device
       for (std::size_t i = 0; i < devices.size(); i++) {

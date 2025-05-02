@@ -1,4 +1,5 @@
 #include "include/tasks.hpp"
+#include "include/settings.hpp"
 
 std::vector<DeviceType> ComputeTask::get_supported_architectures() const {
   std::vector<DeviceType> supported_architectures;
@@ -69,6 +70,24 @@ void Tasks::add_compute_task(ComputeTask task) {
 
 void Tasks::add_data_task(DataTask task) {
   data_tasks.emplace_back(std::move(task));
+}
+
+StatsBundle<timecount_t>
+Tasks::get_duration_statistics(std::vector<DeviceType> &device_types) const {
+  std::vector<timecount_t> durations;
+  durations.reserve(compute_tasks.size());
+
+  StatsBundle<timecount_t> stats;
+  for (const auto &task : compute_tasks) {
+    const auto &variants = task.get_variants();
+    for (const auto &device_type : device_types) {
+      const auto &variant = variants[static_cast<std::size_t>(device_type)];
+      assert(variant.get_arch() == device_type);
+      durations.push_back(variant.get_observed_time());
+    }
+  }
+
+  return StatsBundle(durations);
 }
 
 void Tasks::create_data_task(ComputeTask &task, bool has_writer, taskid_t writer_id,

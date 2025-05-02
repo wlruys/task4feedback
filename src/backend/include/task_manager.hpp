@@ -252,6 +252,22 @@ public:
     return tasks;
   }
 
+  bool is_mapped(taskid_t id) const {
+    return state.is_mapped(id);
+  }
+
+  bool is_reserved(taskid_t id) const {
+    return state.is_reserved(id);
+  }
+
+  bool is_launched(taskid_t id) const {
+    return state.is_launched(id);
+  }
+
+  bool is_completed(taskid_t id) const {
+    return state.is_completed(id);
+  }
+
   void set_state(taskid_t id, TaskState _state) {
     state.set_state(id, _state);
   }

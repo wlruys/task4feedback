@@ -859,6 +859,8 @@ def observation_to_heterodata(
 ) -> HeteroData:
     hetero_data = HeteroData()
 
+    hetero_data["time"].x = observation["aux"]["time"].unsqueeze(0)
+
     if actions is not None:
         # print("setting actions", actions.shape)
         hetero_data["actions"].x = actions
@@ -896,8 +898,8 @@ class ExternalObserver:
     device_features: fastsim.RuntimeFeatureExtractor
     task_task_features: fastsim.RuntimeEdgeFeatureExtractor
     task_data_features: fastsim.RuntimeEdgeFeatureExtractor
-    task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
-    data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
+    task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
+    data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
     truncate: bool = True
 
     def store_feature_types(self):
@@ -1012,6 +1014,18 @@ class ExternalObserver:
             workspace = workspace[:length]
         return workspace, length
 
+    def get_k_hop_dependencies(self, task_ids, workspace, depth: int = 1):
+        length = self.graph_extractor.get_k_hop_dependencies(task_ids, depth, workspace)
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_k_hop_dependents(self, task_ids, workspace, depth: int = 1):
+        length = self.graph_extractor.get_k_hop_dependents(task_ids, depth, workspace)
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
     def get_used_data(self, task_ids, workspace):
         length = self.graph_extractor.get_unique_data(task_ids, workspace)
 
@@ -1031,6 +1045,15 @@ class ExternalObserver:
     def get_task_data_edges(self, task_ids, data_ids, workspace, global_workspace):
         length = self.graph_extractor.get_task_data_edges(
             task_ids, data_ids, workspace, global_workspace
+        )
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+        return workspace, length
+
+    def get_task_task_edges_reverse(self, task_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_task_task_edges_reverse(
+            task_ids, workspace, global_workspace
         )
 
         if self.truncate:
@@ -1165,6 +1188,8 @@ class ExternalObserver:
         _, count = self.get_bidirectional_neighborhood(
             task_ids, output["nodes"]["tasks"]["glb"]
         )
+
+        # print("Task count", count)
         output["nodes"]["tasks"]["count"][0] = count
         self.get_task_features(
             output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
@@ -1272,6 +1297,10 @@ class ExternalObserver:
         self.task_observation(output)
         self.data_observation(output)
         self.device_observation(output)
+
+        # print("Task attribute", output["nodes"]["tasks"]["attr"])
+        # print("Data attribute", output["nodes"]["data"]["attr"])
+        # print("Device attribute", output["nodes"]["devices"]["attr"])
 
         # Edge observations (edges depend on ids collected during node observation)
         self.task_task_observation(output)

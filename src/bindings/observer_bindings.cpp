@@ -266,13 +266,19 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_feature<MemoryTaskFeature>(m, "MemoryTaskFeature");
   bind_state_feature<OneHotMappedDeviceTaskFeature>(m, "OneHotMappedDeviceTaskFeature");
   bind_state_feature<TaskStateFeature>(m, "TaskStateFeature");
+  bind_state_feature<StandardizedGPUDurationTaskFeature>(m, "StandardizedGPUDurationTaskFeature");
+  bind_state_feature<StandardizedInputOutputTaskFeature>(m, "StandardizedInputOutputTaskFeature");
+  bind_state_feature<TagTaskFeature>(m, "TagTaskFeature");
+  bind_state_feature<DepthTaskFeature>(m, "TaskDepthFeature");
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");
   bind_state_feature<DataMappedLocations>(m, "DataMappedLocationsFeature");
+  bind_state_feature<ScaledDataMappedLocations>(m, "ScaledDataMappedLocationsFeature");
   bind_state_feature<DataReservedLocations>(m, "DataReservedLocationsFeature");
   bind_state_feature<DataLaunchedLocations>(m, "DataLaunchedLocationsFeature");
   bind_state_feature<DataSizeFeature>(m, "DataSizeFeature");
+  bind_state_feature<StandardizedDataSizeFeature>(m, "StandardizedDataSizeFeature");
 
   // Device Features
   bind_int_feature<EmptyDeviceFeature>(m, "EmptyDeviceFeature");

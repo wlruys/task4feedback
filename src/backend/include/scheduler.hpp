@@ -5,6 +5,7 @@
 #include "communication_manager.hpp"
 #include "data_manager.hpp"
 #include "device_manager.hpp"
+#include "devices.hpp"
 #include "event_manager.hpp"
 #include "events.hpp"
 #include "graph.hpp"
@@ -321,6 +322,16 @@ struct SchedulerInput {
   }
 };
 
+struct GraphStats {
+  StatsBundle<timecount_t> duration_stats;
+  StatsBundle<mem_t> block_size_stats;
+  StatsBundle<mem_t> io_stats;
+  StatsBundle<taskid_t> indegree_stats;
+  StatsBundle<taskid_t> outdegree_stats;
+  StatsBundle<taskid_t> depth_stats;
+  StatsBundle<taskid_t> tag_stats;
+};
+
 class SchedulerState {
 protected:
   timecount_t global_time = 0;
@@ -351,6 +362,8 @@ protected:
 public:
   TaskCountInfo counts;
   TaskCostInfo costs;
+  GraphStats stats;
+
   SchedulerState(SchedulerInput &input)
       : task_manager(TaskManager(input.tasks, input.task_noise)),
         device_manager(DeviceManager(input.devices)),
@@ -488,6 +501,97 @@ public:
   bool is_data_task_virtual(taskid_t task_id) const;
 
   [[nodiscard]] timecount_t get_execution_time(taskid_t task_id) const;
+
+  StatsBundle<mem_t> get_io_statistics(std::vector<DeviceType> &device_types) const {
+    const auto &tasks = task_manager.get_tasks();
+    const auto &data = data_manager.get_data();
+    std::vector<mem_t> sizes;
+    sizes.reserve(tasks.size() + 10 * data.size());
+
+    for (const auto &task : tasks.get_compute_tasks()) {
+      const auto &read = task.get_read();
+      const auto &write = task.get_write();
+      mem_t input_size = data.get_total_size(read);
+      mem_t output_size = data.get_total_size(write);
+      mem_t internal_size = 0;
+      for (const auto &device_type : device_types) {
+        const auto &variant = task.get_variant(device_type);
+        internal_size += variant.get_mem();
+      }
+      internal_size = internal_size / device_types.size();
+
+      sizes.push_back(input_size);
+      sizes.push_back(output_size);
+      sizes.push_back(internal_size);
+    }
+
+    return StatsBundle<mem_t>(sizes);
+  }
+
+  // StatsBundle<timecount_t> get_total_statistics(std::vector<DeviceType> &device_types) const {
+  //    Sum up all in terms of time
+  //   const auto &tasks = task_manager.get_tasks();
+  //   const auto &data = data_manager.get_data();
+  //   std::vector<timecount_t> durations;
+  //   durations.reserve(tasks.size());
+
+  // }
+
+  void get_degree_statistics(std::vector<DeviceType> &device_types) {
+    const auto &tasks = task_manager.get_tasks();
+
+    std::vector<taskid_t> in_degrees;
+    std::vector<taskid_t> out_degrees;
+
+    for (const auto &task : tasks.get_compute_tasks()) {
+      taskid_t in_degree = task.get_dependencies().size();
+      taskid_t out_degree = task.get_dependents().size();
+
+      in_degrees.push_back(in_degree);
+      out_degrees.push_back(out_degree);
+    }
+
+    this->stats.indegree_stats = StatsBundle<taskid_t>(in_degrees);
+    this->stats.outdegree_stats = StatsBundle<taskid_t>(out_degrees);
+  }
+
+  StatsBundle<taskid_t> get_depth_statistics() const {
+    const auto &tasks = task_manager.get_tasks();
+    std::vector<taskid_t> depths;
+
+    for (const auto &task : tasks.get_compute_tasks()) {
+      taskid_t depth = task.get_depth();
+      depths.push_back(depth);
+    }
+
+    return StatsBundle<taskid_t>(depths);
+  }
+
+  StatsBundle<taskid_t> get_tag_statistics() const {
+
+    const auto &tasks = task_manager.get_tasks();
+    std::vector<taskid_t> tags;
+
+    for (const auto &task : tasks.get_compute_tasks()) {
+      taskid_t tag = task.get_tag();
+      tags.push_back(tag);
+    }
+
+    return StatsBundle<taskid_t>(tags);
+  }
+
+  void gather_graph_statistics(std::vector<DeviceType> &device_types) {
+    const auto &tasks = task_manager.get_tasks();
+    const auto &data = data_manager.get_data();
+    const auto &devices = device_manager.devices.get();
+
+    this->stats.duration_stats = tasks.get_duration_statistics(device_types);
+    this->stats.block_size_stats = data.get_block_statistics(device_types);
+    this->stats.io_stats = get_io_statistics(device_types);
+    this->get_degree_statistics(device_types);
+    this->stats.tag_stats = get_tag_statistics();
+    this->stats.depth_stats = get_depth_statistics();
+  }
 
   [[nodiscard]] timecount_t get_global_time() const {
     assert(global_time >= 0);

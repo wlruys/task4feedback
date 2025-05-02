@@ -32,7 +32,7 @@ class PPOConfig:
     num_collections: int = 1000
     workers: int = 1
     seed: int = 0
-    lr: float = 5e-4
+    lr: float = 10e-4
     clip_eps: float = 0.2
     clip_vloss: bool = True
     ent_coef: float = 0.001
@@ -96,7 +96,7 @@ def evaluate_policy(
 
     for i in range(num_episodes):
         env = eval_env_fn()
-        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+        with set_exploration_type(ExplorationType.RANDOM), torch.no_grad():
             tensordict = env.rollout(
                 max_steps=max_steps,
                 policy=policy,
@@ -121,8 +121,7 @@ def evaluate_policy(
             completion_time = env.simulator.time
             completion_times.append(completion_time)
 
-            if False:
-                # i == 0 and completion_time > 0:
+            if i == 0 and completion_time > 0:
                 # Animate the first environment
                 max_frames = 400
                 time_interval = int(completion_time / max_frames)
