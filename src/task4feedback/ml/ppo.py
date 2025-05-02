@@ -662,7 +662,7 @@ def run_ppo_torchrl(
                         "batch_loss/step": step,
                         "batch_loss/objective": loss_vals["loss_objective"].item(),
                         "batch_loss/critic": loss_vals["loss_critic"].item(),
-                        "batch_loss/entropy": loss_vals["loss_entropy"].item(),
+                        "batch_loss/entropy": loss_vals["entropy"].item(),
                         "batch_loss/total": loss_value.item(),
                         "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
                         "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),

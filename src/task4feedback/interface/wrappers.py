@@ -851,6 +851,14 @@ def observation_to_heterodata_truncate(
                 target, "to", source
             ].edge_attr
 
+        if source == target:
+            hetero_data[source, "from", target].edge_index = hetero_data[
+                target, "to", source
+            ].edge_index.flip(0)
+            hetero_data[source, "from", target].edge_attr = hetero_data[
+                target, "to", source
+            ].edge_attr
+
     return hetero_data.to(device)
 
 

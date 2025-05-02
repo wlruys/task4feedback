@@ -1343,6 +1343,42 @@ class TaskTaskEdgeConv(nn.Module):
         return final_output
 
 
+class HeteroConvkLayer(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+        k: int = 1,
+    ):
+        super(HeteroConvkLayer, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        if k < 1:
+            raise ValueError("Number of layers k must be at least 1.")
+
+        self.k = k
+
+        self.hetero_convs = nn.ModuleList()
+
+        self.hetero_convs.append(
+            HeteroConv(
+                {
+                    ("data", "to", "tasks"): GraphConv(
+                        (-1, -1), layer_config.hidden_channels, aggr="add"
+                    ),
+                    ("tasks", "to", "data"): GraphConv(
+                        (-1, -1), layer_config.hidden_channels, aggr="add"
+                    ),
+                    ("tasks", "from", "data"): GraphConv(
+                        (-1, -1), layer_config.hidden_channels, aggr="add"
+                    ),
+                }
+            )
+        )
+
+
 class AddConvStateNet(nn.Module):
     def __init__(
         self,

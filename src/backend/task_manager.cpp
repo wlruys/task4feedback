@@ -11,8 +11,8 @@ TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
   n_data_tasks = tasks.data_size();
   state.resize(n, TaskState::SPAWNED);
   counts.resize(n, DepCount());
-  mapping.resize(n_compute_tasks, 0);
-  //mapping_priority.resize(n, 0);
+  mapping.resize(n_compute_tasks, -1);
+  // mapping_priority.resize(n, 0);
   reserving_priority.resize(n, 0);
   launching_priority.resize(n, 0);
   is_virtual.resize(n, false);

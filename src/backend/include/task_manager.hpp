@@ -212,6 +212,10 @@ public:
     return noise.get().get_priority(id);
   }
 
+  [[nodiscard]] devid_t get_mapping(taskid_t id) const {
+    return state.get_mapping(id);
+  }
+
   [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const {
     return state.get_reserving_priority(id);
   }
