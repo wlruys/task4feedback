@@ -420,5 +420,8 @@ void init_observer_ext(nb::module_ &m) {
       .def("get_task_data_edges", &GraphExtractor::get_task_data_edges)
       .def("get_task_device_edges", &GraphExtractor::get_task_device_edges)
       .def("get_data_device_edges", &GraphExtractor::get_data_device_edges)
+      .def("get_unique_filtered_data", &GraphExtractor::get_unique_filtered_data)
+      .def("get_task_mapped_device_edges", &GraphExtractor::get_task_mapped_device_edges)
+      .def("get_data_device_edges_filtered", &GraphExtractor::get_data_device_edges_filtered)
       .def("get_unique_data", &GraphExtractor::get_unique_data);
 }

@@ -352,7 +352,57 @@ public:
     return get_k_hop_task_dependencies(visited, initial_tasks, k, output);
   }
 
-  void _get_k_hop_task_bidirectional(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
+  [[nodiscard]] size_t get_k_hop_task_bidirectional(TaskSet &visited,
+                                                    TorchInt64Arr1D &initial_tasks, int k,
+                                                    TorchInt64Arr1D &output) {
+
+    std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
+    static bool has_warned = false;
+    auto v = output.view();
+
+    size_t max_tasks = output.size();
+    for (const auto &task_id_64_bit : initial_tasks_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
+      _get_k_hop_task_dependencies(visited, task_id, k, max_tasks);
+      _get_k_hop_task_dependents(visisted, task_id, k, max_tasks);
+      if (visited.size() >= max_tasks) {
+        if (!has_warned) {
+          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
+          has_warned = true;
+        }
+        break;
+      }
+    }
+
+    auto count = min(max_tasks, visited.size());
+
+    // Always print the initial tasks first (remove them from visisted)
+    // Then fill the rest
+
+    size_t i = 0;
+    for (auto task_id_64_bit : initial_tasks_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
+      visited.erase(task_id);
+      v(i) = task_id_64_bit;
+      i++;
+    }
+
+    for (auto task : visited) {
+      if (i >= count) {
+        if (!has_warned) {
+          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
+          has_warned = true;
+        }
+        break;
+      }
+      v(i) = static_cast<int64_t>(task);
+      i++;
+    }
+
+    return count;
+  }
+
+  void _get_k_hop_task_neigborhood(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
 
     const auto &tasks = this->state.get().get_task_manager().get_tasks();
     static bool has_warned = false;
@@ -410,69 +460,15 @@ public:
   //   return get_k_hop_task_dependencies(visited, initial_tasks, k, output);
   // }
 
-  void _get_k_hop_task_bidirectional_sep(TaskSet &visited, taskid_t task_id, int k,
-                                         size_t max_tasks) {
-
-    const auto &tasks = this->state.get().get_task_manager().get_tasks();
-    static bool has_warned = false;
-    local_visited.clear();
-
-    std::queue<taskid_t> q;
-    q.push(task_id);
-    visited.insert(task_id);
-
-    int current_hop = 0;
-
-    while (!q.empty() && current_hop < k) {
-      std::size_t level_size = q.size();
-
-      for (std::size_t i = 0; i < level_size; ++i) {
-        taskid_t current_task_id = q.front();
-        q.pop();
-
-        const auto &task = tasks.get_compute_task(current_task_id);
-        for (const auto &dep_id : task.get_dependencies()) {
-          if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= max_tasks) {
-              if (!has_warned) {
-                spdlog::warn("Task count exceeded max tasks: {}", visited.size());
-                has_warned = true;
-              }
-              return;
-            }
-            q.push(dep_id);
-            visited.insert(dep_id);
-          }
-        }
-
-        for (const auto &dep_id : task.get_dependents()) {
-          if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= max_tasks) {
-              if (!has_warned) {
-                spdlog::warn("Task count exceeded max tasks: {}", visited.size());
-                has_warned = true;
-              }
-              return;
-            }
-            q.push(dep_id);
-            visited.insert(dep_id);
-          }
-        }
-      }
-
-      current_hop++;
-    }
-  }
-
-  size_t get_k_hop_task_bidirectional(TaskSet &visited, TorchInt64Arr1D &initial_tasks, int k,
-                                      TorchInt64Arr1D &output) {
+  size_t get_k_hop_task_neighborhood(TaskSet &visited, TorchInt64Arr1D &initial_tasks, int k,
+                                     TorchInt64Arr1D &output) {
     auto v = output.view();
     size_t max_tasks = output.size();
     std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
     static bool has_warned = false;
     for (const auto &task_id_64_bit : initial_tasks_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
-      _get_k_hop_task_bidirectional(visited, task_id, k, max_tasks);
+      _get_k_hop_task_neighborhood(visited, task_id, k, max_tasks);
       if (visited.size() >= max_tasks) {
         if (!has_warned) {
           spdlog::warn("Task count exceeded max tasks, {}", visited.size());
@@ -511,7 +507,12 @@ public:
     return count;
   }
 
-  size_t get_k_hop_bidirectional(TorchInt64Arr1D &initial_tasks, int k, TorchInt64Arr1D &output) {
+  size_t get_k_hop_neighborhood(TorchInt64Arr1D &initial_tasks, int k, TorchInt64Arr1D &output) {
+    visited.clear();
+    return get_k_hop_task_neighborhood(visited, initial_tasks, k, output);
+  }
+
+  size_t get_k_hop_bidirectional(TorchInt64ArrID &initial_tasks, int k, TorchInt64ArrID &output) {
     visited.clear();
     return get_k_hop_task_bidirectional(visited, initial_tasks, k, output);
   }
