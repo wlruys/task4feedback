@@ -1205,7 +1205,7 @@ class EFTIncrementalEnv(EnvBase):
             self.cum_time = 0
             # Did we beat the baseline?
             if time <= self.EFT_baseline:
-                reward[0] += 1
+                reward[0] += 2
 
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
             print(
