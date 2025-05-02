@@ -865,6 +865,8 @@ public:
         }
       }
     }
+
+    return edge_count;
   }
 
   size_t get_task_device_edges(TorchInt64Arr1D &task_ids, TorchInt64Arr2D &output,
