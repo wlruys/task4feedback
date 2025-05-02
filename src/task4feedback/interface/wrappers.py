@@ -1183,7 +1183,6 @@ class ExternalObserver:
         if task_ids is None:
             n_candidates = output["aux"]["candidates"]["count"][0]
             task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
-            output["nodes"]["tasks"]["attr"][:n_candidates, -1] = 1
 
         _, count = self.get_bidirectional_neighborhood(
             task_ids, output["nodes"]["tasks"]["glb"]
