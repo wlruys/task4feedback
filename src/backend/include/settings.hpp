@@ -63,7 +63,7 @@ using DeviceIDLinkedList = std::list<devid_t>;
 
 using PriorityList = std::vector<priority_t>;
 
-using TaskDeviceList = std::vector<std::tuple<taskid_t, devid_t, mem_t>>;
+using TaskDeviceList = std::vector<std::tuple<taskid_t, devid_t>>;
 
 class SchedulerState;
 

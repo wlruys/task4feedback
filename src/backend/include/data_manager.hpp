@@ -145,6 +145,9 @@ protected:
   std::vector<bool> locations;
   std::vector<std::vector<ValidInterval>> valid_intervals;
   std::vector<timecount_t> current_start;
+  // TODO(jyp): Remove this to a separate class just for the mapped_locations
+  taskid_t mapped_read_count = 0;
+  taskid_t mapped_write_count = 0;
 
 public:
   BlockLocation(dataid_t data_id, std::size_t n_devices)
@@ -263,6 +266,15 @@ public:
     return updated;
   }
 
+  std::vector<devid_t> invalidate_on(devid_t device_id, timecount_t current_time) {
+    std::vector<devid_t> updated;
+    if (is_valid(device_id)) {
+      set_invalid(device_id, current_time);
+      updated.push_back(device_id);
+    }
+    return updated;
+  }
+
   void finalize(timecount_t current_time) {
     // tie off any open/hanging interval at the end of the simulation
     for (devid_t i = 0; i < locations.size(); i++) {
@@ -304,6 +316,34 @@ public:
       valid_events.stops[intervals.size()] = MAX_TIME;
     }
     return valid_events;
+  }
+
+  void increment_mapped_read() {
+    // TODO(jyp): remove if unused
+    mapped_read_count++;
+  }
+
+  void initialize_mapped_read() {
+    mapped_read_count = 0;
+  }
+
+  bool decrement_mapped_read() {
+    // TODO(jyp): remove if unused
+    // assert(mapped_read_count > 0);
+    mapped_read_count--;
+    return mapped_read_count == 0;
+  }
+
+  void increment_mapped_write() {
+    // TODO(jyp): remove if unused
+    mapped_write_count++;
+  }
+
+  bool decrement_mapped_write() {
+    // TODO(jyp): remove if unused
+    // assert(mapped_write_count > 0);
+    mapped_write_count--;
+    return mapped_write_count == 0;
   }
 
   friend std::ostream &operator<<(std::ostream &os, const BlockLocation &bl) {
@@ -599,6 +639,116 @@ struct MovementStatus {
   timecount_t duration = 0;
 };
 
+class LRU_manager {
+public:
+  // Constructor: initialize for n_devices [0 .. n_devices-1]
+  explicit LRU_manager(std::size_t n_devices)
+      : n_devices_(n_devices), lru_lists_(n_devices), position_maps_(n_devices),
+        size_maps_(n_devices), sizes_(n_devices) {
+    for (auto &size : sizes_) {
+      size = 0;
+    }
+    id_buffer.reserve(20);
+  }
+
+  // read: add (device_id, data_id, mem_size). If present, update MRU; else insert.
+  void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
+    assert(device_id >= 0 && device_id < n_devices_);
+
+    auto &lst = lru_lists_[device_id];
+    auto &pos = position_maps_[device_id];
+    auto &smap = size_maps_[device_id];
+    auto &size = sizes_[device_id];
+    auto it = pos.find(data_id);
+    if (it != pos.end()) {
+      // already present: move to MRU
+      lst.erase(it->second);
+    } else {
+      size += mem_size;
+    }
+    // insert at MRU (back)
+    lst.push_back(data_id);
+    auto new_it = std::prev(lst.end());
+    pos[data_id] = new_it;
+    smap[data_id] = mem_size; // update size
+  }
+
+  LRU_manager(const LRU_manager &other)
+      : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
+        position_maps_(other.n_devices_), size_maps_(other.size_maps_), id_buffer(other.id_buffer) {
+    // Rebuild position_maps_ to point into our own lru_lists_ iterators
+    for (devid_t dev = 0; dev < n_devices_; ++dev) {
+      auto it_list = lru_lists_[dev].begin();
+      for (; it_list != lru_lists_[dev].end(); ++it_list) {
+        position_maps_[dev][*it_list] = it_list;
+      }
+    }
+  }
+
+  // invalidate: remove (device_id, data_id); assert if missing
+  void invalidate(devid_t device_id, dataid_t data_id) {
+    assert(device_id >= 0 && device_id < n_devices_);
+
+    auto &lst = lru_lists_[device_id];
+    auto &pos = position_maps_[device_id];
+    auto &smap = size_maps_[device_id];
+    auto &size = sizes_[device_id];
+
+    auto it = pos.find(data_id);
+    assert(it != pos.end() && "invalidate(): data_id not present");
+
+    lst.erase(it->second);
+    pos.erase(it);
+    size -= smap[data_id]; // update size
+    smap.erase(data_id);
+  }
+
+  // getLRUids: fill id_buffer[device_id] with the least-recently-used data_ids
+  // until their cumulative mem_size ≥ requested mem_size, and return it.
+  const DataIDList &getLRUids(devid_t device_id, std::size_t mem_size,
+                              const DataIDList &used_ids) const {
+    assert(device_id >= 0 && device_id < n_devices_);
+
+    auto &lst = lru_lists_[device_id];
+    auto &smap = size_maps_[device_id];
+    id_buffer.clear();
+    std::size_t accumulated = 0;
+
+    for (auto it = lst.begin(); it != lst.end() && accumulated < mem_size; ++it) {
+      dataid_t did = *it;
+      if (std::find(used_ids.begin(), used_ids.end(), did) != used_ids.end()) {
+        continue; // skip if used by the task
+      }
+      auto sz_it = smap.find(did);
+      assert(sz_it != smap.end() && "size missing for data_id");
+      accumulated += sz_it->second;
+      id_buffer.push_back(did);
+    }
+    if (accumulated < mem_size) {
+      spdlog::warn("LRU_manager::getLRUids: insufficient data to satisfy request");
+    }
+    return id_buffer;
+  }
+
+  mem_t get_mem(devid_t device_id) const {
+    assert((device_id >= 0) && (device_id < n_devices_));
+    return sizes_[device_id];
+  }
+
+private:
+  std::size_t n_devices_;
+
+  // For each device:
+  //  - a list maintaining LRU (front) → MRU (back)
+  //  - a map from data_id → its position in that list
+  //  - a map from data_id → its mem_size
+  std::vector<std::list<dataid_t>> lru_lists_;
+  std::vector<std::unordered_map<dataid_t, typename std::list<dataid_t>::iterator>> position_maps_;
+  std::vector<std::unordered_map<dataid_t, mem_t>> size_maps_;
+  std::vector<mem_t> sizes_;
+  mutable DataIDList id_buffer;
+};
+
 class DataManager {
 protected:
   std::reference_wrapper<Data> data;
@@ -609,6 +759,7 @@ protected:
   LocationManager launched_locations;
   MovementManager movement_manager;
   DataCounts counts;
+  LRU_manager lru_manager;
 
   static bool check_valid(size_t data_id, const LocationManager &locations, devid_t device_id) {
     return locations.is_valid(data_id, device_id);
@@ -631,6 +782,12 @@ protected:
     return updated_ids;
   }
 
+  static auto evict_on_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
+                              timecount_t current_time) {
+    auto updated_ids = locations[data_id].invalidate_on(device_id, current_time);
+    return updated_ids;
+  }
+
 public:
   DataManager(Data &data_, DeviceManager &device_manager_,
               CommunicationManager &communication_manager_)
@@ -638,7 +795,7 @@ public:
         mapped_locations(data.get().size(), device_manager_.size()),
         reserved_locations(data.get().size(), device_manager_.size()),
         launched_locations(data.get().size(), device_manager_.size()),
-        counts(device_manager_.size()) {
+        counts(device_manager_.size()), lru_manager(device_manager_.size()) {
   }
 
   DataManager(const DataManager &o_, DeviceManager &device_manager_,
@@ -646,7 +803,7 @@ public:
       : data(o_.data), device_manager(device_manager_),
         communication_manager(communication_manager_), mapped_locations(o_.mapped_locations),
         reserved_locations(o_.reserved_locations), launched_locations(o_.launched_locations),
-        movement_manager(o_.movement_manager), counts(o_.counts) {
+        movement_manager(o_.movement_manager), counts(o_.counts), lru_manager(o_.lru_manager) {
   }
 
   DataManager(const DataManager &o_) = delete;
@@ -663,11 +820,16 @@ public:
                                                         0);
       device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, data.get().get_size(i),
                                                         0);
+      lru_manager.read(initial_location, i, data.get().get_size(i));
     }
   }
 
   [[nodiscard]] const Data &get_data() const {
     return data;
+  }
+
+  [[nodiscard]] const LRU_manager &get_lru_manager() const {
+    return lru_manager;
   }
 
   [[nodiscard]] const LocationManager &get_mapped_locations() const {
@@ -799,14 +961,61 @@ public:
                  data.get().get_size(data_id));
     device_manager.get().add_mem<TaskState::LAUNCHED>(device_id, data.get().get_size(data_id),
                                                       current_time);
+    lru_manager.read(device_id, data_id, data.get().get_size(data_id));
   }
 
   void read_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
     for (auto data_id : list) {
+      lru_manager.read(device_id, data_id, data.get().get_size(data_id));
       bool changed = read_update(data_id, device_id, launched_locations, current_time);
       if (changed) {
         add_memory(data_id, device_id, current_time);
       }
+    }
+  }
+
+  void write_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+    for (auto data_id : list) {
+      auto updated_devices = write_update(data_id, device_id, launched_locations, current_time);
+      auto updated_devices_mapped =
+          write_update(data_id, device_id, mapped_locations, current_time);
+      // remove_memory(updated_devices, data_id, current_time);
+      auto size = data.get().get_size(data_id);
+      for (auto device : updated_devices) {
+        SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device, size);
+        // device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
+        device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
+        device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+        lru_manager.invalidate(device, data_id);
+        device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
+      }
+      // for (auto device : updated_devices_mapped) {
+      //   device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
+      // }
+    }
+  }
+
+  void evict_on_update_launched(const DataIDList &list, devid_t device_id,
+                                timecount_t current_time) {
+    for (auto data_id : list) {
+      auto updated_devices_launched =
+          evict_on_update(data_id, device_id, launched_locations, current_time);
+      auto updated_devices_reserved =
+          evict_on_update(data_id, device_id, reserved_locations, current_time);
+      auto updated_devices_mapped =
+          evict_on_update(data_id, device_id, mapped_locations, current_time);
+      auto size = data.get().get_size(data_id);
+      assert(updated_devices_launched == updated_devices_reserved);
+      for (auto device : updated_devices_launched) {
+        SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
+        device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
+        device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+        lru_manager.invalidate(device, data_id);
+
+        device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
+      }
+      // for (auto device : updated_devices_mapped)
+      //   device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
     }
   }
 
@@ -906,6 +1115,7 @@ public:
 
     assert(movement_manager.is_moving(data_id, destination));
     launched_locations.set_valid(data_id, destination, current_time);
+    // lru_manager.read(destination, data_id, data.get().get_size(data_id));
     movement_manager.remove(data_id, destination);
 
     communication_manager.get().release_connection(source, destination);
@@ -918,13 +1128,6 @@ public:
       device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
       device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
       device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-    }
-  }
-
-  void write_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
-    for (auto data_id : list) {
-      auto updated_devices = write_update(data_id, device_id, launched_locations, current_time);
-      remove_memory(updated_devices, data_id, current_time);
     }
   }
 

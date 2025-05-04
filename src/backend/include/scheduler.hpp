@@ -86,6 +86,7 @@ protected:
   DeviceQueue reservable;
   DeviceQueue launchable;
   DeviceQueue data_launchable;
+  DeviceQueue eviction_launchable;
 
   // static TaskType id_to_type(taskid_t id, const Tasks &tasks);
 
@@ -93,7 +94,8 @@ protected:
 
 public:
   SchedulerQueues(Devices &devices)
-      : reservable(devices.size()), launchable(devices.size()), data_launchable(devices.size()) {
+      : reservable(devices.size()), launchable(devices.size()), data_launchable(devices.size()),
+        eviction_launchable(devices.size()) {
   }
 
   SchedulerQueues(const SchedulerQueues &other) = default;
@@ -109,6 +111,9 @@ public:
 
   void push_launchable_data(taskid_t id, priority_t p, devid_t device);
   void push_launchable_data(const TaskIDList &ids, const PriorityList &ps, devid_t device);
+
+  void push_launchable_eviction(taskid_t id, priority_t p, devid_t device);
+  void push_launchable_eviction(const TaskIDList &ids, const PriorityList &ps, devid_t device);
 
   [[nodiscard]] std::size_t n_mappable() const {
     return mappable.size();
@@ -155,6 +160,19 @@ public:
 
   [[nodiscard]] bool has_active_data_launchable() const {
     return data_launchable.total_active_size() > 0;
+  }
+
+  [[nodiscard]] std::size_t n_eviction_launchable(devid_t device) const {
+    const auto &device_queue = eviction_launchable.at(device);
+    return device_queue.size();
+  }
+  [[nodiscard]] bool has_eviction_launchable(devid_t device) const {
+    const auto &device_queue = eviction_launchable.at(device);
+    return !device_queue.empty();
+  }
+
+  [[nodiscard]] bool has_active_eviction_launchable() const {
+    return eviction_launchable.total_active_size() > 0;
   }
 
   // void populate(const TaskManager &task_manager);
@@ -388,7 +406,8 @@ public:
 
   [[nodiscard]] bool is_complete() const {
     const auto &tasks = task_manager.get_tasks();
-    bool data_complete = counts.n_data_completed() == tasks.data_size();
+    bool data_complete = counts.n_data_completed() ==
+                         (tasks.data_size() + task_manager.eviction_tasks.get_n_eviction_tasks());
     bool compute_complete = counts.n_completed() == tasks.compute_size();
     return data_complete and compute_complete;
   }
@@ -398,8 +417,11 @@ public:
   [[nodiscard]] const Resources &get_task_resources(taskid_t task_id) const;
 
   [[nodiscard]] const std::string &get_task_name(taskid_t task_id) const {
-    const auto &tasks = task_manager.get_tasks();
-    return tasks.get_name(task_id);
+    if (task_id < task_manager.n_non_eviction_tasks) {
+      return task_manager.get_tasks().get_name(task_id);
+    } else {
+      return task_manager.eviction_tasks.get_name(task_id);
+    }
   }
   [[nodiscard]] const std::string &get_device_name(devid_t device_id) const {
     return device_manager.devices.get().get_name(device_id);
@@ -407,6 +429,7 @@ public:
 
   [[nodiscard]] bool is_compute_task(taskid_t task_id) const;
   [[nodiscard]] bool is_data_task(taskid_t task_id) const;
+  [[nodiscard]] bool is_eviction_task(taskid_t task_id) const;
 
   [[nodiscard]] bool is_mapped(taskid_t task_id) const;
   [[nodiscard]] bool is_reserved(taskid_t task_id) const;
@@ -685,6 +708,7 @@ protected:
   TaskIDList task_buffer;
   DeviceIDList device_buffer;
   TaskDeviceList tasks_requesting_eviction;
+  TaskIDList unlaunched_compute_tasks;
 
   void enqueue_data_tasks(taskid_t task_id);
 
@@ -698,6 +722,7 @@ public:
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
     tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
+    unlaunched_compute_tasks.reserve(input.devices.get().size());
   }
 
   Scheduler(const Scheduler &other) = default;
@@ -743,6 +768,7 @@ public:
   void complete_compute_task(taskid_t task_id, devid_t device_id);
   void complete_data_task(taskid_t task_id, devid_t device_id);
   void complete_task(CompleterEvent &complete_event, EventManager &event_manager);
+  void complete_eviction_task(taskid_t task_id, devid_t destination_id);
 
   [[nodiscard]] const TaskIDList &get_task_buffer() const {
     return task_buffer;
@@ -817,6 +843,14 @@ public:
     priority_t p = state.task_manager.state.get_launching_priority(associated_compute_task);
     devid_t device = state.task_manager.state.get_mapping(associated_compute_task);
     queues.push_launchable_data(id, p, device);
+  }
+
+  void push_launchable_eviction(taskid_t id) {
+    const auto &evict_task = state.task_manager.get_eviction_task(id);
+    taskid_t associated_compute_task = evict_task.get_compute_task();
+    priority_t p = state.task_manager.state.get_launching_priority(associated_compute_task);
+    devid_t device = evict_task.get_device_id();
+    queues.push_launchable_eviction(id, p, device);
   }
 
   void push_launchable_data(const TaskIDList &ids) {

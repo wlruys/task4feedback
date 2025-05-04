@@ -27,6 +27,7 @@ void init_simulator_logger() {
     auto logger = spdlog::stdout_color_mt(logger_name);
     spdlog::set_default_logger(logger);
     spdlog::set_level(spdlog::level::debug);
+    spdlog::set_pattern("[%l][%s:%#]\t%v - %!()");
   } catch (const spdlog::spdlog_ex &ex) {
     std::cerr << "Logger initialization failed: " << ex.what() << std::endl;
   }
@@ -219,7 +220,9 @@ public:
     }
 
     if (last_state == ExecutionState::EXTERNAL_MAPPING) {
-      spdlog::debug("Python Mapping has not been completed. Returning control to Python layer.");
+      SPDLOG_DEBUG(
+          "Time:{} Python Mapping has not been completed. Returning control to Python layer.",
+          this->get_current_time());
       return ExecutionState::EXTERNAL_MAPPING;
     }
 

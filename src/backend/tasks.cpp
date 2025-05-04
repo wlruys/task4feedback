@@ -60,7 +60,13 @@ bool Tasks::is_compute(taskid_t id) const {
 }
 
 bool Tasks::is_data(taskid_t id) const {
+  // Note eviction tasks return as data tasks (because they are a form of data task)
   return id >= compute_size();
+}
+
+bool Tasks::is_eviction(taskid_t id) const {
+  // Any tasks outside the range of compute and data tasks are considered eviction tasks
+  return id >= data_size() + compute_size();
 }
 
 void Tasks::add_compute_task(ComputeTask task) {

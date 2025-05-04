@@ -16,8 +16,9 @@ protected:
   std::vector<DepCount> counts;
   std::vector<bool> is_virtual;
   std::vector<devid_t> sources;
-  std::size_t n_compute_tasks;
-  std::size_t n_data_tasks;
+  std::size_t n_compute_tasks = 0;
+  std::size_t n_data_tasks = 0;
+  std::size_t n_eviction_tasks = 0;
 
   void set_state(taskid_t id, TaskState _state) {
     state[id] = _state;
@@ -47,14 +48,20 @@ public:
   PriorityList reserving_priority;
   PriorityList launching_priority;
 
-  std::vector<TaskIDList> eviction_dependencies;
-  std::vector<TaskIDList> eviction_dependents;
-
   TaskStateInfo() = default;
   TaskStateInfo(const Tasks &tasks);
 
   TaskStateInfo(const TaskStateInfo &other) = default;
   TaskStateInfo &operator=(const TaskStateInfo &other) = default;
+
+  taskid_t add_eviction_task() {
+    taskid_t id = taskid_t(n_compute_tasks + n_data_tasks + n_eviction_tasks++);
+    state.push_back(TaskState::RESERVED);
+    counts.emplace_back();
+    sources.push_back(0);
+    is_virtual.push_back(false);
+    return id;
+  }
 
   [[nodiscard]] TaskState get_state(taskid_t id) const {
     return state.at(id);
@@ -152,14 +159,26 @@ public:
   static constexpr std::size_t n_tracked_states = 4;
 
   std::vector<timecount_t> state_times;
+  std::size_t n_tasks = 0;
 
   TaskRecords() = default;
   TaskRecords(const Tasks &tasks) {
-    state_times.resize(tasks.size() * n_tracked_states, 0);
+    n_tasks = tasks.size();
+    const int EXPECTED_EVICTION_TASKS = 1000;
+    const std::size_t initial_size = n_tasks * n_tracked_states;
+    const std::size_t buffer_size = initial_size + EXPECTED_EVICTION_TASKS * n_tracked_states;
+    state_times.reserve(buffer_size);
+    state_times.resize(initial_size, 0);
   }
 
   TaskRecords(const TaskRecords &other) = default;
   TaskRecords &operator=(const TaskRecords &other) = default;
+
+  taskid_t add_eviction_task() {
+    taskid_t id = n_tasks++;
+    state_times.resize(n_tasks * n_tracked_states, 0);
+    return id;
+  }
 
   void record_mapped(taskid_t id, timecount_t time);
   void record_reserved(taskid_t id, timecount_t time);
@@ -188,6 +207,8 @@ public:
   std::reference_wrapper<TaskNoise> noise;
   TaskStateInfo state;
   TaskRecords records;
+  taskid_t n_non_eviction_tasks = 0;
+  EvictionTasks eviction_tasks;
 
   TaskIDList task_buffer;
 
@@ -205,7 +226,21 @@ public:
     // GraphManager::finalize(tasks, create_data_tasks);
     assert(tasks.get().is_initialized());
     initialize_state();
+    n_non_eviction_tasks = tasks.get().size();
+    eviction_tasks = EvictionTasks(n_non_eviction_tasks);
     initialized = true;
+  }
+
+  [[nodiscard]] taskid_t create_eviction_task(taskid_t compute_task, dataid_t data_id,
+                                              devid_t backup_device, devid_t invalidate_device,
+                                              timecount_t time) {
+    auto id =
+        eviction_tasks.add_eviction_task(compute_task, data_id, backup_device, invalidate_device);
+    auto id_state = state.add_eviction_task();
+    auto id_records = records.add_eviction_task();
+    assert(id == id_state);
+    assert(id == id_records);
+    return id;
   }
 
   [[nodiscard]] priority_t get_mapping_priority(taskid_t id) const {
@@ -252,6 +287,16 @@ public:
     return tasks;
   }
 
+  [[nodiscard]] bool is_data(taskid_t id) const {
+    return tasks.get().is_data(id);
+  }
+  [[nodiscard]] bool is_compute(taskid_t id) const {
+    return tasks.get().is_compute(id);
+  }
+  [[nodiscard]] bool is_eviction(taskid_t id) const {
+    return eviction_tasks.is_eviction(id);
+  }
+
   void set_state(taskid_t id, TaskState _state) {
     state.set_state(id, _state);
   }
@@ -270,6 +315,21 @@ public:
 
   [[nodiscard]] bool is_virtual(taskid_t id) const {
     return state.get_data_task_virtual(id);
+  }
+
+  const ComputeTask &get_compute_task(taskid_t id) const {
+    assert(id < n_non_eviction_tasks);
+    return get_tasks().get_compute_task(id);
+  }
+
+  const DataTask &get_data_task(taskid_t id) const {
+    assert(id < n_non_eviction_tasks);
+    return get_tasks().get_data_task(id);
+  }
+
+  const EvictionTask &get_eviction_task(taskid_t id) const {
+    assert(id >= n_non_eviction_tasks);
+    return eviction_tasks.get_eviction_task(id);
   }
 
   const TaskIDList &notify_mapped(taskid_t id, timecount_t time);
