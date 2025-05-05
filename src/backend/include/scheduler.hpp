@@ -346,6 +346,8 @@ protected:
   DeviceManager device_manager;
   CommunicationManager communication_manager;
   DataManager data_manager;
+  TaskIDList unlaunched_compute_tasks;
+  TaskIDList mapped_but_not_reserved_tasks;
 
   [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id, devid_t device_id) const;
   [[nodiscard]] ResourceRequest request_reserve_resources(taskid_t task_id,
@@ -382,7 +384,9 @@ public:
       : global_time(other.global_time), task_manager(other.task_manager),
         device_manager(other.device_manager), communication_manager(other.communication_manager),
         data_manager(other.data_manager, device_manager, communication_manager),
-        counts(other.counts), costs(other.costs) {
+        counts(other.counts), costs(other.costs),
+        unlaunched_compute_tasks(other.unlaunched_compute_tasks),
+        mapped_but_not_reserved_tasks(other.mapped_but_not_reserved_tasks) {
   }
 
   void update_time(timecount_t time) {
@@ -708,7 +712,6 @@ protected:
   TaskIDList task_buffer;
   DeviceIDList device_buffer;
   TaskDeviceList tasks_requesting_eviction;
-  TaskIDList unlaunched_compute_tasks;
 
   void enqueue_data_tasks(taskid_t task_id);
 
@@ -722,7 +725,6 @@ public:
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
     tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
-    unlaunched_compute_tasks.reserve(input.devices.get().size());
   }
 
   Scheduler(const Scheduler &other) = default;

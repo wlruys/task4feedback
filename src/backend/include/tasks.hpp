@@ -447,6 +447,7 @@ protected:
 
 public:
   EvictionTasks() = default;
+  EvictionTasks(const EvictionTasks &other) = default;
 
   EvictionTasks(std::size_t n_tasks) : n_noneviction_tasks(n_tasks) {
     const int EXPECTED_EVICTION_TASKS = 1000;

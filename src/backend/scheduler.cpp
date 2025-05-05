@@ -701,6 +701,26 @@ const TaskIDList &Scheduler::map_task(taskid_t task_id, Action &action) {
   s.data_manager.read_update_mapped(task.get_read(), chosen_device, current_time);
   s.data_manager.read_update_mapped(task.get_write(), chosen_device, current_time);
   s.data_manager.write_update_mapped(task.get_write(), chosen_device, current_time);
+  // Ground truth
+  // Consider this scenario:
+  //   GPU0   |   GPU1
+  // ---------|----------
+  // read B0  |
+  //          |  Write B0
+  // read B0  |
+  //          |  Read B0
+  // ---------|----------
+  //   2*B0   |    B0
+  // Since GPU1 invalidated B0 once before the last read, total mapped memory size is 2*B0
+  // However, during execution, GPU1 will remove mapped memory from GPU0 in task completion
+  // Thus, every duplicate memory is removed in the end.
+  // IT SHOULD BE launched_location == reserved_location == mapped_location """in the end""".
+  // This becomes tricky when eviction happens.
+  // Currently, we keep track of mapped but not reserved tasks.
+  // We check if there are any usage of the data by the victim device.
+  // If there are, it means that
+
+  s.mapped_but_not_reserved_tasks.emplace_back(task_id);
 
   // Notify dependents and enqueue newly mappable tasks
   const auto &newly_mappable_tasks = s.notify_mapped(task_id);
@@ -879,6 +899,11 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id,
   s.data_manager.read_update_reserved(task.get_write(), device_id, current_time);
   s.data_manager.write_update_reserved(task.get_write(), device_id, current_time);
 
+  // erase task_id from s.mapped_but_not_reserved_tasks
+  s.mapped_but_not_reserved_tasks.erase(std::remove(s.mapped_but_not_reserved_tasks.begin(),
+                                                    s.mapped_but_not_reserved_tasks.end(), task_id),
+                                        s.mapped_but_not_reserved_tasks.end());
+
   const auto &newly_reservable_tasks = s.notify_reserved(task_id);
 
   success_count += 1;
@@ -892,7 +917,7 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id,
     SPDLOG_DEBUG("Time:{} Task {} is launchable", current_time, s.get_task_name(task_id));
     push_launchable(task_id, device_id);
   } else {
-    unlaunched_compute_tasks.push_back(task_id);
+    s.unlaunched_compute_tasks.push_back(task_id);
   }
 
   return {true, &newly_reservable_tasks};
@@ -960,7 +985,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
     event_manager.create_event(EventType::RESERVER, reserver_time);
     return;
   }
-  if (!tasks_requesting_eviction.empty() && unlaunched_compute_tasks.empty()) {
+  if (!tasks_requesting_eviction.empty() && s.unlaunched_compute_tasks.empty()) {
     // Should not start eviction if there are tasks not launchable due to data movement.
 
     // timecount_t launcher_time = s.global_time + TIME_TO_LAUNCH;
@@ -1306,11 +1331,67 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
                   current_time, s.get_task_name(eviction_task_id), data_id,
                   s.get_task_name(task_id), device_id);
               push_launchable_eviction(eviction_task_id);
-            } else {
+            } else { // There are multiple sources for this data
+              // We need to invalidate the data on the device
               // Invalidate the data
-              s.data_manager.evict_on_update_launched(DataIDList{data_id}, device_id, current_time);
-              SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}", current_time,
-                           data_id, s.get_task_name(task_id), device_id);
+              bool remove_from_mapped = true;
+              for (auto unreserved_task_id : s.mapped_but_not_reserved_tasks) {
+                if (task_manager.get_state().get_mapping(unreserved_task_id) == device_id) {
+                  for (auto used_data_id :
+                       task_manager.get_tasks().get_compute_task(unreserved_task_id).get_unique()) {
+                    if (used_data_id == data_id) {
+                      SPDLOG_DEBUG(
+                          "Time:{} Not removing from mapped since data {} will be used later "
+                          "by task {} "
+                          "on device {}",
+                          current_time, data_id, s.get_task_name(unreserved_task_id), device_id);
+                      remove_from_mapped = false;
+                      break;
+                    }
+                  }
+                }
+                if (!remove_from_mapped) {
+                  break;
+                }
+              }
+              bool flag = false;
+              for (auto unreserved_task_id : s.mapped_but_not_reserved_tasks) {
+                if (s.task_manager.get_state().get_mapping(unreserved_task_id) == device_id) {
+                  for (auto used_data_id :
+                       s.task_manager.get_tasks().get_compute_task(unreserved_task_id).get_read()) {
+                    if (used_data_id == data_id) {
+                      SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}",
+                                   current_time, data_id, s.get_task_name(task_id), device_id);
+                      s.data_manager.evict_on_update_launched(
+                          DataIDList{data_id}, device_id, current_time, remove_from_mapped, false);
+                      flag = true;
+                      break;
+                    }
+                  }
+                } else {
+                  for (auto used_data_id : s.task_manager.get_tasks()
+                                               .get_compute_task(unreserved_task_id)
+                                               .get_write()) {
+                    if (used_data_id == data_id) {
+                      SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}",
+                                   current_time, data_id, s.get_task_name(task_id), device_id);
+                      s.data_manager.evict_on_update_launched(
+                          DataIDList{data_id}, device_id, current_time, remove_from_mapped, true);
+                      flag = true;
+                      break;
+                    }
+                  }
+                }
+                if (flag) {
+                  break;
+                }
+              }
+              if (!flag) {
+                SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}", current_time,
+                             data_id, s.get_task_name(task_id), device_id);
+                s.data_manager.evict_on_update_launched(DataIDList{data_id}, device_id,
+                                                        current_time, remove_from_mapped, false);
+              }
             }
           }
         } else {
@@ -1379,7 +1460,8 @@ void Scheduler::complete_eviction_task(taskid_t task_id, devid_t destination_id)
   auto is_virtual = s.task_manager.is_virtual(task_id);
   const auto &eviction_task = s.task_manager.get_eviction_task(task_id);
   auto data_id = eviction_task.get_data_id();
-  s.data_manager.complete_move(data_id, source_id, destination_id, is_virtual, current_time);
+  s.data_manager.complete_eviction_move(data_id, source_id, destination_id, is_virtual,
+                                        current_time);
   s.device_manager.add_mem<TaskState::MAPPED>(
       destination_id, s.data_manager.get_data().get_size(data_id), current_time);
   s.device_manager.add_mem<TaskState::RESERVED>(
@@ -1387,11 +1469,54 @@ void Scheduler::complete_eviction_task(taskid_t task_id, devid_t destination_id)
 
   auto invalidate_device_id = eviction_task.get_invalidate_device();
 
-  s.data_manager.evict_on_update_launched(DataIDList{data_id}, invalidate_device_id, current_time);
+  bool remove_from_mapped = true;
+  for (auto unreserved_task_id : s.mapped_but_not_reserved_tasks) {
+    if (s.task_manager.get_state().get_mapping(unreserved_task_id) == invalidate_device_id) {
+      for (auto used_data_id :
+           s.task_manager.get_tasks().get_compute_task(unreserved_task_id).get_unique()) {
+        if (used_data_id == data_id) {
+          SPDLOG_DEBUG("Time:{} Not removing from mapped since data {} will be used by task {} "
+                       "on device {}",
+                       current_time, data_id, s.get_task_name(unreserved_task_id),
+                       invalidate_device_id);
+          remove_from_mapped = false;
+          break;
+        }
+      }
+    }
+  }
+  for (auto unreserved_task_id : s.mapped_but_not_reserved_tasks) {
+    if (s.task_manager.get_state().get_mapping(unreserved_task_id) == invalidate_device_id) {
+      for (auto used_data_id :
+           s.task_manager.get_tasks().get_compute_task(unreserved_task_id).get_read()) {
+        if (used_data_id == data_id) {
+          s.data_manager.evict_on_update_launched(DataIDList{data_id}, invalidate_device_id,
+                                                  current_time, remove_from_mapped, false);
 
-  // s.data_manager.finalize_mapped_usage(data_list, HOST_ID, current_time);
-  // s.data_manager.finalize_reserved_usage(data_list, HOST_ID, current_time);
-  // s.data_manager.finalize_launched_usage(data_list, HOST_ID, current_time);
+          eviction_count -= 1;
+          SPDLOG_DEBUG("Time:{} Eviction task {} completed {} left", current_time,
+                       s.get_task_name(task_id), eviction_count);
+          return;
+        }
+      }
+    } else {
+      for (auto used_data_id :
+           s.task_manager.get_tasks().get_compute_task(unreserved_task_id).get_write()) {
+        if (used_data_id == data_id) {
+          s.data_manager.evict_on_update_launched(DataIDList{data_id}, invalidate_device_id,
+                                                  current_time, remove_from_mapped, true);
+
+          eviction_count -= 1;
+          SPDLOG_DEBUG("Time:{} Eviction task {} completed {} left", current_time,
+                       s.get_task_name(task_id), eviction_count);
+          return;
+        }
+      }
+    }
+  }
+  s.data_manager.evict_on_update_launched(DataIDList{data_id}, invalidate_device_id, current_time,
+                                          remove_from_mapped, false);
+
   eviction_count -= 1;
   SPDLOG_DEBUG("Time:{} Eviction task {} completed {} left", current_time, s.get_task_name(task_id),
                eviction_count);
@@ -1418,11 +1543,11 @@ void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &even
   // Notify dependents and enqueue newly launchable tasks
   const auto &newly_launchable_tasks = s.notify_completed(task_id);
   push_launchable(newly_launchable_tasks);
-  auto it = unlaunched_compute_tasks.begin();
-  while (it != unlaunched_compute_tasks.end()) {
+  auto it = s.unlaunched_compute_tasks.begin();
+  while (it != s.unlaunched_compute_tasks.end()) {
     if (s.is_launchable(*it)) {
       // erase returns the iterator following the erased element
-      it = unlaunched_compute_tasks.erase(it);
+      it = s.unlaunched_compute_tasks.erase(it);
     } else {
       ++it;
     }
@@ -1434,8 +1559,7 @@ void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &even
   breakpoints.check_task_breakpoint(EventType::COMPLETER, task_id);
   if (scheduler_event_count == 0) {
     if (this->eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
-      event_manager.create_event(EventType::EVICTOR, s.global_time + SCHEDULER_TIME_GAP,
-                                 TaskDeviceList());
+      event_manager.create_event(EventType::EVICTOR, s.global_time + SCHEDULER_TIME_GAP);
     } else if (this->eviction_state == EvictionState::RUNNING) {
       if (eviction_count) {
         event_manager.create_event(EventType::LAUNCHER, s.global_time + SCHEDULER_TIME_GAP);

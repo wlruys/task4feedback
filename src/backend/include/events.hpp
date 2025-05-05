@@ -56,18 +56,10 @@ struct LauncherEvent {
   }
 };
 
-// struct EvictorEvent {
-//   static constexpr EventType type = EventType::EVICTOR;
-//   timecount_t time;
-//   explicit EvictorEvent(timecount_t t) : time(t) {
-//   }
-// };
-
 struct EvictorEvent {
   static constexpr EventType type = EventType::EVICTOR;
   timecount_t time;
-  TaskDeviceList tasks;
-  EvictorEvent(timecount_t t, TaskDeviceList ts) : time(t), tasks(std::move(ts)) {
+  explicit EvictorEvent(timecount_t t) : time(t) {
   }
 };
 

@@ -145,9 +145,6 @@ protected:
   std::vector<bool> locations;
   std::vector<std::vector<ValidInterval>> valid_intervals;
   std::vector<timecount_t> current_start;
-  // TODO(jyp): Remove this to a separate class just for the mapped_locations
-  taskid_t mapped_read_count = 0;
-  taskid_t mapped_write_count = 0;
 
 public:
   BlockLocation(dataid_t data_id, std::size_t n_devices)
@@ -316,34 +313,6 @@ public:
       valid_events.stops[intervals.size()] = MAX_TIME;
     }
     return valid_events;
-  }
-
-  void increment_mapped_read() {
-    // TODO(jyp): remove if unused
-    mapped_read_count++;
-  }
-
-  void initialize_mapped_read() {
-    mapped_read_count = 0;
-  }
-
-  bool decrement_mapped_read() {
-    // TODO(jyp): remove if unused
-    // assert(mapped_read_count > 0);
-    mapped_read_count--;
-    return mapped_read_count == 0;
-  }
-
-  void increment_mapped_write() {
-    // TODO(jyp): remove if unused
-    mapped_write_count++;
-  }
-
-  bool decrement_mapped_write() {
-    // TODO(jyp): remove if unused
-    // assert(mapped_write_count > 0);
-    mapped_write_count--;
-    return mapped_write_count == 0;
   }
 
   friend std::ostream &operator<<(std::ostream &os, const BlockLocation &bl) {
@@ -675,12 +644,13 @@ public:
 
   LRU_manager(const LRU_manager &other)
       : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
-        position_maps_(other.n_devices_), size_maps_(other.size_maps_), id_buffer(other.id_buffer) {
-    // Rebuild position_maps_ to point into our own lru_lists_ iterators
+        position_maps_(other.n_devices_),                   // empty, will rebuild
+        size_maps_(other.size_maps_), sizes_(other.sizes_), // copy total sizes
+        id_buffer(other.id_buffer) {
+    // Rebuild position_maps_ so each iterator points into our own lru_lists_
     for (devid_t dev = 0; dev < n_devices_; ++dev) {
-      auto it_list = lru_lists_[dev].begin();
-      for (; it_list != lru_lists_[dev].end(); ++it_list) {
-        position_maps_[dev][*it_list] = it_list;
+      for (auto it = lru_lists_[dev].begin(); it != lru_lists_[dev].end(); ++it) {
+        position_maps_[dev][*it] = it;
       }
     }
   }
@@ -977,45 +947,77 @@ public:
   void write_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
     for (auto data_id : list) {
       auto updated_devices = write_update(data_id, device_id, launched_locations, current_time);
-      auto updated_devices_mapped =
-          write_update(data_id, device_id, mapped_locations, current_time);
-      // remove_memory(updated_devices, data_id, current_time);
+      // auto updated_devices_mapped =
+      //     write_update(data_id, device_id, mapped_locations, current_time);
+      remove_memory(updated_devices, data_id, current_time);
       auto size = data.get().get_size(data_id);
       for (auto device : updated_devices) {
-        SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device, size);
-        // device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
-        device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
-        device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+        // SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device,
+        // size); device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
+        // device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
+        // device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id);
-        device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
       }
-      // for (auto device : updated_devices_mapped) {
-      //   device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
-      // }
     }
   }
 
-  void evict_on_update_launched(const DataIDList &list, devid_t device_id,
-                                timecount_t current_time) {
+  void evict_on_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time,
+                                bool usage = false, bool write_incoming = false) {
     for (auto data_id : list) {
       auto updated_devices_launched =
           evict_on_update(data_id, device_id, launched_locations, current_time);
       auto updated_devices_reserved =
           evict_on_update(data_id, device_id, reserved_locations, current_time);
-      auto updated_devices_mapped =
-          evict_on_update(data_id, device_id, mapped_locations, current_time);
+
       auto size = data.get().get_size(data_id);
-      assert(updated_devices_launched == updated_devices_reserved);
+      // assert(updated_devices_launched == updated_devices_reserved);
       for (auto device : updated_devices_launched) {
         SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
         device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
         device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id);
-
-        device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
       }
-      // for (auto device : updated_devices_mapped)
-      //   device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
+      if (usage) {
+        // Ground truth: Only device with this data
+        // No more read or write to this data from this device
+        // Mapped location can be invalid if
+        // 1. Write invalidated by other device
+        device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
+        mapped_locations.set_invalid(data_id, device_id, current_time);
+      } else if (mapped_locations.is_invalid(data_id, device_id) || write_incoming) {
+        // TODO(jyp): Need to handle a case where the next usage for the data block is
+        // write from the other device. Since launched_location is invalidated by the eviction
+        // this redundant mapped_memory will not be removed. (Which should be removed).
+        // mapped_locations.is_invalid(data_id, device_id) is only checking a subset of above cases
+        // since to be valid in launced_location and invalid in mapped_location there is only one
+        // scenario.
+        // -> the last operation to the data block in mapped_but_not_reserved_tasks is a write from
+        // another device.
+        //   GPU0   |   GPU1
+        // ---------|----------
+        // read B0  |
+        // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
+        // read B0  |
+        // ~~~~~~~~~~~~~~~~~~~~~
+        //          |  Write B0
+        // ---------|---------- <- Mapped but not reserved B0 invalid in mapped_location GPU0
+        //
+        // However below case is not handeled
+        //
+        //   GPU0   |   GPU1
+        // ---------|----------
+        // read B0  |
+        // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
+        //          |  Write B0
+        // ~~~~~~~~~~~~~~~~~~~~~
+        // read B0  |
+        // ---------|---------- <- Mapped but not reserved B0 valid in mapped_location GPU0
+        //
+        // Write B0 from the GPU should have removed the mapped memory from GPU0 since
+        // launched_location is valid (without eviction).
+        // After eviction launched_location has changed and the removal doesn't happen.
+        device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
+      }
     }
   }
 
@@ -1115,6 +1117,43 @@ public:
 
     assert(movement_manager.is_moving(data_id, destination));
     launched_locations.set_valid(data_id, destination, current_time);
+    // lru_manager.read(destination, data_id, data.get().get_size(data_id));
+    movement_manager.remove(data_id, destination);
+
+    communication_manager.get().release_connection(source, destination);
+  }
+
+  void complete_eviction_move(dataid_t data_id, devid_t source, devid_t destination,
+                              bool is_virtual, timecount_t current_time) {
+
+    if (is_virtual) {
+      SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
+                   "device {}",
+                   data_id, source, destination);
+
+      if (movement_manager.is_moving(data_id, destination)) {
+        SPDLOG_DEBUG("Virtual move of data block {} from device {} to device {} "
+                     "beat the real move",
+                     data_id, source, destination);
+        // Update will happen in the real move
+        // Not valid until the real move is completed
+      } else {
+        // NOTE(wlr): I'm not 100% sure about the source check
+        // Could something that starts at the same time as the move completes be
+        // a problem?
+        assert(launched_locations.is_valid(data_id, source));
+        assert(launched_locations.is_valid(data_id, destination));
+      }
+      return;
+    }
+
+    SPDLOG_DEBUG("Completing eviction move of data block {} from device {} to device {}", data_id,
+                 source, destination);
+
+    assert(movement_manager.is_moving(data_id, destination));
+    launched_locations.set_valid(data_id, destination, current_time);
+    reserved_locations.set_valid(data_id, destination, current_time);
+    mapped_locations.set_valid(data_id, destination, current_time);
     // lru_manager.read(destination, data_id, data.get().get_size(data_id));
     movement_manager.remove(data_id, destination);
 

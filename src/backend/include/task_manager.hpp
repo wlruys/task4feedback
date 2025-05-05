@@ -209,7 +209,6 @@ public:
   TaskRecords records;
   taskid_t n_non_eviction_tasks = 0;
   EvictionTasks eviction_tasks;
-
   TaskIDList task_buffer;
 
   bool initialized = false;

@@ -19,21 +19,12 @@ public:
     case EventType::LAUNCHER:
       events_.push(LauncherEvent{time});
       break;
-    // case EventType::EVICTOR:
-    //   events_.push(EvictorEvent{time});
-    //   break;
+    case EventType::EVICTOR:
+      events_.push(EvictorEvent{time});
+      break;
     default:
       throw std::invalid_argument("create_event(type,time) only for MAPPER/RESERVER/LAUNCHER");
     }
-  }
-
-  // Evictor with TaskDeviceList:
-  void create_event(EventType t, timecount_t time, TaskDeviceList tasks) {
-    if (t != EventType::EVICTOR) {
-      std::cout << "create_event: expected EVICTOR got " << t;
-      throw std::invalid_argument("create_event: expected EVICTOR");
-    }
-    events_.push(EvictorEvent{time, std::move(tasks)});
   }
 
   // Completer with TaskIDList:
