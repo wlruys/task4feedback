@@ -985,9 +985,9 @@ public:
         device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
         mapped_locations.set_invalid(data_id, device_id, current_time);
       } else if (mapped_locations.is_invalid(data_id, device_id) || write_incoming) {
-        // TODO(jyp): Need to handle a case where the next usage for the data block is
+        // write_incoming is needed to handle a case where the next usage for the data block is
         // write from the other device. Since launched_location is invalidated by the eviction
-        // this redundant mapped_memory will not be removed. (Which should be removed).
+        // this redundant mapped_memory will not be removed. (Which should be).
         // mapped_locations.is_invalid(data_id, device_id) is only checking a subset of above cases
         // since to be valid in launced_location and invalid in mapped_location there is only one
         // scenario.
@@ -998,9 +998,9 @@ public:
         // read B0  |
         // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
         // read B0  |
-        // ~~~~~~~~~~~~~~~~~~~~~
+        // ~~~~~~~~~~~~~~~~~~~~~ < other ops
         //          |  Write B0
-        // ---------|---------- <- Mapped but not reserved B0 invalid in mapped_location GPU0
+        // ---------|---------- <- Mapped but not reserved: B0 invalid in mapped_location GPU0
         //
         // However below case is not handeled
         //
@@ -1009,9 +1009,9 @@ public:
         // read B0  |
         // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
         //          |  Write B0
-        // ~~~~~~~~~~~~~~~~~~~~~
+        // ~~~~~~~~~~~~~~~~~~~~~ < other ops
         // read B0  |
-        // ---------|---------- <- Mapped but not reserved B0 valid in mapped_location GPU0
+        // ---------|---------- <- Mapped but not reserved: B0 valid in mapped_location GPU0
         //
         // Write B0 from the GPU should have removed the mapped memory from GPU0 since
         // launched_location is valid (without eviction).

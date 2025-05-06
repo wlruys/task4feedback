@@ -347,7 +347,7 @@ protected:
   CommunicationManager communication_manager;
   DataManager data_manager;
   TaskIDList unlaunched_compute_tasks;
-  TaskIDList mapped_but_not_reserved_tasks;
+  std::unordered_set<taskid_t> mapped_but_not_reserved_tasks;
 
   [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id, devid_t device_id) const;
   [[nodiscard]] ResourceRequest request_reserve_resources(taskid_t task_id,
