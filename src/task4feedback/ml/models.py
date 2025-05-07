@@ -1409,7 +1409,7 @@ class AddConvStateNet(nn.Module):
         self.device_layer = nn.Sequential(
             layer_init(
                 nn.Linear(
-                    feature_config.device_feature_dim * n_devices,
+                    feature_config.device_feature_dim * n_devices + 1,
                     layer_config.hidden_channels,
                 )
             ),
@@ -1426,7 +1426,7 @@ class AddConvStateNet(nn.Module):
             nn.LeakyReLU(negative_slope=0.01),
         )
 
-        self.output_dim = layer_config.hidden_channels * 3 + 1
+        self.output_dim = layer_config.hidden_channels * 3
 
     def forward(self, data: HeteroData | Batch, counts=None):
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
@@ -1441,6 +1441,19 @@ class AddConvStateNet(nn.Module):
 
         device_features = self.unroll_devices(data)
         device_features = device_features.squeeze(0)
+
+        time = data["time"].x
+
+        with torch.no_grad():
+            time = time / 100000
+
+        if task_batch is None:
+            time = time.squeeze(0)
+        else:
+            time.reshape(-1, 1)
+
+        device_features = torch.cat([device_features, time], dim=-1)
+
         device_features = self.device_layer(device_features)
 
         task_features = torch.cat(
@@ -1475,19 +1488,11 @@ class AddConvStateNet(nn.Module):
         # print("device_features", device_features.shape)
         # print("candidate_features", candidate_features.shape)
 
-        time = data["time"].x
-
-        with torch.no_grad():
-            time = time / 100000
-
-        if task_batch is None:
-            time = time.squeeze(0)
-        else:
-            time.reshape(-1, 1)
-
         state_features = torch.cat(
-            (global_state, candidate_features, device_features, time), dim=-1
+            (global_state, candidate_features, device_features), dim=-1
         )
+
+        print("state_features", state_features)
 
         # print("state_features", state_features.shape)
 

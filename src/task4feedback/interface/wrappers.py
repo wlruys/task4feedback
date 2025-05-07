@@ -1313,6 +1313,7 @@ class ExternalObserver:
 
     def candidate_observation(self, output: TensorDict):
         # print("Candidate observation")
+        print("Candidate observation", type(self))
         count = self.simulator.simulator.get_mappable_candidates(
             output["aux"]["candidates"]["idx"]
         )
@@ -1345,6 +1346,7 @@ class ExternalObserver:
         output["aux"]["time"][0] = self.simulator.time
         output["aux"]["improvement"][0] = -2.0
         # print("Auxiliary observation")
+
         return output
 
 
@@ -1376,9 +1378,20 @@ class HeterogeneousExternalObserver(ExternalObserver):
             data_device_features,
         )
 
+    def data_observation(self, output: TensorDict):
+        # print("Data observation")
+        ntasks = output["nodes"]["tasks"]["count"][0]
+        _, count = self.get_used_data(
+            output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
+        )
+        output["nodes"]["data"]["count"][0] = count
+        self.get_data_features(
+            output["nodes"]["data"]["glb"][:count], output["nodes"]["data"]["attr"]
+        )
+
     def get_task_device_edges(self, task_ids, device_ids, workspace, global_workspace):
         length = self.graph_extractor.get_task_mapped_device_edges(
-            task_ids, device_ids, workspace, global_workspace
+            task_ids, workspace, global_workspace
         )
 
         if self.truncate:
@@ -1389,8 +1402,8 @@ class HeterogeneousExternalObserver(ExternalObserver):
     def get_data_device_edges(
         self, data_ids, unique_data_ids, device_ids, workspace, global_workspace
     ):
-        length = self.graph_extractor.get_data_device_edges_filtered(
-            data_ids, unique_data_ids, device_ids, workspace, global_workspace
+        length = self.graph_extractor.get_data_device_edges(
+            data_ids, workspace, global_workspace
         )
 
         if self.truncate:
@@ -1404,19 +1417,24 @@ class HeterogeneousExternalObserver(ExternalObserver):
             (spec.max_data), dtype=torch.int64
         )
         buffer["nodes"]["data"]["filtered_count"] = torch.zeros((1), dtype=torch.int64)
+        return buffer
 
     def data_device_observation(self, output: TensorDict):
         # print("Data-Device observation")
         ndata = output["nodes"]["data"]["count"][0]
         ndevices = output["nodes"]["devices"]["count"][0]
+        ntasks = output["nodes"]["tasks"]["count"][0]
 
-        data_ids = output["nodes"]["data"]["glb"][:ndata]
-        device_ids = output["nodes"]["devices"]["glb"][:ndevices]
+        _, count = self.get_used_filtered_data(
+            output["nodes"]["tasks"]["glb"][:ntasks],
+            output["nodes"]["data"]["filtered_glb"],
+        )
+        output["nodes"]["data"]["filtered_count"][0] = count
 
         _, count = self.get_data_device_edges(
-            data_ids,
-            data_ids,
-            device_ids,
+            output["nodes"]["data"]["glb"][:ndata],
+            output["nodes"]["data"]["filtered_glb"][:count],
+            output["nodes"]["devices"]["glb"][:ndevices],
             output["edges"]["data_devices"]["idx"],
             output["edges"]["data_devices"]["glb"],
         )
@@ -1452,6 +1470,8 @@ class HeterogeneousExternalObserver(ExternalObserver):
         output["aux"]["time"][0] = self.simulator.time
         output["aux"]["improvement"][0] = -2.0
         # print("Auxiliary observation")
+
+        print(output)
         return output
 
 

@@ -457,7 +457,7 @@ if __name__ == "__main__":
             "latency": 1,
         },
         "feature_config": {
-            "observer_factory": "XYObserverFactory",
+            "observer_factory": "XYHeterogeneousObserverFactory",
             "max_tasks": 30,
             "max_data": 50,
             "max_tasks_tasks_edges": 100,
