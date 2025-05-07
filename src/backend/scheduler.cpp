@@ -724,13 +724,13 @@ const TaskIDList &Scheduler::map_task(taskid_t task_id, Action &action) {
   state.update_mapped_cost(task_id, chosen_device);
 
   // Print most recent writers
-  const auto &most_recent_writers = task.get_most_recent_writers();
-  const auto &read = task.get_read();
+  // const auto &most_recent_writers = task.get_most_recent_writers();
+  // const auto &read = task.get_read();
 
-  std::cout << "Most recent writers for task " << s.get_task_name(task_id) << std::endl;
-  for (int i = 0; i < most_recent_writers.size(); i++) {
-    std::cout << read[i] << " : " << most_recent_writers[i] << std::endl;
-  }
+  // std::cout << "Most recent writers for task " << s.get_task_name(task_id) << std::endl;
+  // for (int i = 0; i < most_recent_writers.size(); i++) {
+  //   std::cout << read[i] << " : " << most_recent_writers[i] << std::endl;
+  // }
 
   breakpoints.check_task_breakpoint(EventType::MAPPER, task_id);
 
@@ -987,14 +987,20 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
     event_manager.create_event(EventType::RESERVER, reserver_time);
     return;
   }
-  if (!tasks_requesting_eviction.empty() && s.unlaunched_compute_tasks.empty()) {
+  if (!tasks_requesting_eviction.empty()) {
     // Should not start eviction if there are tasks not launchable due to data movement.
-
+    if (s.unlaunched_compute_tasks.empty()) {
+      SPDLOG_DEBUG("Time:{} Eviction will start for {} tasks", current_time,
+                   tasks_requesting_eviction.size());
+      this->eviction_state = EvictionState::WAITING_FOR_COMPLETION; // This should be set to false
+                                                                    // after the eviction is over
+    } else {
+      SPDLOG_DEBUG("Time:{} Eviction will start after launching {} tasks", current_time,
+                   s.unlaunched_compute_tasks.size());
+    }
     // timecount_t launcher_time = s.global_time + TIME_TO_LAUNCH;
     // // The next event is a eviction event
     // event_manager.create_event(EventType::EVICTOR, launcher_time);
-    this->eviction_state = EvictionState::WAITING_FOR_COMPLETION; // This should be set to false
-                                                                  // after the eviction is over
   }
   // else {
   // The next event is a launching event
@@ -1322,7 +1328,7 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
         const auto [requested, missing] = s.request_reserve_resources(task_id, device_id);
         if (missing.mem) { // There is still memory to evict
           const auto &task = tasks.get_compute_task(task_id);
-          auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, task.get_read());
+          auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, task.get_unique());
           for (auto data_id : data_ids) {
             auto sources = data_manager.get_valid_launched_locations(data_id);
             assert(!sources.empty());
