@@ -1,5 +1,6 @@
 from ..graphs import *
 from ..graphs.jacobi import *
+from ..graphs.dynamic_jacobi import *
 from ..graphs.base import *
 from .env import *
 from ..graphs.mesh import *
@@ -12,7 +13,7 @@ def build_jacobi_graph(config: JacobiConfig, randomize=True) -> JacobiGraph:
     mesh = generate_quad_mesh(L=config.L, n=config.n)
     geom = build_geometry(mesh)
 
-    jgraph = JacobiGraph(geom, config.steps)
+    jgraph = JacobiGraph(geom, config)
 
     jgraph.apply_variant(JacobiVariant)
 
@@ -46,9 +47,25 @@ def make_jacobi_env(config: JacobiConfig):
     m = jgraph
     m.finalize_tasks()
     spec = create_graph_spec()
-    input = SimulatorInput(m, d, s)
-    env = RuntimeEnv(
-        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+    input = SimulatorInput(
+        m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
+    )
+
+    internal_mapper = fastsim.DequeueEFTMapper
+    external_mapper = ExternalMapper
+
+    partition = jgraph.mincut_per_levels(arch=DeviceType.GPU, level_chunks=20)
+    aligned, perms, flips = jgraph.align_partitions()
+
+    env = MapperRuntimeEnv(
+        SimulatorFactory(
+            input,
+            spec,
+            DefaultObserverFactory,
+            internal_mapper=internal_mapper,
+            external_mapper=external_mapper,
+        ),
+        device="cpu",
     )
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())

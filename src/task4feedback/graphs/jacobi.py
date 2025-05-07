@@ -1,6 +1,13 @@
 from .mesh.base import Geometry, Cell, Edge
 from ..interface import DataBlocks, Graph, DeviceType, TaskTuple, VariantTuple
-from .base import DataGeometry, DataKey, GeometryIDMap, ComputeDataGraph
+from .base import (
+    DataGeometry,
+    DataKey,
+    GeometryIDMap,
+    ComputeDataGraph,
+    WeightedCellGraph,
+    weighted_cell_partition,
+)
 from dataclasses import dataclass
 from ..interface.lambdas import VariantBuilder
 import random
@@ -12,6 +19,7 @@ from typing import Self
 from task4feedback import fastsim2 as fastsim
 from ..interface.wrappers import *
 import re
+from scipy.optimize import linear_sum_assignment
 
 
 @dataclass
@@ -284,6 +292,133 @@ class JacobiGraph(ComputeDataGraph):
     ):
         return self.data.permute_locations(location_map, permutation_idx)
 
+    def get_weighted_cell_graph(
+        self, arch: DeviceType, bandwidth=1000, levels: Optional[list[int]] = None
+    ):
+        """
+        Given a list of levels, return the weighted cell interactions
+        """
+
+        if levels is None:
+            levels = list(self.level_to_task.keys())
+
+        tasks_in_levels = []
+        for level in levels:
+            tasks_in_levels += self.level_to_task[level]
+
+        task_to_local, adj_list, adj_starts, vweights, eweights = (
+            self.get_weighted_graph(arch, bandwidth=bandwidth, task_ids=tasks_in_levels)
+        )
+
+        cell_vertex_cost = defaultdict(int)
+        cell_neighbors_cost = defaultdict(lambda: defaultdict(int))
+        for task_id in tasks_in_levels:
+            local_task_id = task_to_local[task_id]
+            cell = self.task_to_cell[task_id]
+            cell_vertex_cost[cell] += vweights[local_task_id]
+            start_idx = adj_starts[local_task_id]
+            end_idx = adj_starts[local_task_id + 1]
+
+            for i in range(start_idx, end_idx):
+                neighbor = adj_list[i]
+                neighbor_cell = self.task_to_cell[neighbor]
+                if neighbor_cell != cell:
+                    cell_neighbors_cost[cell][neighbor_cell] += eweights[i]
+                else:
+                    # self loop
+                    cell_vertex_cost[cell] += eweights[i]
+
+        # Unroll and return with local indicies (in case all cells are not present)
+        cells = list(cell_vertex_cost.keys())
+
+        vweights = [cell_vertex_cost[cell] for cell in cells]
+        adj_list = []
+        adj_starts = []
+        eweights = []
+
+        for i, cell in enumerate(cells):
+            adj_starts.append(len(adj_list))
+            for neighbor, weight in cell_neighbors_cost[cell].items():
+                adj_list.append(neighbor)
+                eweights.append(weight)
+
+        adj_starts.append(len(adj_list))
+
+        cells = np.asarray(cells, dtype=np.int64)
+        adj_list = np.asarray(adj_list, dtype=np.int64)
+        adj_starts = np.asarray(adj_starts, dtype=np.int64)
+        vweights = np.asarray(vweights, dtype=np.int64)
+        eweights = np.asarray(eweights, dtype=np.int64)
+
+        return WeightedCellGraph(cells, adj_list, adj_starts, vweights, eweights)
+
+    def mincut_per_levels(
+        self,
+        arch: DeviceType = DeviceType.GPU,
+        bandwidth: int = 1000,
+        level_chunks: int = 1,
+        n_parts: int = 4,
+    ):
+        partitions = []
+        for i in range(level_chunks):
+            levels = list(self.level_to_task.keys())
+            level_size = len(levels) // level_chunks
+            start = i * level_size
+            end = (i + 1) * level_size
+            if i == level_chunks - 1:
+                end = len(levels)
+            levels = levels[start:end]
+            cell_graph = self.get_weighted_cell_graph(
+                arch, bandwidth=bandwidth, levels=levels
+            )
+            edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
+
+            partitions.append(partition)
+
+        self.partitions = partitions
+        print("Partitions: ", partitions)
+        return partitions
+
+    def align_partitions(self):
+        memberships = self.partitions
+        # Convert to numpy and check shapes
+        aligned = [np.asarray(v, dtype=int) for v in memberships]
+        n = aligned[0].shape[0]
+        if any(v.shape[0] != n for v in aligned):
+            raise ValueError("All membership vectors must have the same length")
+
+        # Find global K
+        K = max(v.max() for v in aligned) + 1
+
+        perms = [None] * len(aligned)
+        flips = [0] * len(aligned)
+
+        for i in range(1, len(aligned)):
+            prev = aligned[i - 1]
+            curr = aligned[i]
+
+            # Build confusion via bincount on flattened indices
+            idx = prev * K + curr
+            cm = np.bincount(idx, minlength=K * K).reshape(K, K)
+
+            # Solve max‐agreement assignment on -cm
+            row_ind, col_ind = linear_sum_assignment(-cm)
+
+            # Build a direct lookup array old→new
+            perm = np.arange(K, dtype=int)
+            perm[col_ind] = row_ind
+            perms[i] = perm
+
+            # Apply mapping
+            aligned[i] = perm[curr]
+
+            # Count flips = how many disagreed with previous
+            flips[i] = int((aligned[i] != prev).sum())
+
+        self.partitions = aligned
+
+        return aligned, perms, flips
+
 
 class JacobiVariant(VariantBuilder):
     @staticmethod
@@ -305,9 +440,9 @@ class PartitionMapper:
         level_start: int = 0,
     ):
         if mapper is not None:
-            assert isinstance(
-                mapper, PartitionMapper
-            ), "Mapper must be of type PartitionMapper, is " + str(type(mapper))
+            assert isinstance(mapper, PartitionMapper), (
+                "Mapper must be of type PartitionMapper, is " + str(type(mapper))
+            )
             self.cell_to_mapping = mapper.cell_to_mapping
 
         elif cell_to_mapping is not None:
@@ -386,7 +521,6 @@ class JacobiVariantGPUOnly(VariantBuilder):
 
 @dataclass(kw_only=True)
 class XYExternalObserver(ExternalObserver):
-
     def data_observation(self, output):
         super().data_observation(output)
         graph: JacobiGraph = self.simulator.input.graph

@@ -1161,6 +1161,7 @@ class ExternalObserver:
     def task_observation(
         self, output: TensorDict, task_ids: Optional[torch.Tensor] = None
     ):
+        # print("Task observation")
         if task_ids is None:
             n_candidates = output["aux"]["candidates"]["count"][0]
             task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
@@ -1175,6 +1176,7 @@ class ExternalObserver:
         )
 
     def data_observation(self, output: TensorDict):
+        # print("Data observation")
         ntasks = output["nodes"]["tasks"]["count"][0]
         _, count = self.get_used_data(
             output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
@@ -1185,6 +1187,7 @@ class ExternalObserver:
         )
 
     def device_observation(self, output: TensorDict):
+        # print("Device observation")
         count = output["nodes"]["devices"]["glb"].shape[0]
         output["nodes"]["devices"]["count"][0] = count
         output["nodes"]["devices"]["glb"][:count] = torch.arange(
@@ -1196,6 +1199,7 @@ class ExternalObserver:
         )
 
     def task_task_observation(self, output: TensorDict):
+        # print("Task-Task observation")
         ntasks = output["nodes"]["tasks"]["count"][0]
 
         _, count = self.get_task_task_edges(
@@ -1211,6 +1215,7 @@ class ExternalObserver:
         )
 
     def task_data_observation(self, output: TensorDict):
+        # print("Task-Data observation")
         ntasks = output["nodes"]["tasks"]["count"][0]
         ndata = output["nodes"]["data"]["count"][0]
         _, count = self.get_task_data_edges(
@@ -1227,6 +1232,7 @@ class ExternalObserver:
         )
 
     def task_device_observation(self, output: TensorDict, use_all_tasks=False):
+        # print("Task-Device observation")
         if not use_all_tasks:
             ncandidates = output["aux"]["candidates"]["count"][0]
             task_ids = output["aux"]["candidates"]["idx"][:ncandidates]
@@ -1252,6 +1258,7 @@ class ExternalObserver:
         )
 
     def candidate_observation(self, output: TensorDict):
+        # print("Candidate observation")
         count = self.simulator.simulator.get_mappable_candidates(
             output["aux"]["candidates"]["idx"]
         )
@@ -1260,6 +1267,8 @@ class ExternalObserver:
     def get_observation(self, output: Optional[TensorDict] = None):
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
+
+        # print(output)
 
         # Get mappable candidates
         self.candidate_observation(output)
@@ -1277,6 +1286,7 @@ class ExternalObserver:
         # Auxiliary observations
         output["aux"]["time"][0] = self.simulator.time
         output["aux"]["improvement"][0] = -2.0
+        # print("Auxiliary observation")
         return output
 
 
@@ -1520,8 +1530,8 @@ def create_graph_spec(
     max_tasks: int = 100,
     max_data: int = 100,
     max_devices: int = 5,
-    max_edges_tasks_tasks: int = 2,
-    max_edges_tasks_data: int = 2,
+    max_edges_tasks_tasks: int = 200,
+    max_edges_tasks_data: int = 200,
     max_candidates: int = 1,
 ):
     """

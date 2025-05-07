@@ -257,6 +257,9 @@ void GraphManager::create_data_tasks(std::unordered_map<dataid_t, taskid_t> &wri
   // Just write operations doesn't need data tasks
   for (auto data_id : task.get_read()) {
     auto writer = find_writer(writers, data_id);
+    if (writer.found) {
+      task.add_recent_writer(writer.task_id, data_id);
+    }
     tasks.create_data_task(task, writer.found, writer.task_id, data_id);
   }
 }

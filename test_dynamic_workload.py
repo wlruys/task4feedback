@@ -139,6 +139,6 @@ if __name__ == "__main__":
 
     w.generate_initial_mass()
 
-    w.generate_correlated_workload(100, scale=0.05, step_size=10000, upper_bound=1500)
+    w.generate_correlated_workload(100, scale=0.1, step_size=200000, upper_bound=5000)
 
     w.animate_workload(max_radius=0.03)

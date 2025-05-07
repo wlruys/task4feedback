@@ -46,17 +46,14 @@ def collect_eft_runs(
             spec = create_graph_spec()
             internal_mapper = fastsim.DequeueEFTMapper
             external_mapper = ExternalMapper
-            if rtc:
-                input = SimulatorInput(
-                    m,
-                    d,
-                    s,
-                    transition_conditions=fastsim.RangeTransitionConditions(5, 5, 16),
-                )
-            else:
-                input = SimulatorInput(
-                    m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
-                )
+
+            input = SimulatorInput(
+                m,
+                d,
+                s,
+                transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16),
+            )
+
             env = MapperRuntimeEnv(
                 SimulatorFactory(
                     input,

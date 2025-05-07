@@ -192,6 +192,7 @@ protected:
   DataIDList write;
   DataIDList unique;
   DataIDList retire;
+  TaskIDList most_recent_writers;
 
   VariantList variants;
 
@@ -210,6 +211,30 @@ public:
 
   void add_variant(DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time) {
     variants.at(static_cast<std::size_t>(arch)) = Variant(arch, vcu, mem, time);
+  }
+
+  void add_recent_writer(taskid_t writer_id, dataid_t data_id) {
+    if (most_recent_writers.size() <= this->read.size()) {
+      most_recent_writers.resize(this->read.size(), -1);
+    }
+
+    // Find the index of the data_id in the read list
+    auto it = std::find(this->read.begin(), this->read.end(), data_id);
+    if (it != this->read.end()) {
+      std::size_t index = std::distance(this->read.begin(), it);
+      most_recent_writers[index] = writer_id;
+    } else {
+      SPDLOG_DEBUG("ComputeTask::add_writer : Data ID {} not found in read list, writer {}",
+                   data_id, writer_id);
+    }
+  }
+
+  TaskIDList &get_most_recent_writers() {
+    return most_recent_writers;
+  }
+
+  [[nodiscard]] const TaskIDList &get_most_recent_writers() const {
+    return most_recent_writers;
   }
 
   void add_variant(DeviceType arch, Variant variant) {
@@ -231,6 +256,7 @@ public:
 
   void set_read(DataIDList _read) {
     this->read = std::move(_read);
+    this->most_recent_writers.resize(read.size(), -1);
   }
   void set_write(DataIDList _write) {
     this->write = std::move(_write);

@@ -69,15 +69,18 @@ class Geometry:
     vertex_edge_dict: dict
     edge_cell_dict: dict
     centroids: np.array
-    
+    bounds: Optional[np.array] = None
+
     def get_centroid(self, cell, round_out=None):
-        cell_verticies = np.asarray(self.cell_points[self.cells[cell]][:, :2], dtype=np.float64)
+        cell_verticies = np.asarray(
+            self.cell_points[self.cells[cell]][:, :2], dtype=np.float64
+        )
         centroid = np.mean(cell_verticies, axis=0)
-        
+
         if round_out is not None:
             centroid = np.round(centroid, round_out)
         return centroid
-    
+
     def get_max_coordinate(self, direction=0):
         """
         Get the maximum coordinate of the mesh in a given direction.
@@ -88,7 +91,7 @@ class Geometry:
             return np.max(self.cell_points[:, 1])
         else:
             raise ValueError("Direction must be 0 (x) or 1 (y).")
-        
+
     def get_min_coordinate(self, direction=0):
         """
         Get the minimum coordinate of the mesh in a given direction.
@@ -99,26 +102,26 @@ class Geometry:
             return np.min(self.cell_points[:, 1])
         else:
             raise ValueError("Direction must be 0 (x) or 1 (y).")
-    
+
     def get_normal_to_edge(self, edge, cell, round_in=None, round_out=None):
         """
         Get the normal vector to the edge, where cell is the interior.
         """
-        
+
         # Get the vertices of the edge
         v1, v2 = self.edges[edge]
 
         # Get the coordinates of the vertices
         x1, y1 = self.cell_points[int(v1)]
         x2, y2 = self.cell_points[int(v2)]
-        
+
         if round_in is not None:
             x1 = np.round(x1, round_in)
             y1 = np.round(y1, round_in)
             x2 = np.round(x2, round_in)
             y2 = np.round(y2, round_in)
-        
-        #Put in higher precision
+
+        # Put in higher precision
         x1 = np.float64(x1)
         y1 = np.float64(y1)
         x2 = np.float64(x2)
@@ -127,26 +130,28 @@ class Geometry:
         # Calculate the normal vector (perpendicular to the edge)
         normal = np.array([-(y2 - y1), x2 - x1], dtype=np.float64)
         normal /= np.linalg.norm(normal)
-        #print("normal", normal)
-            
+        # print("normal", normal)
+
         # Check if the normal is pointing towards the cell
         # Calculate the centroid of the cell
         centroid = self.get_centroid(cell, round_out=round_in)
-        
+
         # Calculate the vector from the centroid to the edge
-        edge_vector = np.array([x1, y1], dtype=np.float64) - np.asarray(centroid, dtype=np.float64)
+        edge_vector = np.array([x1, y1], dtype=np.float64) - np.asarray(
+            centroid, dtype=np.float64
+        )
         edge_vector /= np.linalg.norm(edge_vector)
-        
+
         # Calculate the dot product
         dot_product = np.dot(normal, edge_vector)
-        
+
         # If the dot product is negative, flip the normal vector
         if dot_product < 0:
             normal = -normal
 
         if round_out is not None:
             normal = np.round(normal, round_out)
-        
+
         return normal
 
 
@@ -346,6 +351,17 @@ def build_geometry(mesh):
     edge_dict, edges, edge_to_cells = extract_unique_edges(cells)
     cell_edges = get_cell_edges(cells, edge_dict)
     centroids = get_centroids(cells, points)
+
+    # Get bounding box for mesh.io object
+    bounds = np.array(
+        [
+            np.min(points[:, 0]),
+            np.max(points[:, 0]),
+            np.min(points[:, 1]),
+            np.max(points[:, 1]),
+        ]
+    )
+
     return Geometry(
         cells=cells,
         cell_points=points,
@@ -355,6 +371,7 @@ def build_geometry(mesh):
         vertex_edge_dict=edge_dict,
         edge_cell_dict=edge_to_cells,
         centroids=centroids,
+        bounds=bounds,
     )
 
 

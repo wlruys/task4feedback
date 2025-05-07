@@ -8,12 +8,10 @@ from .jacobi import *
 
 @dataclass
 class DynamicJacobiConfig(JacobiConfig):
-    start_workload: int = 1000
-    upper_workload: int = 3000
-    lower_workload: int = 500
-    step_size: int = 2000
-    correlation_scale: float = 0.1
+    workload_args: dict = field(default_factory=dict)
+    workload_class: Type = TrajectoryWorkload
     data_compute_relation: Callable[[int], int] = lambda x: x
+    start_workload: int = 1000
 
 
 class DynamicJacobiData(JacobiData):
@@ -70,17 +68,12 @@ class DynamicJacobiData(JacobiData):
 
 class DynamicJacobiGraph(JacobiGraph):
     def __init__(self, geometry: Geometry, config: DynamicJacobiConfig):
-        self.workload = DynamicWorkload(geometry)
+        workload_class = config.workload_class
+        self.workload = workload_class(geometry)
         self.workload.generate_initial_mass(
             distribution=lambda x: 1.0, average_workload=config.start_workload
         )
-        self.workload.generate_correlated_workload(
-            num_levels=config.steps + 1,
-            step_size=config.step_size,
-            lower_bound=config.lower_workload,
-            upper_bound=config.upper_workload,
-            scale=config.correlation_scale,
-        )
+        self.workload.generate_workload(config.steps, **config.workload_args)
         super(JacobiGraph, self).__init__()
         self.config = config
         self.data = DynamicJacobiData.from_mesh(geometry, config, self.workload)

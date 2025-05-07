@@ -723,6 +723,15 @@ const TaskIDList &Scheduler::map_task(taskid_t task_id, Action &action) {
   state.counts.count_mapped(task_id, chosen_device);
   state.update_mapped_cost(task_id, chosen_device);
 
+  // Print most recent writers
+  const auto &most_recent_writers = task.get_most_recent_writers();
+  const auto &read = task.get_read();
+
+  std::cout << "Most recent writers for task " << s.get_task_name(task_id) << std::endl;
+  for (int i = 0; i < most_recent_writers.size(); i++) {
+    std::cout << read[i] << " : " << most_recent_writers[i] << std::endl;
+  }
+
   breakpoints.check_task_breakpoint(EventType::MAPPER, task_id);
 
   // Check if the mapped task is reservable, and if so, enqueue it

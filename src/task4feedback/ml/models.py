@@ -62,9 +62,6 @@ class HeteroDataWrapper(nn.Module):
         is_batch: bool = False,
         actions: Optional[TensorDict] = None,
     ) -> HeteroData:
-        # print("obs", obs.shape)
-        # if actions is not None:
-        #     print("actions", actions.shape)
         if not is_batch:
             if actions is not None:
                 _obs = observation_to_heterodata(obs, actions=actions)
@@ -75,9 +72,6 @@ class HeteroDataWrapper(nn.Module):
                 obs["nodes", "tasks", "count"],
                 obs["nodes", "data", "count"],
             )
-
-        # print("BATCH DIMS", obs.batch_dims)
-        # print("BATCH SIZE", obs.batch_size)
 
         # flatten and save the batch size
         self.batch_size = obs.batch_size
@@ -178,7 +172,7 @@ class HeteroGAT1Layer(nn.Module):
             concat=False,
             residual=True,
             dropout=0,
-            edge_dim=feature_config.task_data_edge_dim,
+            # edge_dim=feature_config.task_data_edge_dim,
             add_self_loops=False,
         )
 
@@ -189,7 +183,7 @@ class HeteroGAT1Layer(nn.Module):
             concat=False,
             residual=True,
             dropout=0,
-            edge_dim=feature_config.task_task_edge_dim,
+            # edge_dim=feature_config.task_task_edge_dim,
             add_self_loops=False,
         )
 
@@ -200,7 +194,7 @@ class HeteroGAT1Layer(nn.Module):
             concat=False,
             residual=True,
             dropout=0,
-            edge_dim=feature_config.task_device_edge_dim,
+            # edge_dim=feature_config.task_device_edge_dim,
             add_self_loops=False,
         )
 
@@ -217,19 +211,19 @@ class HeteroGAT1Layer(nn.Module):
         data_fused_tasks = self.gnn_tasks_data(
             (data["data"].x, data["tasks"].x),
             data["data", "to", "tasks"].edge_index,
-            data["data", "to", "tasks"].edge_attr,
+            # data["data", "to", "tasks"].edge_attr,
         )
 
         tasks_fused_tasks = self.gnn_tasks_tasks(
             (data["tasks"].x, data["tasks"].x),
             data["tasks", "to", "tasks"].edge_index,
-            data["tasks", "to", "tasks"].edge_attr,
+            # data["tasks", "to", "tasks"].edge_attr,
         )
 
         devices_fused_tasks = self.gnn_tasks_devices(
             (data["devices"].x, data["tasks"].x),
             data["devices", "to", "tasks"].edge_index,
-            data["devices", "to", "tasks"].edge_attr,
+            # data["devices", "to", "tasks"].edge_attr,
         )
 
         data_fused_tasks = self.layer_norm1(data_fused_tasks)
@@ -438,13 +432,13 @@ class DataTaskGAT2Layer(nn.Module):
         return x_dict
 
 
-class TaskTaskGAT2Layer(nn.Module):
+class TaskTaskGATkLayer(nn.Module):
     """
     Tasks-to-tasks encodes task -> dependency information
 
-    This module performs two depth 2 GAT convolutions on the task nodes:
-    - Two accumulations of task -> dependency information
-    - Two accumulations of task -> dependant information
+    This module performs k layers of GAT convolutions on the task nodes:
+    - k accumulations of task -> dependency information
+    - k accumulations of task -> dependant information
 
     These results are then concatenated and returned as the output (hidden_channels * 2)
     """
@@ -454,58 +448,75 @@ class TaskTaskGAT2Layer(nn.Module):
         input_dim: int,
         feature_config: FeatureDimConfig,
         layer_config: LayerConfig,
+        k: int = 2,
         skip_connection: bool = True,
         use_edge_features: bool = False,
     ):
-        super(TaskTaskGAT2Layer, self).__init__()
+        super(TaskTaskGATkLayer, self).__init__()
 
         if not use_edge_features:
             edge_dim = None
         else:
             edge_dim = feature_config.task_task_edge_dim
 
-        self.conv_dependency_1 = GATv2Conv(
-            (input_dim, input_dim),
-            layer_config.hidden_channels,
-            heads=layer_config.n_heads,
-            concat=False,
-            residual=True,
-            dropout=0,
-            edge_dim=edge_dim,
-            add_self_loops=False,
+        # Create k layers for dependency and dependent paths
+        self.conv_dependency_layers = nn.ModuleList()
+        self.conv_dependent_layers = nn.ModuleList()
+
+        # First layer gets input_dim
+        self.conv_dependency_layers.append(
+            GATv2Conv(
+                (input_dim, input_dim),
+                layer_config.hidden_channels,
+                heads=layer_config.n_heads,
+                concat=False,
+                residual=True,
+                dropout=0,
+                edge_dim=edge_dim,
+                add_self_loops=False,
+            )
         )
 
-        self.conv_dependent_1 = GATv2Conv(
-            (input_dim, input_dim),
-            layer_config.hidden_channels,
-            heads=layer_config.n_heads,
-            concat=False,
-            residual=True,
-            dropout=0,
-            edge_dim=edge_dim,
-            add_self_loops=False,
+        self.conv_dependent_layers.append(
+            GATv2Conv(
+                (input_dim, input_dim),
+                layer_config.hidden_channels,
+                heads=layer_config.n_heads,
+                concat=False,
+                residual=True,
+                dropout=0,
+                edge_dim=edge_dim,
+                add_self_loops=False,
+            )
         )
 
-        self.conv_dependency_2 = GATv2Conv(
-            (layer_config.hidden_channels, layer_config.hidden_channels),
-            layer_config.hidden_channels,
-            heads=layer_config.n_heads,
-            concat=False,
-            residual=True,
-            dropout=0,
-            edge_dim=edge_dim,
-            add_self_loops=False,
-        )
+        # Remaining layers get hidden_channels as input
+        for _ in range(1, k):
+            self.conv_dependency_layers.append(
+                GATv2Conv(
+                    (layer_config.hidden_channels, layer_config.hidden_channels),
+                    layer_config.hidden_channels,
+                    heads=layer_config.n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=edge_dim,
+                    add_self_loops=False,
+                )
+            )
 
-        self.conv_dependent_2 = GATv2Conv(
-            (layer_config.hidden_channels, layer_config.hidden_channels),
-            layer_config.hidden_channels,
-            heads=layer_config.n_heads,
-            concat=False,
-            residual=True,
-            edge_dim=feature_config.task_task_edge_dim,
-            add_self_loops=False,
-        )
+            self.conv_dependent_layers.append(
+                GATv2Conv(
+                    (layer_config.hidden_channels, layer_config.hidden_channels),
+                    layer_config.hidden_channels,
+                    heads=layer_config.n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0,
+                    edge_dim=edge_dim,
+                    add_self_loops=False,
+                )
+            )
 
         self.norm_dependency = nn.LayerNorm(layer_config.hidden_channels)
         self.norm_dependant = nn.LayerNorm(layer_config.hidden_channels)
@@ -513,6 +524,7 @@ class TaskTaskGAT2Layer(nn.Module):
         self.output_dim = layer_config.hidden_channels * 2
 
         self.use_edge_features = use_edge_features
+        self.k = k
 
         self.skip_connection = skip_connection
         if skip_connection:
@@ -528,24 +540,22 @@ class TaskTaskGAT2Layer(nn.Module):
         else:
             edge_attr = None
 
-        tasks_dependency = self.conv_dependency_1(
-            tasks, edge_dependency_index, edge_attr
-        )
-        tasks_dependency = self.norm_dependency(tasks_dependency)
-        tasks_dependency = self.activation(tasks_dependency)
+        tasks_dependency = tasks
+        tasks_dependant = tasks
 
-        tasks_dependant = self.conv_dependent_1(tasks, edge_dependant_index, edge_attr)
-        tasks_dependant = self.norm_dependant(tasks_dependant)
-        tasks_dependant = self.activation(tasks_dependant)
+        # Process through all layers
+        for i in range(self.k):
+            tasks_dependency = self.conv_dependency_layers[i](
+                tasks_dependency, edge_dependency_index, edge_attr
+            )
+            tasks_dependency = self.norm_dependency(tasks_dependency)
+            tasks_dependency = self.activation(tasks_dependency)
 
-        tasks_dependency = self.conv_dependency_2(
-            tasks_dependency, edge_dependency_index, edge_attr
-        )
-        tasks_dependant = self.conv_dependent_2(
-            tasks_dependant, edge_dependant_index, edge_attr
-        )
-        tasks_dependant = self.activation(tasks_dependant)
-        tasks_dependency = self.activation(tasks_dependency)
+            tasks_dependant = self.conv_dependent_layers[i](
+                tasks_dependant, edge_dependant_index, edge_attr
+            )
+            tasks_dependant = self.norm_dependant(tasks_dependant)
+            tasks_dependant = self.activation(tasks_dependant)
 
         if self.skip_connection:
             task_embedding = torch.cat(
@@ -777,57 +787,124 @@ class DeviceGlobalLayer(nn.Module):
         return device_embeddings
 
 
-class DataTaskGAT(nn.Module):
+class DataTaskGATkLayer(nn.Module):
     def __init__(
         self,
         feature_config: FeatureDimConfig,
         layer_config: LayerConfig,
+        k: int = 1,
         skip_connection: bool = True,
     ):
-        super(DataTaskGAT, self).__init__()
+        super(DataTaskGATkLayer, self).__init__()
 
         self.layer_config = layer_config
+        self.k = k
 
-        self.conv_data_task = GATv2Conv(
-            (feature_config.data_feature_dim, feature_config.task_feature_dim),
-            layer_config.hidden_channels,
-            heads=layer_config.n_heads,
-            concat=False,
-            residual=True,
-            dropout=0,
-            edge_dim=feature_config.task_data_edge_dim,
-            add_self_loops=False,
+        # Create ModuleLists for the alternating direction convolutions
+        self.conv_data_task_layers = nn.ModuleList()
+        self.conv_task_data_layers = nn.ModuleList() if k > 1 else None
+
+        # Layer norms for each direction
+        self.layer_norm_task = nn.ModuleList()
+        self.layer_norm_data = nn.ModuleList() if k > 1 else None
+
+        # First layer: Data -> Task
+        self.conv_data_task_layers.append(
+            GATv2Conv(
+                (feature_config.data_feature_dim, feature_config.task_feature_dim),
+                layer_config.hidden_channels,
+                heads=layer_config.n_heads,
+                concat=False,
+                residual=True,
+                dropout=0,
+                edge_dim=feature_config.task_data_edge_dim,
+                add_self_loops=False,
+            )
         )
+        self.layer_norm_task.append(nn.LayerNorm(layer_config.hidden_channels))
 
-        self.output_layer = layer_init(
-            nn.Linear(layer_config.hidden_channels, layer_config.hidden_channels)
-        )
+        # For k > 1, we need additional layers in alternating directions
+        for i in range(1, k):
+            if i % 2 == 1:  # Task -> Data layer
+                if i == 1:
+                    self.conv_task_data_layers = nn.ModuleList()
+                    self.layer_norm_data = nn.ModuleList()
 
+                self.conv_task_data_layers.append(
+                    GATv2Conv(
+                        (layer_config.hidden_channels, layer_config.hidden_channels),
+                        layer_config.hidden_channels,
+                        heads=layer_config.n_heads,
+                        concat=False,
+                        residual=True,
+                        dropout=0,
+                        edge_dim=feature_config.task_data_edge_dim,
+                        add_self_loops=False,
+                    )
+                )
+                self.layer_norm_data.append(nn.LayerNorm(layer_config.hidden_channels))
+            else:  # Data -> Task layer (second round onwards)
+                self.conv_data_task_layers.append(
+                    GATv2Conv(
+                        (layer_config.hidden_channels, layer_config.hidden_channels),
+                        layer_config.hidden_channels,
+                        heads=layer_config.n_heads,
+                        concat=False,
+                        residual=True,
+                        dropout=0,
+                        edge_dim=feature_config.task_data_edge_dim,
+                        add_self_loops=False,
+                    )
+                )
+                self.layer_norm_task.append(nn.LayerNorm(layer_config.hidden_channels))
+
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
         self.output_dim = layer_config.hidden_channels
 
         self.skip_connection = skip_connection
         if skip_connection:
             self.output_dim += feature_config.task_feature_dim
 
-        self.layer_norm = nn.LayerNorm(layer_config.hidden_channels)
-        self.activation = nn.LeakyReLU(negative_slope=0.01)
-
     def forward(self, data: HeteroData | Batch):
         task_features = data["tasks"].x
         data_features = data["data"].x
         data_task_edges = data["data", "to", "tasks"].edge_index
+        task_data_edges = data["tasks", "to", "data"].edge_index
         data_task_edges_attr = data["data", "to", "tasks"].edge_attr
 
-        task_embeddings = self.conv_data_task(
+        # Initial task embeddings from first layer
+        task_embeddings = self.conv_data_task_layers[0](
             (data_features, task_features),
             data_task_edges,
             data_task_edges_attr,
         )
-        task_embeddings = self.layer_norm(task_embeddings)
+        task_embeddings = self.layer_norm_task[0](task_embeddings)
         task_embeddings = self.activation(task_embeddings)
 
+        # Process through remaining layers if k > 1
+        data_embeddings = None
+        for i in range(1, self.k):
+            if i % 2 == 1:  # Task -> Data direction
+                data_embeddings = self.conv_task_data_layers[(i - 1) // 2](
+                    (task_embeddings, data_features),
+                    task_data_edges,
+                    data_task_edges_attr,
+                )
+                data_embeddings = self.layer_norm_data[(i - 1) // 2](data_embeddings)
+                data_embeddings = self.activation(data_embeddings)
+                data_features = data_embeddings
+            else:  # Data -> Task direction
+                task_embeddings = self.conv_data_task_layers[i // 2](
+                    (data_features, task_embeddings),
+                    data_task_edges,
+                    data_task_edges_attr,
+                )
+                task_embeddings = self.layer_norm_task[i // 2](task_embeddings)
+                task_embeddings = self.activation(task_embeddings)
+
+        # Add skip connection if requested
         if self.skip_connection:
-            task_embeddings = torch.cat([task_embeddings, task_features], dim=-1)
+            task_embeddings = torch.cat([task_embeddings, data["tasks"].x], dim=-1)
 
         return task_embeddings
 
@@ -897,7 +974,7 @@ class DeviceAssignmentNet2Layer(nn.Module):
         # Returns concatenated embeddings for tasks at depth 2
         # Two directions of task -> task information (dependency and dependant)
         # Output feature dim: hidden_channels * 2
-        self.task_task_layer = TaskTaskGAT2Layer(
+        self.task_task_layer = TaskTaskGATkLayer(
             layer_config.hidden_channels, feature_config, layer_config
         )
 
@@ -969,30 +1046,38 @@ class DeviceAssignmentNet2Layer(nn.Module):
         return d_logits
 
 
-class ValueNet2Layer(nn.Module):
+class ValueNetkLayer(nn.Module):
     def __init__(
         self,
         feature_config: FeatureDimConfig,
         layer_config: LayerConfig,
         n_devices: int = 5,
+        task_task_layers: int = 1,
+        data_task_layers: int = 1,
+        skip_connection: bool = True,
     ):
-        super(ValueNet2Layer, self).__init__()
+        super(ValueNetkLayer, self).__init__()
 
         self.feature_config = feature_config
         self.layer_config = layer_config
         self.n_devices = n_devices
 
-        # Returns embeddings for tasks and data nodes at depth 2
-        # Output feature dim:
-        # dict of ("tasks": hidden_channels, "data": hidden_channels)
-        self.data_task_layer = DataTaskGAT2Layer(feature_config, layer_config)
+        if task_task_layers >= 1:
+            self.data_task_layer = DataTaskGATkLayer(
+                feature_config,
+                layer_config,
+                k=data_task_layers,
+                skip_connection=skip_connection,
+            )
 
-        # Returns concatenated embeddings for tasks at depth 2
-        # Two directions of task -> task information (dependency and dependant)
-        # Output feature dim: hidden_channels * 2
-        self.task_task_layer = TaskTaskGAT2Layer(
-            layer_config.hidden_channels, feature_config, layer_config
-        )
+        if task_task_layers >= 1:
+            self.task_task_layer = TaskTaskGATkLayer(
+                layer_config.hidden_channels,
+                feature_config,
+                layer_config,
+                k=task_task_layers,
+                skip_connection=skip_connection,
+            )
 
         self.device_layer = DeviceGlobalLayer(feature_config, layer_config)
 
