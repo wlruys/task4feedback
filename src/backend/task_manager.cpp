@@ -12,7 +12,7 @@ TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
   state.resize(n, TaskState::SPAWNED);
   counts.resize(n, DepCount());
   mapping.resize(n_compute_tasks, 0);
-  //mapping_priority.resize(n, 0);
+  // mapping_priority.resize(n, 0);
   reserving_priority.resize(n, 0);
   launching_priority.resize(n, 0);
   is_virtual.resize(n, false);
@@ -247,15 +247,15 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
 
   records.record_completed(id, time);
   state.set_state(id, TaskState::COMPLETED);
-
   // clear task_buffer
   task_buffer.clear();
-
-  for (auto dependent_id : task_objects.get_dependents(id)) {
-    if (state.decrement_incomplete(dependent_id)) {
-      task_buffer.push_back(dependent_id);
-      assert(state.get_state(dependent_id) == TaskState::RESERVED);
-      assert(task_objects.is_compute(dependent_id));
+  if (!is_eviction(id)) {
+    for (auto dependent_id : task_objects.get_dependents(id)) {
+      if (state.decrement_incomplete(dependent_id)) {
+        task_buffer.push_back(dependent_id);
+        assert(state.get_state(dependent_id) == TaskState::RESERVED);
+        assert(task_objects.is_compute(dependent_id));
+      }
     }
   }
 
