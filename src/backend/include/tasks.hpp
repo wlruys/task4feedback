@@ -15,6 +15,7 @@
 #include <tabulate/tabulate.hpp>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -284,7 +285,7 @@ public:
   }
 
   void find_unique_data() {
-    std::set<dataid_t> unique_set;
+    std::unordered_set<dataid_t> unique_set;
     for (auto data_id : read) {
       unique_set.insert(data_id);
     }
@@ -449,7 +450,7 @@ public:
   EvictionTasks() = default;
   EvictionTasks(const EvictionTasks &other) = default;
 
-  EvictionTasks(std::size_t n_tasks) : n_noneviction_tasks(n_tasks) {
+  EvictionTasks(taskid_t n_tasks) : n_noneviction_tasks(n_tasks) {
     const int EXPECTED_EVICTION_TASKS = 1000;
     tasks.reserve(n_tasks + EXPECTED_EVICTION_TASKS);
     task_names.reserve(n_tasks + EXPECTED_EVICTION_TASKS);

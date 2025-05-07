@@ -120,6 +120,7 @@ void init_task_ext(nb::module_ &m) {
       .def("create_compute_task", &Tasks::create_compute_task, "id"_a, "name"_a, "dependencies"_a)
       .def("set_read", &Tasks::set_read, "id"_a, "dataids"_a)
       .def("set_write", &Tasks::set_write, "id"_a, "dataids"_a)
+      .def("set_retire", &Tasks::set_retire, "id"_a, "dataids"_a)
       .def("add_variant",
            nb::overload_cast<taskid_t, DeviceType, vcu_t, mem_t, timecount_t>(&Tasks::add_variant),
            "id"_a, "arch"_a, "vcu"_a, "mem"_a, "time"_a)

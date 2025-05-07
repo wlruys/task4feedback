@@ -103,6 +103,11 @@ class Graph:
             task = self.graph.get_id(task)
         self.graph.add_write_data(task, dataidlist)
 
+    def add_retire_data(self, task, dataidlist, convert=False):
+        if convert and isinstance(task, str):
+            task = self.graph.get_id(task)
+        self.graph.add_retire_data(task, dataidlist)
+
     def apply_variant(self, variant_builder: type[VariantBuilder]):
         for i in range(self.graph.size()):
             task = self.get_task(i)

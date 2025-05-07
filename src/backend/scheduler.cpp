@@ -238,6 +238,7 @@ ResourceRequest SchedulerState::request_map_resources(taskid_t task_id, devid_t 
 
   const Resources &task_resources = get_task_resources(task_id, device_id);
   const auto &task = task_manager.get_tasks().get_compute_task(task_id);
+  // Even though write only blocks are generated, we need to reserve memory space
   mem_t non_local_mem = data_manager.non_local_size_mapped(task.get_unique(), device_id);
   Resources requested = {task_resources.vcu, task_resources.mem + non_local_mem};
   Resources missing;
@@ -273,11 +274,6 @@ ResourceRequest SchedulerState::request_reserve_resources(taskid_t task_id,
 ResourceRequest SchedulerState::request_launch_resources(taskid_t task_id,
                                                          devid_t device_id) const {
   const Resources &task_resources = get_task_resources(task_id, device_id);
-  // mem_t non_local_mem =
-  //     data_manager.non_local_size_launched(task.get_read(), device_id);
-  // non_local_mem +=
-  //     data_manager.non_local_size_launched(task.get_write(), device_id);
-  // assert(non_local_mem == 0);
   SPDLOG_DEBUG("Requesting launch resources for task {} on device {}", get_task_name(task_id),
                device_id);
   SPDLOG_DEBUG("Task resources: VCU: {}, MEM: {}", task_resources.vcu, task_resources.mem);
@@ -698,8 +694,7 @@ const TaskIDList &Scheduler::map_task(taskid_t task_id, Action &action) {
 
   // Update data locations
   const ComputeTask &task = s.task_manager.get_tasks().get_compute_task(task_id);
-  s.data_manager.read_update_mapped(task.get_read(), chosen_device, current_time);
-  s.data_manager.read_update_mapped(task.get_write(), chosen_device, current_time);
+  s.data_manager.read_update_mapped(task.get_unique(), chosen_device, current_time);
   s.data_manager.write_update_mapped(task.get_write(), chosen_device, current_time);
   // Ground truth
   // Consider this scenario:
@@ -896,8 +891,7 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id,
 
   // Update data locations
   const ComputeTask &task = s.task_manager.get_tasks().get_compute_task(task_id);
-  s.data_manager.read_update_reserved(task.get_read(), device_id, current_time);
-  s.data_manager.read_update_reserved(task.get_write(), device_id, current_time);
+  s.data_manager.read_update_reserved(task.get_unique(), device_id, current_time);
   s.data_manager.write_update_reserved(task.get_write(), device_id, current_time);
 
   // erase task_id from s.mapped_but_not_reserved_tasks
@@ -1026,11 +1020,13 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
                s.get_task_name(task_id), device_id);
 
   // Update data locations for WRITE data (create them here)
-  s.data_manager.read_update_launched(task.get_write(), device_id, current_time);
-  s.data_manager.write_update_launched(task.get_write(), device_id, current_time);
+  s.data_manager.read_update_launched(task.get_write(), device_id,
+                                      current_time); // This adds memory
+  s.data_manager.write_update_launched(task.get_write(), device_id,
+                                       current_time); // This invalidates other devices
 
   // All READ data should already be here (prefetched by data tasks)
-  s.data_manager.check_valid_launched(task.get_read(), device_id);
+  assert(s.data_manager.check_valid_launched(task.get_read(), device_id));
 
   // Update launched resources
   s.launch_resources(task_id, device_id, requested);
@@ -1126,7 +1122,6 @@ bool Scheduler::launch_eviction_task(taskid_t task_id, devid_t destination_id,
     SPDLOG_DEBUG("Time:{} Eviction task {} moving from {} to {}", current_time,
                  s.get_task_name(task_id), source_id, destination_id);
   }
-  // s.data_manager.write_update_launched(DataIDList{data_id}, destination_id, current_time);
 
   // Record launching time
   s.notify_launched(task_id);
@@ -1317,9 +1312,8 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
         auto [task_id, device_id] = taskdevice;
         const auto [requested, missing] = s.request_reserve_resources(task_id, device_id);
         if (missing.mem) { // There is still memory to evict
-          // assert(lru_manager.get_mem(device_id) >= requested.mem);
           const auto &task = tasks.get_compute_task(task_id);
-          auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, task.get_unique());
+          auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, task.get_read());
           for (auto data_id : data_ids) {
             auto sources = data_manager.get_valid_launched_locations(data_id);
             assert(!sources.empty());
@@ -1336,18 +1330,18 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
             } else { // There are multiple sources for this data
               // We need to invalidate the data on the device
               // Invalidate the data
-              bool remove_from_mapped = true;
+              bool future_usage = false;
               for (auto unreserved_task_id : mapped) {
                 if (task_manager.get_state().get_mapping(unreserved_task_id) == device_id) {
                   auto &uniq = tasks.get_compute_task(unreserved_task_id).get_unique();
                   if (std::find(uniq.begin(), uniq.end(), data_id) != uniq.end()) {
-                    remove_from_mapped = false;
+                    future_usage = true;
                     break;
                   }
                 }
               }
 
-              bool write_incoming = false;
+              bool write_after_read = false;
               std::unordered_set<taskid_t> buffer_set;
               for (auto unreserved_task_id : mapped) {
                 auto &write = tasks.get_compute_task(unreserved_task_id).get_write();
@@ -1426,10 +1420,10 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
                 // 'top_task_dependencies' now contains *all* of its dependencies
                 // (direct and indirect), in the order first discovered.
                 if (s.get_mapping(top) != device_id) {
-                  write_incoming = true;
+                  write_after_read = true;
                   for (auto dep : top_task_dependencies) {
                     if (s.get_mapping(dep) == device_id) {
-                      write_incoming = false;
+                      write_after_read = false;
                       break;
                     }
                   }
@@ -1439,7 +1433,7 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
               SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}", current_time,
                            data_id, s.get_task_name(task_id), device_id);
               s.data_manager.evict_on_update_launched(DataIDList{data_id}, device_id, current_time,
-                                                      remove_from_mapped, write_incoming);
+                                                      future_usage, write_after_read);
             }
           }
         } else {
@@ -1467,7 +1461,7 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
 
 void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
   auto &s = this->state;
-
+  auto &task = s.task_manager.get_tasks().get_compute_task(task_id);
   SPDLOG_DEBUG("Time:{} Completing compute task {} on device {}", s.global_time,
                s.get_task_name(task_id), device_id);
 
@@ -1475,6 +1469,10 @@ void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
   s.free_resources(task_id);
   s.counts.count_completed(task_id, device_id);
   s.update_completed_cost(task_id, device_id);
+  // Remove retired data
+  for (auto data_id : task.get_retire()) {
+    s.data_manager.retire_data(data_id, device_id, s.global_time);
+  }
 
   const auto &newly_launchable_data_tasks = s.notify_data_completed(task_id);
   push_launchable_data(newly_launchable_data_tasks);
@@ -1517,18 +1515,18 @@ void Scheduler::complete_eviction_task(taskid_t eviction_task_id, devid_t destin
 
   auto invalidate_device_id = eviction_task.get_invalidate_device();
 
-  bool remove_from_mapped = true;
+  bool future_usage = false;
   for (auto unreserved_task_id : s.mapped_but_not_reserved_tasks) {
     if (s.task_manager.get_state().get_mapping(unreserved_task_id) == invalidate_device_id) {
       auto &uniq = s.task_manager.get_tasks().get_compute_task(unreserved_task_id).get_unique();
       if (std::find(uniq.begin(), uniq.end(), data_id) != uniq.end()) {
-        remove_from_mapped = false;
+        future_usage = true;
         break;
       }
     }
   }
 
-  bool write_incoming = false;
+  bool write_after_read = false;
   const auto &tasks = s.task_manager.get_tasks();
   const auto &mapped = s.mapped_but_not_reserved_tasks;
   std::unordered_set<taskid_t> buffer_set;
@@ -1609,10 +1607,10 @@ void Scheduler::complete_eviction_task(taskid_t eviction_task_id, devid_t destin
     // 'top_task_dependencies' now contains *all* of its dependencies
     // (direct and indirect), in the order first discovered.
     if (s.get_mapping(top) != invalidate_device_id) {
-      write_incoming = true;
+      write_after_read = true;
       for (auto dep : top_task_dependencies) {
         if (s.get_mapping(dep) == invalidate_device_id) {
-          write_incoming = false;
+          write_after_read = false;
           break;
         }
       }
@@ -1620,7 +1618,7 @@ void Scheduler::complete_eviction_task(taskid_t eviction_task_id, devid_t destin
   }
 
   s.data_manager.evict_on_update_launched(DataIDList{data_id}, invalidate_device_id, current_time,
-                                          remove_from_mapped, write_incoming);
+                                          future_usage, write_after_read);
 
   eviction_count -= 1;
   SPDLOG_DEBUG("Time:{} Eviction task {} completed {} left", current_time,

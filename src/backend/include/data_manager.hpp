@@ -263,6 +263,17 @@ public:
     return updated;
   }
 
+  std::vector<devid_t> invalidate_all(timecount_t current_time) {
+    std::vector<devid_t> updated;
+    for (devid_t i = 0; i < locations.size(); i++) {
+      if (is_valid(i)) {
+        set_invalid(i, current_time);
+        updated.push_back(i);
+      }
+    }
+    return updated;
+  }
+
   std::vector<devid_t> invalidate_on(devid_t device_id, timecount_t current_time) {
     std::vector<devid_t> updated;
     if (is_valid(device_id)) {
@@ -694,9 +705,7 @@ public:
       accumulated += sz_it->second;
       id_buffer.push_back(did);
     }
-    if (accumulated < mem_size) {
-      spdlog::warn("LRU_manager::getLRUids: insufficient data to satisfy request");
-    }
+    assert(accumulated <= mem_size && "getLRUids(): accumulated size exceeds requested size");
     return id_buffer;
   }
 
@@ -782,15 +791,18 @@ public:
   void initialize() {
     for (dataid_t i = 0; i < data.get().size(); i++) {
       auto initial_location = data.get().get_location(i);
-      mapped_locations.set_valid(i, initial_location, 0);
-      reserved_locations.set_valid(i, initial_location, 0);
-      launched_locations.set_valid(i, initial_location, 0);
-      device_manager.get().add_mem<TaskState::MAPPED>(initial_location, data.get().get_size(i), 0);
-      device_manager.get().add_mem<TaskState::RESERVED>(initial_location, data.get().get_size(i),
+      if (initial_location > -1) {
+        mapped_locations.set_valid(i, initial_location, 0);
+        reserved_locations.set_valid(i, initial_location, 0);
+        launched_locations.set_valid(i, initial_location, 0);
+        device_manager.get().add_mem<TaskState::MAPPED>(initial_location, data.get().get_size(i),
                                                         0);
-      device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, data.get().get_size(i),
-                                                        0);
-      lru_manager.read(initial_location, i, data.get().get_size(i));
+        device_manager.get().add_mem<TaskState::RESERVED>(initial_location, data.get().get_size(i),
+                                                          0);
+        device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, data.get().get_size(i),
+                                                          0);
+        lru_manager.read(initial_location, i, data.get().get_size(i));
+      }
     }
   }
 
@@ -962,7 +974,7 @@ public:
   }
 
   void evict_on_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time,
-                                bool usage = false, bool write_incoming = false) {
+                                bool future_usage, bool write_after_read) {
     for (auto data_id : list) {
       auto updated_devices_launched =
           evict_on_update(data_id, device_id, launched_locations, current_time);
@@ -970,22 +982,19 @@ public:
           evict_on_update(data_id, device_id, reserved_locations, current_time);
 
       auto size = data.get().get_size(data_id);
-      // assert(updated_devices_launched == updated_devices_reserved);
       for (auto device : updated_devices_launched) {
         SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
         device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
         device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id);
       }
-      if (usage) {
-        // Ground truth: Only device with this data
-        // No more read or write to this data from this device
-        // Mapped location can be invalid if
-        // 1. Write invalidated by other device
+      if (!future_usage) {
+        // If there are no further usage for the data block (in mapped but not reserved tasks).
+        // Invalidate for future mapping decisions.
         device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
         mapped_locations.set_invalid(data_id, device_id, current_time);
-      } else if (mapped_locations.is_invalid(data_id, device_id) || write_incoming) {
-        // write_incoming is needed to handle a case where the next usage for the data block is
+      } else if (mapped_locations.is_invalid(data_id, device_id) || write_after_read) {
+        // write_after_read is needed to handle a case where the next usage for the data block is
         // write from the other device. Since launched_location is invalidated by the eviction
         // this redundant mapped_memory will not be removed. (Which should be).
         // mapped_locations.is_invalid(data_id, device_id) is only checking a subset of above cases
@@ -1167,6 +1176,21 @@ public:
       device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
       device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
       device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+    }
+  }
+
+  void retire_data(dataid_t data_id, devid_t device_id, timecount_t current_time) {
+    auto size = data.get().get_size(data_id);
+    SPDLOG_DEBUG("Retiring data block {} from device {} with size {}", data_id, device_id, size);
+    for (auto device : mapped_locations.at(data_id).invalidate_all(current_time)) {
+      device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
+    }
+    for (auto device : reserved_locations.at(data_id).invalidate_all(current_time)) {
+      device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
+    }
+    for (auto device : launched_locations.at(data_id).invalidate_all(current_time)) {
+      device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+      lru_manager.invalidate(device_id, data_id);
     }
   }
 

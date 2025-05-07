@@ -23,6 +23,7 @@ public:
   std::vector<std::string> task_names;
   std::vector<std::vector<taskid_t>> read_data;
   std::vector<std::vector<taskid_t>> write_data;
+  std::vector<std::vector<taskid_t>> retire_data;
   std::vector<std::array<std::array<int64_t, 4>, num_device_types>> variant_info;
   std::vector<std::vector<taskid_t>> dependencies;
 
@@ -33,6 +34,7 @@ public:
     task_names.reserve(100);
     read_data.reserve(100);
     write_data.reserve(100);
+    retire_data.reserve(100);
     variant_info.reserve(100);
     dependencies.reserve(100);
     task_types.reserve(100);
@@ -48,6 +50,7 @@ public:
     task_names.resize(new_size);
     read_data.resize(new_size);
     write_data.resize(new_size);
+    retire_data.resize(new_size);
     variant_info.resize(new_size);
     dependencies.resize(new_size);
   }
@@ -60,6 +63,7 @@ public:
     task_name_to_id[task_name] = task_id;
     read_data.push_back(std::vector<taskid_t>());
     write_data.push_back(std::vector<taskid_t>());
+    retire_data.push_back(std::vector<taskid_t>());
 
     std::array<std::array<int64_t, 4>, num_device_types> zero_variant_array{};
     // Disable all variants initially
@@ -80,6 +84,10 @@ public:
 
   void add_write_data(taskid_t task_id, std::vector<dataid_t> &data_ids) {
     write_data[task_id].insert(write_data[task_id].end(), data_ids.begin(), data_ids.end());
+  }
+
+  void add_retire_data(taskid_t task_id, std::vector<dataid_t> &data_ids) {
+    retire_data[task_id].insert(retire_data[task_id].end(), data_ids.begin(), data_ids.end());
   }
 
   int get_tag(taskid_t task_id) {
@@ -112,6 +120,10 @@ public:
 
   std::vector<dataid_t> &get_write_data(taskid_t task_id) {
     return write_data[task_id];
+  }
+
+  std::vector<dataid_t> &get_retire_data(taskid_t task_id) {
+    return retire_data[task_id];
   }
 
   void add_variant_info(taskid_t task_id, DeviceType device_type, vcu_t vcus, mem_t memory,
@@ -187,6 +199,7 @@ public:
     task_names.erase(task_names.begin() + task_id);
     read_data.erase(read_data.begin() + task_id);
     write_data.erase(write_data.begin() + task_id);
+    retire_data.erase(retire_data.begin() + task_id);
     variant_info.erase(variant_info.begin() + task_id);
     dependencies.erase(dependencies.begin() + task_id);
 
@@ -228,6 +241,7 @@ public:
       new_graph.task_names[new_id] = task_names[i];
       new_graph.read_data[new_id] = read_data[i];
       new_graph.write_data[new_id] = write_data[i];
+      new_graph.retire_data[new_id] = retire_data[i];
       new_graph.variant_info[new_id] = variant_info[i];
       new_graph.dependencies[new_id] = dependencies[i];
     }
@@ -254,6 +268,7 @@ public:
         }
         add_read_data(j + offset, read_data[j]);
         add_write_data(j + offset, write_data[j]);
+        add_retire_data(j + offset, retire_data[j]);
 
         for (std::size_t k = 0; k < num_device_types; k++) {
           std::array<int64_t, 4> info = variant_info[j][k];
@@ -278,6 +293,7 @@ public:
         }
         add_read_data(i + offset, graph.read_data[i]);
         add_write_data(i + offset, graph.write_data[i]);
+        add_retire_data(i + offset, graph.retire_data[i]);
 
         for (std::size_t j = 0; j < num_device_types; j++) {
           std::array<int64_t, 4> info = graph.variant_info[i][j];
@@ -296,6 +312,7 @@ public:
       tasks.set_tag(i, get_tag(i));
       tasks.set_read(i, get_read_data(i));
       tasks.set_write(i, get_write_data(i));
+      tasks.set_retire(i, get_retire_data(i));
       tasks.set_type(i, get_type(i));
       for (std::size_t j = 0; j < num_device_types; j++) {
         std::vector<int64_t> info = get_variant_info(i, static_cast<DeviceType>(j));

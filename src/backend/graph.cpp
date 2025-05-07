@@ -254,6 +254,7 @@ void GraphManager::add_missing_writer_dependencies(std::unordered_map<dataid_t, 
 
 void GraphManager::create_data_tasks(std::unordered_map<dataid_t, taskid_t> &writers,
                                      ComputeTask &task, Tasks &tasks) {
+  // Just write operations doesn't need data tasks
   for (auto data_id : task.get_read()) {
     auto writer = find_writer(writers, data_id);
     tasks.create_data_task(task, writer.found, writer.task_id, data_id);
