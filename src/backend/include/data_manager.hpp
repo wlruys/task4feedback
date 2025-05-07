@@ -993,15 +993,17 @@ public:
         // Invalidate for future mapping decisions.
         device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
         mapped_locations.set_invalid(data_id, device_id, current_time);
-      } else if (mapped_locations.is_invalid(data_id, device_id) || write_after_read) {
+      }
+      // else if (mapped_locations.is_invalid(data_id, device_id) || write_after_read) {
+      else if (write_after_read) {
         // write_after_read is needed to handle a case where the next usage for the data block is
         // write from the other device. Since launched_location is invalidated by the eviction
         // this redundant mapped_memory will not be removed. (Which should be).
-        // mapped_locations.is_invalid(data_id, device_id) is only checking a subset of above cases
-        // since to be valid in launced_location and invalid in mapped_location there is only one
-        // scenario.
-        // -> the last operation to the data block in mapped_but_not_reserved_tasks is a write from
-        // another device.
+        // mapped_locations.is_invalid(data_id, device_id) is only checking a subset of above
+        // cases since to be valid in launced_location and invalid in mapped_location there is
+        // only one scenario.
+        // -> the last operation to the data block in mapped_but_not_reserved_tasks is a write
+        // from another device.
         //   GPU0   |   GPU1
         // ---------|----------
         // read B0  |

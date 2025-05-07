@@ -1438,6 +1438,13 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
                   write_after_read = true;
                   for (auto dep : top_task_dependencies) {
                     if (s.get_mapping(dep) == device_id) {
+                      bool is_read = false;
+                      for (auto read_data_id : tasks.get_compute_task(dep).get_read()) {
+                        if (read_data_id == data_id)
+                          is_read = true;
+                      }
+                      if (!is_read)
+                        continue;
                       write_after_read = false;
                       break;
                     }
@@ -1625,6 +1632,13 @@ void Scheduler::complete_eviction_task(taskid_t eviction_task_id, devid_t destin
       write_after_read = true;
       for (auto dep : top_task_dependencies) {
         if (s.get_mapping(dep) == invalidate_device_id) {
+          bool is_read = false;
+          for (auto read_data_id : tasks.get_compute_task(dep).get_read()) {
+            if (read_data_id == data_id)
+              is_read = true;
+          }
+          if (!is_read)
+            continue;
           write_after_read = false;
           break;
         }
@@ -1691,18 +1705,24 @@ void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &even
     }
     scheduler_event_count += 1;
   }
-
-  // auto &device_manager = s.get_device_manager();
-  // auto &lru_manager = s.get_data_manager().get_lru_manager();
-  // // check memory state, whether it is consistent for debugging purpose
-  // for (devid_t i = 0; i < device_manager.get_devices().size(); i++) {
-  //   mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i) / 1000 / 1000;
-  //   mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i) / 1000 / 1000;
-  //   mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i) / 1000 / 1000;
-  //   mem_t lru_mem = lru_manager.get_mem(i) / 1000 / 1000;
-  //   SPDLOG_DEBUG("Device {}: launched {}, lru {}, reserved {}, mapped {}", i, launched_mem,
-  //   lru_mem,
-  //                reserved_mem, mapped_mem);
-  //   assert(launched_mem == lru_mem);
-  // }
+  if (spdlog::get_level() == spdlog::level::debug) {
+    auto &device_manager = s.get_device_manager();
+    auto &lru_manager = s.get_data_manager().get_lru_manager();
+    // check memory state, whether it is consistent for debugging purpose
+    bool flag = false;
+    for (devid_t i = 0; i < device_manager.get_devices().size(); i++) {
+      mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i) / 1000 / 1000;
+      mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i) / 1000 / 1000;
+      mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i) / 1000 / 1000;
+      mem_t lru_mem = lru_manager.get_mem(i) / 1000 / 1000;
+      SPDLOG_DEBUG("Device {}: launched {}, lru {}, reserved {}, mapped {}", i, launched_mem,
+                   lru_mem, reserved_mem, mapped_mem);
+      if (i > 0 && mapped_mem < launched_mem)
+        flag = true;
+      assert(launched_mem == lru_mem);
+    }
+    if (flag) {
+      SPDLOG_DEBUG("Memory state is inconsistent");
+    }
+  }
 }
