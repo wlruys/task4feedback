@@ -894,9 +894,8 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id,
   // Update reserved resources
   s.reserve_resources(task_id, device_id, requested);
   SPDLOG_DEBUG("Time:{} Task {} requested memsize {} resulting in reserved size of {} at device {}",
-               current_time, s.get_task_name(task_id), requested.mem / 1000 / 1000,
-               s.get_device_manager().get_mem<TaskState::RESERVED>(device_id) / 1000 / 1000,
-               device_id);
+               current_time, s.get_task_name(task_id), requested.mem,
+               s.get_device_manager().get_mem<TaskState::RESERVED>(device_id), device_id);
 
   // Update data locations
   const ComputeTask &task = s.task_manager.get_tasks().get_compute_task(task_id);
@@ -1711,10 +1710,10 @@ void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &even
     // check memory state, whether it is consistent for debugging purpose
     bool flag = false;
     for (devid_t i = 0; i < device_manager.get_devices().size(); i++) {
-      mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i) / 1000 / 1000;
-      mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i) / 1000 / 1000;
-      mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i) / 1000 / 1000;
-      mem_t lru_mem = lru_manager.get_mem(i) / 1000 / 1000;
+      mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i);
+      mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i);
+      mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i);
+      mem_t lru_mem = lru_manager.get_mem(i);
       SPDLOG_DEBUG("Device {}: launched {}, lru {}, reserved {}, mapped {}", i, launched_mem,
                    lru_mem, reserved_mem, mapped_mem);
       if (i > 0 && mapped_mem < launched_mem)

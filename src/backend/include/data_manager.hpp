@@ -1192,7 +1192,7 @@ public:
     }
     for (auto device : launched_locations.at(data_id).invalidate_all(current_time)) {
       device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-      lru_manager.invalidate(device_id, data_id);
+      lru_manager.invalidate(device, data_id);
     }
   }
 
