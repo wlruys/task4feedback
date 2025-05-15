@@ -681,13 +681,13 @@ class XYHeterogeneousObserverFactory(XYExternalHeterogeneousObserverFactory):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         task_feature_factory.add(fastsim.DepthTaskFeature)
-        task_feature_factory.add(fastsim.TagTaskFeature)
+        # task_feature_factory.add(fastsim.TagTaskFeature)
         task_feature_factory.add(fastsim.InDegreeTaskFeature)
         task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-        # task_feature_factory.add(fastsim.TaskStateFeature)
+        task_feature_factory.add(fastsim.TaskStateFeature)
 
         data_feature_factory = FeatureExtractorFactory()
-        data_feature_factory.add(fastsim.ScaledDataMappedLocationsFeature)
+        data_feature_factory.add(fastsim.DataSizeFeature)
         data_feature_factory.add(fastsim.EmptyDataFeature, 2)
 
         device_feature_factory = FeatureExtractorFactory()

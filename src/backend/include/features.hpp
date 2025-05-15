@@ -767,8 +767,124 @@ public:
     return count;
   }
 
-  size_t get_task_data_edges(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
-                             TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+  size_t get_read_data(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &output) {
+    data_visited.clear();
+    data_visited.reserve(400);
+
+    const auto max_data = output.size();
+    auto v = output.view();
+    static bool has_warned = false;
+    std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
+    const auto &s = this->state.get();
+    const auto &task_manager = state.get().get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+
+    for (const auto &task_id_64_bit : task_ids_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
+      const auto &task = tasks.get_compute_task(task_id);
+      const auto &unique = task.get_read();
+
+      // std::cout << "Task ID: " << task_id << " Read size: " << read.size() << std::endl;
+
+      for (int i = 0; i < unique.size(); i++) {
+
+        auto data_id = unique[i];
+        data_visited.insert(data_id);
+        if (data_visited.size() >= max_data) {
+          if (!has_warned) {
+            spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
+            has_warned = true;
+          }
+          break;
+        }
+      }
+      if (data_visited.size() >= max_data) {
+        if (!has_warned) {
+          spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
+          has_warned = true;
+        }
+        break;
+      }
+    }
+
+    size_t count = min(output.size(), data_visited.size());
+
+    // std::cout << "Unique data count: " << count << std::endl;
+    size_t i = 0;
+    for (auto data_id : data_visited) {
+      if (i >= count) {
+        if (!has_warned) {
+          spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
+          has_warned = true;
+        }
+        break;
+      }
+      v(i) = static_cast<int64_t>(data_id);
+      i++;
+    }
+    return count;
+  }
+
+  size_t get_write_data(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &output) {
+    data_visited.clear();
+    data_visited.reserve(400);
+
+    const auto max_data = output.size();
+    auto v = output.view();
+    static bool has_warned = false;
+    std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
+    const auto &s = this->state.get();
+    const auto &task_manager = state.get().get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+
+    for (const auto &task_id_64_bit : task_ids_span) {
+      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
+      const auto &task = tasks.get_compute_task(task_id);
+      const auto &unique = task.get_read();
+
+      // std::cout << "Task ID: " << task_id << " Read size: " << read.size() << std::endl;
+
+      for (int i = 0; i < unique.size(); i++) {
+
+        auto data_id = unique[i];
+        data_visited.insert(data_id);
+        if (data_visited.size() >= max_data) {
+          if (!has_warned) {
+            spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
+            has_warned = true;
+          }
+          break;
+        }
+      }
+      if (data_visited.size() >= max_data) {
+        if (!has_warned) {
+          spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
+          has_warned = true;
+        }
+        break;
+      }
+    }
+
+    size_t count = min(output.size(), data_visited.size());
+
+    // std::cout << "Unique data count: " << count << std::endl;
+    size_t i = 0;
+    for (auto data_id : data_visited) {
+      if (i >= count) {
+        if (!has_warned) {
+          spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
+          has_warned = true;
+        }
+        break;
+      }
+      v(i) = static_cast<int64_t>(data_id);
+      i++;
+    }
+    return count;
+  }
+
+  size_t get_task_data_edges_all(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
+                                 TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
@@ -826,7 +942,205 @@ public:
     return edge_count;
   }
 
-  size_t get_task_mapped_device_edges(TorchInt64Arr1D &task_ids, TorchInt64Arr2D &output,
+  size_t get_task_data_edges_read(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
+                                  TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+    if (output.shape(0) != 2) {
+      throw std::runtime_error("Edge output shape must be 2 x N");
+    }
+
+    std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
+    std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
+    static bool has_warned = false;
+    const auto max_edges = output.shape(1);
+
+    data_index_map.clear();
+    data_index_map.reserve(data_ids.size());
+
+    auto v = output.view();
+    auto gv = global_output.view();
+
+    const auto &task_manager = state.get().get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+
+    std::size_t edge_count = 0;
+    for (int64_t i = 0; i < data_ids_span.size(); i++) {
+      // if (data_index_map.find(static_cast<dataid_t>(data_ids_span[i])) == data_index_map.end()) {
+      //   data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
+      // }
+      data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
+    }
+
+    for (int64_t i = 0; i < task_ids_span.size(); i++) {
+      const auto &task_id = static_cast<taskid_t>(task_ids_span[i]);
+      const auto &task = tasks.get_compute_task(task_id);
+      for (auto data_id : task.get_read()) {
+        auto it = data_index_map.find(data_id);
+        if (it != data_index_map.end()) {
+          v(0, edge_count) = static_cast<int64_t>(i);
+          v(1, edge_count) = static_cast<int64_t>(it->second);
+          gv(0, edge_count) = static_cast<int64_t>(task_id);
+          gv(1, edge_count) = static_cast<int64_t>(data_id);
+          edge_count++;
+          if (edge_count >= max_edges) {
+            if (!has_warned) {
+              spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
+              has_warned = true;
+            }
+            break;
+          }
+        }
+      }
+      if (edge_count >= max_edges) {
+        if (!has_warned) {
+          spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
+          has_warned = true;
+        }
+        break;
+      }
+    }
+    return edge_count;
+  }
+
+  size_t get_task_data_edges_write(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
+                                   TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+    if (output.shape(0) != 2) {
+      throw std::runtime_error("Edge output shape must be 2 x N");
+    }
+
+    std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
+    std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
+    static bool has_warned = false;
+    const auto max_edges = output.shape(1);
+
+    data_index_map.clear();
+    data_index_map.reserve(data_ids.size());
+
+    auto v = output.view();
+    auto gv = global_output.view();
+
+    const auto &task_manager = state.get().get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+
+    std::size_t edge_count = 0;
+    for (int64_t i = 0; i < data_ids_span.size(); i++) {
+      // if (data_index_map.find(static_cast<dataid_t>(data_ids_span[i])) == data_index_map.end()) {
+      //   data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
+      // }
+      data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
+    }
+
+    for (int64_t i = 0; i < task_ids_span.size(); i++) {
+      const auto &task_id = static_cast<taskid_t>(task_ids_span[i]);
+      const auto &task = tasks.get_compute_task(task_id);
+      for (auto data_id : task.get_read()) {
+        auto it = data_index_map.find(data_id);
+        if (it != data_index_map.end()) {
+          v(0, edge_count) = static_cast<int64_t>(i);
+          v(1, edge_count) = static_cast<int64_t>(it->second);
+          gv(0, edge_count) = static_cast<int64_t>(task_id);
+          gv(1, edge_count) = static_cast<int64_t>(data_id);
+          edge_count++;
+          if (edge_count >= max_edges) {
+            if (!has_warned) {
+              spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
+              has_warned = true;
+            }
+            break;
+          }
+        }
+      }
+      if (edge_count >= max_edges) {
+        if (!has_warned) {
+          spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
+          has_warned = true;
+        }
+        break;
+      }
+    }
+    return edge_count;
+  }
+
+  size_t get_task_data_edges_read_mapped(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
+                                         TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+    if (output.shape(0) != 2) {
+      throw std::runtime_error("Edge output shape must be 2 x N");
+    }
+
+    std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
+    std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
+    static bool has_warned = false;
+    const auto max_edges = output.shape(1);
+
+    data_index_map.clear();
+    data_index_map.reserve(data_ids.size());
+
+    auto v = output.view();
+    auto gv = global_output.view();
+
+    const auto &task_manager = state.get().get_task_manager();
+    const auto &tasks = task_manager.get_tasks();
+
+    // // The candidate task id is always the first task id in the list
+    // int64_t candidate_task_id = task_ids_span[0];
+    // std::cout << "Candidate Task ID: " << candidate_task_id << std::endl;
+
+    std::size_t edge_count = 0;
+    for (int64_t i = 0; i < data_ids_span.size(); i++) {
+      data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
+    }
+
+    for (int64_t i = 0; i < task_ids_span.size(); i++) {
+      const auto &task_id = static_cast<taskid_t>(task_ids_span[i]);
+      const auto &task = tasks.get_compute_task(task_id);
+      const auto &read = task.get_read();
+
+      for (int j = 0; j < read.size(); j++) {
+        auto data_id = read[j];
+        taskid_t recent_writer_id = task.get_recent_writer(j);
+
+        // std::cout << "Task ID: " << task_id << " Data ID: " << data_id
+        //           << " Recent Writer ID: " << recent_writer_id << std::endl;
+
+        if (recent_writer_id != -1) {
+          // We are not the first writer, check to see if it is mapped w.r.t us
+          const bool is_mapped = state.get().is_mapped(recent_writer_id);
+          // std::cout << "Recent Writer ID: " << recent_writer_id << " Mapped: " << is_mapped
+          //           << std::endl;
+          if (!is_mapped) {
+            continue;
+          }
+          // TODO: When we merge with retire, we should ignore the data id if it has no valid
+          // location even if we are the first writer (it can be uninitialized)
+        }
+
+        auto it = data_index_map.find(data_id);
+        if (it != data_index_map.end()) {
+          v(0, edge_count) = static_cast<int64_t>(i);
+          v(1, edge_count) = static_cast<int64_t>(it->second);
+          gv(0, edge_count) = static_cast<int64_t>(task_id);
+          gv(1, edge_count) = static_cast<int64_t>(data_id);
+          edge_count++;
+          if (edge_count >= max_edges) {
+            if (!has_warned) {
+              spdlog::warn("Filtered TaskData edge count exceeded max edges: {}", edge_count);
+              has_warned = true;
+            }
+            break;
+          }
+        }
+      }
+      if (edge_count >= max_edges) {
+        if (!has_warned) {
+          spdlog::warn("Filtered TaskData edge count exceeded max edges: {}", edge_count);
+          has_warned = true;
+        }
+        break;
+      }
+    }
+    return edge_count;
+  }
+
+  size_t get_task_device_edges_mapped(TorchInt64Arr1D &task_ids, TorchInt64Arr2D &output,
                                       TorchInt64Arr2D &global_output) {
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
@@ -982,6 +1296,7 @@ public:
     }
 
     auto v = output.view();
+
     auto gv = global_output.view();
     static bool has_warned = false;
     std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());

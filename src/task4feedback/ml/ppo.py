@@ -29,10 +29,10 @@ class PPOConfig:
     states_per_collection: int = 1920
     minibatch_size: int = 250
     num_epochs_per_collection: int = 4
-    num_collections: int = 1000
+    num_collections: int = 5000
     workers: int = 1
     seed: int = 0
-    lr: float = 10e-4
+    lr: float = 2.5e-4
     clip_eps: float = 0.2
     clip_vloss: bool = True
     ent_coef: float = 0.001
