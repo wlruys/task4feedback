@@ -29,10 +29,10 @@ class PPOConfig:
     states_per_collection: int = 1920
     minibatch_size: int = 250
     num_epochs_per_collection: int = 4
-    num_collections: int = 1000
+    num_collections: int = 5000
     workers: int = 1
     seed: int = 0
-    lr: float = 5e-4
+    lr: float = 2.5e-4
     clip_eps: float = 0.2
     clip_vloss: bool = True
     ent_coef: float = 0.001
@@ -96,7 +96,7 @@ def evaluate_policy(
 
     for i in range(num_episodes):
         env = eval_env_fn()
-        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+        with set_exploration_type(ExplorationType.RANDOM), torch.no_grad():
             tensordict = env.rollout(
                 max_steps=max_steps,
                 policy=policy,
@@ -121,8 +121,7 @@ def evaluate_policy(
             completion_time = env.simulator.time
             completion_times.append(completion_time)
 
-            if False:
-                # i == 0 and completion_time > 0:
+            if i == 0 and completion_time > 0:
                 # Animate the first environment
                 max_frames = 400
                 time_interval = int(completion_time / max_frames)
@@ -663,7 +662,7 @@ def run_ppo_torchrl(
                         "batch_loss/step": step,
                         "batch_loss/objective": loss_vals["loss_objective"].item(),
                         "batch_loss/critic": loss_vals["loss_critic"].item(),
-                        "batch_loss/entropy": loss_vals["loss_entropy"].item(),
+                        "batch_loss/entropy": loss_vals["entropy"].item(),
                         "batch_loss/total": loss_value.item(),
                         "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
                         "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),

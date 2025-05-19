@@ -683,7 +683,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
     def __init__(
         self,
         *args,
-        gamma=0.3,
+        gamma=0.4,
         flip=True,
         clip_total=False,
         clip_individual=False,
@@ -800,7 +800,6 @@ class MapperRuntimeEnv(RuntimeEnv):
         self.simulator.get_mappable_candidates(candidate_workspace)
         global_task_id = candidate_workspace[0].item()
         scheduler_state: SchedulerState = self.simulator.state
-        print("Mapping task:", global_task_id)
 
         if self.use_external_mapper:
             external_mapper = self.simulator.external_mapper
@@ -1204,6 +1203,10 @@ class EFTIncrementalEnv(EnvBase):
         time = obs["observation"]["aux"]["time"].item()
         if done:
             self.cum_time = 0
+            # Did we beat the baseline?
+            if time <= self.EFT_baseline:
+                reward[0] += 2
+
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
             print(
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"

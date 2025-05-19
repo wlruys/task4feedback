@@ -35,6 +35,7 @@ NB_MODULE(fastsim2, m) {
   nb::bind_vector<std::vector<Task>>(m, "TaskVector");
   nb::bind_vector<std::vector<ComputeTask>>(m, "ComputeTaskVector");
   nb::bind_vector<std::vector<DataTask>>(m, "DataTaskVector");
+  nb::bind_vector<std::vector<DeviceType>>(m, "DeviceTypeVector");
   init_event_ext(m);
   init_device_ext(m);
   init_task_ext(m);

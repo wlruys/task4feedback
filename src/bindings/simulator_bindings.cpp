@@ -52,6 +52,8 @@ void init_simulator_ext(nb::module_ &m) {
       .def("initialize", &Simulator::initialize, "create_data_tasks"_a = true,
            "initialize_data_manager"_a = false)
       .def("initialize_data", &Simulator::initialize_data_manager)
+      .def("gather_graph_statistics", &Simulator::gather_graph_statistics,
+           "device_types"_a = std::vector<DeviceType>())
       .def("enable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(true); })
       .def("disable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(false); })
       .def("skip_external_mapping", &Simulator::skip_external_mapping,

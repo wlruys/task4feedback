@@ -17,6 +17,9 @@ import torch.nn as nn
 from torch_geometric.nn import (
     GATv2Conv,
     GATConv,
+    GraphConv,
+    SimpleConv,
+    EdgeConv,
     global_mean_pool,
     global_add_pool,
     HeteroConv,
@@ -1161,7 +1164,7 @@ class SeparateNet2Layer(nn.Module):
         self.n_devices = n_devices
 
         self.actor = DeviceAssignmentNet2Layer(feature_config, layer_config, n_devices)
-        self.critic = ValueNet2Layer(feature_config, layer_config, n_devices)
+        self.critic = ValueNetkLayer(feature_config, layer_config, n_devices)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         d_logits = self.actor(data, counts)
@@ -1226,14 +1229,536 @@ class UnRolledDeviceLayer(nn.Module):
     def forward(self, data: HeteroData | Batch):
         # Device features are n_devices x device_feature_dim
 
-        # print("device_features", data["devices"].x.shape)
         device_features = data["devices"].x
-        # print("device_features", device_features.shape)
-        device_features = device_features.view(
+        device_features = device_features.reshape(
             -1, self.n_devices * self.feature_config.device_feature_dim
         )
 
         return device_features
+
+
+class DataTaskGraphConv(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(DataTaskGraphConv, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.data_task_conv = GraphConv(
+            (feature_config.data_feature_dim, feature_config.task_feature_dim),
+            layer_config.hidden_channels,
+            aggr="add",
+            bias=True,
+        )
+
+        self.layer_norm = nn.LayerNorm(layer_config.hidden_channels)
+
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+        self.output_dim = layer_config.hidden_channels
+
+    def forward(self, data: HeteroData | Batch):
+        data_task_edges = data["data", "to", "tasks"].edge_index
+
+        task_agg = self.data_task_conv(
+            (data["data"].x, data["tasks"].x), data_task_edges
+        )
+
+        task_agg = self.layer_norm(task_agg)
+
+        task_agg = self.activation(task_agg)
+
+        return task_agg
+
+
+class TaskTaskEdgeConv(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        layer_config: LayerConfig,
+        k: int = 1,
+        agg_type: str = "add",
+        skip_connection: bool = False,
+    ):
+        super(TaskTaskEdgeConv, self).__init__()
+        if k < 1:
+            raise ValueError("Number of layers k must be at least 1.")
+
+        self.skip_connection = skip_connection
+        self.k = k
+        self.layer_config = layer_config
+        self.conv_layers = nn.ModuleList()
+        self.norm_layers = nn.ModuleList()
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+        current_dim = input_dim
+        for i in range(k):
+            mlp = nn.Sequential(
+                layer_init(nn.Linear(current_dim * 2, layer_config.hidden_channels)),
+                nn.LeakyReLU(negative_slope=0.01),
+                layer_init(
+                    nn.Linear(
+                        layer_config.hidden_channels, layer_config.hidden_channels
+                    )
+                ),
+            )
+            self.conv_layers.append(EdgeConv(mlp, aggr=agg_type))
+            self.norm_layers.append(nn.LayerNorm(layer_config.hidden_channels))
+            current_dim = layer_config.hidden_channels  # Input dim for the next layer
+
+        self.output_dim = k * layer_config.hidden_channels
+
+    def forward(self, task_features, task_edges):
+        """
+        Forward pass through the k EdgeConv layers.
+
+        Args:
+            task_features (Tensor): Input task node features [num_tasks, input_dim].
+            task_edges (Tensor): Edge index for task-to-task connections [2, num_edges].
+
+        Returns:
+            Tensor: Concatenated output features from all layers
+                    [num_tasks, k * hidden_channels].
+        """
+        layer_outputs = []
+        current_features = task_features
+
+        for i in range(self.k):
+            current_features = self.conv_layers[i](current_features, task_edges)
+            current_features = self.norm_layers[i](current_features)
+            current_features = self.activation(current_features)
+            if self.skip_connection:
+                layer_outputs.append(current_features.clone())
+
+        # Concatenate the outputs from all layers
+        if self.skip_connection:
+            final_output = torch.cat(layer_outputs, dim=-1)
+        else:
+            final_output = current_features
+
+        return final_output
+
+
+class HeteroConvkLayer(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+        k: int = 1,
+    ):
+        super(HeteroConvkLayer, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        if k < 1:
+            raise ValueError("Number of layers k must be at least 1.")
+
+        self.k = k
+
+        self.hetero_convs = nn.ModuleList()
+
+        self.hetero_convs.append(
+            HeteroConv(
+                {
+                    ("data", "reads", "tasks"): GraphConv(
+                        (
+                            feature_config.data_feature_dim,
+                            feature_config.task_feature_dim,
+                        ),
+                        layer_config.hidden_channels,
+                        aggr="add",
+                    ),
+                    ("tasks", "reads", "data"): GraphConv(
+                        (
+                            feature_config.task_feature_dim,
+                            feature_config.data_feature_dim,
+                        ),
+                        layer_config.hidden_channels,
+                        aggr="add",
+                    ),
+                    # ("data", "writes", "tasks"): GraphConv(
+                    #     (
+                    #         feature_config.data_feature_dim,
+                    #         feature_config.task_feature_dim,
+                    #     ),
+                    #     layer_config.hidden_channels,
+                    #     aggr="add",
+                    # ),
+                    # ("tasks", "writes", "data"): GraphConv(
+                    #     (
+                    #         feature_config.task_feature_dim,
+                    #         feature_config.data_feature_dim,
+                    #     ),
+                    #     layer_config.hidden_channels,
+                    #     aggr="add",
+                    # ),
+                    ("tasks", "to", "devices"): GraphConv(
+                        (
+                            feature_config.task_feature_dim,
+                            feature_config.device_feature_dim,
+                        ),
+                        layer_config.hidden_channels,
+                        aggr="add",
+                    ),
+                    ("devices", "to", "tasks"): GraphConv(
+                        (
+                            feature_config.device_feature_dim,
+                            feature_config.task_feature_dim,
+                        ),
+                        layer_config.hidden_channels,
+                        aggr="add",
+                    ),
+                    ("data", "to", "devices"): GraphConv(
+                        (
+                            feature_config.data_feature_dim,
+                            feature_config.device_feature_dim,
+                        ),
+                        layer_config.hidden_channels,
+                        aggr="add",
+                    ),
+                    ("devices", "to", "data"): GraphConv(
+                        (
+                            feature_config.device_feature_dim,
+                            feature_config.data_feature_dim,
+                        ),
+                        layer_config.hidden_channels,
+                        aggr="add",
+                    ),
+                    ("tasks", "to", "tasks"): GraphConv(
+                        (
+                            feature_config.task_feature_dim,
+                            feature_config.task_feature_dim,
+                        ),
+                        layer_config.hidden_channels,
+                        aggr="add",
+                    ),
+                    ("tasks", "from", "tasks"): GraphConv(
+                        (
+                            feature_config.task_feature_dim,
+                            feature_config.task_feature_dim,
+                        ),
+                        layer_config.hidden_channels,
+                        aggr="add",
+                    ),
+                },
+                aggr="sum",
+            )
+        )
+
+        for i in range(1, k):
+            self.hetero_convs.append(
+                HeteroConv(
+                    {
+                        ("data", "mapped", "tasks"): GraphConv(
+                            (
+                                layer_config.hidden_channels,
+                                layer_config.hidden_channels,
+                            ),
+                            layer_config.hidden_channels,
+                            aggr="add",
+                        ),
+                        ("tasks", "mapped", "data"): GraphConv(
+                            (
+                                layer_config.hidden_channels,
+                                layer_config.hidden_channels,
+                            ),
+                            layer_config.hidden_channels,
+                            aggr="add",
+                        ),
+                        ("tasks", "to", "devices"): GraphConv(
+                            (
+                                layer_config.hidden_channels,
+                                layer_config.hidden_channels,
+                            ),
+                            layer_config.hidden_channels,
+                            aggr="add",
+                        ),
+                        ("devices", "to", "tasks"): GraphConv(
+                            (
+                                layer_config.hidden_channels,
+                                layer_config.hidden_channels,
+                            ),
+                            layer_config.hidden_channels,
+                            aggr="add",
+                        ),
+                        ("data", "to", "devices"): GraphConv(
+                            (
+                                layer_config.hidden_channels,
+                                layer_config.hidden_channels,
+                            ),
+                            layer_config.hidden_channels,
+                            aggr="add",
+                        ),
+                        ("devices", "to", "data"): GraphConv(
+                            (
+                                layer_config.hidden_channels,
+                                layer_config.hidden_channels,
+                            ),
+                            layer_config.hidden_channels,
+                            aggr="add",
+                        ),
+                        ("tasks", "to", "tasks"): GraphConv(
+                            (
+                                layer_config.hidden_channels,
+                                layer_config.hidden_channels,
+                            ),
+                            layer_config.hidden_channels,
+                            aggr="add",
+                        ),
+                        ("tasks", "from", "tasks"): GraphConv(
+                            (
+                                layer_config.hidden_channels,
+                                layer_config.hidden_channels,
+                            ),
+                            layer_config.hidden_channels,
+                            aggr="add",
+                        ),
+                    },
+                    aggr="sum",
+                )
+            )
+        self.device_layer_norm = nn.ModuleList()
+        self.task_layer_norm = nn.ModuleList()
+        self.data_layer_norm = nn.ModuleList()
+
+        for i in range(k):
+            self.device_layer_norm.append(nn.LayerNorm(layer_config.hidden_channels))
+            self.task_layer_norm.append(nn.LayerNorm(layer_config.hidden_channels))
+            self.data_layer_norm.append(nn.LayerNorm(layer_config.hidden_channels))
+
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
+
+        self.output_dim = layer_config.hidden_channels
+
+    def forward(self, data: HeteroData | Batch):
+        x_dict = data.x_dict
+        edge_index_dict = data.edge_index_dict
+        # print("HeteroConvkLayer")
+        # print("data", data)
+        # print("hetero_convs", self.hetero_convs)
+
+        for k in range(self.k):
+            x_dict = self.hetero_convs[k](x_dict, edge_index_dict)
+
+            for node_type in x_dict.keys():
+                if node_type == "tasks":
+                    x_dict[node_type] = self.task_layer_norm[k](x_dict[node_type])
+                    x_dict[node_type] = self.activation(x_dict[node_type])
+                elif node_type == "data":
+                    x_dict[node_type] = self.data_layer_norm[k](x_dict[node_type])
+                    x_dict[node_type] = self.activation(x_dict[node_type])
+                elif node_type == "devices":
+                    x_dict[node_type] = self.device_layer_norm[k](x_dict[node_type])
+                    x_dict[node_type] = self.activation(x_dict[node_type])
+
+        # print("data_out", x_dict)
+
+        return x_dict
+
+
+class HeteroConvStateNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+        k: int = 1,
+    ):
+        super(HeteroConvStateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.hetero_conv = HeteroConvkLayer(
+            feature_config, layer_config, n_devices, k=k
+        )
+
+        self.output_dim = layer_config.hidden_channels * 2
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # print("HeteroConvStateNet")
+
+        features = self.hetero_conv(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+        data_batch = data["data"].batch if isinstance(data, Batch) else None
+        device_batch = data["devices"].batch if isinstance(data, Batch) else None
+
+        time = data["time"].x
+        with torch.no_grad():
+            time = time / 100000
+        if task_batch is None:
+            time = time.squeeze(0)
+        else:
+            time.reshape(-1, 1)
+
+        task_features = features["tasks"]
+        data_features = features["data"]
+        device_features = features["devices"]
+
+        # print("task_features", task_features.shape)
+        # print("data_features", data_features.shape)
+        # print("device_features", device_features.shape)
+        # print("time", time.shape)
+
+        if task_batch is not None:
+            candidate_features = task_features[data["tasks"].ptr[:-1]]
+        else:
+            candidate_features = task_features[0]
+
+        task_counts = torch.clip(counts[0], min=1)
+        data_counts = torch.clip(counts[1], min=1)
+
+        task_pooling = torch.div(
+            global_add_pool(task_features, task_batch), task_counts
+        )
+
+        # data_pooling = torch.div(
+        #     global_add_pool(data_features, data_batch), data_counts
+        # )
+
+        device_pooling = global_mean_pool(device_features, device_batch)
+
+        # print("task_pooling", task_pooling.shape)
+        # print("data_pooling", data_pooling.shape)
+        # print("device_pooling", device_pooling.shape)
+
+        task_pooling = task_pooling.squeeze(0)
+        # data_pooling = data_pooling.squeeze(0)
+        device_pooling = device_pooling.squeeze(0)
+
+        pool_all = task_pooling + device_pooling
+        # pool_all = pool_all.squeeze(0)
+
+        # print("pool_all", pool_all.shape)
+        # print("candidate_features", candidate_features.shape)
+
+        state_features = torch.cat([candidate_features, pool_all], dim=-1)
+
+        return state_features
+
+
+class AddConvStateNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(AddConvStateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.data_task_conv = DataTaskGraphConv(feature_config, layer_config, n_devices)
+        data_task_dim = self.data_task_conv.output_dim
+
+        self.task_task_conv_dependants = TaskTaskEdgeConv(
+            data_task_dim, layer_config, k=1, agg_type="add"
+        )
+
+        self.task_task_conv_dependencies = TaskTaskEdgeConv(
+            data_task_dim, layer_config, k=1, agg_type="add"
+        )
+
+        self.unroll_devices = UnRolledDeviceLayer(
+            feature_config, layer_config, n_devices
+        )
+
+        # MLP that turns (n_devices * device_feature_dim) into [1 x hidden_channels]
+        self.device_layer = nn.Sequential(
+            layer_init(
+                nn.Linear(
+                    feature_config.device_feature_dim * n_devices + 1,
+                    layer_config.hidden_channels,
+                )
+            ),
+            nn.LeakyReLU(negative_slope=0.01),
+        )
+
+        self.stacked_task_dim = (
+            self.task_task_conv_dependants.output_dim
+            + self.task_task_conv_dependencies.output_dim
+        )
+
+        self.project_down = nn.Sequential(
+            layer_init(nn.Linear(self.stacked_task_dim, layer_config.hidden_channels)),
+            nn.LeakyReLU(negative_slope=0.01),
+        )
+
+        self.output_dim = layer_config.hidden_channels * 3
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+
+        data_fused_tasks = self.data_task_conv(data)
+        task_task_dependants = self.task_task_conv_dependants(
+            data_fused_tasks, data["tasks", "to", "tasks"].edge_index
+        )
+        task_task_dependencies = self.task_task_conv_dependencies(
+            data_fused_tasks, data["tasks", "to", "tasks"].edge_index.flip(0)
+        )
+
+        device_features = self.unroll_devices(data)
+        device_features = device_features.squeeze(0)
+
+        time = data["time"].x
+
+        with torch.no_grad():
+            time = time / 100000
+
+        if task_batch is None:
+            time = time.squeeze(0)
+        else:
+            time.reshape(-1, 1)
+
+        device_features = torch.cat([device_features, time], dim=-1)
+
+        device_features = self.device_layer(device_features)
+
+        task_features = torch.cat(
+            [
+                task_task_dependants,
+                task_task_dependencies,
+            ],
+            dim=-1,
+        )
+
+        task_features = self.project_down(task_features)
+
+        if task_batch is not None:
+            candidate_features = task_features[data["tasks"].ptr[:-1]]
+        else:
+            candidate_features = task_features[0]
+
+        counts_0 = torch.clip(counts[0], min=1)
+        global_state = global_add_pool(task_features, task_batch)
+        global_state = torch.div(global_state, counts_0)
+        global_state = global_state.squeeze(0)
+
+        # print("global_state", global_state.shape)
+        # print("device_features", device_features.shape)
+        # print("candidate_features", candidate_features.shape)
+
+        # global_state = global_state.unsqueeze(0)
+        # candidate_features = candidate_features.unsqueeze(0)
+        # device_features = device_features.unsqueeze(0)
+
+        # print("global_state", global_state.shape)
+        # print("device_features", device_features.shape)
+        # print("candidate_features", candidate_features.shape)
+
+        state_features = torch.cat(
+            (global_state, candidate_features, device_features), dim=-1
+        )
+
+        # print("state_features", state_features)
+
+        # print("state_features", state_features.shape)
+
+        return state_features
 
 
 class DataTaskPolicyNet(nn.Module):
@@ -1247,10 +1772,10 @@ class DataTaskPolicyNet(nn.Module):
         self.feature_config = feature_config
         self.layer_config = layer_config
 
-        self.data_task_gat = DataTaskGAT(feature_config, layer_config)
+        self.data_task_gat = DataTaskGATkLayer(feature_config, layer_config)
         data_task_dim = self.data_task_gat.output_dim
 
-        self.task_task_gat = TaskTaskGAT2Layer(
+        self.task_task_gat = TaskTaskGATkLayer(
             data_task_dim, feature_config, layer_config
         )
 
@@ -1287,13 +1812,128 @@ class DataTaskPolicyNet(nn.Module):
 
         global_embedding = global_embedding.squeeze(0)
 
+        time = data["auxilary"]["time"]
+        time = time.reshape(-1, 1)
+
         candidate_embedding = torch.cat(
-            [candidate_embedding, global_embedding, device_features], dim=-1
+            [candidate_embedding, global_embedding, device_features, time], dim=-1
         )
 
         d_logits = self.actor_head(candidate_embedding)
 
         return d_logits
+
+
+class HeteroConvPolicyNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+        k: int = 1,
+    ):
+        super(HeteroConvPolicyNet, self).__init__()
+
+        self.heteroconv_state_net = HeteroConvStateNet(
+            feature_config, layer_config, n_devices, k=k
+        )
+
+        self.output_head = OutputHead(
+            self.heteroconv_state_net.output_dim,
+            layer_config.hidden_channels,
+            n_devices - 1,
+            logits=True,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # print("HeteroConvPolicyNet")
+        state_features = self.heteroconv_state_net(data, counts)
+        d_logits = self.output_head(state_features)
+        return d_logits
+
+
+class HeteroConvValueNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+        k: int = 1,
+    ):
+        super(HeteroConvValueNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.heteroconv_state_net = HeteroConvStateNet(
+            feature_config, layer_config, n_devices, k=k
+        )
+
+        self.output_head = OutputHead(
+            self.heteroconv_state_net.output_dim,
+            layer_config.hidden_channels,
+            1,
+            logits=False,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # print("HeteroConvValueNet")
+        state_features = self.heteroconv_state_net(data, counts)
+        v = self.output_head(state_features)
+        return v
+
+
+class AddConvPolicyNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(AddConvPolicyNet, self).__init__()
+
+        self.add_conv_state_net = AddConvStateNet(
+            feature_config, layer_config, n_devices
+        )
+
+        self.output_head = OutputHead(
+            self.add_conv_state_net.output_dim,
+            layer_config.hidden_channels,
+            n_devices - 1,
+            logits=True,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        state_features = self.add_conv_state_net(data, counts)
+        d_logits = self.output_head(state_features)
+        return d_logits
+
+
+class AddConvValueNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(AddConvValueNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.add_conv_state_net = AddConvStateNet(
+            feature_config, layer_config, n_devices
+        )
+
+        self.output_head = OutputHead(
+            self.add_conv_state_net.output_dim,
+            layer_config.hidden_channels,
+            1,
+            logits=False,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        state_features = self.add_conv_state_net(data, counts)
+        v = self.output_head(state_features)
+        return v
 
 
 class DataTaskValueNet(nn.Module):
@@ -1307,10 +1947,10 @@ class DataTaskValueNet(nn.Module):
         self.feature_config = feature_config
         self.layer_config = layer_config
 
-        self.data_task_gat = DataTaskGAT(feature_config, layer_config)
+        self.data_task_gat = DataTaskGATkLayer(feature_config, layer_config)
         data_task_dim = self.data_task_gat.output_dim
 
-        self.task_task_gat = TaskTaskGAT2Layer(
+        self.task_task_gat = TaskTaskGATkLayer(
             data_task_dim, feature_config, layer_config
         )
 
@@ -1635,6 +2275,70 @@ class OldSeparateNetwDevice(nn.Module):
 
     def forward(self, data: HeteroData | Batch, counts=None):
         # check the device of data["tasks"].x
+        if next(self.actor.parameters()).is_cuda:
+            data = data.to("cuda")
+        d_logits = self.actor(data, counts)
+        v = self.critic(data, counts)
+        return d_logits, v
+
+
+class AddConvSeparateNet(nn.Module):
+    """
+    Wrapper module for separate actor and critic networks using individual HeteroGAT1Layer instances.
+
+    Unlike `OldCombinedNet`, this class assigns a distinct HeteroGAT1Layer to each of the actor and critic networks.
+
+    Args:
+        n_devices (int): The number of mappable devices. Check whether this includes the CPU.
+    """
+
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(AddConvSeparateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = AddConvPolicyNet(feature_config, layer_config, n_devices)
+        self.critic = AddConvValueNet(feature_config, layer_config, n_devices)
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        if next(self.actor.parameters()).is_cuda:
+            data = data.to("cuda")
+        d_logits = self.actor(data, counts)
+        v = self.critic(data, counts)
+        return d_logits, v
+
+
+class HeteroConvSeparateNet(nn.Module):
+    """
+    Wrapper module for separate actor and critic networks using individual HeteroGAT1Layer instances.
+
+    Unlike `OldCombinedNet`, this class assigns a distinct HeteroGAT1Layer to each of the actor and critic networks.
+
+    Args:
+        n_devices (int): The number of mappable devices. Check whether this includes the CPU.
+    """
+
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+        k: int = 2,
+    ):
+        super(HeteroConvSeparateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = HeteroConvPolicyNet(feature_config, layer_config, n_devices, k=k)
+        self.critic = HeteroConvValueNet(feature_config, layer_config, n_devices, k=k)
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # print("HeteroConvSeparateNet")
         if next(self.actor.parameters()).is_cuda:
             data = data.to("cuda")
         d_logits = self.actor(data, counts)

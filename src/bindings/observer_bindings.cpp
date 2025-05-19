@@ -86,12 +86,18 @@ struct RuntimeFeatureExtractor {
     }
   }
 
-  // New method to get feature type names
   std::vector<std::string> getFeatureTypeNames() const {
     std::vector<std::string> names;
     for (const auto &f : features) {
+
       // Using typeid to get the name of the actual feature type
-      names.push_back(typeid(*f).name());
+      if (!f) {
+        names.push_back("nullptr");
+        continue;
+      }
+
+      auto &obj = *f;
+      names.push_back(typeid(obj).name());
     }
     return names;
   }
@@ -122,12 +128,16 @@ struct RuntimeEdgeFeatureExtractor {
     }
   }
 
-  // New method to get feature type names
   std::vector<std::string> getFeatureTypeNames() const {
     std::vector<std::string> names;
     for (const auto &f : features) {
       // Using typeid to get the name of the actual feature type
-      names.push_back(typeid(*f).name());
+      if (!f) {
+        names.push_back("nullptr");
+        continue;
+      }
+      auto &obj = *f;
+      names.push_back(typeid(obj).name());
     }
     return names;
   }
@@ -266,13 +276,19 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_feature<MemoryTaskFeature>(m, "MemoryTaskFeature");
   bind_state_feature<OneHotMappedDeviceTaskFeature>(m, "OneHotMappedDeviceTaskFeature");
   bind_state_feature<TaskStateFeature>(m, "TaskStateFeature");
+  bind_state_feature<StandardizedGPUDurationTaskFeature>(m, "StandardizedGPUDurationTaskFeature");
+  bind_state_feature<StandardizedInputOutputTaskFeature>(m, "StandardizedInputOutputTaskFeature");
+  bind_state_feature<TagTaskFeature>(m, "TagTaskFeature");
+  bind_state_feature<DepthTaskFeature>(m, "DepthTaskFeature");
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");
   bind_state_feature<DataMappedLocations>(m, "DataMappedLocationsFeature");
+  bind_state_feature<ScaledDataMappedLocations>(m, "ScaledDataMappedLocationsFeature");
   bind_state_feature<DataReservedLocations>(m, "DataReservedLocationsFeature");
   bind_state_feature<DataLaunchedLocations>(m, "DataLaunchedLocationsFeature");
   bind_state_feature<DataSizeFeature>(m, "DataSizeFeature");
+  bind_state_feature<StandardizedDataSizeFeature>(m, "StandardizedDataSizeFeature");
 
   // Device Features
   bind_int_feature<EmptyDeviceFeature>(m, "EmptyDeviceFeature");
@@ -296,6 +312,7 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_edge_feature<TaskDeviceDefaultEdgeFeature>(m, "TaskDeviceDefaultEdgeFeature");
 
   // Data Device Features
+  bind_state_edge_feature<DataDeviceDefaultEdgeFeature>(m, "DataDeviceDefaultEdgeFeature");
 
   // PrecompiledFeatureExtractors
   bind_feature_extractor<InDegreeTaskFeature, OutDegreeTaskFeature, OneHotMappedDeviceTaskFeature>(
@@ -411,8 +428,12 @@ void init_observer_ext(nb::module_ &m) {
       .def("get_active_tasks", &GraphExtractor::get_active_tasks)
       .def("get_task_task_edges", &GraphExtractor::get_task_task_edges)
       .def("get_task_task_edges_reverse", &GraphExtractor::get_task_task_edges_reverse)
-      .def("get_task_data_edges", &GraphExtractor::get_task_data_edges)
+      .def("get_task_data_edges_all", &GraphExtractor::get_task_data_edges_all)
+      .def("get_task_data_edges_read", &GraphExtractor::get_task_data_edges_read)
+      .def("get_task_data_edges_write", &GraphExtractor::get_task_data_edges_write)
+      .def("get_task_data_edges_read_mapped", &GraphExtractor::get_task_data_edges_read_mapped)
       .def("get_task_device_edges", &GraphExtractor::get_task_device_edges)
       .def("get_data_device_edges", &GraphExtractor::get_data_device_edges)
+      .def("get_task_device_edges_mapped", &GraphExtractor::get_task_device_edges_mapped)
       .def("get_unique_data", &GraphExtractor::get_unique_data);
 }

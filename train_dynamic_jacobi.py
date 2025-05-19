@@ -52,9 +52,6 @@ from tensordict.nn import (
 )
 import torchrl
 import torch_geometric
-import aim
-
-from aim.pytorch import track_gradients_dists, track_params_dists
 from task4feedback.graphs.sweep import *
 from task4feedback.graphs import *
 from task4feedback.graphs.mesh import *
@@ -123,11 +120,11 @@ def build_sweep_graph(config: SweepConfig) -> SweepGraph:
     jgraph = SweepGraph(geom, config)
     jgraph.apply_variant(SweepVariant)
 
-    # partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
+    partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
 
     # offset by 1 to ignore cpu
-    # partition = [x + 1 for x in partition]
-    # jgraph.set_cell_locations(partition)
+    partition = [x + 1 for x in partition]
+    jgraph.set_cell_locations(partition)
 
     jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
 
@@ -157,16 +154,31 @@ def make_env(
     m = jgraph
     m.finalize_tasks()
 
+    if feature_config is None:
+        feature_config = {
+            "observer_factory": "XYObserverFactory",
+            "max_tasks": 100,
+            "max_data": 100,
+            "max_edges_tasks_tasks": 200,
+            "max_edges_tasks_data": 200,
+            "max_edges_data_devices": 100,
+            "max_edges_tasks_devices": 100,
+        }
+
     max_tasks = feature_config.get("max_tasks", 100)
     max_data = feature_config.get("max_data", 100)
-    max_tasks_tasks_edges = feature_config.get("max_tasks_tasks_edges", 200)
-    max_tasks_data_edges = feature_config.get("max_tasks_data_edges", 200)
+    max_edges_tasks_tasks = feature_config.get("max_edges_tasks_tasks", 200)
+    max_edges_tasks_data = feature_config.get("max_edges_tasks_data", 200)
+    max_edges_data_devices = feature_config.get("max_edges_data_devices", 100)
+    max_edges_tasks_devices = feature_config.get("max_edges_tasks_devices", 100)
 
     spec = create_graph_spec(
         max_tasks=max_tasks,
         max_data=max_data,
-        max_edges_tasks_data=max_tasks_data_edges,
-        max_edges_tasks_tasks=max_tasks_tasks_edges,
+        max_edges_tasks_tasks=max_edges_tasks_tasks,
+        max_edges_tasks_data=max_edges_tasks_data,
+        max_edges_data_devices=max_edges_data_devices,
+        max_edges_tasks_devices=max_edges_tasks_devices,
     )
 
     input = SimulatorInput(
@@ -259,6 +271,7 @@ def train(wandb_config):
         graph_function,
         graph_config,
         system_config,
+        feature_config=feature_config_info,
         runtime_env_t=runtime_env_type,
         observer_factory_t=observer_factory_type,
         change_priority=env_config["change_priority"],
@@ -301,20 +314,24 @@ def train(wandb_config):
     # Get the mconfig dictionary safely, defaulting to an empty dict if not found
     mconfig = wandb_config.get("mconfig", {})
 
+    print("Feature config:", feature_config)
+
+    print("Feature config info:", feature_config_info)
+
     train_config = PPOConfig(
         train_device=mconfig.get("train_device", "cpu"),
         workers=mconfig.get("workers", 1),
         ent_coef=mconfig.get("ent_coef", 0.05),
         gae_lmbda=mconfig.get("gae_lmbda", 1),
         gae_gamma=mconfig.get("gae_gamma", 0.99),
-        normalize_advantage=mconfig.get("normalize_advantage", True),
+        normalize_advantage=mconfig.get("normalize_advantage", False),
         clip_eps=mconfig.get("clip_eps", 0.2),
-        clip_vloss=mconfig.get("clip_vloss", True),
+        clip_vloss=mconfig.get("clip_vloss", False),
         minibatch_size=mconfig.get("minibatch_size", 250),
         eval_interval=mconfig.get("eval_interval", 50),
         eval_episodes=mconfig.get("eval_episodes", 1),
         states_per_collection=n_tasks * mconfig.get("graphs_per_collection", 10),
-        max_grad_norm=mconfig.get("max_grad_norm", 10),
+        max_grad_norm=mconfig.get("max_grad_norm", 0.5),
     )
 
     # Define environment creation function for PPO
@@ -323,6 +340,8 @@ def train(wandb_config):
             graph_function,
             graph_config,
             system_config,
+            feature_config=feature_config_info,
+            runtime_env_t=runtime_env_type,
             observer_factory_t=observer_factory_type,
             change_priority=env_config["change_priority"],
             change_locations=env_config["change_locations"],
@@ -335,6 +354,8 @@ def train(wandb_config):
             graph_function,
             graph_config,
             system_config,
+            feature_config=feature_config_info,
+            runtime_env_t=runtime_env_type,
             observer_factory_t=observer_factory_type,
             change_priority=False,
             change_locations=False,
@@ -356,6 +377,8 @@ def train(wandb_config):
         "hidden_channels": layer_config.hidden_channels,
         "n_heads": layer_config.n_heads,
     }
+
+    print("NUMBER OF PARAMETERS: ", num_params)
 
     feature_params = env.observer.store_feature_types()
     wandb_params["features"] = {
@@ -398,6 +421,11 @@ def train(wandb_config):
     except AttributeError:
         print("torch.compile not available, using uncompiled model")
 
+    for layer in model.modules():
+        if isinstance(layer, torch.nn.Linear):
+            torch.nn.init.orthogonal_(layer.weight, 1.0)
+            layer.bias.data.zero_()
+
     # Run PPO training
     run_ppo_torchrl(
         model,
@@ -412,8 +440,8 @@ if __name__ == "__main__":
     wandb_config = {
         "graph_config": {
             "graph_class": "JacobiGraph",
-            "interior_size": 10000000,
-            "boundary_interior_ratio": 0.2,
+            "interior_size": 1000,
+            "boundary_interior_ratio": 1,
             "randomness": 1,
             "L": 1,
             "n": 4,
@@ -425,48 +453,50 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "RuntimeEnv",
+            "runtime_env": "EFTIncrementalEnv",
         },
         "system_config": {
             "type": "uniform_connected_devices",
             "n_devices": 5,
-            "bandwidth": 2000,
+            "bandwidth": 1,
             "latency": 1,
         },
         "feature_config": {
-            "observer_factory": "XYDataObserverFactory",
-            "max_tasks": 100,
-            "max_data": 100,
-            "max_tasks_tasks_edges": 200,
-            "max_tasks_data_edges": 200,
+            "observer_factory": "XYHeterogeneousObserverFactory",
+            "max_tasks": 50,
+            "max_data": 80,
+            "max_edges_tasks_tasks": 150,
+            "max_edges_tasks_data": 200,
+            "max_edges_data_devices": 80 * 4,
+            "max_edges_tasks_devices": 50,
         },
         "layer_config": {
-            "hidden_channels": 32,
+            "hidden_channels": 16,
             "n_heads": 2,
         },
         "mconfig": {
-            "graphs_per_collection": 10,
+            "graphs_per_collection": 16,
             "train_device": "cpu",
-            "workers": 2,
-            "ent_coef": 0.05,
-            "gae_lmbda": 0.1,
-            "gae_gamma": 0.99,
+            "workers": 4,
+            "ent_coef": 0,
+            "gae_lmbda": 0.9,
+            "gae_gamma": 1,
             "normalize_advantage": True,
             "clip_eps": 0.2,
-            "clip_vloss": True,
-            "minibatch_size": 250,
+            "clip_vloss": False,
+            "minibatch_size": 128,
         },
         "env_config": {
             "change_priority": True,
             "change_locations": True,
-            "seed": 1000,
+            "seed": 1,
         },
         "model_config": {
-            "model_architecture": "DataTaskSeparateNet",
+            "model_architecture": "HeteroConvSeparateNet",
         },
         "wandb_config": {
             "project": "test",
-            "name": "test",
+            "name": "Random",
         },
     }
 

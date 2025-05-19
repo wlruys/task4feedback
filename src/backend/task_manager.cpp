@@ -11,7 +11,7 @@ TaskStateInfo::TaskStateInfo(const Tasks &tasks) {
   n_data_tasks = tasks.data_size();
   state.resize(n, TaskState::SPAWNED);
   counts.resize(n, DepCount());
-  mapping.resize(n_compute_tasks, 0);
+  mapping.resize(n_compute_tasks, -1);
   // mapping_priority.resize(n, 0);
   reserving_priority.resize(n, 0);
   launching_priority.resize(n, 0);
@@ -45,19 +45,19 @@ bool TaskStateInfo::is_launchable(taskid_t id) const {
 }
 
 bool TaskStateInfo::is_mapped(taskid_t id) const {
-  return this->get_state(id) == TaskState::MAPPED;
+  return this->get_state(id) >= TaskState::MAPPED;
 }
 
 bool TaskStateInfo::is_reserved(taskid_t id) const {
-  return this->get_state(id) == TaskState::RESERVED;
+  return this->get_state(id) >= TaskState::RESERVED;
 }
 
 bool TaskStateInfo::is_launched(taskid_t id) const {
-  return this->get_state(id) == TaskState::LAUNCHED;
+  return this->get_state(id) >= TaskState::LAUNCHED;
 }
 
 bool TaskStateInfo::is_completed(taskid_t id) const {
-  return this->get_state(id) == TaskState::COMPLETED;
+  return this->get_state(id) >= TaskState::COMPLETED;
 }
 
 bool TaskStateInfo::decrement_unmapped(taskid_t id) {

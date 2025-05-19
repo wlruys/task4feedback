@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Optional, Type, Self
 from .types import (
     DeviceTuple,
@@ -33,6 +34,39 @@ from task4feedback.fastsim2 import ExecutionState, start_logger, EventType
 import torch
 from tensordict.tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
+
+
+def _make_node_tensor(nodes, dim):
+    return TensorDict(
+        {
+            "glb": torch.zeros((nodes), dtype=torch.int64),
+            "attr": torch.zeros((nodes, dim), dtype=torch.float32),
+            "count": torch.zeros((1), dtype=torch.int64),
+            # "count": torch.tensor([0], dtype=torch.int64),
+        }
+    )
+
+
+def _make_edge_tensor(edges, dim):
+    return TensorDict(
+        {
+            "glb": torch.zeros((2, edges), dtype=torch.int64),
+            "idx": torch.zeros((2, edges), dtype=torch.int64),
+            "attr": torch.zeros((edges, dim), dtype=torch.float32),
+            "count": torch.zeros((1), dtype=torch.int64),
+            # "count": torch.tensor([0], dtype=torch.int64),
+        }
+    )
+
+
+def _make_index_tensor(n):
+    return TensorDict(
+        {
+            "idx": torch.zeros((n), dtype=torch.int64),
+            "count": torch.zeros((1), dtype=torch.int64),
+            # "count": torch.tensor([0], dtype=torch.int64),
+        }
+    )
 
 
 class Graph:
@@ -843,18 +877,48 @@ def observation_to_heterodata_truncate(
         hetero_data[f"{node_type}"].x = node_data["attr"][:count]
 
     for edge_key, edge_data in observation["edges"].items():
-        target, source = edge_key.split("_")
-        count = edge_data["count"][0]
-        hetero_data[target, "to", source].edge_index = edge_data["idx"][:, :count]
-        hetero_data[target, "to", source].edge_attr = edge_data["attr"][:count]
+        splits = edge_key.split("_")
 
-        if source != target:
-            hetero_data[source, "to", target].edge_index = hetero_data[
-                target, "to", source
-            ].edge_index.flip(0)
-            hetero_data[source, "to", target].edge_attr = hetero_data[
-                target, "to", source
-            ].edge_attr
+        if len(splits) == 2:
+            target, source = splits
+            usage = None
+        elif len(splits) == 3:
+            target, usage, source = splits
+        else:
+            raise ValueError(f"Invalid edge key format: {edge_key}")
+
+        count = edge_data["count"][0]
+
+        if usage is None:
+            hetero_data[target, "to", source].edge_index = edge_data["idx"][:, :count]
+            hetero_data[target, "to", source].edge_attr = edge_data["attr"][:count]
+
+            if source != target:
+                hetero_data[source, "to", target].edge_index = hetero_data[
+                    target, "to", source
+                ].edge_index.flip(0)
+                hetero_data[source, "to", target].edge_attr = hetero_data[
+                    target, "to", source
+                ].edge_attr
+
+            if source == target:
+                hetero_data[source, "from", target].edge_index = hetero_data[
+                    target, "to", source
+                ].edge_index.flip(0)
+                hetero_data[source, "from", target].edge_attr = hetero_data[
+                    target, "to", source
+                ].edge_attr
+        else:
+            hetero_data[target, usage, source].edge_index = edge_data["idx"][:, :count]
+            hetero_data[target, usage, source].edge_attr = edge_data["attr"][:count]
+
+            if source != target:
+                hetero_data[source, usage, target].edge_index = hetero_data[
+                    target, usage, source
+                ].edge_index.flip(0)
+                hetero_data[source, usage, target].edge_attr = hetero_data[
+                    target, usage, source
+                ].edge_attr
 
     return hetero_data.to(device)
 
@@ -863,6 +927,8 @@ def observation_to_heterodata(
     observation: TensorDict, idx: int = 0, device="cpu", actions=None
 ) -> HeteroData:
     hetero_data = HeteroData()
+
+    hetero_data["time"].x = observation["aux"]["time"].unsqueeze(0)
 
     if actions is not None:
         # print("setting actions", actions.shape)
@@ -874,21 +940,65 @@ def observation_to_heterodata(
         hetero_data[f"{node_type}"].x = node_data["attr"]
 
     for edge_key, edge_data in observation["edges"].items():
-        target, source = edge_key.split("_")
-        count = edge_data["count"]
-        # print("edge count", edge_key, count)
-        hetero_data[target, "to", source].edge_index = edge_data["idx"]
-        hetero_data[target, "to", source].edge_attr = edge_data["attr"]
+        splits = edge_key.split("_")
 
-        if source != target:
-            hetero_data[source, "to", target].edge_index = hetero_data[
-                target, "to", source
-            ].edge_index.flip(0)
-            hetero_data[source, "to", target].edge_attr = hetero_data[
-                target, "to", source
-            ].edge_attr
+        if len(splits) == 2:
+            target, source = splits
+            usage = None
+        elif len(splits) == 3:
+            target, usage, source = splits
+        else:
+            raise ValueError(f"Invalid edge key format: {edge_key}")
+
+        count = edge_data["count"]
+
+        if usage is None:
+            hetero_data[target, "to", source].edge_index = edge_data["idx"]
+            hetero_data[target, "to", source].edge_attr = edge_data["attr"]
+
+            if source != target:
+                hetero_data[source, "to", target].edge_index = hetero_data[
+                    target, "to", source
+                ].edge_index.flip(0)
+                hetero_data[source, "to", target].edge_attr = hetero_data[
+                    target, "to", source
+                ].edge_attr
+
+            if source == target:
+                hetero_data[source, "from", target].edge_index = hetero_data[
+                    target, "to", source
+                ].edge_index.flip(0)
+                hetero_data[source, "from", target].edge_attr = hetero_data[
+                    target, "to", source
+                ].edge_attr
+        else:
+            hetero_data[target, usage, source].edge_index = edge_data["idx"]
+            hetero_data[target, usage, source].edge_attr = edge_data["attr"]
+
+            if source != target:
+                hetero_data[source, usage, target].edge_index = hetero_data[
+                    target, usage, source
+                ].edge_index.flip(0)
+                hetero_data[source, usage, target].edge_attr = hetero_data[
+                    target, usage, source
+                ].edge_attr
 
     return hetero_data.to(device)
+
+
+class AccessType(IntEnum):
+    READ_WRITE: int = 0
+    READ: int = 1
+    WRITE: int = 2
+    READ_MAPPED: int = 3
+    RETIRE: int = 4
+
+
+class NeighborhoodType(IntEnum):
+    DEPENDENCIES: int = 0
+    DEPENDENTS: int = 1
+    BIDIRECTIONAL: int = 2
+    ITERATIVE: int = 3
 
 
 @dataclass
@@ -901,8 +1011,8 @@ class ExternalObserver:
     device_features: fastsim.RuntimeFeatureExtractor
     task_task_features: fastsim.RuntimeEdgeFeatureExtractor
     task_data_features: fastsim.RuntimeEdgeFeatureExtractor
-    task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
-    data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor]
+    task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
+    data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
     truncate: bool = True
 
     def store_feature_types(self):
@@ -1008,7 +1118,21 @@ class ExternalObserver:
             workspace = workspace[:length]
         return workspace, length
 
-    def get_bidirectional_neighborhood(self, task_ids, workspace, depth: int = 1):
+    def get_data_device_features(self, data_ids, workspace):
+        length = self.data_device_features.get_features_batch(data_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_k_hop_neighborhood(self, task_ids, workspace, depth: int = 1):
+        length = self.graph_extractor.get_k_hop_neighborhood(task_ids, depth, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_k_hop_bidirectional(self, task_ids, workspace, depth: int = 1):
         length = self.graph_extractor.get_k_hop_bidirectional(
             task_ids, depth, workspace
         )
@@ -1017,8 +1141,30 @@ class ExternalObserver:
             workspace = workspace[:length]
         return workspace, length
 
+    def get_k_hop_dependencies(self, task_ids, workspace, depth: int = 1):
+        length = self.graph_extractor.get_k_hop_dependencies(task_ids, depth, workspace)
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_k_hop_dependents(self, task_ids, workspace, depth: int = 1):
+        length = self.graph_extractor.get_k_hop_dependents(task_ids, depth, workspace)
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
     def get_used_data(self, task_ids, workspace):
         length = self.graph_extractor.get_unique_data(task_ids, workspace)
+
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
+
+    def get_used_filtered_data(self, task_ids, workspace):
+        """
+        Only return data whose most recent writer has been mapped
+        """
+        length = self.graph_extractor.get_unique_filtered_data(task_ids, workspace)
 
         if self.truncate:
             workspace = workspace[:length]
@@ -1033,16 +1179,49 @@ class ExternalObserver:
             workspace = workspace[:, :length]
         return workspace, length
 
-    def get_task_data_edges(self, task_ids, data_ids, workspace, global_workspace):
-        length = self.graph_extractor.get_task_data_edges(
-            task_ids, data_ids, workspace, global_workspace
+    def get_task_data_edges(
+        self,
+        task_ids,
+        data_ids,
+        workspace,
+        global_workspace,
+        access_type: AccessType = AccessType.READ_WRITE,
+    ):
+        if access_type == AccessType.READ_WRITE:
+            length = self.graph_extractor.get_task_data_edges_all(
+                task_ids, data_ids, workspace, global_workspace
+            )
+        elif access_type == AccessType.READ:
+            length = self.graph_extractor.get_task_data_edges_read(
+                task_ids, data_ids, workspace, global_workspace
+            )
+        elif access_type == AccessType.WRITE:
+            length = self.graph_extractor.get_task_data_edges_write(
+                task_ids, data_ids, workspace, global_workspace
+            )
+        elif access_type == AccessType.READ_MAPPED:
+            length = self.graph_extractor.get_task_data_edges_read_mapped(
+                task_ids, data_ids, workspace, global_workspace
+            )
+        else:
+            raise ValueError(
+                f"Invalid access type operation for get_task_data_edges: {access_type}"
+            )
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+        return workspace, length
+
+    def get_task_task_edges_reverse(self, task_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_task_task_edges_reverse(
+            task_ids, workspace, global_workspace
         )
 
         if self.truncate:
             workspace = workspace[:, :length]
         return workspace, length
 
-    def get_task_device_edges(self, task_ids, device_ids, workspace, global_workspace):
+    def get_task_device_edges(self, task_ids, workspace, global_workspace):
         length = self.graph_extractor.get_task_device_edges(
             task_ids, workspace, global_workspace
         )
@@ -1081,36 +1260,6 @@ class ExternalObserver:
         if spec is None:
             spec = self.graph_spec
 
-        def _make_node_tensor(nodes, dim):
-            return TensorDict(
-                {
-                    "glb": torch.zeros((nodes), dtype=torch.int64),
-                    "attr": torch.zeros((nodes, dim), dtype=torch.float32),
-                    "count": torch.zeros((1), dtype=torch.int64),
-                    # "count": torch.tensor([0], dtype=torch.int64),
-                }
-            )
-
-        def _make_edge_tensor(edges, dim):
-            return TensorDict(
-                {
-                    "glb": torch.zeros((2, edges), dtype=torch.int64),
-                    "idx": torch.zeros((2, edges), dtype=torch.int64),
-                    "attr": torch.zeros((edges, dim), dtype=torch.float32),
-                    "count": torch.zeros((1), dtype=torch.int64),
-                    # "count": torch.tensor([0], dtype=torch.int64),
-                }
-            )
-
-        def _make_index_tensor(n):
-            return TensorDict(
-                {
-                    "idx": torch.zeros((n), dtype=torch.int64),
-                    "count": torch.zeros((1), dtype=torch.int64),
-                    # "count": torch.tensor([0], dtype=torch.int64),
-                }
-            )
-
         node_tensor = TensorDict(
             {
                 "tasks": _make_node_tensor(
@@ -1136,6 +1285,9 @@ class ExternalObserver:
                 "tasks_devices": _make_edge_tensor(
                     spec.max_edges_tasks_devices, self.task_device_features.feature_dim
                 ),
+                "data_devices": _make_edge_tensor(
+                    spec.max_edges_data_devices, self.data_device_features.feature_dim
+                ),
             }
         )
 
@@ -1159,17 +1311,45 @@ class ExternalObserver:
         return obs_tensor
 
     def task_observation(
-        self, output: TensorDict, task_ids: Optional[torch.Tensor] = None
+        self,
+        output: TensorDict,
+        task_ids: Optional[torch.Tensor] = None,
+        k: int = 1,
+        neighborhood_type: NeighborhoodType = NeighborhoodType.BIDIRECTIONAL,
     ):
         # print("Task observation")
         if task_ids is None:
             n_candidates = output["aux"]["candidates"]["count"][0]
             task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
-            output["nodes"]["tasks"]["attr"][:n_candidates, -1] = 1
 
-        _, count = self.get_bidirectional_neighborhood(
-            task_ids, output["nodes"]["tasks"]["glb"]
-        )
+        if neighborhood_type == NeighborhoodType.BIDIRECTIONAL:
+            # print("Bidirectional")
+            _, count = self.get_k_hop_bidirectional(
+                task_ids, output["nodes"]["tasks"]["glb"], k
+            )
+        elif neighborhood_type == NeighborhoodType.DEPENDENCIES:
+            # print("Dependencies")
+            _, count = self.get_k_hop_dependencies(
+                task_ids, output["nodes"]["tasks"]["glb"]
+            )
+
+        elif neighborhood_type == NeighborhoodType.DEPENDENTS:
+            # print("Dependents")
+            _, count = self.get_k_hop_dependents(
+                task_ids, output["nodes"]["tasks"]["glb"]
+            )
+
+        elif neighborhood_type == NeighborhoodType.ITERATIVE:
+            # print("Iterative")
+            _, count = self.get_k_hop_neighborhood(
+                task_ids, output["nodes"]["tasks"]["glb"], k
+            )
+        else:
+            raise ValueError(
+                f"Invalid neighborhood type operation for task observation: {neighborhood_type}"
+            )
+
+        # print("Task count", count)
         output["nodes"]["tasks"]["count"][0] = count
         self.get_task_features(
             output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
@@ -1178,7 +1358,7 @@ class ExternalObserver:
     def data_observation(self, output: TensorDict):
         # print("Data observation")
         ntasks = output["nodes"]["tasks"]["count"][0]
-        _, count = self.get_used_data(
+        _, count = self.get_used_filtered_data(
             output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
         )
         output["nodes"]["data"]["count"][0] = count
@@ -1241,11 +1421,9 @@ class ExternalObserver:
             task_ids = output["nodes"]["tasks"]["glb"][:ntasks]
 
         ndevices = output["nodes"]["devices"]["count"][0]
-        device_ids = output["nodes"]["devices"]["glb"][:ndevices]
 
         _, count = self.get_task_device_edges(
             task_ids,
-            device_ids,
             output["edges"]["tasks_devices"]["idx"],
             output["edges"]["tasks_devices"]["glb"],
         )
@@ -1259,6 +1437,7 @@ class ExternalObserver:
 
     def candidate_observation(self, output: TensorDict):
         # print("Candidate observation")
+        # print("Candidate observation", type(self))
         count = self.simulator.simulator.get_mappable_candidates(
             output["aux"]["candidates"]["idx"]
         )
@@ -1278,6 +1457,10 @@ class ExternalObserver:
         self.data_observation(output)
         self.device_observation(output)
 
+        # print("Task attribute", output["nodes"]["tasks"]["attr"])
+        # print("Data attribute", output["nodes"]["data"]["attr"])
+        # print("Device attribute", output["nodes"]["devices"]["attr"])
+
         # Edge observations (edges depend on ids collected during node observation)
         self.task_task_observation(output)
         self.task_data_observation(output)
@@ -1287,6 +1470,200 @@ class ExternalObserver:
         output["aux"]["time"][0] = self.simulator.time
         output["aux"]["improvement"][0] = -2.0
         # print("Auxiliary observation")
+
+        return output
+
+
+@dataclass
+class HeterogeneousExternalObserver(ExternalObserver):
+    def __init__(
+        self,
+        simulator: "SimulatorDriver",
+        graph_spec: fastsim.GraphSpec,
+        graph_extractor: fastsim.GraphExtractor,
+        task_features: fastsim.RuntimeFeatureExtractor,
+        data_features: fastsim.RuntimeFeatureExtractor,
+        device_features: fastsim.RuntimeFeatureExtractor,
+        task_task_features: fastsim.RuntimeEdgeFeatureExtractor,
+        task_data_features: fastsim.RuntimeEdgeFeatureExtractor,
+        task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None,
+        data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None,
+    ):
+        super().__init__(
+            simulator,
+            graph_spec,
+            graph_extractor,
+            task_features,
+            data_features,
+            device_features,
+            task_task_features,
+            task_data_features,
+            task_device_features,
+            data_device_features,
+        )
+
+    def data_observation(self, output: TensorDict):
+        # print("Data observation")
+        ntasks = output["nodes"]["tasks"]["count"][0]
+        _, count = self.get_used_data(
+            output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
+        )
+        output["nodes"]["data"]["count"][0] = count
+        self.get_data_features(
+            output["nodes"]["data"]["glb"][:count], output["nodes"]["data"]["attr"]
+        )
+
+    def get_task_device_edges(self, task_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_task_device_edges_mapped(
+            task_ids, workspace, global_workspace
+        )
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+
+        return workspace, length
+
+    def get_data_device_edges(self, data_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_data_device_edges(
+            data_ids, workspace, global_workspace
+        )
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+
+        return workspace, length
+
+    def new_observation_buffer(self, spec=None):
+        if spec is None:
+            spec = self.graph_spec
+
+        buffer = super().new_observation_buffer(spec)
+        buffer["edges"]["tasks_reads_data"] = _make_edge_tensor(
+            spec.max_edges_tasks_data, self.task_data_features.feature_dim
+        )
+        buffer["edges"]["tasks_mapped_data"] = _make_edge_tensor(
+            spec.max_edges_tasks_data, self.task_data_features.feature_dim
+        )
+        buffer["edges"]["tasks_write_data"] = _make_edge_tensor(
+            spec.max_edges_tasks_data, self.task_data_features.feature_dim
+        )
+
+        return buffer
+
+    def data_device_observation(self, output: TensorDict):
+        # print("Data-Device observation")
+        ndata = output["nodes"]["data"]["count"][0]
+        ndevices = output["nodes"]["devices"]["count"][0]
+        ntasks = output["nodes"]["tasks"]["count"][0]
+
+        _, count = self.get_data_device_edges(
+            output["nodes"]["data"]["glb"][:ndata],
+            output["edges"]["data_devices"]["idx"],
+            output["edges"]["data_devices"]["glb"],
+        )
+
+        output["edges"]["data_devices"]["count"][0] = count
+
+        self.get_data_device_features(
+            output["edges"]["data_devices"]["glb"][:, :count],
+            output["edges"]["data_devices"]["attr"],
+        )
+
+    def task_data_observation(self, output: TensorDict):
+        # print("Task-Data observation")
+        ntasks = output["nodes"]["tasks"]["count"][0]
+        ndata = output["nodes"]["data"]["count"][0]
+
+        # Read & Write edges
+        _, count = self.get_task_data_edges(
+            output["nodes"]["tasks"]["glb"][:ntasks],
+            output["nodes"]["data"]["glb"][:ndata],
+            output["edges"]["tasks_data"]["idx"],
+            output["edges"]["tasks_data"]["glb"],
+        )
+        output["edges"]["tasks_data"]["count"][0] = count
+
+        self.get_task_data_features(
+            output["edges"]["tasks_data"]["glb"][:, :count],
+            output["edges"]["tasks_data"]["attr"],
+        )
+
+        # Read only edges
+        _, count = self.get_task_data_edges(
+            output["nodes"]["tasks"]["glb"][:ntasks],
+            output["nodes"]["data"]["glb"][:ndata],
+            output["edges"]["tasks_reads_data"]["idx"],
+            output["edges"]["tasks_reads_data"]["glb"],
+            AccessType.READ,
+        )
+        output["edges"]["tasks_reads_data"]["count"][0] = count
+
+        self.get_task_data_features(
+            output["edges"]["tasks_reads_data"]["glb"][:, :count],
+            output["edges"]["tasks_reads_data"]["attr"],
+        )
+
+        # Write only edges
+        _, count = self.get_task_data_edges(
+            output["nodes"]["tasks"]["glb"][:ntasks],
+            output["nodes"]["data"]["glb"][:ndata],
+            output["edges"]["tasks_write_data"]["idx"],
+            output["edges"]["tasks_write_data"]["glb"],
+            AccessType.WRITE,
+        )
+
+        output["edges"]["tasks_write_data"]["count"][0] = count
+
+        self.get_task_data_features(
+            output["edges"]["tasks_write_data"]["glb"][:, :count],
+            output["edges"]["tasks_write_data"]["attr"],
+        )
+
+        # Mapped data edges
+        _, count = self.get_task_data_edges(
+            output["nodes"]["tasks"]["glb"][:ntasks],
+            output["nodes"]["data"]["glb"][:ndata],
+            output["edges"]["tasks_mapped_data"]["idx"],
+            output["edges"]["tasks_mapped_data"]["glb"],
+            AccessType.READ_MAPPED,
+        )
+
+        output["edges"]["tasks_mapped_data"]["count"][0] = count
+
+        self.get_task_data_features(
+            output["edges"]["tasks_mapped_data"]["glb"][:, :count],
+            output["edges"]["tasks_mapped_data"]["attr"],
+        )
+
+    def get_observation(self, output=None):
+        if output is None:
+            output = self.new_observation_buffer(self.graph_spec)
+
+        # print(output)
+
+        # Get mappable candidates
+        self.candidate_observation(output)
+
+        # Node observations (all nodes must be processed before edges)
+        self.task_observation(output, k=1)
+        self.data_observation(output)
+        self.device_observation(output)
+
+        # Edge observations (edges depend on ids collected during node observation)
+        self.task_task_observation(output)
+        self.task_data_observation(output)
+        self.task_device_observation(output, use_all_tasks=True)
+        self.data_device_observation(output)
+
+        # Auxiliary observations
+        output["aux"]["time"][0] = self.simulator.time
+        output["aux"]["improvement"][0] = -2.0
+        # print("Auxiliary observation")
+
+        # print("All Data", output["edges"]["tasks_data"]["count"])
+        # print("Read Data", output["edges"]["tasks_reads_data"]["count"])
+        # print("Write Data", output["edges"]["tasks_write_data"]["count"])
+        # print("Mapped Data", output["edges"]["tasks_mapped_data"]["count"])
         return output
 
 
@@ -1538,6 +1915,8 @@ def create_graph_spec(
     max_devices: int = 5,
     max_edges_tasks_tasks: int = 200,
     max_edges_tasks_data: int = 200,
+    max_edges_data_devices: int = 200,
+    max_edges_tasks_devices: int = 200,
     max_candidates: int = 1,
 ):
     """
@@ -1557,10 +1936,13 @@ def create_graph_spec(
     spec.max_devices = max_devices
     spec.max_edges_tasks_tasks = max_edges_tasks_tasks
     spec.max_edges_tasks_data = max_edges_tasks_data
+    spec.max_edges_data_devices = max_edges_data_devices
+    spec.max_edges_tasks_devices = max_edges_tasks_devices
+
     spec.max_candidates = max_candidates
 
     # This should be max_candidates, but reverting to max_tasks to implement original NN architecture
-    spec.max_edges_tasks_devices = max_devices * max_candidates + 1
+    # spec.max_edges_tasks_devices = max_devices * max_candidates + 1
     # spec.max_edges_tasks_devices = max_devices
     return spec
 

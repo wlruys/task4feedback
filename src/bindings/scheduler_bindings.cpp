@@ -24,6 +24,7 @@ void init_scheduler_ext(nb::module_ &m) {
       .def("is_mappable", &SchedulerState::is_mappable, "task_id"_a)
       .def("is_reservable", &SchedulerState::is_reservable, "task_id"_a)
       .def("is_launchable", &SchedulerState::is_launchable, "task_id"_a)
+      .def("gather_graph_statistics", &SchedulerState::gather_graph_statistics, "device_types"_a)
       .def("get_mappings", &SchedulerState::get_mappings, nb::rv_policy::reference_internal)
       .def("get_mapping_priority", &SchedulerState::get_mapping_priority, "task_id"_a,
            nb::rv_policy::reference_internal)

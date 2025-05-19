@@ -246,6 +246,10 @@ public:
     return noise.get().get_priority(id);
   }
 
+  [[nodiscard]] devid_t get_mapping(taskid_t id) const {
+    return state.get_mapping(id);
+  }
+
   [[nodiscard]] priority_t get_reserving_priority(taskid_t id) const {
     return state.get_reserving_priority(id);
   }
@@ -286,14 +290,21 @@ public:
     return tasks;
   }
 
-  [[nodiscard]] bool is_data(taskid_t id) const {
-    return tasks.get().is_data(id);
+
+  bool is_mapped(taskid_t id) const {
+    return state.is_mapped(id);
   }
-  [[nodiscard]] bool is_compute(taskid_t id) const {
-    return tasks.get().is_compute(id);
+
+  bool is_reserved(taskid_t id) const {
+    return state.is_reserved(id);
   }
-  [[nodiscard]] bool is_eviction(taskid_t id) const {
-    return eviction_tasks.is_eviction(id);
+
+  bool is_launched(taskid_t id) const {
+    return state.is_launched(id);
+  }
+
+  bool is_completed(taskid_t id) const {
+    return state.is_completed(id);
   }
 
   void set_state(taskid_t id, TaskState _state) {
