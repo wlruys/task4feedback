@@ -61,7 +61,13 @@ bool Tasks::is_compute(taskid_t id) const {
 }
 
 bool Tasks::is_data(taskid_t id) const {
+  // Note eviction tasks return as data tasks (because they are a form of data task)
   return id >= compute_size();
+}
+
+bool Tasks::is_eviction(taskid_t id) const {
+  // Any tasks outside the range of compute and data tasks are considered eviction tasks
+  return id >= data_size() + compute_size();
 }
 
 void Tasks::add_compute_task(ComputeTask task) {
@@ -126,6 +132,14 @@ void Tasks::set_read(taskid_t id, DataIDList read) {
   compute_tasks[id].set_read(std::move(read));
 }
 
+void Tasks::set_write(taskid_t id, DataIDList write) {
+  compute_tasks[id].set_write(std::move(write));
+}
+
+void Tasks::set_retire(taskid_t id, DataIDList retire) {
+  compute_tasks[id].set_retire(std::move(retire));
+}
+
 void Tasks::set_tag(taskid_t id, int tag) {
   compute_tasks[id].set_tag(tag);
 }
@@ -140,10 +154,6 @@ int Tasks::get_type(taskid_t id) const {
 
 int Tasks::get_tag(taskid_t id) const {
   return compute_tasks[id].get_tag();
-}
-
-void Tasks::set_write(taskid_t id, DataIDList write) {
-  compute_tasks[id].set_write(std::move(write));
 }
 
 const TaskIDList &Tasks::get_dependencies(taskid_t id) const {
@@ -174,6 +184,10 @@ const DataIDList &Tasks::get_read(taskid_t id) const {
 
 const DataIDList &Tasks::get_write(taskid_t id) const {
   return get_compute_task(id).get_write();
+}
+
+const DataIDList &Tasks::get_retire(taskid_t id) const {
+  return get_compute_task(id).get_retire();
 }
 
 const Resources &Tasks::get_task_resources(taskid_t id, DeviceType arch) const {

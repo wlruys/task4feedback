@@ -168,10 +168,11 @@ class JacobiData(DataGeometry):
 
 
 class JacobiGraph(ComputeDataGraph):
-    def _build_graph(self):
+    def _build_graph(self, retire_data: bool = False):
         self.task_to_cell = {}
         self.task_to_level = {}
         self.level_to_task = defaultdict(list)
+        prev_interiors = {}
         for i in range(self.config.steps):
             for j, (cell, edges) in enumerate(self.data.geometry.cell_edges.items()):
                 # Create task that:
@@ -209,9 +210,12 @@ class JacobiGraph(ComputeDataGraph):
 
                 read_blocks = interior_edges + exterior_edges + [interior_block]
                 write_blocks = next_interior_edges + [next_interior_block]
+                prev_interiors[(cell, i)] = interior_edges + [interior_block]
 
                 self.add_read_data(task_id, read_blocks)
                 self.add_write_data(task_id, write_blocks)
+                if i > 0 and retire_data:
+                    self.add_retire_data(task_id, prev_interiors[(cell, i - 1)])
 
         self.fill_data_flow_dependencies()
 
@@ -440,9 +444,9 @@ class PartitionMapper:
         level_start: int = 0,
     ):
         if mapper is not None:
-            assert isinstance(mapper, PartitionMapper), (
-                "Mapper must be of type PartitionMapper, is " + str(type(mapper))
-            )
+            assert isinstance(
+                mapper, PartitionMapper
+            ), "Mapper must be of type PartitionMapper, is " + str(type(mapper))
             self.cell_to_mapping = mapper.cell_to_mapping
 
         elif cell_to_mapping is not None:

@@ -28,6 +28,7 @@ void init_graph_ext(nb::module_ &m) {
       .def("get_write_data", &GraphTemplate::get_write_data, nb::rv_policy::reference_internal)
       .def("add_read_data", &GraphTemplate::add_read_data)
       .def("add_write_data", &GraphTemplate::add_write_data)
+      .def("add_retire_data", &GraphTemplate::add_retire_data)
       .def("add_variant", &GraphTemplate::add_variant_info)
       .def("set_vcu", &GraphTemplate::set_vcu)
       .def("set_memory", &GraphTemplate::set_memory)
