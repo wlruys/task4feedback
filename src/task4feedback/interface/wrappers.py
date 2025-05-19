@@ -1452,6 +1452,12 @@ class SimulatorDriver:
         """
         return self.simulator.get_current_time()
 
+    def evicted_memory_size(self) -> int:
+        """
+        Returns the size of the evicted memory (in bytes) of the simulator state.
+        """
+        return self.simulator.get_evicted_memory_size()
+
     def task_finish_time(self, task_id: int) -> int:
         """
         Returns the finish time (in microseconds) of a task.
@@ -1639,7 +1645,9 @@ class SimulatorFactory:
             self.cseed = comm_seed
 
 
-def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth: int):
+def uniform_connected_devices(
+    n_devices: int, mem: int, latency: int, bandwidth: int, n_links: int = 2
+):
     """
     Creates a system with a uniform connection of devices including one CPU and multiple GPUs.
     Parameters:
@@ -1664,12 +1672,12 @@ def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth:
     s.finalize_devices()
 
     for i in range(n_gpus):
-        s.add_connection(0, i + 1, bandwidth, latency)
-        s.add_connection(i + 1, 0, bandwidth, latency)
+        s.add_connection(0, i + 1, bandwidth, latency, n_links)
+        s.add_connection(i + 1, 0, bandwidth, latency, n_links)
 
     for i in range(n_gpus):
         for j in range(n_gpus):
-            s.add_connection(i + 1, j + 1, bandwidth, latency)
-            s.add_connection(j + 1, i + 1, bandwidth, latency)
+            s.add_connection(i + 1, j + 1, bandwidth, latency, n_links)
+            s.add_connection(j + 1, i + 1, bandwidth, latency, n_links)
 
     return s
