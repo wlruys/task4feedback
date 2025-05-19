@@ -462,8 +462,8 @@ def run_ppo_torchrl(
     actor = actor_critic_base.actor
     critic = actor_critic_base.critic
 
-    # actor = torch.compile(actor_critic_base.actor)
-    # critic = torch.compile(actor_critic_base.critic)
+    #actor = torch.compile(actor_critic_base.actor)
+    #critic = torch.compile(actor_critic_base.critic)
 
     _actor_td = HeteroDataWrapper(actor)
     _critic_td = HeteroDataWrapper(critic)
@@ -566,7 +566,7 @@ def run_ppo_torchrl(
     )
 
     loss_module = loss_module.to(config.update_device)
-    # loss_module = torch.compile(loss_module)
+    loss_module = torch.compile(loss_module)
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
@@ -605,7 +605,7 @@ def run_ppo_torchrl(
 
         optimizer.step()
 
-    update = torch.compile(update)
+    #update = torch.compile(update)
 
     for i, tensordict_data in enumerate(collector):
         if (i + 1) % 20 == 0:

@@ -1605,10 +1605,10 @@ class OldSeparateNetwDevice(nn.Module):
         # check the device of data["tasks"].x
 
         if next(self.actor.parameters()).is_cuda:
-            data = data.to("cuda")
-            counts[0] = counts[0].to("cuda")
-            counts[1] = counts[1].to("cuda")
-            counts = (counts[0], counts[1])
+            data = data.to("cuda", non_blocking=True)
+            counts_0 = counts[0].to("cuda", non_blocking=True)
+            counts_1 = counts[1].to("cuda", non_blocking=True)
+            counts = (counts_0, counts_1)
 
         d_logits = self.actor(data, counts)
         v = self.critic(data, counts)
