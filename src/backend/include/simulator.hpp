@@ -253,6 +253,10 @@ public:
     return scheduler.get_state().get_global_time();
   }
 
+  [[nodiscard]] mem_t get_evicted_memory_size() const {
+    return scheduler.get_state().get_data_manager().get_lru_manager().get_evicted_memory_size();
+  }
+
   [[nodiscard]] timecount_t get_task_finish_time(taskid_t task_id) const {
     return scheduler.get_state().get_task_manager().records.get_completed_time(task_id);
   }

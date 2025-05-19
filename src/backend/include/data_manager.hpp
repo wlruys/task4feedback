@@ -622,11 +622,15 @@ struct MovementStatus {
 class LRU_manager {
 public:
   // Constructor: initialize for n_devices [0 .. n_devices-1]
-  explicit LRU_manager(std::size_t n_devices)
-      : n_devices_(n_devices), lru_lists_(n_devices), position_maps_(n_devices),
-        size_maps_(n_devices), sizes_(n_devices) {
+  explicit LRU_manager(DeviceManager &device_manager)
+      : n_devices_(device_manager.size()), lru_lists_(device_manager.size()),
+        position_maps_(device_manager.size()), size_maps_(device_manager.size()),
+        sizes_(device_manager.size()), max_sizes_(device_manager.size()) {
     for (auto &size : sizes_) {
       size = 0;
+    }
+    for (int i = 0; i < device_manager.size(); i++) {
+      max_sizes_[i] = device_manager.devices.get().get_max_resources(i).mem;
     }
     id_buffer.reserve(20);
   }
@@ -639,12 +643,18 @@ public:
     auto &pos = position_maps_[device_id];
     auto &smap = size_maps_[device_id];
     auto &size = sizes_[device_id];
+    auto &max_size = max_sizes_[device_id];
     auto it = pos.find(data_id);
     if (it != pos.end()) {
       // already present: move to MRU
       lst.erase(it->second);
     } else {
       size += mem_size;
+      if (size > max_size) {
+        SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
+                     data_id, mem_size);
+        assert(size <= max_size && "LRU_manager::read(): size exceeds max size");
+      }
     }
     // insert at MRU (back)
     lst.push_back(data_id);
@@ -655,19 +665,18 @@ public:
 
   LRU_manager(const LRU_manager &other)
       : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
-        position_maps_(other.n_devices_),                   // empty, will rebuild
-        size_maps_(other.size_maps_), sizes_(other.sizes_), // copy total sizes
-        id_buffer(other.id_buffer) {
-    // Rebuild position_maps_ so each iterator points into our own lru_lists_
+        position_maps_(other.n_devices_), size_maps_(other.size_maps_), sizes_(other.sizes_),
+        max_sizes_(other.max_sizes_), evicted_size(other.evicted_size) {
+    // Rebuild position_maps_
     for (devid_t dev = 0; dev < n_devices_; ++dev) {
       for (auto it = lru_lists_[dev].begin(); it != lru_lists_[dev].end(); ++it) {
         position_maps_[dev][*it] = it;
       }
     }
+    id_buffer.reserve(other.id_buffer.capacity());
   }
-
   // invalidate: remove (device_id, data_id); assert if missing
-  void invalidate(devid_t device_id, dataid_t data_id) {
+  void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
     assert(device_id >= 0 && device_id < n_devices_);
 
     auto &lst = lru_lists_[device_id];
@@ -681,6 +690,8 @@ public:
     lst.erase(it->second);
     pos.erase(it);
     size -= smap[data_id]; // update size
+    if (evict)
+      evicted_size += smap[data_id];
     smap.erase(data_id);
   }
 
@@ -714,6 +725,10 @@ public:
     return sizes_[device_id];
   }
 
+  mem_t get_evicted_memory_size() const {
+    return evicted_size;
+  }
+
 private:
   std::size_t n_devices_;
 
@@ -725,6 +740,8 @@ private:
   std::vector<std::unordered_map<dataid_t, typename std::list<dataid_t>::iterator>> position_maps_;
   std::vector<std::unordered_map<dataid_t, mem_t>> size_maps_;
   std::vector<mem_t> sizes_;
+  std::vector<mem_t> max_sizes_;
+  mem_t evicted_size = 0;
   mutable DataIDList id_buffer;
 };
 
@@ -774,7 +791,7 @@ public:
         mapped_locations(data.get().size(), device_manager_.size()),
         reserved_locations(data.get().size(), device_manager_.size()),
         launched_locations(data.get().size(), device_manager_.size()),
-        counts(device_manager_.size()), lru_manager(device_manager_.size()) {
+        counts(device_manager_.size()), lru_manager(device_manager_) {
   }
 
   DataManager(const DataManager &o_, DeviceManager &device_manager_,
@@ -986,7 +1003,7 @@ public:
         SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
         device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
         device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        lru_manager.invalidate(device, data_id);
+        lru_manager.invalidate(device, data_id, true);
       }
       if (!future_usage) {
         // If there are no further usage for the data block (in mapped but not reserved tasks).
