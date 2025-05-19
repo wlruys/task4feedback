@@ -249,7 +249,7 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
   state.set_state(id, TaskState::COMPLETED);
   // clear task_buffer
   task_buffer.clear();
-  if (!is_eviction(id)) {
+  if (!task_objects.is_eviction(id)) {
     for (auto dependent_id : task_objects.get_dependents(id)) {
       if (state.decrement_incomplete(dependent_id)) {
         task_buffer.push_back(dependent_id);
