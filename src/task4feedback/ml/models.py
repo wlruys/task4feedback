@@ -11,6 +11,8 @@ from dataclasses import dataclass
 #     observation_to_heterodata_truncate as observation_to_heterodata,
 # )
 
+import torch.autograd.profiler as profiler
+
 from tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
 import torch.nn as nn
@@ -133,10 +135,13 @@ class HeteroDataWrapper(nn.Module):
 
     def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
-        data, task_count, data_count = self._convert_to_heterodata(
-            obs, is_batch, actions=actions
-        )
-        out = self.network(data, (task_count, data_count))
+
+        with profiler.record_function("CONVERT_DATA"):
+            data, task_count, data_count = self._convert_to_heterodata(
+                obs, is_batch, actions=actions
+            )
+        with profiler.record_function("FORWARD_PASS"):
+            out = self.network(data, (task_count, data_count))
         return out
 
 

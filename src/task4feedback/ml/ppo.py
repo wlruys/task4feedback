@@ -23,6 +23,8 @@ from torchrl.envs import set_exploration_type, ExplorationType
 from task4feedback.graphs.mesh.plot import *
 from tensordict.nn import TensorDictSequential as Sequential
 from torchrl._utils import compile_with_warmup
+from torch.profiler import profile, record_function, ProfilerActivity
+
 
 @dataclass
 class PPOConfig:
@@ -301,7 +303,7 @@ def run_ppo_cleanrl(
         prefetch=4,
     )
 
-    actor_critic_base = torch.compile(actor_critic_base)
+    #actor_critic_base = torch.compile(actor_critic_base)
 
     _actor_critic_td = HeteroDataWrapper(actor_critic_base)
 
@@ -339,6 +341,9 @@ def run_ppo_cleanrl(
     actor_critic_t.module[0].module.device = config.update_device
 
     optimizer = torch.optim.Adam(actor_critic_t.parameters(), lr=config.lr)
+
+    activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
+
 
     def update_fn(batch, actor_critic_t, optimizer):
         batch = batch.to(config.update_device, non_blocking=True)
@@ -386,7 +391,7 @@ def run_ppo_cleanrl(
         nn.utils.clip_grad_norm_(actor_critic_t.parameters(), config.max_grad_norm)
         optimizer.step()
 
-    update_fn = torch.compile(update_fn)
+    #update_fn = torch.compile(update_fn)
 
     for i, td in enumerate(collector):
         print(f"Collection: {i}")
@@ -403,6 +408,8 @@ def run_ppo_cleanrl(
         end_t = time.perf_counter()
         print("Advantage computation time:", end_t - start_t)
 
+        sort_by_keyword = "cpu_time_total"
+
         for j in range(config.num_epochs_per_collection):
             n_batches = len(replay_buffer) // config.minibatch_size
             # actor_critic_t = actor_critic.to(config.update_device)
@@ -412,8 +419,15 @@ def run_ppo_cleanrl(
 
                 batch = replay_buffer.sample(config.minibatch_size)
                 batch = actor_critic_t(batch)
-                update_fn(batch, actor_critic_t, optimizer)
+
+                with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
+                    with record_function("model_update"):
+                        update_fn(batch, actor_critic_t, optimizer)
+
+
                 end_t = time.perf_counter()
+
+                print(prof.key_averages().table(sort_by=sort_by_keyword, row_limit=100))
 
                 print("Batch training time:", end_t - start_t)
 
