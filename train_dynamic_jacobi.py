@@ -319,7 +319,8 @@ def train(wandb_config):
     print("Feature config info:", feature_config_info)
 
     train_config = PPOConfig(
-        train_device=mconfig.get("train_device", "cpu"),
+        collect_device=mconfig.get("collect_device", "cpu"),
+        update_device=mconfig.get("update_device", "cuda:0"),
         workers=mconfig.get("workers", 1),
         ent_coef=mconfig.get("ent_coef", 0.05),
         gae_lmbda=mconfig.get("gae_lmbda", 1),
@@ -415,11 +416,11 @@ def train(wandb_config):
         }
     )
 
-    try:
-        model = torch.compile(model, fullgraph=True)
-        print("Using compiled model")
-    except AttributeError:
-        print("torch.compile not available, using uncompiled model")
+    # try:
+    #     model = torch.compile(model, fullgraph=True)
+    #     print("Using compiled model")
+    # except AttributeError:
+    #     print("torch.compile not available, using uncompiled model")
 
     for layer in model.modules():
         if isinstance(layer, torch.nn.Linear):
@@ -427,12 +428,10 @@ def train(wandb_config):
             layer.bias.data.zero_()
 
     # Run PPO training
-    run_ppo_torchrl(
+    run_ppo_cleanrl(
         model,
         make_env_fn,
         train_config,
-        model_name="model",
-        eval_env_fn=make_eval_env_fn,
     )
 
 
@@ -476,15 +475,16 @@ if __name__ == "__main__":
         },
         "mconfig": {
             "graphs_per_collection": 16,
-            "train_device": "cpu",
-            "workers": 4,
+            "collect_device": "cpu",
+            "update_device": "cuda:0",
+            "workers": 8,
             "ent_coef": 0,
             "gae_lmbda": 0.9,
             "gae_gamma": 1,
             "normalize_advantage": True,
             "clip_eps": 0.2,
             "clip_vloss": False,
-            "minibatch_size": 128,
+            "minibatch_size": 512,
         },
         "env_config": {
             "change_priority": True,
