@@ -428,11 +428,16 @@ def train(wandb_config):
             layer.bias.data.zero_()
 
     # Run PPO training
-    run_ppo_cleanrl(
+    run_ppo_cleanrl_no(
         model,
         make_env_fn,
         train_config,
     )
+    # run_ppo_cleanrl(
+    #     model,
+    #     make_env_fn,
+    #     train_config,
+    # )
 
 
 if __name__ == "__main__":
