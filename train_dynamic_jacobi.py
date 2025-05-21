@@ -457,7 +457,7 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "EFTIncrementalEnv",
+            "runtime_env": "RuntimeEnv",
         },
         "system_config": {
             "type": "uniform_connected_devices",
@@ -482,7 +482,7 @@ if __name__ == "__main__":
             "graphs_per_collection": 16,
             "collect_device": "cpu",
             "update_device": "cuda:0",
-            "workers": 8,
+            "workers": 4,
             "ent_coef": 0,
             "gae_lmbda": 0.9,
             "gae_gamma": 1,

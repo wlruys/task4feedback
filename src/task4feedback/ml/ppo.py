@@ -208,7 +208,7 @@ def run_ppo_cleanrl_no(
         cat_results=0,
         env_device="cpu",
         policy_device=config.collect_device,
-        #use_buffers=True,
+        use_buffers=True,
     )
     # collector = SyncDataCollector(
     #     make_env,
@@ -281,23 +281,29 @@ def run_ppo_cleanrl_no(
         optimizer.step()
         
     def repack_td(td):
-        state = []
-        for l in range(len(td)):
-            tl = td[l]
-            tlo = tl["observation"]
-            #tlon = tlo["nodes"]
-            _obs = observation_to_heterodata(tlo)
-            _obs["action"] = tl["action"]
-            _obs["sample_log_prob"] = tl["sample_log_prob"]
-            _obs["state_value"] = tl["state_value"]
-            _obs["advantage"] = tl["advantage"]
-            _obs["value_target"] = tl["value_target"]
-            _obs["task_counts"] = tl["observation", "nodes", "tasks", "count"]
-            _obs["data_counts"] = tl["observation", "nodes", "data", "count"]
-            state.append(_obs)
+        state = td["hetero_data"]
+        obs_actions = td["action"]
+        obs_sample_log_prob = td["sample_log_prob"]
+        obs_state_value = td["state_value"]
+        obs_advantage = td["advantage"]
+        obs_value_target = td["value_target"]
+        obs_task_counts = td["observation", "nodes", "tasks", "count"]
+        obs_data_counts = td["observation", "nodes", "data", "count"]
+        
+        
+        for l in range(len(state)):
+            _obs = state[l]
+            _obs["action"] = obs_actions[l]
+            _obs["sample_log_prob"] = obs_sample_log_prob[l]
+            _obs["state_value"] = obs_state_value[l]
+            _obs["advantage"] = obs_advantage[l]
+            _obs["value_target"] = obs_value_target[l]
+            _obs["tasks_count"] = obs_task_counts[l]
+            _obs["data_count"] = obs_data_counts[l]
         return state 
     
-    #repack_td = torch.compile(repack_td)
+    repack_td = torch.compile(repack_td)
+    
 
    # with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
 
@@ -309,10 +315,10 @@ def run_ppo_cleanrl_no(
         
         print("Collection:", i)
         
-        start_t = time.perf_counter()
-        td = td.to(config.update_device)
-        end_t = time.perf_counter()
-        print("Move to device time:", end_t - start_t)
+        # start_t = time.perf_counter()
+        # td = td.to(config.update_device)
+        # end_t = time.perf_counter()
+        # print("Move to device time:", end_t - start_t)
         
         start_t = time.perf_counter()
         with torch.no_grad():
@@ -332,15 +338,15 @@ def run_ppo_cleanrl_no(
             loader = DataLoader(state, batch_size=config.minibatch_size, shuffle=True)
 
             for j, batch in enumerate(loader):
-                batch = batch.to(config.update_device)
+                batch = batch.to(config.update_device, non_blocking=True)
                 
                 start_t = time.perf_counter()
-                new_logits, new_value = actor_critic_base_t(batch, (batch["task_counts"].unsqueeze(1), batch["data_counts"].unsqueeze(1)))
+                new_logits, new_value = actor_critic_base_t(batch, (batch["tasks_count"].unsqueeze(1), batch["data_count"].unsqueeze(1)))
 
                 #with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
                     #with record_function("model_update"):
                 update_fn(new_logits, new_value, batch, actor_critic_base_t, optimizer)
-                torch.cuda.synchronize()
+                #torch.cuda.synchronize()
                         
                 end_t = time.perf_counter()
                 #print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=100))
