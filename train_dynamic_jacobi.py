@@ -23,6 +23,10 @@ from task4feedback.interface.wrappers import (
     observation_to_heterodata_truncate,
 )
 
+import torch.multiprocessing as mp
+
+mp.set_sharing_strategy("file_system")  # must be before DataLoader / mp.spawn
+
 
 # from task4feedback.interface.wrappers import (
 #     observation_to_heterodata_truncate as observation_to_heterodata,
@@ -332,7 +336,7 @@ def train(wandb_config):
         eval_interval=mconfig.get("eval_interval", 50),
         eval_episodes=mconfig.get("eval_episodes", 1),
         states_per_collection=n_tasks * mconfig.get("graphs_per_collection", 10),
-        max_grad_norm=mconfig.get("max_grad_norm", 0.5),
+        max_grad_norm=mconfig.get("max_grad_norm", 10),
     )
 
     # Define environment creation function for PPO
@@ -457,7 +461,7 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "RuntimeEnv",
+            "runtime_env": "GeneralizedIncrementalEFT",
         },
         "system_config": {
             "type": "uniform_connected_devices",
@@ -468,7 +472,7 @@ if __name__ == "__main__":
         "feature_config": {
             "observer_factory": "XYHeterogeneousObserverFactory",
             "max_tasks": 50,
-            "max_data": 80 ,
+            "max_data": 80,
             "max_edges_tasks_tasks": 100,
             "max_edges_tasks_data": 200,
             "max_edges_data_devices": 320,
@@ -489,7 +493,7 @@ if __name__ == "__main__":
             "normalize_advantage": True,
             "clip_eps": 0.2,
             "clip_vloss": False,
-            "minibatch_size": 256,
+            "minibatch_size": 2048,
         },
         "env_config": {
             "change_priority": False,

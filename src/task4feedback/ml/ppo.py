@@ -34,7 +34,7 @@ class PPOConfig:
     num_collections: int = 1
     workers: int = 1
     seed: int = 0
-    lr: float = 2.5e-4
+    lr: float = 6e-4
     clip_eps: float = 0.2
     clip_vloss: bool = True
     ent_coef: float = 0.001
