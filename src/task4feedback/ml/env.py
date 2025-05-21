@@ -9,6 +9,7 @@ from task4feedback.interface.wrappers import (
     DefaultObserverFactory,
     SimulatorFactory,
     create_graph_spec,
+    observation_to_heterodata,
 )
 from task4feedback.fastsim2 import GraphExtractor, SchedulerState
 from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
@@ -21,7 +22,7 @@ from task4feedback.graphs.mesh.plot import *
 import numpy as np
 from task4feedback.legacy_graphs import *
 from task4feedback.graphs.jacobi import JacobiGraph
-
+from torch_geometric.data import HeteroData
 from torch.profiler import record_function
 
 
@@ -139,6 +140,7 @@ class RuntimeEnv(EnvBase):
             td = TensorDict(observation=obs)
         else:
             self.simulator.observer.get_observation(output=td["observation"])
+        td.set("hetero_data", observation_to_heterodata(td["observation"]))
         return td
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -150,6 +152,7 @@ class RuntimeEnv(EnvBase):
         obs = self._get_new_observation_buffer()
         obs.set("reward", torch.tensor([0], device=self.device, dtype=torch.float32))
         obs.set("done", torch.tensor([False], device=self.device, dtype=torch.bool))
+        obs.set("state_value", torch.tensor([0], device=self.device, dtype=torch.float32))
         return obs
 
     def _prealloc_step_buffers(self, n: int) -> List[TensorDict]:
@@ -212,6 +215,7 @@ class RuntimeEnv(EnvBase):
                 )
 
             out = obs
+            out.set("state_value", torch.tensor([0], device=self.device, dtype=torch.float32))
             out.set("reward", reward)
             out.set("done", done)
             self.step_count += 1
