@@ -1353,7 +1353,7 @@ class ExternalObserver:
     def data_observation(self, output: TensorDict):
         # print("Data observation")
         ntasks = output["nodes"]["tasks"]["count"][0]
-        _, count = self.get_used_filtered_data(
+        _, count = self.get_used_data(
             output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
         )
         output["nodes"]["data"]["count"][0] = count
@@ -1398,6 +1398,7 @@ class ExternalObserver:
             output["nodes"]["data"]["glb"][:ndata],
             output["edges"]["tasks_data"]["idx"],
             output["edges"]["tasks_data"]["glb"],
+            AccessType.READ_MAPPED,
         )
         output["edges"]["tasks_data"]["count"][0] = count
 
