@@ -48,7 +48,7 @@ class PPOConfig:
     normalize_advantage: bool = True
     value_norm: str = "l2"
     eval_interval: int = 10
-    eval_episodes: int = 1  
+    eval_episodes: int = 1
 
 
 def log_parameter_and_gradient_norms(model):
@@ -177,9 +177,8 @@ def evaluate_policy(
 def run_ppo_cleanrl_no(
     actor_critic_base: nn.Module, make_env: Callable[[], EnvBase], config: PPOConfig
 ):
-    
-    #actor_critic_base = torch.compile(actor_critic_base)
-    #_actor_critic_td = HeteroDataWrapper(actor_critic_base)
+    # actor_critic_base = torch.compile(actor_critic_base)
+    # _actor_critic_td = HeteroDataWrapper(actor_critic_base)
     actor_critic_base = actor_critic_base.to(config.collect_device)
 
     _actor_critic_module = TensorDictModule(
@@ -197,10 +196,10 @@ def run_ppo_cleanrl_no(
         cache_dist=False,
         return_log_prob=True,
     )
-    
+
     actor_critic = actor_critic.to(config.collect_device)
-    
-    #actor_critic = torch.compile(actor_critic)
+
+    # actor_critic = torch.compile(actor_critic)
 
     collector = MultiSyncDataCollector(
         [make_env for _ in range(config.workers)],
@@ -215,28 +214,29 @@ def run_ppo_cleanrl_no(
         trust_policy=True,
     )
 
-    
     out_seed = collector.set_seed(config.seed)
 
     actor_critic_base_t = copy.deepcopy(actor_critic_base)
     actor_critic_base_t = actor_critic_base_t.to(config.update_device)
 
     optimizer = torch.optim.Adam(actor_critic_base_t.parameters(), lr=config.lr)
-    
+
     activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
-    
-    
+
     def update_fn(new_logits, new_value, batch, actor_critic_base_t, optimizer):
-        new_logits = new_logits.view(-1)
+        # new_logits = new_logits.view(-1)
         new_value = new_value.view(-1)
 
-        sample_logprob = batch["sample_log_prob"].detach().view(-1)
+        sample_logprob = batch["sample_log_prob"].detach()
         sample_value = batch["state_value"].detach().view(-1)
         sample_advantage = batch["advantage"].detach().view(-1)
         sample_returns = batch["value_target"].detach().view(-1)
-        sample_action = batch["action"].detach().view(-1)
+        sample_action = batch["action"].detach()
 
         new_logprob, new_entropy = logits_to_action(new_logits, sample_action)
+        print("New logprob shape:", new_logprob.shape)
+        print("New logits shape:", new_logits.shape)
+
         new_logprob = new_logprob.view(-1)
         new_entropy = new_entropy.view(-1)
 
@@ -262,13 +262,9 @@ def run_ppo_cleanrl_no(
         # Entropy Loss
         entropy_loss = new_entropy.mean()
 
-        loss = (
-            policy_loss
-            + config.val_coef * v_loss
-            - config.ent_coef * entropy_loss
-        )
-        
-        #LOG LOSSES
+        loss = policy_loss + config.val_coef * v_loss - config.ent_coef * entropy_loss
+
+        # LOG LOSSES
         wandb.log(
             {
                 "batch_loss/objective": policy_loss.item(),
@@ -277,66 +273,61 @@ def run_ppo_cleanrl_no(
                 "batch_loss/total": loss.item(),
             }
         )
-        #LOG GRADIENTS
+        # LOG GRADIENTS
         norms = log_parameter_and_gradient_norms(actor_critic_base_t)
         wandb.log(norms)
 
         optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(
-            actor_critic_base_t.parameters(), config.max_grad_norm
-        )
+        nn.utils.clip_grad_norm_(actor_critic_base_t.parameters(), config.max_grad_norm)
         optimizer.step()
-        
+
     def repack_td(td):
         state = td["observation", "hetero_data"]
-        
-        #print("TD length:", len(td))
-        #print("State length:", len(state))
-        
+
+        # print("TD length:", len(td))
+        # print("State length:", len(state))
+
         obs_actions = td["action"]
         obs_sample_log_prob = td["sample_log_prob"]
         obs_state_value = td["state_value"]
         obs_advantage = td["advantage"]
         obs_value_target = td["value_target"]
-        #obs_task_counts = td["observation", "nodes", "tasks", "count"]
-        #obs_data_counts = td["observation", "nodes", "data", "count"]
-        
-        
+        # obs_task_counts = td["observation", "nodes", "tasks", "count"]
+        # obs_data_counts = td["observation", "nodes", "data", "count"]
+
         for l in range(len(state)):
-            #print(state, l)
+            # print(state, l)
             _obs = state[l]
             _obs["action"] = obs_actions[l]
             _obs["sample_log_prob"] = obs_sample_log_prob[l]
             _obs["state_value"] = obs_state_value[l]
             _obs["advantage"] = obs_advantage[l]
             _obs["value_target"] = obs_value_target[l]
-            #_obs["tasks_count"] = obs_task_counts[l]
-            #_obs["data_count"] = obs_data_counts[l]
+            # _obs["tasks_count"] = obs_task_counts[l]
+            # _obs["data_count"] = obs_data_counts[l]
             # state[l] = _obs.to(config.update_device)
-        return state 
-    
+        return state
+
     # repack_td = torch.compile(repack_td)
     update_fn = torch.compile(update_fn, mode="reduce-overhead")
-    
 
-   # with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
+    # with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
 
     collect_start_t = time.perf_counter()
     for i, td in enumerate(collector):
         collect_break_t = time.perf_counter()
         print("Collection time:", collect_break_t - collect_start_t)
-       
-        
+
         print("Collection:", i)
-        
+
         start_t = time.perf_counter()
         td = td.to(config.update_device, non_blocking=True)
         end_t = time.perf_counter()
         print("Move to device time:", end_t - start_t)
-        
+
         with torch.no_grad():
-            #Record average improvement in wandb
+            # Record average improvement in wandb
             non_zero_rewards = td["next", "reward"]
             improvements = td["next", "observation", "aux", "improvement"]
             mask = improvements > -1.5
@@ -352,41 +343,50 @@ def run_ppo_cleanrl_no(
                 wandb.log({"avg_non_zero_reward": avg_non_zero_reward})
                 wandb.log({"std_rewards": std_rewards})
                 print(f"Average reward: {avg_non_zero_reward}")
-        
+
         start_t = time.perf_counter()
         with torch.no_grad():
             td = compute_gae(td)
         end_t = time.perf_counter()
         print("Advantage computation time:", end_t - start_t)
-            
-        
+
         start_t = time.perf_counter()
         state = repack_td(td)
         torch.cuda.synchronize()
         end_t = time.perf_counter()
         print("Repacking Time:", end_t - start_t)
-        
+
+        if i % 50 == 0:
+            # Save the model in the wandb directory
+            if wandb.run.dir is None:
+                path = "."
+            else:
+                path = wandb.run.dir
+            torch.save(
+                actor_critic_base_t.state_dict(),
+                os.path.join(path, "model_" + f"{i}.pth"),
+            )
 
         for j in range(config.num_epochs_per_collection):
             loader = DataLoader(state, batch_size=config.minibatch_size, shuffle=True)
 
             for j, batch in enumerate(loader):
                 batch = batch.to(config.update_device, non_blocking=True)
-                
+
                 start_t = time.perf_counter()
                 new_logits, new_value = actor_critic_base_t(batch)
 
-                #with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
-                    #with record_function("model_update"):
+                # with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
+                # with record_function("model_update"):
                 update_fn(new_logits, new_value, batch, actor_critic_base_t, optimizer)
-                        
+
                 end_t = time.perf_counter()
-                #print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=100))
+                # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=100))
                 print("Batch training time:", end_t - start_t)
-                
-        #print(collector.policy)
-        #print(collector.policy.module)
-        
+
+        # print(collector.policy)
+        # print(collector.policy.module)
+
         torch.cuda.synchronize()
 
         collector.policy.module[0].module.load_state_dict(
@@ -395,9 +395,10 @@ def run_ppo_cleanrl_no(
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
         collect_start_t = time.perf_counter()
         print("Update policy time:", collect_start_t - collect_break_t)
-    
-    #print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=100))
+
+    # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=100))
     collector.shutdown()
+
 
 def run_ppo_cleanrl(
     actor_critic_base: nn.Module, make_env: Callable[[], EnvBase], config: PPOConfig
@@ -410,7 +411,7 @@ def run_ppo_cleanrl(
         prefetch=4,
     )
 
-    #actor_critic_base = torch.compile(actor_critic_base)
+    # actor_critic_base = torch.compile(actor_critic_base)
 
     _actor_critic_td = HeteroDataWrapper(actor_critic_base)
 
@@ -428,7 +429,7 @@ def run_ppo_cleanrl(
         cache_dist=False,
         return_log_prob=True,
     )
-    
+
     test_make = [make_env for _ in range(config.workers)]
 
     collector = MultiSyncDataCollector(
@@ -450,7 +451,6 @@ def run_ppo_cleanrl(
     optimizer = torch.optim.Adam(actor_critic_t.parameters(), lr=config.lr)
 
     activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
-
 
     def update_fn(batch, actor_critic_t, optimizer):
         batch = batch.to(config.update_device, non_blocking=True)
@@ -492,7 +492,7 @@ def run_ppo_cleanrl(
         entropy_loss = new_entropy.mean()
 
         loss = policy_loss + config.val_coef * v_loss - config.ent_coef * entropy_loss
-        
+
         wandb.log(
             {
                 "batch_loss/objective": policy_loss.item(),
@@ -508,9 +508,6 @@ def run_ppo_cleanrl(
         optimizer.step()
         norms = log_parameter_and_gradient_norms(actor_critic_t)
         wandb.log(norms)
-
-        
-        
 
     update_fn = torch.compile(update_fn)
 
@@ -548,21 +545,18 @@ def run_ppo_cleanrl(
                 #     with record_function("model_update"):
                 update_fn(batch, actor_critic_t, optimizer)
 
-
                 end_t = time.perf_counter()
 
-                #print(prof.key_averages().table(sort_by=sort_by_keyword, row_limit=100))
+                # print(prof.key_averages().table(sort_by=sort_by_keyword, row_limit=100))
 
                 print("Batch training time:", end_t - start_t)
         end_batch_t = time.perf_counter()
         print("Total batch training time:", end_batch_t - start_batch_t)
-        
 
         collector.policy.load_state_dict(actor_critic_t.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
         start_collect_t = time.perf_counter()
     collector.shutdown()
-
 
 
 def run_ppo_torchrl(
