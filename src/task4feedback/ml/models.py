@@ -28,7 +28,7 @@ from torch_geometric.nn import (
     SAGEConv,
 )
 import numpy as np
-import time 
+import time
 
 
 def layer_init(layer, a=0.01, std=np.sqrt(2), bias_const=0.0):
@@ -50,7 +50,7 @@ class HeteroDataWrapper(nn.Module):
     def __init__(self, network: nn.Module, device: Optional[str] = "cpu"):
         super(HeteroDataWrapper, self).__init__()
         self.network = network
-        
+
         self.register_parameter("dummy_param_0", nn.Parameter(torch.randn(1)))
 
     def _is_batch(self, obs: TensorDict) -> bool:
@@ -64,15 +64,14 @@ class HeteroDataWrapper(nn.Module):
         is_batch: bool = False,
         actions: Optional[TensorDict] = None,
     ) -> HeteroData:
-        
         is_cuda = any(p.is_cuda for p in self.parameters())
-        
+
         if not is_batch:
             if actions is not None:
                 _obs = observation_to_heterodata(obs, actions=actions)
             else:
                 _obs = observation_to_heterodata(obs)
-                
+
             task_count = obs["nodes", "tasks", "count"]
             data_count = obs["nodes", "data", "count"]
 
@@ -87,36 +86,35 @@ class HeteroDataWrapper(nn.Module):
                 obs["nodes", "data", "count"],
             )
 
-        #Otherwise we're batching, possibly over multiple batch dimensions
+        # Otherwise we're batching, possibly over multiple batch dimensions
 
         # flatten and save the batch size
         self.batch_size = obs.batch_size
         # obs = obs.reshape(-1)
 
         _h_data = []
-        
+
         if is_cuda:
             for i in range(obs.batch_size[0]):
                 if actions is not None:
                     _obs = observation_to_heterodata(obs[i], actions=actions[i])
                 else:
                     _obs = observation_to_heterodata(obs[i])
-                    
-                #_obs = _obs.to("cuda", non_blocking=True)
-                    
+
+                # _obs = _obs.to("cuda", non_blocking=True)
+
                 _h_data.append(_obs)
         else:
             for i in range(obs.batch_size[0]):
                 if actions is not None:
                     _obs = observation_to_heterodata(obs[i], actions=actions[i])
                 else:
-                    _obs = observation_to_heterodata(obs[i])                    
-                _h_data.append(_obs)      
+                    _obs = observation_to_heterodata(obs[i])
+                _h_data.append(_obs)
 
-        batch_obs = Batch.from_data_list(_h_data),
+        batch_obs = (Batch.from_data_list(_h_data),)
         task_count = obs["nodes", "tasks", "count"]
         data_count = obs["nodes", "data", "count"]
-        
 
         if isinstance(batch_obs, tuple):
             batch_obs = batch_obs[0]
@@ -126,11 +124,7 @@ class HeteroDataWrapper(nn.Module):
             data_count = data_count.to("cuda", non_blocking=True)
             batch_obs = batch_obs.to("cuda", non_blocking=True)
 
-        return (
-           batch_obs,
-           task_count,
-           data_count
-        )
+        return (batch_obs, task_count, data_count)
 
     def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
@@ -140,8 +134,7 @@ class HeteroDataWrapper(nn.Module):
                 data, task_count, data_count = self._convert_to_heterodata(
                     obs, is_batch, actions=actions
                 )
-            
-            
+
         with record_function("FORWARD_PASS"):
             out = self.network(data, (task_count, data_count))
         return out
@@ -1623,7 +1616,6 @@ class HeteroConvStateNet(nn.Module):
     def forward(self, data: HeteroData | Batch, counts=None):
         # print("HeteroConvStateNet")
 
-
         with record_function("HeteroConvStateNet"):
             features = self.hetero_conv(data)
             task_batch = data["tasks"].batch if isinstance(data, Batch) else None
@@ -1653,17 +1645,17 @@ class HeteroConvStateNet(nn.Module):
                 candidate_features = task_features[0]
 
             task_counts = torch.clip(data["tasks_count"].x.unsqueeze(1), min=1)
-            #data_counts = torch.clip(counts[1], min=1)
-            
-            #print("task_counts", task_counts.shape)
+            # data_counts = torch.clip(counts[1], min=1)
 
-            
+            # print("task_counts", task_counts.shape)
+
+            # print("task_features", task_features.shape)
             task_features = global_add_pool(task_features, task_batch)
-            #print("task_features", task_features.shape)
+            # print("task_features", task_features.shape)
 
-            task_pooling = torch.div(
-                task_features, task_counts
-            )
+            task_pooling = torch.div(task_features, task_counts)
+
+            # print("task_pooling", task_pooling.shape)
 
             # data_pooling = torch.div(
             #     global_add_pool(data_features, data_batch), data_counts
@@ -1898,7 +1890,9 @@ class HeteroConvPolicyNet(nn.Module):
         # print("HeteroConvPolicyNet")
         with record_function("hetero_conv"):
             state_features = self.heteroconv_state_net(data, counts)
+            # print("state_features", state_features.shape)
             d_logits = self.output_head(state_features)
+            # print("d_logits", d_logits.shape)
         return d_logits
 
 
