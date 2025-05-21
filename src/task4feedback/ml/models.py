@@ -1652,7 +1652,7 @@ class HeteroConvStateNet(nn.Module):
             else:
                 candidate_features = task_features[0]
 
-            task_counts = torch.clip(counts[0], min=1)
+            task_counts = torch.clip(data["tasks_count"].x.unsqueeze(1), min=1)
             #data_counts = torch.clip(counts[1], min=1)
             
             #print("task_counts", task_counts.shape)
@@ -2383,6 +2383,10 @@ class HeteroConvSeparateNet(nn.Module):
         self.critic = HeteroConvValueNet(feature_config, layer_config, n_devices, k=k)
 
     def forward(self, data: HeteroData | Batch, counts=None):
+        # if any(p.is_cuda for p in self.actor.parameters()):
+        #     data = data.to("cuda", non_blocking=True)
+        if not isinstance(data, Batch | HeteroData):
+            data = data["hetero_data"]
         d_logits = self.actor(data, counts)
         v = self.critic(data, counts)
         return d_logits, v

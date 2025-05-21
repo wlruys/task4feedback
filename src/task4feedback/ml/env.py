@@ -24,7 +24,7 @@ from task4feedback.legacy_graphs import *
 from task4feedback.graphs.jacobi import JacobiGraph
 from torch_geometric.data import HeteroData
 from torch.profiler import record_function
-
+MAX_BUFFERS = 2000
 
 class RuntimeEnv(EnvBase):
     def __init__(
@@ -90,7 +90,7 @@ class RuntimeEnv(EnvBase):
         self.reward_spec = self._create_reward_spec()
         self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool)
 
-        self.workspace = self._prealloc_step_buffers(1)
+        self.workspace = self._prealloc_step_buffers(1000)
         self.baseline_time = baseline_time
 
         if change_locations:
@@ -113,6 +113,14 @@ class RuntimeEnv(EnvBase):
 
     def _create_observation_spec(self) -> TensorSpec:
         obs = self.simulator.observer.get_observation()
+        # obs = Bounded(
+        #     shape=(1,),
+        #     device=self.device,
+        #     dtype=torch.float32,
+        #     low=torch.tensor(0, device=self.device),
+        #     high=torch.tensor(1, device=self.device),
+        # )
+        # comp = obs 
         comp = make_composite_from_td(obs)
         comp = Composite(observation=comp)
         return comp
@@ -140,7 +148,8 @@ class RuntimeEnv(EnvBase):
             td = TensorDict(observation=obs)
         else:
             self.simulator.observer.get_observation(output=td["observation"])
-        td.set("hetero_data", observation_to_heterodata(td["observation"]))
+        #td["observation"].set("hetero_data", observation_to_heterodata(td["observation"]))
+        #td.set("observation, hetero_data", observation_to_heterodata(td["observation"]))
         return td
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -168,7 +177,7 @@ class RuntimeEnv(EnvBase):
 
     def _get_current_buffer(self):
         buf = self._get_preallocated_step_buffer(self.workspace, self.buffer_idx)
-        self.buffer_idx += 1
+        self.buffer_idx = (self.buffer_idx + 1) % MAX_BUFFERS
 
     def _step(self, td: TensorDict) -> TensorDict:
         
@@ -211,7 +220,7 @@ class RuntimeEnv(EnvBase):
             if done:
                 obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
                 print(
-                    f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                   f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
                 )
 
             out = obs

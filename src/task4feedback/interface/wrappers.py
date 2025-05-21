@@ -938,6 +938,7 @@ def observation_to_heterodata(
         count = node_data["count"]
         # print("node count", node_type, count)
         hetero_data[f"{node_type}"].x = node_data["attr"]
+        hetero_data[f"{node_type}_count"].x = count
 
     for edge_key, edge_data in observation["edges"].items():
         splits = edge_key.split("_")
@@ -1354,6 +1355,7 @@ class ExternalObserver:
         self.get_task_features(
             output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
         )
+        #print("Task attribute", output["nodes"]["tasks"]["attr"])
 
     def data_observation(self, output: TensorDict):
         # print("Data observation")
@@ -1642,7 +1644,7 @@ class HeterogeneousExternalObserver(ExternalObserver):
 
         # print(output)
 
-        # Get mappable candidates
+        # # Get mappable candidates
         self.candidate_observation(output)
 
         # Node observations (all nodes must be processed before edges)
@@ -1655,11 +1657,20 @@ class HeterogeneousExternalObserver(ExternalObserver):
         self.task_data_observation(output)
         self.task_device_observation(output, use_all_tasks=True)
         self.data_device_observation(output)
+        
+        # print("Task attribute", output["nodes"]["tasks"]["attr"])
+        # print("Data attribute", output["nodes"]["data"]["attr"])
+        # print("Device attribute", output["nodes"]["devices"]["attr"])
 
         # Auxiliary observations
         output["aux"]["time"][0] = self.simulator.time
         output["aux"]["improvement"][0] = -2.0
         # print("Auxiliary observation")
+        
+        output["hetero_data"] = observation_to_heterodata(output)
+        
+        output["nodes"] = 0 
+        output["edges"] = 0
 
         # print("All Data", output["edges"]["tasks_data"]["count"])
         # print("Read Data", output["edges"]["tasks_reads_data"]["count"])

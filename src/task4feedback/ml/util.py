@@ -25,7 +25,7 @@ def compute_advantage(td: TensorDict):
     return td
 
 
-def compute_gae(tensordict_data, gamma=0.99, lam=0.95):
+def compute_gae(tensordict_data, gamma=1, lam=0.90):
     with torch.no_grad():
         # critic(tensordict_data)
         # critic(tensordict_data["next"])
@@ -40,9 +40,11 @@ def compute_gae(tensordict_data, gamma=0.99, lam=0.95):
         for t in reversed(range(T)):
             if done[t]:
                 c = 0
+                nv = 0
             else:
                 c = 1
-            delta = reward[t] + gamma * value[t] * c - value[t]
+                nv = value[t+1]
+            delta = reward[t] + gamma * nv * c - value[t]
             gae = delta + gamma * lam * c * gae
             advantage[t] = gae
 
@@ -50,6 +52,7 @@ def compute_gae(tensordict_data, gamma=0.99, lam=0.95):
         tensordict_data["advantage"] = advantage
         tensordict_data["value_target"] = value_target
         return tensordict_data
+
 
 
 
