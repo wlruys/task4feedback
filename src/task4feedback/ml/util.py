@@ -25,37 +25,58 @@ def compute_advantage(td: TensorDict):
     return td
 
 
-def compute_gae(tensordict_data, gamma=1, lam=0.90):
+def compute_gae(tensordict_data, gamma=1, lam=0.99):
     with torch.no_grad():
-        # critic(tensordict_data)
-        # critic(tensordict_data["next"])
-
-        value = tensordict_data["state_value"]
-        # next_value = tensordict_data["next", "state_value"]
-        reward = tensordict_data["next", "reward"]
-        done = tensordict_data["next", "done"]
-
-        print(reward.view(-1))
-        print(done.view(-1))
+        value = tensordict_data["state_value"].view(-1)
+        reward = tensordict_data["next", "reward"].view(-1)
+        done = tensordict_data["next", "done"].view(-1)
+        traj_ids = tensordict_data["collector", "traj_ids"].view(-1)
+        step_count = tensordict_data["step_count"].view(-1)
 
         advantage = torch.zeros_like(value)
-        gae = 0.0
-        T = reward.shape[0]
-        for t in reversed(range(T)):
-            if done[t]:
-                c = 0
-                nv = 0
-            else:
-                c = 1
-                nv = value[t + 1]
 
-            delta = reward[t] + gamma * nv * c - value[t]
-            gae = delta + gamma * lam * c * gae
-            advantage[t] = gae
+        print(tensordict_data.keys())
+
+        for traj_id in traj_ids.unique():
+            mask = traj_ids == traj_id
+            traj_value = value[mask]
+            traj_reward = reward[mask]
+            traj_done = done[mask]
+            traj_advantage = torch.zeros_like(traj_value)
+
+            print(step_count[mask])
+            print(
+                len(traj_value), len(traj_reward), len(traj_done), len(traj_advantage)
+            )
+
+            gae = 0.0
+            T = len(traj_value)
+
+            for t in reversed(range(T)):
+                if traj_done[t]:
+                    c = 0
+                    nv = 0
+                else:
+                    c = 1
+                    nv = traj_value[t + 1] if t + 1 < T else 0
+
+                delta = traj_reward[t] + gamma * nv * c - traj_value[t]
+                gae = delta + gamma * lam * c * gae
+                traj_advantage[t] = gae
+
+                if traj_done[t] and t < T - 1:
+                    print(
+                        "Warning: done flag is set but not at the end of the trajectory.",
+                        t,
+                        T,
+                    )
+
+            advantage[mask] = traj_advantage
 
         value_target = advantage + value
-        tensordict_data["advantage"] = advantage
-        tensordict_data["value_target"] = value_target
+        tensordict_data["advantage"] = advantage.unsqueeze(1)
+        tensordict_data["value_target"] = value_target.unsqueeze(1)
+
         return tensordict_data
 
 

@@ -428,10 +428,10 @@ def train(wandb_config):
     # except AttributeError:
     #     print("torch.compile not available, using uncompiled model")
 
-    for layer in model.modules():
-        if isinstance(layer, torch.nn.Linear):
-            torch.nn.init.orthogonal_(layer.weight, 1.0)
-            layer.bias.data.zero_()
+    # for layer in model.modules():
+    #     if isinstance(layer, torch.nn.Linear):
+    #         torch.nn.init.orthogonal_(layer.weight, 1.0)
+    #         layer.bias.data.zero_()
 
     # Run PPO training
     run_ppo_cleanrl_no(
@@ -463,7 +463,7 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "GeneralizedIncrementalEFT",
+            "runtime_env": "EFTIncrementalEnv",
         },
         "system_config": {
             "type": "uniform_connected_devices",
@@ -495,7 +495,7 @@ if __name__ == "__main__":
             "normalize_advantage": False,
             "clip_eps": 0.2,
             "clip_vloss": False,
-            "minibatch_size": 512,
+            "minibatch_size": 256,
         },
         "env_config": {
             "change_priority": False,

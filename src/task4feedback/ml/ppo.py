@@ -218,10 +218,10 @@ def run_ppo_cleanrl_no(
         actor_critic,
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
-        cat_results=0,
         env_device="cpu",
         policy_device=config.collect_device,
         # compile_policy=True,
+        cat_results=0,
         use_buffers=True,
         trust_policy=True,
     )
@@ -375,7 +375,8 @@ def run_ppo_cleanrl_no(
 
         with torch.no_grad():
             start_t = time.perf_counter()
-            td = compute_gae(td)
+            td = compute_gae(td, gamma=config.gae_gamma, lam=config.gae_lmbda)
+            # td = compute_advantage(td)
             end_t = time.perf_counter()
             print("Advantage computation time:", end_t - start_t)
 
