@@ -31,8 +31,12 @@ def compute_gae(tensordict_data, gamma=1, lam=0.90):
         # critic(tensordict_data["next"])
 
         value = tensordict_data["state_value"]
+        # next_value = tensordict_data["next", "state_value"]
         reward = tensordict_data["next", "reward"]
         done = tensordict_data["next", "done"]
+
+        print(reward.view(-1))
+        print(done.view(-1))
 
         advantage = torch.zeros_like(value)
         gae = 0.0
@@ -43,7 +47,8 @@ def compute_gae(tensordict_data, gamma=1, lam=0.90):
                 nv = 0
             else:
                 c = 1
-                nv = value[t+1]
+                nv = value[t + 1]
+
             delta = reward[t] + gamma * nv * c - value[t]
             gae = delta + gamma * lam * c * gae
             advantage[t] = gae
@@ -52,8 +57,6 @@ def compute_gae(tensordict_data, gamma=1, lam=0.90):
         tensordict_data["advantage"] = advantage
         tensordict_data["value_target"] = value_target
         return tensordict_data
-
-
 
 
 def logits_to_action(logits: torch.Tensor, action):

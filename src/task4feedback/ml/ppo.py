@@ -34,7 +34,7 @@ class PPOConfig:
     num_collections: int = 1
     workers: int = 1
     seed: int = 0
-    lr: float = 6e-4
+    lr: float = 2.5e-4
     clip_eps: float = 0.2
     clip_vloss: bool = True
     ent_coef: float = 0.001
@@ -42,7 +42,7 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     threads_per_worker: int = 1
     collect_device: str = "cpu"
-    update_device: str = "cuda:0"
+    update_device: str = "cpu"
     gae_gamma: float = 1
     gae_lmbda: float = 0.99
     normalize_advantage: bool = True
@@ -175,11 +175,23 @@ def evaluate_policy(
 
 
 def run_ppo_cleanrl_no(
-    actor_critic_base: nn.Module, make_env: Callable[[], EnvBase], config: PPOConfig
+    actor_critic_base: nn.Module,
+    make_env: Callable[[], EnvBase],
+    config: PPOConfig,
+    model_name: str = "model",
+    model_path: str = None,
+    eval_env_fn: Optional[Callable[[], EnvBase]] = None,
+    do_rollout: bool = False,
 ):
     # actor_critic_base = torch.compile(actor_critic_base)
     # _actor_critic_td = HeteroDataWrapper(actor_critic_base)
     actor_critic_base = actor_critic_base.to(config.collect_device)
+
+    wandb.define_metric("batch_loss/step")
+    wandb.define_metric("collect_loss/step")
+    wandb.define_metric("batch_loss/*", step_metric="batch_loss/step")
+    wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
+    wandb.define_metric("eval/*", step_metric="eval/step")
 
     _actor_critic_module = TensorDictModule(
         actor_critic_base,
@@ -209,7 +221,7 @@ def run_ppo_cleanrl_no(
         cat_results=0,
         env_device="cpu",
         policy_device=config.collect_device,
-        compile_policy=True,
+        # compile_policy=True,
         use_buffers=True,
         trust_policy=True,
     )
@@ -221,9 +233,22 @@ def run_ppo_cleanrl_no(
 
     optimizer = torch.optim.Adam(actor_critic_base_t.parameters(), lr=config.lr)
 
+    if eval_env_fn is None:
+        eval_env_fn = make_env
+
+    if config.eval_interval > 0:
+        eval_metrics = evaluate_policy(
+            policy=actor_critic,
+            eval_env_fn=eval_env_fn,
+            num_episodes=config.eval_episodes,
+            step=0,
+        )
+        eval_metrics["eval/step"] = 0
+        wandb.log(eval_metrics)
+
     activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
 
-    def update_fn(new_logits, new_value, batch, actor_critic_base_t, optimizer):
+    def update_fn(step, new_logits, new_value, batch, actor_critic_base_t, optimizer):
         # new_logits = new_logits.view(-1)
         new_value = new_value.view(-1)
 
@@ -234,8 +259,6 @@ def run_ppo_cleanrl_no(
         sample_action = batch["action"].detach()
 
         new_logprob, new_entropy = logits_to_action(new_logits, sample_action)
-        print("New logprob shape:", new_logprob.shape)
-        print("New logits shape:", new_logits.shape)
 
         new_logprob = new_logprob.view(-1)
         new_entropy = new_entropy.view(-1)
@@ -243,6 +266,19 @@ def run_ppo_cleanrl_no(
         # Policy Loss
         logratio = new_logprob.view(-1) - sample_logprob.detach().view(-1)
         ratio = logratio.exp().view(-1)
+
+        with torch.no_grad():
+            old_approx_kl = (-logratio).mean()
+            approx_kl = ((ratio - 1) - logratio).mean()
+            clip_fraction = ((torch.abs(ratio - 1) > config.clip_eps).float()).mean()
+            ess = 1 - torch.sum(
+                torch.exp(logratio) * (1 - torch.exp(logratio))
+            ).mean() / (torch.sum(torch.exp(logratio)) + 1e-8)
+
+        if config.normalize_advantage:
+            sample_advantage = (sample_advantage - sample_advantage.mean()) / (
+                sample_advantage.std() + 1e-8
+            )
 
         policy_loss_1 = sample_advantage * ratio.view(-1)
         policy_loss_2 = sample_advantage * torch.clamp(
@@ -252,11 +288,15 @@ def run_ppo_cleanrl_no(
 
         # Value Loss
         v_loss_unclipped = (new_value - sample_returns) ** 2
-        v_clipped = sample_value + torch.clamp(
-            new_value - sample_value, -config.clip_eps, config.clip_eps
-        )
-        v_loss_clipped = (v_clipped - sample_returns) ** 2
-        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+
+        if config.clip_vloss:
+            v_clipped = sample_value + torch.clamp(
+                new_value - sample_value, -config.clip_eps, config.clip_eps
+            )
+            v_loss_clipped = (v_clipped - sample_returns) ** 2
+            v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+        else:
+            v_loss_max = v_loss_unclipped.mean()
         v_loss = 0.5 * v_loss_max
 
         # Entropy Loss
@@ -264,23 +304,30 @@ def run_ppo_cleanrl_no(
 
         loss = policy_loss + config.val_coef * v_loss - config.ent_coef * entropy_loss
 
-        # LOG LOSSES
-        wandb.log(
-            {
-                "batch_loss/objective": policy_loss.item(),
-                "batch_loss/critic": v_loss.item(),
-                "batch_loss/entropy": entropy_loss.item(),
-                "batch_loss/total": loss.item(),
-            }
-        )
         # LOG GRADIENTS
-        norms = log_parameter_and_gradient_norms(actor_critic_base_t)
-        wandb.log(norms)
-
         optimizer.zero_grad()
         loss.backward()
+        pre_clip_norms = log_parameter_and_gradient_norms(actor_critic_base_t)
         nn.utils.clip_grad_norm_(actor_critic_base_t.parameters(), config.max_grad_norm)
+        post_clip_norms = log_parameter_and_gradient_norms(actor_critic_base_t)
         optimizer.step()
+
+        wandb.log(
+            {
+                **pre_clip_norms,
+                **post_clip_norms,
+                "batch_loss/step": step,
+                "batch_loss/objective": policy_loss.item(),
+                "batch_loss/critic": v_loss.item(),
+                "batch_loss/scaled_critic": config.val_coef * v_loss.item(),
+                "batch_loss/scaled_entropy": config.ent_coef * entropy_loss.item(),
+                "batch_loss/entropy": entropy_loss.item(),
+                "batch_loss/total": loss.item(),
+                "batch_loss/kl_approx": approx_kl.item(),
+                "batch_loss/clip_fraction": clip_fraction.item(),
+                "batch_loss/ESS": ess.item(),
+            }
+        )
 
     def repack_td(td):
         state = td["observation", "hetero_data"]
@@ -310,7 +357,7 @@ def run_ppo_cleanrl_no(
         return state
 
     # repack_td = torch.compile(repack_td)
-    update_fn = torch.compile(update_fn, mode="reduce-overhead")
+    # update_fn = torch.compile(update_fn, mode="reduce-overhead")
 
     # with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
 
@@ -327,6 +374,11 @@ def run_ppo_cleanrl_no(
         print("Move to device time:", end_t - start_t)
 
         with torch.no_grad():
+            start_t = time.perf_counter()
+            td = compute_gae(td)
+            end_t = time.perf_counter()
+            print("Advantage computation time:", end_t - start_t)
+
             # Record average improvement in wandb
             non_zero_rewards = td["next", "reward"]
             improvements = td["next", "observation", "aux", "improvement"]
@@ -334,25 +386,16 @@ def run_ppo_cleanrl_no(
             filtered_improvements = improvements[mask]
             if filtered_improvements.numel() > 0:
                 avg_improvement = filtered_improvements.mean()
-                wandb.log({"avg_improvement": avg_improvement.item()})
             else:
                 avg_improvement = 0.0
             if len(non_zero_rewards) > 0:
                 avg_non_zero_reward = non_zero_rewards.mean().item()
                 std_rewards = non_zero_rewards.std().item()
-                wandb.log({"avg_non_zero_reward": avg_non_zero_reward})
-                wandb.log({"std_rewards": std_rewards})
-                print(f"Average reward: {avg_non_zero_reward}")
-
-        start_t = time.perf_counter()
-        with torch.no_grad():
-            td = compute_gae(td)
-        end_t = time.perf_counter()
-        print("Advantage computation time:", end_t - start_t)
+                print(f"Average improvement: {avg_improvement}")
 
         start_t = time.perf_counter()
         state = repack_td(td)
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         end_t = time.perf_counter()
         print("Repacking Time:", end_t - start_t)
 
@@ -367,37 +410,77 @@ def run_ppo_cleanrl_no(
                 os.path.join(path, "model_" + f"{i}.pth"),
             )
 
+        if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
+            eval_metrics = evaluate_policy(
+                policy=actor_critic,
+                eval_env_fn=eval_env_fn,
+                num_episodes=config.eval_episodes,
+                step=i + 1,
+            )
+            eval_metrics["eval/step"] = i + 1
+            wandb.log(eval_metrics)
+
         for j in range(config.num_epochs_per_collection):
             loader = DataLoader(state, batch_size=config.minibatch_size, shuffle=True)
 
-            for j, batch in enumerate(loader):
+            for k, batch in enumerate(loader):
                 batch = batch.to(config.update_device, non_blocking=True)
 
                 start_t = time.perf_counter()
                 new_logits, new_value = actor_critic_base_t(batch)
 
-                # with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
-                # with record_function("model_update"):
-                update_fn(new_logits, new_value, batch, actor_critic_base_t, optimizer)
+                step = (i * config.num_epochs_per_collection) + j * len(loader) + k
+
+                update_fn(
+                    step, new_logits, new_value, batch, actor_critic_base_t, optimizer
+                )
 
                 end_t = time.perf_counter()
-                # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=100))
-                print("Batch training time:", end_t - start_t)
-
-        # print(collector.policy)
-        # print(collector.policy.module)
-
-        torch.cuda.synchronize()
 
         collector.policy.module[0].module.load_state_dict(
             actor_critic_base_t.state_dict()
         )
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
         collect_start_t = time.perf_counter()
+
         print("Update policy time:", collect_start_t - collect_break_t)
+        wandb.log(
+            {
+                "collect_loss/step": i,
+                "collect_loss/mean_nonzero_reward": avg_non_zero_reward,
+                "collect_loss/std_nonzero_reward": std_rewards,
+                "collect_loss/std_improvement": filtered_improvements.std().item(),
+                "collect_loss/average_improvement": avg_improvement.item(),
+                "collect_loss/mean_return": td["value_target"].mean().item(),
+                "collect_loss/std_return": td["value_target"].std().item(),
+                "collect_loss/advantage_mean": td["advantage"].mean().item(),
+                "collect_loss/advantage_std": td["advantage"].std().item(),
+            },
+        )
+
+    # Final evaluation
+    if config.eval_interval > 0:
+        eval_metrics = evaluate_policy(
+            policy=actor_critic,
+            eval_env_fn=eval_env_fn,
+            num_episodes=config.eval_episodes,
+            step=config.num_collections,
+        )
+        eval_metrics["eval/step"] = config.num_collections
+        wandb.log(eval_metrics)
+
+    if wandb.run.dir is None:
+        path = "."
+    else:
+        path = wandb.run.dir
+    torch.save(
+        actor_critic_base_t.state_dict(),
+        os.path.join(path, model_name + "_final.pth"),
+    )
 
     # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=100))
     collector.shutdown()
+    wandb.finish()
 
 
 def run_ppo_cleanrl(
@@ -473,6 +556,17 @@ def run_ppo_cleanrl(
         logratio = new_logprob.view(-1) - sample_logprob.detach().view(-1)
         ratio = logratio.exp().view(-1)
 
+        with torch.no_grad():
+            old_approx_kl = (-logratio).mean()
+            approx_kl = ((ratio - 1) - logratio).mean()
+            clip_fraction = ((torch.abs(ratio - 1) > config.clip_eps).float()).mean()
+            print("Clip fraction:", clip_fraction.item())
+
+        if config.normalize_advantage:
+            sample_advantage = (sample_advantage - sample_advantage.mean()) / (
+                sample_advantage.std() + 1e-8
+            )
+
         policy_loss_1 = sample_advantage * ratio.view(-1)
         policy_loss_2 = sample_advantage * torch.clamp(
             ratio, 1 - config.clip_eps, 1 + config.clip_eps
@@ -481,11 +575,14 @@ def run_ppo_cleanrl(
 
         # Value Loss
         v_loss_unclipped = (new_value - sample_returns) ** 2
-        v_clipped = sample_value + torch.clamp(
-            new_value - sample_value, -config.clip_eps, config.clip_eps
-        )
-        v_loss_clipped = (v_clipped - sample_returns) ** 2
-        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+        if config.clip_vloss:
+            v_clipped = sample_value + torch.clamp(
+                new_value - sample_value, -config.clip_eps, config.clip_eps
+            )
+            v_loss_clipped = (v_clipped - sample_returns) ** 2
+            v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+        else:
+            v_loss_max = v_loss_unclipped.mean()
         v_loss = 0.5 * v_loss_max
 
         # Entropy Loss
@@ -499,6 +596,8 @@ def run_ppo_cleanrl(
                 "batch_loss/critic": v_loss.item(),
                 "batch_loss/entropy": entropy_loss.item(),
                 "batch_loss/total": loss.item(),
+                "batch_loss/kl_approx": approx_kl.item(),
+                "batch_loss/clip_fraction": clip_fraction.item(),
             }
         )
 
@@ -509,7 +608,7 @@ def run_ppo_cleanrl(
         norms = log_parameter_and_gradient_norms(actor_critic_t)
         wandb.log(norms)
 
-    update_fn = torch.compile(update_fn)
+    # update_fn = torch.compile(update_fn)
 
     start_collect_t = time.perf_counter()
     for i, td in enumerate(collector):
