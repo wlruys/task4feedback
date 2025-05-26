@@ -46,6 +46,44 @@ def init_weights(m):
         nn.init.constant_(m.bias, 0.0)
 
 
+class BatchWrapper(nn.Module):
+    def __init__(self, network: nn.Module, device: Optional[str] = "cpu"):
+        super(BatchWrapper, self).__init__()
+        self.network = network
+
+        self.register_parameter("dummy_param_0", nn.Parameter(torch.randn(1)))
+
+    def _is_batch(self, obs: TensorDict) -> bool:
+        if not obs.batch_size:
+            return False
+        return True
+
+    def _convert_to_heterodata(
+        obs: TensorDict, is_batch: bool = False
+    ) -> HeteroData | Batch:
+        if not is_batch:
+            return obs["hetero_data"]
+
+        # Otherwise form batch
+
+        hetero_data_list = obs["hetero_data"]
+
+        hetero_batch = Batch.from_data_list(hetero_data_list)
+
+        return hetero_batch
+
+    def forward(self, obs: TensorDict):
+        is_batch = self._is_batch(obs)
+
+        with record_function("CONVERT_DATA"):
+            with torch.no_grad():
+                data = self._convert_to_heterodata(obs, is_batch)
+
+        with record_function("FORWARD_PASS"):
+            out = self.network(data)
+        return out
+
+
 class HeteroDataWrapper(nn.Module):
     def __init__(self, network: nn.Module, device: Optional[str] = "cpu"):
         super(HeteroDataWrapper, self).__init__()

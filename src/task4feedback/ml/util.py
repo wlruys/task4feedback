@@ -31,11 +31,8 @@ def compute_gae(tensordict_data, gamma=1, lam=0.99):
         reward = tensordict_data["next", "reward"].view(-1)
         done = tensordict_data["next", "done"].view(-1)
         traj_ids = tensordict_data["collector", "traj_ids"].view(-1)
-        step_count = tensordict_data["step_count"].view(-1)
 
         advantage = torch.zeros_like(value)
-
-        print(tensordict_data.keys())
 
         for traj_id in traj_ids.unique():
             mask = traj_ids == traj_id
@@ -43,11 +40,6 @@ def compute_gae(tensordict_data, gamma=1, lam=0.99):
             traj_reward = reward[mask]
             traj_done = done[mask]
             traj_advantage = torch.zeros_like(traj_value)
-
-            print(step_count[mask])
-            print(
-                len(traj_value), len(traj_reward), len(traj_done), len(traj_advantage)
-            )
 
             gae = 0.0
             T = len(traj_value)
