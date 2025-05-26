@@ -59,9 +59,6 @@ from tensordict.nn import (
 )
 import torchrl
 import torch_geometric
-import aim
-from aim.pytorch import track_gradients_dists, track_params_dists
-
 
 seed = 1
 random.seed(seed)
@@ -111,9 +108,7 @@ def make_jacobi_env(config: JacobiConfig):
     input = SimulatorInput(
         m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
     )
-    env = RuntimeEnv(
-        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
-    )
+    env = RuntimeEnv(SimulatorFactory(input, spec, XYObserverFactory), device="cpu")
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
 
@@ -135,10 +130,10 @@ if __name__ == "__main__":
     geom = jgraph.data.geometry
     # generate_transition_matrix(geom)
 
-    w = DynamicWorkload(geom)
+    w = TrajectoryWorkload(geom)
 
     w.generate_initial_mass()
 
-    w.generate_correlated_workload(100, scale=0.1, step_size=200000, upper_bound=5000)
+    w.generate_workload(50)
 
     w.animate_workload(max_radius=0.03)
