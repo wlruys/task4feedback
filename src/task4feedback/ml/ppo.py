@@ -24,6 +24,7 @@ from task4feedback.graphs.mesh.plot import *
 from tensordict.nn import TensorDictSequential as Sequential
 from torchrl._utils import compile_with_warmup
 from torch.profiler import profile, record_function, ProfilerActivity
+from torchrl.objectives.utils import ValueEstimators
 
 
 @dataclass
@@ -147,6 +148,7 @@ def evaluate_policy(
                         "eval/animation": wandb.Video(
                             video_path,
                             caption=title,
+                            format="mp4",
                         )
                     }
                 )
@@ -222,7 +224,7 @@ def run_ppo_cleanrl_no(
         policy_device=config.collect_device,
         # compile_policy=True,
         cat_results=0,
-        use_buffers=True,
+        # use_buffers=True,
         trust_policy=True,
     )
 
@@ -363,6 +365,9 @@ def run_ppo_cleanrl_no(
 
     collect_start_t = time.perf_counter()
     for i, td in enumerate(collector):
+        if i >= config.num_collections:
+            break
+
         collect_break_t = time.perf_counter()
         print("Collection time:", collect_break_t - collect_start_t)
 
@@ -676,8 +681,10 @@ def run_ppo_torchrl(
     wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
 
-    _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
-    _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
+    _actor_td = HeteroDataWrapper(
+        actor_critic_base.actor,
+    )
+    _critic_td = HeteroDataWrapper(actor_critic_base.critic)
 
     module_action = TensorDictModule(
         _actor_td,
@@ -699,10 +706,10 @@ def run_ppo_torchrl(
         in_keys=["observation"],
     )
 
-    td_module_action = td_module_action.to(config.train_device)
-    td_critic_module = td_critic_module.to(config.train_device)
-    train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
-    train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
+    td_module_action = td_module_action.to(config.collect_device)
+    td_critic_module = td_critic_module.to(config.collect_device)
+    train_actor_network = copy.deepcopy(td_module_action).to(config.update_device)
+    train_critic_network = copy.deepcopy(td_critic_module).to(config.update_device)
     model = torch.nn.ModuleList([train_actor_network, train_critic_network])
 
     # Create evaluation environment if not provided
@@ -730,14 +737,14 @@ def run_ppo_torchrl(
         frames_per_batch=config.states_per_collection,
         reset_at_each_iter=True,
         cat_results=0,
-        device=config.train_device,
+        device=config.collect_device,
         env_device="cpu",
     )
     out_seed = collector.set_seed(config.seed)
 
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(
-            max_size=config.states_per_collection, device=config.train_device
+            max_size=config.states_per_collection, device=config.update_device
         ),
         sampler=SamplerWithoutReplacement(),
         pin_memory=torch.cuda.is_available(),
@@ -750,7 +757,9 @@ def run_ppo_torchrl(
         lmbda=config.gae_lmbda,
         value_network=model[1],
         average_gae=False,
-        device=config.train_device,
+        device=config.update_device,
+        shifted=False,
+        vectorized=False,
     )
 
     loss_module = ClipPPOLoss(
@@ -804,7 +813,7 @@ def run_ppo_torchrl(
             break
 
         print(f"Collection: {i}")
-        tensordict_data = tensordict_data.to(config.train_device, non_blocking=True)
+        tensordict_data = tensordict_data.to(config.update_device, non_blocking=True)
 
         with torch.no_grad():
             advantage_module(tensordict_data)

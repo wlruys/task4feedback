@@ -59,7 +59,7 @@ class BatchWrapper(nn.Module):
         return True
 
     def _convert_to_heterodata(
-        obs: TensorDict, is_batch: bool = False
+        self, obs: TensorDict, is_batch: bool = False
     ) -> HeteroData | Batch:
         if not is_batch:
             return obs["hetero_data"]
@@ -68,9 +68,18 @@ class BatchWrapper(nn.Module):
 
         hetero_data_list = obs["hetero_data"]
 
-        hetero_batch = Batch.from_data_list(hetero_data_list)
+        print(obs.shape, len(obs))
 
-        return hetero_batch
+        batches = []
+
+        for hlist in hetero_data_list:
+            batches.append(Batch.from_data_list(hlist))
+
+        # hetero_batch = Batch.from_data_list(hetero_data_list)
+
+        print(batches)
+
+        return batches
 
     def forward(self, obs: TensorDict):
         is_batch = self._is_batch(obs)
@@ -132,6 +141,8 @@ class HeteroDataWrapper(nn.Module):
 
         _h_data = []
 
+        print("obs", obs.shape, obs.batch_size)
+
         if is_cuda:
             for i in range(obs.batch_size[0]):
                 if actions is not None:
@@ -147,10 +158,12 @@ class HeteroDataWrapper(nn.Module):
                 if actions is not None:
                     _obs = observation_to_heterodata(obs[i], actions=actions[i])
                 else:
+                    print(i, len(obs))
+                    print(obs[i])
                     _obs = observation_to_heterodata(obs[i])
                 _h_data.append(_obs)
 
-        batch_obs = (Batch.from_data_list(_h_data),)
+        batch_obs = Batch.from_data_list(_h_data)
         task_count = obs["nodes", "tasks", "count"]
         data_count = obs["nodes", "data", "count"]
 
@@ -1437,7 +1450,7 @@ class HeteroConvkLayer(nn.Module):
         self.hetero_convs.append(
             HeteroConv(
                 {
-                    ("data", "reads", "tasks"): GraphConv(
+                    ("data", "to", "tasks"): GraphConv(
                         (
                             feature_config.data_feature_dim,
                             feature_config.task_feature_dim,
@@ -1445,7 +1458,7 @@ class HeteroConvkLayer(nn.Module):
                         layer_config.hidden_channels,
                         aggr="add",
                     ),
-                    ("tasks", "reads", "data"): GraphConv(
+                    ("tasks", "to", "data"): GraphConv(
                         (
                             feature_config.task_feature_dim,
                             feature_config.data_feature_dim,

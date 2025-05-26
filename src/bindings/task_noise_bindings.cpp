@@ -12,7 +12,8 @@ using namespace nb::literals;
 
 void init_task_noise_ext(nb::module_ &m) {
   nb::class_<TaskNoise>(m, "TaskNoise")
-      .def(nb::init<Tasks &, unsigned int, unsigned int>(), "tasks"_a, "seed"_a = 0, "pseed"_a = 0)
+      .def(nb::init<Tasks &, unsigned int, unsigned int>(), "tasks"_a, "seed"_a = 0, "pseed"_a = 0,
+           nb::keep_alive<1, 2>()) // Keep tasks alive as long as noise object exists
       .def("set_seed", &TaskNoise::set_seed, "seed"_a)
       .def("set_pseed", &TaskNoise::set_pseed, "pseed"_a)
       .def("get", &TaskNoise::get, "task_id"_a, "arch"_a)
@@ -35,5 +36,6 @@ void init_task_noise_ext(nb::module_ &m) {
       .def("load_priorities_from_binary", &TaskNoise::load_priorities_from_binary, "filename"_a);
 
   nb::class_<LognormalTaskNoise>(m, "LognormalTaskNoise")
-      .def(nb::init<Tasks &, unsigned int, unsigned int>(), "tasks"_a, "seed"_a = 0, "pseed"_a = 0);
+      .def(nb::init<Tasks &, unsigned int, unsigned int>(), "tasks"_a, "seed"_a = 0, "pseed"_a = 0,
+           nb::keep_alive<1, 2>()); // Keep tasks alive as long as noise object exists
 }

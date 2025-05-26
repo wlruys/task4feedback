@@ -38,7 +38,9 @@ void init_simulator_ext(nb::module_ &m) {
       .def(nb::init<Tasks &, Data &, Devices &, Topology &, TaskNoise &, CommunicationNoise &,
                     TransitionConditions &>(),
            "tasks"_a, "data"_a, "devices"_a, "topology"_a, "task_noise"_a, "communication_noise"_a,
-           "transition_conditions"_a)
+           "transition_conditions"_a, nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(),
+           nb::keep_alive<1, 4>(), nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(),
+           nb::keep_alive<1, 7>(), nb::keep_alive<1, 8>()) // Keep all referenced objects alive
       .def(nb::init<SchedulerInput &>(), "other"_a);
 
   nb::class_<Simulator>(m, "Simulator")
@@ -47,7 +49,8 @@ void init_simulator_ext(nb::module_ &m) {
       .def_ro("last_execution_state", &Simulator::last_state)
       .def_ro("last_event", &Simulator::last_event)
       .def_ro("data_initialized", &Simulator::data_initialized)
-      .def(nb::init<SchedulerInput &, Mapper &>(), "input"_a, "mapper"_a)
+      .def(nb::init<SchedulerInput &, Mapper &>(), "input"_a, "mapper"_a, nb::keep_alive<1, 2>(),
+           nb::keep_alive<1, 3>()) // Keep input and mapper alive
       .def(nb::init<Simulator &>(), "other"_a)
       .def("initialize", &Simulator::initialize, "create_data_tasks"_a = true,
            "initialize_data_manager"_a = false)
@@ -58,7 +61,8 @@ void init_simulator_ext(nb::module_ &m) {
       .def("disable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(false); })
       .def("skip_external_mapping", &Simulator::skip_external_mapping,
            "enqueue_mapping_event"_a = true)
-      .def("set_mapper", &Simulator::set_mapper, "mapper"_a)
+      .def("set_mapper", &Simulator::set_mapper, "mapper"_a,
+           nb::keep_alive<1, 2>()) // Keep mapper alive
       .def("get_state", nb::overload_cast<>(&Simulator::get_state, nb::const_),
            nb::rv_policy::reference_internal)
       .def("run", &Simulator::run)

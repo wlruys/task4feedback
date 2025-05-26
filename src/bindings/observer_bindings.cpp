@@ -177,9 +177,12 @@ template <typename FEType> void bind_int_feature(nb::module_ &m, const char *cla
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(task_id, sp);
            })
-      .def_static("create", [](SchedulerState &state, size_t n) -> std::shared_ptr<IFeature> {
-        return std::make_shared<FeatureAdapter<FEType>>(FEType(state, n));
-      });
+      .def_static(
+          "create",
+          [](SchedulerState &state, size_t n) -> std::shared_ptr<IFeature> {
+            return std::make_shared<FeatureAdapter<FEType>>(FEType(state, n));
+          },
+          nb::rv_policy::take_ownership); // Add explicit ownership policy
 }
 
 template <typename FEType> void bind_int_edge_feature(nb::module_ &m, const char *class_name) {
@@ -193,9 +196,12 @@ template <typename FEType> void bind_int_edge_feature(nb::module_ &m, const char
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(source_id, target_id, sp);
            })
-      .def_static("create", [](SchedulerState &state, size_t n) -> std::shared_ptr<IEdgeFeature> {
-        return std::make_shared<EdgeFeatureAdapter<FEType>>(FEType(state, n));
-      });
+      .def_static(
+          "create",
+          [](SchedulerState &state, size_t n) -> std::shared_ptr<IEdgeFeature> {
+            return std::make_shared<EdgeFeatureAdapter<FEType>>(FEType(state, n));
+          },
+          nb::rv_policy::take_ownership); // Add explicit ownership policy
 }
 
 template <typename FEType> void bind_state_feature(nb::module_ &m, const char *class_name) {
@@ -209,9 +215,12 @@ template <typename FEType> void bind_state_feature(nb::module_ &m, const char *c
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(task_id, sp);
            })
-      .def_static("create", [](SchedulerState &n) -> std::shared_ptr<IFeature> {
-        return std::make_shared<FeatureAdapter<FEType>>(FEType(n));
-      });
+      .def_static(
+          "create",
+          [](SchedulerState &n) -> std::shared_ptr<IFeature> {
+            return std::make_shared<FeatureAdapter<FEType>>(FEType(n));
+          },
+          nb::rv_policy::take_ownership); // Add explicit ownership policy
 }
 
 template <typename FEType> void bind_state_edge_feature(nb::module_ &m, const char *class_name) {
@@ -225,9 +234,12 @@ template <typename FEType> void bind_state_edge_feature(nb::module_ &m, const ch
              std::span<float> sp(data, self.getFeatureDim());
              self.extractFeature(source_id, target_id, sp);
            })
-      .def_static("create", [](SchedulerState &n) -> std::shared_ptr<IEdgeFeature> {
-        return std::make_shared<EdgeFeatureAdapter<FEType>>(FEType(n));
-      });
+      .def_static(
+          "create",
+          [](SchedulerState &n) -> std::shared_ptr<IEdgeFeature> {
+            return std::make_shared<EdgeFeatureAdapter<FEType>>(FEType(n));
+          },
+          nb::rv_policy::take_ownership); // Add explicit ownership policy
 }
 
 template <typename... Features>
@@ -334,7 +346,8 @@ void init_observer_ext(nb::module_ &m) {
 
   nb::class_<RuntimeFeatureExtractor>(m, "RuntimeFeatureExtractor")
       .def(nb::init<>())
-      .def("add_feature", &RuntimeFeatureExtractor::addFeature)
+      .def("add_feature", &RuntimeFeatureExtractor::addFeature, nb::arg("feature"),
+           nb::keep_alive<1, 2>()) // Keep feature alive as long as extractor exists
       .def_prop_ro("feature_dim", &RuntimeFeatureExtractor::getFeatureDim)
       .def("get_features",
            [](const RuntimeFeatureExtractor &self, int32_t task_id,
@@ -348,7 +361,8 @@ void init_observer_ext(nb::module_ &m) {
 
   nb::class_<RuntimeEdgeFeatureExtractor>(m, "RuntimeEdgeFeatureExtractor")
       .def(nb::init<>())
-      .def("add_feature", &RuntimeEdgeFeatureExtractor::addFeature)
+      .def("add_feature", &RuntimeEdgeFeatureExtractor::addFeature, nb::arg("feature"),
+           nb::keep_alive<1, 2>()) // Keep feature alive as long as extractor exists
       .def_prop_ro("feature_dim", &RuntimeEdgeFeatureExtractor::getFeatureDim)
       .def("get_features",
            [](const RuntimeEdgeFeatureExtractor &self, int32_t source_id, int32_t target_id,

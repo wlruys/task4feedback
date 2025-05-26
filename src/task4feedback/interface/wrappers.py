@@ -1350,7 +1350,7 @@ class ExternalObserver:
         self.get_task_features(
             output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
         )
-        #print("Task attribute", output["nodes"]["tasks"]["attr"])
+        # print("Task attribute", output["nodes"]["tasks"]["attr"])
 
     def data_observation(self, output: TensorDict):
         # print("Data observation")
@@ -1572,12 +1572,13 @@ class HeterogeneousExternalObserver(ExternalObserver):
         ntasks = output["nodes"]["tasks"]["count"][0]
         ndata = output["nodes"]["data"]["count"][0]
 
-        # Read & Write edges
+        # Read
         _, count = self.get_task_data_edges(
             output["nodes"]["tasks"]["glb"][:ntasks],
             output["nodes"]["data"]["glb"][:ndata],
             output["edges"]["tasks_data"]["idx"],
             output["edges"]["tasks_data"]["glb"],
+            AccessType.READ,
         )
         output["edges"]["tasks_data"]["count"][0] = count
 
@@ -1587,30 +1588,30 @@ class HeterogeneousExternalObserver(ExternalObserver):
         )
 
         # Read only edges
-        _, count = self.get_task_data_edges(
-            output["nodes"]["tasks"]["glb"][:ntasks],
-            output["nodes"]["data"]["glb"][:ndata],
-            output["edges"]["tasks_reads_data"]["idx"],
-            output["edges"]["tasks_reads_data"]["glb"],
-            AccessType.READ,
-        )
-        output["edges"]["tasks_reads_data"]["count"][0] = count
+        # _, count = self.get_task_data_edges(
+        #     output["nodes"]["tasks"]["glb"][:ntasks],
+        #     output["nodes"]["data"]["glb"][:ndata],
+        #     output["edges"]["tasks_reads_data"]["idx"],
+        #     output["edges"]["tasks_reads_data"]["glb"],
+        #     AccessType.READ,
+        # )
+        # output["edges"]["tasks_reads_data"]["count"][0] = count
 
-        self.get_task_data_features(
-            output["edges"]["tasks_reads_data"]["glb"][:, :count],
-            output["edges"]["tasks_reads_data"]["attr"],
-        )
+        # self.get_task_data_features(
+        #     output["edges"]["tasks_reads_data"]["glb"][:, :count],
+        #     output["edges"]["tasks_reads_data"]["attr"],
+        # )
 
         # Write only edges
-        _, count = self.get_task_data_edges(
-            output["nodes"]["tasks"]["glb"][:ntasks],
-            output["nodes"]["data"]["glb"][:ndata],
-            output["edges"]["tasks_write_data"]["idx"],
-            output["edges"]["tasks_write_data"]["glb"],
-            AccessType.WRITE,
-        )
+        # _, count = self.get_task_data_edges(
+        #     output["nodes"]["tasks"]["glb"][:ntasks],
+        #     output["nodes"]["data"]["glb"][:ndata],
+        #     output["edges"]["tasks_write_data"]["idx"],
+        #     output["edges"]["tasks_write_data"]["glb"],
+        #     AccessType.WRITE,
+        # )
 
-        output["edges"]["tasks_write_data"]["count"][0] = count
+        # output["edges"]["tasks_write_data"]["count"][0] = count
 
         self.get_task_data_features(
             output["edges"]["tasks_write_data"]["glb"][:, :count],
@@ -1652,7 +1653,7 @@ class HeterogeneousExternalObserver(ExternalObserver):
         self.task_data_observation(output)
         self.task_device_observation(output, use_all_tasks=True)
         self.data_device_observation(output)
-        
+
         # print("Task attribute", output["nodes"]["tasks"]["attr"])
         # print("Data attribute", output["nodes"]["data"]["attr"])
         # print("Device attribute", output["nodes"]["devices"]["attr"])
@@ -1661,11 +1662,11 @@ class HeterogeneousExternalObserver(ExternalObserver):
         output["aux"]["time"][0] = self.simulator.time
         output["aux"]["improvement"][0] = -2.0
         # print("Auxiliary observation")
-        
+
         output["hetero_data"] = observation_to_heterodata(output)
-        
-        output["nodes"] = 0 
-        output["edges"] = 0
+
+        # output["nodes"] = 0
+        # output["edges"] = 0
 
         # print("All Data", output["edges"]["tasks_data"]["count"])
         # print("Read Data", output["edges"]["tasks_reads_data"]["count"])
