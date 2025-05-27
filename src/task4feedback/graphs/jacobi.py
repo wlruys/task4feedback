@@ -362,6 +362,7 @@ class JacobiGraph(ComputeDataGraph):
         bandwidth: int = 1000,
         level_chunks: int = 1,
         n_parts: int = 4,
+        offset: int = 0,  # 1 to ignore cpu
     ):
         partitions = []
         for i in range(level_chunks):
@@ -376,11 +377,11 @@ class JacobiGraph(ComputeDataGraph):
                 arch, bandwidth=bandwidth, levels=levels
             )
             edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
-
+            partition = [x + offset for x in partition]
             partitions.append(partition)
 
         self.partitions = partitions
-        print("Partitions: ", partitions)
+        # print(f"{len(partitions)} Partitions: ", partitions)
         return partitions
 
     def align_partitions(self):
@@ -505,7 +506,13 @@ class LevelPartitionMapper:
         assert isinstance(graph, JacobiGraph)
         level = graph.task_to_level[global_task_id]
         cell_id = graph.task_to_cell[global_task_id]
-        device = self.level_cell_mapping[level][cell_id]
+        total_levels = graph.config.steps
+        if len(self.level_cell_mapping) != total_levels:
+            device = self.level_cell_mapping[
+                level // (total_levels // len(self.level_cell_mapping))
+            ][cell_id]
+        else:
+            device = self.level_cell_mapping[level][cell_id]
         state = simulator.simulator.get_state()
         mapping_priority = state.get_mapping_priority(global_task_id)
         return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
@@ -685,8 +692,8 @@ class XYHeterogeneousObserverFactory(XYExternalHeterogeneousObserverFactory):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         task_feature_factory.add(fastsim.DepthTaskFeature)
-        #task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        #task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        # task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
         task_feature_factory.add(fastsim.TaskStateFeature)
 
         data_feature_factory = FeatureExtractorFactory()

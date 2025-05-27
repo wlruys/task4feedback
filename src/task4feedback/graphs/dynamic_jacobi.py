@@ -77,7 +77,7 @@ class DynamicJacobiGraph(JacobiGraph):
         super(JacobiGraph, self).__init__()
         self.config = config
         self.data = DynamicJacobiData.from_mesh(geometry, config, self.workload)
-        self._build_graph()
+        self._build_graph(retire_data=True)
         self._apply_workload_variant()
 
     def _apply_workload_variant(self):

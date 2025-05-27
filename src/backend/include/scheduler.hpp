@@ -806,6 +806,7 @@ protected:
   std::size_t scheduler_event_count = 1;
   std::size_t success_count = 0;
   std::size_t eviction_count = 0;
+  std::size_t compute_on_fly = 0;
 
   bool can_map = true;
   bool can_reserve = true;

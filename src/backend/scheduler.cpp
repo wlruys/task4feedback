@@ -1140,7 +1140,6 @@ bool Scheduler::launch_eviction_task(taskid_t task_id, devid_t destination_id,
   // Record launching time
   s.notify_launched(task_id);
   success_count += 1;
-  breakpoints.check_task_breakpoint(EventType::LAUNCHER, task_id);
 
   // Create completion event
   timecount_t completion_time = s.global_time + duration.duration;
@@ -1185,6 +1184,7 @@ void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_ma
       launchable.next();
       continue;
     }
+    compute_on_fly += 1;
     launchable.pop();
     launchable.next();
   }
@@ -1313,7 +1313,7 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
   auto current_time = s.global_time;
 
   if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
-    if (launchable.total_size() + data_launchable.total_size()) {
+    if (launchable.total_size() + data_launchable.total_size() + compute_on_fly) {
       SPDLOG_DEBUG("Time:{} Evictor waiting for all {} compute and {} data task to finish",
                    current_time, launchable.total_size(), data_launchable.total_size());
       event_manager.create_event(EventType::LAUNCHER, current_time);
@@ -1499,6 +1499,7 @@ void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
   push_launchable_data(newly_launchable_data_tasks);
   // spdlog::debug("Newly launchable data tasks: {}",
   //               newly_launchable_data_tasks.size());
+  compute_on_fly -= 1;
 }
 
 void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
