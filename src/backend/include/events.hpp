@@ -3,8 +3,10 @@
 #include "resources.hpp"
 #include "settings.hpp"
 #include <cstddef>
+#include <queue>
 #include <utility>
 #include <variant>
+#include <vector>
 
 enum class EventType {
   MAPPER = 0,
