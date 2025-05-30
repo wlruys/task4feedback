@@ -1649,10 +1649,12 @@ class AddConvStateNet(nn.Module):
         feature_config: FeatureDimConfig,
         layer_config: LayerConfig,
         n_devices: int,
+        use_time: bool = True,
     ):
         super(AddConvStateNet, self).__init__()
         self.feature_config = feature_config
         self.layer_config = layer_config
+        self.use_time = use_time
 
         self.data_task_conv = DataTaskGraphConv(feature_config, layer_config, n_devices)
         data_task_dim = self.data_task_conv.output_dim
@@ -1673,7 +1675,8 @@ class AddConvStateNet(nn.Module):
         self.device_layer = nn.Sequential(
             layer_init(
                 nn.Linear(
-                    feature_config.device_feature_dim * n_devices + 1,
+                    feature_config.device_feature_dim * n_devices
+                    + (1 if self.use_time else 0),
                     layer_config.hidden_channels,
                 )
             ),
@@ -1716,7 +1719,8 @@ class AddConvStateNet(nn.Module):
         else:
             time.reshape(-1, 1)
 
-        device_features = torch.cat([device_features, time], dim=-1)
+        if self.use_time:
+            device_features = torch.cat([device_features, time], dim=-1)
 
         device_features = self.device_layer(device_features)
 
@@ -1893,11 +1897,12 @@ class AddConvPolicyNet(nn.Module):
         layer_config: LayerConfig,
         n_devices: int,
         add_progress: bool = False,
+        add_time: bool = False,
     ):
         super(AddConvPolicyNet, self).__init__()
 
         self.add_conv_state_net = AddConvStateNet(
-            feature_config, layer_config, n_devices
+            feature_config, layer_config, n_devices, use_time=add_time
         )
 
         self.add_progress = add_progress
@@ -1921,19 +1926,21 @@ class AddConvPolicyNet(nn.Module):
 
 
 class AddConvValueNet(nn.Module):
+
     def __init__(
         self,
         feature_config: FeatureDimConfig,
         layer_config: LayerConfig,
         n_devices: int,
         add_progress: bool = False,
+        add_time: bool = False,
     ):
         super(AddConvValueNet, self).__init__()
         self.feature_config = feature_config
         self.layer_config = layer_config
 
         self.add_conv_state_net = AddConvStateNet(
-            feature_config, layer_config, n_devices
+            feature_config, layer_config, n_devices, use_time=add_time
         )
         self.add_progress = add_progress
 
@@ -2317,16 +2324,17 @@ class AddConvSeparateNet(nn.Module):
         layer_config: LayerConfig,
         n_devices: int,
         add_progress: bool = False,
+        add_time: bool = False,
     ):
         super(AddConvSeparateNet, self).__init__()
         self.feature_config = feature_config
         self.layer_config = layer_config
 
         self.actor = AddConvPolicyNet(
-            feature_config, layer_config, n_devices, add_progress
+            feature_config, layer_config, n_devices, add_progress, add_time
         )
         self.critic = AddConvValueNet(
-            feature_config, layer_config, n_devices, add_progress
+            feature_config, layer_config, n_devices, add_progress, add_time
         )
 
     def forward(self, data: HeteroData | Batch, counts=None, progress=None):

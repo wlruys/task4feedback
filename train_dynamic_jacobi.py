@@ -313,6 +313,7 @@ def train(wandb_config):
         n_devices=wandb_config["system_config"]["n_devices"],
         # k=wandb_config["model_config"]["conv_layers"],
         add_progress=model_config_info.get("add_progress", False),
+        add_time=model_config_info.get("add_time", True),
     )
 
     # Log model parameters count
@@ -485,7 +486,7 @@ if __name__ == "__main__":
             "num_collections": 200,
             "graphs_per_collection": 16,
             "train_device": "cpu",
-            "workers": 4,
+            "workers": 8,
             "ent_coef": 0.001,
             "gae_lmbda": 0.95,
             "gae_gamma": 1,
@@ -502,7 +503,8 @@ if __name__ == "__main__":
         "model_config": {
             "model_architecture": "AddConvSeparateNet",
             "conv_layers": 2,
-            "add_progress": True,
+            "add_progress": False,
+            "add_time": False,
         },
         "wandb_config": {
             "project": "SanityCheck_Jacobi",
