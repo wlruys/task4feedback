@@ -1296,6 +1296,7 @@ class ExternalObserver:
                 "candidates": _make_index_tensor(spec.max_candidates),
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
+                "progress": torch.zeros((1), dtype=torch.float32),
                 # "time": torch.tensor([0], dtype=torch.int64),
             }
         )

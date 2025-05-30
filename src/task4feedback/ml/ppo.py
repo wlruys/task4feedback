@@ -698,6 +698,7 @@ def run_ppo_torchrl(
                 "collect_loss/advantage_std": tensordict_data["advantage"].std().item(),
             },
         )
+        replay_buffer.empty()
 
     # Final evaluation
     if config.eval_interval > 0:

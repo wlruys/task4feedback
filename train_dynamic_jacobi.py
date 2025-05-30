@@ -68,14 +68,16 @@ from task4feedback.ml.env import *
 import wandb
 from task4feedback.graphs.dynamic_jacobi import *
 
-seed = 1
+seed = 2
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
 torch.backends.cudnn.deterministic = True
+OPTIMAL = None
 
 
-def build_jacobi_graph(config: JacobiConfig, metis_init=False, nparts=4) -> JacobiGraph:
+def build_jacobi_graph(config: JacobiConfig, metis_init=True, nparts=4) -> JacobiGraph:
+    global OPTIMAL
     mesh = generate_quad_mesh(L=config.L, n=config.n)
     geom = build_geometry(mesh)
 
@@ -85,8 +87,9 @@ def build_jacobi_graph(config: JacobiConfig, metis_init=False, nparts=4) -> Jaco
     if metis_init:
         partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=nparts)
         # offset by 1 to ignore cpu
-        partition = [x + 1 for x in partition]
-        jgraph.set_cell_locations(partition)
+        OPTIMAL = [x + 1 for x in partition]
+        jgraph.set_cell_locations(OPTIMAL, step=0)
+        jgraph.set_cell_locations([-1 for i in partition], step=1)
 
     jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
 
@@ -147,7 +150,7 @@ def make_env(
     n_devices = system_config["n_devices"]
     bandwidth = system_config["bandwidth"]
     latency = system_config["latency"]
-    s = uniform_connected_devices(n_devices, 100000000000000, latency, bandwidth)
+    s = uniform_connected_devices(n_devices, 50 * 1000, latency, bandwidth)
     jgraph = graph_builder(graph_config)
 
     d = jgraph.get_blocks()
@@ -191,6 +194,7 @@ def make_env(
         change_priority=change_priority,
         seed=seed,
         change_locations=change_locations,
+        answer=OPTIMAL,
     )
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
@@ -307,6 +311,8 @@ def train(wandb_config):
         feature_config=feature_config,
         layer_config=layer_config,
         n_devices=wandb_config["system_config"]["n_devices"],
+        # k=wandb_config["model_config"]["conv_layers"],
+        add_progress=model_config_info.get("add_progress", False),
     )
 
     # Log model parameters count
@@ -332,6 +338,7 @@ def train(wandb_config):
         eval_episodes=mconfig.get("eval_episodes", 1),
         states_per_collection=n_tasks * mconfig.get("graphs_per_collection", 10),
         max_grad_norm=mconfig.get("max_grad_norm", 0.5),
+        num_collections=mconfig.get("num_collections", 5000),
     )
 
     # Define environment creation function for PPO
@@ -453,12 +460,12 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "EFTIncrementalEnv",
+            "runtime_env": "SanityCheckEnv",
         },
         "system_config": {
             "type": "uniform_connected_devices",
             "n_devices": 5,
-            "bandwidth": 1,
+            "bandwidth": 10000,
             "latency": 1,
         },
         "feature_config": {
@@ -475,28 +482,31 @@ if __name__ == "__main__":
             "n_heads": 2,
         },
         "mconfig": {
+            "num_collections": 200,
             "graphs_per_collection": 16,
             "train_device": "cpu",
             "workers": 4,
-            "ent_coef": 0,
-            "gae_lmbda": 0.9,
+            "ent_coef": 0.001,
+            "gae_lmbda": 0.95,
             "gae_gamma": 1,
             "normalize_advantage": True,
             "clip_eps": 0.2,
             "clip_vloss": False,
-            "minibatch_size": 128,
+            "minibatch_size": 64,
         },
         "env_config": {
             "change_priority": True,
             "change_locations": True,
-            "seed": 1,
+            "seed": 2,
         },
         "model_config": {
-            "model_architecture": "HeteroConvSeparateNet",
+            "model_architecture": "AddConvSeparateNet",
+            "conv_layers": 2,
+            "add_progress": True,
         },
         "wandb_config": {
-            "project": "test",
-            "name": "Random",
+            "project": "SanityCheck_Jacobi",
+            "name": "2-Layer AddConv UseProgress",
         },
     }
 

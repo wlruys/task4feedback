@@ -74,6 +74,7 @@ class HeteroDataWrapper(nn.Module):
                 _obs,
                 obs["nodes", "tasks", "count"],
                 obs["nodes", "data", "count"],
+                obs["aux", "progress"],
             )
 
         # flatten and save the batch size
@@ -94,15 +95,16 @@ class HeteroDataWrapper(nn.Module):
             Batch.from_data_list(_h_data),
             obs["nodes", "tasks", "count"],
             obs["nodes", "data", "count"],
+            obs["aux", "progress"],
         )
 
     def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
-        data, task_count, data_count = self._convert_to_heterodata(
+        data, task_count, data_count, progress = self._convert_to_heterodata(
             obs, is_batch, actions=actions
         )
         data = data.to(self.device)
-        out = self.network(data, (task_count, data_count))
+        out = self.network(data, (task_count, data_count), progress)
         return out
 
 
@@ -1839,16 +1841,17 @@ class HeteroConvPolicyNet(nn.Module):
         )
 
         self.output_head = OutputHead(
-            self.heteroconv_state_net.output_dim,
+            self.heteroconv_state_net.output_dim + 1,
             layer_config.hidden_channels,
             n_devices - 1,
             logits=True,
         )
 
-    def forward(self, data: HeteroData | Batch, counts=None):
-        # print("HeteroConvPolicyNet")
+    def forward(self, data: HeteroData | Batch, counts=None, progress=None):
         state_features = self.heteroconv_state_net(data, counts)
-        d_logits = self.output_head(state_features)
+        d_logits = self.output_head(
+            torch.cat([state_features, progress.unsqueeze(-1)], dim=-1)
+        )
         return d_logits
 
 
@@ -1869,16 +1872,17 @@ class HeteroConvValueNet(nn.Module):
         )
 
         self.output_head = OutputHead(
-            self.heteroconv_state_net.output_dim,
+            self.heteroconv_state_net.output_dim + 1,
             layer_config.hidden_channels,
             1,
             logits=False,
         )
 
-    def forward(self, data: HeteroData | Batch, counts=None):
-        # print("HeteroConvValueNet")
+    def forward(self, data: HeteroData | Batch, counts=None, progress=None):
         state_features = self.heteroconv_state_net(data, counts)
-        v = self.output_head(state_features)
+        v = self.output_head(
+            torch.cat([state_features, progress.unsqueeze(-1)], dim=-1)
+        )
         return v
 
 
@@ -1888,6 +1892,7 @@ class AddConvPolicyNet(nn.Module):
         feature_config: FeatureDimConfig,
         layer_config: LayerConfig,
         n_devices: int,
+        add_progress: bool = False,
     ):
         super(AddConvPolicyNet, self).__init__()
 
@@ -1895,16 +1900,23 @@ class AddConvPolicyNet(nn.Module):
             feature_config, layer_config, n_devices
         )
 
+        self.add_progress = add_progress
+
         self.output_head = OutputHead(
-            self.add_conv_state_net.output_dim,
+            self.add_conv_state_net.output_dim + int(self.add_progress),
             layer_config.hidden_channels,
             n_devices - 1,
             logits=True,
         )
 
-    def forward(self, data: HeteroData | Batch, counts=None):
+    def forward(self, data: HeteroData | Batch, counts=None, progress=None):
         state_features = self.add_conv_state_net(data, counts)
-        d_logits = self.output_head(state_features)
+        if self.add_progress:
+            d_logits = self.output_head(
+                torch.cat([state_features, progress.unsqueeze(-1)], dim=-1)
+            )
+        else:
+            d_logits = self.output_head(state_features)
         return d_logits
 
 
@@ -1914,6 +1926,7 @@ class AddConvValueNet(nn.Module):
         feature_config: FeatureDimConfig,
         layer_config: LayerConfig,
         n_devices: int,
+        add_progress: bool = False,
     ):
         super(AddConvValueNet, self).__init__()
         self.feature_config = feature_config
@@ -1922,17 +1935,23 @@ class AddConvValueNet(nn.Module):
         self.add_conv_state_net = AddConvStateNet(
             feature_config, layer_config, n_devices
         )
+        self.add_progress = add_progress
 
         self.output_head = OutputHead(
-            self.add_conv_state_net.output_dim,
+            self.add_conv_state_net.output_dim + int(self.add_progress),
             layer_config.hidden_channels,
             1,
             logits=False,
         )
 
-    def forward(self, data: HeteroData | Batch, counts=None):
+    def forward(self, data: HeteroData | Batch, counts=None, progress=None):
         state_features = self.add_conv_state_net(data, counts)
-        v = self.output_head(state_features)
+        if self.add_progress:
+            v = self.output_head(
+                torch.cat([state_features, progress.unsqueeze(-1)], dim=-1)
+            )
+        else:
+            v = self.output_head(state_features)
         return v
 
 
@@ -2297,19 +2316,24 @@ class AddConvSeparateNet(nn.Module):
         feature_config: FeatureDimConfig,
         layer_config: LayerConfig,
         n_devices: int,
+        add_progress: bool = False,
     ):
         super(AddConvSeparateNet, self).__init__()
         self.feature_config = feature_config
         self.layer_config = layer_config
 
-        self.actor = AddConvPolicyNet(feature_config, layer_config, n_devices)
-        self.critic = AddConvValueNet(feature_config, layer_config, n_devices)
+        self.actor = AddConvPolicyNet(
+            feature_config, layer_config, n_devices, add_progress
+        )
+        self.critic = AddConvValueNet(
+            feature_config, layer_config, n_devices, add_progress
+        )
 
-    def forward(self, data: HeteroData | Batch, counts=None):
+    def forward(self, data: HeteroData | Batch, counts=None, progress=None):
         if next(self.actor.parameters()).is_cuda:
             data = data.to("cuda")
-        d_logits = self.actor(data, counts)
-        v = self.critic(data, counts)
+        d_logits = self.actor(data, counts, progress)
+        v = self.critic(data, counts, progress)
         return d_logits, v
 
 
@@ -2337,10 +2361,10 @@ class HeteroConvSeparateNet(nn.Module):
         self.actor = HeteroConvPolicyNet(feature_config, layer_config, n_devices, k=k)
         self.critic = HeteroConvValueNet(feature_config, layer_config, n_devices, k=k)
 
-    def forward(self, data: HeteroData | Batch, counts=None):
+    def forward(self, data: HeteroData | Batch, counts=None, progress=None):
         # print("HeteroConvSeparateNet")
         if next(self.actor.parameters()).is_cuda:
             data = data.to("cuda")
-        d_logits = self.actor(data, counts)
-        v = self.critic(data, counts)
+        d_logits = self.actor(data, counts, progress)
+        v = self.critic(data, counts, progress)
         return d_logits, v
