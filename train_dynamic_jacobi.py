@@ -68,7 +68,7 @@ from task4feedback.ml.env import *
 import wandb
 from task4feedback.graphs.dynamic_jacobi import *
 
-seed = 2
+seed = 1111
 random.seed(seed)
 np.random.seed(seed)
 torch.manual_seed(seed)
@@ -144,13 +144,15 @@ def make_env(
     change_priority=True,
     change_locations=True,
     seed=1000,
+    randomize_interval=10,
 ):
     gmsh.initialize()
 
     n_devices = system_config["n_devices"]
     bandwidth = system_config["bandwidth"]
     latency = system_config["latency"]
-    s = uniform_connected_devices(n_devices, 50 * 1000, latency, bandwidth)
+    memory = system_config.get("memory", 50 * 1000)
+    s = uniform_connected_devices(n_devices, memory, latency, bandwidth)
     jgraph = graph_builder(graph_config)
 
     d = jgraph.get_blocks()
@@ -195,6 +197,7 @@ def make_env(
         seed=seed,
         change_locations=change_locations,
         answer=OPTIMAL,
+        randomize_interval=randomize_interval,
     )
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
@@ -281,6 +284,7 @@ def train(wandb_config):
         change_priority=env_config["change_priority"],
         change_locations=env_config["change_locations"],
         seed=env_config["seed"],
+        randomize_interval=wandb_config.get("randomize_interval", 10),
     )
 
     graph = env.simulator.input.graph
@@ -461,13 +465,14 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "SanityCheckEnv",
+            "runtime_env": "RunningAvgEnv",
         },
         "system_config": {
             "type": "uniform_connected_devices",
             "n_devices": 5,
-            "bandwidth": 10000,
+            "bandwidth": 1,
             "latency": 1,
+            "memory": 50 * 1000,
         },
         "feature_config": {
             "observer_factory": "XYHeterogeneousObserverFactory",
@@ -483,7 +488,7 @@ if __name__ == "__main__":
             "n_heads": 2,
         },
         "mconfig": {
-            "num_collections": 200,
+            "num_collections": 10000,
             "graphs_per_collection": 16,
             "train_device": "cpu",
             "workers": 8,
@@ -498,17 +503,18 @@ if __name__ == "__main__":
         "env_config": {
             "change_priority": True,
             "change_locations": True,
-            "seed": 2,
+            "seed": 1111,
+            "randomize_interval": 10,  # Interval for randomizing locations
         },
         "model_config": {
             "model_architecture": "AddConvSeparateNet",
             "conv_layers": 2,
-            "add_progress": False,
-            "add_time": False,
+            "add_progress": True,
+            "add_time": True,
         },
         "wandb_config": {
-            "project": "SanityCheck_Jacobi",
-            "name": "2-Layer AddConv UseProgress",
+            "project": "RunningAvg_Jacobi",
+            "name": "AddConv,Progress,Time,seed=1111",
         },
     }
 

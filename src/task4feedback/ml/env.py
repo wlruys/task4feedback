@@ -44,6 +44,7 @@ class RuntimeEnv(EnvBase):
         location_randomness=1,
         location_list: Optional[List[int]] = None,
         answer: Optional[List[int]] = None,
+        randomize_interval: int = 1,
     ):
         super().__init__(device=device)
         # print("Initializing environment")
@@ -53,6 +54,7 @@ class RuntimeEnv(EnvBase):
         self.change_locations = change_locations
         self.location_seed = location_seed
         self.location_randomness = location_randomness
+        self.randomize_interval = randomize_interval
         if location_list is None:
             location_list = range(
                 int(only_gpu), simulator_factory.graph_spec.max_devices
@@ -234,7 +236,9 @@ class RuntimeEnv(EnvBase):
         current_priority_seed = self.simulator_factory.pseed
         current_duration_seed = self.simulator_factory.seed
 
-        if self.change_locations:
+        if self.change_locations and (
+            (self.resets // 2) % self.randomize_interval == 0
+        ):
             new_location_seed = self.location_seed + self.resets
             graph = self.simulator_factory.input.graph
             random.seed(new_location_seed)
@@ -248,12 +252,12 @@ class RuntimeEnv(EnvBase):
                 graph.set_cell_locations(samples, step=0)
                 graph.set_cell_locations([-1 for i in samples], step=1)
 
-        if self.change_priority:
+        if self.change_priority and (self.resets % self.randomize_interval == 0):
             new_priority_seed = int(current_priority_seed + self.resets)
         else:
             new_priority_seed = int(current_priority_seed)
 
-        if self.change_duration:
+        if self.change_duration and (self.resets % self.randomize_interval == 0):
             new_duration_seed = int(current_duration_seed + self.resets)
         else:
             new_duration_seed = int(current_duration_seed)
