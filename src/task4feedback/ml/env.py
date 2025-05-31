@@ -296,6 +296,51 @@ class RuntimeEnv(EnvBase):
             self.location_seed = seed
 
 
+class SanityCheckEnv(RuntimeEnv):
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.graph: JacobiGraph = self.simulator_factory.input.graph
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        cell_id = self.graph.task_to_cell[global_task_id]
+        answer = self.location_list[cell_id]
+        if answer == chosen_device:
+            reward[0] = 1
+        else:
+            reward[0] = -1
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"].item()
+        if done:
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
+
+        out = obs
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
 class EFTIncrementalEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
