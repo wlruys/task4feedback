@@ -65,16 +65,6 @@ from task4feedback.ml.test_envs import *
 from task4feedback.ml.iql import *
 
 
-@dataclass
-class JacobiConfig:
-    L: int = 4
-    n: int = 4
-    steps: int = 1
-    n_part: int = 4
-    randomness: float = 0
-    permute_idx: int = 0
-
-
 class JacobiVariant(VariantBuilder):
     @staticmethod
     def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
@@ -93,7 +83,14 @@ if __name__ == "__main__":
         randomness = i / 16.0
         config_list = [
             JacobiConfig(
-                L=4, n=4, steps=14, n_part=4, randomness=randomness, permute_idx=i
+                L=4,
+                n=4,
+                steps=14,
+                n_part=4,
+                randomness=randomness,
+                permute_idx=i,
+                interior_size=5000,
+                boundary_interior_ratio=0.2,
             )
             for i in range(24)
         ]

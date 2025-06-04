@@ -2435,3 +2435,120 @@ class HeteroConvSeparateNet(nn.Module):
         d_logits = self.actor(data, counts)
         v = self.critic(data, counts)
         return d_logits, v
+
+
+class VectorStateNet(nn.Module):
+    """
+    Simple network that takes in a task feature vector and performs k MLP layers of fixed size.
+    Args:
+        feature_config (FeatureDimConfig): Configuration for feature dimensions.
+        layer_config (LayerConfig): Configuration for layer dimensions.
+    """
+
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        k: int = 0,
+    ):
+        super(VectorStateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+        self.k = k
+
+        if k == 0:
+            self.layers = nn.Identity()
+            self.output_dim = feature_config.task_feature_dim
+        else:
+            # Build k MLP layers
+            layers = []
+            input_dim = feature_config.task_feature_dim
+
+            for i in range(k):
+                layers.append(
+                    layer_init(nn.Linear(input_dim, layer_config.hidden_channels))
+                )
+                layers.append(nn.LayerNorm(layer_config.hidden_channels))
+                layers.append(nn.LeakyReLU(negative_slope=0.01))
+                input_dim = layer_config.hidden_channels
+
+            self.layers = nn.Sequential(*layers)
+            self.output_dim = layer_config.hidden_channels
+
+    def forward(self, task_features):
+        return self.layers(task_features)
+
+
+class VectorPolicyNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int = 5,
+        k: int = 0,
+    ):
+        super(VectorPolicyNet, self).__init__()
+        self.vector_state_net = VectorStateNet(feature_config, layer_config, k=k)
+
+        self.actor_head = OutputHead(
+            self.vector_state_net.output_dim,
+            layer_config.hidden_channels,
+            n_devices - 1,
+            logits=True,
+        )
+
+    def forward(self, td):
+        task_features = td["nodes"]["tasks"]["attr"]
+        # print("task_features", task_features.shape)
+        state_features = self.vector_state_net(task_features)
+        d_logits = self.actor_head(state_features)
+        # print("d_logits", d_logits.shape)
+        return d_logits
+
+
+class VectorValueNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int = 5,
+        k: int = 0,
+    ):
+        super(VectorValueNet, self).__init__()
+        self.vector_state_net = VectorStateNet(feature_config, layer_config, k=k)
+
+        self.critic_head = OutputHead(
+            self.vector_state_net.output_dim,
+            layer_config.hidden_channels,
+            1,
+            logits=False,
+        )
+
+    def forward(self, td):
+        task_features = td["nodes"]["tasks"]["attr"]
+        # print("task_features", task_features.shape)
+        state_features = self.vector_state_net(task_features)
+        v = self.critic_head(state_features)
+        v = v.squeeze(1)
+        # print("v", v.shape)
+        return v
+
+
+class VectorSeparateNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(VectorSeparateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = VectorPolicyNet(feature_config, layer_config, n_devices)
+        self.critic = VectorValueNet(feature_config, layer_config, n_devices)
+
+    def forward(self, td: TensorDict):
+        d_logits = self.actor(td)
+        v = self.critic(td)
+        return d_logits, v

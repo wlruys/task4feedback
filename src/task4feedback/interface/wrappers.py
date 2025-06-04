@@ -39,7 +39,7 @@ from torch_geometric.data import HeteroData, Batch
 def _make_node_tensor(nodes, dim):
     return TensorDict(
         {
-            "glb": torch.zeros((nodes), dtype=torch.int64),
+            "glb": torch.zeros((nodes,), dtype=torch.int64),
             "attr": torch.zeros((nodes, dim), dtype=torch.float32),
             "count": torch.zeros((1), dtype=torch.int64),
             # "count": torch.tensor([0], dtype=torch.int64),
@@ -63,7 +63,7 @@ def _make_index_tensor(n):
     return TensorDict(
         {
             "idx": torch.zeros((n), dtype=torch.int64),
-            "count": torch.zeros((1), dtype=torch.int64),
+            "count": torch.zeros((1,), dtype=torch.int64),
             # "count": torch.tensor([0], dtype=torch.int64),
         }
     )
@@ -340,11 +340,18 @@ class DataBlocks:
         else:
             self.data = Data()
 
-    def add_block(self, name, size, location=0, id=None):
+    def add_block(self, name, size, location=0, id=None, x_pos=0, y_pos=0):
         if id is None:
             id = self.data.append_block(size, location, name)
         else:
             self.data.create_block(id, size, location, name)
+
+        if x_pos != 0:
+            self.data.set_x_pos(id, x_pos)
+
+        if y_pos != 0:
+            self.data.set_y_pos(id, y_pos)
+
         return DataBlockTuple(id, name, size, location)
 
     def set_location(self, block, location, convert=False):
@@ -1672,6 +1679,60 @@ class HeterogeneousExternalObserver(ExternalObserver):
         # print("Read Data", output["edges"]["tasks_reads_data"]["count"])
         # print("Write Data", output["edges"]["tasks_write_data"]["count"])
         # print("Mapped Data", output["edges"]["tasks_mapped_data"]["count"])
+        return output
+
+
+class CandidateObserver(ExternalObserver):
+    """
+    Observer that only collects candidate information.
+    Only 1 vector no graph information is directly collected. Useful for testing without overhead of graph extraction.
+    """
+
+    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
+        if spec is None:
+            spec = self.graph_spec
+
+        node_tensor = TensorDict(
+            {"tasks": _make_node_tensor(1, self.task_features.feature_dim)}
+        )
+
+        aux_tensor = TensorDict(
+            {
+                "candidates": _make_index_tensor(spec.max_candidates),
+                "time": torch.zeros((1,), dtype=torch.int64),
+                "improvement": torch.zeros((1,), dtype=torch.float32),
+            }
+        )
+
+        obs_tensor = TensorDict(
+            {
+                "nodes": node_tensor,
+                "edges": TensorDict({}),
+                "aux": aux_tensor,
+            }
+        )
+
+        return obs_tensor
+
+    def get_observation(self, output: Optional[TensorDict] = None):
+        if output is None:
+            output = self.new_observation_buffer(self.graph_spec)
+
+        # Get mappable candidates
+        self.candidate_observation(output)
+        task_output = output["nodes"]["tasks"]
+
+        task_output["glb"] = output["aux"]["candidates"]["idx"]
+        task_output["count"][0] = 1
+
+        self.get_task_features(
+            output["nodes"]["tasks"]["glb"], output["nodes"]["tasks"]["attr"]
+        )
+
+        # Auxiliary observations
+        output["aux"]["time"][0] = self.simulator.time
+        output["aux"]["improvement"][0] = -2.0
+
         return output
 
 

@@ -135,10 +135,10 @@ if __name__ == "__main__":
     geom = jgraph.data.geometry
     # generate_transition_matrix(geom)
 
-    w = DynamicWorkload(geom)
+    w = TrajectoryWorkload(geom)
 
     w.generate_initial_mass()
 
-    w.generate_correlated_workload(100, scale=0.1, step_size=200000, upper_bound=5000)
+    w.generate_workload(100)
 
     w.animate_workload(max_radius=0.03)

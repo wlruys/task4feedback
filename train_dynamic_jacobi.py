@@ -338,7 +338,7 @@ def train(wandb_config):
         eval_interval=mconfig.get("eval_interval", 50),
         eval_episodes=mconfig.get("eval_episodes", 1),
         states_per_collection=n_tasks * mconfig.get("graphs_per_collection", 10),
-        max_grad_norm=mconfig.get("max_grad_norm", 10),
+        max_grad_norm=mconfig.get("max_grad_norm", 1),
     )
 
     # Define environment creation function for PPO
@@ -428,13 +428,13 @@ def train(wandb_config):
     # except AttributeError:
     #     print("torch.compile not available, using uncompiled model")
 
-    # for layer in model.modules():
-    #     if isinstance(layer, torch.nn.Linear):
-    #         torch.nn.init.orthogonal_(layer.weight, 1.0)
-    #         layer.bias.data.zero_()
+    for layer in model.modules():
+        if isinstance(layer, torch.nn.Linear):
+            torch.nn.init.orthogonal_(layer.weight, 1.0)
+            layer.bias.data.zero_()
 
     # Run PPO training
-    run_ppo_cleanrl_no(
+    run_ppo_torchrl(
         model,
         make_env_fn,
         train_config,
@@ -455,7 +455,7 @@ if __name__ == "__main__":
             "randomness": 1,
             "L": 1,
             "n": 4,
-            "steps": 5,
+            "steps": 20,
             "start_workload": 1000,
             "lower_workload": 500,
             "upper_workload": 2000,
@@ -472,16 +472,16 @@ if __name__ == "__main__":
             "latency": 1,
         },
         "feature_config": {
-            "observer_factory": "XYHeterogeneousObserverFactory",
-            "max_tasks": 50,
-            "max_data": 80,
-            "max_edges_tasks_tasks": 100,
-            "max_edges_tasks_data": 200,
-            "max_edges_data_devices": 320,
-            "max_edges_tasks_devices": 50,
+            "observer_factory": "CandidateObserverFactory",
+            "max_tasks": 1,
+            "max_data": 1,
+            "max_edges_tasks_tasks": 1,
+            "max_edges_tasks_data": 1,
+            "max_edges_data_devices": 1,
+            "max_edges_tasks_devices": 1,
         },
         "layer_config": {
-            "hidden_channels": 16,
+            "hidden_channels": 128,
             "n_heads": 2,
         },
         "mconfig": {
@@ -490,20 +490,20 @@ if __name__ == "__main__":
             "update_device": "cpu",
             "workers": 8,
             "ent_coef": 0,
-            "gae_lmbda": 0.99,
+            "gae_lmbda": 0.90,
             "gae_gamma": 1,
             "normalize_advantage": False,
             "clip_eps": 0.2,
             "clip_vloss": False,
-            "minibatch_size": 256,
+            "minibatch_size": 32,
         },
         "env_config": {
-            "change_priority": False,
-            "change_locations": False,
+            "change_priority": True,
+            "change_locations": True,
             "seed": 1,
         },
         "model_config": {
-            "model_architecture": "HeteroConvSeparateNet",
+            "model_architecture": "VectorSeparateNet",
         },
         "wandb_config": {
             "project": "test",

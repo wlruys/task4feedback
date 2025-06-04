@@ -33,6 +33,8 @@ NB_MODULE(fastsim2, m) {
   nb::bind_vector<std::vector<int32_t>>(m, "Int32Vector");
   nb::bind_vector<std::vector<int64_t>>(m, "Int64Vector");
   nb::bind_vector<std::vector<float>>(m, "FloatVector");
+  nb::bind_vector<std::vector<double>>(m, "DoubleVector");
+  nb::bind_vector<std::vector<std::string>>(m, "StringVector");
   nb::bind_vector<std::vector<Task>>(m, "TaskVector");
   nb::bind_vector<std::vector<ComputeTask>>(m, "ComputeTaskVector");
   nb::bind_vector<std::vector<DataTask>>(m, "DataTaskVector");

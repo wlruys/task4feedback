@@ -1738,6 +1738,79 @@ struct TaskStateFeature : public StateFeature<TaskStateFeature> {
   }
 };
 
+struct TaskDataMappedLocations : public StateFeature<TaskDataMappedLocations> {
+  TaskDataMappedLocations(const SchedulerState &state)
+      : StateFeature<TaskDataMappedLocations>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_device_manager().get_devices();
+    return devices.size();
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &task_manager = state.get_task_manager();
+    const auto &task = task_manager.get_tasks().get_compute_task(task_id);
+    const auto &devices = state.get_device_manager().get_devices();
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = state.get_data_manager().get_data();
+    const auto &read = task.get_read();
+    for (std::size_t i = 0; i < read.size(); i++) {
+      auto data_id = read[i];
+
+      // Standardize the size
+      double mean_size = state.stats.block_size_stats.mean;
+      double std_size = state.stats.block_size_stats.stddev;
+
+      // Get the size of the data
+      auto data_size = static_cast<double>(data.get_size(data_id));
+      // Scale the size
+      data_size = guarded_divide(data_size, mean_size);
+
+      for (std::size_t j = 0; j < devices.size(); j++) {
+        output[j] += data_size * static_cast<f_t>(data_manager.check_valid_mapped(data_id, j));
+      }
+    }
+  }
+};
+
+struct TaskDeviceMappedTime : public StateFeature<TaskDeviceMappedTime> {
+  TaskDeviceMappedTime(const SchedulerState &state)
+      : StateFeature<TaskDeviceMappedTime>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_device_manager().get_devices();
+    return devices.size();
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+
+    const auto &devices = state.get_device_manager().get_devices();
+
+    auto mean_duration = static_cast<double>(state.stats.duration_stats.mean);
+    auto std_duration = static_cast<double>(state.stats.duration_stats.stddev);
+
+    for (std::size_t i = 0; i < devices.size(); i++) {
+      auto mapped_time = static_cast<double>(state.costs.get_mapped_time(i));
+      mapped_time = guarded_divide(mapped_time, mean_duration);
+      output[i] = static_cast<f_t>(mapped_time);
+    }
+
+    // Normalize across devices
+    double sum = 0.0;
+    for (std::size_t i = 0; i < devices.size(); i++) {
+      sum += output[i];
+    }
+
+    if (sum > 0.0) {
+      for (std::size_t i = 0; i < devices.size(); i++) {
+        output[i] /= sum;
+      }
+    }
+  }
+};
+
 struct EmptyDataFeature : public IntFeature<EmptyDataFeature> {
   size_t dimension;
   EmptyDataFeature(SchedulerState &state, size_t dimension)

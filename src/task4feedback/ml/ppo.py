@@ -31,8 +31,8 @@ from torchrl.objectives.utils import ValueEstimators
 class PPOConfig:
     states_per_collection: int = 1920
     minibatch_size: int = 250
-    num_epochs_per_collection: int = 4
-    num_collections: int = 1
+    num_epochs_per_collection: int = 6
+    num_collections: int = 1000
     workers: int = 1
     seed: int = 0
     lr: float = 2.5e-4
@@ -681,10 +681,11 @@ def run_ppo_torchrl(
     wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
 
-    _actor_td = HeteroDataWrapper(
-        actor_critic_base.actor,
-    )
-    _critic_td = HeteroDataWrapper(actor_critic_base.critic)
+    # _actor_td = HeteroDataWrapper(actor_critic_base.actor)
+    # _critic_td = HeteroDataWrapper(actor_critic_base.critic)
+
+    _actor_td = actor_critic_base.actor
+    _critic_td = actor_critic_base.critic
 
     module_action = TensorDictModule(
         _actor_td,
@@ -758,8 +759,6 @@ def run_ppo_torchrl(
         value_network=model[1],
         average_gae=False,
         device=config.update_device,
-        shifted=False,
-        vectorized=False,
     )
 
     loss_module = ClipPPOLoss(
@@ -775,6 +774,52 @@ def run_ppo_torchrl(
     )
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
+
+    def update(subdata, i, j, k):
+        loss_vals = loss_module(subdata)
+        loss_value = (
+            loss_vals["loss_objective"]
+            + loss_vals["loss_critic"]
+            + loss_vals["loss_entropy"]
+        )
+
+        optimizer.zero_grad()
+        loss_value.backward()
+
+        # Log pre-clipping gradient norms
+        pre_clip_norms = log_parameter_and_gradient_norms(loss_module)
+
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            loss_module.parameters(), max_norm=config.max_grad_norm
+        )
+
+        # Log post-clipping gradient norms
+        post_clip_norms = log_parameter_and_gradient_norms(loss_module)
+        post_clip_norms = {
+            f"post_clip_{k}": v for k, v in post_clip_norms.items() if "grad_norm" in k
+        }
+
+        optimizer.step()
+
+        # Log norms for this batch
+        step = i * config.num_epochs_per_collection * n_batches + j * n_batches + k
+        wandb.log(
+            {
+                **pre_clip_norms,
+                **post_clip_norms,
+                "batch_loss/step": step,
+                "batch_loss/objective": loss_vals["loss_objective"].item(),
+                "batch_loss/critic": loss_vals["loss_critic"].item(),
+                "batch_loss/entropy": loss_vals["entropy"].item(),
+                "batch_loss/total": loss_value.item(),
+                "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
+                "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),
+                # "batch_loss/value_clip_fraction": loss_vals[
+                #    "value_clip_fraction"
+                # ].item(),
+                "batch_loss/ESS": loss_vals["ESS"].item(),
+            },
+        )
 
     # Run initial evaluation
     if config.eval_interval > 0:
@@ -839,56 +884,9 @@ def run_ppo_torchrl(
 
             for k in range(n_batches):
                 subdata = replay_buffer.sample(config.minibatch_size)
-                subdata.to(config.train_device)
+                subdata.to(config.update_device, non_blocking=True)
 
-                loss_vals = loss_module(subdata)
-                loss_value = (
-                    loss_vals["loss_objective"]
-                    + loss_vals["loss_critic"]
-                    + loss_vals["loss_entropy"]
-                )
-
-                optimizer.zero_grad()
-                loss_value.backward()
-
-                # Log pre-clipping gradient norms
-                pre_clip_norms = log_parameter_and_gradient_norms(loss_module)
-
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    loss_module.parameters(), max_norm=config.max_grad_norm
-                )
-
-                # Log post-clipping gradient norms
-                post_clip_norms = log_parameter_and_gradient_norms(loss_module)
-                post_clip_norms = {
-                    f"post_clip_{k}": v
-                    for k, v in post_clip_norms.items()
-                    if "grad_norm" in k
-                }
-
-                optimizer.step()
-
-                # Log norms for this batch
-                step = (
-                    i * config.num_epochs_per_collection * n_batches + j * n_batches + k
-                )
-                wandb.log(
-                    {
-                        **pre_clip_norms,
-                        **post_clip_norms,
-                        "batch_loss/step": step,
-                        "batch_loss/objective": loss_vals["loss_objective"].item(),
-                        "batch_loss/critic": loss_vals["loss_critic"].item(),
-                        "batch_loss/entropy": loss_vals["entropy"].item(),
-                        "batch_loss/total": loss_value.item(),
-                        "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
-                        "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),
-                        # "batch_loss/value_clip_fraction": loss_vals[
-                        #    "value_clip_fraction"
-                        # ].item(),
-                        "batch_loss/ESS": loss_vals["ESS"].item(),
-                    },
-                )
+                update(subdata, i, j, k)
 
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
@@ -898,17 +896,12 @@ def run_ppo_torchrl(
                 "collect_loss/step": i,
                 "collect_loss/mean_nonzero_reward": avg_non_zero_reward,
                 "collect_loss/std_nonzero_reward": std_rewards,
-                "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
                 "collect_loss/average_improvement": avg_improvement.item(),
                 "collect_loss/std_improvement": filtered_improvements.std().item(),
                 "collect_loss/std_return": tensordict_data["value_target"].std().item(),
                 "collect_loss/mean_return": tensordict_data["value_target"]
                 .mean()
                 .item(),
-                "collect_loss/loss_critic": loss_vals["loss_critic"].item(),
-                "collect_loss/loss_entropy": loss_vals["loss_entropy"].item(),
-                "collect_loss/loss_total": loss_value.item(),
-                "collect_loss/grad_norm": grad_norm,
                 "collect_loss/advantage_mean": tensordict_data["advantage"]
                 .mean()
                 .item(),

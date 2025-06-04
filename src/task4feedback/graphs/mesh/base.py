@@ -68,18 +68,26 @@ class Geometry:
     edges: np.array
     vertex_edge_dict: dict
     edge_cell_dict: dict
-    centroids: np.array
+    centroids: Optional[np.array] = None
     bounds: Optional[np.array] = None
 
-    def get_centroid(self, cell, round_out=None):
-        cell_verticies = np.asarray(
-            self.cell_points[self.cells[cell]][:, :2], dtype=np.float64
-        )
-        centroid = np.mean(cell_verticies, axis=0)
+    def get_centroid(self, cell, round_out=None, use_precomputed=True):
+        if use_precomputed and self.centroids is not None:
+            centroid = self.centroids[cell]
+            if round_out is not None:
+                centroid = np.round(centroid, round_out)
+            return centroid
+        elif not use_precomputed or self.centroids is None:
+            cell_verticies = np.asarray(
+                self.cell_points[self.cells[cell]][:, :2], dtype=np.float64
+            )
+            centroid = np.mean(cell_verticies, axis=0)
 
-        if round_out is not None:
-            centroid = np.round(centroid, round_out)
-        return centroid
+            if round_out is not None:
+                centroid = np.round(centroid, round_out)
+            return centroid
+        else:
+            raise ValueError("get_centroid:: Invalid use")
 
     def get_max_coordinate(self, direction=0):
         """
@@ -322,7 +330,8 @@ def get_centroids(cells, points, round_decimals: Optional[int] = 3):
     centroids = np.zeros((len(cells), 2))
 
     for i, cell in enumerate(cells):
-        centroid = np.mean(points[cell][:2], axis=0)
+        cell_verticies = np.asarray(points[cell][:, :2], dtype=np.float64)
+        centroid = np.mean(cell_verticies, axis=0)
         centroids[i] = centroid
 
     if round_decimals is not None:

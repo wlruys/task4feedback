@@ -161,8 +161,12 @@ class DataGeometry:
     blocks: DataBlocks = field(default_factory=DataBlocks)
     map: GeometryIDMap = field(default_factory=GeometryIDMap)
 
-    def add_block(self, key: DataKey, size: int, location: int):
-        block = self.blocks.add_block(name=str(key), size=size, location=location)
+    def add_block(
+        self, key: DataKey, size: int, location: int, x: float = 0, y: float = 0
+    ):
+        block = self.blocks.add_block(
+            name=str(key), size=size, location=location, x_pos=x, y_pos=y
+        )
         self.map.add_block(key, block.id)
 
     def get_object(self, block_id: int):
