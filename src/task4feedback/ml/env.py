@@ -6,12 +6,12 @@ import numpy as np
 
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import (
-    DefaultObserverFactory,
+    # DefaultObserverFactory,
     SimulatorFactory,
     create_graph_spec,
     observation_to_heterodata,
 )
-from task4feedback.fastsim2 import GraphExtractor, SchedulerState
+from task4feedback.fastsim2 import GraphExtractor, SchedulerState, EventType
 from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
 from torchrl.envs.utils import make_composite_from_td
 from torchrl.envs import StepCounter, TrajCounter, TransformedEnv
@@ -24,7 +24,9 @@ from task4feedback.legacy_graphs import *
 from task4feedback.graphs.jacobi import JacobiGraph
 from torch_geometric.data import HeteroData
 from torch.profiler import record_function
+
 MAX_BUFFERS = 2000
+
 
 class RuntimeEnv(EnvBase):
     def __init__(
@@ -41,6 +43,8 @@ class RuntimeEnv(EnvBase):
         priority_seed=0,
         location_randomness=1,
         location_list: Optional[List[int]] = None,
+        answer: Optional[List[int]] = None,
+        randomize_interval: int = 1,
     ):
         super().__init__(device=device)
         # print("Initializing environment")
@@ -50,12 +54,15 @@ class RuntimeEnv(EnvBase):
         self.change_locations = change_locations
         self.location_seed = location_seed
         self.location_randomness = location_randomness
+        self.randomize_interval = randomize_interval
         if location_list is None:
             location_list = range(
                 int(only_gpu), simulator_factory.graph_spec.max_devices
             )
         self.location_list = location_list
+        self.answer = answer
         self.only_gpu = only_gpu
+        self.graph: JacobiGraph = simulator_factory.input.graph
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(
@@ -93,10 +100,10 @@ class RuntimeEnv(EnvBase):
         self.workspace = self._prealloc_step_buffers(1000)
         self.baseline_time = baseline_time
 
-        if change_locations:
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
+        # if change_locations:
+        #     graph.randomize_locations(
+        #         self.location_randomness, self.location_list, verbose=False
+        #     )
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
@@ -120,7 +127,7 @@ class RuntimeEnv(EnvBase):
         #     low=torch.tensor(0, device=self.device),
         #     high=torch.tensor(1, device=self.device),
         # )
-        # comp = obs 
+        # comp = obs
         comp = make_composite_from_td(obs)
         comp = Composite(observation=comp)
         return comp
@@ -147,9 +154,8 @@ class RuntimeEnv(EnvBase):
             obs = self.simulator.observer.get_observation()
             td = TensorDict(observation=obs)
         else:
-            self.simulator.observer.get_observation(output=td["observation"])
-        #td["observation"].set("hetero_data", observation_to_heterodata(td["observation"]))
-        #td.set("observation, hetero_data", observation_to_heterodata(td["observation"]))
+            self.simulator.observer.get_observation(td["observation"])
+        td["observation", "aux", "progress"] = self.step_count / 80
         return td
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -161,7 +167,6 @@ class RuntimeEnv(EnvBase):
         obs = self._get_new_observation_buffer()
         obs.set("reward", torch.tensor([0], device=self.device, dtype=torch.float32))
         obs.set("done", torch.tensor([False], device=self.device, dtype=torch.bool))
-        obs.set("state_value", torch.tensor([0], device=self.device, dtype=torch.float32))
         return obs
 
     def _prealloc_step_buffers(self, n: int) -> List[TensorDict]:
@@ -171,63 +176,58 @@ class RuntimeEnv(EnvBase):
         self, buffers: List[TensorDict], i: int
     ) -> TensorDict:
         if i >= len(buffers):
-            print("EXTENDING BUFFERS", i, len(buffers))
             buffers.extend(self._prealloc_step_buffers(2 * len(buffers)))
         return buffers[i]
 
     def _get_current_buffer(self):
         buf = self._get_preallocated_step_buffer(self.workspace, self.buffer_idx)
-        self.buffer_idx = (self.buffer_idx + 1) % MAX_BUFFERS
+        self.buffer_idx += 1
 
     def _step(self, td: TensorDict) -> TensorDict:
-        
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
-            
-        with record_function("STEP"):
-            done = torch.tensor((1,), device=self.device, dtype=torch.bool)
-            reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
-            candidate_workspace = torch.zeros(
-                self.simulator_factory.graph_spec.max_candidates,
-                dtype=torch.int64,
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        simulator_copy = self.simulator.copy()
+        simulator_copy.disable_external_mapper()
+        simulator_copy.run()
+        if simulator_copy.time > self.prev_makespan:
+            reward[0] = -1
+        elif simulator_copy.time < self.prev_makespan:
+            reward[0] = 1
+        else:
+            reward[0] = 0
+        self.prev_makespan = simulator_copy.time
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"].item()
+        if done:
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
-            self.simulator.get_mappable_candidates(candidate_workspace)
-            chosen_device = td["action"].item() + int(self.only_gpu)
-            global_task_id = candidate_workspace[0].item()
-            mapping_priority = self.simulator.get_mapping_priority(global_task_id)
 
-            self.simulator.simulator.map_tasks(
-                [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
-            )
-
-            simulator_copy = self.simulator.copy()
-            simulator_copy.disable_external_mapper()
-            simulator_copy.run()
-            if simulator_copy.time > self.prev_makespan:
-                reward[0] = -1
-            elif simulator_copy.time < self.prev_makespan:
-                reward[0] = 1
-            else:
-                reward[0] = 0
-            self.prev_makespan = simulator_copy.time
-
-            simulator_status = self.simulator.run_until_external_mapping()
-            done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
-
-            obs = self._get_observation()
-            time = obs["observation"]["aux"]["time"].item()
-            if done:
-                obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
-                print(
-                   f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
-                )
-
-            out = obs
-            out.set("state_value", torch.tensor([0], device=self.device, dtype=torch.float32))
-            out.set("reward", reward)
-            out.set("done", done)
-            self.step_count += 1
+        out = obs
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
         return out
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
@@ -237,7 +237,9 @@ class RuntimeEnv(EnvBase):
         current_priority_seed = self.simulator_factory.pseed
         current_duration_seed = self.simulator_factory.seed
 
-        if self.change_locations:
+        if self.change_locations and (
+            (self.resets // 2) % self.randomize_interval == 0
+        ):
             new_location_seed = self.location_seed + self.resets
             graph = self.simulator_factory.input.graph
             random.seed(new_location_seed)
@@ -246,16 +248,17 @@ class RuntimeEnv(EnvBase):
                 for i in range(data.size()):
                     data.set_location(i, random.choice(self.location_list))
             else:
-                graph.randomize_locations(
-                    self.location_randomness, self.location_list, verbose=False
-                )
+                samples = [item for item in self.location_list for _ in range(4)]
+                random.shuffle(samples)
+                graph.set_cell_locations(samples, step=0)
+                graph.set_cell_locations([-1 for i in samples], step=1)
 
-        if self.change_priority:
+        if self.change_priority and (self.resets % self.randomize_interval == 0):
             new_priority_seed = int(current_priority_seed + self.resets)
         else:
             new_priority_seed = int(current_priority_seed)
 
-        if self.change_duration:
+        if self.change_duration and (self.resets % self.randomize_interval == 0):
             new_duration_seed = int(current_duration_seed + self.resets)
         else:
             new_duration_seed = int(current_duration_seed)
@@ -268,8 +271,9 @@ class RuntimeEnv(EnvBase):
         assert (
             simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
         ), f"Unexpected simulator status: {simulator_status}"
-
+        self.observer.reset()
         obs = self._get_observation()
+        print(obs)
         return obs
 
     @property
@@ -288,11 +292,23 @@ class RuntimeEnv(EnvBase):
             self.location_seed = seed
 
 
-class SanityCheckEnv(RuntimeEnv):
+class RunningAvgEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
-            self.graph: JacobiGraph = self.simulator_factory.input.graph
+            self.eftsim = self.simulator.fresh_copy()
+            self.eftsim.initialize()
+            self.eftsim.initialize_data()
+            self.eftsim.disable_external_mapper()
+            final_state = self.eftsim.run()
+            assert (
+                final_state == fastsim.ExecutionState.COMPLETE
+            ), f"Baseline returned unexpected final state: {final_state}"
+            self.EFT_baseline = self.eftsim.time
+            self.eft_history = []
+            self.policy_history = []
+            self.avg_eft = []
+            self.avg_policy = []
+
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
         candidate_workspace = torch.zeros(
@@ -309,24 +325,46 @@ class SanityCheckEnv(RuntimeEnv):
             [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
         )
 
-        cell_id = self.graph.task_to_cell[global_task_id]
-        answer = self.location_list[cell_id]
-        if answer == chosen_device:
-            reward[0] = 1
-        else:
-            reward[0] = -1
+        sim_ml = self.simulator.copy()
+        sim_ml.disable_external_mapper()
+        sim_ml.set_task_breakpoint(EventType.COMPLETER, global_task_id)
+        sim_ml.run()
+
+        self.eft_history.append(self.eftsim.task_finish_time(global_task_id))
+        self.policy_history.append(sim_ml.task_finish_time(global_task_id))
+
+        self.avg_eft.append(average(self.eft_history[-16:]))
+        self.avg_policy.append(average(self.policy_history[-16:]))
+
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        if self.step_count == 0:
+            reward[0] = 0
+        else:
+            reward[0] = (self.avg_policy[-2] - self.avg_policy[-1]) / self.EFT_baseline
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
             print(
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
+
+        if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+            for next_id in self.graph.level_to_task[
+                self.graph.task_to_level[global_task_id]
+            ]:
+                if (
+                    self.graph.task_to_cell[global_task_id]
+                    == self.graph.task_to_cell[next_id]
+                ):
+                    x, y = self.graph.xy_from_id(global_task_id)
+                    self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
         out.set("reward", reward)
         out.set("done", done)
         self.step_count += 1
@@ -937,184 +975,6 @@ def make_simple_env(graph: ComputeDataGraph):
     env = TransformedEnv(env, TrajCounter())
 
     return env
-
-
-class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
-    def __init__(
-        self,
-        simulator_factory,
-        seed: int = 0,
-        device="cpu",
-        baseline_time=56000,
-        use_external_mapper: bool = False,
-        change_priority=True,
-        change_duration=False,
-        change_locations=False,
-        location_seed=0,
-        location_randomness=1,
-        location_list=[1, 2, 3, 4],
-    ):
-        super().__init__(
-            simulator_factory=simulator_factory,
-            seed=seed,
-            device=device,
-            baseline_time=baseline_time,
-            use_external_mapper=use_external_mapper,
-            change_priority=change_priority,
-            change_duration=change_duration,
-        )
-        self.change_locations = change_locations
-        self.location_seed = 0
-
-        graph = simulator_factory.input.graph
-        assert hasattr(graph, "get_cell_locations")
-        assert hasattr(graph, "set_cell_locations")
-        assert hasattr(graph, "randomize_locations")
-        self.initial_location_list = graph.get_cell_locations()
-        self.location_randomness = location_randomness
-        self.location_list = location_list
-
-        random.seed(self.location_seed)
-
-        if change_locations:
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        self.resets += 1
-        current_priority_seed = self.simulator_factory.pseed
-        current_duration_seed = self.simulator_factory.seed
-
-        if self.change_locations:
-            new_location_seed = self.location_seed + self.resets
-            # Load initial location list
-            graph = self.simulator_factory.input.graph
-            graph.set_cell_locations(self.initial_location_list)
-
-            random.seed(new_location_seed)
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
-        if self.change_priority:
-            new_priority_seed = current_priority_seed + self.resets
-        else:
-            new_priority_seed = current_priority_seed
-
-        if self.change_duration:
-            new_duration_seed = current_duration_seed + self.resets
-        else:
-            new_duration_seed = current_duration_seed
-
-        new_priority_seed = int(new_priority_seed)
-        new_duration_seed = int(new_duration_seed)
-
-        self.simulator = self.simulator_factory.create(
-            priority_seed=new_priority_seed, duration_seed=new_duration_seed
-        )
-
-        simulator_status = self.simulator.run_until_external_mapping()
-        assert (
-            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
-        ), f"Unexpected simulator status: {simulator_status}"
-
-        obs = self._get_observation()
-        return obs
-
-    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
-        s = super()._set_seed(seed, static_seed)
-        # if s is not None:
-        #     self.location_seed = s
-        return s
-
-
-class RandomLocationRuntimeEnv(RuntimeEnv):
-    def __init__(
-        self,
-        simulator_factory,
-        seed: int = 0,
-        device="cpu",
-        baseline_time=56000,
-        change_priority=True,
-        change_duration=False,
-        change_locations=False,
-        location_seed=0,
-        location_randomness=1,
-        location_list=[1, 2, 3, 4],
-    ):
-        super().__init__(
-            simulator_factory=simulator_factory,
-            seed=seed,
-            device=device,
-            baseline_time=baseline_time,
-            change_priority=change_priority,
-            change_duration=change_duration,
-        )
-        self.change_locations = change_locations
-        self.location_seed = 0
-
-        graph = simulator_factory.input.graph
-        assert hasattr(graph, "get_cell_locations")
-        assert hasattr(graph, "set_cell_locations")
-        assert hasattr(graph, "randomize_locations")
-        self.initial_location_list = graph.get_cell_locations()
-        self.location_randomness = location_randomness
-        self.location_list = location_list
-
-        random.seed(self.location_seed)
-
-        if change_locations:
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        self.resets += 1
-        current_priority_seed = self.simulator_factory.pseed
-        current_duration_seed = self.simulator_factory.seed
-
-        if self.change_locations:
-            new_location_seed = self.location_seed + self.resets
-            # Load initial location list
-            graph = self.simulator_factory.input.graph
-            graph.set_cell_locations(self.initial_location_list)
-
-            random.seed(new_location_seed)
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
-        if self.change_priority:
-            new_priority_seed = current_priority_seed + self.resets
-        else:
-            new_priority_seed = current_priority_seed
-
-        if self.change_duration:
-            new_duration_seed = current_duration_seed + self.resets
-        else:
-            new_duration_seed = current_duration_seed
-
-        new_priority_seed = int(new_priority_seed)
-        new_duration_seed = int(new_duration_seed)
-
-        self.simulator = self.simulator_factory.create(
-            priority_seed=new_priority_seed, duration_seed=new_duration_seed
-        )
-
-        simulator_status = self.simulator.run_until_external_mapping()
-        assert (
-            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
-        ), f"Unexpected simulator status: {simulator_status}"
-
-        obs = self._get_observation()
-        return obs
-
-    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
-        s = super()._set_seed(seed, static_seed)
-        # if s is not None:
-        #     self.location_seed = s
-        return s
 
 
 class EFTIncrementalEnv(EnvBase):

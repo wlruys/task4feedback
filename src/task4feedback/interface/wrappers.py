@@ -35,6 +35,8 @@ import torch
 from tensordict.tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
 
+# from task4feedback.graphs.jacobi import JacobiGraph
+
 
 def _make_node_tensor(nodes, dim):
     return TensorDict(
@@ -719,149 +721,22 @@ class ExternalObserverFactory:
     graph_spec: fastsim.GraphSpec
     graph_extractor_t: Type[fastsim.GraphExtractor]
     task_feature_factory: FeatureExtractorFactory
-    data_feature_factory: FeatureExtractorFactory
-    device_feature_factory: FeatureExtractorFactory
-    task_task_feature_factory: EdgeFeatureExtractorFactory
-    task_data_feature_factory: EdgeFeatureExtractorFactory
-    task_device_feature_factory: Optional[EdgeFeatureExtractorFactory]
-    data_device_feature_factory: Optional[EdgeFeatureExtractorFactory]
+    # device_feature_factory: FeatureExtractorFactory
 
-    def create(self, simulator: Simulator):
+    def create(self, simulator: "SimulatorDriver"):
         state = simulator.get_state()
         graph_spec = self.graph_spec
         graph_extractor = self.graph_extractor_t(state)
         task_feature_extractor = self.task_feature_factory.create(state)
-        data_feature_extractor = self.data_feature_factory.create(state)
-        device_feature_extractor = self.device_feature_factory.create(state)
-        task_task_feature_extractor = self.task_task_feature_factory.create(state)
-        task_data_feature_extractor = self.task_data_feature_factory.create(state)
-        task_device_feature_extractor = (
-            self.task_device_feature_factory.create(state)
-            if self.task_device_feature_factory is not None
-            else None
-        )
-        data_device_feature_extractor = (
-            self.data_device_feature_factory.create(state)
-            if self.data_device_feature_factory is not None
-            else None
-        )
-
-        return ExternalObserver(
+        # device_feature_extractor = self.device_feature_factory.create(state)
+        observer = ExternalObserver(
             simulator,
             graph_spec,
             graph_extractor,
             task_feature_extractor,
-            data_feature_extractor,
-            device_feature_extractor,
-            task_task_feature_extractor,
-            task_data_feature_extractor,
-            task_device_feature_extractor,
-            data_device_feature_extractor,
+            # device_feature_extractor,
         )
-
-
-class CompiledDefaultObserverFactory:
-    def __init__(self, spec: fastsim.GraphSpec):
-        self.spec = spec
-        self.graph_extractor_t = fastsim.GraphExtractor
-        self.task_feature_factory = fastsim.TaskFeatureExtractor
-        self.data_feature_factory = fastsim.DataFeatureExtractor
-        self.device_feature_factory = fastsim.DeviceFeatureExtractor
-        self.task_task_feature_factory = fastsim.TaskTaskFeatureExtractor
-        self.task_data_feature_factory = fastsim.TaskDataFeatureExtractor
-        self.task_device_feature_factory = None
-        self.data_device_feature_factory = None
-
-    def create(self, simulator: Simulator):
-        state = simulator.get_state()
-        graph_spec = self.spec
-        graph_extractor = self.graph_extractor_t(state)
-        task_feature_extractor = self.task_feature_factory(
-            fastsim.InDegreeTaskFeature(state),
-            # fastsim.OutDegreeTaskFeature(state),
-            # fastsim.OneHotMappedDeviceTaskFeature(state),
-        )
-        data_feature_extractor = self.data_feature_factory(
-            fastsim.DataSizeFeature(state),
-            # fastsim.DataMappedLocationsFeature(state),
-        )
-
-        device_feature_extractor = self.device_feature_factory(
-            fastsim.DeviceArchitectureFeature(state),
-            fastsim.DeviceIDFeature(state),
-            # fastsim.DeviceMemoryFeature(state),
-            # fastsim.DeviceTimeFeature(state),
-        )
-
-        task_task_feature_extractor = self.task_task_feature_factory(
-            fastsim.TaskTaskSharedDataFeature(state)
-        )
-
-        task_data_feature_extractor = self.task_data_feature_factory(
-            # fastsim.TaskDataRelativeSizeFeature(state),
-            fastsim.TaskDataUsageFeature(state),
-        )
-
-        task_device_feature_extractor = None
-        data_device_feature_extractor = None
-
-        return ExternalObserver(
-            simulator,
-            graph_spec,
-            graph_extractor,
-            task_feature_extractor,
-            data_feature_extractor,
-            device_feature_extractor,
-            task_task_feature_extractor,
-            task_data_feature_extractor,
-            task_device_feature_extractor,
-            data_device_feature_extractor,
-        )
-
-
-class DefaultObserverFactory(ExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec):
-        graph_extractor_t = fastsim.GraphExtractor
-        task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-        # task_feature_factory.add(fastsim.TaskStateFeature)
-        task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
-        task_feature_factory.add(fastsim.EmptyTaskFeature, 1)
-
-        data_feature_factory = FeatureExtractorFactory()
-        data_feature_factory.add(fastsim.DataSizeFeature)
-        data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-
-        device_feature_factory = FeatureExtractorFactory()
-        device_feature_factory.add(fastsim.DeviceArchitectureFeature)
-        device_feature_factory.add(fastsim.DeviceIDFeature)
-        # device_feature_factory.add(fastsim.DeviceMemoryFeature)
-        # device_feature_factory.add(fastsim.DeviceTimeFeature)
-
-        task_task_feature_factory = EdgeFeatureExtractorFactory()
-        task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
-
-        task_data_feature_factory = EdgeFeatureExtractorFactory()
-        task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
-        # task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
-
-        task_device_feature_factory = EdgeFeatureExtractorFactory()
-        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
-
-        data_device_feature_factory = None
-
-        super().__init__(
-            spec,
-            graph_extractor_t,
-            task_feature_factory,
-            data_feature_factory,
-            device_feature_factory,
-            task_task_feature_factory,
-            task_data_feature_factory,
-            task_device_feature_factory,
-            data_device_feature_factory,
-        )
+        return observer
 
 
 def observation_to_heterodata_truncate(
@@ -1008,13 +883,26 @@ class ExternalObserver:
     graph_spec: fastsim.GraphSpec
     graph_extractor: fastsim.GraphExtractor
     task_features: fastsim.RuntimeFeatureExtractor
-    data_features: fastsim.RuntimeFeatureExtractor
-    device_features: fastsim.RuntimeFeatureExtractor
-    task_task_features: fastsim.RuntimeEdgeFeatureExtractor
-    task_data_features: fastsim.RuntimeEdgeFeatureExtractor
-    task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
-    data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
+    # device_features: fastsim.RuntimeFeatureExtractor
     truncate: bool = True
+    task_ids = None
+
+    def reset(self):
+        assert (self.simulator.input.graph.config.n**2) in [
+            16,
+            64,
+        ], "Only 16 or 64 tasks are supported in the current implementation"
+        self.task_ids = torch.Tensor(
+            [-1 for _ in range(self.simulator.input.graph.config.n**2)]
+        )
+        graph = self.simulator.input.graph
+        for task in graph.level_to_task[0]:
+            x, y = graph.xy_from_id(task)
+            self.task_ids[int(x * graph.config.n + y)] = task
+        if -1 in self.task_ids:
+            raise ValueError(
+                "Not all task ids were set during reset. Check the graph initialization."
+            )
 
     def store_feature_types(self):
         """
@@ -1047,36 +935,6 @@ class ExternalObserver:
             return 0
         return self.task_features.feature_dim
 
-    @property
-    def data_feature_dim(self):
-        if self.data_features is None:
-            return 0
-        return self.data_features.feature_dim
-
-    @property
-    def device_feature_dim(self):
-        if self.device_features is None:
-            return 0
-        return self.device_features.feature_dim
-
-    @property
-    def task_data_edge_dim(self):
-        if self.task_data_features is None:
-            return
-        return self.task_data_features.feature_dim
-
-    @property
-    def task_device_edge_dim(self):
-        if self.task_device_features is None:
-            return 0
-        return self.task_device_features.feature_dim
-
-    @property
-    def task_task_edge_dim(self):
-        if self.task_task_features is None:
-            return 0
-        return self.task_task_features.feature_dim
-
     def get_task_features(self, task_ids, workspace):
         length = self.task_features.get_features_batch(task_ids, workspace)
 
@@ -1084,227 +942,85 @@ class ExternalObserver:
             workspace = workspace[:length]
         return workspace, length
 
-    def get_data_features(self, data_ids, workspace):
-        length = self.data_features.get_features_batch(data_ids, workspace)
+    # def get_data_features(self, data_ids, workspace):
+    #     length = self.data_features.get_features_batch(data_ids, workspace)
 
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
+    #     if self.truncate:
+    #         workspace = workspace[:length]
+    #     return workspace, length
 
-    def get_device_features(self, device_ids, workspace):
-        length = self.device_features.get_features_batch(device_ids, workspace)
+    # def get_device_features(self, device_ids, workspace):
+    #     length = self.device_features.get_features_batch(device_ids, workspace)
 
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
+    #     if self.truncate:
+    #         workspace = workspace[:length]
+    #     return workspace, length
 
-    def get_task_task_features(self, task_ids, workspace):
-        length = self.task_task_features.get_features_batch(task_ids, workspace)
+    # def get_used_data(self, task_ids, workspace):
+    #     length = self.graph_extractor.get_unique_data(task_ids, workspace)
 
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
+    #     if self.truncate:
+    #         workspace = workspace[:length]
+    #     return workspace, length
 
-    def get_task_data_features(self, task_ids, workspace):
-        length = self.task_data_features.get_features_batch(task_ids, workspace)
+    # def get_used_filtered_data(self, task_ids, workspace):
+    #     """
+    #     Only return data whose most recent writer has been mapped
+    #     """
+    #     length = self.graph_extractor.get_unique_filtered_data(task_ids, workspace)
 
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
+    #     if self.truncate:
+    #         workspace = workspace[:length]
+    #     return workspace, length
 
-    def get_task_device_features(self, task_ids, workspace):
-        length = self.task_device_features.get_features_batch(task_ids, workspace)
+    # def _local_to_global(self, global_ids, local_ids, workspace=None):
+    #     if workspace is not None:
+    #         workspace[: len(local_ids)] = global_ids[local_ids]
+    #         return workspace
+    #     else:
+    #         return global_ids[local_ids]
 
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
+    # def _local_to_global2D(self, g1, g2, l, workspace=None):
+    #     if workspace is not None:
+    #         size = len(l[0, :])
+    #         workspace[0, :size] = g1[l[0, :]][:size]
+    #         workspace[1, :size] = g2[l[1, :]][:size]
+    #         return workspace
+    #     else:
+    #         id1 = g1[l[0, :]]
+    #         id2 = g2[l[1, :]]
+    #         return torch.stack((id1, id2), dim=0)
 
-    def get_data_device_features(self, data_ids, workspace):
-        length = self.data_device_features.get_features_batch(data_ids, workspace)
-
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
-
-    def get_k_hop_neighborhood(self, task_ids, workspace, depth: int = 1):
-        length = self.graph_extractor.get_k_hop_neighborhood(task_ids, depth, workspace)
-
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
-
-    def get_k_hop_bidirectional(self, task_ids, workspace, depth: int = 1):
-        length = self.graph_extractor.get_k_hop_bidirectional(
-            task_ids, depth, workspace
-        )
-
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
-
-    def get_k_hop_dependencies(self, task_ids, workspace, depth: int = 1):
-        length = self.graph_extractor.get_k_hop_dependencies(task_ids, depth, workspace)
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
-
-    def get_k_hop_dependents(self, task_ids, workspace, depth: int = 1):
-        length = self.graph_extractor.get_k_hop_dependents(task_ids, depth, workspace)
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
-
-    def get_used_data(self, task_ids, workspace):
-        length = self.graph_extractor.get_unique_data(task_ids, workspace)
-
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
-
-    def get_used_filtered_data(self, task_ids, workspace):
-        """
-        Only return data whose most recent writer has been mapped
-        """
-        length = self.graph_extractor.get_unique_filtered_data(task_ids, workspace)
-
-        if self.truncate:
-            workspace = workspace[:length]
-        return workspace, length
-
-    def get_task_task_edges(self, task_ids, workspace, global_workspace):
-        length = self.graph_extractor.get_task_task_edges(
-            task_ids, workspace, global_workspace
-        )
-
-        if self.truncate:
-            workspace = workspace[:, :length]
-        return workspace, length
-
-    def get_task_data_edges(
-        self,
-        task_ids,
-        data_ids,
-        workspace,
-        global_workspace,
-        access_type: AccessType = AccessType.READ_WRITE,
-    ):
-        if access_type == AccessType.READ_WRITE:
-            length = self.graph_extractor.get_task_data_edges_all(
-                task_ids, data_ids, workspace, global_workspace
-            )
-        elif access_type == AccessType.READ:
-            length = self.graph_extractor.get_task_data_edges_read(
-                task_ids, data_ids, workspace, global_workspace
-            )
-        elif access_type == AccessType.WRITE:
-            length = self.graph_extractor.get_task_data_edges_write(
-                task_ids, data_ids, workspace, global_workspace
-            )
-        elif access_type == AccessType.READ_MAPPED:
-            length = self.graph_extractor.get_task_data_edges_read_mapped(
-                task_ids, data_ids, workspace, global_workspace
-            )
-        else:
-            raise ValueError(
-                f"Invalid access type operation for get_task_data_edges: {access_type}"
-            )
-
-        if self.truncate:
-            workspace = workspace[:, :length]
-        return workspace, length
-
-    def get_task_task_edges_reverse(self, task_ids, workspace, global_workspace):
-        length = self.graph_extractor.get_task_task_edges_reverse(
-            task_ids, workspace, global_workspace
-        )
-
-        if self.truncate:
-            workspace = workspace[:, :length]
-        return workspace, length
-
-    def get_task_device_edges(self, task_ids, workspace, global_workspace):
-        length = self.graph_extractor.get_task_device_edges(
-            task_ids, workspace, global_workspace
-        )
-
-        if self.truncate:
-            workspace = workspace[:, :length]
-        return workspace, length
-
-    def _local_to_global(self, global_ids, local_ids, workspace=None):
-        if workspace is not None:
-            workspace[: len(local_ids)] = global_ids[local_ids]
-            return workspace
-        else:
-            return global_ids[local_ids]
-
-    def _local_to_global2D(self, g1, g2, l, workspace=None):
-        if workspace is not None:
-            size = len(l[0, :])
-            workspace[0, :size] = g1[l[0, :]][:size]
-            workspace[1, :size] = g2[l[1, :]][:size]
-            return workspace
-        else:
-            id1 = g1[l[0, :]]
-            id2 = g2[l[1, :]]
-            return torch.stack((id1, id2), dim=0)
-
-    def _local_to_global2D_same(self, g1, l, workspace=None):
-        if workspace is not None:
-            size = len(l[0, :])
-            workspace[:, :size] = g1[l][:size]
-            return workspace
-        else:
-            return g1[l]
+    # def _local_to_global2D_same(self, g1, l, workspace=None):
+    #     if workspace is not None:
+    #         size = len(l[0, :])
+    #         workspace[:, :size] = g1[l][:size]
+    #         return workspace
+    #     else:
+    #         return g1[l]
 
     def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
         if spec is None:
             spec = self.graph_spec
-
-        node_tensor = TensorDict(
-            {
-                "tasks": _make_node_tensor(
-                    spec.max_tasks, self.task_features.feature_dim
-                ),
-                "data": _make_node_tensor(
-                    spec.max_data, self.data_features.feature_dim
-                ),
-                "devices": _make_node_tensor(
-                    spec.max_devices, self.device_features.feature_dim
-                ),
-            }
-        )
-        # print("Making new buffer", self.task_feature_dim)
-        edge_tensor = TensorDict(
-            {
-                "tasks_tasks": _make_edge_tensor(
-                    spec.max_edges_tasks_tasks, self.task_task_features.feature_dim
-                ),
-                "tasks_data": _make_edge_tensor(
-                    spec.max_edges_tasks_data, self.task_data_features.feature_dim
-                ),
-                "tasks_devices": _make_edge_tensor(
-                    spec.max_edges_tasks_devices, self.task_device_features.feature_dim
-                ),
-                "data_devices": _make_edge_tensor(
-                    spec.max_edges_data_devices, self.data_device_features.feature_dim
-                ),
-            }
-        )
 
         aux_tensor = TensorDict(
             {
                 "candidates": _make_index_tensor(spec.max_candidates),
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
-                # "time": torch.tensor([0], dtype=torch.int64),
+                "progress": torch.zeros((1), dtype=torch.float32),
             }
         )
 
+        assert (
+            spec.max_tasks == 16 or spec.max_tasks == 64
+        ), "Only 16 or 32 tasks are supported in the current implementation"
+
         obs_tensor = TensorDict(
             {
-                "nodes": node_tensor,
-                "edges": edge_tensor,
+                "tasks": torch.zeros(
+                    (spec.max_tasks, self.task_feature_dim), dtype=torch.float32
+                ),
                 "aux": aux_tensor,
             }
         )
@@ -1315,128 +1031,105 @@ class ExternalObserver:
         self,
         output: TensorDict,
         task_ids: Optional[torch.Tensor] = None,
-        k: int = 1,
-        neighborhood_type: NeighborhoodType = NeighborhoodType.BIDIRECTIONAL,
     ):
-        # print("Task observation")
-        if task_ids is None:
-            n_candidates = output["aux"]["candidates"]["count"][0]
-            task_ids = output["aux"]["candidates"]["idx"][:n_candidates]
+        self.get_task_features(self.task_ids, output["tasks"])
+        # print("Task attribute", output["nodes"]["tasks"]["attr"])
 
-        if neighborhood_type == NeighborhoodType.BIDIRECTIONAL:
-            # print("Bidirectional")
-            _, count = self.get_k_hop_bidirectional(
-                task_ids, output["nodes"]["tasks"]["glb"], k
-            )
-        elif neighborhood_type == NeighborhoodType.DEPENDENCIES:
-            # print("Dependencies")
-            _, count = self.get_k_hop_dependencies(
-                task_ids, output["nodes"]["tasks"]["glb"]
-            )
+    # def data_observation(self, output: TensorDict):
+    #     assert (
+    #         False
+    #     ), "Data observation is not supported in the vector env implementation"
+    #     # print("Data observation")
+    #     ntasks = output["nodes"]["tasks"]["count"][0]
+    #     _, count = self.get_used_data(
+    #         output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
+    #     )
+    #     output["nodes"]["data"]["count"][0] = count
+    #     self.get_data_features(
+    #         output["nodes"]["data"]["glb"][:count], output["nodes"]["data"]["attr"]
+    #     )
 
-        elif neighborhood_type == NeighborhoodType.DEPENDENTS:
-            # print("Dependents")
-            _, count = self.get_k_hop_dependents(
-                task_ids, output["nodes"]["tasks"]["glb"]
-            )
+    # def device_observation(self, output: TensorDict):
+    #     assert (
+    #         False
+    #     ), "Device observation is not supported in the vector env implementation"
+    #     # print("Device observation")
+    #     count = output["nodes"]["devices"]["glb"].shape[0]
+    #     output["nodes"]["devices"]["count"][0] = count
+    #     output["nodes"]["devices"]["glb"][:count] = torch.arange(
+    #         count, dtype=torch.int64
+    #     )
+    #     self.get_device_features(
+    #         output["nodes"]["devices"]["glb"][:count],
+    #         output["nodes"]["devices"]["attr"],
+    #     )
 
-        elif neighborhood_type == NeighborhoodType.ITERATIVE:
-            # print("Iterative")
-            _, count = self.get_k_hop_neighborhood(
-                task_ids, output["nodes"]["tasks"]["glb"], k
-            )
-        else:
-            raise ValueError(
-                f"Invalid neighborhood type operation for task observation: {neighborhood_type}"
-            )
+    # def task_task_observation(self, output: TensorDict):
+    #     assert (
+    #         False
+    #     ), "Task-Task observation is not supported in the vector env implementation"
+    #     # print("Task-Task observation")
+    #     ntasks = output["nodes"]["tasks"]["count"][0]
 
-        # print("Task count", count)
-        output["nodes"]["tasks"]["count"][0] = count
-        self.get_task_features(
-            output["nodes"]["tasks"]["glb"][:count], output["nodes"]["tasks"]["attr"]
-        )
-        #print("Task attribute", output["nodes"]["tasks"]["attr"])
+    #     _, count = self.get_task_task_edges(
+    #         output["nodes"]["tasks"]["glb"][:ntasks],
+    #         output["edges"]["tasks_tasks"]["idx"],
+    #         output["edges"]["tasks_tasks"]["glb"],
+    #     )
+    #     output["edges"]["tasks_tasks"]["count"][0] = count
 
-    def data_observation(self, output: TensorDict):
-        # print("Data observation")
-        ntasks = output["nodes"]["tasks"]["count"][0]
-        _, count = self.get_used_data(
-            output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
-        )
-        output["nodes"]["data"]["count"][0] = count
-        self.get_data_features(
-            output["nodes"]["data"]["glb"][:count], output["nodes"]["data"]["attr"]
-        )
+    #     self.get_task_task_features(
+    #         output["edges"]["tasks_tasks"]["glb"][:, :count],
+    #         output["edges"]["tasks_tasks"]["attr"],
+    #     )
 
-    def device_observation(self, output: TensorDict):
-        # print("Device observation")
-        count = output["nodes"]["devices"]["glb"].shape[0]
-        output["nodes"]["devices"]["count"][0] = count
-        output["nodes"]["devices"]["glb"][:count] = torch.arange(
-            count, dtype=torch.int64
-        )
-        self.get_device_features(
-            output["nodes"]["devices"]["glb"][:count],
-            output["nodes"]["devices"]["attr"],
-        )
+    # def task_data_observation(self, output: TensorDict):
+    #     assert (
+    #         False
+    #     ), "Task-Task observation is not supported in the vector env implementation"
+    #     # print("Task-Data observation")
+    #     ntasks = output["nodes"]["tasks"]["count"][0]
+    #     ndata = output["nodes"]["data"]["count"][0]
+    #     _, count = self.get_task_data_edges(
+    #         output["nodes"]["tasks"]["glb"][:ntasks],
+    #         output["nodes"]["data"]["glb"][:ndata],
+    #         output["edges"]["tasks_data"]["idx"],
+    #         output["edges"]["tasks_data"]["glb"],
+    #         AccessType.READ_MAPPED,
+    #     )
+    #     output["edges"]["tasks_data"]["count"][0] = count
 
-    def task_task_observation(self, output: TensorDict):
-        # print("Task-Task observation")
-        ntasks = output["nodes"]["tasks"]["count"][0]
+    #     self.get_task_data_features(
+    #         output["edges"]["tasks_data"]["glb"][:, :count],
+    #         output["edges"]["tasks_data"]["attr"],
+    #     )
 
-        _, count = self.get_task_task_edges(
-            output["nodes"]["tasks"]["glb"][:ntasks],
-            output["edges"]["tasks_tasks"]["idx"],
-            output["edges"]["tasks_tasks"]["glb"],
-        )
-        output["edges"]["tasks_tasks"]["count"][0] = count
+    # def task_device_observation(self, output: TensorDict, use_all_tasks=False):
+    #     assert (
+    #         False
+    #     ), "Task-Task observation is not supported in the vector env implementation"
+    #     # print("Task-Device observation")
+    #     if not use_all_tasks:
+    #         ncandidates = output["aux"]["candidates"]["count"][0]
+    #         task_ids = output["aux"]["candidates"]["idx"][:ncandidates]
+    #     else:
+    #         ntasks = output["nodes"]["tasks"]["count"][0]
+    #         task_ids = output["nodes"]["tasks"]["glb"][:ntasks]
 
-        self.get_task_task_features(
-            output["edges"]["tasks_tasks"]["glb"][:, :count],
-            output["edges"]["tasks_tasks"]["attr"],
-        )
+    #     ndevices = output["nodes"]["devices"]["count"][0]
 
-    def task_data_observation(self, output: TensorDict):
-        # print("Task-Data observation")
-        ntasks = output["nodes"]["tasks"]["count"][0]
-        ndata = output["nodes"]["data"]["count"][0]
-        _, count = self.get_task_data_edges(
-            output["nodes"]["tasks"]["glb"][:ntasks],
-            output["nodes"]["data"]["glb"][:ndata],
-            output["edges"]["tasks_data"]["idx"],
-            output["edges"]["tasks_data"]["glb"],
-            AccessType.READ_MAPPED,
-        )
-        output["edges"]["tasks_data"]["count"][0] = count
+    #     _, count = self.get_task_device_edges(
+    #         task_ids,
+    #         output["edges"]["tasks_devices"]["idx"],
+    #         output["edges"]["tasks_devices"]["glb"],
+    #     )
 
-        self.get_task_data_features(
-            output["edges"]["tasks_data"]["glb"][:, :count],
-            output["edges"]["tasks_data"]["attr"],
-        )
+    #     output["edges"]["tasks_devices"]["count"][0] = count
 
-    def task_device_observation(self, output: TensorDict, use_all_tasks=False):
-        # print("Task-Device observation")
-        if not use_all_tasks:
-            ncandidates = output["aux"]["candidates"]["count"][0]
-            task_ids = output["aux"]["candidates"]["idx"][:ncandidates]
-        else:
-            ntasks = output["nodes"]["tasks"]["count"][0]
-            task_ids = output["nodes"]["tasks"]["glb"][:ntasks]
-
-        ndevices = output["nodes"]["devices"]["count"][0]
-
-        _, count = self.get_task_device_edges(
-            task_ids,
-            output["edges"]["tasks_devices"]["idx"],
-            output["edges"]["tasks_devices"]["glb"],
-        )
-
-        output["edges"]["tasks_devices"]["count"][0] = count
-
-        self.get_task_device_features(
-            output["edges"]["tasks_devices"]["glb"][:, :count],
-            output["edges"]["tasks_devices"]["attr"],
-        )
+    #     self.get_task_device_features(
+    #         output["edges"]["tasks_devices"]["glb"][:, :count],
+    #         output["edges"]["tasks_devices"]["attr"],
+    #     )
 
     def candidate_observation(self, output: TensorDict):
         # print("Candidate observation")
@@ -1456,226 +1149,24 @@ class ExternalObserver:
         self.candidate_observation(output)
 
         # Node observations (all nodes must be processed before edges)
-        self.task_observation(output)
-        self.data_observation(output)
-        self.device_observation(output)
+        self.task_observation(output=output)
+        # self.data_observation(output)
+        # self.device_observation(output)
 
         # print("Task attribute", output["nodes"]["tasks"]["attr"])
         # print("Data attribute", output["nodes"]["data"]["attr"])
         # print("Device attribute", output["nodes"]["devices"]["attr"])
 
         # Edge observations (edges depend on ids collected during node observation)
-        self.task_task_observation(output)
-        self.task_data_observation(output)
-        self.task_device_observation(output)
+        # self.task_task_observation(output)
+        # self.task_data_observation(output)
+        # self.task_device_observation(output)
 
         # Auxiliary observations
         output["aux"]["time"][0] = self.simulator.time
         output["aux"]["improvement"][0] = -2.0
         # print("Auxiliary observation")
 
-        return output
-
-
-@dataclass
-class HeterogeneousExternalObserver(ExternalObserver):
-    def __init__(
-        self,
-        simulator: "SimulatorDriver",
-        graph_spec: fastsim.GraphSpec,
-        graph_extractor: fastsim.GraphExtractor,
-        task_features: fastsim.RuntimeFeatureExtractor,
-        data_features: fastsim.RuntimeFeatureExtractor,
-        device_features: fastsim.RuntimeFeatureExtractor,
-        task_task_features: fastsim.RuntimeEdgeFeatureExtractor,
-        task_data_features: fastsim.RuntimeEdgeFeatureExtractor,
-        task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None,
-        data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None,
-    ):
-        super().__init__(
-            simulator,
-            graph_spec,
-            graph_extractor,
-            task_features,
-            data_features,
-            device_features,
-            task_task_features,
-            task_data_features,
-            task_device_features,
-            data_device_features,
-        )
-
-    def data_observation(self, output: TensorDict):
-        # print("Data observation")
-        ntasks = output["nodes"]["tasks"]["count"][0]
-        _, count = self.get_used_data(
-            output["nodes"]["tasks"]["glb"][:ntasks], output["nodes"]["data"]["glb"]
-        )
-        output["nodes"]["data"]["count"][0] = count
-        self.get_data_features(
-            output["nodes"]["data"]["glb"][:count], output["nodes"]["data"]["attr"]
-        )
-
-    def get_task_device_edges(self, task_ids, workspace, global_workspace):
-        length = self.graph_extractor.get_task_device_edges_mapped(
-            task_ids, workspace, global_workspace
-        )
-
-        if self.truncate:
-            workspace = workspace[:, :length]
-
-        return workspace, length
-
-    def get_data_device_edges(self, data_ids, workspace, global_workspace):
-        length = self.graph_extractor.get_data_device_edges(
-            data_ids, workspace, global_workspace
-        )
-
-        if self.truncate:
-            workspace = workspace[:, :length]
-
-        return workspace, length
-
-    def new_observation_buffer(self, spec=None):
-        if spec is None:
-            spec = self.graph_spec
-
-        buffer = super().new_observation_buffer(spec)
-        buffer["edges"]["tasks_reads_data"] = _make_edge_tensor(
-            spec.max_edges_tasks_data, self.task_data_features.feature_dim
-        )
-        buffer["edges"]["tasks_mapped_data"] = _make_edge_tensor(
-            spec.max_edges_tasks_data, self.task_data_features.feature_dim
-        )
-        buffer["edges"]["tasks_write_data"] = _make_edge_tensor(
-            spec.max_edges_tasks_data, self.task_data_features.feature_dim
-        )
-
-        return buffer
-
-    def data_device_observation(self, output: TensorDict):
-        # print("Data-Device observation")
-        ndata = output["nodes"]["data"]["count"][0]
-        ndevices = output["nodes"]["devices"]["count"][0]
-        ntasks = output["nodes"]["tasks"]["count"][0]
-
-        _, count = self.get_data_device_edges(
-            output["nodes"]["data"]["glb"][:ndata],
-            output["edges"]["data_devices"]["idx"],
-            output["edges"]["data_devices"]["glb"],
-        )
-
-        output["edges"]["data_devices"]["count"][0] = count
-
-        self.get_data_device_features(
-            output["edges"]["data_devices"]["glb"][:, :count],
-            output["edges"]["data_devices"]["attr"],
-        )
-
-    def task_data_observation(self, output: TensorDict):
-        # print("Task-Data observation")
-        ntasks = output["nodes"]["tasks"]["count"][0]
-        ndata = output["nodes"]["data"]["count"][0]
-
-        # Read & Write edges
-        _, count = self.get_task_data_edges(
-            output["nodes"]["tasks"]["glb"][:ntasks],
-            output["nodes"]["data"]["glb"][:ndata],
-            output["edges"]["tasks_data"]["idx"],
-            output["edges"]["tasks_data"]["glb"],
-        )
-        output["edges"]["tasks_data"]["count"][0] = count
-
-        self.get_task_data_features(
-            output["edges"]["tasks_data"]["glb"][:, :count],
-            output["edges"]["tasks_data"]["attr"],
-        )
-
-        # Read only edges
-        _, count = self.get_task_data_edges(
-            output["nodes"]["tasks"]["glb"][:ntasks],
-            output["nodes"]["data"]["glb"][:ndata],
-            output["edges"]["tasks_reads_data"]["idx"],
-            output["edges"]["tasks_reads_data"]["glb"],
-            AccessType.READ,
-        )
-        output["edges"]["tasks_reads_data"]["count"][0] = count
-
-        self.get_task_data_features(
-            output["edges"]["tasks_reads_data"]["glb"][:, :count],
-            output["edges"]["tasks_reads_data"]["attr"],
-        )
-
-        # Write only edges
-        _, count = self.get_task_data_edges(
-            output["nodes"]["tasks"]["glb"][:ntasks],
-            output["nodes"]["data"]["glb"][:ndata],
-            output["edges"]["tasks_write_data"]["idx"],
-            output["edges"]["tasks_write_data"]["glb"],
-            AccessType.WRITE,
-        )
-
-        output["edges"]["tasks_write_data"]["count"][0] = count
-
-        self.get_task_data_features(
-            output["edges"]["tasks_write_data"]["glb"][:, :count],
-            output["edges"]["tasks_write_data"]["attr"],
-        )
-
-        # Mapped data edges
-        _, count = self.get_task_data_edges(
-            output["nodes"]["tasks"]["glb"][:ntasks],
-            output["nodes"]["data"]["glb"][:ndata],
-            output["edges"]["tasks_mapped_data"]["idx"],
-            output["edges"]["tasks_mapped_data"]["glb"],
-            AccessType.READ_MAPPED,
-        )
-
-        output["edges"]["tasks_mapped_data"]["count"][0] = count
-
-        self.get_task_data_features(
-            output["edges"]["tasks_mapped_data"]["glb"][:, :count],
-            output["edges"]["tasks_mapped_data"]["attr"],
-        )
-
-    def get_observation(self, output=None):
-        if output is None:
-            output = self.new_observation_buffer(self.graph_spec)
-
-        # print(output)
-
-        # # Get mappable candidates
-        self.candidate_observation(output)
-
-        # Node observations (all nodes must be processed before edges)
-        self.task_observation(output, k=1)
-        self.data_observation(output)
-        self.device_observation(output)
-
-        # Edge observations (edges depend on ids collected during node observation)
-        self.task_task_observation(output)
-        self.task_data_observation(output)
-        self.task_device_observation(output, use_all_tasks=True)
-        self.data_device_observation(output)
-        
-        # print("Task attribute", output["nodes"]["tasks"]["attr"])
-        # print("Data attribute", output["nodes"]["data"]["attr"])
-        # print("Device attribute", output["nodes"]["devices"]["attr"])
-
-        # Auxiliary observations
-        output["aux"]["time"][0] = self.simulator.time
-        output["aux"]["improvement"][0] = -2.0
-        # print("Auxiliary observation")
-        
-        output["hetero_data"] = observation_to_heterodata(output)
-        
-        output["nodes"] = 0 
-        output["edges"] = 0
-
-        # print("All Data", output["edges"]["tasks_data"]["count"])
-        # print("Read Data", output["edges"]["tasks_reads_data"]["count"])
-        # print("Write Data", output["edges"]["tasks_write_data"]["count"])
-        # print("Mapped Data", output["edges"]["tasks_mapped_data"]["count"])
         return output
 
 
@@ -1725,13 +1216,11 @@ class SimulatorDriver:
 
         self.internal_mapper = internal_mapper
         self.external_mapper = external_mapper
-
         if simulator is None:
             self.simulator = fastsim.Simulator(input.to_input(), self.internal_mapper)
         else:
             self.simulator = simulator
             self.simulator.set_mapper(self.internal_mapper)
-
         if observer_factory is not None:
             self.observer_factory = observer_factory
             self.observer = observer_factory.create(self)

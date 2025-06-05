@@ -41,6 +41,7 @@ class PPOConfig:
     val_coef: float = 0.5
     max_grad_norm: float = 0.5
     threads_per_worker: int = 1
+    train_device: str = "cpu"
     collect_device: str = "cpu"
     update_device: str = "cuda:0"
     gae_gamma: float = 1
@@ -96,6 +97,7 @@ def evaluate_policy(
     for i in range(num_episodes):
         env = eval_env_fn()
         with set_exploration_type(ExplorationType.RANDOM), torch.no_grad():
+            env._reset()
             tensordict = env.rollout(
                 max_steps=max_steps,
                 policy=policy,
@@ -576,8 +578,8 @@ def run_ppo_torchrl(
     wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
 
-    _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
-    _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
+    _actor_td = actor_critic_base.actor
+    _critic_td = actor_critic_base.critic
 
     module_action = TensorDictModule(
         _actor_td,
@@ -808,15 +810,15 @@ def run_ppo_torchrl(
         )
 
     # Final evaluation
-    if config.eval_interval > 0:
-        eval_metrics = evaluate_policy(
-            policy=td_module_action,
-            eval_env_fn=eval_env_fn,
-            num_episodes=config.eval_episodes,
-            step=config.num_collections,
-        )
-        eval_metrics["eval/step"] = config.num_collections
-        wandb.log(eval_metrics)
+    # if config.eval_interval > 0 and i % config.eval_interval == 0:
+    #     eval_metrics = evaluate_policy(
+    #         policy=td_module_action,
+    #         eval_env_fn=eval_env_fn,
+    #         num_episodes=config.eval_episodes,
+    #         step=config.num_collections,
+    #     )
+    #     eval_metrics["eval/step"] = config.num_collections
+    #     wandb.log(eval_metrics)
 
     # save final network
     if wandb.run.dir is None:
