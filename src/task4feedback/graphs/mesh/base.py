@@ -277,46 +277,35 @@ def extract_unique_edges(cells):
 
 def get_cell_edges(cells, edge_dict=None):
     """
-    Compute a dictionary mapping each cell index to its edge IDs,
-    but skip any boundary edges (edges that occur only once).
+    Compute a dictionary mapping each cell index to its edge IDs.
 
     Parameters:
-    - cells: NumPy array of shape (N, n), where each row is a list of n vertex indices.
-    - edge_dict: Optional dict mapping edge tuples (v_min, v_max) → edge ID.
-                 If None, we call extract_unique_edges(cells) to build it.
+    - cells: NumPy array of cells containing cell vertex indices
+    - edge_dict: Optional dictionary mapping edge tuples to edge IDs
 
     Returns:
-    - cell_edges: dict mapping cell index → list of edge IDs,
-                  excluding any edges that occur only once across all cells.
+    - Dictionary mapping cell IDs to lists of edge IDs
     """
-    # 1) Build edge_dict if needed
+    # Get edge dictionary if not provided
     if edge_dict is None:
         edge_dict, _ = extract_unique_edges(cells)
 
     N, n = cells.shape
-
-    # 2) For each cell, produce the n “raw” edges (pairs of adjacent vertices)
+    # Generate the edges for each cell (pairs of adjacent vertices)
     cells_shifted = np.roll(cells, shift=-1, axis=1)
-    raw_edges = np.stack((cells, cells_shifted), axis=2)
-    raw_edges.sort(axis=2)  # ensure each edge is in canonical order (v1 < v2)
+    edges = np.stack((cells, cells_shifted), axis=2)
+    edges.sort(axis=2)  # Ensure canonical edge representation (v1 < v2)
 
-    # 3) Count how many times each edge‐tuple appears across ALL cells
-    edge_count = {}
-    for i in range(N):
-        for j in range(n):
-            et = tuple(raw_edges[i, j])  # e.g. (v_min, v_max)
-            edge_count[et] = edge_count.get(et, 0) + 1
-
-    # 4) Build cell_edges, but only keep edges whose count > 1
+    # Create cell-to-edge mapping
     cell_edges = {}
+
+    # For each cell, find its edges and their IDs
     for i in range(N):
         edge_ids = []
         for j in range(n):
-            et = tuple(raw_edges[i, j])
-            if edge_count[et] > 1:
-                # interior/shared edge → include its ID
-                edge_ids.append(edge_dict[et])
-            # else: boundary edge (count == 1), skip it
+            edge_tuple = tuple(edges[i, j])
+            edge_id = edge_dict[edge_tuple]
+            edge_ids.append(edge_id)
         cell_edges[i] = edge_ids
 
     return cell_edges
