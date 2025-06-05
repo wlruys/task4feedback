@@ -455,7 +455,7 @@ if __name__ == "__main__":
             "randomness": 1,
             "L": 1,
             "n": 4,
-            "steps": 20,
+            "steps": 5,
             "start_workload": 1000,
             "lower_workload": 500,
             "upper_workload": 2000,
@@ -472,7 +472,7 @@ if __name__ == "__main__":
             "latency": 1,
         },
         "feature_config": {
-            "observer_factory": "CandidateObserverFactory",
+            "observer_factory": "CandidateCoordinateObserverFactory",
             "max_tasks": 1,
             "max_data": 1,
             "max_edges_tasks_tasks": 1,
@@ -498,16 +498,16 @@ if __name__ == "__main__":
             "minibatch_size": 32,
         },
         "env_config": {
-            "change_priority": True,
-            "change_locations": True,
+            "change_priority": False,
+            "change_locations": False,
             "seed": 1,
         },
         "model_config": {
             "model_architecture": "VectorSeparateNet",
         },
         "wandb_config": {
-            "project": "test",
-            "name": "Random",
+            "project": "IncrementalEFT-Training",
+            "name": "VectorValuedNetwork-4x4x5-Coordinates",
         },
     }
 
