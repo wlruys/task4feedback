@@ -318,7 +318,11 @@ class SanityCheckEnv(RuntimeEnv):
         )
 
         cell_id = self.graph.task_to_cell[global_task_id]
-        answer = self.location_list[cell_id]
+
+        print(f"Cell ID: {cell_id}, Chosen Device: {chosen_device}")
+        print(f"Location List: {self.location_list}")
+
+        answer = self.answer[cell_id]
         if answer == chosen_device:
             reward[0] = 1
         else:

@@ -893,3 +893,45 @@ class CandidateObserverFactory(CandidateExternalObserverFactory):
             task_device_feature_factory,
             data_device_feature_factory,
         )
+
+
+class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
+    def __init__(self, spec: fastsim.GraphSpec):
+        graph_extractor_t = fastsim.GraphExtractor
+        task_feature_factory = FeatureExtractorFactory()
+        task_feature_factory.add(fastsim.TaskDeviceMappedTimeFeature)
+        task_feature_factory.add(fastsim.TaskDataMappedLocationsFeature)
+        task_feature_factory.add(fastsim.TaskDataMappedCoordinatesFeature)
+        task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
+        task_feature_factory.add(fastsim.StandardizedInputOutputTaskFeature)
+
+        data_feature_factory = FeatureExtractorFactory()
+        data_feature_factory.add(fastsim.EmptyDataFeature, 1)
+
+        device_feature_factory = FeatureExtractorFactory()
+        device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
+
+        task_task_feature_factory = EdgeFeatureExtractorFactory()
+        task_task_feature_factory.add(fastsim.EmptyTaskTaskFeature, 1)
+
+        task_data_feature_factory = EdgeFeatureExtractorFactory()
+        task_data_feature_factory.add(fastsim.EmptyTaskDataFeature, 1)
+
+        task_device_feature_factory = EdgeFeatureExtractorFactory()
+        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
+        data_device_feature_factory = EdgeFeatureExtractorFactory()
+        data_device_feature_factory.add(fastsim.DataDeviceDefaultEdgeFeature)
+
+        super().__init__(
+            spec,
+            graph_extractor_t,
+            task_feature_factory,
+            data_feature_factory,
+            device_feature_factory,
+            task_task_feature_factory,
+            task_data_feature_factory,
+            task_device_feature_factory,
+            data_device_feature_factory,
+        )

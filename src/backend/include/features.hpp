@@ -1774,6 +1774,54 @@ struct TaskDataMappedLocations : public StateFeature<TaskDataMappedLocations> {
   }
 };
 
+struct TaskDataMappedCoordinates : public StateFeature<TaskDataMappedCoordinates> {
+  TaskDataMappedCoordinates(const SchedulerState &state)
+      : StateFeature<TaskDataMappedCoordinates>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_device_manager().get_devices();
+    return 2 * devices.size() + 2;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &task_manager = state.get_task_manager();
+    const auto &task = task_manager.get_tasks().get_compute_task(task_id);
+    const auto &devices = state.get_device_manager().get_devices();
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = state.get_data_manager().get_data();
+    const auto &read = task.get_read();
+
+    const int n_devices = static_cast<int>(devices.size());
+
+    for (std::size_t i = 0; i < read.size(); i++) {
+      auto data_id = read[i];
+
+      // Standardize the size
+      double mean_size = state.stats.block_size_stats.mean;
+      double std_size = state.stats.block_size_stats.stddev;
+
+      // Get the size of the data
+      auto data_size = static_cast<double>(data.get_size(data_id));
+      // Scale the size
+      data_size = guarded_divide(data_size, mean_size);
+
+      const f_t x_pos = static_cast<f_t>(data.get_x_pos(data_id));
+      const f_t y_pos = static_cast<f_t>(data.get_y_pos(data_id));
+
+      for (std::size_t j = 0; j < n_devices; j++) {
+        const bool is_mapped = data_manager.check_valid_mapped(data_id, j);
+        const f_t mapped_v = static_cast<f_t>(is_mapped);
+        output[j] += x_pos * mapped_v;
+        output[j + n_devices] += y_pos * mapped_v;
+      }
+
+      output[2 * n_devices + 1] += data_size * x_pos;
+      output[2 * n_devices + 2] += data_size * y_pos;
+    }
+  }
+};
+
 struct TaskDeviceMappedTime : public StateFeature<TaskDeviceMappedTime> {
   TaskDeviceMappedTime(const SchedulerState &state)
       : StateFeature<TaskDeviceMappedTime>(state, NodeType::TASK) {

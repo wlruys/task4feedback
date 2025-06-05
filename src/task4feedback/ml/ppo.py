@@ -32,7 +32,7 @@ class PPOConfig:
     states_per_collection: int = 1920
     minibatch_size: int = 250
     num_epochs_per_collection: int = 6
-    num_collections: int = 1000
+    num_collections: int = 10000
     workers: int = 1
     seed: int = 0
     lr: float = 2.5e-4
