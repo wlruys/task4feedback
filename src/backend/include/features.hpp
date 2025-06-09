@@ -1546,6 +1546,36 @@ struct DepthTaskFeature : public StateFeature<DepthTaskFeature> {
     double mean_depth = state.stats.depth_stats.mean;
     double std_depth = state.stats.depth_stats.stddev;
     depth = guarded_divide(depth - mean_depth, std_depth);
+    output[0] = depth;
+  }
+};
+
+struct ReadDataLocationFeature : public StateFeature<ReadDataLocationFeature> {
+  ReadDataLocationFeature(const SchedulerState &state)
+      : StateFeature<ReadDataLocationFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_device_manager().get_devices();
+    return devices.size() - 1; // Exclude CPU
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const ComputeTask &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = data_manager.get_data();
+    const auto &devices = state.get_device_manager().get_devices();
+    double max_size = static_cast<double>(state.stats.total_read_stats.max);
+    double total_read = static_cast<double>(data.get_total_size(task.get_read()));
+    for (devid_t i = 1; i < devices.size(); i++) {
+      output[i - 1] = -guarded_divide(total_read, max_size);
+      for (auto data_id : task.get_read()) {
+        if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_id), i)) {
+          auto data_size = static_cast<double>(data.get_size(data_id));
+          output[i - 1] += guarded_divide(data_size, max_size);
+        }
+      }
+    }
   }
 };
 

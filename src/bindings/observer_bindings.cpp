@@ -280,6 +280,7 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_feature<StandardizedInputOutputTaskFeature>(m, "StandardizedInputOutputTaskFeature");
   bind_state_feature<TagTaskFeature>(m, "TagTaskFeature");
   bind_state_feature<DepthTaskFeature>(m, "DepthTaskFeature");
+  bind_state_feature<ReadDataLocationFeature>(m, "ReadDataLocationFeature");
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");

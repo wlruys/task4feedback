@@ -344,6 +344,7 @@ struct GraphStats {
   StatsBundle<timecount_t> duration_stats;
   StatsBundle<mem_t> block_size_stats;
   StatsBundle<mem_t> io_stats;
+  StatsBundle<mem_t> total_read_stats;
   StatsBundle<taskid_t> indegree_stats;
   StatsBundle<taskid_t> outdegree_stats;
   StatsBundle<taskid_t> depth_stats;
@@ -594,6 +595,19 @@ public:
     return StatsBundle<taskid_t>(depths);
   }
 
+  StatsBundle<mem_t> get_total_read_statistics() const {
+    const auto &tasks = task_manager.get_tasks();
+    std::vector<mem_t> sizes;
+
+    for (const auto &task : tasks.get_compute_tasks()) {
+      const auto &read = task.get_read();
+      mem_t input_size = data_manager.get_data().get_total_size(read);
+      sizes.push_back(input_size);
+    }
+
+    return StatsBundle<mem_t>(sizes);
+  }
+
   StatsBundle<taskid_t> get_tag_statistics() const {
 
     const auto &tasks = task_manager.get_tasks();
@@ -618,6 +632,7 @@ public:
     this->get_degree_statistics(device_types);
     this->stats.tag_stats = get_tag_statistics();
     this->stats.depth_stats = get_depth_statistics();
+    this->stats.total_read_stats = get_total_read_statistics();
   }
 
   [[nodiscard]] timecount_t get_global_time() const {
