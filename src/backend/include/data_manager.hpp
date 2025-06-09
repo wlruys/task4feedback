@@ -662,7 +662,7 @@ public:
   }
 
   // read: add (device_id, data_id, mem_size). If present, update MRU; else insert.
-  void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
+  bool read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
     assert(device_id >= 0 && device_id < n_devices_);
 
     auto &lst = lru_lists_[device_id];
@@ -675,18 +675,21 @@ public:
       // already present: move to MRU
       lst.erase(it->second);
     } else {
-      size += mem_size;
-      if (size > max_size) {
-        SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
-                     data_id, mem_size);
-        assert(size <= max_size && "LRU_manager::read(): size exceeds max size");
+      if ((size + mem_size) > max_size) {
+        SPDLOG_CRITICAL("LRU_manager::read(): Device {}: Cannot add data_id {} with size {}. "
+                        "Device current size: {}, max size: {}. "
+                        "Falling back to CPU",
+                        device_id, data_id, mem_size, size, max_size);
+        return false;
       }
+      size += mem_size;
     }
     // insert at MRU (back)
     lst.push_back(data_id);
     auto new_it = std::prev(lst.end());
     pos[data_id] = new_it;
     smap[data_id] = mem_size; // update size
+    return true;
   }
 
   LRU_manager(const LRU_manager &other)
@@ -835,16 +838,25 @@ public:
     for (dataid_t i = 0; i < data.get().size(); i++) {
       auto initial_location = data.get().get_location(i);
       if (initial_location > -1) {
-        mapped_locations.set_valid(i, initial_location, 0);
-        reserved_locations.set_valid(i, initial_location, 0);
-        launched_locations.set_valid(i, initial_location, 0);
-        device_manager.get().add_mem<TaskState::MAPPED>(initial_location, data.get().get_size(i),
-                                                        0);
-        device_manager.get().add_mem<TaskState::RESERVED>(initial_location, data.get().get_size(i),
+        if (lru_manager.read(initial_location, i, data.get().get_size(i))) {
+          mapped_locations.set_valid(i, initial_location, 0);
+          reserved_locations.set_valid(i, initial_location, 0);
+          launched_locations.set_valid(i, initial_location, 0);
+          device_manager.get().add_mem<TaskState::MAPPED>(initial_location, data.get().get_size(i),
                                                           0);
-        device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, data.get().get_size(i),
-                                                          0);
-        lru_manager.read(initial_location, i, data.get().get_size(i));
+          device_manager.get().add_mem<TaskState::RESERVED>(initial_location,
+                                                            data.get().get_size(i), 0);
+          device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location,
+                                                            data.get().get_size(i), 0);
+        } else {
+          mapped_locations.set_valid(i, 0, 0);
+          reserved_locations.set_valid(i, 0, 0);
+          launched_locations.set_valid(i, 0, 0);
+          device_manager.get().add_mem<TaskState::MAPPED>(0, data.get().get_size(i), 0);
+          device_manager.get().add_mem<TaskState::RESERVED>(0, data.get().get_size(i), 0);
+          device_manager.get().add_mem<TaskState::LAUNCHED>(0, data.get().get_size(i), 0);
+          lru_manager.read(0, i, data.get().get_size(i));
+        }
       }
     }
   }
