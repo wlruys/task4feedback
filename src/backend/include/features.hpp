@@ -1543,9 +1543,9 @@ struct DepthTaskFeature : public StateFeature<DepthTaskFeature> {
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
     double depth = static_cast<double>(get_depth(task));
-    double mean_depth = state.stats.depth_stats.mean;
-    double std_depth = state.stats.depth_stats.stddev;
-    depth = guarded_divide(depth - mean_depth, std_depth);
+    // double mean_depth = state.stats.depth_stats.mean;
+    // double std_depth = state.stats.depth_stats.stddev;
+    // depth = guarded_divide(depth - mean_depth, std_depth);
     output[0] = depth;
   }
 };

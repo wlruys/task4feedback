@@ -168,6 +168,21 @@ class JacobiData(DataGeometry):
 
 
 class JacobiGraph(ComputeDataGraph):
+    def xy_from_id(self, taskid: int) -> tuple[int, int]:
+        """
+        Convert a task ID to its (x, y) coordinates in the Jacobi grid.
+        """
+        cell_id = self.task_to_cell[taskid]
+        centroid = self.data.geometry.cell_points[
+            self.data.geometry.cells[cell_id]
+        ].mean(axis=0)
+        n = self.config.n
+        centroid = np.round(centroid * n)
+
+        x = int(centroid[0])
+        y = int(centroid[1])
+        return x, y
+
     def _build_graph(self, retire_data: bool = False):
         self.task_to_cell = {}
         self.task_to_level = {}
@@ -211,7 +226,6 @@ class JacobiGraph(ComputeDataGraph):
                 read_blocks = interior_edges + exterior_edges + [interior_block]
                 write_blocks = next_interior_edges + [next_interior_block]
                 prev_interiors[(cell, i)] = interior_edges + [interior_block]
-
                 self.add_read_data(task_id, read_blocks)
                 self.add_write_data(task_id, write_blocks)
                 if i > 0 and retire_data:
@@ -568,7 +582,7 @@ class XYNormalizedDeviceQueueObserver(XYExternalObserver):
 
 
 @dataclass(kw_only=True)
-class XYHeterogeneousObserver(HeterogeneousExternalObserver):
+class XYHeterogeneousObserver(ExternalObserver):
     def data_observation(self, output):
         super().data_observation(output)
         graph: JacobiGraph = self.simulator.input.graph
@@ -812,147 +826,59 @@ class XYMinimalObserverFactory(XYExternalObserverFactory):
         )
 
 
-# class XYDataObserverFactory(XYExternalObserverFactory):
-#     def __init__(self, spec: fastsim.GraphSpec):
-#         graph_extractor_t = fastsim.GraphExtractor
-#         task_feature_factory = FeatureExtractorFactory()
-#         # task_feature_factory.add(fastsim.InDegreeTaskFeature)
-#         # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-#         # task_feature_factory.add(fastsim.TaskStateFeature)
-#         task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
-#         task_feature_factory.add(
-#             fastsim.EmptyTaskFeature, 1
-#         )  # 2 for x, y position, last for whether it is mapped
+@dataclass(kw_only=True)
+class VectorExternalObserverFactory(ExternalObserverFactory):
 
-#         data_feature_factory = FeatureExtractorFactory()
-#         data_feature_factory.add(fastsim.DataSizeFeature)
-#         data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-#         data_feature_factory.add(fastsim.EmptyDataFeature, 2)
+    def __init__(self, spec: fastsim.GraphSpec):
+        graph_extractor_t = fastsim.GraphExtractor
+        task_feature_factory = FeatureExtractorFactory()
+        task_feature_factory.add(fastsim.DepthTaskFeature)
+        # task_feature_factory.add(fastsim.EmptyTaskFeature, 1)
+        # task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
+        # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+        task_feature_factory.add(fastsim.ReadDataLocationFeature)
+        task_feature_factory.add(
+            fastsim.EmptyTaskFeature, 1
+        )  # last for whether it is candidate or not
 
-#         device_feature_factory = FeatureExtractorFactory()
-#         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
-#         # device_feature_factory.add(fastsim.DeviceIDFeature)
-#         # device_feature_factory.add(fastsim.DeviceMemoryFeature)
-#         device_feature_factory.add(fastsim.DeviceTimeFeature)
+        # device_feature_factory = FeatureExtractorFactory()
+        # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
+        # device_feature_factory.add(fastsim.DeviceIDFeature)
+        # device_feature_factory.add(fastsim.DeviceMemoryFeature)
+        # device_feature_factory.add(fastsim.DeviceTimeFeature)
 
-#         task_task_feature_factory = EdgeFeatureExtractorFactory()
-#         task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
+        super().__init__(
+            spec,
+            graph_extractor_t,
+            task_feature_factory,
+            # device_feature_factory,
+        )
 
-#         task_data_feature_factory = EdgeFeatureExtractorFactory()
-#         # task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
-#         task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
-
-#         task_device_feature_factory = EdgeFeatureExtractorFactory()
-#         task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
-
-#         data_device_feature_factory = None
-
-#         super().__init__(
-#             spec,
-#             graph_extractor_t,
-#             task_feature_factory,
-#             data_feature_factory,
-#             device_feature_factory,
-#             task_task_feature_factory,
-#             task_data_feature_factory,
-#             task_device_feature_factory,
-#             data_device_feature_factory,
-#         )
+    def create(self, simulator: SimulatorDriver):
+        state = simulator.get_state()
+        graph_spec = self.graph_spec
+        graph_extractor = self.graph_extractor_t(state)
+        task_feature_extractor = self.task_feature_factory.create(state)
+        # device_feature_extractor = self.device_feature_factory.create(state)
+        observer = VectorObserver(
+            simulator,
+            graph_spec,
+            graph_extractor,
+            task_feature_extractor,
+            # device_feature_extractor,
+        )
+        observer.reset()
+        return observer
 
 
-# class OnlyXYObserverFactory(XYExternalObserverFactory):
-#     def __init__(self, spec: fastsim.GraphSpec):
-#         graph_extractor_t = fastsim.GraphExtractor
-#         task_feature_factory = FeatureExtractorFactory()
-#         # task_feature_factory.add(fastsim.InDegreeTaskFeature)
-#         # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-#         # task_feature_factory.add(fastsim.TaskStateFeature)
-#         task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
-#         task_feature_factory.add(
-#             fastsim.EmptyTaskFeature, 1
-#         )  # 2 for x, y position, last for whether it is mapped
-
-#         data_feature_factory = FeatureExtractorFactory()
-#         # data_feature_factory.add(fastsim.DataSizeFeature)
-#         # data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-#         data_feature_factory.add(fastsim.EmptyDataFeature, 2)
-
-#         device_feature_factory = FeatureExtractorFactory()
-#         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
-#         # device_feature_factory.add(fastsim.DeviceIDFeature)
-#         # device_feature_factory.add(fastsim.DeviceMemoryFeature)
-#         # device_feature_factory.add(fastsim.DeviceTimeFeature)
-#         device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
-
-#         task_task_feature_factory = EdgeFeatureExtractorFactory()
-#         # task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
-#         task_task_feature_factory.add(fastsim.EmptyTaskTaskFeature, 1)
-
-#         task_data_feature_factory = EdgeFeatureExtractorFactory()
-#         # task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
-#         # task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
-#         task_data_feature_factory.add(fastsim.EmptyTaskDataFeature, 1)
-
-#         task_device_feature_factory = EdgeFeatureExtractorFactory()
-#         task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
-
-#         data_device_feature_factory = None
-
-#         super().__init__(
-#             spec,
-#             graph_extractor_t,
-#             task_feature_factory,
-#             data_feature_factory,
-#             device_feature_factory,
-#             task_task_feature_factory,
-#             task_data_feature_factory,
-#             task_device_feature_factory,
-#             data_device_feature_factory,
-#         )
-
-
-# class DataObserverFactory(ExternalObserverFactory):
-#     def __init__(self, spec: fastsim.GraphSpec):
-#         graph_extractor_t = fastsim.GraphExtractor
-#         task_feature_factory = FeatureExtractorFactory()
-#         # task_feature_factory.add(fastsim.InDegreeTaskFeature)
-#         # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-#         # task_feature_factory.add(fastsim.TaskStateFeature)
-#         task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
-#         task_feature_factory.add(
-#             fastsim.EmptyTaskFeature, 1
-#         )  # 2 for x, y position, last for whether it is mapped
-
-#         data_feature_factory = FeatureExtractorFactory()
-#         # data_feature_factory.add(fastsim.DataSizeFeature)
-#         data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-
-#         device_feature_factory = FeatureExtractorFactory()
-#         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
-#         device_feature_factory.add(fastsim.DeviceIDFeature)
-#         # device_feature_factory.add(fastsim.DeviceMemoryFeature)
-#         device_feature_factory.add(fastsim.DeviceTimeFeature)
-
-#         task_task_feature_factory = EdgeFeatureExtractorFactory()
-#         task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
-
-#         task_data_feature_factory = EdgeFeatureExtractorFactory()
-#         # task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
-#         task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
-
-#         task_device_feature_factory = EdgeFeatureExtractorFactory()
-#         task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
-
-#         data_device_feature_factory = None
-
-#         super().__init__(
-#             spec,
-#             graph_extractor_t,
-#             task_feature_factory,
-#             data_feature_factory,
-#             device_feature_factory,
-#             task_task_feature_factory,
-#             task_data_feature_factory,
-#             task_device_feature_factory,
-#             data_device_feature_factory,
-#         )
+@dataclass(kw_only=True)
+class VectorObserver(ExternalObserver):
+    def task_observation(self, output: TensorDict):
+        graph: JacobiGraph = self.simulator.input.graph
+        candidate = output["aux", "candidates", "idx"][0].item()
+        x, y = graph.xy_from_id(candidate)
+        # print(f"Task Observation: {candidate} at ({x}, {y})")
+        super().task_observation(output)
+        output["tasks"][x * graph.config.n + y][-1] = 1.0
+        # Used for Depth Normalization
+        output["tasks"][:, 0] -= output["tasks"][output["tasks"][:, -1] > 0, 0][0]

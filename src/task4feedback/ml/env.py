@@ -6,7 +6,6 @@ import numpy as np
 
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import (
-    DefaultObserverFactory,
     SimulatorFactory,
     create_graph_spec,
     observation_to_heterodata,
@@ -24,6 +23,9 @@ from task4feedback.legacy_graphs import *
 from task4feedback.graphs.jacobi import JacobiGraph
 from torch_geometric.data import HeteroData
 from torch.profiler import record_function
+from task4feedback.graphs.mesh.partition import metis_partition
+from task4feedback.graphs.jacobi import PartitionMapper
+import itertools
 
 MAX_BUFFERS = 2000
 
@@ -43,7 +45,6 @@ class RuntimeEnv(EnvBase):
         priority_seed=0,
         location_randomness=1,
         location_list: Optional[List[int]] = None,
-        answer: Optional[List[int]] = None,
         randomize_interval: int = 1,
     ):
         super().__init__(device=device)
@@ -60,7 +61,6 @@ class RuntimeEnv(EnvBase):
                 int(only_gpu), simulator_factory.graph_spec.max_devices
             )
         self.location_list = location_list
-        self.answer = answer
         self.only_gpu = only_gpu
 
         self.simulator_factory = simulator_factory
@@ -70,24 +70,33 @@ class RuntimeEnv(EnvBase):
 
         self.buffer_idx = 0
         self.resets = 0
+        print("Change locations:", self.change_locations)
+        print("Change priority:", self.change_priority)
+        graph = simulator_factory.input.graph
+        if self.only_gpu and (0 in self.location_list):
+            print(
+                "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
+            )
+        if (
+            hasattr(graph, "get_cell_locations")
+            and hasattr(graph, "set_cell_locations")
+            and hasattr(graph, "randomize_locations")
+        ):
+            self.legacy_graph = False
+        else:
+            self.legacy_graph = True
+            print(
+                "Warning: Randomizing locations on a legacy graph. This may not work as expected. location_randomness is ignored."
+            )
 
-        if self.change_locations:
-            graph = simulator_factory.input.graph
-            if self.only_gpu and (0 in self.location_list):
-                print(
-                    "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
-                )
-            if (
-                hasattr(graph, "get_cell_locations")
-                and hasattr(graph, "set_cell_locations")
-                and hasattr(graph, "randomize_locations")
-            ):
-                self.legacy_graph = False
-            else:
-                self.legacy_graph = True
-                print(
-                    "Warning: Randomizing locations on a legacy graph. This may not work as expected. location_randomness is ignored."
-                )
+        if self.legacy_graph is False:
+            self.graph: JacobiGraph = simulator_factory.input.graph
+            self.metis = metis_partition(
+                self.graph.data.geometry.cells,
+                self.graph.data.geometry.cell_neighbors,
+                nparts=simulator_factory.graph_spec.max_devices - int(only_gpu),
+            )
+            self.metis = np.array([i + 1 for i in self.metis])
 
         # print("Creating environment spec")
         self.observation_spec = self._create_observation_spec()
@@ -96,13 +105,8 @@ class RuntimeEnv(EnvBase):
         self.reward_spec = self._create_reward_spec()
         self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool)
 
-        self.workspace = self._prealloc_step_buffers(100)
+        self.workspace = self._prealloc_step_buffers(1000)
         self.baseline_time = baseline_time
-
-        # if change_locations:
-        #     graph.randomize_locations(
-        #         self.location_randomness, self.location_list, verbose=False
-        #     )
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
@@ -154,7 +158,9 @@ class RuntimeEnv(EnvBase):
             td = TensorDict(observation=obs)
         else:
             self.simulator.observer.get_observation(td["observation"])
-        td["observation", "aux", "progress"] = self.step_count / 80
+        td["observation", "aux", "progress"] = self.step_count / (
+            len(self.simulator.input.graph)
+        )
         return td
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -215,12 +221,24 @@ class RuntimeEnv(EnvBase):
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
+        # if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+        #     for next_id in self.graph.level_to_task[
+        #         self.graph.task_to_level[global_task_id]
+        #     ]:
+        #         if (
+        #             self.graph.task_to_cell[global_task_id]
+        #             == self.graph.task_to_cell[next_id]
+        #         ):
+        #             x, y = self.graph.xy_from_id(global_task_id)
+        #             self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f}"
             )
 
         out = obs
@@ -240,17 +258,18 @@ class RuntimeEnv(EnvBase):
             (self.resets // 2) % self.randomize_interval == 0
         ):
             new_location_seed = self.location_seed + self.resets
-            graph = self.simulator_factory.input.graph
             random.seed(new_location_seed)
             if self.legacy_graph:
                 data = self.simulator_factory.input.data.data
                 for i in range(data.size()):
                     data.set_location(i, random.choice(self.location_list))
             else:
-                samples = [item for item in self.location_list for _ in range(4)]
-                random.shuffle(samples)
-                graph.set_cell_locations(samples, step=0)
-                graph.set_cell_locations([-1 for i in samples], step=1)
+                self.graph.randomize_locations(
+                    self.location_randomness, self.location_list, verbose=False
+                )
+                self.graph.set_cell_locations(
+                    [-1 for _ in range(len(self.graph.data.geometry.cells))], 1
+                )
 
         if self.change_priority and (self.resets % self.randomize_interval == 0):
             new_priority_seed = int(current_priority_seed + self.resets)
@@ -266,11 +285,41 @@ class RuntimeEnv(EnvBase):
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
 
+        current_loc = self.graph.get_cell_locations(as_dict=False)
+
+        labels = [1, 2, 3, 4]
+        best_mismatches = len(self.metis) + 1
+        best_relabelled = None
+
+        for perm in itertools.permutations(labels):
+            # perm is a tuple like (2,1,3,4), meaning: send 1→2, 2→1, 3→3, 4→4.
+            # Build a small lookup table of size 5 so that lookup[a] == π(a):
+            lookup = np.zeros(5, dtype=int)
+            for a, mapped in zip(labels, perm):
+                lookup[a] = mapped
+
+            # apply π to the entire answer array:
+            relabelled = lookup[self.metis]  # shape (N,)
+
+            # count how many positions i have relabelled[i] != current_loc[i]
+            mismatches = np.count_nonzero(relabelled != current_loc)
+
+            if mismatches < best_mismatches:
+                best_mismatches = mismatches
+                best_relabelled = relabelled.copy()
+        self.answer = best_relabelled.tolist()
+        partition_mapper = PartitionMapper(cell_to_mapping=self.answer)
+        opt_sim = self.simulator.copy()
+        opt_sim.external_mapper = partition_mapper
+        opt_sim.enable_external_mapper()
+        opt_sim.run()
+        self.optimal_time = opt_sim.time
+
         simulator_status = self.simulator.run_until_external_mapping()
         assert (
             simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
         ), f"Unexpected simulator status: {simulator_status}"
-
+        self.observer.reset()
         obs = self._get_observation()
         return obs
 
@@ -320,14 +369,25 @@ class SanityCheckEnv(RuntimeEnv):
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
+        if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+            for next_id in self.graph.level_to_task[
+                self.graph.task_to_level[global_task_id] + 1
+            ]:
+                if (
+                    self.graph.task_to_cell[global_task_id]
+                    == self.graph.task_to_cell[next_id]
+                ):
+                    x, y = self.graph.xy_from_id(global_task_id)
+                    self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
-
         out = obs
         out.set("reward", reward)
         out.set("done", done)
@@ -385,17 +445,30 @@ class RunningAvgEnv(RuntimeEnv):
         if self.step_count == 0:
             reward[0] = 0
         else:
-            reward[0] = (self.avg_policy[-2] - self.avg_policy[-1]) / self.EFT_baseline
+            reward[0] = -(self.avg_policy[-1] - self.avg_eft[-1]) / self.EFT_baseline
+
+        if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+            for next_id in self.graph.level_to_task[
+                self.graph.task_to_level[global_task_id] + 1
+            ]:
+                if (
+                    self.graph.task_to_cell[global_task_id]
+                    == self.graph.task_to_cell[next_id]
+                ):
+                    x, y = self.graph.xy_from_id(global_task_id)
+                    self.observer.task_ids[x * self.graph.config.n + y] = next_id
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
+
         out.set("reward", reward)
         out.set("done", done)
         self.step_count += 1
@@ -436,12 +509,24 @@ class EFTIncrementalEnv(RuntimeEnv):
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
+        if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+            for next_id in self.graph.level_to_task[
+                self.graph.task_to_level[global_task_id] + 1
+            ]:
+                if (
+                    self.graph.task_to_cell[global_task_id]
+                    == self.graph.task_to_cell[next_id]
+                ):
+                    x, y = self.graph.xy_from_id(global_task_id)
+                    self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -478,10 +563,11 @@ class TerminalEnv(RuntimeEnv):
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             reward[0] = obs["observation"]["aux"]["improvement"][0]
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -536,9 +622,10 @@ class kHopEFTIncrementalEnv(RuntimeEnv):
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -605,10 +692,10 @@ class EFTAllPossibleEnv(RuntimeEnv):
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            improvement = self.EFT_baseline / time - 1
+            improvement = self.EFT_baseline / time
             obs["observation"]["aux"]["improvement"][0] = improvement
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -691,9 +778,10 @@ class RolloutEnv(RuntimeEnv):
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -800,9 +888,10 @@ class kHopRolloutEnv(RuntimeEnv):
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -888,12 +977,24 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
+        if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+            for next_id in self.graph.level_to_task[
+                self.graph.task_to_level[global_task_id] + 1
+            ]:
+                if (
+                    self.graph.task_to_cell[global_task_id]
+                    == self.graph.task_to_cell[next_id]
+                ):
+                    x, y = self.graph.xy_from_id(global_task_id)
+                    self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -1006,183 +1107,6 @@ def make_simple_env(graph: ComputeDataGraph):
     env = TransformedEnv(env, TrajCounter())
 
     return env
-
-
-class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
-    def __init__(
-        self,
-        simulator_factory,
-        seed: int = 0,
-        device="cpu",
-        baseline_time=56000,
-        use_external_mapper: bool = False,
-        change_priority=True,
-        change_duration=False,
-        change_locations=False,
-        location_seed=0,
-        location_randomness=1,
-        location_list=[1, 2, 3, 4],
-    ):
-        super().__init__(
-            simulator_factory=simulator_factory,
-            seed=seed,
-            device=device,
-            baseline_time=baseline_time,
-            use_external_mapper=use_external_mapper,
-            change_priority=change_priority,
-            change_duration=change_duration,
-        )
-        self.change_locations = change_locations
-        self.location_seed = 0
-
-        graph = simulator_factory.input.graph
-        assert hasattr(graph, "get_cell_locations")
-        assert hasattr(graph, "set_cell_locations")
-        assert hasattr(graph, "randomize_locations")
-        self.initial_location_list = graph.get_cell_locations()
-        self.location_randomness = location_randomness
-        self.location_list = location_list
-
-        random.seed(self.location_seed)
-
-        if change_locations:
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        self.resets += 1
-        current_priority_seed = self.simulator_factory.pseed
-        current_duration_seed = self.simulator_factory.seed
-
-        if self.change_locations:
-            new_location_seed = self.location_seed + self.resets
-            # Load initial location list
-            graph = self.simulator_factory.input.graph
-            graph.set_cell_locations(self.initial_location_list)
-
-            random.seed(new_location_seed)
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
-        if self.change_priority:
-            new_priority_seed = current_priority_seed + self.resets
-        else:
-            new_priority_seed = current_priority_seed
-
-        if self.change_duration:
-            new_duration_seed = current_duration_seed + self.resets
-        else:
-            new_duration_seed = current_duration_seed
-
-        new_priority_seed = int(new_priority_seed)
-        new_duration_seed = int(new_duration_seed)
-
-        self.simulator = self.simulator_factory.create(
-            priority_seed=new_priority_seed, duration_seed=new_duration_seed
-        )
-
-        simulator_status = self.simulator.run_until_external_mapping()
-        assert (
-            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
-        ), f"Unexpected simulator status: {simulator_status}"
-
-        obs = self._get_observation()
-        return obs
-
-    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
-        s = super()._set_seed(seed, static_seed)
-        # if s is not None:
-        #     self.location_seed = s
-        return s
-
-
-class RandomLocationRuntimeEnv(RuntimeEnv):
-    def __init__(
-        self,
-        simulator_factory,
-        seed: int = 0,
-        device="cpu",
-        baseline_time=56000,
-        change_priority=True,
-        change_duration=False,
-        change_locations=False,
-        location_seed=0,
-        location_randomness=1,
-        location_list=[1, 2, 3, 4],
-    ):
-        super().__init__(
-            simulator_factory=simulator_factory,
-            seed=seed,
-            device=device,
-            baseline_time=baseline_time,
-            change_priority=change_priority,
-            change_duration=change_duration,
-        )
-        self.change_locations = change_locations
-        self.location_seed = 0
-
-        graph = simulator_factory.input.graph
-        assert hasattr(graph, "get_cell_locations")
-        assert hasattr(graph, "set_cell_locations")
-        assert hasattr(graph, "randomize_locations")
-        self.initial_location_list = graph.get_cell_locations()
-        self.location_randomness = location_randomness
-        self.location_list = location_list
-
-        random.seed(self.location_seed)
-
-        if change_locations:
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        self.resets += 1
-        current_priority_seed = self.simulator_factory.pseed
-        current_duration_seed = self.simulator_factory.seed
-
-        if self.change_locations:
-            new_location_seed = self.location_seed + self.resets
-            # Load initial location list
-            graph = self.simulator_factory.input.graph
-
-            random.seed(new_location_seed)
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
-        if self.change_priority:
-            new_priority_seed = current_priority_seed + self.resets
-        else:
-            new_priority_seed = current_priority_seed
-
-        if self.change_duration:
-            new_duration_seed = current_duration_seed + self.resets
-        else:
-            new_duration_seed = current_duration_seed
-
-        new_priority_seed = int(new_priority_seed)
-        new_duration_seed = int(new_duration_seed)
-
-        self.simulator = self.simulator_factory.create(
-            priority_seed=new_priority_seed, duration_seed=new_duration_seed
-        )
-
-        simulator_status = self.simulator.run_until_external_mapping()
-        assert (
-            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
-        ), f"Unexpected simulator status: {simulator_status}"
-
-        obs = self._get_observation()
-        return obs
-
-    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
-        s = super()._set_seed(seed, static_seed)
-        # if s is not None:
-        #     self.location_seed = s
-        return s
 
 
 class EFTIncrementalEnv(EnvBase):
@@ -1339,9 +1263,10 @@ class EFTIncrementalEnv(EnvBase):
             if time <= self.EFT_baseline:
                 reward[0] += 2
 
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -1548,9 +1473,10 @@ class IncrementalMappingEnv(EnvBase):
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
             self.last_time = 0
 

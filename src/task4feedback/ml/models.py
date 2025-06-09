@@ -111,11 +111,6 @@ class HeteroDataWrapper(nn.Module):
 @dataclass
 class FeatureDimConfig:
     task_feature_dim: int = 12
-    data_feature_dim: int = 5
-    device_feature_dim: int = 12
-    task_data_edge_dim: int = 3
-    task_device_edge_dim: int = 2
-    task_task_edge_dim: int = 1
 
     @staticmethod
     def from_observer(observer: ExternalObserver):
@@ -128,30 +123,17 @@ class FeatureDimConfig:
 
         return FeatureDimConfig(
             task_feature_dim=observer.task_feature_dim,
-            data_feature_dim=observer.data_feature_dim,
-            device_feature_dim=observer.device_feature_dim,
-            task_data_edge_dim=observer.task_data_edge_dim,
-            task_device_edge_dim=observer.task_device_edge_dim,
-            task_task_edge_dim=observer.task_task_edge_dim,
+            # data_feature_dim=observer.data_feature_dim,
+            # device_feature_dim=observer.device_feature_dim,
+            # task_data_edge_dim=observer.task_data_edge_dim,
+            # task_device_edge_dim=observer.task_device_edge_dim,
+            # task_task_edge_dim=observer.task_task_edge_dim,
         )
 
     @staticmethod
     def from_config(other: Self, **overrides):
         return FeatureDimConfig(
             task_feature_dim=overrides.get("task_feature_dim", other.task_feature_dim),
-            data_feature_dim=overrides.get("data_feature_dim", other.data_feature_dim),
-            device_feature_dim=overrides.get(
-                "device_feature_dim", other.device_feature_dim
-            ),
-            task_data_edge_dim=overrides.get(
-                "task_data_edge_dim", other.task_data_edge_dim
-            ),
-            task_device_edge_dim=overrides.get(
-                "task_device_edge_dim", other.task_device_edge_dim
-            ),
-            task_task_edge_dim=overrides.get(
-                "task_task_edge_dim", other.task_task_edge_dim
-            ),
         )
 
 
@@ -161,6 +143,11 @@ class LayerConfig:
     n_heads: int = 1
     input_dim: Optional[int] = None
     output_dim: Optional[int] = None
+    input_channels: Optional[int] = None
+    output_channels: Optional[int] = None
+    width: Optional[int] = None
+    kernel_size: Optional[int] = None
+    padding: Optional[int] = None
 
 
 class HeteroGAT1Layer(nn.Module):
@@ -2389,4 +2376,232 @@ class HeteroConvSeparateNet(nn.Module):
             data = data.to("cuda")
         d_logits = self.actor(data, counts, progress)
         v = self.critic(data, counts, progress)
+        return d_logits, v
+
+
+class Conv2LayerNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+    ):
+        super(Conv2LayerNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.conv1 = nn.Conv2d(
+            in_channels=feature_config.task_feature_dim,
+            out_channels=layer_config.output_channels,
+            kernel_size=layer_config.kernel_size,
+            padding=layer_config.padding,
+        )
+        conv_spatial = (
+            layer_config.width + 2 * layer_config.padding - layer_config.kernel_size + 1
+        )
+        self.activation1 = nn.LeakyReLU(negative_slope=0.01)
+        self.conv2 = nn.Conv2d(
+            in_channels=layer_config.output_channels,
+            out_channels=1,
+            kernel_size=layer_config.kernel_size,
+            padding=layer_config.padding,
+        )
+        self.activation2 = nn.LeakyReLU(negative_slope=0.01)
+        # self.conv3 = nn.Conv2d(
+        #     in_channels=8,
+        #     out_channels=1,
+        #     kernel_size=layer_config.kernel_size,
+        #     padding=layer_config.padding,
+        # )
+        # self.activation3 = nn.LeakyReLU(negative_slope=0.01)
+        self.output_dim = 1 * conv_spatial * conv_spatial
+
+    def forward(self, x):
+        single_sample = x.batch_size == torch.Size([])
+        x = x["tasks"]
+        if single_sample:
+            # shape = (N*N, C)
+            x = x.unsqueeze(0)  # → (1, N*N, C)
+
+        # Now x.dim() == 3: (batch_size, N*N, C)
+        batch_size = x.size(0)
+        x = x.view(
+            batch_size,
+            self.layer_config.width,
+            self.layer_config.width,
+            self.feature_config.task_feature_dim,
+        )
+        x = x.permute(0, 3, 1, 2)  # Change to (batch_size, channels, height, width)
+
+        # # Move to CPU and detach from graph
+        # x_cpu = x.detach().cpu()
+
+        # # Unpack shape
+        # _, channels, height, width = x_cpu.shape
+
+        # # Select the first batch
+        # batch0 = x_cpu[0]  # shape: (channels, height, width)
+
+        # # Print each pixel as a grouped vector of channel values, row-wise
+        # for h in range(height):
+        #     for w in range(width):
+        #         # Gather all channel values for this pixel
+        #         pixel_vec = batch0[:, h, w].tolist()
+        #         # Print the vector in brackets
+        #         for c in range(channels):
+        #             print(f"{pixel_vec[c]:.1f}", end=",")
+        #         print("    ", end="")  # Comma-separated values
+        #     print()  # newline after each row
+
+        x = self.conv1(x)
+        x = self.activation1(x)
+        x = self.conv2(x)
+        x = self.activation2(x)
+        # x = self.conv3(x)
+        # x = self.activation3(x)
+        x = x.contiguous().view(batch_size, -1)  # Flatten the output
+
+        if single_sample:
+            # remove batch dimension → (out_features,)
+            x = x.squeeze(0)
+
+        return x
+
+
+class Conv1LayerNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+    ):
+        super(Conv1LayerNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.conv1 = nn.Conv2d(
+            in_channels=feature_config.task_feature_dim,
+            out_channels=1,
+            kernel_size=layer_config.kernel_size,
+            padding=layer_config.padding,
+        )
+        conv1_spatial = (
+            layer_config.width + 2 * layer_config.padding - layer_config.kernel_size + 1
+        )
+        self.activation1 = nn.LeakyReLU(negative_slope=0.01)
+        self.output_dim = 1 * conv1_spatial * conv1_spatial
+
+    def forward(self, x):
+        single_sample = x.batch_size == torch.Size([])
+        x = x["tasks"]
+        if single_sample:
+            # shape = (N*N, C)
+            x = x.unsqueeze(0)  # → (1, N*N, C)
+
+        # Now x.dim() == 3: (batch_size, N*N, C)
+        batch_size = x.size(0)
+        x = x.view(
+            batch_size,
+            self.layer_config.width,
+            self.layer_config.width,
+            self.feature_config.task_feature_dim,
+        )
+        x = x.permute(0, 3, 1, 2)  # Change to (batch_size, channels, height, width)
+
+        x = self.conv1(x)
+        x = self.activation1(x)
+        x = x.contiguous().view(batch_size, -1)  # Flatten the output
+
+        if single_sample:
+            # remove batch dimension → (out_features,)
+            x = x.squeeze(0)
+
+        return x
+
+
+class ConvPolicyNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(ConvPolicyNet, self).__init__()
+
+        self.conv = Conv2LayerNet(feature_config, layer_config)
+
+        self.output_head = OutputHead(
+            self.conv.output_dim,
+            layer_config.hidden_channels,
+            n_devices - 1,
+            logits=True,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # print("HeteroConvPolicyNet")
+        state_features = self.conv(data)
+        # print("state_features", state_features.shape)
+        d_logits = self.output_head(state_features)
+        # print("d_logits", d_logits.shape)
+        return d_logits
+
+
+class ConvValueNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(ConvValueNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.conv = Conv2LayerNet(feature_config, layer_config)
+
+        self.output_head = OutputHead(
+            self.conv.output_dim + 1,
+            layer_config.hidden_channels,
+            1,
+            logits=False,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # print("HeteroConvValueNet")
+        state_features = self.conv(data)
+        # print("state_features", state_features.shape)
+        # print("progress", data["aux", "progress"].shape)
+        v = self.output_head(
+            torch.cat([state_features, data["aux", "progress"].unsqueeze(-1)], dim=-1)
+        )
+        return v
+
+
+class ConvSeparateNet(nn.Module):
+    """
+    Wrapper module for separate actor and critic networks using individual Conv layers.
+
+    Unlike `OldCombinedNet`, this class assigns a distinct Conv layer to each of the actor and critic networks.
+
+    Args:
+        n_devices (int): The number of mappable devices. Check whether this includes the CPU.
+    """
+
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+        k: int = 1,
+    ):
+        super(ConvSeparateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = ConvPolicyNet(feature_config, layer_config, n_devices)
+        self.critic = ConvValueNet(feature_config, layer_config, n_devices)
+
+    def forward(self, data):
+        # if any(p.is_cuda for p in self.actor.parameters()):
+        #     data = data.to("cuda", non_blocking=True)
+        d_logits = self.actor(data)
+        v = self.critic(data)
         return d_logits, v

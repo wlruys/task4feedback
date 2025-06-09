@@ -40,6 +40,8 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     threads_per_worker: int = 1
     train_device: str = "cpu"
+    collect_device: str = "cpu"
+    update_device: str = "cuda:0"
     gae_gamma: float = 1
     gae_lmbda: float = 0.99
     normalize_advantage: bool = True
@@ -97,6 +99,7 @@ def evaluate_policy(
     for i in range(num_episodes):
         env = eval_env_fn()
         with set_exploration_type(ExplorationType.RANDOM), torch.no_grad():
+            env._reset()
             tensordict = env.rollout(
                 max_steps=max_steps,
                 policy=policy,
@@ -468,8 +471,8 @@ def run_ppo_torchrl(
     wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
 
-    _actor_td = HeteroDataWrapper(actor_critic_base.actor, device=config.train_device)
-    _critic_td = HeteroDataWrapper(actor_critic_base.critic, device=config.train_device)
+    _actor_td = actor_critic_base.actor
+    _critic_td = actor_critic_base.critic
 
     module_action = TensorDictModule(
         _actor_td,
@@ -557,6 +560,13 @@ def run_ppo_torchrl(
         normalize_advantage=config.normalize_advantage,
     )
 
+    if hasattr(torch, "compile"):
+        # compile each sub-module into a static graph
+        train_actor_network = torch.compile(train_actor_network, fullgraph=True)
+        train_critic_network = torch.compile(train_critic_network, fullgraph=True)
+        # advantage_module = torch.compile(advantage_module, fullgraph=True)
+        # loss_module = torch.compile(loss_module, fullgraph=True)
+
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 
     # Run initial evaluation
@@ -603,16 +613,22 @@ def run_ppo_torchrl(
 
             non_zero_rewards = tensordict_data["next", "reward"]
             improvements = tensordict_data["next", "observation", "aux", "improvement"]
+            vsoptimals = tensordict_data["next", "observation", "aux", "vsoptimal"]
             mask = improvements > -1.5
             filtered_improvements = improvements[mask]
             if filtered_improvements.numel() > 0:
                 avg_improvement = filtered_improvements.mean()
+            mask = vsoptimals > -1.5
+            filtered_vsoptimals = vsoptimals[mask]
+            if filtered_vsoptimals.numel() > 0:
+                avg_vsoptimal = filtered_vsoptimals.mean()
 
             if len(non_zero_rewards) > 0:
                 avg_non_zero_reward = non_zero_rewards.mean().item()
                 std_rewards = non_zero_rewards.std().item()
                 print(f"Average reward: {avg_non_zero_reward}")
                 print(f"Average improvement: {avg_improvement}")
+                print(f"Average vs Optimal: {avg_vsoptimal}")
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
@@ -683,6 +699,7 @@ def run_ppo_torchrl(
                 "collect_loss/std_nonzero_reward": std_rewards,
                 "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
                 "collect_loss/average_improvement": avg_improvement.item(),
+                "collect_loss/average_vsoptimal": avg_vsoptimal.item(),
                 "collect_loss/std_improvement": filtered_improvements.std().item(),
                 "collect_loss/std_return": tensordict_data["value_target"].std().item(),
                 "collect_loss/mean_return": tensordict_data["value_target"]
@@ -701,15 +718,15 @@ def run_ppo_torchrl(
         replay_buffer.empty()
 
     # Final evaluation
-    if config.eval_interval > 0:
-        eval_metrics = evaluate_policy(
-            policy=td_module_action,
-            eval_env_fn=eval_env_fn,
-            num_episodes=config.eval_episodes,
-            step=config.num_collections,
-        )
-        eval_metrics["eval/step"] = config.num_collections
-        wandb.log(eval_metrics)
+    # if config.eval_interval > 0 and i % config.eval_interval == 0:
+    #     eval_metrics = evaluate_policy(
+    #         policy=td_module_action,
+    #         eval_env_fn=eval_env_fn,
+    #         num_episodes=config.eval_episodes,
+    #         step=config.num_collections,
+    #     )
+    #     eval_metrics["eval/step"] = config.num_collections
+    #     wandb.log(eval_metrics)
 
     # save final network
     if wandb.run.dir is None:

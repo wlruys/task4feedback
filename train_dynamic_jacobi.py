@@ -13,8 +13,8 @@ from typing import Optional, Self
 
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import (
-    DefaultObserverFactory,
-    CompiledDefaultObserverFactory,
+    # DefaultObserverFactory,
+    # CompiledDefaultObserverFactory,
     SimulatorDriver,
     SimulatorFactory,
     create_graph_spec,
@@ -84,14 +84,14 @@ def build_jacobi_graph(config: JacobiConfig, metis_init=True, nparts=4) -> Jacob
     jgraph = JacobiGraph(geom, config)
     jgraph.apply_variant(JacobiVariant)
 
+    partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=nparts)
+    # offset by 1 to ignore cpu
+    partition = [x + 1 for x in partition]
     if metis_init:
-        partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=nparts)
-        # offset by 1 to ignore cpu
-        OPTIMAL = [x + 1 for x in partition]
-        jgraph.set_cell_locations(OPTIMAL, step=0)
-        jgraph.set_cell_locations([-1 for i in partition], step=1)
+        jgraph.set_cell_locations(partition)
 
-    jgraph.randomize_locations(config.randomness, location_list=[1, 2, 3, 4])
+    jgraph.randomize_locations(config.randomness, location_list=[0, 1, 2, 3, 4])
+    jgraph.set_cell_locations([-1 for _ in range(len(geom.cells))], 1)
 
     return jgraph
 
@@ -151,39 +151,16 @@ def make_env(
     n_devices = system_config["n_devices"]
     bandwidth = system_config["bandwidth"]
     latency = system_config["latency"]
-    memory = system_config.get("memory", 50 * 1000)
+    memory = system_config["memory"]
     s = uniform_connected_devices(n_devices, memory, latency, bandwidth)
-    jgraph = graph_builder(graph_config)
+    jgraph: JacobiGraph = graph_builder(graph_config)
 
     d = jgraph.get_blocks()
     m = jgraph
     m.finalize_tasks()
 
-    if feature_config is None:
-        feature_config = {
-            "observer_factory": "XYObserverFactory",
-            "max_tasks": 100,
-            "max_data": 100,
-            "max_edges_tasks_tasks": 200,
-            "max_edges_tasks_data": 200,
-            "max_edges_data_devices": 100,
-            "max_edges_tasks_devices": 100,
-        }
-
-    max_tasks = feature_config.get("max_tasks", 100)
-    max_data = feature_config.get("max_data", 100)
-    max_edges_tasks_tasks = feature_config.get("max_edges_tasks_tasks", 200)
-    max_edges_tasks_data = feature_config.get("max_edges_tasks_data", 200)
-    max_edges_data_devices = feature_config.get("max_edges_data_devices", 100)
-    max_edges_tasks_devices = feature_config.get("max_edges_tasks_devices", 100)
-
     spec = create_graph_spec(
-        max_tasks=max_tasks,
-        max_data=max_data,
-        max_edges_tasks_tasks=max_edges_tasks_tasks,
-        max_edges_tasks_data=max_edges_tasks_data,
-        max_edges_data_devices=max_edges_data_devices,
-        max_edges_tasks_devices=max_edges_tasks_devices,
+        max_tasks=jgraph.config.n * jgraph.config.n,
     )
 
     input = SimulatorInput(
@@ -196,8 +173,8 @@ def make_env(
         change_priority=change_priority,
         seed=seed,
         change_locations=change_locations,
-        answer=OPTIMAL,
         randomize_interval=randomize_interval,
+        location_list=[0, 1, 2, 3, 4],
     )
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
@@ -284,7 +261,7 @@ def train(wandb_config):
         change_priority=env_config["change_priority"],
         change_locations=env_config["change_locations"],
         seed=env_config["seed"],
-        randomize_interval=wandb_config.get("randomize_interval", 10),
+        randomize_interval=env_config["randomize_interval"],
     )
 
     graph = env.simulator.input.graph
@@ -305,6 +282,13 @@ def train(wandb_config):
     layer_config = LayerConfig(
         hidden_channels=wandb_config["layer_config"]["hidden_channels"],
         n_heads=wandb_config["layer_config"]["n_heads"],
+        input_channels=feature_config.task_feature_dim,
+        output_channels=wandb_config["layer_config"].get(
+            "output_channels", feature_config.task_feature_dim
+        ),
+        width=graph_info["n"],
+        kernel_size=wandb_config["layer_config"].get("kernel_size", 3),
+        padding=wandb_config["layer_config"].get("padding", 1),
     )
 
     # Create model based on configuration
@@ -316,8 +300,8 @@ def train(wandb_config):
         layer_config=layer_config,
         n_devices=wandb_config["system_config"]["n_devices"],
         # k=wandb_config["model_config"]["conv_layers"],
-        add_progress=model_config_info.get("add_progress", False),
-        add_time=model_config_info.get("add_time", True),
+        # add_progress=model_config_info.get("add_progress", False),
+        # add_time=model_config_info.get("add_time", True),
     )
 
     # Log model parameters count
@@ -339,11 +323,13 @@ def train(wandb_config):
         clip_eps=mconfig.get("clip_eps", 0.2),
         clip_vloss=mconfig.get("clip_vloss", False),
         minibatch_size=mconfig.get("minibatch_size", 250),
-        eval_interval=mconfig.get("eval_interval", 50),
+        eval_interval=mconfig.get("eval_interval", 500),
         eval_episodes=mconfig.get("eval_episodes", 1),
         states_per_collection=n_tasks * mconfig.get("graphs_per_collection", 10),
         max_grad_norm=mconfig.get("max_grad_norm", 0.5),
-        num_collections=mconfig.get("num_collections", 5000),
+        update_device=mconfig.get("update_device", "cuda:0"),
+        lr=mconfig.get("lr", 2.5e-4),
+        num_collections=mconfig.get("num_collections", 2000),
     )
 
     # Define environment creation function for PPO
@@ -358,6 +344,7 @@ def train(wandb_config):
             change_priority=env_config["change_priority"],
             change_locations=env_config["change_locations"],
             seed=env_config["seed"],
+            randomize_interval=env_config["randomize_interval"],
         )
 
     # Define a fixed evaluation environment function
@@ -443,7 +430,6 @@ def train(wandb_config):
         model,
         make_env_fn,
         train_config,
-        model_name="model",
         eval_env_fn=make_eval_env_fn,
     )
 
@@ -457,7 +443,7 @@ if __name__ == "__main__":
             "randomness": 1,
             "L": 1,
             "n": 4,
-            "steps": 5,
+            "steps": 10,
             "start_workload": 1000,
             "lower_workload": 500,
             "upper_workload": 2000,
@@ -465,7 +451,9 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "RunningAvgEnv",
+            # "runtime_env": "SanityCheckEnv",
+            "runtime_env": "GeneralizedIncrementalEFT",
+            # "runtime_env": "RunningAvgEnv",
         },
         "system_config": {
             "type": "uniform_connected_devices",
@@ -475,46 +463,47 @@ if __name__ == "__main__":
             "memory": 50 * 1000,
         },
         "feature_config": {
-            "observer_factory": "XYHeterogeneousObserverFactory",
-            "max_tasks": 50,
-            "max_data": 80,
-            "max_edges_tasks_tasks": 150,
-            "max_edges_tasks_data": 200,
-            "max_edges_data_devices": 80 * 4,
-            "max_edges_tasks_devices": 50,
+            "observer_factory": "VectorExternalObserverFactory",
+            "max_tasks": 16,
         },
         "layer_config": {
             "hidden_channels": 16,
             "n_heads": 2,
+            "output_channels": 16,
+            "kernel_size": 3,
+            "padding": 1,
         },
         "mconfig": {
-            "num_collections": 10000,
-            "graphs_per_collection": 16,
-            "train_device": "cpu",
-            "workers": 8,
+            "num_collections": 1500,
+            "graphs_per_collection": 4,
+            "collect_device": "cpu",
+            "update_device": "cpu",
+            "workers": 4,
             "ent_coef": 0.001,
-            "gae_lmbda": 0.95,
+            "gae_lmbda": 0.9,
             "gae_gamma": 1,
             "normalize_advantage": True,
             "clip_eps": 0.2,
-            "clip_vloss": False,
-            "minibatch_size": 64,
+            "clip_vloss": True,
+            "minibatch_size": 128,
+            "lr": 1e-3,
+            "eval_interval": 250,
+            "eval_episodes": 1,
         },
         "env_config": {
             "change_priority": True,
             "change_locations": True,
             "seed": 1111,
-            "randomize_interval": 10,  # Interval for randomizing locations
+            "randomize_interval": 1,  # Interval for randomizing locations
         },
         "model_config": {
-            "model_architecture": "AddConvSeparateNet",
-            "conv_layers": 2,
-            "add_progress": True,
-            "add_time": True,
+            "model_architecture": "ConvSeparateNet",
         },
         "wandb_config": {
-            "project": "RunningAvg_Jacobi",
-            "name": "AddConv,Progress,Time,seed=1111",
+            "project": "CNN_Jacobi",
+            # "name": "GEFTIncremental",
+            # "name": "SanityCheck 2Layer Batch=16",
+            "name": "2Layer Batch=16",
         },
     }
 
