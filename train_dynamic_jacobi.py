@@ -338,7 +338,7 @@ def train(wandb_config):
         eval_interval=mconfig.get("eval_interval", 50),
         eval_episodes=mconfig.get("eval_episodes", 1),
         states_per_collection=n_tasks * mconfig.get("graphs_per_collection", 10),
-        max_grad_norm=mconfig.get("max_grad_norm", 1),
+        max_grad_norm=mconfig.get("max_grad_norm", 10),
     )
 
     # Define environment creation function for PPO
@@ -454,8 +454,8 @@ if __name__ == "__main__":
             "boundary_interior_ratio": 1,
             "randomness": 1,
             "L": 1,
-            "n": 4,
-            "steps": 5,
+            "n": 6,
+            "steps": 10,
             "start_workload": 1000,
             "lower_workload": 500,
             "upper_workload": 2000,
@@ -463,7 +463,7 @@ if __name__ == "__main__":
             "correlation_scale": 0.1,
         },
         "reward_config": {
-            "runtime_env": "EFTIncrementalEnv",
+            "runtime_env": "GeneralizedIncrementalEFT",
         },
         "system_config": {
             "type": "uniform_connected_devices",
@@ -483,14 +483,15 @@ if __name__ == "__main__":
         "layer_config": {
             "hidden_channels": 128,
             "n_heads": 2,
+            "n_layers": 0,
         },
         "mconfig": {
-            "graphs_per_collection": 8,
+            "graphs_per_collection": 4,
             "collect_device": "cpu",
             "update_device": "cpu",
-            "workers": 8,
-            "ent_coef": 0,
-            "gae_lmbda": 0.90,
+            "workers": 4,
+            "ent_coef": 0.0005,
+            "gae_lmbda": 0.99,
             "gae_gamma": 1,
             "normalize_advantage": False,
             "clip_eps": 0.2,
@@ -498,8 +499,8 @@ if __name__ == "__main__":
             "minibatch_size": 32,
         },
         "env_config": {
-            "change_priority": False,
-            "change_locations": False,
+            "change_priority": True,
+            "change_locations": True,
             "seed": 1,
         },
         "model_config": {

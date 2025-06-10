@@ -96,7 +96,7 @@ def evaluate_policy(
 
     for i in range(num_episodes):
         env = eval_env_fn()
-        with set_exploration_type(ExplorationType.RANDOM), torch.no_grad():
+        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
             tensordict = env.rollout(
                 max_steps=max_steps,
                 policy=policy,
@@ -131,8 +131,8 @@ def evaluate_policy(
                     time_interval=time_interval,
                     show=False,
                     title=title,
-                    figsize=(2, 2),
-                    dpi=20,
+                    figsize=(4, 4),
+                    dpi=50,
                     bitrate=50,
                 )
 
@@ -759,6 +759,7 @@ def run_ppo_torchrl(
         value_network=model[1],
         average_gae=False,
         device=config.update_device,
+        vectorized=False,
     )
 
     loss_module = ClipPPOLoss(
@@ -821,6 +822,9 @@ def run_ppo_torchrl(
             },
         )
 
+    # advantage_module = torch.compile(advantage_module)
+    # update = torch.compile(update, mode="reduce-overhead")
+
     # Run initial evaluation
     if config.eval_interval > 0:
         eval_metrics = evaluate_policy(
@@ -833,6 +837,8 @@ def run_ppo_torchrl(
         wandb.log(eval_metrics)
 
     for i, tensordict_data in enumerate(collector):
+        replay_buffer.empty()
+
         if (i + 1) % 20 == 0:
             if wandb.run.dir is None:
                 path = "."
@@ -861,6 +867,9 @@ def run_ppo_torchrl(
         tensordict_data = tensordict_data.to(config.update_device, non_blocking=True)
 
         with torch.no_grad():
+            # print(f"Computing advantages for collection {i}")
+            # print("tensordict_data keys:", tensordict_data.keys(True))
+
             advantage_module(tensordict_data)
 
             non_zero_rewards = tensordict_data["next", "reward"]
@@ -880,7 +889,8 @@ def run_ppo_torchrl(
 
         # Training loop
         for j in range(config.num_epochs_per_collection):
-            n_batches = config.states_per_collection // config.minibatch_size
+            # n_batches = config.states_per_collection // config.minibatch_size
+            n_batches = (80 * 8) // config.minibatch_size
 
             for k in range(n_batches):
                 subdata = replay_buffer.sample(config.minibatch_size)

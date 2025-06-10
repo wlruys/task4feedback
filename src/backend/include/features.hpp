@@ -1548,6 +1548,7 @@ struct DepthTaskFeature : public StateFeature<DepthTaskFeature> {
     double mean_depth = state.stats.depth_stats.mean;
     double std_depth = state.stats.depth_stats.stddev;
     depth = guarded_divide(depth - mean_depth, std_depth);
+    output[0] = depth;
   }
 };
 

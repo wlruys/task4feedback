@@ -2518,7 +2518,7 @@ class VectorValueNet(nn.Module):
         self.vector_state_net = VectorStateNet(feature_config, layer_config, k=k)
 
         self.critic_head = OutputHead(
-            self.vector_state_net.output_dim,
+            self.vector_state_net.output_dim + 2,
             layer_config.hidden_channels,
             1,
             logits=False,
@@ -2528,8 +2528,25 @@ class VectorValueNet(nn.Module):
         task_features = td["nodes"]["tasks"]["attr"]
         # print("task_features", task_features.shape)
         state_features = self.vector_state_net(task_features)
+
+        time_feature = td["aux"]["time"] / td["aux"]["baseline"]
+
+        # print(
+        #     f"time: {td['aux']['time']}, baseline: {td['aux']['baseline']}, time_feature: {time_feature}"
+        # )
+        progress_feature = td["aux"]["progress"]
+        state_features = state_features.squeeze(1)
+
+        # print(f"time_feature: {time_feature}, progress_feature: {progress_feature}")
+        # print(f"state_features: {state_features}")
+        # state_features = state_features.squeeze(1)
+
+        state_features = torch.cat(
+            [state_features, time_feature, progress_feature], dim=-1
+        )
+
         v = self.critic_head(state_features)
-        v = v.squeeze(1)
+        # v = v.squeeze(1)
         # print("v", v.shape)
         return v
 
@@ -2545,8 +2562,8 @@ class VectorSeparateNet(nn.Module):
         self.feature_config = feature_config
         self.layer_config = layer_config
 
-        self.actor = VectorPolicyNet(feature_config, layer_config, n_devices)
-        self.critic = VectorValueNet(feature_config, layer_config, n_devices)
+        self.actor = VectorPolicyNet(feature_config, layer_config, n_devices, 0)
+        self.critic = VectorValueNet(feature_config, layer_config, n_devices, 0)
 
     def forward(self, td: TensorDict):
         d_logits = self.actor(td)

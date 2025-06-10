@@ -66,6 +66,7 @@ class RuntimeEnv(EnvBase):
 
         self.buffer_idx = 0
         self.resets = 0
+        self.EFT_baseline = 1
 
         if self.change_locations:
             graph = simulator_factory.input.graph
@@ -150,8 +151,10 @@ class RuntimeEnv(EnvBase):
             td = TensorDict(observation=obs)
         else:
             self.simulator.observer.get_observation(output=td["observation"])
-        # td["observation"].set("hetero_data", observation_to_heterodata(td["observation"]))
-        # td.set("observation, hetero_data", observation_to_heterodata(td["observation"]))
+
+        n_tasks = len(self.simulator_factory.input.graph)
+        td["observation", "aux", "progress"][0] = self.step_count / n_tasks
+        td["observation", "aux", "baseline"][0] = max(1.0, self.EFT_baseline)
         return td
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -187,6 +190,7 @@ class RuntimeEnv(EnvBase):
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
+        # td["observation", "aux", "baseline"][0] = self.EFT_baseline
 
         with record_function("STEP"):
             done = torch.tensor((1,), device=self.device, dtype=torch.bool)
@@ -228,6 +232,7 @@ class RuntimeEnv(EnvBase):
                     f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
                 )
 
+            # obs["observation"]["aux"]["baseline"][0] = self.EFT_baseline
             out = obs
             out.set(
                 "state_value",
