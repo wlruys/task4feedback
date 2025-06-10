@@ -68,11 +68,7 @@ from task4feedback.ml.env import *
 import wandb
 from task4feedback.graphs.dynamic_jacobi import *
 
-seed = 1111
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-torch.backends.cudnn.deterministic = True
+
 OPTIMAL = None
 
 
@@ -212,6 +208,18 @@ def train(wandb_config):
     graph_info = wandb_config["graph_config"]
     graph_class = globals()[graph_info["graph_class"]]
 
+    system_config = wandb_config["system_config"]
+    env_config = wandb_config["env_config"]
+    mconfig = wandb_config["mconfig"]
+
+    random.seed(env_config["seed"])
+    np.random.seed(env_config["seed"])
+    torch.manual_seed(env_config["seed"])
+    torch.cuda.manual_seed_all(env_config["seed"])
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     if graph_class == JacobiGraph:
         graph_config = JacobiConfig(
             interior_size=graph_info["interior_size"],
@@ -247,10 +255,8 @@ def train(wandb_config):
     runtime_env_type = globals()[reward_config_info["runtime_env"]]
 
     # Get system configuration
-    system_config = wandb_config["system_config"]
 
     # Create environment
-    env_config = wandb_config["env_config"]
     env = make_env(
         graph_function,
         graph_config,
@@ -307,7 +313,6 @@ def train(wandb_config):
     # Log model parameters count
     num_params = count_parameters(model)
     # Get the mconfig dictionary safely, defaulting to an empty dict if not found
-    mconfig = wandb_config.get("mconfig", {})
 
     print("Feature config:", feature_config)
 
@@ -330,6 +335,7 @@ def train(wandb_config):
         update_device=mconfig.get("update_device", "cuda:0"),
         lr=mconfig.get("lr", 2.5e-4),
         num_collections=mconfig.get("num_collections", 2000),
+        seed=env_config["seed"],
     )
 
     # Define environment creation function for PPO
@@ -474,18 +480,18 @@ if __name__ == "__main__":
             "padding": 1,
         },
         "mconfig": {
-            "num_collections": 1500,
-            "graphs_per_collection": 4,
+            "num_collections": 2000,
+            "graphs_per_collection": 8,
             "collect_device": "cpu",
             "update_device": "cpu",
-            "workers": 4,
+            "workers": 8,
             "ent_coef": 0.001,
             "gae_lmbda": 0.9,
             "gae_gamma": 1,
             "normalize_advantage": True,
             "clip_eps": 0.2,
             "clip_vloss": True,
-            "minibatch_size": 128,
+            "minibatch_size": 32,
             "lr": 1e-3,
             "eval_interval": 250,
             "eval_episodes": 1,

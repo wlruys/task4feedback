@@ -529,6 +529,7 @@ def run_ppo_torchrl(
         env_device="cpu",
     )
     out_seed = collector.set_seed(config.seed)
+    print("Collector seed:", out_seed)
 
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(
@@ -559,13 +560,6 @@ def run_ppo_torchrl(
         clip_value=config.clip_vloss,
         normalize_advantage=config.normalize_advantage,
     )
-
-    if hasattr(torch, "compile"):
-        # compile each sub-module into a static graph
-        train_actor_network = torch.compile(train_actor_network, fullgraph=True)
-        train_critic_network = torch.compile(train_critic_network, fullgraph=True)
-        # advantage_module = torch.compile(advantage_module, fullgraph=True)
-        # loss_module = torch.compile(loss_module, fullgraph=True)
 
     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
 

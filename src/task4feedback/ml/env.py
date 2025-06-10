@@ -56,12 +56,16 @@ class RuntimeEnv(EnvBase):
         self.location_seed = location_seed
         self.location_randomness = location_randomness
         self.randomize_interval = randomize_interval
+        self.only_gpu = only_gpu
         if location_list is None:
             location_list = range(
                 int(only_gpu), simulator_factory.graph_spec.max_devices
             )
         self.location_list = location_list
-        self.only_gpu = only_gpu
+        if self.only_gpu and (0 in self.location_list):
+            print(
+                "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
+            )
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(
@@ -73,10 +77,7 @@ class RuntimeEnv(EnvBase):
         print("Change locations:", self.change_locations)
         print("Change priority:", self.change_priority)
         graph = simulator_factory.input.graph
-        if self.only_gpu and (0 in self.location_list):
-            print(
-                "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
-            )
+
         if (
             hasattr(graph, "get_cell_locations")
             and hasattr(graph, "set_cell_locations")
@@ -276,10 +277,10 @@ class RuntimeEnv(EnvBase):
         else:
             new_priority_seed = int(current_priority_seed)
 
-        if self.change_duration and (self.resets % self.randomize_interval == 0):
-            new_duration_seed = int(current_duration_seed + self.resets)
-        else:
-            new_duration_seed = int(current_duration_seed)
+        # if self.change_duration and (self.resets % self.randomize_interval == 0):
+        #     new_duration_seed = int(current_duration_seed + self.resets)
+        # else:
+        new_duration_seed = int(current_duration_seed)
 
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed

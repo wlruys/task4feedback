@@ -882,3 +882,4 @@ class VectorObserver(ExternalObserver):
         output["tasks"][x * graph.config.n + y][-1] = 1.0
         # Used for Depth Normalization
         output["tasks"][:, 0] -= output["tasks"][output["tasks"][:, -1] > 0, 0][0]
+        output["tasks"][:, 0] /= 3
