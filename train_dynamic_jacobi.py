@@ -444,6 +444,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Train PPO with sweepable mconfig parameters"
     )
+    parser.add_argument("--name", type=str, default="3Layer", help="WandB run name")
     parser.add_argument("--ent_coef", type=float, default=0.01)
     parser.add_argument("--clip_eps", type=float, default=0.2)
     parser.add_argument(
@@ -529,7 +530,7 @@ if __name__ == "__main__":
             "project": "CNN_Jacobi_model_sweep",
             # "name": "GEFTIncremental",
             # "name": "SanityCheck 2Layer Batch=16",
-            "name": "3Layer",
+            "name": args.name,
         },
     }
 
