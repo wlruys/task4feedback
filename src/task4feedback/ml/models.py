@@ -2467,6 +2467,145 @@ class Conv2LayerNet(nn.Module):
         return x
 
 
+# class Conv3LayerNet(nn.Module):
+#     def __init__(
+#         self,
+#         feature_config: FeatureDimConfig,
+#         layer_config: LayerConfig,
+#     ):
+#         super(Conv3LayerNet, self).__init__()
+#         self.feature_config = feature_config
+#         self.layer_config = layer_config
+
+#         self.conv1 = nn.Conv2d(
+#             in_channels=feature_config.task_feature_dim,
+#             out_channels=8,
+#             kernel_size=layer_config.kernel_size,
+#             padding=layer_config.padding,
+#         )
+#         conv_spatial = (
+#             layer_config.width + 2 * layer_config.padding - layer_config.kernel_size + 1
+#         )
+#         self.activation1 = nn.LeakyReLU(negative_slope=0.01)
+#         self.conv2 = nn.Conv2d(
+#             in_channels=8,
+#             out_channels=8,
+#             kernel_size=layer_config.kernel_size,
+#             padding=layer_config.padding,
+#         )
+#         self.activation2 = nn.LeakyReLU(negative_slope=0.01)
+#         self.conv3 = nn.Conv2d(
+#             in_channels=8,
+#             out_channels=1,
+#             kernel_size=layer_config.kernel_size,
+#             padding=layer_config.padding,
+#         )
+#         self.activation3 = nn.LeakyReLU(negative_slope=0.01)
+#         # self.conv3 = nn.Conv2d(
+#         #     in_channels=8,
+#         #     out_channels=1,
+#         #     kernel_size=layer_config.kernel_size,
+#         #     padding=layer_config.padding,
+#         # )
+#         # self.activation3 = nn.LeakyReLU(negative_slope=0.01)
+#         self.output_dim = 1 * conv_spatial * conv_spatial
+
+
+class Conv3LayerNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+    ):
+        super(Conv3LayerNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.conv1 = nn.Conv2d(
+            in_channels=feature_config.task_feature_dim,
+            out_channels=16,
+            kernel_size=layer_config.kernel_size,
+            padding=layer_config.padding,
+        )
+        conv_spatial = (
+            layer_config.width + 2 * layer_config.padding - layer_config.kernel_size + 1
+        )
+        self.activation1 = nn.LeakyReLU(negative_slope=0.01)
+        self.conv2 = nn.Conv2d(
+            in_channels=16,
+            out_channels=16,
+            kernel_size=layer_config.kernel_size,
+            padding=layer_config.padding,
+        )
+        self.activation2 = nn.LeakyReLU(negative_slope=0.01)
+        self.conv3 = nn.Conv2d(
+            in_channels=16,
+            out_channels=1,
+            kernel_size=layer_config.kernel_size,
+            padding=layer_config.padding,
+        )
+        self.activation3 = nn.LeakyReLU(negative_slope=0.01)
+        # self.conv3 = nn.Conv2d(
+        #     in_channels=8,
+        #     out_channels=1,
+        #     kernel_size=layer_config.kernel_size,
+        #     padding=layer_config.padding,
+        # )
+        # self.activation3 = nn.LeakyReLU(negative_slope=0.01)
+        self.output_dim = 1 * conv_spatial * conv_spatial
+
+    def forward(self, x):
+        single_sample = x.batch_size == torch.Size([])
+        x = x["tasks"]
+        if single_sample:
+            # shape = (N*N, C)
+            x = x.unsqueeze(0)  # → (1, N*N, C)
+
+        # Now x.dim() == 3: (batch_size, N*N, C)
+        batch_size = x.size(0)
+        x = x.view(
+            batch_size,
+            self.layer_config.width,
+            self.layer_config.width,
+            self.feature_config.task_feature_dim,
+        )
+        x = x.permute(0, 3, 1, 2)  # Change to (batch_size, channels, height, width)
+
+        # # Move to CPU and detach from graph
+        # x_cpu = x.detach().cpu()
+
+        # # Unpack shape
+        # _, channels, height, width = x_cpu.shape
+
+        # # Select the first batch
+        # batch0 = x_cpu[0]  # shape: (channels, height, width)
+
+        # # Print each pixel as a grouped vector of channel values, row-wise
+        # for h in range(height):
+        #     for w in range(width):
+        #         # Gather all channel values for this pixel
+        #         pixel_vec = batch0[:, h, w].tolist()
+        #         # Print the vector in brackets
+        #         for c in range(channels):
+        #             print(f"{pixel_vec[c]:.1f}", end=",")
+        #         print("    ", end="")  # Comma-separated values
+        #     print()  # newline after each row
+
+        x = self.conv1(x)
+        x = self.activation1(x)
+        x = self.conv2(x)
+        x = self.activation2(x)
+        x = self.conv3(x)
+        x = self.activation3(x)
+        x = x.contiguous().view(batch_size, -1)  # Flatten the output
+
+        if single_sample:
+            # remove batch dimension → (out_features,)
+            x = x.squeeze(0)
+
+        return x
+
+
 class Conv1LayerNet(nn.Module):
     def __init__(
         self,
@@ -2526,7 +2665,7 @@ class ConvPolicyNet(nn.Module):
     ):
         super(ConvPolicyNet, self).__init__()
 
-        self.conv = Conv2LayerNet(feature_config, layer_config)
+        self.conv = Conv3LayerNet(feature_config, layer_config)
 
         self.output_head = OutputHead(
             self.conv.output_dim,
@@ -2555,7 +2694,7 @@ class ConvValueNet(nn.Module):
         self.feature_config = feature_config
         self.layer_config = layer_config
 
-        self.conv = Conv2LayerNet(feature_config, layer_config)
+        self.conv = Conv3LayerNet(feature_config, layer_config)
 
         self.output_head = OutputHead(
             self.conv.output_dim + 1,

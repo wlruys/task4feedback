@@ -473,7 +473,7 @@ def run_ppo_torchrl(
 
     _actor_td = actor_critic_base.actor
     _critic_td = actor_critic_base.critic
-
+    print(actor_critic_base)
     module_action = TensorDictModule(
         _actor_td,
         in_keys=["observation"],

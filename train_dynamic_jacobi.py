@@ -67,7 +67,7 @@ from task4feedback.ml.util import *
 from task4feedback.ml.env import *
 import wandb
 from task4feedback.graphs.dynamic_jacobi import *
-
+import argparse
 
 OPTIMAL = None
 
@@ -441,6 +441,26 @@ def train(wandb_config):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Train PPO with sweepable mconfig parameters"
+    )
+    parser.add_argument("--ent_coef", type=float, default=0.01)
+    parser.add_argument("--clip_eps", type=float, default=0.2)
+    parser.add_argument(
+        "--clip_vloss",
+        type=lambda x: x.lower() in ("1", "true", "yes"),
+        default=False,
+        help="True/False",
+    )
+    parser.add_argument(
+        "--normalize_advantage",
+        type=lambda x: x.lower() in ("1", "true", "yes"),
+        default=False,
+        help="True/False",
+    )
+    parser.add_argument("--minibatch_size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    args = parser.parse_args()
     wandb_config = {
         "graph_config": {
             "graph_class": "JacobiGraph",
@@ -449,7 +469,7 @@ if __name__ == "__main__":
             "randomness": 1,
             "L": 1,
             "n": 4,
-            "steps": 10,
+            "steps": 5,
             "start_workload": 1000,
             "lower_workload": 500,
             "upper_workload": 2000,
@@ -481,20 +501,20 @@ if __name__ == "__main__":
         },
         "mconfig": {
             "num_collections": 2000,
-            "graphs_per_collection": 8,
+            "graphs_per_collection": 4,
             "collect_device": "cpu",
             "update_device": "cpu",
-            "workers": 8,
-            "ent_coef": 0.001,
+            "workers": 4,
             "gae_lmbda": 0.9,
             "gae_gamma": 1,
-            "normalize_advantage": True,
-            "clip_eps": 0.2,
-            "clip_vloss": True,
-            "minibatch_size": 32,
-            "lr": 1e-3,
             "eval_interval": 250,
             "eval_episodes": 1,
+            "ent_coef": args.ent_coef,
+            "clip_eps": args.clip_eps,
+            "clip_vloss": args.clip_vloss,
+            "normalize_advantage": args.normalize_advantage,
+            "minibatch_size": args.minibatch_size,
+            "lr": args.lr,
         },
         "env_config": {
             "change_priority": True,
@@ -506,10 +526,10 @@ if __name__ == "__main__":
             "model_architecture": "ConvSeparateNet",
         },
         "wandb_config": {
-            "project": "CNN_Jacobi",
+            "project": "CNN_Jacobi_model_sweep",
             # "name": "GEFTIncremental",
             # "name": "SanityCheck 2Layer Batch=16",
-            "name": "2Layer Batch=16",
+            "name": "3Layer",
         },
     }
 
