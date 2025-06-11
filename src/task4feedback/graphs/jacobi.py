@@ -112,13 +112,15 @@ class JacobiData(DataGeometry):
         for i, location in enumerate(location_list):
             self.set_location(Cell(i), location, step)
 
-    def randomize_locations(self, num_changes: int, location_list: list[int]):
+    def randomize_locations(
+        self, num_changes: int, location_list: list[int], step: Optional[int] = None
+    ):
         new_locations = []
 
         selected_cells = random.sample(range(len(self.geometry.cells)), num_changes)
         for i, cell in enumerate(selected_cells):
             new_location = random.choice(location_list)
-            self.set_location(Cell(cell), new_location)
+            self.set_location(Cell(cell), new_location, step)
             new_locations.append(new_location)
 
         return selected_cells, new_locations
@@ -246,6 +248,7 @@ class JacobiGraph(ComputeDataGraph):
         min_loc: int = 0,
         max_loc: Optional[int] = None,
         verbose: bool = False,
+        step: Optional[int] = None,
     ):
         num_changes = int(perc_change * len(self.data.geometry.cells))
         if verbose:
@@ -258,11 +261,13 @@ class JacobiGraph(ComputeDataGraph):
             location_list = list(range(min_loc, max_loc))
 
         selected_cells, new_locations = self.data.randomize_locations(
-            num_changes, location_list
+            num_changes, location_list, step
         )
 
         if verbose:
-            print(f"Randomized locations for {len(selected_cells)} cells:")
+            print(
+                f"Randomized locations for {len(selected_cells)} cells on step {step}:"
+            )
             for cell, new_location in zip(selected_cells, new_locations):
                 print(f"Cell {cell} -> New Location: {new_location}")
 
@@ -376,6 +381,7 @@ class JacobiGraph(ComputeDataGraph):
         bandwidth: int = 1000,
         level_chunks: int = 1,
         n_parts: int = 4,
+        offset: int = 0,  # 1 to ignore cpu
     ):
         partitions = []
         for i in range(level_chunks):
@@ -390,11 +396,11 @@ class JacobiGraph(ComputeDataGraph):
                 arch, bandwidth=bandwidth, levels=levels
             )
             edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
-
+            partition = [x + offset for x in partition]
             partitions.append(partition)
 
         self.partitions = partitions
-        print("Partitions: ", partitions)
+        # print(f"{len(partitions)} Partitions: ", partitions)
         return partitions
 
     def align_partitions(self):
@@ -519,7 +525,13 @@ class LevelPartitionMapper:
         assert isinstance(graph, JacobiGraph)
         level = graph.task_to_level[global_task_id]
         cell_id = graph.task_to_cell[global_task_id]
-        device = self.level_cell_mapping[level][cell_id]
+        total_levels = graph.config.steps
+        if len(self.level_cell_mapping) != total_levels:
+            device = self.level_cell_mapping[
+                level // (total_levels // len(self.level_cell_mapping))
+            ][cell_id]
+        else:
+            device = self.level_cell_mapping[level][cell_id]
         state = simulator.simulator.get_state()
         mapping_priority = state.get_mapping_priority(global_task_id)
         return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
@@ -877,6 +889,10 @@ class VectorObserver(ExternalObserver):
         graph: JacobiGraph = self.simulator.input.graph
         candidate = output["aux", "candidates", "idx"][0].item()
         x, y = graph.xy_from_id(candidate)
+        (
+            output["observation", "aux", "x_coord"],
+            output["observation", "aux", "y_coord"],
+        ) = (x, y)
         # print(f"Task Observation: {candidate} at ({x}, {y})")
         super().task_observation(output)
         output["tasks"][x * graph.config.n + y][-1] = 1.0
