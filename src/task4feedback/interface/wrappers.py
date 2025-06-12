@@ -893,6 +893,9 @@ class ExternalObserver:
         graph = self.simulator.input.graph
         for task in graph.level_to_task[0]:
             x, y = graph.xy_from_id(task)
+            assert (
+                0 <= x < graph.config.n and 0 <= y < graph.config.n
+            ), f"Task {task} has invalid coordinates ({x}, {y}) for graph size {graph.config.n}."
             self.task_ids[int(x * graph.config.n + y)] = task
         if -1 in self.task_ids:
             raise ValueError(
