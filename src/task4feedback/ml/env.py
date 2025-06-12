@@ -30,6 +30,7 @@ from torch_geometric.data import HeteroData
 from torch.profiler import record_function
 from task4feedback.graphs.mesh.partition import metis_partition
 from task4feedback.graphs.jacobi import PartitionMapper, LevelPartitionMapper
+from task4feedback.graphs.dynamic_jacobi import DynamicJacobiConfig
 import itertools
 
 MAX_BUFFERS = 2000
@@ -323,8 +324,12 @@ class RuntimeEnv(EnvBase):
             opt_sim = self.simulator.copy()
             opt_sim.external_mapper = partition_mapper
         else:  # Dynamic
+            assert isinstance(self.graph.config, DynamicJacobiConfig)
             self.answer = self.graph.mincut_per_levels(
-                bandwidth=1, level_chunks=5, n_parts=4, offset=1
+                bandwidth=1,
+                level_chunks=self.graph.config.level_chunks,
+                n_parts=4,
+                offset=1,
             )
             partition_mapper = LevelPartitionMapper(level_cell_mapping=self.answer)
             opt_sim = self.simulator.copy()

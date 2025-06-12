@@ -12,6 +12,7 @@ class DynamicJacobiConfig(JacobiConfig):
     workload_class: Type = TrajectoryWorkload
     data_compute_relation: Callable[[int], int] = lambda x: x
     start_workload: int = 1000
+    level_chunks: int = 1
 
 
 class DynamicJacobiData(JacobiData):
