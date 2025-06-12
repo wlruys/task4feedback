@@ -140,6 +140,8 @@ class FeatureDimConfig:
 @dataclass
 class LayerConfig:
     hidden_channels: int = 16
+    cnn_hidden_channels: int = 16
+    cnn_layers: int = 3
     n_heads: int = 1
     input_dim: Optional[int] = None
     output_dim: Optional[int] = None
@@ -2654,6 +2656,171 @@ class Conv1LayerNet(nn.Module):
             x = x.squeeze(0)
 
         return x
+
+
+def init_uniform_output(model, final_constant: float = 0.0):
+    """
+    Initializes:
+     - all Conv2d / Linear weights with Xavier uniform (good for ReLU nets)
+     - all biases to zero
+     - *then* zeroes out the final head's weights and sets its bias=final_constant
+    """
+    for m in model.modules():
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
+            # Xavier uniform is a good default for ReLU-based nets
+            nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain("relu"))
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0.0)
+
+        elif isinstance(m, nn.BatchNorm2d):
+            nn.init.constant_(m.weight, 1.0)
+            nn.init.constant_(m.bias, 0.0)
+
+
+class CellDecisionCNN(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,  # C_total = 1 (mask) + C_other
+        layer_config: LayerConfig,
+    ):
+        super().__init__()
+        self.layer_config = layer_config
+        self.in_channels = in_channels
+        layers = []
+        ch = in_channels
+        pad = layer_config.kernel_size // 2
+        for _ in range(layer_config.cnn_layers - 1):
+            layers += [
+                nn.Conv2d(
+                    ch,
+                    layer_config.cnn_hidden_channels,
+                    layer_config.kernel_size,
+                    padding=pad,
+                ),
+                # nn.BatchNorm2d(hidden_channels, track_running_stats=False),
+                nn.LeakyReLU(inplace=True, negative_slope=0.01),
+            ]
+            ch = layer_config.cnn_hidden_channels
+        layers.append(
+            nn.Conv2d(
+                ch, layer_config.output_channels, layer_config.kernel_size, padding=pad
+            )
+        )
+        # layers.append(nn.BatchNorm2d(out_channels, track_running_stats=False))
+        layers.append(nn.LeakyReLU(inplace=True, negative_slope=0.01))
+        self.net = nn.Sequential(*layers)
+        self.output_dim = (layer_config.width**2) * layer_config.output_channels
+
+    def forward(self, x, x_coords=None, y_coords=None):
+        single_sample = x.batch_size == torch.Size([])
+        x = x["tasks"]
+        if single_sample:
+            # shape = (N*N, C)
+            x = x.unsqueeze(0)  # → (1, N*N, C)
+
+        # Now x.dim() == 3: (batch_size, N*N, C)
+        batch_size = x.size(0)
+        x = x.view(
+            batch_size,
+            self.layer_config.width,
+            self.layer_config.width,
+            self.in_channels,
+        )
+        x = x.permute(0, 3, 1, 2)  # Change to (batch_size, channels, height, width)
+
+        x = self.net(x)
+        if x_coords is not None and y_coords is not None:
+            x = x[:, :, x_coords, y_coords]
+        x = x.contiguous().view(batch_size, -1)  # Flatten the output
+        if single_sample:
+            # remove batch dimension → (out_features,)
+            x = x.squeeze(0)
+
+        return x
+
+
+class NewConvPolicyNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(NewConvPolicyNet, self).__init__()
+        self.conv = CellDecisionCNN(
+            in_channels=feature_config.task_feature_dim,
+            layer_config=layer_config,
+        )
+        init_uniform_output(self.conv, final_constant=0.0)
+        self.output_head = OutputHead(
+            self.conv.output_dim,
+            layer_config.hidden_channels,
+            n_devices - 1,  # n_devices - 1 because the first device is the CPU
+            logits=True,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # print("HeteroConvPolicyNet")
+        x_coords = data["aux", "x_coord"]
+        y_coords = data["aux", "y_coord"]
+        # d_logits = self.conv(data, x_coords=x_coords, y_coords=y_coords)
+        d_logits = self.output_head(self.conv(data))
+        return d_logits
+
+
+class NewConvValueNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(NewConvValueNet, self).__init__()
+
+        self.conv = CellDecisionCNN(
+            in_channels=feature_config.task_feature_dim,
+            layer_config=layer_config,
+        )
+        init_uniform_output(self.conv, final_constant=0.0)
+
+        self.output_head = OutputHead(
+            self.conv.output_dim + 1,
+            layer_config.hidden_channels,
+            1,
+            logits=False,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        state_features = self.conv(data)
+        v = self.output_head(
+            torch.cat([state_features, data["aux", "progress"].unsqueeze(-1)], dim=-1)
+        )
+        return v
+
+
+class NewConvSeparateNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+        k: int = 1,
+    ):
+        assert n_devices == 5, "designed for 5 devices (4 GPUs + CPU)."
+
+        super(NewConvSeparateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = NewConvPolicyNet(feature_config, layer_config, n_devices)
+        self.critic = NewConvValueNet(feature_config, layer_config, n_devices)
+
+    def forward(self, data):
+        # if any(p.is_cuda for p in self.actor.parameters()):
+        #     data = data.to("cuda", non_blocking=True)
+        d_logits = self.actor(data)
+        v = self.critic(data)
+        return d_logits, v
 
 
 class ConvPolicyNet(nn.Module):

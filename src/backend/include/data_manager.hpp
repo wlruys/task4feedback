@@ -848,6 +848,9 @@ public:
                                                             data.get().get_size(i), 0);
           device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location,
                                                             data.get().get_size(i), 0);
+          SPDLOG_DEBUG("Data {} initialized at device {} added {} now {}", data.get().get_name(i),
+                       initial_location, data.get().get_size(i),
+                       lru_manager.get_mem(initial_location));
         } else {
           mapped_locations.set_valid(i, 0, 0);
           reserved_locations.set_valid(i, 0, 0);
@@ -858,6 +861,11 @@ public:
           lru_manager.read(0, i, data.get().get_size(i));
         }
       }
+    }
+    SPDLOG_DEBUG("DataManager initialized with {} data blocks", data.get().size());
+    for (devid_t i = 0; i < device_manager.get().size(); i++) {
+      SPDLOG_DEBUG("Device {}: LRU size: {}, max size: {}", i, lru_manager.get_mem(i),
+                   device_manager.get().devices.get().get_max_resources(i).mem);
     }
   }
 
@@ -1258,6 +1266,7 @@ public:
       device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
     }
     for (auto device : launched_locations.at(data_id).invalidate_all(current_time)) {
+      SPDLOG_DEBUG("Retired data block {} from device {} with size {}", data_id, device, size);
       device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
       lru_manager.invalidate(device, data_id);
     }

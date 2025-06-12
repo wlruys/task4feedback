@@ -42,7 +42,7 @@ class JacobiConfig:
     n_part: int = 4
     randomness: float = 0
     permute_idx: int = 0
-    interior_size: int = 1000000
+    interior_size: int = 1000
     boundary_interior_ratio: float = 1.0
 
 
@@ -190,6 +190,10 @@ class JacobiGraph(ComputeDataGraph):
         self.task_to_level = {}
         self.level_to_task = defaultdict(list)
         prev_interiors = {}
+        if retire_data:
+            self.dynamic = True
+        else:
+            self.dynamic = False
         for i in range(self.config.steps):
             for j, (cell, edges) in enumerate(self.data.geometry.cell_edges.items()):
                 # Create task that:
@@ -898,4 +902,4 @@ class VectorObserver(ExternalObserver):
         output["tasks"][x * graph.config.n + y][-1] = 1.0
         # Used for Depth Normalization
         output["tasks"][:, 0] -= output["tasks"][output["tasks"][:, -1] > 0, 0][0]
-        output["tasks"][:, 0] /= 3
+        output["tasks"][:, 0] /= graph.config.n - 1

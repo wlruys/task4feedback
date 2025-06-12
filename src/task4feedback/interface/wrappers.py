@@ -887,10 +887,6 @@ class ExternalObserver:
     task_ids = None
 
     def reset(self):
-        assert (self.simulator.input.graph.config.n**2) in [
-            16,
-            64,
-        ], "Only 16 or 64 tasks are supported in the current implementation"
         self.task_ids = torch.Tensor(
             [-1 for _ in range(self.simulator.input.graph.config.n**2)]
         )
@@ -1009,12 +1005,10 @@ class ExternalObserver:
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "vsoptimal": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
+                "x_coord": torch.zeros((1), dtype=torch.int64),
+                "y_coord": torch.zeros((1), dtype=torch.int64),
             }
         )
-
-        assert (
-            spec.max_tasks == 16 or spec.max_tasks == 64
-        ), "Only 16 or 32 tasks are supported in the current implementation"
 
         obs_tensor = TensorDict(
             {

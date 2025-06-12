@@ -10,7 +10,12 @@ from task4feedback.interface.wrappers import (
     create_graph_spec,
     observation_to_heterodata,
 )
-from task4feedback.fastsim2 import GraphExtractor, SchedulerState, EventType
+from task4feedback.fastsim2 import (
+    GraphExtractor,
+    SchedulerState,
+    EventType,
+    start_logger,
+)
 from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
 from torchrl.envs.utils import make_composite_from_td
 from torchrl.envs import StepCounter, TrajCounter, TransformedEnv
@@ -24,7 +29,7 @@ from task4feedback.graphs.jacobi import JacobiGraph
 from torch_geometric.data import HeteroData
 from torch.profiler import record_function
 from task4feedback.graphs.mesh.partition import metis_partition
-from task4feedback.graphs.jacobi import PartitionMapper
+from task4feedback.graphs.jacobi import PartitionMapper, LevelPartitionMapper
 import itertools
 
 MAX_BUFFERS = 2000
@@ -92,12 +97,13 @@ class RuntimeEnv(EnvBase):
 
         if self.legacy_graph is False:
             self.graph: JacobiGraph = simulator_factory.input.graph
-            self.metis = metis_partition(
-                self.graph.data.geometry.cells,
-                self.graph.data.geometry.cell_neighbors,
-                nparts=simulator_factory.graph_spec.max_devices - int(only_gpu),
-            )
-            self.metis = np.array([i + 1 for i in self.metis])
+            if self.graph.dynamic is False:
+                self.metis = metis_partition(
+                    self.graph.data.geometry.cells,
+                    self.graph.data.geometry.cell_neighbors,
+                    nparts=simulator_factory.graph_spec.max_devices - int(only_gpu),
+                )
+                self.metis = np.array([i + 1 for i in self.metis])
 
         # print("Creating environment spec")
         self.observation_spec = self._create_observation_spec()
@@ -191,7 +197,6 @@ class RuntimeEnv(EnvBase):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
@@ -265,12 +270,16 @@ class RuntimeEnv(EnvBase):
                 for i in range(data.size()):
                     data.set_location(i, random.choice(self.location_list))
             else:
-                self.graph.randomize_locations(
-                    self.location_randomness, self.location_list, verbose=False
-                )
-                self.graph.set_cell_locations(
-                    [-1 for _ in range(len(self.graph.data.geometry.cells))], 1
-                )
+                if self.graph.dynamic is False:
+                    self.graph.set_cell_locations(
+                        [-1 for _ in range(len(self.graph.data.geometry.cells))]
+                    )
+                    self.graph.randomize_locations(
+                        self.location_randomness,
+                        self.location_list,
+                        verbose=False,
+                        step=0,
+                    )
 
         if self.change_priority and (self.resets % self.randomize_interval == 0):
             new_priority_seed = int(current_priority_seed + self.resets)
@@ -286,36 +295,45 @@ class RuntimeEnv(EnvBase):
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
 
-        current_loc = self.graph.get_cell_locations(as_dict=False)
+        if self.graph.dynamic is False:  # Static
+            current_loc = self.graph.get_cell_locations(as_dict=False)
 
-        labels = [1, 2, 3, 4]
-        best_mismatches = len(self.metis) + 1
-        best_relabelled = None
+            labels = [1, 2, 3, 4]
+            best_mismatches = len(self.metis) + 1
+            best_relabelled = None
 
-        for perm in itertools.permutations(labels):
-            # perm is a tuple like (2,1,3,4), meaning: send 1→2, 2→1, 3→3, 4→4.
-            # Build a small lookup table of size 5 so that lookup[a] == π(a):
-            lookup = np.zeros(5, dtype=int)
-            for a, mapped in zip(labels, perm):
-                lookup[a] = mapped
+            for perm in itertools.permutations(labels):
+                # perm is a tuple like (2,1,3,4), meaning: send 1→2, 2→1, 3→3, 4→4.
+                # Build a small lookup table of size 5 so that lookup[a] == π(a):
+                lookup = np.zeros(5, dtype=int)
+                for a, mapped in zip(labels, perm):
+                    lookup[a] = mapped
 
-            # apply π to the entire answer array:
-            relabelled = lookup[self.metis]  # shape (N,)
+                # apply π to the entire answer array:
+                relabelled = lookup[self.metis]  # shape (N,)
 
-            # count how many positions i have relabelled[i] != current_loc[i]
-            mismatches = np.count_nonzero(relabelled != current_loc)
+                # count how many positions i have relabelled[i] != current_loc[i]
+                mismatches = np.count_nonzero(relabelled != current_loc)
 
-            if mismatches < best_mismatches:
-                best_mismatches = mismatches
-                best_relabelled = relabelled.copy()
-        self.answer = best_relabelled.tolist()
-        partition_mapper = PartitionMapper(cell_to_mapping=self.answer)
-        opt_sim = self.simulator.copy()
-        opt_sim.external_mapper = partition_mapper
+                if mismatches < best_mismatches:
+                    best_mismatches = mismatches
+                    best_relabelled = relabelled.copy()
+            self.answer = best_relabelled.tolist()
+            partition_mapper = PartitionMapper(cell_to_mapping=self.answer)
+            opt_sim = self.simulator.copy()
+            opt_sim.external_mapper = partition_mapper
+        else:  # Dynamic
+            self.answer = self.graph.mincut_per_levels(
+                bandwidth=1, level_chunks=5, n_parts=4, offset=1
+            )
+            partition_mapper = LevelPartitionMapper(level_cell_mapping=self.answer)
+            opt_sim = self.simulator.copy()
+            opt_sim.external_mapper = partition_mapper
+
         opt_sim.enable_external_mapper()
         opt_sim.run()
         self.optimal_time = opt_sim.time
-
+        self.EFT_baseline = self._get_baseline(use_eft=True)
         simulator_status = self.simulator.run_until_external_mapping()
         assert (
             simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
@@ -343,7 +361,6 @@ class RuntimeEnv(EnvBase):
 class SanityCheckEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
             self.graph: JacobiGraph = self.simulator_factory.input.graph
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
@@ -479,7 +496,6 @@ class RunningAvgEnv(RuntimeEnv):
 class EFTIncrementalEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
@@ -539,8 +555,6 @@ class EFTIncrementalEnv(RuntimeEnv):
 
 class TerminalEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
-        if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
         candidate_workspace = torch.zeros(
@@ -581,7 +595,6 @@ class TerminalEnv(RuntimeEnv):
 class kHopEFTIncrementalEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
@@ -643,7 +656,6 @@ class EFTAllPossibleEnv(RuntimeEnv):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
             self.action_candidates = range(
                 int(self.only_gpu), self.simulator_factory.graph_spec.max_devices
@@ -712,7 +724,6 @@ class RolloutEnv(RuntimeEnv):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
@@ -798,7 +809,6 @@ class kHopRolloutEnv(RuntimeEnv):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
@@ -925,7 +935,6 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_log[self.step_count] = self.EFT_baseline
@@ -973,7 +982,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
         if self.clip_total:
             reward_sum = min(reward_sum, 0)
 
-        reward[0] = reward_sum / self.EFT_baseline
+        reward[0] = reward_sum / (self.EFT_baseline / len(self.graph))
 
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
