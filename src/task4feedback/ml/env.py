@@ -418,6 +418,57 @@ class SanityCheckEnv(RuntimeEnv):
         return out
 
 
+class EvalEnv(RuntimeEnv):
+    def _step(self, td: TensorDict) -> TensorDict:
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+
+        self.simulator.get_mappable_candidates(candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        reward[0] = 0
+
+        if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+            for next_id in self.graph.level_to_task[
+                self.graph.task_to_level[global_task_id] + 1
+            ]:
+                if (
+                    self.graph.task_to_cell[global_task_id]
+                    == self.graph.task_to_cell[next_id]
+                ):
+                    x, y = self.graph.xy_from_id(global_task_id)
+                    self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
+        obs = self._get_observation()
+        time = obs["observation"]["aux"]["time"].item()
+        if done:
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            print(
+                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+            )
+
+        out = obs
+
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
 class RunningAvgEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
