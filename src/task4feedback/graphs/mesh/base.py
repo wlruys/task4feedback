@@ -181,7 +181,10 @@ def generate_quad_mesh(L=1.0, n=4):
     gmsh.option.set_number("Mesh.Algorithm", 8)  # 8 = Delaunay
     with pygmsh.geo.Geometry() as geom:
         rectangle = geom.add_rectangle(0.0, L, 0.0, L, 0.0, mesh_size=nx)
-        geom.set_recombined_surfaces([rectangle.surface])
+        for curve in rectangle.curves:
+            geom.set_transfinite_curve(curve, n + 1, "Progression", 1.0)
+        geom.set_transfinite_surface(rectangle.surface, "Left", tuple(rectangle.curves))
+
         mesh = geom.generate_mesh(dim=2)
     return mesh
 

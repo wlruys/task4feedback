@@ -179,10 +179,7 @@ class JacobiGraph(ComputeDataGraph):
             self.data.geometry.cells[cell_id]
         ].mean(axis=0)
         n = self.config.n
-        if n % 2 == 0:
-            centroid = np.round(centroid * n)
-        else:
-            centroid = np.floor(centroid * n)
+        centroid = np.floor(centroid * n)
 
         x = int(centroid[0])
         y = int(centroid[1])
