@@ -457,9 +457,7 @@ class EvalEnv(RuntimeEnv):
         if done:
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
             obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
-            print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
-            )
+            print(f"{time},{self.EFT_baseline},{self.optimal_time}")
 
         out = obs
 
