@@ -573,18 +573,8 @@ def run_ppo_torchrl(
         )
         eval_metrics["eval/step"] = 0
         wandb.log(eval_metrics)
-
+    prev_max_vsoptimal = 1.0
     for i, tensordict_data in enumerate(collector):
-        if (i + 1) % 20 == 0:
-            if wandb.run.dir is None:
-                path = "."
-            else:
-                path = wandb.run.dir
-            torch.save(
-                model.state_dict(),
-                os.path.join(path, model_name + f"_{i + 1}.pth"),
-            )
-
         # Run evaluation at specified intervals
         if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
             eval_metrics = evaluate_policy(
@@ -711,16 +701,36 @@ def run_ppo_torchrl(
         )
         replay_buffer.empty()
 
-    # Final evaluation
-    # if config.eval_interval > 0 and i % config.eval_interval == 0:
-    #     eval_metrics = evaluate_policy(
-    #         policy=td_module_action,
-    #         eval_env_fn=eval_env_fn,
-    #         num_episodes=config.eval_episodes,
-    #         step=config.num_collections,
-    #     )
-    #     eval_metrics["eval/step"] = config.num_collections
-    #     wandb.log(eval_metrics)
+        if (i + 1) % 100 == 0:
+            if wandb.run.dir is None:
+                path = "."
+            else:
+                path = wandb.run.dir
+            torch.save(
+                model.state_dict(),
+                os.path.join(path, model_name + f"_{i+1}.pth"),
+            )
+
+        if avg_vsoptimal >= prev_max_vsoptimal + 0.01:
+            if wandb.run.dir is None:
+                path = "."
+            else:
+                path = wandb.run.dir
+            torch.save(
+                model.state_dict(),
+                os.path.join(path, "max_" + model_name + f"_{avg_vsoptimal}.pth"),
+            )
+            prev_max_vsoptimal = avg_vsoptimal
+
+    if config.eval_interval > 0 and i % config.eval_interval == 0:
+        eval_metrics = evaluate_policy(
+            policy=td_module_action,
+            eval_env_fn=eval_env_fn,
+            num_episodes=config.eval_episodes,
+            step=config.num_collections,
+        )
+        eval_metrics["eval/step"] = config.num_collections
+        wandb.log(eval_metrics)
 
     # save final network
     if wandb.run.dir is None:
