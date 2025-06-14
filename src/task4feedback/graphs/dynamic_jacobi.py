@@ -40,7 +40,7 @@ class DynamicJacobiData(JacobiData):
         boundary_size = int(self.config.boundary_interior_ratio * interior_size)
 
         base_workload = self.config.start_workload
-
+        # sum_data = []
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
             # Create 2 data blocks per cell
@@ -51,6 +51,7 @@ class DynamicJacobiData(JacobiData):
                 new_data_size = int(interior_size * new_data_ratio)
 
                 self.add_block(DataKey(Cell(cell), i), size=new_data_size, location=0)
+                # sum_data.append(new_data_size)
 
             # Create 2 data blocks per edge
             for edge in self.geometry.cell_edges[cell]:
@@ -65,6 +66,9 @@ class DynamicJacobiData(JacobiData):
                         size=new_data_size,
                         location=0,
                     )
+                    # sum_data.append(new_data_size)
+
+        # print(f"Average data size per step: {sum(sum_data) / len(sum_data)}")
 
 
 class DynamicJacobiGraph(JacobiGraph):

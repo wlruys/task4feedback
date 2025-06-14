@@ -2739,6 +2739,84 @@ class CellDecisionCNN(nn.Module):
         return x
 
 
+import torch
+import torch.nn as nn
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_ch, hidden_ch, kernel_size):
+        super().__init__()
+        pad = kernel_size // 2
+        self.conv1 = nn.Conv2d(in_ch, hidden_ch, kernel_size, padding=pad)
+        self.act1 = nn.LeakyReLU(inplace=True, negative_slope=0.01)
+        self.conv2 = nn.Conv2d(hidden_ch, hidden_ch, kernel_size, padding=pad)
+        self.act2 = nn.LeakyReLU(inplace=True, negative_slope=0.01)
+
+    def forward(self, x):
+        residual = x
+        out = self.conv1(x)
+        out = self.act1(out)
+        out = self.conv2(out)
+        out = self.act2(out)
+        return out + residual
+
+
+class CellDecisionSkipCNN(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,  # C_total = 1 (mask) + C_other
+        layer_config: LayerConfig,
+    ):
+        super().__init__()
+        self.layer_config = layer_config
+        self.in_channels = in_channels
+
+        kernel_size = layer_config.kernel_size
+        hidden_ch = layer_config.cnn_hidden_channels
+        n_layers = layer_config.cnn_layers
+
+        blocks = []
+        ch = in_channels
+
+        # build floor(n_layers/2) residual blocks
+        for _ in range(n_layers // 2):
+            blocks.append(ResidualBlock(ch, hidden_ch, kernel_size))
+            ch = hidden_ch
+
+        # if odd number of layers, tack on a final conv+ReLU
+        if n_layers % 2 == 1:
+            pad = kernel_size // 2
+            blocks += [
+                nn.Conv2d(ch, layer_config.output_channels, kernel_size, padding=pad),
+                nn.LeakyReLU(inplace=True, negative_slope=0.01),
+            ]
+            ch = layer_config.output_channels
+
+        self.net = nn.Sequential(*blocks)
+        self.output_dim = (layer_config.width**2) * ch
+
+    def forward(self, x, x_coords=None, y_coords=None):
+        single = x.batch_size == torch.Size([])
+        x = x["tasks"]
+        if single:
+            x = x.unsqueeze(0)  # → (1, N*N, C)
+
+        bsz = x.size(0)
+        x = x.view(
+            bsz, self.layer_config.width, self.layer_config.width, self.in_channels
+        ).permute(0, 3, 1, 2)
+
+        x = self.net(x)
+
+        if x_coords is not None and y_coords is not None:
+            x = x[:, :, x_coords, y_coords]
+
+        x = x.contiguous().view(bsz, -1)
+        if single:
+            x = x.squeeze(0)
+        return x
+
+
 class NewConvPolicyNet(nn.Module):
     def __init__(
         self,

@@ -723,7 +723,7 @@ class TrajectoryWorkload(DynamicWorkload):
         trajectory = make_circle_trajectory(
             self.geom, num_steps=num_levels, radius=0.25, max_angle=0.5
         )
-
+        # total_sum = 0.0
         centroids = np.zeros((self.num_cells, 2))
         for i, cell in enumerate(self.geom.cells):
             centroids[i] = self.geom.get_centroid(i)
@@ -737,3 +737,8 @@ class TrajectoryWorkload(DynamicWorkload):
             self.level_workload[j] += gaussian_workload
 
             self.level_workload[j] = np.clip(self.level_workload[j], 0, None)
+            # total_sum += np.sum(self.level_workload[j])
+        # total_sum += np.sum(self.level_workload[0])
+        # print(
+        #     f"Total workload sum: {total_sum}, per cell: {total_sum / (self.num_cells * (num_levels+1))}"
+        # )
