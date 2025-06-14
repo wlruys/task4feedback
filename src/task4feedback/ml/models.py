@@ -2778,19 +2778,31 @@ class CellDecisionSkipCNN(nn.Module):
         blocks = []
         ch = in_channels
 
+        pad = kernel_size // 2
+        blocks += [
+            nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
+            nn.LeakyReLU(inplace=True, negative_slope=0.01),
+        ]
+        ch = hidden_ch
+
         # build floor(n_layers/2) residual blocks
-        for _ in range(n_layers // 2):
+        for _ in range((n_layers - 2) // 2):
             blocks.append(ResidualBlock(ch, hidden_ch, kernel_size))
             ch = hidden_ch
 
         # if odd number of layers, tack on a final conv+ReLU
         if n_layers % 2 == 1:
-            pad = kernel_size // 2
             blocks += [
-                nn.Conv2d(ch, layer_config.output_channels, kernel_size, padding=pad),
+                nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
                 nn.LeakyReLU(inplace=True, negative_slope=0.01),
             ]
-            ch = layer_config.output_channels
+            ch = hidden_ch
+        # final conv layer
+        blocks.append(
+            nn.Conv2d(ch, layer_config.output_channels, kernel_size, padding=pad)
+        )
+        blocks.append(nn.LeakyReLU(inplace=True, negative_slope=0.01))
+        ch = layer_config.output_channels
 
         self.net = nn.Sequential(*blocks)
         self.output_dim = (layer_config.width**2) * ch
@@ -2892,6 +2904,90 @@ class NewConvSeparateNet(nn.Module):
 
         self.actor = NewConvPolicyNet(feature_config, layer_config, n_devices)
         self.critic = NewConvValueNet(feature_config, layer_config, n_devices)
+
+    def forward(self, data):
+        # if any(p.is_cuda for p in self.actor.parameters()):
+        #     data = data.to("cuda", non_blocking=True)
+        d_logits = self.actor(data)
+        v = self.critic(data)
+        return d_logits, v
+
+
+class SkipConvPolicyNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(SkipConvPolicyNet, self).__init__()
+        self.conv = CellDecisionSkipCNN(
+            in_channels=feature_config.task_feature_dim,
+            layer_config=layer_config,
+        )
+        init_uniform_output(self.conv, final_constant=0.0)
+        self.output_head = OutputHead(
+            self.conv.output_dim,
+            layer_config.hidden_channels,
+            n_devices - 1,  # n_devices - 1 because the first device is the CPU
+            logits=True,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        # print("HeteroConvPolicyNet")
+        x_coords = data["aux", "x_coord"]
+        y_coords = data["aux", "y_coord"]
+        # d_logits = self.conv(data, x_coords=x_coords, y_coords=y_coords)
+        d_logits = self.output_head(self.conv(data))
+        return d_logits
+
+
+class SkipConvValueNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(SkipConvValueNet, self).__init__()
+
+        self.conv = CellDecisionSkipCNN(
+            in_channels=feature_config.task_feature_dim,
+            layer_config=layer_config,
+        )
+        init_uniform_output(self.conv, final_constant=0.0)
+
+        self.output_head = OutputHead(
+            self.conv.output_dim + 1,
+            layer_config.hidden_channels,
+            1,
+            logits=False,
+        )
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        state_features = self.conv(data)
+        v = self.output_head(
+            torch.cat([state_features, data["aux", "progress"].unsqueeze(-1)], dim=-1)
+        )
+        return v
+
+
+class SkipConvSeparateNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+        k: int = 1,
+    ):
+        assert n_devices == 5, "designed for 5 devices (4 GPUs + CPU)."
+
+        super(SkipConvSeparateNet, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = SkipConvPolicyNet(feature_config, layer_config, n_devices)
+        self.critic = SkipConvValueNet(feature_config, layer_config, n_devices)
 
     def forward(self, data):
         # if any(p.is_cuda for p in self.actor.parameters()):
