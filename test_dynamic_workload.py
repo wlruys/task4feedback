@@ -57,10 +57,6 @@ from tensordict.nn import (
     ProbabilisticTensorDictModule,
     TensorDictSequential,
 )
-import torchrl
-import torch_geometric
-import aim
-from aim.pytorch import track_gradients_dists, track_params_dists
 
 
 seed = 1
@@ -112,7 +108,7 @@ def make_jacobi_env(config: JacobiConfig):
         m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
     )
     env = RuntimeEnv(
-        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+        SimulatorFactory(input, spec, XYHeterogeneousObserverFactory), device="cpu"
     )
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
@@ -123,7 +119,7 @@ def make_jacobi_env(config: JacobiConfig):
 from task4feedback.graphs.dynamic_jacobi import *
 
 if __name__ == "__main__":
-    jacobi_config = JacobiConfig(L=1, n=8)
+    jacobi_config = JacobiConfig(L=1, n=4)
 
     def make_env() -> RuntimeEnv:
         return make_jacobi_env(jacobi_config)

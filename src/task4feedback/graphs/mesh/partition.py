@@ -20,6 +20,17 @@ def metis_partition(cells, cell_neighbors, nparts=2):
     return parts
 
 
+def metis_geometry_partition(geometry: Geometry, nparts=2, round=2, direction=None):
+    graph = []
+    for i in range(len(geometry.cells)):
+        neighbors = geometry.cell_neighbors[i]
+        graph.append(list(neighbors))
+
+    # Compute the partitioning
+    edgecuts, parts = pymetis.part_graph(nparts=nparts, adjacency=graph)
+    return parts
+
+
 def bin_partition(geometry: Geometry, round=2, direction=None, n_parts=2):
     if direction is None:
         direction = 0

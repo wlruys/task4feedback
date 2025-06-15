@@ -56,7 +56,7 @@ from tensordict.nn import (
 )
 import torchrl
 import torch_geometric
-from task4feedback.graphs.sweep import *
+from task4feedback.graphs.sweeps import *
 from task4feedback.graphs import *
 from task4feedback.graphs.mesh import *
 from task4feedback.graphs.mesh.base import *

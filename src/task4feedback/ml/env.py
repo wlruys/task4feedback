@@ -53,9 +53,9 @@ class RuntimeEnv(EnvBase):
         self.location_seed = location_seed
         self.location_randomness = location_randomness
         if location_list is None:
-            location_list = range(
-                int(only_gpu), simulator_factory.graph_spec.max_devices
-            )
+            location_list = [
+                i for i in range(int(only_gpu), len(simulator_factory.input.system))
+            ]
         self.location_list = location_list
         self.only_gpu = only_gpu
 
@@ -101,6 +101,22 @@ class RuntimeEnv(EnvBase):
                 self.location_randomness, self.location_list, verbose=False
             )
 
+    def size(self):
+        """
+        Return maximum number of steps in the environment.
+        This is the number of tasks in the graph.
+        """
+        return len(self.simulator_factory.input.graph)
+
+    def __len__(self):
+        """
+        Return maximum number of steps in the environment.
+        This is the number of tasks in the graph.
+
+        Note: May not be available in a TransformedEnv.
+        """
+        return self.size()
+
     def _get_baseline(self, use_eft=False):
         if use_eft:
             simulator_copy = self.simulator.fresh_copy()
@@ -144,6 +160,9 @@ class RuntimeEnv(EnvBase):
 
     def _create_reward_spec(self) -> TensorSpec:
         return Unbounded(shape=(1,), device=self.device, dtype=torch.float32)
+
+    def get_observer(self):
+        return self.simulator.observer
 
     def _get_observation(self, td: TensorDict = None) -> TensorDict:
         if td is None:
@@ -350,7 +369,7 @@ class SanityCheckEnv(RuntimeEnv):
         return out
 
 
-class EFTIncrementalEnv(RuntimeEnv):
+class IncrementalEFT(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(use_eft=True)

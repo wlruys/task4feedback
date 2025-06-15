@@ -521,6 +521,9 @@ class System:
 
         return "\n".join(result)
 
+    def __len__(self):
+        return self.devices.size()
+
     def connection_table(self):
         if self.topology is None:
             return "No topology defined. Call finalize_devices() first."

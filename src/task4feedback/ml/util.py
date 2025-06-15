@@ -161,3 +161,127 @@ def logits_to_action(logits: torch.Tensor, action):
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+# def log_parameter_and_gradient_norms(model):
+#     """Log parameter and gradient norms to wandb"""
+#     param_norms = {}
+#     grad_norms = {}
+
+#     total_param_norm = 0.0
+#     total_grad_norm = 0.0
+
+#     for name, param in model.named_parameters():
+#         if param.requires_grad:
+#             param_norm = param.detach().norm().item()
+#             param_norms[f"param_norm/{name}"] = param_norm
+#             total_param_norm += param_norm**2
+
+#             if param.grad is not None:
+#                 grad_norm = param.grad.detach().norm().item()
+#                 grad_norms[f"grad_norm/{name}"] = grad_norm
+#                 total_grad_norm += grad_norm**2
+
+#     total_param_norm = total_param_norm**0.5
+#     total_grad_norm = total_grad_norm**0.5
+
+#     return {
+#         **param_norms,
+#         **grad_norms,
+#         "param_norm/total": total_param_norm,
+#         "grad_norm/total": total_grad_norm,
+#     }
+
+
+# def evaluate_policy(
+#     policy,
+#     eval_env_fn: Callable,
+#     max_steps: int = 10000,
+#     num_episodes: int = 1,
+#     step=0,
+# ) -> Dict[str, float]:
+#     episode_rewards = []
+#     completion_times = []
+#     episode_returns = []
+#     std_rewards = []
+
+#     for i in range(num_episodes):
+#         env = eval_env_fn()
+#         with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+#             tensordict = env.rollout(
+#                 max_steps=max_steps,
+#                 policy=policy,
+#             )
+
+#         if "next" in tensordict and "reward" in tensordict["next"]:
+#             rewards = tensordict["next", "reward"]
+#             avg_reward = rewards.mean().item()
+#             std_reward = rewards.std().item()
+#             returns = tensordict["next", "reward"].sum().item()
+#         else:
+#             returns = 0.0
+#             avg_non_zero_reward = 0.0
+#             std_rewards = 0.0
+
+#         episode_returns.append(returns)
+#         episode_rewards.append(avg_reward)
+#         std_rewards.append(std_reward)
+
+#         if hasattr(env, "simulator") and hasattr(env.simulator, "time"):
+#             completion_time = env.simulator.time
+#             completion_times.append(completion_time)
+
+#             if i == 0 and completion_time > 0:
+#                 max_frames = 400
+#                 time_interval = int(completion_time / max_frames)
+
+#                 title = f"network_eval_{step}_{i}"
+#                 print(title)
+#                 animate_mesh_graph(
+#                     env,
+#                     time_interval=time_interval,
+#                     show=False,
+#                     title=title,
+#                     figsize=(4, 4),
+#                     dpi=50,
+#                     bitrate=50,
+#                 )
+
+#                 if wandb.run.dir is None:
+#                     path = "."
+#                 else:
+#                     path = wandb.run.dir
+
+#                 video_path = os.path.join(path, title + ".mp4")
+
+#                 wandb.log(
+#                     {
+#                         "eval/animation": wandb.Video(
+#                             video_path,
+#                             caption=title,
+#                             format="mp4",
+#                         )
+#                     }
+#                 )
+
+#     # Create metrics dictionary
+#     metrics = {
+#         "eval/mean_return": sum(episode_rewards) / max(len(episode_rewards), 1),
+#         # "eval/std_return": np.std(episode_rewards) if len(episode_rewards) > 1 else 0,
+#         "eval/mean_reward": sum(episode_rewards) / max(len(episode_rewards), 1),
+#         # "eval/std_mean_reward": np.std(episode_rewards)
+#         # if len(episode_rewards) > 1
+#         # else 0,
+#         # "eval/std_std_reward": np.std(std_rewards) if len(std_rewards) > 1 else 0,
+#         "eval/mean_std_reward": sum(std_rewards) / max(len(std_rewards), 1),
+#     }
+
+#     # Add completion time metrics if available
+#     if completion_times:
+#         metrics["eval/mean_completion_time"] = sum(completion_times) / len(
+#             completion_times
+#         )
+#         # metrics["eval/min_completion_time"] = min(completion_times)
+#         # metrics["eval/max_completion_time"] = max(completion_times)
+
+#     return metrics

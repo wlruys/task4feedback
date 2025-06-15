@@ -1,6 +1,6 @@
 from .mesh.base import Geometry, Cell, Edge
 from ..interface import DataBlocks, Graph, DeviceType, TaskTuple, VariantTuple
-from .base import DataGeometry, DataKey, GeometryIDMap, ComputeDataGraph
+from .base import DataGeometry, DataKey, GeometryIDMap, ComputeDataGraph, GraphConfig
 from dataclasses import dataclass
 from ..interface.lambdas import VariantBuilder
 import random
@@ -14,7 +14,7 @@ from ..interface.wrappers import *
 
 
 @dataclass
-class SweepConfig:
+class SweepConfig(GraphConfig):
     L: int = 4
     n: int = 4
     randomness: float = 0

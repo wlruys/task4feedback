@@ -10,6 +10,8 @@ from .. import fastsim2 as fastsim
 import numpy as np
 from task4feedback.fastsim2 import DeviceType
 import pymetis
+import inspect
+from typing import Type
 
 
 def spring_layout(G):
@@ -709,3 +711,45 @@ class TrajectoryWorkload(DynamicWorkload):
             self.level_workload[j] += gaussian_workload
 
             self.level_workload[j] = np.clip(self.level_workload[j], 0, None)
+
+
+@dataclass
+class GraphConfig:
+    pass
+
+
+class GraphRegistry:
+    _registry: dict[Type, Callable[[Geometry, GraphConfig], Graph]] = {}
+
+    @classmethod
+    def register(
+        cls, func: Callable[[Geometry, GraphConfig], Graph], config: Type[GraphConfig]
+    ):
+        print(f"Registering graph type: {config}")
+        cls._registry[config] = func
+        return func
+
+    @classmethod
+    def get(
+        cls, config: Type[GraphConfig]
+    ) -> Optional[Callable[[Geometry, GraphConfig], Graph]]:
+        return cls._registry.get(config)
+
+    @classmethod
+    def build(cls, geometry: Geometry, config: GraphConfig) -> Optional[Graph]:
+        """
+        Build a graph of the specified type using the provided geometry and configuration.
+        """
+        graph_builder = cls.get(type(config))
+        if graph_builder is not None:
+            return graph_builder(geometry, config)
+        else:
+            raise ValueError(f"Graph type '{config}' is not registered.")
+
+
+def register_graph(cls, cfg):
+    GraphRegistry.register(cls, cfg)
+
+
+def build_graph(geometry: Geometry, config: GraphConfig):
+    return GraphRegistry.build(geometry, config)

@@ -743,13 +743,13 @@ class TaskTaskGAT1Layer(nn.Module):
 
 
 class OutputHead(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, logits=True):
+    def __init__(self, input_dim, hidden_channels, output_dim, logits=True):
         super(OutputHead, self).__init__()
 
-        self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
-        self.layer_norm1 = nn.LayerNorm(hidden_dim)
+        self.fc1 = layer_init(nn.Linear(input_dim, hidden_channels))
+        self.layer_norm1 = nn.LayerNorm(hidden_channels)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.fc2 = nn.Linear(hidden_channels, output_dim)
 
         if logits:
             # nn.init.normal_(self.fc2.weight, mean=0.0, std=0.01)
@@ -2448,51 +2448,65 @@ class VectorStateNet(nn.Module):
     def __init__(
         self,
         feature_config: FeatureDimConfig,
-        layer_config: LayerConfig,
-        k: int = 0,
+        hidden_channels: list[int],
+        add_progress: bool = False,
     ):
         super(VectorStateNet, self).__init__()
         self.feature_config = feature_config
-        self.layer_config = layer_config
-        self.k = k
+        self.hidden_channels = hidden_channels
+        self.k = len(self.hidden_channels)
 
-        if k == 0:
+        if self.k == 0:
             self.layers = nn.Identity()
             self.output_dim = feature_config.task_feature_dim
         else:
             # Build k MLP layers
             layers = []
             input_dim = feature_config.task_feature_dim
-
-            for i in range(k):
-                layers.append(
-                    layer_init(nn.Linear(input_dim, layer_config.hidden_channels))
-                )
-                layers.append(nn.LayerNorm(layer_config.hidden_channels))
+            layer_channels = input_dim
+            for i in range(self.k):
+                layer_channels = hidden_channels[i]
+                layers.append(layer_init(nn.Linear(input_dim, layer_channels)))
+                layers.append(nn.LayerNorm(layer_channels))
                 layers.append(nn.LeakyReLU(negative_slope=0.01))
-                input_dim = layer_config.hidden_channels
+                input_dim = layer_channels
 
             self.layers = nn.Sequential(*layers)
-            self.output_dim = layer_config.hidden_channels
+            self.output_dim = layer_channels
 
-    def forward(self, task_features):
-        return self.layers(task_features)
+        self.add_progress = add_progress
+        if self.add_progress:
+            self.output_dim += 2
+
+    def forward(self, tensordict: TensorDict):
+        task_features = tensordict["nodes", "tasks", "attr"]
+        task_activations = self.layers(task_features)
+        task_activations = task_activations.unsqueeze(1)
+
+        if self.add_progress:
+            time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+            progress_feature = tensordict["aux", "progress"]
+
+            task_activations = torch.cat(
+                [task_activations, time_feature, progress_feature], dim=-1
+            )
+
+        return task_activations
 
 
 class VectorPolicyNet(nn.Module):
     def __init__(
         self,
         feature_config: FeatureDimConfig,
-        layer_config: LayerConfig,
+        hidden_channels: list[int],
         n_devices: int = 5,
-        k: int = 0,
     ):
         super(VectorPolicyNet, self).__init__()
-        self.vector_state_net = VectorStateNet(feature_config, layer_config, k=k)
+        self.vector_state_net = VectorStateNet(feature_config, hidden_channels)
 
         self.actor_head = OutputHead(
             self.vector_state_net.output_dim,
-            layer_config.hidden_channels,
+            hidden_channels,
             n_devices - 1,
             logits=True,
         )

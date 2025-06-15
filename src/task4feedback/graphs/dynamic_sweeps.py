@@ -3,7 +3,7 @@ from .mesh.partition import *
 from .base import *
 from typing import Callable, Optional, Self
 from collections import defaultdict
-from .sweep import *
+from .sweeps import *
 
 
 @dataclass

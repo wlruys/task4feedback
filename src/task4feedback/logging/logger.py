@@ -13,7 +13,14 @@ if ENABLE_LOGGING:
     LOGFILE = os.path.join("logging.conf")
     print("Notice: Logging enabled")
 
-    logging.config.fileConfig(LOGFILE)
+    if os.path.exists(LOGFILE):
+        logging.config.fileConfig(LOGFILE)
+    else:
+        # Fallback to basic configuration if logging.conf doesn't exist
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
 
     runtime = logging.getLogger("runtime")
     resource = logging.getLogger("resources")
@@ -22,3 +29,4 @@ if ENABLE_LOGGING:
     stats = logging.getLogger("stats")
     mapping = logging.getLogger("mapping")
     launching = logging.getLogger("launching")
+    training = logging.getLogger("training")

@@ -6,7 +6,9 @@ from .base import (
     GeometryIDMap,
     ComputeDataGraph,
     WeightedCellGraph,
+    GraphConfig,
     weighted_cell_partition,
+    register_graph,
 )
 from dataclasses import dataclass
 from ..interface.lambdas import VariantBuilder
@@ -23,7 +25,7 @@ from scipy.optimize import linear_sum_assignment
 
 
 @dataclass
-class JacobiConfig:
+class JacobiConfig(GraphConfig):
     """
     Configuration settings for Jacobi mesh generation.
 
@@ -429,6 +431,9 @@ class JacobiGraph(ComputeDataGraph):
         self.partitions = aligned
 
         return aligned, perms, flips
+
+
+register_graph(JacobiGraph, JacobiConfig)
 
 
 class JacobiVariant(VariantBuilder):
