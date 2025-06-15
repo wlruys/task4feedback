@@ -1,15 +1,15 @@
 from tensordict.nn import TensorDictModule
 from torchrl.envs.utils import ExplorationType
 from torchrl.objectives import IQLLoss, SoftUpdate
-from ..interface.wrappers import *
+from ...interface.wrappers import *
 from torchrl.data.replay_buffers import (
     ReplayBuffer,
     LazyMemmapStorage,
 )
 from torchrl.collectors import MultiSyncDataCollector
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
-from .models import *
-from .env import *
+from ..models import *
+from ..env import *
 from torchrl.modules import ProbabilisticActor, ValueOperator
 import wandb
 

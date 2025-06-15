@@ -3,7 +3,7 @@ from tensordict import TensorDict
 from torch import nn
 from torchrl.envs.utils import ExplorationType, set_exploration_type
 from torchrl.objectives import IQLLoss, SoftUpdate, DiscreteIQLLoss, HardUpdate, DQNLoss
-from ..interface.wrappers import *
+from ...interface.wrappers import *
 from torchrl.collectors import SyncDataCollector, MultiSyncDataCollector
 from torchrl.data.replay_buffers import (
     ReplayBuffer,
@@ -15,9 +15,9 @@ from torchrl.data.replay_buffers import (
 from torchrl.collectors import MultiSyncDataCollector
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from typing import Callable, Type, Self, Optional
-from .util import *
-from .models import *
-from .env import *
+from ..util import *
+from ..models import *
+from ..env import *
 from torchrl.modules import (
     ProbabilisticActor,
     ValueOperator,

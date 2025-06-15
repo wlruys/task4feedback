@@ -1,5 +1,5 @@
-from .models import *
-from .util import *
+from ..models import *
+from ..util import *
 from dataclasses import dataclass
 from typing import Callable, Optional, List, Dict, Any, Tuple
 from torchrl.collectors import MultiSyncDataCollector, SyncDataCollector
@@ -205,7 +205,6 @@ def run_rnn_ppo_torchrl(
     model_path: str = None,
     eval_env_fn: Optional[Callable[[], EnvBase]] = None,
 ):
-
     env = make_env()
     if config.rnn_model == "LSTM":
         RNNModule = LSTMModule
