@@ -21,6 +21,7 @@ from ..base import ActorCriticModule
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from task4feedback.logging import training
+import time
 
 
 @dataclass
@@ -98,10 +99,12 @@ def run_ppo(
         env_workers(),
         actor_critic_module.actor,
         frames_per_batch=max_states_per_collection,
-        reset_at_each_iter=True,
         cat_results=0,
-        device=ppo_config.collect_device,
+        policy_device=ppo_config.collect_device,
+        storing_device=ppo_config.collect_device,
         env_device="cpu",
+        compile_policy=False,
+        replay_buffer=replay_buffer,
     )
     out_seed = collector.set_seed(ppo_config.seed)
 
@@ -111,6 +114,8 @@ def run_ppo(
         value_network=actor_critic_module.critic,
         average_gae=False,
         device=ppo_config.update_device,
+        # vectorized=False,
+        # shifted=False,
     )
 
     loss_module = ClipPPOLoss(
@@ -125,7 +130,15 @@ def run_ppo(
         normalize_advantage=ppo_config.normalize_advantage,
     )
 
-    optimizer = instantiate(opt_cfg, params=loss_module.parameters())
+    # optimizer = instantiate(opt_cfg, params=loss_module.parameters())
+    optimizer = torch.optim.Adam(
+        loss_module.parameters(),
+        lr=opt_cfg.lr if opt_cfg is not None else 3e-4,
+        eps=opt_cfg.eps if opt_cfg is not None else 1e-5,
+    )
+
+    loss_module = loss_module.to(ppo_config.update_device)
+    advantage_module = advantage_module.to(ppo_config.update_device)
 
     if lr_cfg is not None:
         lr_scheduler = instantiate(lr_cfg, optimizer=optimizer)
@@ -148,14 +161,28 @@ def run_ppo(
         if lr_scheduler is not None:
             lr_scheduler.step()
 
-        return {
-            "loss_objective": loss_vals["loss_objective"].item(),
-            "loss_critic": loss_vals["loss_critic"].item(),
-            "loss_entropy": loss_vals["entropy"].item(),
-        }
+        return loss_vals
+
+    # advantage_module = compile_with_warmup(advantage_module)
+
+    # update = compile_with_warmup(update)
+
+    start_t = time.perf_counter()
 
     for i, tensordict_data in enumerate(collector):
         replay_buffer.empty()
+
+        current_t = time.perf_counter()
+        elapsed_time = current_t - start_t
+        updates_per_second = (i + 1) / elapsed_time if elapsed_time > 0 else 0
+        training.info(
+            f"Collection {i + 1}/{ppo_config.num_collections}, "
+            f"Updates per second: {updates_per_second:.2f}"
+        )
+
+        tensordict_data = tensordict_data.to(
+            ppo_config.update_device, non_blocking=True
+        )
 
         if i >= ppo_config.num_collections:
             break
@@ -163,6 +190,16 @@ def run_ppo(
         with torch.no_grad():
             # Compute advantages
             advantage_module(tensordict_data)
+
+            # Compute average improvement
+            improvements = tensordict_data["next", "observation", "aux", "improvement"]
+            mask = improvements > -1.5
+            filtered_improvements = improvements[mask]
+            if filtered_improvements.numel() > 0:
+                avg_improvement = filtered_improvements.mean()
+            else:
+                avg_improvement = torch.tensor(0.0)
+            training.info(f"Average improvement: {avg_improvement:.4f}")
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
@@ -174,12 +211,15 @@ def run_ppo(
                 batch.to(ppo_config.update_device, non_blocking=True)
                 loss = update(batch, i, j, k)
 
-                training.info(
-                    f"Collection {i}, Epoch {j}, Batch {k}: "
-                    f"Loss Objective: {loss['loss_objective']:.4f}, "
-                    f"Loss Critic: {loss['loss_critic']:.4f}, "
-                    f"Loss Entropy: {loss['loss_entropy']:.4f}"
-                )
+                # training.info(
+                #     f"Collection {i}, Epoch {j}, Batch {k}: "
+                #     f"Loss Objective: {loss['loss_objective']:.4f}, "
+                #     f"Loss Critic: {loss['loss_critic']:.4f}, "
+                #     f"Loss Entropy: {loss['loss_entropy']:.4f}"
+                # )
+            collector.update_policy_weights_(
+                TensorDict.from_module(loss_module.actor_network)
+            )
 
 
 # def run_ppo_torchrl(

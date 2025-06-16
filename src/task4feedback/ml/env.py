@@ -24,6 +24,7 @@ from task4feedback.legacy_graphs import *
 from task4feedback.graphs.jacobi import JacobiGraph
 from torch_geometric.data import HeteroData
 from torch.profiler import record_function
+from torchrl.data import Categorical
 
 MAX_BUFFERS = 2000
 
@@ -86,14 +87,40 @@ class RuntimeEnv(EnvBase):
                     "Warning: Randomizing locations on a legacy graph. This may not work as expected. location_randomness is ignored."
                 )
 
-        # print("Creating environment spec")
-        self.observation_spec = self._create_observation_spec()
-        # print("Observation spec created")
-        self.action_spec = self._create_action_spec()
-        self.reward_spec = self._create_reward_spec()
-        self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool)
+        self.observation = self._get_new_observation_buffer()
+        observation_spec = self._create_observation_spec(self.observation)
 
-        self.workspace = self._prealloc_step_buffers(1000)
+        action_spec = self._create_action_spec(n_devices=5)
+        reward_spec = self._create_reward_spec()
+        done_spec = self._create_done_spec()
+
+        self.action_spec = action_spec
+        self.observation_spec = Composite(observation=observation_spec)
+        self.reward_spec = Composite(reward=reward_spec)
+        self.done_spec = Composite(done=done_spec, terminated=done_spec)
+
+        # self.full_action_spec = Composite(action=action_spec, device=self.device)
+        # self.full_observation_spec = Composite(
+        #    observation=observation_spec, device=self.device
+        # )
+        # self.full_reward_spec = Composite(reward=reward_spec, device=self.device)
+        # self.full_done_spec = Composite(
+        #    done=done_spec, terminated=done_spec, device=self.device
+        # )
+
+        spec = Composite(
+            observation=observation_spec,
+            reward=reward_spec,
+            done=done_spec,
+            terminated=done_spec,
+        )
+        # self.spec = spec
+
+        self._buf = spec.zeros()
+        self.candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates, dtype=torch.int64
+        )
+
         self.baseline_time = baseline_time
 
         if change_locations:
@@ -130,140 +157,116 @@ class RuntimeEnv(EnvBase):
             return simulator_copy.time
         return self.baseline_time
 
-    def _create_observation_spec(self) -> TensorSpec:
-        obs = self.simulator.observer.get_observation()
-        # obs = Bounded(
-        #     shape=(1,),
-        #     device=self.device,
-        #     dtype=torch.float32,
-        #     low=torch.tensor(0, device=self.device),
-        #     high=torch.tensor(1, device=self.device),
-        # )
-        # comp = obs
-        comp = make_composite_from_td(obs)
-        comp = Composite(observation=comp)
+    def _create_observation_spec(self, td) -> TensorSpec:
+        comp = make_composite_from_td(td, unsqueeze_null_shapes=False)
+
+        # def set_device_recursive(spec, device):
+        #     if hasattr(spec, "device") and spec.device is None:
+        #         spec = spec.to(device)
+        #     if isinstance(spec, Composite):
+        #         for key, value in spec.items():
+        #             spec[key] = set_device_recursive(value, device)
+        #     return spec
+
+        # comp = set_device_recursive(comp, self.device)
         return comp
 
-    def _create_action_spec(self, ndevices: int = 5) -> TensorSpec:
-        n_devices = self.simulator_factory.graph_spec.max_devices
+    def _create_state_value_spec(self) -> TensorSpec:
+        return Unbounded(shape=[1], device=self.device, dtype=torch.float32)
+
+    def _create_action_spec(self, n_devices: int = 5) -> TensorSpec:
         if self.only_gpu:
             n_devices -= 1
-        out = Bounded(
-            shape=(1,),
-            device=self.device,
-            dtype=torch.int64,
-            low=torch.tensor(0, device=self.device),
-            high=torch.tensor(n_devices, device=self.device),
-        )
-        out = Composite(action=out)
+        out = Categorical(n=n_devices, shape=[1], device=self.device, dtype=torch.int64)
         return out
 
     def _create_reward_spec(self) -> TensorSpec:
-        return Unbounded(shape=(1,), device=self.device, dtype=torch.float32)
+        return Unbounded(shape=[1], device=self.device, dtype=torch.float32)
+
+    def _create_done_spec(self) -> TensorSpec:
+        return Binary(n=1, device=self.device, dtype=torch.bool)
 
     def get_observer(self):
         return self.simulator.observer
 
-    def _get_observation(self, td: TensorDict = None) -> TensorDict:
-        if td is None:
-            obs = self.simulator.observer.get_observation()
-            td = TensorDict(observation=obs)
-        else:
-            self.simulator.observer.get_observation(output=td["observation"])
-
+    def _get_observation(self) -> TensorDict:
+        self.simulator.observer.get_observation(self.observation)
         n_tasks = len(self.simulator_factory.input.graph)
-        td["observation", "aux", "progress"][0] = self.step_count / n_tasks
-        td["observation", "aux", "baseline"][0] = max(1.0, self.EFT_baseline)
-        return td
+        progress = self.step_count / n_tasks
+        baseline = max(1.0, self.EFT_baseline)
+        self.observation.set_at_(("aux", "progress"), progress, 0)
+        self.observation.set_at_(("aux", "baseline"), baseline, 0)
+        return self.observation
 
     def _get_new_observation_buffer(self) -> TensorDict:
         obs = self.simulator.observer.new_observation_buffer()
-        td = TensorDict(observation=obs)
-        return td
-
-    def _get_new_step_buffer(self) -> TensorDict:
-        obs = self._get_new_observation_buffer()
-        obs.set("reward", torch.tensor([0], device=self.device, dtype=torch.float32))
-        obs.set("done", torch.tensor([False], device=self.device, dtype=torch.bool))
-        obs.set(
-            "state_value", torch.tensor([0], device=self.device, dtype=torch.float32)
-        )
         return obs
-
-    def _prealloc_step_buffers(self, n: int) -> List[TensorDict]:
-        return [self._get_new_step_buffer() for _ in range(n)]
-
-    def _get_preallocated_step_buffer(
-        self, buffers: List[TensorDict], i: int
-    ) -> TensorDict:
-        if i >= len(buffers):
-            print("EXTENDING BUFFERS", i, len(buffers))
-            buffers.extend(self._prealloc_step_buffers(2 * len(buffers)))
-        return buffers[i]
-
-    def _get_current_buffer(self):
-        buf = self._get_preallocated_step_buffer(self.workspace, self.buffer_idx)
-        self.buffer_idx = (self.buffer_idx + 1) % MAX_BUFFERS
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
-        # td["observation", "aux", "baseline"][0] = self.EFT_baseline
 
-        with record_function("STEP"):
-            done = torch.tensor((1,), device=self.device, dtype=torch.bool)
-            reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
-            candidate_workspace = torch.zeros(
-                self.simulator_factory.graph_spec.max_candidates,
-                dtype=torch.int64,
+        self.simulator.get_mappable_candidates(self.candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = self.candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+
+        # simulator_copy = self.simulator.copy()
+        # simulator_copy.disable_external_mapper()
+        # simulator_copy.run()
+
+        # if simulator_copy.time > self.prev_makespan:
+        #     reward = -1
+        # elif simulator_copy.time < self.prev_makespan:
+        #     reward = 1
+        # else:
+        #     reward = 0
+        # self.prev_makespan = simulator_copy.time
+
+        reward = 0
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        self._get_observation()
+        time = self.observation["aux"]["time"].item()
+
+        if done:
+            improvement = self.EFT_baseline / time - 1
+            reward = improvement
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
             )
-            self.simulator.get_mappable_candidates(candidate_workspace)
-            chosen_device = td["action"].item() + int(self.only_gpu)
-            global_task_id = candidate_workspace[0].item()
-            mapping_priority = self.simulator.get_mapping_priority(global_task_id)
 
-            self.simulator.simulator.map_tasks(
-                [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
-            )
+        # reward = torch.tensor([reward], device=self.device, dtype=torch.float32)
+        # done = torch.tensor([done], device=self.device, dtype=torch.bool)
+        buf = td.empty()
+        buf.set("observation", self.observation)
+        buf.set(
+            "reward", torch.tensor([reward], device=self.device, dtype=torch.float32)
+        )
+        buf.set("done", torch.tensor([done], device=self.device, dtype=torch.bool))
+        buf.set(
+            "terminated", torch.tensor([done], device=self.device, dtype=torch.bool)
+        )
 
-            simulator_copy = self.simulator.copy()
-            simulator_copy.disable_external_mapper()
-            simulator_copy.run()
-            if simulator_copy.time > self.prev_makespan:
-                reward[0] = -1
-            elif simulator_copy.time < self.prev_makespan:
-                reward[0] = 1
-            else:
-                reward[0] = 0
-            self.prev_makespan = simulator_copy.time
+        # buf = self._buf.copy()
+        # buf.set_("observation", self.observation)
+        # buf.set_at_("reward", reward, 0)
+        # buf.set_at_("done", done, 0)
+        # buf.set_at_("terminated", done, 0)
+        self.step_count += 1
 
-            simulator_status = self.simulator.run_until_external_mapping()
-            done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
-
-            obs = self._get_observation()
-            time = obs["observation"]["aux"]["time"].item()
-            if done:
-                obs["observation"]["aux"]["improvement"][0] = (
-                    self.EFT_baseline / time - 1
-                )
-                print(
-                    f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
-                )
-
-            # obs["observation"]["aux"]["baseline"][0] = self.EFT_baseline
-            out = obs
-            out.set(
-                "state_value",
-                torch.tensor([0], device=self.device, dtype=torch.float32),
-            )
-            out.set("reward", reward)
-            out.set("done", done)
-            self.step_count += 1
-        return out
+        return buf
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         # print("Resetting environment")
+        self.observation.zero_()
         self.resets += 1
         self.step_count = 0
         current_priority_seed = self.simulator_factory.pseed
@@ -301,8 +304,20 @@ class RuntimeEnv(EnvBase):
             f"Unexpected simulator status: {simulator_status}"
         )
 
-        obs = self._get_observation()
-        return obs
+        if td is None:
+            td = TensorDict()
+        else:
+            td = td.empty()
+
+        self._get_observation()
+        # td._zero_()
+        # self._buf.zero_()
+        # self._buf.set_("observation", self.observation)
+        td.set("observation", self.observation)
+        # buf.set("reward", 0)
+        # buf.set("done", 0)
+
+        return td
 
     @property
     def observer(self):
@@ -387,6 +402,11 @@ class IncrementalEFT(RuntimeEnv):
         chosen_device = td["action"].item() + int(self.only_gpu)
         global_task_id = candidate_workspace[0].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        # print(
+        #     f"Chosen Device: {chosen_device}, Global Task ID: {global_task_id}, Mapping Priority: {mapping_priority}",
+        #     flush=True,
+        # )
 
         self.simulator.simulator.map_tasks(
             [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
@@ -1187,9 +1207,9 @@ class IncrementalMappingEnv(EnvBase):
         self.last_time = 0
 
         self.observation_spec = self._create_observation_spec()
-        self.action_spec = self._create_action_spec()
+        self.action_spec = self._create_action_spec(ndevices=5)
         self.reward_spec = self._create_reward_spec()
-        self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool)
+        self.done_spec = self._create_done_spec()
 
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
@@ -1229,6 +1249,9 @@ class IncrementalMappingEnv(EnvBase):
 
     def _create_reward_spec(self) -> TensorSpec:
         return Unbounded(shape=(1,), device=self.device, dtype=torch.float32)
+
+    def _create_done_spec(self):
+        return Binary(n=1, device=self.device, dtype=torch.bool)
 
     def _get_observation(self, td: TensorDict = None) -> TensorDict:
         if td is None:

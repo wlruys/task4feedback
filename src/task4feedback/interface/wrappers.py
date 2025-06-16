@@ -36,11 +36,18 @@ from tensordict.tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
 
 
-def _make_node_tensor(nodes, dim):
+def _make_node_tensor(nodes, dim, single=False):
+    if single:
+        glb_shape = 1
+        attr_shape = dim
+    else:
+        glb_shape = (nodes,)
+        attr_shape = (nodes, dim)
+
     return TensorDict(
         {
-            "glb": torch.zeros((nodes,), dtype=torch.int64),
-            "attr": torch.zeros((nodes, dim), dtype=torch.float32),
+            "glb": torch.zeros(glb_shape, dtype=torch.int64),
+            "attr": torch.zeros(attr_shape, dtype=torch.float32),
             "count": torch.zeros((1), dtype=torch.int64),
             # "count": torch.tensor([0], dtype=torch.int64),
         }
@@ -1447,9 +1454,10 @@ class ExternalObserver:
         # print("Candidate observation")
         # print("Candidate observation", type(self))
         count = self.simulator.simulator.get_mappable_candidates(
-            output["aux"]["candidates"]["idx"]
+            output["aux", "candidates", "idx"]
         )
-        output["aux"]["candidates"]["count"][0] = count
+        # output["aux"]["candidates"]["count"][0] = count
+        output.set_at_(("aux", "candidates", "count"), count, 0)
 
     def get_observation(self, output: Optional[TensorDict] = None):
         if output is None:
@@ -1702,17 +1710,16 @@ class CandidateObserver(ExternalObserver):
         aux_tensor = TensorDict(
             {
                 "candidates": _make_index_tensor(spec.max_candidates),
-                "time": torch.zeros((1,), dtype=torch.int64),
-                "improvement": torch.zeros((1,), dtype=torch.float32),
+                "time": torch.zeros((1), dtype=torch.int64),
+                "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
-                "baseline": torch.ones((1,), dtype=torch.float32),
+                "baseline": torch.ones((1), dtype=torch.float32),
             }
         )
 
         obs_tensor = TensorDict(
             {
                 "nodes": node_tensor,
-                "edges": TensorDict({}),
                 "aux": aux_tensor,
             }
         )
@@ -1722,21 +1729,21 @@ class CandidateObserver(ExternalObserver):
     def get_observation(self, output: Optional[TensorDict] = None):
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
+            raise Warning("Allocating new observation buffer, this is not efficient!")
 
         # Get mappable candidates
         self.candidate_observation(output)
-        task_output = output["nodes"]["tasks"]
 
-        task_output["glb"] = output["aux"]["candidates"]["idx"]
-        task_output["count"][0] = 1
+        output.set_(("nodes", "tasks", "glb"), output["aux", "candidates", "idx"])
+        output.set_at_(("nodes", "tasks", "count"), 1, 0)
 
         self.get_task_features(
-            output["nodes"]["tasks"]["glb"], output["nodes"]["tasks"]["attr"]
+            output["nodes", "tasks", "glb"], output["nodes", "tasks", "attr"]
         )
 
         # Auxiliary observations
-        output["aux"]["time"][0] = self.simulator.time
-        output["aux"]["improvement"][0] = -2.0
+        output.set_at_(("aux", "progress"), -2.0, 0)
+        output.set_at_(("aux", "time"), self.simulator.time, 0)
 
         return output
 

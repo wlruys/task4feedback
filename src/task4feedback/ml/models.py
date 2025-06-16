@@ -2480,8 +2480,8 @@ class VectorStateNet(nn.Module):
 
     def forward(self, tensordict: TensorDict):
         task_features = tensordict["nodes", "tasks", "attr"]
+        task_features = torch.squeeze(task_features)
         task_activations = self.layers(task_features)
-        task_activations = task_activations.unsqueeze(1)
 
         if self.add_progress:
             time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
