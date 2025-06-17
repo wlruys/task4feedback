@@ -29,11 +29,59 @@ from torch_geometric.nn import (
 )
 import numpy as np
 import time
+from hydra.utils import instantiate, call
+from omegaconf import DictConfig, OmegaConf
 
 
-def layer_init(layer, a=0.01, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.kaiming_uniform_(layer.weight, a=a, nonlinearity="leaky_relu")
-    torch.nn.init.constant_(layer.bias, bias_const)
+def kaiming_init(layer, a=0.01, mode="fan_in", nonlinearity="leaky_relu"):
+    """
+    Initializes a layer with Kaiming He initialization.
+    """
+    print(f"Initializing layer {layer} with Kaiming He initialization")
+    if isinstance(layer, nn.Linear):
+        nn.init.kaiming_uniform_(
+            layer.weight, a=a, mode=mode, nonlinearity=nonlinearity
+        )
+        if layer.bias is not None:
+            nn.init.constant_(layer.bias, 0.0)
+    elif isinstance(layer, nn.Conv2d):
+        nn.init.kaiming_uniform_(
+            layer.weight, a=a, mode=mode, nonlinearity=nonlinearity
+        )
+        if layer.bias is not None:
+            nn.init.constant_(layer.bias, 0.0)
+    return layer
+
+
+def xavier_init(layer, gain=1.0):
+    """
+    Initializes a layer with Xavier initialization.
+    """
+    print(f"Initializing layer {layer} with Xavier initialization")
+    if isinstance(layer, nn.Linear):
+        nn.init.xavier_uniform_(layer.weight, gain=gain)
+        if layer.bias is not None:
+            nn.init.constant_(layer.bias, 0.0)
+    elif isinstance(layer, nn.Conv2d):
+        nn.init.xavier_uniform_(layer.weight, gain=gain)
+        if layer.bias is not None:
+            nn.init.constant_(layer.bias, 0.0)
+    return layer
+
+
+def orthogonal_init(layer, gain=1.0):
+    """
+    Initializes a layer with orthogonal initialization.
+    """
+    print(f"Initializing layer {layer} with Orthogonal initialization")
+    if isinstance(layer, nn.Linear):
+        nn.init.orthogonal_(layer.weight, gain=gain)
+        if layer.bias is not None:
+            nn.init.constant_(layer.bias, 0.0)
+    elif isinstance(layer, nn.Conv2d):
+        nn.init.orthogonal_(layer.weight, gain=gain)
+        if layer.bias is not None:
+            nn.init.constant_(layer.bias, 0.0)
     return layer
 
 
@@ -743,30 +791,38 @@ class TaskTaskGAT1Layer(nn.Module):
 
 
 class OutputHead(nn.Module):
-    def __init__(self, input_dim, hidden_channels, output_dim, logits=True):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_channels: int,
+        output_dim: int,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+        layer_norm: bool = True,
+    ):
         super(OutputHead, self).__init__()
 
-        self.fc1 = layer_init(nn.Linear(input_dim, hidden_channels))
-        self.layer_norm1 = nn.LayerNorm(hidden_channels)
-        self.activation = nn.LeakyReLU(negative_slope=0.01)
-        self.fc2 = nn.Linear(hidden_channels, output_dim)
+        print(initialization)
 
-        if logits:
-            # nn.init.normal_(self.fc2.weight, mean=0.0, std=0.01)
-            nn.init.uniform_(self.fc2.weight, a=-0.001, b=0.001)
-            nn.init.constant_(self.fc2.bias, 0.0)
+        if initialization is None:
+            layer1_init = kaiming_init
+            layer2_init = kaiming_init
         else:
-            nn.init.xavier_uniform_(self.fc2.weight)
-            nn.init.constant_(self.fc2.bias, 0.0)
+            layer1_init = call(initialization["layer1"])
+            layer2_init = call(initialization["layer2"])
+
+        layers = []
+        layers.append(layer1_init(nn.Linear(input_dim, hidden_channels)))
+        if layer_norm:
+            layers.append(nn.LayerNorm(hidden_channels))
+        layers.append(
+            instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01)
+        )
+        layers.append(layer2_init(nn.Linear(hidden_channels, output_dim)))
+        self.network = nn.Sequential(*layers)
 
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.layer_norm1(x)
-        x = self.activation(x)
-        x = self.fc2(x)
-
-        # print("x", x.shape, flush=True)
-        return x
+        return self.network(x)
 
 
 class OldOutputHead(nn.Module):
@@ -2452,11 +2508,23 @@ class VectorStateNet(nn.Module):
         feature_config: FeatureDimConfig,
         hidden_channels: list[int],
         add_progress: bool = False,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+        layer_norm: bool = True,
     ):
         super(VectorStateNet, self).__init__()
         self.feature_config = feature_config
         self.hidden_channels = hidden_channels
         self.k = len(self.hidden_channels)
+
+        def make_activation(activation_config):
+            return (
+                instantiate(activation)
+                if activation
+                else nn.LeakyReLU(negative_slope=0.01)
+            )
+
+        layer_init = call(initialization if initialization else kaiming_init)
 
         if self.k == 0:
             self.layers = nn.Identity()
@@ -2469,8 +2537,9 @@ class VectorStateNet(nn.Module):
             for i in range(self.k):
                 layer_channels = hidden_channels[i]
                 layers.append(layer_init(nn.Linear(input_dim, layer_channels)))
-                layers.append(nn.LayerNorm(layer_channels))
-                layers.append(nn.LeakyReLU(negative_slope=0.01))
+                if layer_norm:
+                    layers.append(nn.LayerNorm(layer_channels))
+                layers.append(make_activation(activation))
                 input_dim = layer_channels
 
             self.layers = nn.Sequential(*layers)
