@@ -25,6 +25,9 @@ from task4feedback.graphs.jacobi import JacobiGraph
 from torch_geometric.data import HeteroData
 from torch.profiler import record_function
 from torchrl.data import Categorical
+from task4feedback.logging import training
+from time import perf_counter
+
 
 MAX_BUFFERS = 2000
 
@@ -99,34 +102,25 @@ class RuntimeEnv(EnvBase):
         self.reward_spec = Composite(reward=reward_spec)
         self.done_spec = Composite(done=done_spec, terminated=done_spec)
 
-        # self.full_action_spec = Composite(action=action_spec, device=self.device)
-        # self.full_observation_spec = Composite(
-        #    observation=observation_spec, device=self.device
-        # )
-        # self.full_reward_spec = Composite(reward=reward_spec, device=self.device)
-        # self.full_done_spec = Composite(
-        #    done=done_spec, terminated=done_spec, device=self.device
-        # )
-
         spec = Composite(
             observation=observation_spec,
             reward=reward_spec,
             done=done_spec,
             terminated=done_spec,
         )
-        # self.spec = spec
 
         self._buf = spec.zeros()
         self.candidate_workspace = torch.zeros(
             self.simulator_factory.graph_spec.max_candidates, dtype=torch.int64
         )
-
         self.baseline_time = baseline_time
 
         if change_locations:
             graph.randomize_locations(
                 self.location_randomness, self.location_list, verbose=False
             )
+
+        self.batch_size = torch.Size([])
 
     def size(self):
         """
@@ -146,9 +140,9 @@ class RuntimeEnv(EnvBase):
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
-            simulator_copy = self.simulator.fresh_copy()
-            simulator_copy.initialize()
-            simulator_copy.initialize_data()
+            simulator_copy = self.simulator.copy()
+            # simulator_copy.initialize()
+            # simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
             assert final_state == fastsim.ExecutionState.COMPLETE, (
@@ -159,25 +153,13 @@ class RuntimeEnv(EnvBase):
 
     def _create_observation_spec(self, td) -> TensorSpec:
         comp = make_composite_from_td(td, unsqueeze_null_shapes=False)
-
-        # def set_device_recursive(spec, device):
-        #     if hasattr(spec, "device") and spec.device is None:
-        #         spec = spec.to(device)
-        #     if isinstance(spec, Composite):
-        #         for key, value in spec.items():
-        #             spec[key] = set_device_recursive(value, device)
-        #     return spec
-
-        # comp = set_device_recursive(comp, self.device)
         return comp
 
     def _create_state_value_spec(self) -> TensorSpec:
         return Unbounded(shape=[1], device=self.device, dtype=torch.float32)
 
     def _create_action_spec(self, n_devices: int = 5) -> TensorSpec:
-        if self.only_gpu:
-            n_devices -= 1
-        out = Categorical(n=n_devices, shape=[1], device=self.device, dtype=torch.int64)
+        out = Categorical(n=n_devices, shape=[], device=self.device, dtype=torch.int64)
         return out
 
     def _create_reward_spec(self) -> TensorSpec:
@@ -203,6 +185,7 @@ class RuntimeEnv(EnvBase):
         return obs
 
     def _step(self, td: TensorDict) -> TensorDict:
+        start_t = perf_counter()
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(use_eft=True)
             self.prev_makespan = self.EFT_baseline
@@ -216,56 +199,45 @@ class RuntimeEnv(EnvBase):
             [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
         )
 
-        # simulator_copy = self.simulator.copy()
-        # simulator_copy.disable_external_mapper()
-        # simulator_copy.run()
-
-        # if simulator_copy.time > self.prev_makespan:
-        #     reward = -1
-        # elif simulator_copy.time < self.prev_makespan:
-        #     reward = 1
-        # else:
-        #     reward = 0
-        # self.prev_makespan = simulator_copy.time
-
         reward = 0
-
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
 
         self._get_observation()
-        time = self.observation["aux"]["time"].item()
 
         if done:
-            improvement = self.EFT_baseline / time - 1
+            time = self.observation["aux", "time"].item()
+            improvement = (self.EFT_baseline / time) - 1
             reward = improvement
             print(
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
             )
 
-        # reward = torch.tensor([reward], device=self.device, dtype=torch.float32)
-        # done = torch.tensor([done], device=self.device, dtype=torch.bool)
-        buf = td.empty()
-        buf.set("observation", self.observation)
-        buf.set(
-            "reward", torch.tensor([reward], device=self.device, dtype=torch.float32)
-        )
-        buf.set("done", torch.tensor([done], device=self.device, dtype=torch.bool))
-        buf.set(
-            "terminated", torch.tensor([done], device=self.device, dtype=torch.bool)
-        )
+        # buf = td.empty()
+        # buf.set("observation", self.observation)
+        # buf.set(
+        #     "reward", torch.tensor([reward], device=self.device, dtype=torch.float32)
+        # )
+        # buf.set("done", torch.tensor([done], device=self.device, dtype=torch.bool))
+        # buf.set(
+        #     "terminated", torch.tensor([done], device=self.device, dtype=torch.bool)
+        # )
 
-        # buf = self._buf.copy()
-        # buf.set_("observation", self.observation)
-        # buf.set_at_("reward", reward, 0)
-        # buf.set_at_("done", done, 0)
-        # buf.set_at_("terminated", done, 0)
+        buf = self._buf
+        buf.set_("observation", self.observation)
+        buf.set_at_("reward", reward, 0)
+        buf.set_at_("done", done, 0)
+        buf.set_at_("terminated", done, 0)
         self.step_count += 1
 
+        end_t = perf_counter()
+        # print(f"Step took {end_t - start_t:.2f} seconds")
+        # training.info(f"Step took {end_t - start_t:.2f} seconds")
         return buf
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         # print("Resetting environment")
+        start_t = perf_counter()
         self.observation.zero_()
         self.resets += 1
         self.step_count = 0
@@ -310,13 +282,10 @@ class RuntimeEnv(EnvBase):
             td = td.empty()
 
         self._get_observation()
-        # td._zero_()
-        # self._buf.zero_()
-        # self._buf.set_("observation", self.observation)
         td.set("observation", self.observation)
-        # buf.set("reward", 0)
-        # buf.set("done", 0)
-
+        end_t = perf_counter()
+        # print(f"Resetting environment took {end_t - start_t:.2f} seconds")
+        # training.info(f"Reset took {end_t - start_t:.2f} seconds")
         return td
 
     @property
@@ -384,58 +353,47 @@ class SanityCheckEnv(RuntimeEnv):
         return out
 
 
-class IncrementalEFT(RuntimeEnv):
-    def _step(self, td: TensorDict) -> TensorDict:
-        if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
-            self.prev_makespan = self.EFT_baseline
-            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
-        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
-        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
-        candidate_workspace = torch.zeros(
-            self.simulator_factory.graph_spec.max_candidates,
-            dtype=torch.int64,
-        )
+# class IncrementalEFT(RuntimeEnv):
+#     def _step(self, td: TensorDict) -> TensorDict:
+#         if self.step_count == 0:
+#             self.EFT_baseline = self._get_baseline(use_eft=True)
+#             self.prev_makespan = self.EFT_baseline
+#             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
 
-        sim_eft = self.simulator.copy()
-        self.simulator.get_mappable_candidates(candidate_workspace)
-        chosen_device = td["action"].item() + int(self.only_gpu)
-        global_task_id = candidate_workspace[0].item()
-        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+#         sim_eft = self.simulator.copy()
+#         self.simulator.get_mappable_candidates(self.candidate_workspace)
+#         chosen_device = td["action"].item() + int(self.only_gpu)
+#         global_task_id = self.candidate_workspace[0].item()
+#         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
 
-        # print(
-        #     f"Chosen Device: {chosen_device}, Global Task ID: {global_task_id}, Mapping Priority: {mapping_priority}",
-        #     flush=True,
-        # )
+#         self.simulator.simulator.map_tasks(
+#             [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+#         )
 
-        self.simulator.simulator.map_tasks(
-            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
-        )
+#         sim_ml = self.simulator.copy()
+#         sim_eft.disable_external_mapper()
+#         sim_ml.disable_external_mapper()
+#         sim_eft.run()
+#         sim_ml.run()
+#         eft_time = sim_eft.time
+#         ml_time = sim_ml.time
+#         reward[0] = (eft_time - ml_time) / self.EFT_baseline
+#         simulator_status = self.simulator.run_until_external_mapping()
+#         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
-        sim_ml = self.simulator.copy()
-        sim_eft.disable_external_mapper()
-        sim_ml.disable_external_mapper()
-        sim_eft.run()
-        sim_ml.run()
-        eft_time = sim_eft.time
-        ml_time = sim_ml.time
-        reward[0] = (eft_time - ml_time) / self.EFT_baseline
-        simulator_status = self.simulator.run_until_external_mapping()
-        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+#         obs = self._get_observation()
+#         time = obs["observation"]["aux"]["time"].item()
+#         if done:
+#             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
+#             print(
+#                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+#             )
 
-        obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
-        if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
-            )
-
-        out = obs
-        out.set("reward", reward)
-        out.set("done", done)
-        self.step_count += 1
-        return out
+#         out = obs
+#         out.set("reward", reward)
+#         out.set("done", done)
+#         self.step_count += 1
+#         return out
 
 
 class TerminalEnv(RuntimeEnv):

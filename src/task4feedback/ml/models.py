@@ -764,6 +764,8 @@ class OutputHead(nn.Module):
         x = self.layer_norm1(x)
         x = self.activation(x)
         x = self.fc2(x)
+
+        # print("x", x.shape, flush=True)
         return x
 
 
@@ -2481,6 +2483,8 @@ class VectorStateNet(nn.Module):
     def forward(self, tensordict: TensorDict):
         task_features = tensordict["nodes", "tasks", "attr"]
         task_features = torch.squeeze(task_features)
+        # print("TF SHAPE", task_features.shape)
+
         task_activations = self.layers(task_features)
 
         if self.add_progress:

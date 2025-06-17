@@ -22,6 +22,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from task4feedback.logging import training
 import time
+from torchrl.envs import ParallelEnv
 
 
 @dataclass
@@ -41,6 +42,7 @@ class PPOConfig(AlgorithmConfig):
     threads_per_worker: int = 1
     collect_device: str = "cpu"
     update_device: str = "cpu"
+    storing_device: str = "cpu"
     gae_gamma: float = 1
     gae_lmbda: float = 0.99
     normalize_advantage: bool = False
@@ -50,6 +52,7 @@ class PPOConfig(AlgorithmConfig):
     compile_advantage: bool = False
     using_lstm: bool = False
     seed: int = 0
+    collector: str = "multi_sync"  # "sync" or "multi_sync"
 
 
 def run_ppo(
@@ -78,15 +81,25 @@ def run_ppo(
 
     max_states_per_collection = ppo_config.graphs_per_collection * max_tasks
 
+    advantage_module = GAE(
+        gamma=ppo_config.gae_gamma,
+        lmbda=ppo_config.gae_lmbda,
+        value_network=actor_critic_module.critic,
+        average_gae=False,
+        device=ppo_config.update_device,
+    )
+
     replay_buffer = ReplayBuffer(
         storage=LazyTensorStorage(
             max_size=max_states_per_collection,
             device=ppo_config.update_device,
         ),
         sampler=SamplerWithoutReplacement(),
-        pin_memory=torch.cuda.is_available(),
+        # pin_memory=torch.cuda.is_available(),
         prefetch=4,
         batch_size=ppo_config.minibatch_size,
+        # shared=True,
+        # transform=advantage_module,
     )
 
     def env_workers():
@@ -95,28 +108,48 @@ def run_ppo(
             for i in range(ppo_config.workers)
         ]
 
-    collector = MultiSyncDataCollector(
-        env_workers(),
-        actor_critic_module.actor,
-        frames_per_batch=max_states_per_collection,
-        cat_results=0,
-        policy_device=ppo_config.collect_device,
-        storing_device=ppo_config.collect_device,
-        env_device="cpu",
-        compile_policy=False,
-        replay_buffer=replay_buffer,
-    )
-    out_seed = collector.set_seed(ppo_config.seed)
+    print(f"Creating collector with {ppo_config.workers} workers")
 
-    advantage_module = GAE(
-        gamma=ppo_config.gae_gamma,
-        lmbda=ppo_config.gae_lmbda,
-        value_network=actor_critic_module.critic,
-        average_gae=False,
-        device=ppo_config.update_device,
-        # vectorized=False,
-        # shifted=False,
-    )
+    if ppo_config.collector == "multi_sync":
+        collector = MultiSyncDataCollector(
+            env_workers(),
+            actor_critic_module.actor,
+            frames_per_batch=max_states_per_collection,
+            cat_results="stack",
+            reset_at_each_iter=False,
+            policy_device=ppo_config.collect_device,
+            storing_device=ppo_config.storing_device,
+            env_device="cpu",
+            use_buffers=True,
+            # replay_buffer=replay_buffer,
+            # extend_buffer=True,
+            # postproc=advantage_module,
+            # compile with reduced overhead
+            compile_policy={"mode": "reduce-overhead"}
+            if ppo_config.compile_policy
+            else None,
+        )
+    elif ppo_config.collector == "sync":
+        collector = SyncDataCollector(
+            env_workers()[0],
+            policy=actor_critic_module.actor,
+            frames_per_batch=max_states_per_collection,
+            reset_at_each_iter=False,
+            policy_device=ppo_config.collect_device,
+            storing_device=ppo_config.storing_device,
+            env_device="cpu",
+            use_buffers=True,
+            # replay_buffer=replay_buffer,
+            # extend_buffer=True,
+            # postproc=advantage_module,
+        )
+    else:
+        raise ValueError(
+            f"Unknown collector type: {ppo_config.collector}. "
+            "Use 'sync' or 'multi_sync'."
+        )
+
+    collector.set_seed(ppo_config.seed)
 
     loss_module = ClipPPOLoss(
         actor_network=actor_critic_module.actor,
@@ -163,63 +196,77 @@ def run_ppo(
 
         return loss_vals
 
-    # advantage_module = compile_with_warmup(advantage_module)
+    if ppo_config.compile_advantage:
+        advantage_module = compile_with_warmup(
+            advantage_module, mode="reduce-overhead", warmup=8
+        )
 
-    # update = compile_with_warmup(update)
+    if ppo_config.compile_update:
+        update = compile_with_warmup(update, mode="reduce-overhead", warmup=8)
+
+    states_per_collection = min(
+        ppo_config.states_per_collection, max_states_per_collection
+    )
+    n_batch = states_per_collection // ppo_config.minibatch_size
+
+    training.info(
+        f"Starting PPO training with {ppo_config.num_collections} collections, "
+        f"{max_states_per_collection} states saved per collection, "
+        f"{states_per_collection} states used per collection, "
+        f"{ppo_config.epochs_per_collection} epochs per collection, "
+        f"{ppo_config.minibatch_size} minibatch size, "
+        f"{n_batch} batches per collection, "
+        f"{ppo_config.workers} workers."
+    )
 
     start_t = time.perf_counter()
 
     for i, tensordict_data in enumerate(collector):
         replay_buffer.empty()
 
+        if i >= ppo_config.num_collections:
+            break
+
         current_t = time.perf_counter()
         elapsed_time = current_t - start_t
         updates_per_second = (i + 1) / elapsed_time if elapsed_time > 0 else 0
+
         training.info(
             f"Collection {i + 1}/{ppo_config.num_collections}, "
-            f"Updates per second: {updates_per_second:.2f}"
+            f"Collections/s: {updates_per_second:.2f}",
         )
 
         tensordict_data = tensordict_data.to(
             ppo_config.update_device, non_blocking=True
         )
 
-        if i >= ppo_config.num_collections:
-            break
+        print(f"Processing collection {i + 1} with {tensordict_data.shape} shape")
 
+        adv_start_t = time.perf_counter()
         with torch.no_grad():
             # Compute advantages
             advantage_module(tensordict_data)
-
-            # Compute average improvement
-            improvements = tensordict_data["next", "observation", "aux", "improvement"]
-            mask = improvements > -1.5
-            filtered_improvements = improvements[mask]
-            if filtered_improvements.numel() > 0:
-                avg_improvement = filtered_improvements.mean()
-            else:
-                avg_improvement = torch.tensor(0.0)
-            training.info(f"Average improvement: {avg_improvement:.4f}")
+        adv_end_t = time.perf_counter()
+        adv_elapsed_time = adv_end_t - adv_start_t
+        training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")
 
         replay_buffer.extend(tensordict_data.reshape(-1))
 
+        update_start_t = time.perf_counter()
         for j in range(ppo_config.epochs_per_collection):
-            n_batch = ppo_config.states_per_collection // ppo_config.minibatch_size
-
             for k in range(n_batch):
                 batch = replay_buffer.sample(ppo_config.minibatch_size)
                 batch.to(ppo_config.update_device, non_blocking=True)
                 loss = update(batch, i, j, k)
 
-                # training.info(
-                #     f"Collection {i}, Epoch {j}, Batch {k}: "
-                #     f"Loss Objective: {loss['loss_objective']:.4f}, "
-                #     f"Loss Critic: {loss['loss_critic']:.4f}, "
-                #     f"Loss Entropy: {loss['loss_entropy']:.4f}"
-                # )
             collector.update_policy_weights_(
-                TensorDict.from_module(loss_module.actor_network)
+                TensorDict.from_module(loss_module.actor_network).to(
+                    ppo_config.collect_device
+                )
             )
+        update_end_t = time.perf_counter()
+        update_elapsed_time = update_end_t - update_start_t
+        training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
 
 
 # def run_ppo_torchrl(
