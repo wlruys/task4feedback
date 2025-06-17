@@ -100,7 +100,7 @@ class RuntimeEnv(EnvBase):
         self.action_spec = action_spec
         self.observation_spec = Composite(observation=observation_spec)
         self.reward_spec = Composite(reward=reward_spec)
-        self.done_spec = Composite(done=done_spec, terminated=done_spec)
+        # self.done_spec = Composite(done=done_spec, terminated=done_spec)
 
         spec = Composite(
             observation=observation_spec,
@@ -208,6 +208,7 @@ class RuntimeEnv(EnvBase):
         if done:
             time = self.observation["aux", "time"].item()
             improvement = (self.EFT_baseline / time) - 1
+            self.observation.set_at_(("aux", "improvement"), improvement, 0)
             reward = improvement
             print(
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
@@ -353,47 +354,60 @@ class SanityCheckEnv(RuntimeEnv):
         return out
 
 
-# class IncrementalEFT(RuntimeEnv):
-#     def _step(self, td: TensorDict) -> TensorDict:
-#         if self.step_count == 0:
-#             self.EFT_baseline = self._get_baseline(use_eft=True)
-#             self.prev_makespan = self.EFT_baseline
-#             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+class IncrementalEFT(RuntimeEnv):
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+            self.eft_time = self.EFT_baseline
 
-#         sim_eft = self.simulator.copy()
-#         self.simulator.get_mappable_candidates(self.candidate_workspace)
-#         chosen_device = td["action"].item() + int(self.only_gpu)
-#         global_task_id = self.candidate_workspace[0].item()
-#         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+        self.simulator.get_mappable_candidates(self.candidate_workspace)
+        chosen_device = td["action"].item() + int(self.only_gpu)
+        global_task_id = self.candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
 
-#         self.simulator.simulator.map_tasks(
-#             [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
-#         )
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
 
-#         sim_ml = self.simulator.copy()
-#         sim_eft.disable_external_mapper()
-#         sim_ml.disable_external_mapper()
-#         sim_eft.run()
-#         sim_ml.run()
-#         eft_time = sim_eft.time
-#         ml_time = sim_ml.time
-#         reward[0] = (eft_time - ml_time) / self.EFT_baseline
-#         simulator_status = self.simulator.run_until_external_mapping()
-#         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+        sim_ml = self.simulator.copy()
+        sim_ml.disable_external_mapper()
+        sim_ml.run()
 
-#         obs = self._get_observation()
-#         time = obs["observation"]["aux"]["time"].item()
-#         if done:
-#             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
-#             print(
-#                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
-#             )
+        ml_time = sim_ml.time
 
-#         out = obs
-#         out.set("reward", reward)
-#         out.set("done", done)
-#         self.step_count += 1
-#         return out
+        reward = (self.eft_time - ml_time) / 80
+        self.eft_time = ml_time
+        simulator_status = self.simulator.run_until_external_mapping()
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        self._get_observation()
+        if done:
+            time = self.observation["aux", "time"][0].item()
+            improvement = (self.EFT_baseline / time) - 1
+            self.observation.set_at_(("aux", "improvement"), improvement, 0)
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
+            )
+
+        # buf = td.empty()
+        # buf.set("observation", self.observation)
+        # buf.set(
+        #     "reward", torch.tensor([reward], device=self.device, dtype=torch.float32)
+        # )
+        # buf.set("done", torch.tensor([done], device=self.device, dtype=torch.bool))
+        # buf.set(
+        #     "terminated", torch.tensor([done], device=self.device, dtype=torch.bool)
+        # )
+
+        buf = self._buf
+        buf.set_("observation", self.observation)
+        buf.set_at_("reward", reward, 0)
+        buf.set_at_("done", done, 0)
+        buf.set_at_("terminated", done, 0)
+        self.step_count += 1
+        return buf
 
 
 class TerminalEnv(RuntimeEnv):

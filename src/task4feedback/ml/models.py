@@ -2526,13 +2526,18 @@ class VectorStateNet(nn.Module):
 
         layer_init = call(initialization if initialization else kaiming_init)
 
+        input_dim = feature_config.task_feature_dim
+
+        self.add_progress = add_progress
+        if add_progress:
+            input_dim += 2
+
         if self.k == 0:
             self.layers = nn.Identity()
-            self.output_dim = feature_config.task_feature_dim
+            self.output_dim = input_dim
         else:
             # Build k MLP layers
             layers = []
-            input_dim = feature_config.task_feature_dim
             layer_channels = input_dim
             for i in range(self.k):
                 layer_channels = hidden_channels[i]
@@ -2545,24 +2550,20 @@ class VectorStateNet(nn.Module):
             self.layers = nn.Sequential(*layers)
             self.output_dim = layer_channels
 
-        self.add_progress = add_progress
-        if self.add_progress:
-            self.output_dim += 2
-
     def forward(self, tensordict: TensorDict):
         task_features = tensordict["nodes", "tasks", "attr"]
         task_features = torch.squeeze(task_features)
         # print("TF SHAPE", task_features.shape)
 
-        task_activations = self.layers(task_features)
-
         if self.add_progress:
             time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
             progress_feature = tensordict["aux", "progress"]
 
-            task_activations = torch.cat(
-                [task_activations, time_feature, progress_feature], dim=-1
+            task_features = torch.cat(
+                [task_features, time_feature, progress_feature], dim=-1
             )
+
+        task_activations = self.layers(task_features)
 
         return task_activations
 
