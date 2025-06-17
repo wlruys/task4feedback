@@ -163,34 +163,34 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-# def log_parameter_and_gradient_norms(model):
-#     """Log parameter and gradient norms to wandb"""
-#     param_norms = {}
-#     grad_norms = {}
+def log_parameter_and_gradient_norms(model):
+    """Log parameter and gradient norms to wandb"""
+    param_norms = {}
+    grad_norms = {}
 
-#     total_param_norm = 0.0
-#     total_grad_norm = 0.0
+    total_param_norm = 0.0
+    total_grad_norm = 0.0
 
-#     for name, param in model.named_parameters():
-#         if param.requires_grad:
-#             param_norm = param.detach().norm().item()
-#             param_norms[f"param_norm/{name}"] = param_norm
-#             total_param_norm += param_norm**2
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            param_norm = param.detach().norm().item()
+            param_norms[f"param_norm/{name}"] = param_norm
+            total_param_norm += param_norm**2
 
-#             if param.grad is not None:
-#                 grad_norm = param.grad.detach().norm().item()
-#                 grad_norms[f"grad_norm/{name}"] = grad_norm
-#                 total_grad_norm += grad_norm**2
+            if param.grad is not None:
+                grad_norm = param.grad.detach().norm().item()
+                grad_norms[f"grad_norm/{name}"] = grad_norm
+                total_grad_norm += grad_norm**2
 
-#     total_param_norm = total_param_norm**0.5
-#     total_grad_norm = total_grad_norm**0.5
+    total_param_norm = total_param_norm**0.5
+    total_grad_norm = total_grad_norm**0.5
 
-#     return {
-#         **param_norms,
-#         **grad_norms,
-#         "param_norm/total": total_param_norm,
-#         "grad_norm/total": total_grad_norm,
-#     }
+    return {
+        **param_norms,
+        **grad_norms,
+        "param_norm/total": total_param_norm,
+        "grad_norm/total": total_grad_norm,
+    }
 
 
 # def evaluate_policy(

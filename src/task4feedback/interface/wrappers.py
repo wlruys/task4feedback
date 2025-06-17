@@ -1484,7 +1484,7 @@ class ExternalObserver:
 
         # Auxiliary observations
         output["aux"]["time"][0] = self.simulator.time
-        output["aux"]["improvement"][0] = -2.0
+        output["aux"]["improvement"][0] = -100
         # print("Auxiliary observation")
 
         return output
@@ -1678,7 +1678,7 @@ class HeterogeneousExternalObserver(ExternalObserver):
 
         # Auxiliary observations
         output["aux"]["time"][0] = self.simulator.time
-        output["aux"]["improvement"][0] = -2.0
+        output["aux"]["improvement"][0] = -100
         # print("Auxiliary observation")
 
         output["hetero_data"] = observation_to_heterodata(output)
@@ -1744,6 +1744,7 @@ class CandidateObserver(ExternalObserver):
         # Auxiliary observations
         output.set_at_(("aux", "progress"), -2.0, 0)
         output.set_at_(("aux", "time"), self.simulator.time, 0)
+        output.set_at_(("aux", "improvement"), -100.0, 0)
 
         return output
 
