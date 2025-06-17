@@ -419,7 +419,7 @@ def run_ppo_lstm(
     def update(batch, i, j, k):
         if ppo_config.sample_slices:
             batch = batch.reshape(num_slices, -1)
-            print(batch.shape)
+            # print(batch.shape)
 
         loss_vals = loss_module(batch)
         loss_value = (
@@ -449,8 +449,11 @@ def run_ppo_lstm(
     states_per_collection = min(
         ppo_config.states_per_collection, max_states_per_collection
     )
-    # n_batch = states_per_collection // ppo_config.minibatch_size
-    n_batch = max(1, ppo_config.graphs_per_collection // ppo_config.minibatch_size)
+
+    if ppo_config.sample_slices:
+        n_batch = max(1, states_per_collection // ppo_config.minibatch_size)
+    else:
+        n_batch = max(1, ppo_config.graphs_per_collection // ppo_config.minibatch_size)
 
     training.info(
         f"Starting PPO-LSTM training with {ppo_config.num_collections} collections, "
@@ -500,6 +503,13 @@ def run_ppo_lstm(
         if ppo_config.sample_slices:
             replay_buffer.extend(tensordict_data.reshape(-1))
         else:
+            # tensordict_data = split_trajectories(
+            #     tensordict_data.reshape(-1),
+            #     trajectory_key=("collector", "traj_ids"),
+            #     done_key=("next", "truncated"),
+            # )
+            # print("Split trajectories shape:", tensordict_data.shape)
+            # print(tensordict_data["action"])
             replay_buffer.extend(tensordict_data)
 
         update_start_t = time.perf_counter()
@@ -509,7 +519,7 @@ def run_ppo_lstm(
                     ppo_config.minibatch_size, return_info=True
                 )
 
-                print("Sampling batch", batch.shape)
+                # print("Sampling batch", batch.shape)
 
                 batch.to(ppo_config.update_device, non_blocking=True)
                 loss = update(batch, i, j, k)
