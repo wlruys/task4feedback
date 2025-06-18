@@ -55,7 +55,6 @@ class PPOConfig(AlgorithmConfig):
     compile_policy: bool = False
     compile_update: bool = False
     compile_advantage: bool = False
-    using_lstm: bool = False
     seed: int = 0
     collector: str = "multi_sync"  # "sync" or "multi_sync"
     sample_slices: bool = (
@@ -73,15 +72,16 @@ def run_ppo(
     opt_cfg: Optional[DictConfig] = None,
     lr_cfg: Optional[DictConfig] = None,
 ):
-    # if logging_config is not None and (
-    #     logging_frequency := logging_config.stats_interval
-    # ):
-    wandb.define_metric("batch/step")
-    wandb.define_metric("batch/n_samples", step_metric="batch/step")
-    wandb.define_metric("batch/*", step_metric="batch/step")
-    wandb.define_metric("grad_norm/*", step_metric="batch/step")
-    wandb.define_metric("param_norm/*", step_metric="batch/step")
-    wandb.define_metric("eval/*", step_metric="eval/step")
+    if logging_config is not None and (
+        logging_frequency := logging_config.stats_interval
+    ):
+        wandb.define_metric("batch/n_updates")
+        wandb.define_metric("batch/n_samples", step_metric="batch/n_updates")
+        wandb.define_metric("batch/n_collections", step_metric="batch/n_updates")
+        wandb.define_metric("batch/*", step_metric="batch/n_updates")
+        wandb.define_metric("grad_norm/*", step_metric="batch/n_updates")
+        wandb.define_metric("param_norm/*", step_metric="batch/n_updates")
+        wandb.define_metric("eval/*", step_metric="eval/n_updates")
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
 
@@ -99,6 +99,7 @@ def run_ppo(
         value_network=actor_critic_module.critic,
         average_gae=False,
         device=ppo_config.update_device,
+        vectorized=(False if ppo_config.compile_advantage else True),
     )
 
     replay_buffer = TensorDictReplayBuffer(
@@ -107,11 +108,8 @@ def run_ppo(
             device=ppo_config.update_device,
         ),
         sampler=SamplerWithoutReplacement(),
-        # pin_memory=torch.cuda.is_available(),
         prefetch=4,
         batch_size=ppo_config.minibatch_size,
-        # shared=True,
-        # transform=advantage_module,
     )
 
     def env_workers():
@@ -127,16 +125,12 @@ def run_ppo(
             env_workers(),
             actor_critic_module.actor,
             frames_per_batch=max_states_per_collection,
-            #cat_results="stack",
-            cat_results=0,
-            reset_at_each_iter=False,
+            cat_results="stack",
+            reset_at_each_iter=False if ppo_config.rollout_steps > 0 else True,
             policy_device=ppo_config.collect_device,
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            # replay_buffer=replay_buffer,
-            # extend_buffer=True,
-            # postproc=advantage_module,
             compile_policy={"mode": "reduce-overhead"}
             if ppo_config.compile_policy
             else None,
@@ -146,14 +140,11 @@ def run_ppo(
             env_workers()[0],
             policy=actor_critic_module.actor,
             frames_per_batch=max_states_per_collection,
-            reset_at_each_iter=False,
+            reset_at_each_iter=False if ppo_config.rollout_steps > 0 else True,
             policy_device=ppo_config.collect_device,
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            # replay_buffer=replay_buffer,
-            # extend_buffer=True,
-            # postproc=advantage_module,
             compile_policy={"mode": "reduce-overhead"}
             if ppo_config.compile_policy
             else None,
@@ -181,9 +172,8 @@ def run_ppo(
     # optimizer = instantiate(opt_cfg, params=loss_module.parameters())
     optimizer = torch.optim.Adam(
         loss_module.parameters(),
-        lr=2.5e-4,
-        #lr=opt_cfg.lr if opt_cfg is not None else 3e-4,
-        #eps=opt_cfg.eps if opt_cfg is not None else 1e-5,
+        lr=opt_cfg.lr if opt_cfg is not None else 3e-4,
+        eps=opt_cfg.eps if opt_cfg is not None else 1e-5,
     )
 
     loss_module = loss_module.to(ppo_config.update_device)
@@ -233,9 +223,9 @@ def run_ppo(
         f"Starting PPO training with {ppo_config.num_collections} collections, "
         f"{max_states_per_collection} states saved per collection, "
         f"{states_per_collection} states used per collection, "
-        f"{ppo_config.epochs_per_collection} epochs per collection, "
         f"{ppo_config.minibatch_size} minibatch size, "
-        f"{n_batch} batches per collection, "
+        f"{ppo_config.epochs_per_collection} epochs per collection, "
+        f"{n_batch} batches per epoch, "
         f"{ppo_config.workers} workers."
     )
 
@@ -292,7 +282,6 @@ def run_ppo(
                     with torch.no_grad():
                         non_zero_rewards = flattened_data["next", "reward"]
                         improvements = flattened_data["next", "observation", "aux", "improvement"]
-                        #print(improvements)
                         mask = improvements > -100
                         filtered_improvements = improvements[mask]
                         
@@ -308,27 +297,29 @@ def run_ppo(
                             avg_non_zero_reward = 0.0
                             std_rewards = 0.0    
                         
-                    post_clip_norms = log_parameter_and_gradient_norms(loss_module)
-                    wandb.log({
-                        **post_clip_norms,
-                        "batch/mean_reward": avg_non_zero_reward,
-                        "batch/std_reward": std_rewards,
-                        "batch/improvement": avg_improvement.item(),
-                        "batch/step": n_updates,
-                        "batch/n_samples": n_samples,
-                        "batch/objective": loss["loss_objective"].item(),
-                        "batch/critic": loss["loss_critic"].item(),
-                        "batch/entropy": loss["loss_entropy"].item(),
-                        "batch/kl_approx": loss["kl_approx"].item(),
-                        "batch/clip_fraction": loss["clip_fraction"].item(),
-                        "batch/ESS": loss["ESS"].item(),
-                        "batch/advantage_mean": tensordict_data["advantage"].mean().item(),
-                        "batch/advantage_std": tensordict_data["advantage"].std().item(),
-                        "batch/mean_return": tensordict_data["value_target"].mean().item(),
-                        "batch/std_return": tensordict_data["value_target"].std().item(),
-                        "batch/mean_improvement": filtered_improvements.mean().item(),
-                        "batch/std_improvement": filtered_improvements.std().item(),
-                    },)
+                        post_clip_norms = log_parameter_and_gradient_norms(loss_module)
+                        wandb.log({
+                            **post_clip_norms,
+                            "batch/n_updates": n_updates,
+                            "batch/n_collections": i + 1,
+                            "batch/mean_reward": avg_non_zero_reward,
+                            "batch/std_reward": std_rewards,
+                            "batch/improvement": avg_improvement.item(),
+                            "batch/n_samples": n_samples,
+                            "batch/policy_loss": loss["loss_objective"].item(),
+                            "batch/critic_loss": loss["loss_critic"].item(),
+                            "batch/entropy_loss": loss["loss_entropy"].item(),
+                            "batch/entropy": loss["entropy"].item(),
+                            "batch/kl_approx": loss["kl_approx"].item(),
+                            "batch/clip_fraction": loss["clip_fraction"].item(),
+                            "batch/ESS": loss["ESS"].item(),
+                            "batch/advantage_mean": tensordict_data["advantage"].mean().item(),
+                            "batch/advantage_std": tensordict_data["advantage"].std().item(),
+                            "batch/mean_return": tensordict_data["value_target"].mean().item(),
+                            "batch/std_return": tensordict_data["value_target"].std().item(),
+                            "batch/mean_improvement": filtered_improvements.mean().item(),
+                            "batch/std_improvement": filtered_improvements.std().item(),
+                        },)
                 n_updates += 1
 
             collector.update_policy_weights_(
@@ -352,13 +343,13 @@ def run_ppo_lstm(
     if logging_config is not None and (
         logging_frequency := logging_config.stats_interval
     ):
-        wandb.define_metric("batch_loss/step")
-        wandb.define_metric("collect_loss/step")
-        wandb.define_metric("batch_loss/*", step_metric="batch_loss/step")
-        wandb.define_metric("grad_norm/*", step_metric="batch_loss/step")
-        wandb.define_metric("param_norm/*", step_metric="batch_loss/step")
-        wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
-        wandb.define_metric("eval/*", step_metric="eval/step")
+        wandb.define_metric("batch/n_updates")
+        wandb.define_metric("batch/n_samples", step_metric="batch/n_updates")
+        wandb.define_metric("batch/n_collections", step_metric="batch/n_updates")
+        wandb.define_metric("batch/*", step_metric="batch/n_updates")
+        wandb.define_metric("grad_norm/*", step_metric="batch/n_updates")
+        wandb.define_metric("param_norm/*", step_metric="batch/n_updates")
+        wandb.define_metric("eval/*", step_metric="eval/n_updates")
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
 
@@ -418,15 +409,11 @@ def run_ppo_lstm(
             actor_critic_module.actor,
             frames_per_batch=max_states_per_collection,
             cat_results="stack",
-            reset_at_each_iter=False,
+            reset_at_each_iter=False if ppo_config.rollout_steps > 0 else True,
             policy_device=ppo_config.collect_device,
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            # replay_buffer=replay_buffer,
-            # extend_buffer=True,
-            # postproc=advantage_module,
-            # compile with reduced overhead
             compile_policy={"mode": "reduce-overhead"}
             if ppo_config.compile_policy
             else None,
@@ -441,9 +428,6 @@ def run_ppo_lstm(
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            # replay_buffer=replay_buffer,
-            # extend_buffer=True,
-            # postproc=advantage_module,
         )
     else:
         raise ValueError(
@@ -495,7 +479,7 @@ def run_ppo_lstm(
         optimizer.zero_grad()
         loss_value.backward()
         
-        grad_norm = torch.nn.utils.clip_grad_norm_(
+        torch.nn.utils.clip_grad_norm_(
             loss_module.parameters(), max_norm=ppo_config.max_grad_norm
         )
 
@@ -528,15 +512,16 @@ def run_ppo_lstm(
         f"sample_slices={ppo_config.sample_slices}, "
         f"{max_states_per_collection} states saved per collection, "
         f"{states_per_collection} states used per collection, "
-        f"{ppo_config.epochs_per_collection} epochs per collection, "
         f"{ppo_config.minibatch_size} minibatch size, "
-        f"{n_batch} batches per collection, "
+        f"{ppo_config.epochs_per_collection} epochs per collection, "
+        f"{n_batch} batches per epoch, "
         f"{ppo_config.workers} workers.",
     )
 
     start_t = time.perf_counter()
 
     n_updates = 0
+    n_samples = 0
     for i, tensordict_data in enumerate(collector):
         replay_buffer.empty()
 
@@ -556,8 +541,6 @@ def run_ppo_lstm(
             ppo_config.update_device, non_blocking=True
         )
 
-        print(f"Processing collection {i + 1} with {tensordict_data.shape} shape")
-
         adv_start_t = time.perf_counter()
         with torch.no_grad():
             # Compute advantages
@@ -565,21 +548,15 @@ def run_ppo_lstm(
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
         training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")
-
-        # print("Done", tensordict_data["next", "done"].shape)
-        # print("Done Shape", tensordict_data["next", "done"].shape)
+        
+        flattened_data = tensordict_data.reshape(-1)
 
         if ppo_config.sample_slices:
-            replay_buffer.extend(tensordict_data.reshape(-1))
+            replay_buffer.extend(flattened_data)
         else:
-            # tensordict_data = split_trajectories(
-            #     tensordict_data.reshape(-1),
-            #     trajectory_key=("collector", "traj_ids"),
-            #     done_key=("next", "truncated"),
-            # )
-            # print("Split trajectories shape:", tensordict_data.shape)
-            # print(tensordict_data["action"])
             replay_buffer.extend(tensordict_data)
+            
+        n_samples += flattened_data.shape[0]
 
         update_start_t = time.perf_counter()
         for j in range(ppo_config.epochs_per_collection):
@@ -592,17 +569,49 @@ def run_ppo_lstm(
                 loss = update(batch, i, j, k)
                 
                 if n_updates % logging_config.stats_interval == 0 and logging_config is not None:
-                    post_clip_norms = log_parameter_and_gradient_norms(loss_module)
-                    wandb.log({
-                        **post_clip_norms,
-                        "batch/step": n_updates,
-                        "batch/objective": loss["loss_objective"].item(),
-                        "batch/critic": loss["loss_critic"].item(),
-                        "batch/entropy": loss["loss_entropy"].item(),
-                        "batch_loss/kl_approx": loss["kl_approx"].item(),
-                        "batch_loss/clip_fraction": loss["clip_fraction"].item(),
-                        "batch_loss/ESS": loss["ESS"].item(),
-                    }, step=n_updates)
+                    with torch.no_grad():
+                        non_zero_rewards = flattened_data["next", "reward"]
+                        improvements = flattened_data["next", "observation", "aux", "improvement"]
+                        mask = improvements > -100
+                        filtered_improvements = improvements[mask]
+                        
+                        if filtered_improvements.numel() > 0:
+                            avg_improvement = filtered_improvements.mean()
+                        else:
+                            avg_improvement = torch.tensor(0.0, dtype=np.float32)
+                            
+                        print(f"Average improvement: {avg_improvement.item()}")
+
+                        if len(non_zero_rewards) > 0:
+                            avg_non_zero_reward = non_zero_rewards.mean().item()
+                            std_rewards = non_zero_rewards.std().item()
+                        else:
+                            avg_non_zero_reward = 0.0
+                            std_rewards = 0.0    
+                        
+                        post_clip_norms = log_parameter_and_gradient_norms(loss_module)
+                        wandb.log({
+                            **post_clip_norms,
+                            "batch/n_updates": n_updates,
+                            "batch/n_collections": i + 1,
+                            "batch/mean_reward": avg_non_zero_reward,
+                            "batch/std_reward": std_rewards,
+                            "batch/improvement": avg_improvement.item(),
+                            "batch/n_samples": n_samples,
+                            "batch/policy_loss": loss["loss_objective"].item(),
+                            "batch/critic_loss": loss["loss_critic"].item(),
+                            "batch/entropy_loss": loss["loss_entropy"].item(),
+                            "batch/entropy": loss["entropy"].item(),
+                            "batch/kl_approx": loss["kl_approx"].item(),
+                            "batch/clip_fraction": loss["clip_fraction"].item(),
+                            "batch/ESS": loss["ESS"].item(),
+                            "batch/advantage_mean": tensordict_data["advantage"].mean().item(),
+                            "batch/advantage_std": tensordict_data["advantage"].std().item(),
+                            "batch/mean_return": tensordict_data["value_target"].mean().item(),
+                            "batch/std_return": tensordict_data["value_target"].std().item(),
+                            "batch/mean_improvement": filtered_improvements.mean().item(),
+                            "batch/std_improvement": filtered_improvements.std().item(),
+                        },)
                 
                 n_updates += 1
 
@@ -889,13 +898,3 @@ def run_ppo_lstm(
 #         model.state_dict(),
 #         os.path.join(path, model_name + f"_{config.num_collections}.pth"),
 #     )
-#     # save final optimizer state
-#     torch.save(
-#         optimizer.state_dict(),
-#         os.path.join(
-#             path, "optimizer_" + model_name + f"_{config.num_collections}.pth"
-#         ),
-#     )
-
-#     collector.shutdown()
-#     wandb.finish()

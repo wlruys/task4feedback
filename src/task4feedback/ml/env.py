@@ -282,7 +282,7 @@ class RuntimeEnv(EnvBase):
         self._get_observation()
         td.set("observation", self.observation.clone())
         end_t = perf_counter()
-        print(f"Resetting environment took {end_t - start_t:.2f} seconds")
+        # print(f"Resetting environment took {end_t - start_t:.2f} seconds")
         # training.info(f"Reset took {end_t - start_t:.2f} seconds")
         return td
 
@@ -466,7 +466,7 @@ class IncrementalEFT(RuntimeEnv):
 
         ml_time = sim_ml.time
 
-        reward = (self.eft_time - ml_time) / self.EFT_baseline
+        reward = (self.eft_time - ml_time) / self.size()
         self.eft_time = ml_time
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
