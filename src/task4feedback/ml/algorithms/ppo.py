@@ -129,7 +129,7 @@ def run_ppo(
             frames_per_batch=max_states_per_collection,
             #cat_results="stack",
             cat_results=0,
-            reset_at_each_iter=True,
+            reset_at_each_iter=False,
             policy_device=ppo_config.collect_device,
             storing_device=ppo_config.storing_device,
             env_device="cpu",
