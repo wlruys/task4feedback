@@ -1654,16 +1654,6 @@ struct StandardizedInputOutputTaskFeature
     auto input_size = get_input_size(task, data);
     auto output_size = get_output_size(task, data);
 
-    // Put it in terms of block size scale (only matters for unstandardized case)
-    // input_size = guarded_divide(input_size, mean_block_size);
-    // output_size = guarded_divide(output_size, mean_block_size);
-
-    // mean_io = guarded_divide(mean_io, mean_block_size);
-    // std_io = guarded_divide(std_io, mean_block_size);
-
-    // output[0] = guarded_divide(input_size - mean_io, std_io);
-    // output[1] = guarded_divide(output_size - mean_io, std_io);
-
     output[0] = guarded_divide(input_size, mean_io);
     output[1] = guarded_divide(output_size, mean_io);
   }
@@ -1739,6 +1729,84 @@ struct TaskStateFeature : public StateFeature<TaskStateFeature> {
   }
 };
 
+struct CandidateVector : public StateFeature<CandidateVector> {
+  CandidateVector(const SchedulerState &state)
+      : StateFeature<CandidateVector>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_device_manager().get_devices();
+    return devices.size() * 4 + 1; // mapped_queue, location, x_center, y_center
+  }
+
+  static f_t get_input_size(const ComputeTask &task, const Data &data) {
+    const auto &read = task.get_read();
+    if (read.empty()) {
+      return 0;
+    }
+    return static_cast<f_t>(data.get_total_size(read));
+  }
+
+  static f_t get_output_size(const ComputeTask &task, const Data &data) {
+    const auto &write = task.get_write();
+    if (write.empty()) {
+      return 0;
+    }
+
+    return static_cast<f_t>(data.get_total_size(write));
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &task_manager = state.get_task_manager();
+    const auto &task = task_manager.get_tasks().get_compute_task(task_id);
+    const auto &devices = state.get_device_manager().get_devices();
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = state.get_data_manager().get_data();
+    const auto &read = task.get_read();
+    const int n_devices = static_cast<int>(devices.size());
+
+    int64_t sum = 0.0;
+    for (int i = 0; i < n_devices; i++) {
+      auto mapped_time = static_cast<int64_t>(state.costs.get_mapped_time(i));
+      output[i] = static_cast<f_t>(mapped_time);
+      sum += mapped_time;
+    }
+
+    if (sum > 0.0) {
+      for (int i = 0; i < n_devices; i++) {
+        output[i] = static_cast<f_t>(output[i] / sum);
+      }
+    }
+
+    f_t input_size = get_input_size(task, data);
+    const f_t mean_size = state.stats.block_size_stats.mean;
+    // input_size = guarded_divide(input_size, mean_size);
+
+    for (int i = 0; i < read.size(); i++) {
+      auto data_id = read[i];
+      auto data_size = static_cast<f_t>(data.get_size(data_id));
+      // data_size = guarded_divide(data_size, mean_size);
+      const f_t x_pos = static_cast<f_t>(data.get_x_pos(data_id));
+      const f_t y_pos = static_cast<f_t>(data.get_y_pos(data_id));
+
+      for (int j = 0; j < n_devices; ++j) {
+        const bool is_mapped = data_manager.check_valid_mapped(data_id, j);
+        const f_t size = is_mapped * data_size;
+        const int offset = n_devices + j * 3;
+        output[offset] += size;
+        output[offset + 1] += (x_pos * size) / input_size;
+        output[offset + 2] += (y_pos * size) / input_size;
+        // std::cout << "offset: " << offset << " size:" << size << " x_pos: " << x_pos
+        //           << " y_pos: " << y_pos << " input_size: " << input_size
+        //           << " output[offset]: " << output[offset]
+        //           << " output[offset + 1]: " << output[offset + 1]
+        //           << " output[offset + 2]: " << output[offset + 2] << std::endl;
+      }
+    }
+    output[n_devices * 4] = input_size;
+  }
+};
+
 struct TaskDataMappedLocations : public StateFeature<TaskDataMappedLocations> {
   TaskDataMappedLocations(const SchedulerState &state)
       : StateFeature<TaskDataMappedLocations>(state, NodeType::TASK) {
@@ -1782,7 +1850,7 @@ struct TaskDataMappedCoordinates : public StateFeature<TaskDataMappedCoordinates
 
   size_t getFeatureDimImpl() const {
     const auto &devices = this->state.get_device_manager().get_devices();
-    return 2 * devices.size() + 2;
+    return 2 * devices.size();
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {

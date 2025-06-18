@@ -578,7 +578,7 @@ def run_ppo_lstm(
                         if filtered_improvements.numel() > 0:
                             avg_improvement = filtered_improvements.mean()
                         else:
-                            avg_improvement = torch.tensor(0.0, dtype=np.float32)
+                            avg_improvement = torch.tensor(0.0, dtype=torch.float32)
                             
                         print(f"Average improvement: {avg_improvement.item()}")
 

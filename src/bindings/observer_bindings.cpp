@@ -295,6 +295,7 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_feature<TaskDeviceMappedTime>(m, "TaskDeviceMappedTimeFeature");
   bind_state_feature<TaskDataMappedLocations>(m, "TaskDataMappedLocationsFeature");
   bind_state_feature<TaskDataMappedCoordinates>(m, "TaskDataMappedCoordinatesFeature");
+  bind_state_feature<CandidateVector>(m, "CandidateVectorFeature");
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");

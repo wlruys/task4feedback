@@ -581,16 +581,16 @@ public:
   }
 
   void gather_graph_statistics(std::vector<DeviceType> &device_types) {
-    const auto &tasks = task_manager.get_tasks();
-    const auto &data = data_manager.get_data();
-    const auto &devices = device_manager.devices.get();
+    // const auto &tasks = task_manager.get_tasks();
+    // const auto &data = data_manager.get_data();
+    // const auto &devices = device_manager.devices.get();
 
-    this->stats.duration_stats = tasks.get_duration_statistics(device_types);
-    this->stats.block_size_stats = data.get_block_statistics(device_types);
-    this->stats.io_stats = get_io_statistics(device_types);
-    this->get_degree_statistics(device_types);
-    this->stats.tag_stats = get_tag_statistics();
-    this->stats.depth_stats = get_depth_statistics();
+    // this->stats.duration_stats = tasks.get_duration_statistics(device_types);
+    // this->stats.block_size_stats = data.get_block_statistics(device_types);
+    // this->stats.io_stats = get_io_statistics(device_types);
+    // this->get_degree_statistics(device_types);
+    // this->stats.tag_stats = get_tag_statistics();
+    // this->stats.depth_stats = get_depth_statistics();
   }
 
   [[nodiscard]] timecount_t get_global_time() const {

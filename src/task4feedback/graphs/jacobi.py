@@ -863,11 +863,12 @@ class CandidateObserverFactory(CandidateExternalObserverFactory):
     def __init__(self, spec: fastsim.GraphSpec):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.TaskDeviceMappedTimeFeature)
-        task_feature_factory.add(fastsim.TaskDataMappedLocationsFeature)
-        task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
-        task_feature_factory.add(fastsim.StandardizedInputOutputTaskFeature)
+        task_feature_factory.add(fastsim.CandidateVectorFeature)
+        # task_feature_factory.add(fastsim.TaskDeviceMappedTimeFeature)
+        # task_feature_factory.add(fastsim.TaskDataMappedLocationsFeature)
+        # task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        # #task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
+        # task_feature_factory.add(fastsim.StandardizedInputOutputTaskFeature)
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.EmptyDataFeature, 1)
@@ -904,12 +905,7 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
     def __init__(self, spec: fastsim.GraphSpec):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.TaskDeviceMappedTimeFeature)
-        task_feature_factory.add(fastsim.TaskDataMappedLocationsFeature)
-        task_feature_factory.add(fastsim.TaskDataMappedCoordinatesFeature)
-        task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
-        task_feature_factory.add(fastsim.StandardizedInputOutputTaskFeature)
+        task_feature_factory.add(fastsim.CandidateVectorFeature)
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.EmptyDataFeature, 1)
