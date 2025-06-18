@@ -32,6 +32,7 @@ from task4feedback.graphs.mesh.partition import metis_partition
 from task4feedback.graphs.jacobi import PartitionMapper, LevelPartitionMapper
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiConfig
 import itertools
+import time
 
 MAX_BUFFERS = 2000
 
@@ -111,22 +112,22 @@ class RuntimeEnv(EnvBase):
         # print("Observation spec created")
         self.action_spec = self._create_action_spec()
         self.reward_spec = self._create_reward_spec()
-        self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool)
+        self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool, n=1)
 
         self.workspace = self._prealloc_step_buffers(1000)
         self.baseline_time = baseline_time
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
-            simulator_copy = self.simulator.fresh_copy()
-            simulator_copy.initialize()
-            simulator_copy.initialize_data()
-            simulator_copy.disable_external_mapper()
-            final_state = simulator_copy.run()
+            self.eftsim = self.simulator.fresh_copy()
+            self.eftsim.initialize()
+            self.eftsim.initialize_data()
+            self.eftsim.disable_external_mapper()
+            final_state = self.eftsim.run()
             assert (
                 final_state == fastsim.ExecutionState.COMPLETE
             ), f"Baseline returned unexpected final state: {final_state}"
-            return simulator_copy.time
+            return self.eftsim.time
         return self.baseline_time
 
     def _create_observation_spec(self) -> TensorSpec:
@@ -240,12 +241,12 @@ class RuntimeEnv(EnvBase):
         #             self.observer.task_ids[x * self.graph.config.n + y] = next_id
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f}"
             )
 
         out = obs
@@ -404,12 +405,12 @@ class SanityCheckEnv(RuntimeEnv):
                     self.observer.task_ids[x * self.graph.config.n + y] = next_id
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
         out = obs
         out.set("reward", reward)
@@ -453,11 +454,11 @@ class EvalEnv(RuntimeEnv):
                     self.observer.task_ids[x * self.graph.config.n + y] = next_id
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
-            print(f"{time},{self.EFT_baseline},{self.optimal_time}")
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
+            print(f"{sim_time},{self.EFT_baseline},{self.optimal_time}")
 
         out = obs
 
@@ -470,19 +471,12 @@ class EvalEnv(RuntimeEnv):
 class RunningAvgEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.eftsim = self.simulator.fresh_copy()
-            self.eftsim.initialize()
-            self.eftsim.initialize_data()
-            self.eftsim.disable_external_mapper()
-            final_state = self.eftsim.run()
-            assert (
-                final_state == fastsim.ExecutionState.COMPLETE
-            ), f"Baseline returned unexpected final state: {final_state}"
-            self.EFT_baseline = self.eftsim.time
+            self.EFT_baseline = self._get_baseline(use_eft=True)
             self.eft_history = []
             self.policy_history = []
             self.avg_eft = []
             self.avg_policy = []
+            self.start_time = time.time()
 
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
@@ -531,12 +525,13 @@ class RunningAvgEnv(RuntimeEnv):
                     self.observer.task_ids[x * self.graph.config.n + y] = next_id
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            duration = time.time() - self.start_time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Took: {duration} | Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -592,12 +587,12 @@ class EFTIncrementalEnv(RuntimeEnv):
                     self.observer.task_ids[x * self.graph.config.n + y] = next_id
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -629,14 +624,38 @@ class TerminalEnv(RuntimeEnv):
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
+        if (self.step_count + 1) % (
+            self.simulator_factory.input.graph.config.n**2
+        ) == 0:
+            copy_sim = self.simulator.copy()
+            copy_sim.disable_external_mapper()
+            copy_sim.set_task_breakpoint(fastsim.EventType.COMPLETER, global_task_id)
+            copy_sim.run()
+            reward[0] = (
+                self.eftsim.task_finish_time(global_task_id)
+                / copy_sim.task_finish_time(global_task_id)
+                - 1
+            )
+
+        if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+            for next_id in self.graph.level_to_task[
+                self.graph.task_to_level[global_task_id] + 1
+            ]:
+                if (
+                    self.graph.task_to_cell[global_task_id]
+                    == self.graph.task_to_cell[next_id]
+                ):
+                    x, y = self.graph.xy_from_id(global_task_id)
+                    self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
-            reward[0] = obs["observation"]["aux"]["improvement"][0]
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
+            reward[0] = obs["observation"]["aux"]["improvement"][0] - 1
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -649,15 +668,16 @@ class TerminalEnv(RuntimeEnv):
 class kHopEFTIncrementalEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+            self.start_time = time.time()
+
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
         candidate_workspace = torch.zeros(
             self.simulator_factory.graph_spec.max_candidates,
             dtype=torch.int64,
         )
-        dependents = torch.zeros(16, dtype=torch.int64)
+        dependents = torch.zeros(100, dtype=torch.int64)
 
         sim_eft = self.simulator.copy()
         self.simulator.get_mappable_candidates(candidate_workspace)
@@ -687,13 +707,25 @@ class kHopEFTIncrementalEnv(RuntimeEnv):
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
+        if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+            for next_id in self.graph.level_to_task[
+                self.graph.task_to_level[global_task_id] + 1
+            ]:
+                if (
+                    self.graph.task_to_cell[global_task_id]
+                    == self.graph.task_to_cell[next_id]
+                ):
+                    x, y = self.graph.xy_from_id(global_task_id)
+                    self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            duration = time.time() - self.start_time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Took {duration} | Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -757,12 +789,12 @@ class EFTAllPossibleEnv(RuntimeEnv):
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            improvement = self.EFT_baseline / time
+            improvement = self.EFT_baseline / sim_time
             obs["observation"]["aux"]["improvement"][0] = improvement
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -842,12 +874,12 @@ class RolloutEnv(RuntimeEnv):
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -951,12 +983,12 @@ class kHopRolloutEnv(RuntimeEnv):
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -992,6 +1024,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_log[self.step_count] = self.EFT_baseline
+            self.start_time = time.time()
 
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
@@ -1053,12 +1086,13 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
                     self.observer.task_ids[x * self.graph.config.n + y] = next_id
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            duration = time.time() - self.start_time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Took: {duration} | Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -1320,17 +1354,17 @@ class EFTIncrementalEnv(EnvBase):
         # print("Cumulative Time:", self.cum_time)
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
             self.cum_time = 0
             # Did we beat the baseline?
-            if time <= self.EFT_baseline:
+            if sim_time <= self.EFT_baseline:
                 reward[0] += 2
 
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
 
         out = obs
@@ -1535,12 +1569,12 @@ class IncrementalMappingEnv(EnvBase):
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
-        time = obs["observation"]["aux"]["time"].item()
+        sim_time = obs["observation"]["aux"]["time"].item()
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time
-            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
             )
             self.last_time = 0
 

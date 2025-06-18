@@ -2934,10 +2934,6 @@ class SkipConvPolicyNet(nn.Module):
         )
 
     def forward(self, data: HeteroData | Batch, counts=None):
-        # print("HeteroConvPolicyNet")
-        x_coords = data["aux", "x_coord"]
-        y_coords = data["aux", "y_coord"]
-        # d_logits = self.conv(data, x_coords=x_coords, y_coords=y_coords)
         d_logits = self.output_head(self.conv(data))
         return d_logits
 
@@ -3085,3 +3081,215 @@ class ConvSeparateNet(nn.Module):
         d_logits = self.actor(data)
         v = self.critic(data)
         return d_logits, v
+
+
+class CellDecisionSkipCNNRnnActor(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,  # C_total = 1 (mask) + C_other
+        layer_config: LayerConfig,
+    ):
+        super().__init__()
+        self.layer_config = layer_config
+        self.in_channels = in_channels
+
+        kernel_size = layer_config.kernel_size
+        hidden_ch = layer_config.cnn_hidden_channels
+        n_layers = layer_config.cnn_layers
+
+        blocks = []
+        ch = in_channels
+
+        pad = kernel_size // 2
+        blocks += [
+            nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
+            nn.LeakyReLU(inplace=True, negative_slope=0.01),
+        ]
+        ch = hidden_ch
+
+        # build floor(n_layers/2) residual blocks
+        for _ in range((n_layers - 2) // 2):
+            blocks.append(ResidualBlock(ch, hidden_ch, kernel_size))
+            ch = hidden_ch
+
+        # if odd number of layers, tack on a final conv+ReLU
+        if n_layers % 2 == 1:
+            blocks += [
+                nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
+                nn.LeakyReLU(inplace=True, negative_slope=0.01),
+            ]
+            ch = hidden_ch
+        # final conv layer
+        blocks.append(
+            nn.Conv2d(ch, layer_config.output_channels, kernel_size, padding=pad)
+        )
+        blocks.append(nn.LeakyReLU(inplace=True, negative_slope=0.01))
+        ch = layer_config.output_channels
+
+        self.net = nn.Sequential(*blocks)
+        self.output_dim = (layer_config.width**2) * ch
+
+    def forward(self, x, x_coords=None, y_coords=None):
+        # x is a TensorDict; x.batch_size might be [], [N], [N,M], etc.
+        batch_size = x.batch_size
+
+        # Pull out the tasks tensor: shape = (*batch_size, tasks, in_channels)
+        x_tasks = x["tasks"]
+        # Split off the leading batch dims vs. the last two dims (tasks, channels)
+        *batch_shape, tasks, in_channels = x_tasks.shape
+
+        # Flatten all leading batch dims into one:
+        flat_bs = 1
+        for d in batch_shape:
+            flat_bs *= d
+
+        # Now we have a 3-D tensor (flat_bs, tasks, in_channels)
+        x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
+
+        # Convert the 'tasks' dim back into (width, width) spatial dims
+        width = self.layer_config.width
+        x_flat = x_flat.view(
+            flat_bs, width, width, in_channels
+        ).permute(  # (flat_bs, W, W, C_in)
+            0, 3, 1, 2
+        )  # (flat_bs, C_in, W, W)
+
+        # Run through your convolutional net
+        x_flat = self.net(x_flat)
+
+        # If you want to pick out particular (x_coords, y_coords) per sample:
+        if x_coords is not None and y_coords is not None:
+            # x_flat: (flat_bs, C_out, W, W) → (flat_bs, C_out)
+            x_flat = x_flat[:, :, x_coords, y_coords]
+
+        # Collapse spatial/channel dims into a single feature vector
+        x_flat = x_flat.contiguous().view(flat_bs, -1)
+
+        # Finally, reshape back to the original batch dimensions:
+        if batch_shape:
+            # e.g. for batch_shape=[N,M], gives (N, M, features)
+            x_out = x_flat.view(*batch_shape, -1)
+        else:
+            # single sample: drop the artificial batch axis → (features,)
+            x_out = x_flat.squeeze(0)
+
+        return x_out
+
+
+class CellDecisionSkipCNNRnnCritic(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,  # C_total = 1 (mask) + C_other
+        layer_config: LayerConfig,
+    ):
+        super().__init__()
+        self.layer_config = layer_config
+        self.in_channels = in_channels
+
+        kernel_size = layer_config.kernel_size
+        hidden_ch = layer_config.cnn_hidden_channels
+        n_layers = layer_config.cnn_layers
+
+        blocks = []
+        ch = in_channels
+
+        pad = kernel_size // 2
+        blocks += [
+            nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
+            nn.LeakyReLU(inplace=True, negative_slope=0.01),
+        ]
+        ch = hidden_ch
+
+        # build floor(n_layers/2) residual blocks
+        for _ in range((n_layers - 2) // 2):
+            blocks.append(ResidualBlock(ch, hidden_ch, kernel_size))
+            ch = hidden_ch
+
+        # if odd number of layers, tack on a final conv+ReLU
+        if n_layers % 2 == 1:
+            blocks += [
+                nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
+                nn.LeakyReLU(inplace=True, negative_slope=0.01),
+            ]
+            ch = hidden_ch
+        # final conv layer
+        blocks.append(
+            nn.Conv2d(ch, layer_config.output_channels, kernel_size, padding=pad)
+        )
+        blocks.append(nn.LeakyReLU(inplace=True, negative_slope=0.01))
+        ch = layer_config.output_channels
+
+        self.net = nn.Sequential(*blocks)
+        self.output_dim = (layer_config.width**2) * ch
+
+    def forward(self, x, x_coords=None, y_coords=None):
+        # x is a TensorDict; x.batch_size might be [], [N], [N,M], etc.
+        batch_size = x.batch_size
+
+        # Pull out the tasks tensor: shape = (*batch_size, tasks, in_channels)
+        x_tasks = x["tasks"]
+        # Split off the leading batch dims vs. the last two dims (tasks, channels)
+        *batch_shape, tasks, in_channels = x_tasks.shape
+
+        # Flatten all leading batch dims into one:
+        flat_bs = 1
+        for d in batch_shape:
+            flat_bs *= d
+
+        # Now we have a 3-D tensor (flat_bs, tasks, in_channels)
+        x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
+
+        # Convert the 'tasks' dim back into (width, width) spatial dims
+        width = self.layer_config.width
+        x_flat = x_flat.view(
+            flat_bs, width, width, in_channels
+        ).permute(  # (flat_bs, W, W, C_in)
+            0, 3, 1, 2
+        )  # (flat_bs, C_in, W, W)
+
+        # Run through your convolutional net
+        x_flat = self.net(x_flat)
+
+        # If you want to pick out particular (x_coords, y_coords) per sample:
+        if x_coords is not None and y_coords is not None:
+            # x_flat: (flat_bs, C_out, W, W) → (flat_bs, C_out)
+            x_flat = x_flat[:, :, x_coords, y_coords]
+
+        # Collapse spatial/channel dims into a single feature vector
+        x_flat = x_flat.contiguous().view(flat_bs, -1)
+
+        # Finally, reshape back to the original batch dimensions:
+        if batch_shape:
+            # e.g. for batch_shape=[N,M], gives (N, M, features)
+            x_out = x_flat.view(*batch_shape, -1)
+        else:
+            # single sample: drop the artificial batch axis → (features,)
+            x_out = x_flat.squeeze(0)
+
+        return x_out
+
+
+class ActorCriticCNNBase(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(ActorCriticCNNBase, self).__init__()
+        self.actor_cnn = CellDecisionSkipCNNRnnActor(
+            in_channels=feature_config.task_feature_dim,
+            layer_config=layer_config,
+        )
+        init_uniform_output(self.actor_cnn, final_constant=0.0)
+        self.critic_cnn = CellDecisionSkipCNNRnnCritic(
+            in_channels=feature_config.task_feature_dim,
+            layer_config=layer_config,
+        )
+        init_uniform_output(self.critic_cnn, final_constant=0.0)
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+        self.n_devices = n_devices
+
+    def forward(self, data: HeteroData | Batch, counts=None):
+        raise NotImplementedError("This method should be overridden by subclasses.")
