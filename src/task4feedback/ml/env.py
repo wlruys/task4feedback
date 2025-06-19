@@ -44,7 +44,7 @@ class RuntimeEnv(EnvBase):
         priority_seed=0,
         location_randomness=1,
         location_list: Optional[List[int]] = None,
-        max_samples_per_iter: int = 80,
+        max_samples_per_iter: int = 0,
     ):
         super().__init__(device=device)
         # print("Initializing environment")
@@ -91,7 +91,6 @@ class RuntimeEnv(EnvBase):
 
         self.observation = self._get_new_observation_buffer()
         observation_spec = self._create_observation_spec(self.observation)
-    
 
         action_spec = self._create_action_spec(n_devices=len(self.location_list))
         reward_spec = self._create_reward_spec()
@@ -100,19 +99,18 @@ class RuntimeEnv(EnvBase):
         self.action_spec = action_spec
         self.observation_spec = Composite(observation=observation_spec)
         self.reward_spec = Composite(reward=reward_spec)
-        
+
         spec = Composite(
             observation=observation_spec,
             reward=reward_spec,
             done=done_spec,
         )
-        
-        #self.observations = observation_spec.expand(min(1, max_samples_per_iter)).zero()
+
+        # self.observations = observation_spec.expand(min(1, max_samples_per_iter)).zero()
         self.observations = []
         for _ in range(max(1, max_samples_per_iter)):
             obs = observation_spec.zero()
             self.observations.append(obs)
-           
 
         self._buf = spec.zeros()
         self.candidate_workspace = torch.zeros(
@@ -126,7 +124,7 @@ class RuntimeEnv(EnvBase):
             )
 
         self.batch_size = torch.Size([])
-        
+
         self.progress_key = ("aux", "progress")
         self.baseline_key = ("aux", "baseline")
         self.improvement_key = ("aux", "improvement")
@@ -188,10 +186,10 @@ class RuntimeEnv(EnvBase):
     def _get_observation(self) -> TensorDict:
         step_count = self.step_count
         n_buffers = len(self.observations)
-        
+
         obs = self.observations[step_count % n_buffers]
         obs.zero_()
-        
+
         self.simulator.observer.get_observation(obs)
         n_tasks = len(self.simulator_factory.input.graph)
         progress = step_count / n_tasks
@@ -216,7 +214,7 @@ class RuntimeEnv(EnvBase):
         global_task_id = candidate_workspace[0].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
 
-        #print("Chosen device:", chosen_device)
+        # print("Chosen device:", chosen_device)
         self.simulator.simulator.map_tasks(
             [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
         )
@@ -226,8 +224,8 @@ class RuntimeEnv(EnvBase):
         done = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
-        
-        #print(global_task_id, obs[("nodes", "tasks", "attr")])
+
+        # print(global_task_id, obs[("nodes", "tasks", "attr")])
 
         if done:
             time = obs[self.time_key].item()
@@ -458,7 +456,7 @@ class IncrementalEFT(RuntimeEnv):
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
-            
+
         self.step_count += 1
 
         self.simulator.get_mappable_candidates(self.candidate_workspace)
@@ -491,7 +489,9 @@ class IncrementalEFT(RuntimeEnv):
             )
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
         buf.set(
             self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
         )

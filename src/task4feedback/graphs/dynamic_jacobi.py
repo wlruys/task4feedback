@@ -4,6 +4,7 @@ from .base import *
 from typing import Callable, Optional, Self
 from collections import defaultdict
 from .jacobi import *
+from .base import register_graph
 
 
 @dataclass
@@ -103,3 +104,6 @@ class DynamicJacobiGraph(JacobiGraph):
                     return None
 
         self.apply_variant(DynamicJacobiVariant)
+
+
+register_graph(DynamicJacobiGraph, DynamicJacobiConfig)
