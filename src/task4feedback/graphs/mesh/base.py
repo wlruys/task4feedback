@@ -158,14 +158,16 @@ class Geometry:
 def initialize_gmsh():
     global GMSH_INITIALIZED
     if not GMSH_INITIALIZED:
-        gmsh.initialize()
+        if not gmsh.is_initialized():
+            gmsh.initialize()
     GMSH_INITIALIZED = True
 
 
 def finalize_gmsh():
     global GMSH_INITIALIZED
     if GMSH_INITIALIZED:
-        gmsh.finalize()
+        if gmsh.is_initialized():
+            gmsh.finalize()
     GMSH_INITIALIZED = False
 
 

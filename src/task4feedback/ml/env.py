@@ -69,10 +69,10 @@ class RuntimeEnv(EnvBase):
                 int(only_gpu), simulator_factory.graph_spec.max_devices
             )
         self.location_list = location_list
-        if self.only_gpu and (0 in self.location_list):
-            print(
-                "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
-            )
+        # if self.only_gpu and (0 in self.location_list):
+        #     print(
+        #         "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
+        #     )
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(
@@ -81,8 +81,8 @@ class RuntimeEnv(EnvBase):
 
         self.buffer_idx = 0
         self.resets = 0
-        print("Change locations:", self.change_locations)
-        print("Change priority:", self.change_priority)
+        # print("Change locations:", self.change_locations)
+        # print("Change priority:", self.change_priority)
         graph = simulator_factory.input.graph
 
         if (
@@ -282,6 +282,16 @@ class RuntimeEnv(EnvBase):
                         verbose=False,
                         step=0,
                     )
+                else:
+                    self.graph.set_cell_locations(
+                        [-1 for _ in range(len(self.graph.data.geometry.cells))]
+                    )
+                    self.graph.randomize_locations(
+                        self.location_randomness,
+                        self.location_list,
+                        verbose=False,
+                        step=0,
+                    )
 
         if self.change_priority and (self.resets % self.randomize_interval == 0):
             new_priority_seed = int(current_priority_seed + self.resets)
@@ -458,7 +468,7 @@ class EvalEnv(RuntimeEnv):
         if done:
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
             obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
-            print(f"{sim_time},{self.EFT_baseline},{self.optimal_time}")
+            print(f"{sim_time},{self.EFT_baseline},{self.optimal_time}", flush=True)
 
         out = obs
 

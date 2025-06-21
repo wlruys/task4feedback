@@ -568,7 +568,7 @@ def animate_mesh_graph(
         state_list,
         title=title,
         show=show,
-        folder=None,
+        folder=folder,
         figsize=figsize,
         dpi=dpi,
         bitrate=bitrate,
