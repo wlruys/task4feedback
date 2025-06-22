@@ -1,19 +1,15 @@
 // nanobind_module.cpp
 #include "devices.hpp"
 #include "features.hpp"
+#include "nbh.hpp"
 #include "scheduler.hpp"
 #include "settings.hpp"
 #include <cstdint>
 #include <memory>
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
-#include <nanobind/stl/bind_vector.h>
 #include <nanobind/stl/shared_ptr.h>
-#include <nanobind/stl/string.h>
 #include <nanobind/trampoline.h>
 #include <span>
 #include <sys/types.h>
-#include <vector>
 
 namespace nb = nanobind;
 using namespace nb::literals;

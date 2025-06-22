@@ -44,7 +44,7 @@ class RuntimeEnv(EnvBase):
         priority_seed=0,
         location_randomness=1,
         location_list: Optional[List[int]] = None,
-        max_samples_per_iter: int = 0,
+        max_samples_per_iter: int = 80,
     ):
         super().__init__(device=device)
         # print("Initializing environment")

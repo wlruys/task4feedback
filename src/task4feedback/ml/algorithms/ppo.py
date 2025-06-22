@@ -62,7 +62,7 @@ class PPOConfig(AlgorithmConfig):
         True  # if using lstm, whether slices are used instead of episodes
     )
     slice_len: int = 16  # length of slices for LSTM, only used if sample_slices is True
-    rollout_steps: int = 0
+    rollout_steps: int = 250
 
 
 def run_ppo(

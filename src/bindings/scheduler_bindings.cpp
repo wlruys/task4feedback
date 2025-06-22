@@ -1,15 +1,7 @@
 #include "action.hpp"
+#include "nbh.hpp"
 #include "scheduler.hpp"
-#include "settings.hpp"
 #include <cstdint>
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
-#include <nanobind/stl/bind_map.h>
-#include <nanobind/stl/bind_vector.h>
-#include <nanobind/stl/optional.h>
-#include <nanobind/stl/string.h>
-#include <string>
-#include <vector>
 
 namespace nb = nanobind;
 using namespace nb::literals;

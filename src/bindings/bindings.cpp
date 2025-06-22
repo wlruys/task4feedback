@@ -1,15 +1,16 @@
+#include "data_bindings.cpp"
+#include "device_bindings.cpp"
+#include "event_bindings.cpp"
+#include "graph_bindings.cpp"
+#include "mapper_bindings.cpp"
+#include "nbh.hpp"
+#include "observer_bindings.cpp"
+#include "scheduler_bindings.cpp"
+#include "simulator_bindings.cpp"
+#include "task_bindings.cpp"
+#include "task_noise_bindings.cpp"
+#include "topology_bindings.cpp"
 #include <cstdint>
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
-#include <nanobind/stl/bind_map.h>
-#include <nanobind/stl/bind_vector.h>
-#include <nanobind/stl/optional.h>
-#include <nanobind/stl/string.h>
-
-#include "devices.hpp"
-#include "resources.hpp"
-#include "settings.hpp"
-#include "tasks.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -35,10 +36,6 @@ NB_MODULE(fastsim2, m) {
   nb::bind_vector<std::vector<float>>(m, "FloatVector");
   nb::bind_vector<std::vector<double>>(m, "DoubleVector");
   nb::bind_vector<std::vector<std::string>>(m, "StringVector");
-  nb::bind_vector<std::vector<Task>>(m, "TaskVector");
-  nb::bind_vector<std::vector<ComputeTask>>(m, "ComputeTaskVector");
-  nb::bind_vector<std::vector<DataTask>>(m, "DataTaskVector");
-  nb::bind_vector<std::vector<DeviceType>>(m, "DeviceTypeVector");
   init_event_ext(m);
   init_device_ext(m);
   init_task_ext(m);

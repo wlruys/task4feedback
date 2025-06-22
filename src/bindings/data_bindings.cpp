@@ -1,11 +1,8 @@
 #include "data_manager.hpp"
-#include <nanobind/nanobind.h>
-#include <nanobind/stl/string.h>
-#include <nanobind/stl/vector.h>
-
+#include "nbh.hpp"
 namespace nb = nanobind;
 using namespace nb::literals;
-
+ 
 void init_data_ext(nb::module_ &m) {
   nb::class_<Data>(m, "Data")
       .def(nb::init<>())

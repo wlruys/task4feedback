@@ -1,58 +1,96 @@
-[build-system]
-requires = ["scikit-build-core>=0.5", "pyyaml", "nanobind", "numpy"]
-build-backend = "scikit_build_core.build"
-
 [project]
 name = "task4feedback"
-version = "0.0.1"
-maintainers = [
+version = "0.2.0"
+authors = [
     { name = "William Ruys", email = "will.ruys@gmail.com" },
-    { name = "Hochan Lee", email = "hochan@utexas.edu" },
     { name = "Jaeyoung Park", email = "jaeyoung@utexas.edu" },
+    { name = "Hochan Lee", email = "hochan@utexas.edu" },
 ]
 description = ""
 readme = "README.md"
-requires-python = ">=3.8"
-dependencies = ["psutil", "pyyaml", "numpy", "python-json-logger"]
+requires-python = ">=3.12"
+
+dependencies = [
+    "cxxfilt>=0.3,<1.0",
+    "hypernetx>=2.0,<3.0",
+    "hydra-core>=1.3,<2.0",
+    "matplotlib>=3.8,<4.0",
+    "meshio>=5.3,<6.0",
+    "networkx>=3.3,<4.0",
+    "numpy>=2.0,<3.0",
+    "psutil>=5.9,<6.0",
+    "pygmsh>=7.1,<8.0",
+    "python-json-logger>=2.0,<3.0",
+    "pyyaml>=6.0,<7.0",
+    "rich>=14.0.0",
+    "tensordict>=0.8.3",
+    "torch>=2.7.1",
+    "torch-geometric>=2.5.0",
+    "torchrl>=0.8.1",
+    "tqdm>=4.66,<5.0",
+    "wandb>=0.20.0",
+    "pyqt6>=6.9.1,<7.0",
+    "pymetis>=2025.1.1",
+    "gravis>=0.1.0",
+    "pydot>=4.0.0,<5.0",
+]
 
 
 [project.optional-dependencies]
-graph = [
-    "pydot",
-    "networkx",
-    "hypernetx",
-    "matplotlib",
-    "seaborn",
-    "torch",
-    "torch-geometric",
-    "torch-rl",
+dev = [
+    "ruff>=0.12.0,<0.13.0",
+    "pytest>=8.4.1,<9.0",
+    "pytest-cov>=6.2.1,<7.0",
+    "build>=1.2.2.post1,<2.0",
+    "wheel>=0.45,<1.0",
+    "pre-commit>=4.2.0,<5.0",
 ]
-dev = ["ruff"]
-rl = ["torch"]
+
+[build-system]
+requires = [
+    "scikit-build-core>=0.11",
+    "cmake>=3.27",
+    "nanobind>=1.9",
+    "numpy>=2.0,<3.0",
+]
+build-backend = "scikit_build_core.build"
+
 
 [tool.scikit-build]
-minimum-version = "0.5"
-build-dir = "build"
+minimum-version = "0.11"
 wheel.packages = ["src/task4feedback"]
-wheel.license-files = []
-cmake.minimum-version = "3.22.1"
+install.components = ["python"]
+cmake.version = ">=3.27"
 cmake.build-type = "Release"
-cmake.verbose = true
-ninja.minimum-version = "1.11"
+build.verbose = true
+build-dir = "build"
 
 
 [tool.scikit-build.cmake.define]
 SIM_TRACK_RESOURCES = { env = "SIM_TRACK_RESOURCES", default = "ON" }
 SIM_TRACK_LOCATION = { env = "SIM_TRACK_LOCATION", default = "ON" }
 SPDLOG_ACTIVE_LEVEL = { env = "SPDLOG_ACTIVE_LEVEL", default = "SPDLOG_LEVEL_DEBUG" }
+CXX_PGO_FLAGS = ""
+LD_PGO_FLAGS = ""
+
+[[tool.scikit-build.overrides]]
+if.env.PGO_MODE = "Generate"
+inherit.cmake.define = "append"
+cmake.define.CXX_PGO_FLAGS = "-fprofile-generate"
+cmake.define.LD_PGO_FLAGS = "-fprofile-generate"
+
+[[tool.scikit-build.overrides]]
+if.env.PGO_MODE = "Use"
+inherit.cmake.define = "append"
+cmake.define.CXX_PGO_FLAGS = "-fprofile-use -fprofile-correction"
+cmake.define.LD_PGO_FLAGS = "-fprofile-use"
+
+
+[tool.ruff]
+target-version = "py312"
+extend-ignore = ["E501"]
 
 [tool.cython-lint]
-ignore = [
-    'E504', # break after binary operator
-    'E501', # line too long
-    "F841", # local variable is assigned to but never used
-    "F405", # may be undefined, or defined from star imports: ...
-    "W291", # trailing whitespace
-    "E116", # unexpected indentation (comment)
-    "W293", # blank line contains whitespace
-]
+ignore = ["E504", "E501", "F841", "F405", "W291", "E116", "W293"]
+name = "task4feedback"
+line-length = 100

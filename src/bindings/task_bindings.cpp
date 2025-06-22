@@ -1,14 +1,15 @@
 #include "devices.hpp"
+#include "nbh.hpp"
 #include "resources.hpp"
 #include "tasks.hpp"
-#include <nanobind/nanobind.h>
-#include <nanobind/stl/bind_vector.h>
-#include <nanobind/stl/string.h>
-
 namespace nb = nanobind;
 using namespace nb::literals;
 
 void init_task_ext(nb::module_ &m) {
+
+  nb::bind_vector<std::vector<Task>>(m, "TaskVector");
+  nb::bind_vector<std::vector<ComputeTask>>(m, "ComputeTaskVector");
+  nb::bind_vector<std::vector<DataTask>>(m, "DataTaskVector");
 
   nb::enum_<TaskState>(m, "TaskState", nb::is_arithmetic())
       .value("SPAWNED", TaskState::SPAWNED)

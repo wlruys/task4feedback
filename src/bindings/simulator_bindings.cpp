@@ -3,20 +3,13 @@
 #include "data_manager.hpp"
 #include "device_manager.hpp"
 #include "devices.hpp"
+#include "nbh.hpp"
 #include "noise.hpp"
+#include "resources.hpp"
 #include "scheduler.hpp"
-#include "settings.hpp"
 #include "simulator.hpp"
 #include "tasks.hpp"
 #include <cstdint>
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
-#include <nanobind/stl/bind_map.h>
-#include <nanobind/stl/bind_vector.h>
-#include <nanobind/stl/optional.h>
-#include <nanobind/stl/string.h>
-#include <string>
-#include <vector>
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -41,7 +34,7 @@ void init_simulator_ext(nb::module_ &m) {
            "transition_conditions"_a, nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(),
            nb::keep_alive<1, 4>(), nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(),
            nb::keep_alive<1, 7>(), nb::keep_alive<1, 8>()) // Keep all referenced objects alive
-      .def(nb::init<SchedulerInput &>(), "other"_a);
+      .def(nb::init<SchedulerInput &>());
 
   nb::class_<Simulator>(m, "Simulator")
       .def_ro("initialized", &Simulator::initialized)
@@ -49,7 +42,7 @@ void init_simulator_ext(nb::module_ &m) {
       .def_ro("last_execution_state", &Simulator::last_state)
       .def_ro("last_event", &Simulator::last_event)
       .def_ro("data_initialized", &Simulator::data_initialized)
-      .def(nb::init<SchedulerInput &, Mapper &>(), "input"_a, "mapper"_a, nb::keep_alive<1, 2>(),
+      .def(nb::init<SchedulerInput &, Mapper &>(), nb::keep_alive<1, 2>(),
            nb::keep_alive<1, 3>()) // Keep input and mapper alive
       .def(nb::init<Simulator &>(), "other"_a)
       .def("initialize", &Simulator::initialize, "create_data_tasks"_a = true,
@@ -61,8 +54,7 @@ void init_simulator_ext(nb::module_ &m) {
       .def("disable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(false); })
       .def("skip_external_mapping", &Simulator::skip_external_mapping,
            "enqueue_mapping_event"_a = true)
-      .def("set_mapper", &Simulator::set_mapper, "mapper"_a,
-           nb::keep_alive<1, 2>()) // Keep mapper alive
+      .def("set_mapper", &Simulator::set_mapper, nb::keep_alive<1, 2>()) // Keep mapper alive
       .def("get_state", nb::overload_cast<>(&Simulator::get_state, nb::const_),
            nb::rv_policy::reference_internal)
       .def("run", &Simulator::run)

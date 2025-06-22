@@ -1,9 +1,7 @@
 #include "device_manager.hpp"
 #include "devices.hpp"
+#include "nbh.hpp"
 #include "resources.hpp"
-#include "settings.hpp"
-#include <nanobind/nanobind.h>
-#include <nanobind/stl/string.h>
 
 namespace nb = nanobind;
 using namespace nb::literals;
