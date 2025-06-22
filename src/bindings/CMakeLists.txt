@@ -26,16 +26,11 @@ set_target_properties(fastsim2 PROPERTIES
 
 target_link_libraries(fastsim2 PRIVATE backend python_deps project_warnings)
 target_compile_features(fastsim2 PUBLIC cxx_std_20)
-target_precompile_headers(fastsim2 PRIVATE
-    <nanobind/nanobind.h>          
-    <Python.h>                     
-    <fmt/core.h>
-    <spdlog/spdlog.h>
-    <nbh.hpp>
-    )
 
-target_compile_options(fastsim2 PRIVATE "-fno-modules-ts")
-
+# check_cxx_compiler_flag("-fno-modules-ts" HAS_FNO_MODULES_TS)
+# if (HAS_FNO_MODULES_TS)
+#     target_compile_options(fastsim2 PRIVATE -fno-modules-ts)
+# endif()
 
 if(CMAKE_CROSSCOMPILING AND SKBUILD_CROSS_STATIC_LIBCPP)
     nanobind_musl_static_libcpp(fastsim2)
@@ -46,17 +41,17 @@ if(CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo")
     nanobind_strip(fastsim2)
 endif()
 
-nanobind_add_stub(fastsim2_stub
-    MODULE fastsim2
-    OUTPUT fastsim2.pyi
-    MARKER_FILE py.typed
-    DEPENDS fastsim2)
+# nanobind_add_stub(fastsim2_stub
+#     MODULE fastsim2
+#     OUTPUT fastsim2.pyi
+#     MARKER_FILE py.typed
+#     DEPENDS fastsim2)
 
 install(TARGETS fastsim2
         COMPONENT python
         LIBRARY DESTINATION task4feedback)
 
-install(FILES  ${CMAKE_CURRENT_BINARY_DIR}/fastsim2.pyi
-               ${CMAKE_CURRENT_BINARY_DIR}/py.typed
-        COMPONENT python
-        DESTINATION task4feedback)
+# install(FILES  ${CMAKE_CURRENT_BINARY_DIR}/fastsim2.pyi
+#                ${CMAKE_CURRENT_BINARY_DIR}/py.typed
+#         COMPONENT python
+#         DESTINATION task4feedback)

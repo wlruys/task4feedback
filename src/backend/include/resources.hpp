@@ -24,27 +24,27 @@ constexpr mem_t MAX_MEM = std::numeric_limits<mem_t>::max();
 constexpr timecount_t MAX_TIME = std::numeric_limits<timecount_t>::max();
 constexpr copy_t MAX_COPIES = 10;
 
-consteval mem_t operator"" _KB(unsigned long long val) {
+consteval mem_t operator""_KB(unsigned long long val) {
   return static_cast<mem_t>(val * BYTES_IN_POWER);
 }
-consteval mem_t operator"" _MB(unsigned long long val) {
+consteval mem_t operator""_MB(unsigned long long val) {
   return static_cast<mem_t>(val * BYTES_IN_POWER * BYTES_IN_POWER);
 }
-consteval mem_t operator"" _GB(unsigned long long val) {
+consteval mem_t operator""_GB(unsigned long long val) {
   return static_cast<mem_t>(val * BYTES_IN_POWER * BYTES_IN_POWER * BYTES_IN_POWER);
 }
 
-consteval timecount_t operator"" _us(unsigned long long val) {
+consteval timecount_t operator""_us(unsigned long long val) {
   return static_cast<timecount_t>(val);
 }
-consteval timecount_t operator"" _ms(unsigned long long val) {
+consteval timecount_t operator""_ms(unsigned long long val) {
   return static_cast<timecount_t>(val * 1000);
 }
-consteval timecount_t operator"" _s(unsigned long long val) {
+consteval timecount_t operator""_s(unsigned long long val) {
   return static_cast<timecount_t>(val * 1000 * 1000);
 }
 
-consteval vcu_t operator"" _vcus(long double val) {
+consteval vcu_t operator""_vcus(long double val) {
   // Return fraction of MAX_VCUS
   return static_cast<vcu_t>(val * MAX_VCUS);
 }

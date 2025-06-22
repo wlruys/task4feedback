@@ -36,7 +36,6 @@ target_sources(backend
         include/stats.hpp
         include/task_manager.hpp
         include/tasks.hpp
-        include/features.hpp
 )
 
                                          
@@ -52,8 +51,7 @@ set_target_properties(backend PROPERTIES
 )
 
 
-find_package(Python COMPONENTS Development NumPy REQUIRED)
-target_link_libraries(backend PUBLIC Python::Python Python::NumPy tabulate python_deps project_warnings spdlog::spdlog)
+target_link_libraries(backend PUBLIC tabulate python_deps project_warnings spdlog::spdlog_header_only fmt::fmt)
 
 
 if(SIM_TRACK_RESOURCES)

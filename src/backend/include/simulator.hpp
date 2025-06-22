@@ -13,8 +13,6 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
 #include <sstream>
 #include <unistd.h>
 
@@ -146,8 +144,8 @@ public:
     scheduler.update_time(event.get_time());
   }
 
-  size_t get_mappable_candidates(TorchInt64Arr1D &output_tensor) {
-    return scheduler.get_mappable_candidates(output_tensor);
+  size_t get_mappable_candidates(std::span<int64_t> v) {
+    return scheduler.get_mappable_candidates(v);
   }
 
   void map_tasks(ActionList &action_list) {

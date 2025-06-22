@@ -49,7 +49,6 @@ dev = [
 [build-system]
 requires = [
     "scikit-build-core>=0.11",
-    "cmake>=3.27",
     "nanobind>=1.9",
     "numpy>=2.0,<3.0",
 ]
@@ -70,20 +69,16 @@ build-dir = "build"
 SIM_TRACK_RESOURCES = { env = "SIM_TRACK_RESOURCES", default = "ON" }
 SIM_TRACK_LOCATION = { env = "SIM_TRACK_LOCATION", default = "ON" }
 SPDLOG_ACTIVE_LEVEL = { env = "SPDLOG_ACTIVE_LEVEL", default = "SPDLOG_LEVEL_DEBUG" }
-CXX_PGO_FLAGS = ""
-LD_PGO_FLAGS = ""
 
 [[tool.scikit-build.overrides]]
 if.env.PGO_MODE = "Generate"
 inherit.cmake.define = "append"
-cmake.define.CXX_PGO_FLAGS = "-fprofile-generate"
-cmake.define.LD_PGO_FLAGS = "-fprofile-generate"
+cmake.define.PGO_MODE = "Generate"
 
 [[tool.scikit-build.overrides]]
 if.env.PGO_MODE = "Use"
 inherit.cmake.define = "append"
-cmake.define.CXX_PGO_FLAGS = "-fprofile-use -fprofile-correction"
-cmake.define.LD_PGO_FLAGS = "-fprofile-use"
+cmake.define.PGO_MODE = "Use"
 
 
 [tool.ruff]

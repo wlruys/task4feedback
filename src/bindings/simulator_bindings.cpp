@@ -10,6 +10,9 @@
 #include "simulator.hpp"
 #include "tasks.hpp"
 #include <cstdint>
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include <span>
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -57,9 +60,15 @@ void init_simulator_ext(nb::module_ &m) {
       .def("set_mapper", &Simulator::set_mapper, nb::keep_alive<1, 2>()) // Keep mapper alive
       .def("get_state", nb::overload_cast<>(&Simulator::get_state, nb::const_),
            nb::rv_policy::reference_internal)
-      .def("run", &Simulator::run)
+      .def("run", &Simulator::run, nb::call_guard<nb::gil_scoped_acquire>())
       .def("get_current_time", &Simulator::get_current_time)
       .def("get_task_finish_time", &Simulator::get_task_finish_time)
+      .def("get_mappable_candidates",
+           [](Simulator &s, TorchInt64Arr1D &arr) {
+             nb::gil_scoped_acquire gil;
+             std::span<int64_t> span(arr.data(), arr.size());
+             return s.get_mappable_candidates(span);
+           })
       .def("get_mappable_candidates", &Simulator::get_mappable_candidates)
       .def("map_tasks", &Simulator::map_tasks)
       .def("add_task_breakpoint", &Simulator::add_task_breakpoint)

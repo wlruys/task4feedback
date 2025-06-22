@@ -818,7 +818,7 @@ public:
     state.initialize_data_manager();
   }
 
-  size_t get_mappable_candidates(TorchInt64Arr1D &output_tensor);
+  size_t get_mappable_candidates(std::span<int64_t> v);
   TaskIDList &get_mappable_candidates();
 
   const TaskIDList &map_task(taskid_t task_id, Action &action);

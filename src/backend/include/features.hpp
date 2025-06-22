@@ -1,5 +1,6 @@
 #pragma once
 #include "devices.hpp"
+#include "nbh.hpp"
 #include "scheduler.hpp"
 #include "settings.hpp"
 #include "tasks.hpp"
@@ -12,8 +13,6 @@
 #include <limits>
 #include <math.h>
 #include <memory>
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
 #include <span>
 #include <sys/types.h>
 #include <tuple>
@@ -22,10 +21,10 @@
 #include <vector>
 
 namespace nb = nanobind;
+using namespace nb::literals;
 
 using op_t = int32_t;
 using f_t = float_t;
-using namespace nb::literals;
 
 taskid_t max(taskid_t a, taskid_t b) {
   return a > b ? a : b;

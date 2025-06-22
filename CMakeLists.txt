@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 include(FetchContent)
+include(CheckCXXCompilerFlag)
 
 project(${SKBUILD_PROJECT_NAME}
         VERSION 0.2.0
@@ -20,20 +21,38 @@ add_library(tabulate INTERFACE)
 target_include_directories(tabulate
     INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/external/tabulate/include)
 
-find_package(spdlog CONFIG QUIET)
+find_package(fmt CONFIG QUIET)
+if(fmt_FOUND)
+    message(STATUS "Using system-installed fmt ${fmt_VERSION}")
+else()
+    FetchContent_Declare(
+      fmt
+      GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+      GIT_TAG        10.2.1
+    )
+    # build fmt as static with PIC by default
+    set(FMT_DOC OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(FMT_TEST OFF     CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(fmt)
+endif()
 
-if(NOT spdlog_FOUND)
-  include(FetchContent)
+
+find_package(spdlog CONFIG QUIET)
+if(spdlog_FOUND)
+  message(STATUS "Using system-installed spdlog ${spdlog_VERSION}")
+else()
 
   set(SPDLOG_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
   set(SPDLOG_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
   set(SPDLOG_BUILD_BENCH     OFF CACHE BOOL "" FORCE)
-
-  set(SPDLOG_BUILD_STATIC    ON  CACHE BOOL "" FORCE)
-  set(SPDLOG_BUILD_SHARED    OFF CACHE BOOL "" FORCE)
-  set(SPDLOG_BUILD_PIC       ON  CACHE BOOL "" FORCE)
-
-  set(SPDLOG_FMT_EXTERNAL    ON  CACHE BOOL "" FORCE)
+  #
+  # set(SPDLOG_BUILD_STATIC    ON  CACHE BOOL "" FORCE)
+  # set(SPDLOG_BUILD_SHARED    OFF CACHE BOOL "" FORCE)
+  # set(SPDLOG_BUILD_PIC       ON  CACHE BOOL "" FORCE)
+    set(FMT_SYSTEM_HEADERS ON CACHE BOOL "" FORCE)
+  set(SPDLOG_HEADER_ONLY ON CACHE BOOL "" FORCE)
+  set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
 
   FetchContent_Declare(
       spdlog
@@ -45,16 +64,20 @@ if(NOT spdlog_FOUND)
 endif()
 
 
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LD_PGO_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CXX_PGO_FLAGS}")
-
+if(PGO_MODE STREQUAL "Generate")
+    add_compile_options(-fprofile-generate)
+    add_link_options   (-fprofile-generate)
+elseif(PGO_MODE STREQUAL "Use")
+    add_compile_options(-fprofile-use -fprofile-correction)
+    add_link_options   (-fprofile-use)
+endif()
 
 find_package(Python COMPONENTS Interpreter Development NumPy REQUIRED)
 add_library(python_deps INTERFACE)
 target_link_libraries(python_deps
     INTERFACE Python::Python Python::NumPy)
 
-find_package(nanobind CONFIG REQUIRED)
+find_package(nanobind REQUIRED CONFIG)
 
 add_library(project_warnings INTERFACE)
 
@@ -66,7 +89,6 @@ endif()
 if(ENABLE_NATIVE_TUNING)
     target_compile_options(project_warnings INTERFACE -march=native -mtune=native)
 endif()
-
 
 add_subdirectory(src/backend)      # defines backend target
 add_subdirectory(src/bindings)     # defines python module 
