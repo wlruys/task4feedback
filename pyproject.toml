@@ -47,11 +47,7 @@ dev = [
 ]
 
 [build-system]
-requires = [
-    "scikit-build-core>=0.11",
-    "nanobind>=1.9",
-    "numpy>=2.0,<3.0",
-]
+requires = ["scikit-build-core>=0.11", "nanobind>=1.9", "numpy>=2.0,<3.0"]
 build-backend = "scikit_build_core.build"
 
 
