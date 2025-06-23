@@ -3,7 +3,6 @@ from ..interface import DataBlocks, Graph
 from dataclasses import dataclass, field
 from collections import defaultdict
 import networkx as nx
-import gravis as gv
 import os
 from typing import List, Optional, Callable, Self
 from .. import fastsim2 as fastsim
@@ -22,25 +21,25 @@ def spring_layout(G):
         node["y"] = y
 
 
-def draw(G, filename="graph.html"):
-    # spring_layout(G)
-    fig = gv.d3(
-        G,
-        layout_algorithm_active=True,
-        graph_height=1000,
-        use_edge_size_normalization=True,
-        use_node_size_normalization=True,
-        node_size_normalization_max=30,
-    )
-    if os.path.exists(filename):
-        os.remove(filename)
+# def draw(G, filename="graph.html"):
+#     # spring_layout(G)
+#     fig = gv.d3(
+#         G,
+#         layout_algorithm_active=True,
+#         graph_height=1000,
+#         use_edge_size_normalization=True,
+#         use_node_size_normalization=True,
+#         node_size_normalization_max=30,
+#     )
+#     if os.path.exists(filename):
+#         os.remove(filename)
 
-    if filename.endswith(".html"):
-        fig.export_html(filename)
-    elif filename.endswith(".png"):
-        fig.export_png(filename)
-    elif filename.endswith(".jpg"):
-        fig.export_jpg(filename)
+#     if filename.endswith(".html"):
+#         fig.export_html(filename)
+#     elif filename.endswith(".png"):
+#         fig.export_png(filename)
+#     elif filename.endswith(".jpg"):
+#         fig.export_jpg(filename)
 
 
 @dataclass(frozen=True, eq=True, order=True, slots=True)

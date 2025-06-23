@@ -50,9 +50,21 @@ set_target_properties(backend PROPERTIES
     INSTALL_RPATH "$ORIGIN"
 )
 
+set_target_properties(backend PROPERTIES
+  UNITY_BUILD ON
+)
 
-target_link_libraries(backend PUBLIC python_deps project_warnings spdlog::spdlog_header_only fmt::fmt)
+target_precompile_headers(backend PRIVATE
+    <vector>
+    <string>
+    <memory>
+    <algorithm>
+    <unordered_map>
+    <spdlog/spdlog.h>
+    <fmt/format.h>
+)
 
+target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt)
 
 if(SIM_TRACK_RESOURCES)
     target_compile_definitions(backend PUBLIC SIM_TRACK_RESOURCES)

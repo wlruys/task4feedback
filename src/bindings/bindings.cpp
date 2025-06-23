@@ -22,6 +22,7 @@ extern void init_simulator_ext(nb::module_ &);
 
 NB_MODULE(fastsim2, m) {
   nb::set_leak_warnings(false);
+  m.def("test", []() { return "Module loaded successfully!"; });
   nb::bind_vector<std::vector<uint32_t>>(m, "UInt32Vector");
   nb::bind_vector<std::vector<uint64_t>>(m, "UInt64Vector");
   nb::bind_vector<std::vector<int32_t>>(m, "Int32Vector");

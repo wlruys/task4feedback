@@ -7,7 +7,6 @@ from ..device import *
 from ..task import *
 from ..topology import *
 
-import gravis as gv
 import networkx as nx
 import os
 
@@ -191,35 +190,35 @@ def spring_layout(G):
         node["y"] = y
 
 
-def draw(G, filename="graph.html"):
-    # spring_layout(G)
-    fig = gv.three(
-        G,
-        layout_algorithm_active=True,
-        graph_height=1000,
-        use_edge_size_normalization=True,
-        use_node_size_normalization=True,
-        node_size_normalization_max=30,
-    )
-    if os.path.exists(filename):
-        os.remove(filename)
+# def draw(G, filename="graph.html"):
+#     # spring_layout(G)
+#     fig = gv.three(
+#         G,
+#         layout_algorithm_active=True,
+#         graph_height=1000,
+#         use_edge_size_normalization=True,
+#         use_node_size_normalization=True,
+#         node_size_normalization_max=30,
+#     )
+#     if os.path.exists(filename):
+#         os.remove(filename)
 
-    if filename.endswith(".html"):
-        fig.export_html(filename)
-    elif filename.endswith(".png"):
-        fig.export_png(filename)
-    elif filename.endswith(".jpg"):
-        fig.export_jpg(filename)
+#     if filename.endswith(".html"):
+#         fig.export_html(filename)
+#     elif filename.endswith(".png"):
+#         fig.export_png(filename)
+#     elif filename.endswith(".jpg"):
+#         fig.export_jpg(filename)
 
 
-def draw_networkx(G: nx.DiGraph):
-    pos = nx.spring_layout(G, seed=5)
-    nx.draw_networkx_nodes(G, pos=pos, node_size=700)
-    nx.draw_networkx_edges(G, pos=pos)
-    nx.draw_networkx_labels(G, pos=pos, labels=labels)
-    plt.tight_layout()
-    plt.axis("off")
-    plt.show()
+# def draw_networkx(G: nx.DiGraph):
+#     pos = nx.spring_layout(G, seed=5)
+#     nx.draw_networkx_nodes(G, pos=pos, node_size=700)
+#     nx.draw_networkx_edges(G, pos=pos)
+#     nx.draw_networkx_labels(G, pos=pos, labels=labels)
+#     plt.tight_layout()
+#     plt.axis("off")
+#     plt.show()
 
 
 def draw_pydot(G: nx.DiGraph):

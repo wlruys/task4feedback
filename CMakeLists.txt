@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 3.29)
 include(FetchContent)
 include(CheckCXXCompilerFlag)
 
@@ -9,10 +9,18 @@ project(${SKBUILD_PROJECT_NAME}
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS  OFF)
+set(CMAKE_UNITY_BUILD_BATCH_SIZE 0)
+
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "Using ccache: ${CCACHE_PROGRAM}")
+endif()
 
 # ---- project options -------------------------------------------------------
 option(ENABLE_ASAN          "Compile with AddressSanitizer"          OFF)
-option(ENABLE_NATIVE_TUNING "Add -march=native / -mtune=native"      OFF)
+option(ENABLE_NATIVE_TUNING "Add -march=native / -mtune=native"      ON)
 option(PGO_MODE "PGO mode: Generate / Use / None"       "None")
 option(SIM_TRACK_RESOURCES  "Enable resource-usage logging"  ON)
 option(SIM_TRACK_LOCATION   "Enable data-location logging"   ON)
@@ -69,9 +77,10 @@ elseif(PGO_MODE STREQUAL "Use")
 endif()
 
 find_package(Python COMPONENTS Interpreter Development NumPy REQUIRED)
-add_library(python_deps INTERFACE)
-target_link_libraries(python_deps
-    INTERFACE Python::Python Python::NumPy)
+find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
+
+include_directories(${Python_INCLUDE_DIRS})
+include_directories(${Python_NumPy_INCLUDE_DIRS})
 
 add_library(project_warnings INTERFACE)
 
