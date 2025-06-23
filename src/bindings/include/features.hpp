@@ -209,7 +209,6 @@ public:
 
   [[nodiscard]] size_t get_k_hop_task_dependents(TaskSet &visited, TorchInt64Arr1D &initial_tasks,
                                                  int k, TorchInt64Arr1D &output) {
-
     auto v = output.view();
     size_t max_tasks = output.size();
     static bool has_warned = false;
@@ -462,6 +461,7 @@ public:
   size_t get_k_hop_task_neighborhood(TaskSet &visited, TorchInt64Arr1D &initial_tasks, int k,
                                      TorchInt64Arr1D &output) {
     auto v = output.view();
+
     size_t max_tasks = output.size();
     std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
     static bool has_warned = false;
@@ -579,7 +579,6 @@ public:
 
   size_t get_task_task_edges_reverse(TorchInt64Arr1D &sources, TorchInt64Arr2D &output,
                                      TorchInt64Arr2D &global_output) {
-
     // Check first dimension is 2
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
@@ -1244,6 +1243,7 @@ public:
     auto v = output.view();
     auto gv = global_output.view();
     static bool has_warned = false;
+
     std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
     const auto max_edges = output.shape(1);
@@ -1357,6 +1357,7 @@ template <typename Derived> struct Feature {
   }
 
   void extractFeature(int32_t object_id, TorchArr &output) const {
+
     std::span<float> sp(output.data(), output.size());
     static_cast<const Derived *>(this)->extractFeatureImpl(object_id, sp);
   }

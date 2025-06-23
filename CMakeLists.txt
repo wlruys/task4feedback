@@ -17,10 +17,6 @@ option(PGO_MODE "PGO mode: Generate / Use / None"       "None")
 option(SIM_TRACK_RESOURCES  "Enable resource-usage logging"  ON)
 option(SIM_TRACK_LOCATION   "Enable data-location logging"   ON)
 
-add_library(tabulate INTERFACE)
-target_include_directories(tabulate
-    INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/external/tabulate/include)
-
 find_package(fmt CONFIG QUIET)
 if(fmt_FOUND)
     message(STATUS "Using system-installed fmt ${fmt_VERSION}")
@@ -57,7 +53,7 @@ else()
   FetchContent_Declare(
       spdlog
       GIT_REPOSITORY https://github.com/gabime/spdlog.git
-      GIT_TAG        v1.14.1            # pin to a release; avoid 'v1.x'
+      GIT_TAG        v1.14.1          
   )
 
   FetchContent_MakeAvailable(spdlog)
@@ -76,8 +72,6 @@ find_package(Python COMPONENTS Interpreter Development NumPy REQUIRED)
 add_library(python_deps INTERFACE)
 target_link_libraries(python_deps
     INTERFACE Python::Python Python::NumPy)
-
-find_package(nanobind REQUIRED CONFIG)
 
 add_library(project_warnings INTERFACE)
 

@@ -327,39 +327,3 @@ public:
 
   friend class SchedulerState;
 };
-
-class TaskPrinter {
-private:
-  std::reference_wrapper<TaskManager> tm;
-
-public:
-  TaskPrinter(TaskManager &tm) : tm(tm) {
-  }
-
-  [[nodiscard]] Color get_task_color(taskid_t id) const;
-
-  template <typename DependencyList> Table make_list_table(DependencyList &dependencies);
-
-  template <typename DependencyList>
-  Table make_list_table(DependencyList &dependencies, std::string name);
-
-  template <typename DependencyList>
-  Table make_list_table_named(DependencyList &dependencies, std::string name);
-
-  template <typename DataList> Table make_data_table(DataList &read, DataList &write);
-
-  static Table make_variant_table(Variant v);
-
-  template <typename VariantList> Table make_variant_tables(VariantList vlist);
-
-  Table make_status_table(taskid_t id);
-
-  [[nodiscard]] Table
-  wrap_tables(const std::vector<std::function<tabulate::Table(taskid_t)>> &generators,
-              taskid_t id) const;
-
-  void print_tables(const std::vector<std::function<tabulate::Table(taskid_t)>> &generators,
-                    taskid_t id);
-
-  static Table wrap_in_task_table(taskid_t id, tabulate::Table table);
-};

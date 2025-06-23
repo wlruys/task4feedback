@@ -11,14 +11,10 @@
 #include <set>
 #include <span>
 #include <string>
-#include <tabulate/table.hpp>
-#include <tabulate/tabulate.hpp>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-
-using namespace tabulate;
 
 enum class TaskType {
   COMPUTE = 0,

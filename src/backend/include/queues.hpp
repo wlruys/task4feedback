@@ -12,8 +12,6 @@
 #include <queue>
 #include <random>
 #include <stdexcept>
-#include <tabulate/table.hpp>
-#include <tabulate/tabulate.hpp>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -514,40 +512,4 @@ template <WrappedQueueConcept Q> std::vector<typename Q::element_type> as_vector
     q.push(element);
   }
   return elements;
-}
-
-template <WrappedQueueConcept Q> void print_table(Q &q) {
-
-  using namespace tabulate;
-  using Row_t = Table::Row_t;
-
-  Table table;
-  auto elements = as_vector(q);
-
-  // Add headers
-  Row_t headers;
-  Row_t values;
-  Row_t priorities;
-
-  headers.emplace_back("Element");
-  values.emplace_back("Value");
-  priorities.emplace_back("Priority");
-
-  for (size_t i = 0; i < elements.size(); ++i) {
-    headers.emplace_back(std::to_string(i));
-    values.emplace_back(std::to_string(elements[i].value));
-    priorities.emplace_back(std::to_string(elements[i].priority));
-  }
-  table.add_row(headers);
-  table.add_row(values);
-  table.add_row(priorities);
-
-  // Iterator over cells in the first column
-  for (auto &cell : table.column(0)) {
-    if (cell.get_text() != "Company") {
-      cell.format().font_align(FontAlign::right).font_style({FontStyle::bold});
-    }
-  }
-
-  std::cout << table << std::endl;
 }

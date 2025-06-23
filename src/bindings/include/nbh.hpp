@@ -13,12 +13,7 @@
 namespace nb = nanobind;
 using namespace nb::literals;
 
-#if NB_VERSION_MAJOR > 1
-// shapes are signed starting with NB 2, nb::any now stands for any type, not any shape
 constexpr auto any_size = -1;
-#else
-constexpr auto any_size = nb::any;
-#endif
 
 using TorchArr = nb::ndarray<nb::pytorch, nb::device::cpu, float>;
 

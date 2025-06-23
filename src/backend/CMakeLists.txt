@@ -51,7 +51,7 @@ set_target_properties(backend PROPERTIES
 )
 
 
-target_link_libraries(backend PUBLIC tabulate python_deps project_warnings spdlog::spdlog_header_only fmt::fmt)
+target_link_libraries(backend PUBLIC python_deps project_warnings spdlog::spdlog_header_only fmt::fmt)
 
 
 if(SIM_TRACK_RESOURCES)
