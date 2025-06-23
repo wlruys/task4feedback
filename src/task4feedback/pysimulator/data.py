@@ -165,7 +165,7 @@ class DataUse:
 
         if use in NonEvictableUses:
             self.nonevictable_usage_count[device] -= 1
-            assert self.nonevictable_usage_count[device] >= 0, f"Negative usage count."
+            assert self.nonevictable_usage_count[device] >= 0, "Negative usage count."
 
         if self.is_evictable(device) and not use == DataUses.EVICTING:
             # print(

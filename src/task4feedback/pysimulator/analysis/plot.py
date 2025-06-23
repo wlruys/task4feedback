@@ -753,7 +753,7 @@ def plot_data_event_count(
     ylabel: str = "Accumulated Number of Data Movements",  # Label of the y-axis
 ):
     data_tasks: DataTaskRecorder = simulator.recorders.get(DataTaskRecorder)
-    if name is "":
+    if name == "":
         name = f"DataEventCount_{simulator.scheduler_type}_{simulator.mapper_type}_{simulator.task_order_mode.name}_{str(len(simulator.topology.get_devices(device_type=Architecture.GPU)))}GPUs"
     data_movement = []
     for task in data_tasks.tasks.values():

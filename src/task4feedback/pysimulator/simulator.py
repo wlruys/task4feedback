@@ -11,7 +11,15 @@ from .topology import *
 from .rl.models.model import *
 from .rl.models.env import *
 
-from ..legacy_types import DataMap, Architecture, Device, TaskID, TaskState, TaskType, Time
+from ..legacy_types import (
+    DataMap,
+    Architecture,
+    Device,
+    TaskID,
+    TaskState,
+    TaskType,
+    Time,
+)
 from ..legacy_types import TaskRuntimeInfo, TaskPlacementInfo, TaskMap, ExecutionMode
 from ..legacy_types import TaskOrderType
 

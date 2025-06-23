@@ -186,7 +186,7 @@ def make_random_graph(
         for task in task_dict.values():
             data_dependencies = TaskDataInfo()
             child_tracker[task.id] = 0
-            if task.dependencies is []:
+            if task.dependencies == []:
                 # This is the first task
                 continue
             for dep_task in task.dependencies:

@@ -19,7 +19,6 @@ from tensordict import TensorDict
 from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph
 import random
 from task4feedback.graphs.mesh.plot import *
-import numpy as np
 from task4feedback.legacy_graphs import *
 from task4feedback.graphs.jacobi import JacobiGraph
 from torch_geometric.data import HeteroData

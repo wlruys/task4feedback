@@ -341,7 +341,7 @@ def write_to_pgraph(
             return info_to_comma(runtime)
         elif isinstance(runtime, list):
             raise NotImplementedError(
-                f"PGraph does not support lists of runtime configurations (Device configurations cannot vary by their index in the placement options)"
+                "PGraph does not support lists of runtime configurations (Device configurations cannot vary by their index in the placement options)"
             )
         else:
             raise ValueError(f"Unknown runtime type {runtime}")

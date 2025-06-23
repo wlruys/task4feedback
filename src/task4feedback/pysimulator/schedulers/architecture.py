@@ -93,7 +93,7 @@ class SchedulerArchitecture:
         return []
 
     def __str__(self):
-        return f"SchedulerArchitecture()"
+        return "SchedulerArchitecture()"
 
     def __repr__(self):
         self.__str__()

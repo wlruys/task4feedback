@@ -12,7 +12,6 @@ from torchrl.data.replay_buffers import (
     LazyMemmapStorage,
     LazyTensorStorage,
 )
-from torchrl.collectors import MultiSyncDataCollector
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement, Sampler
 from typing import Callable, Type, Self, Optional
 from ..util import *

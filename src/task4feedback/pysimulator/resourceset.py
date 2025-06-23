@@ -175,7 +175,7 @@ class ResourceSet:
         return True
 
     def __str__(self):
-        string = f"ResourceSet("
+        string = "ResourceSet("
         for key in self.store:
             string += f"{resource_names[key]}={self.store[key]} "
         string += ")"

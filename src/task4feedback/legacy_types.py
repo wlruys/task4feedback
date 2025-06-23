@@ -156,11 +156,12 @@ class Device:
     """
     Identifies a device in a synthetic task graph.
     """
+
     # The architecture of the device
     architecture: Architecture = Architecture.CPU
     # The id of the device (-1 for any)
     device_id: int = 0
-    
+
     def __str__(self):
         return f"{self.architecture.name}[{self.device_id}]"
 

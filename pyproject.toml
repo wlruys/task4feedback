@@ -57,10 +57,11 @@ build-backend = "scikit_build_core.build"
 minimum-version = "0.11"
 wheel.packages = ["src/task4feedback"]
 install.components = ["python"]
-cmake.version = ">=3.28"
+cmake.version = ">=3.29"
 cmake.build-type = "Release"
 build.verbose = true
-build-dir = "build"
+build-dir = "build/{wheel_tag}"
+wheel.expand-macos-universal-tags = true
 
 
 [tool.scikit-build.cmake.define]
@@ -87,6 +88,12 @@ cmake.define.ENABLE_NATIVE_TUNING = "ON"
 [[tool.scikit-build.overrides]]
 if.env.SIM_NATIVE = "OFF"
 inherit.cmake.define = "append"
+cmake.define.ENABLE_NATIVE_TUNING = "OFF"
+
+[[tool.scikit-build.overrides]]
+if.env.CMAKE_BUILD_TYPE = "Debug"
+inherit.cmake.define = "append"
+cmake.build-type = "Debug"
 cmake.define.ENABLE_NATIVE_TUNING = "OFF"
 
 
