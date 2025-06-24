@@ -247,15 +247,15 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
 
   records.record_completed(id, time);
   state.set_state(id, TaskState::COMPLETED);
-
   // clear task_buffer
   task_buffer.clear();
-
-  for (auto dependent_id : task_objects.get_dependents(id)) {
-    if (state.decrement_incomplete(dependent_id)) {
-      task_buffer.push_back(dependent_id);
-      assert(state.get_state(dependent_id) == TaskState::RESERVED);
-      assert(task_objects.is_compute(dependent_id));
+  if (!task_objects.is_eviction(id)) {
+    for (auto dependent_id : task_objects.get_dependents(id)) {
+      if (state.decrement_incomplete(dependent_id)) {
+        task_buffer.push_back(dependent_id);
+        assert(state.get_state(dependent_id) == TaskState::RESERVED);
+        assert(task_objects.is_compute(dependent_id));
+      }
     }
   }
 

@@ -1537,6 +1537,8 @@ struct DepthTaskFeature : public StateFeature<DepthTaskFeature> {
   }
 
   static f_t get_depth(const ComputeTask &task) {
+    // std::cout << "Task ID: " << task.get_id() << std::endl;
+    // std::cout << "Task Depth: " << task.get_depth() << std::endl;
     return static_cast<f_t>(task.get_depth());
   }
 
@@ -1729,10 +1731,10 @@ struct TaskStateFeature : public StateFeature<TaskStateFeature> {
     const auto &s = this->state;
     const auto &task_manager = s.get_task_manager();
     const auto state = task_manager.state.get_state(task_id);
-    output[0] = static_cast<f_t>(state == TaskState::MAPPED);
-    output[1] = static_cast<f_t>(state == TaskState::RESERVED);
-    output[2] = static_cast<f_t>(state == TaskState::LAUNCHED);
-    output[3] = static_cast<f_t>(state == TaskState::COMPLETED);
+    output[0] = static_cast<f_t>(state >= TaskState::MAPPED);
+    output[1] = static_cast<f_t>(state >= TaskState::RESERVED);
+    output[2] = static_cast<f_t>(state >= TaskState::LAUNCHED);
+    output[3] = static_cast<f_t>(state >= TaskState::COMPLETED);
   }
 };
 
