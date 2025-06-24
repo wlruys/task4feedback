@@ -37,6 +37,7 @@ if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)  # Don't use with AddressSanitizer
     find_package(mimalloc CONFIG QUIET)
     if(mimalloc_FOUND)
         message(STATUS "Using system-installed mimalloc")
+        add_library(mimalloc::mimalloc ALIAS mimalloc)
     else()
         message(STATUS "Fetching mimalloc from GitHub")
         FetchContent_Declare(
@@ -50,7 +51,7 @@ if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)  # Don't use with AddressSanitizer
         set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
         set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
         set(MI_BUILD_STATIC ON CACHE BOOL "" FORCE)
-        set(MI_OVERRIDE ON CACHE BOOL "" FORCE)          # Override malloc/free
+        set(MI_OVERRIDE ON CACHE BOOL "" FORCE)
         
 
         FetchContent_MakeAvailable(mimalloc)
