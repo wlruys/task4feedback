@@ -64,7 +64,7 @@ target_precompile_headers(backend PRIVATE
     <fmt/format.h>
 )
 
-target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt)
+target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt tracy_headers)
 
 if(SIM_TRACK_RESOURCES)
     target_compile_definitions(backend PUBLIC SIM_TRACK_RESOURCES)
@@ -81,6 +81,11 @@ endif()
 if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)
     target_link_libraries(backend PRIVATE mimalloc::mimalloc)
     target_compile_definitions(backend PRIVATE MI_MALLOC_OVERRIDE=1)
+endif()
+
+if(ENABLE_TRACY)
+    target_link_libraries(backend PUBLIC TracyClient)
+    target_compile_definitions(backend PUBLIC ENABLE_TRACY TRACY_ENABLE TRACY_ON_DEMAND)
 endif()
 
 target_include_directories(backend

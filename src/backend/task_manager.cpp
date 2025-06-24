@@ -165,6 +165,7 @@ TaskState TaskRecords::get_state_at_time(taskid_t id, timecount_t query_time) co
 
 // Task Manager
 void TaskManager::initialize_state() {
+  ZoneScoped;
   const auto &const_tasks = this->tasks.get();
   state = TaskStateInfo(tasks);
   records = TaskRecords(tasks);
@@ -198,6 +199,7 @@ void TaskManager::set_mapping(taskid_t id, devid_t devid) {
 }
 
 const TaskIDList &TaskManager::notify_mapped(taskid_t id, timecount_t time) {
+  ZoneScoped;
   const auto &task_objects = get_tasks();
 
   records.record_mapped(id, time);
@@ -218,6 +220,7 @@ const TaskIDList &TaskManager::notify_mapped(taskid_t id, timecount_t time) {
 }
 
 const TaskIDList &TaskManager::notify_reserved(taskid_t id, timecount_t time) {
+  ZoneScoped;
   const auto &task_objects = get_tasks();
 
   records.record_reserved(id, time);
@@ -243,6 +246,7 @@ void TaskManager::notify_launched(taskid_t id, timecount_t time) {
 }
 
 const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
+  ZoneScoped;
   const auto &task_objects = get_tasks();
 
   records.record_completed(id, time);
@@ -264,6 +268,7 @@ const TaskIDList &TaskManager::notify_completed(taskid_t id, timecount_t time) {
 
 const TaskIDList &TaskManager::notify_data_completed(taskid_t id, timecount_t time) {
   MONUnusedParameter(time);
+  ZoneScoped;
   const auto &task_objects = get_tasks();
   // clear task_buffer
   task_buffer.clear();

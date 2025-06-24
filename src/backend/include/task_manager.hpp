@@ -7,6 +7,7 @@
 #include "tasks.hpp"
 #include <ctime>
 #include <functional>
+#include <tracy/Tracy.hpp>
 
 class TaskManager;
 
@@ -221,6 +222,7 @@ public:
   TaskManager(const TaskManager &other) = default;
 
   void initialize(bool create_data_tasks = false) {
+    ZoneScoped;
     task_buffer.reserve(TASK_MANAGER_TASK_BUFFER_SIZE);
     // GraphManager::finalize(tasks, create_data_tasks);
     assert(tasks.get().is_initialized());
@@ -289,7 +291,6 @@ public:
   [[nodiscard]] const Tasks &get_tasks() const {
     return tasks;
   }
-
 
   bool is_mapped(taskid_t id) const {
     return state.is_mapped(id);

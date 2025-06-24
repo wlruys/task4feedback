@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS  OFF)
 set(CMAKE_UNITY_BUILD_BATCH_SIZE 0)
-
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ---- project options -------------------------------------------------------
 option(ENABLE_ASAN          "Compile with AddressSanitizer"          OFF)
@@ -20,6 +20,9 @@ option(PGO_MODE "PGO mode: Generate / Use / None"       "None")
 option(SIM_TRACK_RESOURCES  "Enable resource-usage logging"  ON)
 option(SIM_TRACK_LOCATION   "Enable data-location logging"   ON)
 option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
+option(ENABLE_TRACY         "Enable Tracy profiler support"   ON)
+option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" ON)
+
 
 if(ENABLE_CCACHE)
     find_program(CCACHE_FOUND ccache)
@@ -61,6 +64,49 @@ if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)  # Don't use with AddressSanitizer
     message(STATUS "mimalloc enabled - automatic malloc/free override")
 endif()
 
+
+FetchContent_Declare(tracy
+    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS TRUE
+    GIT_TAG master
+)     
+
+add_library(tracy_headers INTERFACE)
+
+
+if(ENABLE_TRACY)
+    set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
+    set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+    set(TRACY_LTO ON CACHE BOOL "" FORCE)
+    if(ENABLE_TRACY_LIBDEBUG)
+        set(TRACY_DEBUGINFOD ON CACHE BOOL "" FORCE)
+    else()
+        set(TRACY_DEBUGINFOD OFF CACHE BOOL "" FORCE)
+    endif()
+    FetchContent_MakeAvailable(tracy)     
+
+    target_link_libraries(tracy_headers    
+        INTERFACE Tracy::TracyClient)
+    target_compile_definitions(tracy_headers
+        INTERFACE TRACY_ENABLE TRACY_LTO TRACY_ON_DEMAND)
+    target_compile_options(tracy_headers
+        INTERFACE -fno-omit-frame-pointer -g)
+    if(ENABLE_TRACY_LIBDEBUG)
+        target_compile_definitions(tracy_headers 
+            INTERFACE TRACY_DEBUGINFOD)
+        include(FindPkgConfig)
+        pkg_check_modules(debuginfod REQUIRED libdebuginfod)
+        target_include_directories(tracy_headers INTERFACE ${debuginfod_INCLUDE_DIRS})
+        target_link_libraries(tracy_headers INTERFACE ${debuginfod_LINK_LIBRARIES})   
+    endif()
+else()
+    set(TRACY_ENABLE OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(tracy)     
+endif()
+
+target_include_directories(tracy_headers
+    INTERFACE ${tracy_SOURCE_DIR}/public)  # contains Tracy.hpp
 
 find_package(fmt CONFIG QUIET)
 if(fmt_FOUND)
@@ -113,13 +159,13 @@ elseif(PGO_MODE STREQUAL "Use")
     add_link_options   (-fprofile-use)
 endif()
 
-find_package(Python COMPONENTS Interpreter Development NumPy REQUIRED)
 find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
 
 include_directories(${Python_INCLUDE_DIRS})
 include_directories(${Python_NumPy_INCLUDE_DIRS})
 
 add_library(project_warnings INTERFACE)
+
 
 if(ENABLE_ASAN)
     target_compile_options(project_warnings INTERFACE -fsanitize=address -fno-omit-frame-pointer)

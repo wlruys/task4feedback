@@ -493,46 +493,6 @@ void SchedulerQueues::push_launchable_eviction(const TaskIDList &ids, const Prio
   }
 }
 
-// void SchedulerQueues::id_to_queue(taskid_t id, const TaskStateInfo &state) {
-//   if (state.is_mappable(id)) {
-//     push_mappable(id, state.get_mapping_priority(id));
-//   } else if (state.is_reservable(id)) {
-//     push_reservable(id, state.get_reserving_priority(id),
-//                     state.get_mapping(id));
-//   } else if (state.is_launchable(id)) {
-//     push_launchable(id, state.get_launching_priority(id),
-//                     state.get_mapping(id));
-//   }
-// }
-
-// TaskType SchedulerQueues::id_to_type(taskid_t id, const Tasks &tasks) {
-//   if (tasks.is_compute(id)) {
-//     return TaskType::COMPUTE;
-//   }
-//   return TaskType::DATA;
-// }
-
-// TODO(wlr): Deal with data tasks
-// void SchedulerQueues::populate(const TaskManager &task_manager) {
-//   const auto &state = task_manager.get_state();
-//   const auto &compute_tasks = task_manager.get_tasks().get_compute_tasks();
-
-//   for (const auto &compute_task : compute_tasks) {
-//     id_to_queue(compute_task.id, state);
-//   }
-// }
-
-// void SchedulerQueues::populate(const TaskIDList &ids,
-//                                const TaskManager &task_manager) {
-//   const auto &state = task_manager.get_state();
-
-//   for (auto id : ids) {
-//     id_to_queue(id, state);
-//   }
-// }
-
-// TaskCountInfo
-
 TaskCountInfo::TaskCountInfo(std::size_t n_devices)
     : per_device_mapped_tasks(n_devices), per_device_reserved_tasks(n_devices),
       per_device_launched_tasks(n_devices), per_device_completed_tasks(n_devices),
@@ -651,6 +611,7 @@ size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
 
 // Original function kept for backward compatibility
 TaskIDList &Scheduler::get_mappable_candidates() {
+  ZoneScoped;
   auto &s = this->state;
   bool condition = queues.has_mappable() && conditions.get().should_map(s, queues);
   clear_task_buffer();
@@ -667,6 +628,7 @@ TaskIDList &Scheduler::get_mappable_candidates() {
 }
 
 const TaskIDList &Scheduler::map_task(taskid_t task_id, Action &action) {
+  ZoneScoped;
   auto &s = this->state;
   auto current_time = s.global_time;
 
@@ -754,6 +716,7 @@ void Scheduler::remove_mapped_tasks(ActionList &action_list) {
 
 ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
                                                 EventManager &event_manager) {
+  ZoneScoped;
   success_count = 0;
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
@@ -797,6 +760,7 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
 }
 
 void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper) {
+  ZoneScoped;
   success_count = 0;
 
   auto &s = this->state;
@@ -864,6 +828,8 @@ void Scheduler::enqueue_data_tasks(taskid_t id) {
 
 SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id,
                                     TaskDeviceList &tasks_requesting_eviction) {
+  ZoneScoped;
+
   auto &s = this->state;
   auto current_time = s.global_time;
   auto &mapped = s.mapped_but_not_reserved_tasks;
@@ -924,6 +890,7 @@ SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id,
 }
 
 void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
+  ZoneScoped;
   // Can't reserve tasks if we are in the middle of an eviction
   auto current_time = this->state.global_time;
   assert(this->eviction_state == EvictionState::NONE);
@@ -1009,6 +976,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
 
 bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
                                     EventManager &event_manager) {
+  ZoneScoped;
   auto &s = this->state;
   auto current_time = s.global_time;
 
@@ -1061,6 +1029,7 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
 
 bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
                                  EventManager &event_manager) {
+  ZoneScoped;
   auto &s = this->state;
   auto current_time = s.global_time;
 
@@ -1104,6 +1073,7 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
 
 bool Scheduler::launch_eviction_task(taskid_t task_id, devid_t destination_id,
                                      EventManager &event_manager) {
+  ZoneScoped;
   auto &s = this->state;
   auto current_time = s.global_time;
 
@@ -1148,7 +1118,7 @@ bool Scheduler::launch_eviction_task(taskid_t task_id, devid_t destination_id,
 }
 
 void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_manager) {
-
+  ZoneScoped;
   auto &s = this->state;
   auto current_time = s.global_time;
 
@@ -1296,10 +1266,8 @@ void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_ma
   }
 }
 
-// TODO(wlr): implement eviction event
 void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager) {
-  MONUnusedParameter(eviction_event);
-  MONUnusedParameter(event_manager);
+  ZoneScoped;
   auto &s = this->state;
   auto &launchable = queues.launchable;
   auto &task_manager = s.task_manager;
@@ -1480,6 +1448,7 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
 }
 
 void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
+  ZoneScoped;
   auto &s = this->state;
   auto &task = s.task_manager.get_tasks().get_compute_task(task_id);
   SPDLOG_DEBUG("Time:{} Completing compute task {} on device {}", s.global_time,
@@ -1502,6 +1471,7 @@ void Scheduler::complete_compute_task(taskid_t task_id, devid_t device_id) {
 }
 
 void Scheduler::complete_data_task(taskid_t task_id, devid_t destination_id) {
+  ZoneScoped;
   auto &s = this->state;
   auto current_time = s.global_time;
   s.counts.count_data_completed(task_id, destination_id);
@@ -1654,6 +1624,7 @@ void Scheduler::complete_eviction_task(taskid_t eviction_task_id, devid_t destin
 }
 
 void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &event_manager) {
+  ZoneScoped;
   assert(complete_event.tasks.size() == 1);
   auto &s = this->state;
   taskid_t task_id = complete_event.tasks.front();

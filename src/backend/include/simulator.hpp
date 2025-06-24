@@ -14,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <sstream>
+#include <tracy/Tracy.hpp>
 #include <unistd.h>
 
 void init_simulator_logger() {
@@ -34,10 +35,12 @@ void init_simulator_logger() {
 class Simulator {
 protected:
   void add_initial_event() {
+    ZoneScoped;
     event_manager.create_event(EventType::MAPPER, 0);
   }
 
   ExecutionState dispatch_mapper(MapperEvent &event) {
+    ZoneScoped;
     if (use_python_mapper && scheduler.get_queues().has_mappable() &&
         scheduler.conditions.get().should_map(scheduler.get_state(), scheduler.get_queues())) {
       return ExecutionState::EXTERNAL_MAPPING;
@@ -72,6 +75,7 @@ public:
   }
 
   void gather_graph_statistics(std::vector<DeviceType> &device_types) {
+    ZoneScoped;
     scheduler.get_state().gather_graph_statistics(device_types);
   }
 
@@ -83,6 +87,7 @@ public:
   }
 
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = false) {
+    ZoneScoped;
     if (initialized) {
       spdlog::warn("Simulator already initialized ...skipping.");
       return;
@@ -95,6 +100,7 @@ public:
   }
 
   void initialize_data_manager() {
+    ZoneScoped;
     if (!initialized) {
       spdlog::critical("Simulator not initialized.");
       return;
@@ -115,6 +121,7 @@ public:
   }
 
   ExecutionState handle_event(EventVariant &event) {
+    ZoneScoped;
     auto event_type = get_type(event);
 
     switch (event_type) {
@@ -150,7 +157,6 @@ public:
   }
 
   void map_tasks(ActionList &action_list) {
-
     if (this->last_state != ExecutionState::EXTERNAL_MAPPING) {
       spdlog::critical("Simulator not in external mapping state.");
       return;
@@ -198,6 +204,7 @@ public:
     return ex_state;
   }
   ExecutionState run() {
+    ZoneScoped;
 
     if (last_state == ExecutionState::NONE) {
       last_state = ExecutionState::RUNNING;
