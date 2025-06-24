@@ -51,7 +51,7 @@ def make_jacobi_env(config: JacobiConfig):
         m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
     )
 
-    internal_mapper = fastsim.RandomMapper
+    internal_mapper = fastsim.DequeueEFTMapper
     external_mapper = ExternalMapper
 
     # partition = jgraph.mincut_per_levels(arch=DeviceType.GPU, level_chunks=20)
@@ -86,7 +86,7 @@ def make_dynamic_jacobi_env(config: DynamicJacobiConfig):
         m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
     )
 
-    internal_mapper = fastsim.RandomMapper
+    internal_mapper = fastsim.DequeueEFTMapper
     external_mapper = ExternalMapper
 
     # partition = jgraph.mincut_per_levels(arch=DeviceType.GPU, level_chunks=20)

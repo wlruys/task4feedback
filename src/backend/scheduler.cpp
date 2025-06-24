@@ -156,64 +156,64 @@ SchedulerState::get_launched_mem_events(devid_t device_id) const {
   return records.get_state_at_time(task_id, time);
 }
 
-ValidEventArray SchedulerState::get_valid_intervals_mapped(dataid_t data_id,
-                                                           devid_t device_id) const {
-  /* Get the valid intervals for a data mapped to a device */
-  if (track_location_guard()) {
-    return {};
-  }
-  return data_manager.get_valid_intervals_mapped(data_id, device_id);
-}
+// ValidEventArray &SchedulerState::get_valid_intervals_mapped(dataid_t data_id, devid_t device_id)
+// {
+//   /* Get the valid intervals for a data mapped to a device */
+//   if (track_location_guard()) {
+//     return {};
+//   }
+//   return data_manager.get_valid_intervals_mapped(data_id, device_id);
+// }
 
-ValidEventArray SchedulerState::get_valid_intervals_reserved(dataid_t data_id,
-                                                             devid_t device_id) const {
-  /* Get the valid intervals for a data reserved to a device*/
-  if (track_location_guard()) {
-    return {};
-  }
+// ValidEventArray &SchedulerState::get_valid_intervals_reserved(dataid_t data_id,
+//                                                               devid_t device_id) onst {
+//   /* Get the valid intervals for a data reserved to a device*/
+//   if (track_location_guard()) {
+//     return {};
+//   }
 
-  return data_manager.get_valid_intervals_reserved(data_id, device_id);
-}
+//   return data_manager.get_valid_intervals_reserved(data_id, device_id);
+// }
 
-ValidEventArray SchedulerState::get_valid_intervals_launched(dataid_t data_id,
-                                                             devid_t device_id) const {
-  /* Get the valid intervals for a data launched to a device */
-  if (track_location_guard()) {
-    return {};
-  }
+// ValidEventArray &SchedulerState::get_valid_intervals_launched(dataid_t data_id, devid_t
+// device_id) {
+//   /* Get the valid intervals for a data launched to a device */
+//   if (track_location_guard()) {
+//     return {};
+//   }
 
-  return data_manager.get_valid_intervals_launched(data_id, device_id);
-}
+//   return data_manager.get_valid_intervals_launched(data_id, device_id);
+// }
 
-bool SchedulerState::check_valid_mapped_at(dataid_t data_id, devid_t device_id,
-                                           timecount_t query_time) const {
-  /* Check if a data is valid at a given time (in the mapping location table) */
-  if (track_location_guard()) {
-    return false;
-  }
+// bool SchedulerState::check_valid_mapped_at(dataid_t data_id, devid_t device_id,
+//                                            timecount_t query_time) const {
+//   /* Check if a data is valid at a given time (in the mapping location table) */
+//   if (track_location_guard()) {
+//     return false;
+//   }
 
-  return data_manager.check_valid_at_time_mapped(data_id, device_id, query_time);
-}
+//   return data_manager.check_valid_at_time_mapped(data_id, device_id, query_time);
+// }
 
-bool SchedulerState::check_valid_reserved_at(dataid_t data_id, devid_t device_id,
-                                             timecount_t query_time) const {
-  /* Check if a data is valid at a given time (in the reservation location table) */
-  if (track_location_guard()) {
-    return false;
-  }
+// bool SchedulerState::check_valid_reserved_at(dataid_t data_id, devid_t device_id,
+//                                              timecount_t query_time) const {
+//   /* Check if a data is valid at a given time (in the reservation location table) */
+//   if (track_location_guard()) {
+//     return false;
+//   }
 
-  return data_manager.check_valid_at_time_reserved(data_id, device_id, query_time);
-}
+//   return data_manager.check_valid_at_time_reserved(data_id, device_id, query_time);
+// }
 
-bool SchedulerState::check_valid_launched_at(dataid_t data_id, devid_t device_id,
-                                             timecount_t query_time) const {
-  /* Check if a data is valid at a given time (in the launch location table) */
-  if (track_location_guard()) {
-    return false;
-  }
+// bool SchedulerState::check_valid_launched_at(dataid_t data_id, devid_t device_id,
+//                                              timecount_t query_time) const {
+//   /* Check if a data is valid at a given time (in the launch location table) */
+//   if (track_location_guard()) {
+//     return false;
+//   }
 
-  return data_manager.check_valid_at_time_launched(data_id, device_id, query_time);
-}
+//   return data_manager.check_valid_at_time_launched(data_id, device_id, query_time);
+// }
 
 timecount_t SchedulerState::get_execution_time(taskid_t task_id) const {
   auto device_id = task_manager.state.get_mapping(task_id);
@@ -1296,9 +1296,11 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
           const auto &task = tasks.get_compute_task(task_id);
           auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, task.get_unique());
           for (auto data_id : data_ids) {
-            auto sources = data_manager.get_valid_launched_locations(data_id);
-            assert(!sources.empty());
-            if (sources.size() == 1) {
+            // auto sources = data_manager.get_valid_launched_locations(data_id);
+            auto location_flags = data_manager.get_launched_location_flags(data_id);
+            devid_t n_sources = std::count(location_flags.begin(), location_flags.end(), 1);
+            assert(n_sources > 0);
+            if (n_sources == 1) {
               eviction_count += 1;
               auto eviction_task_id = task_manager.create_eviction_task(task_id, data_id, HOST_ID,
                                                                         device_id, current_time);

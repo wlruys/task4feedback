@@ -492,69 +492,69 @@ public:
     return records.get_state_at_time(task_id, time);
   }
 
-  ValidEventArray get_valid_intervals_mapped(dataid_t data_id, devid_t device_id) const {
-    /* Get the valid intervals for a data mapped to a device */
-    if (track_location_guard()) {
-      return {};
-    }
+  // ValidEventArray &get_valid_intervals_mapped(dataid_t data_id, devid_t device_id) {
+  //   /* Get the valid intervals for a data mapped to a device */
+  //   if (track_location_guard()) {
+  //     return {};
+  //   }
 
-    const auto &s = scheduler.get_state();
-    const auto &data_manager = s.get_data_manager();
-    return data_manager.get_valid_intervals_mapped(data_id, device_id);
-  }
+  //   const auto &s = scheduler.get_state();
+  //   auto &data_manager = s.get_data_manager();
+  //   return data_manager.get_valid_intervals_mapped(data_id, device_id);
+  // }
 
-  ValidEventArray get_valid_intervals_reserved(dataid_t data_id, devid_t device_id) const {
-    /* Get the valid intervals for a data reserved to a device*/
-    if (track_location_guard()) {
-      return {};
-    }
+  // ValidEventArray &get_valid_intervals_reserved(dataid_t data_id, devid_t device_id) {
+  //   /* Get the valid intervals for a data reserved to a device*/
+  //   if (track_location_guard()) {
+  //     return {};
+  //   }
 
-    const auto &s = scheduler.get_state();
-    const auto &data_manager = s.get_data_manager();
-    return data_manager.get_valid_intervals_reserved(data_id, device_id);
-  }
+  //   const auto &s = scheduler.get_state();
+  //   auto &data_manager = s.get_data_manager();
+  //   return data_manager.get_valid_intervals_reserved(data_id, device_id);
+  // }
 
-  ValidEventArray get_valid_intervals_launched(dataid_t data_id, devid_t device_id) const {
-    /* Get the valid intervals for a data launched to a device */
-    if (track_location_guard()) {
-      return {};
-    }
+  // ValidEventArray &get_valid_intervals_launched(dataid_t data_id, devid_t device_id) {
+  //   /* Get the valid intervals for a data launched to a device */
+  //   if (track_location_guard()) {
+  //     return {};
+  //   }
 
-    const auto &s = scheduler.get_state();
-    const auto &data_manager = s.get_data_manager();
-    return data_manager.get_valid_intervals_launched(data_id, device_id);
-  }
+  //   const auto &s = scheduler.get_state();
+  //   auto &data_manager = s.get_data_manager();
+  //   return data_manager.get_valid_intervals_launched(data_id, device_id);
+  // }
 
-  bool check_valid_mapped(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
-    /* Check if a data is valid at a given time (in the mapping location table) */
-    if (track_location_guard()) {
-      return false;
-    }
+  // bool check_valid_mapped(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
+  //   /* Check if a data is valid at a given time (in the mapping location table) */
+  //   if (track_location_guard()) {
+  //     return false;
+  //   }
 
-    const auto &s = scheduler.get_state();
-    const auto &data_manager = s.get_data_manager();
-    return data_manager.check_valid_at_time_mapped(data_id, device_id, query_time);
-  }
+  //   const auto &s = scheduler.get_state();
+  //   const auto &data_manager = s.get_data_manager();
+  //   return data_manager.check_valid_at_time_mapped(data_id, device_id, query_time);
+  // }
 
-  bool check_valid_reserved(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
-    /* Check if a data is valid at a given time (in the reservation location table) */
-    if (track_location_guard()) {
-      return false;
-    }
+  // bool check_valid_reserved(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
+  //   /* Check if a data is valid at a given time (in the reservation location table) */
+  //   if (track_location_guard()) {
+  //     return false;
+  //   }
 
-    const auto &s = scheduler.get_state();
-    const auto &data_manager = s.get_data_manager();
-    return data_manager.check_valid_at_time_reserved(data_id, device_id, query_time);
-  }
+  //   const auto &s = scheduler.get_state();
+  //   const auto &data_manager = s.get_data_manager();
+  //   return data_manager.check_valid_at_time_reserved(data_id, device_id, query_time);
+  // }
 
-  bool check_valid_launched(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
-    /* Check if a data is valid at a given time (in the launch location table) */
-    if (track_location_guard()) {
-      return false;
-    }
+  // bool check_valid_launched(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
+  //   /* Check if a data is valid at a given time (in the launch location table) */
+  //   if (track_location_guard()) {
+  //     return false;
+  //   }
 
-    const auto &s = scheduler.get_state();
-    const auto &data_manager = s.get_data_manager();
-    return data_manager.check_valid_at_time_launched(data_id, device_id, query_time);
-  }
+  //   const auto &s = scheduler.get_state();
+  //   const auto &data_manager = s.get_data_manager();
+  //   return data_manager.check_valid_at_time_launched(data_id, device_id, query_time);
+  // }
 };

@@ -44,7 +44,7 @@ def collect_eft_runs(
             m = graph
             m.finalize_tasks()
             spec = create_graph_spec()
-            internal_mapper = fastsim.RandomMapper
+            internal_mapper = fastsim.DequeueEFTMapper
             external_mapper = ExternalMapper
 
             input = SimulatorInput(

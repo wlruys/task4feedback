@@ -13,6 +13,7 @@
 #include <functional>
 #include <iostream>
 #include <random>
+#include <span>
 #include <sys/types.h>
 #include <unordered_map>
 #include <vector>
@@ -52,10 +53,10 @@ struct CommunicationRequest {
 };
 
 class Topology {
+  devid_t num_devices = 0;
   std::vector<timecount_t> latency;
   std::vector<mem_t> bandwidths;
   std::vector<copy_t> links;
-  devid_t num_devices = 0;
 
 public:
   Topology(devid_t num_devices)
@@ -64,40 +65,40 @@ public:
   }
 
   void set_bandwidth(devid_t src, devid_t dst, mem_t bandwidth) {
-    bandwidths.at(src * num_devices + dst) = bandwidth;
+    bandwidths[src * num_devices + dst] = bandwidth;
   }
 
   void set_max_connections(devid_t src, devid_t dst, uint8_t max_links) {
-    links.at(src * num_devices + dst) = max_links;
+    links[src * num_devices + dst] = max_links;
   }
 
   void set_latency(devid_t src, devid_t dst, timecount_t latency_) {
-    latency.at(src * num_devices + dst) = latency_;
+    latency[src * num_devices + dst] = latency_;
   }
 
   [[nodiscard]] timecount_t get_latency(devid_t src, devid_t dst) const {
-    return latency.at(src * num_devices + dst);
+    return latency[src * num_devices + dst];
   }
 
   [[nodiscard]] mem_t get_bandwidth(devid_t src, devid_t dst) const {
-    return bandwidths.at(src * num_devices + dst);
+    return bandwidths[src * num_devices + dst];
   }
 
   [[nodiscard]] bool is_connected(devid_t src, devid_t dst) const {
-    return links.at(src * num_devices + dst) > 0;
+    return links[src * num_devices + dst] > 0;
   }
 
   [[nodiscard]] copy_t get_max_connections(devid_t src, devid_t dst) const {
-    return links.at(src * num_devices + dst);
+    return links[src * num_devices + dst];
   }
 };
 
 class CommunicationNoise {
 protected:
-  std::unordered_map<CommunicationRequest, CommunicationStats, CommunicationRequest::Hash> record;
   unsigned int seed = 0;
-  mutable std::mt19937 gen;
   std::reference_wrapper<Topology> topology;
+  std::unordered_map<CommunicationRequest, CommunicationStats, CommunicationRequest::Hash> record;
+  mutable std::mt19937 gen;
 
   struct request_high_precision {
     uint64_t data_task_id = 0;
@@ -495,6 +496,34 @@ public:
           best_source = src;
           found = true;
         }
+      }
+    }
+    return {found, best_source};
+  }
+
+  [[nodiscard]] SourceRequest get_best_source(devid_t dst,
+                                              std::span<const int8_t> possible_source_flags) const {
+    // Return the source with the highest bandwidth
+    // If no source is available, return found=false
+
+    bool found = false;
+    devid_t best_source = 0;
+    mem_t best_bandwidth = 0;
+
+    for (devid_t src = 0; src < possible_source_flags.size(); ++src) {
+      if (possible_source_flags[src] == 0) {
+        continue; // Skip invalid sources
+      }
+
+      if (src == dst) {
+        return {true, src};
+      }
+
+      auto bandwidth = get_available_bandwidth(src, dst);
+      if (bandwidth > best_bandwidth) {
+        best_bandwidth = bandwidth;
+        best_source = src;
+        found = true;
       }
     }
     return {found, best_source};

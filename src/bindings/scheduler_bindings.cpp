@@ -47,19 +47,19 @@ void init_scheduler_ext(nb::module_ &m) {
       .def("get_launched_mem_events", &SchedulerState::get_launched_mem_events, "device_id"_a)
       .def("get_state_at", &SchedulerState::get_state_at, "task_id"_a, "time"_a)
       .def("is_data_task_virtual", &SchedulerState::is_data_task_virtual, "task_id"_a)
-      .def("get_data_task_source", &SchedulerState::get_data_task_source, "task_id"_a)
-      .def("get_valid_intervals_mapped", &SchedulerState::get_valid_intervals_mapped, "data_id"_a,
-           "device_id"_a)
-      .def("get_valid_intervals_reserved", &SchedulerState::get_valid_intervals_reserved,
-           "data_id"_a, "device_id"_a)
-      .def("get_valid_intervals_launched", &SchedulerState::get_valid_intervals_launched,
-           "data_id"_a, "device_id"_a)
-      .def("check_valid_mapped_at", &SchedulerState::check_valid_mapped_at, "data_id"_a,
-           "device_id"_a, "query_time"_a)
-      .def("check_valid_reserved_at", &SchedulerState::check_valid_reserved_at, "data_id"_a,
-           "device_id"_a, "query_time"_a)
-      .def("check_valid_launched_at", &SchedulerState::check_valid_launched_at, "data_id"_a,
-           "device_id"_a, "query_time"_a);
+      .def("get_data_task_source", &SchedulerState::get_data_task_source, "task_id"_a);
+  //  .def("get_valid_intervals_mapped", &SchedulerState::get_valid_intervals_mapped, "data_id"_a,
+  //       "device_id"_a)
+  //  .def("get_valid_intervals_reserved", &SchedulerState::get_valid_intervals_reserved,
+  //       "data_id"_a, "device_id"_a)
+  //  .def("get_valid_intervals_launched", &SchedulerState::get_valid_intervals_launched,
+  //       "data_id"_a, "device_id"_a)
+  //  .def("check_valid_mapped_at", &SchedulerState::check_valid_mapped_at, "data_id"_a,
+  //       "device_id"_a, "query_time"_a)
+  //  .def("check_valid_reserved_at", &SchedulerState::check_valid_reserved_at, "data_id"_a,
+  //       "device_id"_a, "query_time"_a)
+  //  .def("check_valid_launched_at", &SchedulerState::check_valid_launched_at, "data_id"_a,
+  //       "device_id"_a, "query_time"_a);
 
   nb::class_<TransitionConditions>(m, "TransitionConditions")
       .def("should_map", &TransitionConditions::should_map)

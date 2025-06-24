@@ -643,6 +643,10 @@ public:
     return data_manager;
   }
 
+  [[nodiscard]] DataManager &get_data_manager() {
+    return data_manager;
+  }
+
   friend class Scheduler;
   friend class TransitionConstraints;
 };
@@ -1199,23 +1203,12 @@ public:
 
   timecount_t time_for_transfer(dataid_t data_id, devid_t destination,
                                 const SchedulerState &state) {
-    // Get valid locations in mapped
-    const auto &data_manager = state.get_data_manager();
+    auto &data_manager = state.get_data_manager();
     const auto &communication_manager = state.get_communication_manager();
-    const DeviceIDList valid_sources = data_manager.get_valid_mapped_locations(data_id);
-    assert(!valid_sources.empty());
+    auto location_flags = data_manager.get_mapped_location_flags(data_id);
     const mem_t data_size = data_manager.get_data().get_size(data_id);
-
-    // SPDLOG_DEBUG("Data {} has size {}", data_manager.get_data().get_name(data_id), data_size);
-
-    SourceRequest req = communication_manager.get_best_source(destination, valid_sources);
+    SourceRequest req = communication_manager.get_best_source(destination, location_flags);
     assert(req.found);
-
-    // SPDLOG_DEBUG("Best source to transfer data {} to device {} is device {}",
-    //              data_manager.get_data().get_name(data_id), destination, req.source);
-    // SPDLOG_DEBUG("It has bandwidth {}",
-    //              communication_manager.get_bandwidth(req.source, destination));
-
     return communication_manager.ideal_time_to_transfer(data_size, req.source, destination);
   }
 
@@ -1264,16 +1257,11 @@ public:
 
     timecount_t dep_time = get_dependency_finish_time(task_id, state);
 
-    // SPDLOG_DEBUG("Computing EFT for task {}", task_manager.get_tasks().get_name(task_id));
-    // SPDLOG_DEBUG("Dependency finish time is {}", dep_time);
-
     for (auto device_id : device_buffer) {
       timecount_t start_time = get_device_available_time(device_id, state);
-      // SPDLOG_DEBUG("Device {} is available at {}", device_id, start_time);
       start_time = std::max(start_time, dep_time);
       timecount_t finish_time = get_finish_time(task_id, device_id, start_time, state);
       finish_time_buffer.emplace_back(device_id, finish_time);
-      // SPDLOG_DEBUG("EFT for task {} on device {} is {}", task_id, device_id, finish_time);
     }
   }
 
@@ -1285,7 +1273,6 @@ public:
     for (std::size_t i = 0; i < finish_time_buffer.size(); i++) {
       devid_t device_id = finish_time_buffer.at(i).device_id;
       timecount_t finish_time = finish_time_buffer.at(i).time;
-      // SPDLOG_DEBUG("EFT for task {} on device {} is {}", task_id, device_id, finish_time);
 
       if (finish_time < min_time) {
         min_time = finish_time;
