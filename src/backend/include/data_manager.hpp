@@ -200,7 +200,7 @@ struct ValidEventArray {
 class BlockLocation {
 protected:
   dataid_t data_id;
-  std::vector<bool> locations;
+  std::vector<int8_t> locations;
   std::vector<std::vector<ValidInterval>> valid_intervals;
   std::vector<timecount_t> current_start;
 
@@ -500,16 +500,17 @@ public:
     return movement_times.find({data_id, destination}) != movement_times.end();
   }
 
-  [[nodiscard]] timecount_t get_time(dataid_t data_id, devid_t destination) const {
+  [[nodiscard]] inline timecount_t get_time(dataid_t data_id, devid_t destination) const {
     auto it = movement_times.find({data_id, destination});
     return it == movement_times.end() ? 0 : it->second;
   }
 
-  void set_completion(dataid_t data_id, devid_t destination, timecount_t global_completion_time) {
+  inline void set_completion(dataid_t data_id, devid_t destination,
+                             timecount_t global_completion_time) {
     movement_times[{data_id, destination}] = global_completion_time;
   }
 
-  void remove(dataid_t data_id, devid_t destination) {
+  inline void remove(dataid_t data_id, devid_t destination) {
     movement_times.erase({data_id, destination});
   }
 };
