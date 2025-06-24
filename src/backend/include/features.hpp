@@ -1568,7 +1568,7 @@ struct ReadDataLocationFeature : public StateFeature<ReadDataLocationFeature> {
     double max_size = static_cast<double>(state.stats.total_read_stats.max);
     double total_read = static_cast<double>(data.get_total_size(task.get_read()));
     for (devid_t i = 1; i < devices.size(); i++) {
-      output[i - 1] = -guarded_divide(total_read, max_size);
+      // output[i - 1] = -guarded_divide(total_read, max_size);
       for (auto data_id : task.get_read()) {
         if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_id), i)) {
           auto data_size = static_cast<double>(data.get_size(data_id));

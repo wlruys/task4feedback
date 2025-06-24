@@ -857,17 +857,17 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
             fastsim.EmptyTaskFeature, 1
         )  # last for whether it is candidate or not
 
-        # device_feature_factory = FeatureExtractorFactory()
+        device_feature_factory = FeatureExtractorFactory()
         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
         # device_feature_factory.add(fastsim.DeviceIDFeature)
         # device_feature_factory.add(fastsim.DeviceMemoryFeature)
-        # device_feature_factory.add(fastsim.DeviceTimeFeature)
+        device_feature_factory.add(fastsim.DeviceTimeFeature)
 
         super().__init__(
             spec,
             graph_extractor_t,
             task_feature_factory,
-            # device_feature_factory,
+            device_feature_factory,
         )
 
     def create(self, simulator: SimulatorDriver):
@@ -875,13 +875,13 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
         graph_spec = self.graph_spec
         graph_extractor = self.graph_extractor_t(state)
         task_feature_extractor = self.task_feature_factory.create(state)
-        # device_feature_extractor = self.device_feature_factory.create(state)
+        device_feature_extractor = self.device_feature_factory.create(state)
         observer = VectorObserver(
             simulator,
             graph_spec,
             graph_extractor,
             task_feature_extractor,
-            # device_feature_extractor,
+            device_feature_extractor,
         )
         observer.reset()
         return observer

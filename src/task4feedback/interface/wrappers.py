@@ -721,20 +721,20 @@ class ExternalObserverFactory:
     graph_spec: fastsim.GraphSpec
     graph_extractor_t: Type[fastsim.GraphExtractor]
     task_feature_factory: FeatureExtractorFactory
-    # device_feature_factory: FeatureExtractorFactory
+    device_feature_factory: FeatureExtractorFactory
 
     def create(self, simulator: "SimulatorDriver"):
         state = simulator.get_state()
         graph_spec = self.graph_spec
         graph_extractor = self.graph_extractor_t(state)
         task_feature_extractor = self.task_feature_factory.create(state)
-        # device_feature_extractor = self.device_feature_factory.create(state)
+        device_feature_extractor = self.device_feature_factory.create(state)
         observer = ExternalObserver(
             simulator,
             graph_spec,
             graph_extractor,
             task_feature_extractor,
-            # device_feature_extractor,
+            device_feature_extractor,
         )
         return observer
 
@@ -882,8 +882,8 @@ class ExternalObserver:
     graph_spec: fastsim.GraphSpec
     graph_extractor: fastsim.GraphExtractor
     task_features: fastsim.RuntimeFeatureExtractor
-    # device_features: fastsim.RuntimeFeatureExtractor
-    truncate: bool = True
+    device_features: fastsim.RuntimeFeatureExtractor
+    truncate: bool = False
     task_ids = None
 
     def reset(self):
@@ -933,6 +933,12 @@ class ExternalObserver:
             return 0
         return self.task_features.feature_dim
 
+    @property
+    def device_feature_dim(self):
+        if self.device_features is None:
+            return 0
+        return self.device_features.feature_dim
+
     def get_task_features(self, task_ids, workspace):
         length = self.task_features.get_features_batch(task_ids, workspace)
 
@@ -947,12 +953,12 @@ class ExternalObserver:
     #         workspace = workspace[:length]
     #     return workspace, length
 
-    # def get_device_features(self, device_ids, workspace):
-    #     length = self.device_features.get_features_batch(device_ids, workspace)
+    def get_device_features(self, device_ids, workspace):
+        length = self.device_features.get_features_batch(device_ids, workspace)
 
-    #     if self.truncate:
-    #         workspace = workspace[:length]
-    #     return workspace, length
+        if self.truncate:
+            workspace = workspace[:length]
+        return workspace, length
 
     # def get_used_data(self, task_ids, workspace):
     #     length = self.graph_extractor.get_unique_data(task_ids, workspace)
@@ -1018,6 +1024,10 @@ class ExternalObserver:
                 "tasks": torch.zeros(
                     (spec.max_tasks, self.task_feature_dim), dtype=torch.float32
                 ),
+                "devices": torch.zeros(
+                    (spec.max_devices - 1, self.device_feature_dim),
+                    dtype=torch.float32,
+                ),
                 "aux": aux_tensor,
             }
         )
@@ -1030,6 +1040,9 @@ class ExternalObserver:
         task_ids: Optional[torch.Tensor] = None,
     ):
         self.get_task_features(self.task_ids, output["tasks"])
+        self.get_device_features(
+            list(range(1, self.graph_spec.max_devices)), output["devices"]
+        )
         # print("Task attribute", output["nodes"]["tasks"]["attr"])
 
     # def data_observation(self, output: TensorDict):
