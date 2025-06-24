@@ -96,7 +96,8 @@ void Tasks::create_data_task(ComputeTask &task, bool has_writer, taskid_t writer
   data_tasks.emplace_back(data_task_id);
   DataTask &data_task = data_tasks.back();
   auto &compute_task_name = task_names[task.id];
-  task_names.emplace_back(compute_task_name + "_data[" + std::to_string(data_id) + "]");
+  // task_names.push_back(compute_task_name + "_data[" + std::to_string(data_id) + "]");
+  task_names.push_back("_data[" + std::to_string(data_id) + "]");
   data_task.set_data_id(data_id);
   data_task.set_compute_task(task.id);
 

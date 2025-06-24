@@ -43,7 +43,6 @@ void init_simulator_ext(nb::module_ &m) {
       .def_ro("initialized", &Simulator::initialized)
       .def_ro("use_python_mapper", &Simulator::use_python_mapper)
       .def_ro("last_execution_state", &Simulator::last_state)
-      .def_ro("last_event", &Simulator::last_event)
       .def_ro("data_initialized", &Simulator::data_initialized)
       .def(nb::init<SchedulerInput &, Mapper &>(), nb::keep_alive<1, 2>(),
            nb::keep_alive<1, 3>()) // Keep input and mapper alive

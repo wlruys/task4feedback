@@ -42,16 +42,21 @@ if(CMAKE_CROSSCOMPILING AND SKBUILD_CROSS_STATIC_LIBCPP)
     nanobind_musl_static_libcpp(fastsim2)
 endif()
 
+if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)
+    target_link_libraries(fastsim2 PRIVATE mimalloc::mimalloc)
+    target_compile_definitions(fastsim2 PRIVATE MI_MALLOC_OVERRIDE=1)
+endif()
+
 if(CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo")
     nanobind_lto(fastsim2)
     nanobind_strip(fastsim2)
 endif()
 
-nanobind_add_stub(fastsim2_stub
-    MODULE fastsim2
-    OUTPUT fastsim2.pyi
-    MARKER_FILE py.typed
-    DEPENDS fastsim2)
+# nanobind_add_stub(fastsim2_stub
+#     MODULE fastsim2
+#     OUTPUT fastsim2.pyi
+#     MARKER_FILE py.typed
+#     DEPENDS fastsim2)
 
 install(TARGETS fastsim2
         COMPONENT python

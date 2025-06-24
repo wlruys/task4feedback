@@ -78,6 +78,10 @@ if(DEFINED SPDLOG_ACTIVE_LEVEL)
     target_compile_definitions(backend PUBLIC SPDLOG_ACTIVE_LEVEL=${SPDLOG_ACTIVE_LEVEL})
 endif()
 
+if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)
+    target_link_libraries(backend PRIVATE mimalloc::mimalloc)
+    target_compile_definitions(backend PRIVATE MI_MALLOC_OVERRIDE=1)
+endif()
 
 target_include_directories(backend
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

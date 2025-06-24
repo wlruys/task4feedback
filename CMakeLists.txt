@@ -11,19 +11,55 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS  OFF)
 set(CMAKE_UNITY_BUILD_BATCH_SIZE 0)
 
-find_program(CCACHE_PROGRAM ccache)
-if(CCACHE_PROGRAM)
-    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-    message(STATUS "Using ccache: ${CCACHE_PROGRAM}")
-endif()
 
 # ---- project options -------------------------------------------------------
 option(ENABLE_ASAN          "Compile with AddressSanitizer"          OFF)
+option(ENABLE_MIMALLOC      "Use mimalloc memory allocator"          ON)
 option(ENABLE_NATIVE_TUNING "Add -march=native / -mtune=native"      ON)
 option(PGO_MODE "PGO mode: Generate / Use / None"       "None")
 option(SIM_TRACK_RESOURCES  "Enable resource-usage logging"  ON)
 option(SIM_TRACK_LOCATION   "Enable data-location logging"   ON)
+option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
+
+if(ENABLE_CCACHE)
+    find_program(CCACHE_FOUND ccache)
+    if(CCACHE_FOUND)
+        message(STATUS "Using ccache for faster builds")
+        set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
+        set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK   ccache)
+    else()
+        message(WARNING "ccache not found, disabling ENABLE_CCACHE")
+        set(ENABLE_CCACHE OFF)
+    endif()
+endif()
+
+if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)  # Don't use with AddressSanitizer
+    find_package(mimalloc CONFIG QUIET)
+    if(mimalloc_FOUND)
+        message(STATUS "Using system-installed mimalloc")
+    else()
+        message(STATUS "Fetching mimalloc from GitHub")
+        FetchContent_Declare(
+            mimalloc
+            GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
+            GIT_TAG        v2.1.7
+        )
+        
+        # Configure mimalloc build options
+        set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
+        set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+        set(MI_BUILD_STATIC ON CACHE BOOL "" FORCE)
+        set(MI_OVERRIDE ON CACHE BOOL "" FORCE)          # Override malloc/free
+        
+
+        FetchContent_MakeAvailable(mimalloc)
+        add_library(mimalloc::mimalloc ALIAS mimalloc-static)
+    endif()
+    
+    message(STATUS "mimalloc enabled - automatic malloc/free override")
+endif()
+
 
 find_package(fmt CONFIG QUIET)
 if(fmt_FOUND)
