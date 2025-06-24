@@ -3,7 +3,9 @@
 #include "resources.hpp"
 #include "settings.hpp"
 #include <cstddef>
+#include <queue>
 #include <utility>
+#include <variant>
 
 enum class EventType {
   MAPPER = 0,
@@ -14,108 +16,102 @@ enum class EventType {
 };
 constexpr std::size_t num_event_types = 5;
 
-// Define << operator for EventType
-inline std::string to_string(const EventType &type) {
-  switch (type) {
+inline std::string to_string(EventType t) {
+  switch (t) {
   case EventType::MAPPER:
     return "MAPPER";
-    break;
   case EventType::RESERVER:
     return "RESERVER";
-    break;
   case EventType::LAUNCHER:
     return "LAUNCHER";
-    break;
   case EventType::EVICTOR:
     return "EVICTOR";
-    break;
   case EventType::COMPLETER:
     return "COMPLETER";
-    break;
-  default:
-    return "UNKNOWN";
   }
+  return "UNKNOWN";
 }
 
-inline std::ostream &operator<<(std::ostream &os, const EventType &type) {
-  os << to_string(type);
-  return os;
+inline std::ostream &operator<<(std::ostream &os, EventType t) {
+  return os << to_string(t);
 }
 
-class Event {
-protected:
-  EventType type = EventType::MAPPER;
-  timecount_t time = 0;
+struct MapperEvent {
+  static constexpr EventType type = EventType::MAPPER;
+  timecount_t time;
+  explicit MapperEvent(timecount_t t) : time(t) {
+  }
+};
+
+struct ReserverEvent {
+  static constexpr EventType type = EventType::RESERVER;
+  timecount_t time;
+  explicit ReserverEvent(timecount_t t) : time(t) {
+  }
+};
+
+struct LauncherEvent {
+  static constexpr EventType type = EventType::LAUNCHER;
+  timecount_t time;
+  explicit LauncherEvent(timecount_t t) : time(t) {
+  }
+};
+
+struct EvictorEvent {
+  static constexpr EventType type = EventType::EVICTOR;
+  timecount_t time;
+  explicit EvictorEvent(timecount_t t) : time(t) {
+  }
+};
+
+struct CompleterEvent {
+  static constexpr EventType type = EventType::COMPLETER;
+  timecount_t time;
   TaskIDList tasks;
-
-public:
-  Event(EventType type, timecount_t time, TaskIDList tasks)
-      : type(type), time(time), tasks(std::move(tasks)) {
-  }
-
-  [[nodiscard]] EventType get_type() const {
-    return type;
-  }
-  [[nodiscard]] timecount_t get_time() const {
-    return time;
-  }
-
-  [[nodiscard]] const TaskIDList &get_tasks() {
-    return tasks;
-  }
-
-  [[nodiscard]] bool operator<(const Event &other) const {
-
-    if (time == other.time) {
-      // larger events are processed first
-      // Always process COMPLETER events before scheduler events
-      return type > other.type;
-    }
-
-    return time < other.time;
-  }
-
-  [[nodiscard]] bool operator>(const Event &other) const {
-    if (time == other.time) {
-      return type < other.type;
-    }
-    return time > other.time;
+  CompleterEvent(timecount_t t, TaskIDList ts) : time(t), tasks(std::move(ts)) {
   }
 };
 
-class MapperEvent : public Event {
-public:
-  MapperEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::MAPPER, time, std::move(tasks)} {
+using EventVariant =
+    std::variant<MapperEvent, ReserverEvent, LauncherEvent, EvictorEvent, CompleterEvent>;
+
+struct TypeExtractor {
+  EventType operator()(MapperEvent const &) const noexcept {
+    return EventType::MAPPER;
+  }
+  EventType operator()(ReserverEvent const &) const noexcept {
+    return EventType::RESERVER;
+  }
+  EventType operator()(LauncherEvent const &) const noexcept {
+    return EventType::LAUNCHER;
+  }
+  EventType operator()(EvictorEvent const &) const noexcept {
+    return EventType::EVICTOR;
+  }
+  EventType operator()(CompleterEvent const &) const noexcept {
+    return EventType::COMPLETER;
   }
 };
 
-class ReserverEvent : public Event {
-public:
-  ReserverEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::RESERVER, time, std::move(tasks)} {
+inline EventType get_type(EventVariant const &v) {
+  return std::visit(TypeExtractor{}, v);
+}
+
+inline timecount_t get_time(EventVariant const &v) {
+  return std::visit([](auto const &e) -> timecount_t { return e.time; }, v);
+}
+
+// Comparator for a min-heap (earlier time ⇒ higher priority;
+// on tie, larger EventType ⇒ higher priority so COMPLETER (4) goes first)
+struct EventVariantCompare {
+  bool operator()(EventVariant const &a, EventVariant const &b) const {
+    auto ta = get_time(a), tb = get_time(b);
+    if (ta != tb)
+      return ta > tb;
+    // if same time, we want the one with larger EventType first:
+    return get_type(a) < get_type(b);
   }
 };
 
-class LauncherEvent : public Event {
-public:
-  LauncherEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::LAUNCHER, time, std::move(tasks)} {
-  }
-};
-
-class EvictorEvent : public Event {
-public:
-  EvictorEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::EVICTOR, time, std::move(tasks)} {
-  }
-};
-
-class CompleterEvent : public Event {
-public:
-  CompleterEvent(timecount_t time, TaskIDList tasks)
-      : Event{EventType::COMPLETER, time, std::move(tasks)} {
-  }
-};
-
-using EventList = std::vector<Event>;
+using EventQueue =
+    std::priority_queue<EventVariant, std::vector<EventVariant>, EventVariantCompare>;

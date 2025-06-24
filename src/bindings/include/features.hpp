@@ -1537,8 +1537,6 @@ struct DepthTaskFeature : public StateFeature<DepthTaskFeature> {
   }
 
   static f_t get_depth(const ComputeTask &task) {
-    // std::cout << "Task ID: " << task.get_id() << std::endl;
-    // std::cout << "Task Depth: " << task.get_depth() << std::endl;
     return static_cast<f_t>(task.get_depth());
   }
 

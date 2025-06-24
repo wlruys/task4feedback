@@ -13,12 +13,14 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 enum class TaskType {
   COMPUTE = 0,
-  DATA = 1
+  DATA = 1,
+  EVICTION = 2,
 };
 constexpr std::size_t num_task_types = 2;
 
@@ -185,6 +187,7 @@ protected:
   DataIDList read;
   DataIDList write;
   DataIDList unique;
+  DataIDList retire;
   TaskIDList most_recent_writers;
 
   VariantList variants;
@@ -268,6 +271,9 @@ public:
   void set_write(DataIDList _write) {
     this->write = std::move(_write);
   }
+  void set_retire(DataIDList _retire) {
+    this->retire = std::move(_retire);
+  }
 
   void set_type(int type_) {
     this->type = type_;
@@ -294,6 +300,10 @@ public:
     return write;
   }
 
+  [[nodiscard]] const DataIDList &get_retire() const {
+    return retire;
+  }
+
   void add_data_dependency(taskid_t dependency) {
     data_dependencies.push_back(dependency);
   }
@@ -311,7 +321,7 @@ public:
   }
 
   void find_unique_data() {
-    std::set<dataid_t> unique_set;
+    std::unordered_set<dataid_t> unique_set;
     for (auto data_id : read) {
       unique_set.insert(data_id);
     }
@@ -352,6 +362,55 @@ public:
 
   [[nodiscard]] dataid_t get_data_id() const {
     return data_id;
+  }
+};
+
+class EvictionTask : public DataTask {
+protected:
+  TaskIDList data_dependencies;
+  TaskIDList data_dependents;
+  devid_t device_id = HOST_ID;         // the backup device
+  devid_t invalidate_device = HOST_ID; // the device to invalidate
+
+public:
+  static constexpr TaskType task_type = TaskType::EVICTION;
+
+  EvictionTask() = default;
+  EvictionTask(taskid_t id_) {
+    this->id = id_;
+  }
+
+  [[nodiscard]] const TaskIDList &get_data_dependencies() const {
+    return data_dependencies;
+  }
+  [[nodiscard]] const TaskIDList &get_data_dependents() const {
+    return data_dependents;
+  }
+  void add_data_dependency(taskid_t dependency) {
+    data_dependencies.push_back(dependency);
+  }
+  void add_data_dependent(taskid_t dependent) {
+    data_dependents.push_back(dependent);
+  }
+
+  [[nodiscard]] devid_t get_device_id() const {
+    return device_id;
+  }
+
+  void set_invalidate_device(devid_t invalidate_device_) {
+    this->invalidate_device = invalidate_device_;
+  }
+
+  [[nodiscard]] devid_t get_invalidate_device() const {
+    return invalidate_device;
+  }
+
+  void set_device_id(devid_t device_id_) {
+    this->device_id = device_id_;
+  }
+
+  [[nodiscard]] bool is_eviction() const {
+    return true;
   }
 };
 
@@ -410,10 +469,69 @@ struct TaskTypeBundle {
 
 using ComputeTaskList = std::vector<ComputeTask>;
 using DataTaskList = std::vector<DataTask>;
+using EvictionTaskList = std::vector<EvictionTask>;
 using TaskList = std::vector<Task>;
 using MixedTaskIDList = std::vector<TaskTypeBundle>;
 
 class GraphManager;
+
+class EvictionTasks {
+protected:
+  EvictionTaskList tasks;
+  std::vector<std::string> task_names;
+  taskid_t n_noneviction_tasks = 0;
+  taskid_t n_eviction_tasks = 0;
+
+public:
+  EvictionTasks() = default;
+  EvictionTasks(const EvictionTasks &other) = default;
+
+  EvictionTasks(taskid_t n_tasks) : n_noneviction_tasks(n_tasks) {
+    const int EXPECTED_EVICTION_TASKS = 1000;
+    tasks.reserve(n_tasks + EXPECTED_EVICTION_TASKS);
+    task_names.reserve(n_tasks + EXPECTED_EVICTION_TASKS);
+  }
+
+  taskid_t get_local_eviction_task_id(taskid_t id) const {
+    assert(id < n_noneviction_tasks + n_eviction_tasks);
+    assert(id >= n_noneviction_tasks);
+    return id - n_noneviction_tasks;
+  }
+
+  taskid_t add_eviction_task(taskid_t compute_task, dataid_t data_id, devid_t backup_device,
+                             devid_t invalidate_device) {
+    taskid_t id = n_noneviction_tasks + n_eviction_tasks++;
+    tasks.emplace_back(id);
+    task_names.emplace_back("eviction[" + std::to_string(id) + "]");
+    tasks.back().set_data_id(data_id);
+    tasks.back().set_compute_task(compute_task);
+    tasks.back().set_device_id(backup_device);
+    tasks.back().set_invalidate_device(invalidate_device);
+    return id;
+  }
+
+  bool is_eviction(taskid_t id) const {
+    assert(id < n_noneviction_tasks + n_eviction_tasks);
+    return id >= n_noneviction_tasks;
+  }
+
+  [[nodiscard]] EvictionTask &get_eviction_task(taskid_t id) {
+    return tasks.at(get_local_eviction_task_id(id));
+  }
+
+  [[nodiscard]] const EvictionTask &get_eviction_task(taskid_t id) const {
+    return tasks.at(get_local_eviction_task_id(id));
+  }
+
+  [[nodiscard]] const std::string &get_name(taskid_t id) const {
+    assert(id < n_noneviction_tasks + n_eviction_tasks);
+    return task_names.at(get_local_eviction_task_id(id));
+  }
+
+  [[nodiscard]] std::size_t get_n_eviction_tasks() const {
+    return n_eviction_tasks;
+  }
+};
 
 class Tasks {
 protected:
@@ -461,6 +579,7 @@ public:
   [[nodiscard]] bool empty() const;
   [[nodiscard]] bool is_compute(taskid_t id) const;
   [[nodiscard]] bool is_data(taskid_t id) const;
+  [[nodiscard]] bool is_eviction(taskid_t id) const;
 
   void add_compute_task(ComputeTask task);
   void add_data_task(DataTask task);
@@ -469,6 +588,7 @@ public:
   void add_variant(taskid_t id, DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time);
   void set_read(taskid_t id, DataIDList read);
   void set_write(taskid_t id, DataIDList write);
+  void set_retire(taskid_t id, DataIDList retire);
   void set_type(taskid_t id, int type);
   void set_tag(taskid_t id, int tag);
 
@@ -497,6 +617,7 @@ public:
   [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const;
   [[nodiscard]] const DataIDList &get_read(taskid_t id) const;
   [[nodiscard]] const DataIDList &get_write(taskid_t id) const;
+  [[nodiscard]] const DataIDList &get_retire(taskid_t id) const;
 
   [[nodiscard]] const Resources &get_task_resources(taskid_t id) const;
   [[nodiscard]] const Resources &get_task_resources(taskid_t id, DeviceType arch) const;
