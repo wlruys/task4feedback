@@ -73,7 +73,7 @@ template <typename T> struct StatsBundle {
       return;
     }
 
-    std::sort(v.begin(), v.end());
+    // std::sort(v.begin(), v.end());
 
     min = v.front();
     max = v.back();
@@ -84,6 +84,6 @@ template <typename T> struct StatsBundle {
     for (const auto &val : v) {
       sum += (val - mean) * (val - mean);
     }
-    stddev = std::sqrt(sum / v.size());
+    // stddev = std::sqrt(sum / v.size());
   }
 };

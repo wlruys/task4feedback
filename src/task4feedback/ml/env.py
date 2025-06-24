@@ -469,7 +469,10 @@ class IncrementalEFT(RuntimeEnv):
 
         sim_ml = self.simulator.copy()
         sim_ml.disable_external_mapper()
+        start_time = perf_counter()
         sim_ml.run()
+        end_time = perf_counter()
+        training.info(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
 
         ml_time = sim_ml.time
 

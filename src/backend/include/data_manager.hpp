@@ -410,6 +410,10 @@ public:
     return block_locations.at(data_id).get_valid_locations();
   }
 
+  void populate_valid_locations(dataid_t data_id, std::vector<devid_t> &valid_locations) const {
+    block_locations.at(data_id).populate_valid_locations(valid_locations);
+  }
+
   BlockLocation &at(dataid_t data_id) {
     return block_locations.at(data_id);
   }
@@ -690,6 +694,7 @@ protected:
   }
 
 public:
+  std::vector<devid_t> valid_location_buffer;
   DataManager(Data &data_, DeviceManager &device_manager_,
               CommunicationManager &communication_manager_)
       : data(data_), device_manager(device_manager_), communication_manager(communication_manager_),
@@ -722,6 +727,7 @@ public:
       device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, data.get().get_size(i),
                                                         0);
     }
+    valid_location_buffer.reserve(device_manager.get().size());
   }
 
   [[nodiscard]] const Data &get_data() const {
@@ -892,8 +898,12 @@ public:
     return launched_locations.get_valid_locations(data_id);
   }
 
-  SourceRequest request_source(dataid_t data_id, devid_t destination) const {
-    auto valid_locations = launched_locations.get_valid_locations(data_id);
+  SourceRequest request_source(dataid_t data_id, devid_t destination) {
+    auto &valid_locations = this->valid_location_buffer;
+    valid_locations.clear();
+    valid_locations.reserve(device_manager.get().size());
+
+    launched_locations.populate_valid_locations(data_id, valid_locations);
     assert(!valid_locations.empty());
 
     if (launched_locations.is_valid(data_id, destination)) {
