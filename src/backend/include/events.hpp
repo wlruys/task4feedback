@@ -67,8 +67,8 @@ struct EvictorEvent {
 struct CompleterEvent {
   static constexpr EventType type = EventType::COMPLETER;
   timecount_t time;
-  TaskIDList tasks;
-  CompleterEvent(timecount_t t, TaskIDList ts) : time(t), tasks(std::move(ts)) {
+  taskid_t task;
+  CompleterEvent(timecount_t t, taskid_t tid) : time(t), task(tid) {
   }
 };
 

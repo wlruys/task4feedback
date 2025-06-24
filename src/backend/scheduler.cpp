@@ -1022,7 +1022,7 @@ bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
 
   // Create completion event
   timecount_t completion_time = s.global_time + s.get_execution_time(task_id);
-  event_manager.create_event(EventType::COMPLETER, completion_time, TaskIDList({task_id}));
+  event_manager.create_event(EventType::COMPLETER, completion_time, task_id);
 
   return true;
 }
@@ -1066,7 +1066,7 @@ bool Scheduler::launch_data_task(taskid_t task_id, devid_t destination_id,
 
   // Create completion event
   timecount_t completion_time = s.global_time + duration.duration;
-  event_manager.create_event(EventType::COMPLETER, completion_time, TaskIDList({task_id}));
+  event_manager.create_event(EventType::COMPLETER, completion_time, task_id);
 
   return true;
 }
@@ -1112,7 +1112,7 @@ bool Scheduler::launch_eviction_task(taskid_t task_id, devid_t destination_id,
 
   // Create completion event
   timecount_t completion_time = s.global_time + duration.duration;
-  event_manager.create_event(EventType::COMPLETER, completion_time, TaskIDList({task_id}));
+  event_manager.create_event(EventType::COMPLETER, completion_time, task_id);
 
   return true;
 }
@@ -1625,9 +1625,8 @@ void Scheduler::complete_eviction_task(taskid_t eviction_task_id, devid_t destin
 
 void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &event_manager) {
   ZoneScoped;
-  assert(complete_event.tasks.size() == 1);
   auto &s = this->state;
-  taskid_t task_id = complete_event.tasks.front();
+  taskid_t task_id = complete_event.task;
 
   if (s.is_eviction_task(task_id)) {
     const auto &eviction_task = s.task_manager.get_eviction_task(task_id);

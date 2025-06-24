@@ -15,6 +15,8 @@ build-dev: install-build-deps
 	CMAKE_BUILD_TYPE=Debug $(PIP) install -e .[dev] -v --no-build-isolation
 build-release: install-build-deps
 	CMAKE_BUILD_TYPE=Release $(PIP) install -e .[dev] -v --no-build-isolation
+build-deb: install-build-deps
+	CMAKE_BUILD_TYPE=RelWithDebInfo $(PIP) install -e .[dev] -v --no-build-isolation
 # Force rebuild (clean first)
 rebuild-dev: clean build-dev
 rebuild-release: clean build-release
@@ -47,6 +49,8 @@ sdist:
 	$(PYTHON) -m build --sdist
 dev: setup-dev build-dev test
 	@echo "Development build and test complete!"
+deb: clean build-deb test
+	@echo "Release build and test complete!"
 release: clean build-release test
 	@echo "Release build and test complete!"
 help:

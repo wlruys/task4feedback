@@ -8,7 +8,7 @@ class EventManager {
 
 public:
   // No-payload events:
-  void create_event(EventType t, timecount_t time) {
+  inline void create_event(EventType t, timecount_t time) {
     switch (t) {
     case EventType::MAPPER:
       events_.push(MapperEvent{time});
@@ -28,16 +28,16 @@ public:
   }
 
   // Completer with TaskIDList:
-  void create_event(EventType t, timecount_t time, TaskIDList tasks) {
+  inline void create_event(EventType t, timecount_t time, taskid_t task_id) {
     if (t != EventType::COMPLETER) {
       std::cout << "create_event: expected COMPLETER got " << t;
       throw std::invalid_argument("create_event: expected COMPLETER");
     }
-    events_.push(CompleterEvent{time, std::move(tasks)});
+    events_.push(CompleterEvent{time, task_id});
   }
 
   // Push an existing variant:
-  void add_event(EventVariant ev) {
+  inline void add_event(EventVariant ev) {
     events_.push(std::move(ev));
   }
 
@@ -49,12 +49,12 @@ public:
   }
 
   // Peek at the next event (by const‐ref):
-  [[nodiscard]] EventVariant const &peek_next_event() const {
+  [[nodiscard]] inline EventVariant const &peek_next_event() const {
     return events_.top();
   }
 
   // Pop and return by value:
-  EventVariant pop_event() {
+  inline EventVariant pop_event() {
     auto ev = events_.top();
     events_.pop();
     return ev;
