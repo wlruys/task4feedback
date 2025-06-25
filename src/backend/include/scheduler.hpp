@@ -186,7 +186,7 @@ public:
 
 class TaskCountInfo {
 public:
-  std::unordered_set<taskid_t> active_tasks;
+  ankerl::unordered_dense::set<taskid_t> active_tasks;
 
   TaskCountInfo(std::size_t n_devices);
   void count_mapped(taskid_t task_id, devid_t device_id);

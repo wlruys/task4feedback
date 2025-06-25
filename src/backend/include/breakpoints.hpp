@@ -11,7 +11,9 @@ class Breakpoint {};
 class BreakpointManager {
 private:
   timecount_t max_time = MAX_TIME;
-  std::map<EventType, TaskIDList> breakpoints;
+  // TODO(wlr): Replace with vector for better performance
+  // TODO(wlr): Add fast path for empty breakpoints
+  std::map<TaskIDList> breakpoints;
   volatile bool breakpoint_status = false;
 
   static bool check_task(TaskIDList &tasks, taskid_t task) {
