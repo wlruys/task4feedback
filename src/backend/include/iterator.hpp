@@ -6,7 +6,7 @@
 template <typename T> class ActiveIterator {
 protected:
   std::vector<T> containers;
-  std::vector<bool> active;
+  std::vector<int32_t> active;
   std::size_t active_index;
   std::size_t num_active;
 
@@ -18,26 +18,26 @@ public:
   }
 
   bool is_active(std::size_t index) {
-    return active.at(index);
+    return active[index] == 1;
   }
   bool has_active() {
     return num_active > 0;
   }
 
   T &get_active() {
-    return containers.at(active_index);
+    return containers[active_index];
   }
   T &operator[](std::size_t index) {
-    return containers.at(index);
+    return containers[index];
   }
   T &at(std::size_t index) {
-    return containers.at(index);
+    return containers[index];
   }
   const T &operator[](std::size_t index) const {
-    return containers.at(index);
+    return containers[index];
   }
   const T &at(std::size_t index) const {
-    return containers.at(index);
+    return containers[index];
   }
 
   [[nodiscard]] std::size_t size() const {
@@ -56,11 +56,10 @@ public:
   }
 
   [[nodiscard]] std::size_t total_active_size() const {
-    std::size_t tsize = 0;
-    for (std::size_t i = 0; i < containers.size(); i++) {
-      if (active[i]) {
-        tsize += containers.at(i).size();
-      }
+    int32_t tsize = 0;
+    const auto n = containers.size();
+    for (int32_t i = 0; i < containers.size(); i++) {
+      tsize += containers[i].size() * std::size_t(active[i]);
     }
     return tsize;
   }
@@ -83,12 +82,12 @@ public:
   }
 
   void activate(std::size_t index) {
-    active.at(index) = true;
+    active[index] = 1;
     num_active++;
   }
 
   void activate() {
-    active.at(active_index) = true;
+    active[active_index] = 1;
     num_active++;
   }
 
@@ -97,36 +96,32 @@ public:
   }
 
   void current_or_next_active() {
-    if (!active.at(active_index)) {
+    if (!active[active_index]) {
       next_active();
     }
   }
 
   void prev() {
-    if (active_index == 0) {
-      active_index = containers.size() - 1;
-    } else {
-      active_index--;
-    }
+    active_index = (active_index == 0) ? containers.size() - 1 : active_index - 1;
   }
 
   void next_active() {
     next();
-    while (!active.at(active_index)) {
+    while (!active[active_index]) {
       next();
     }
   }
 
   void prev_active() {
     prev();
-    while (!active.at(active_index)) {
+    while (!active[active_index]) {
       prev();
     }
   }
 
   void reset() {
-    for (auto &&a : active) {
-      a = true;
+    for (int32_t i = 0; i < active.size(); i++) {
+      active[i] = 1;
     }
     num_active = containers.size();
   }
@@ -136,39 +131,39 @@ template <PriorityQueueConcept Q> class ActiveQueueIterator : public ActiveItera
 
 public:
   void push(Q::value_type value) {
-    this->containers.at(this->active_index).push(value);
+    this->containers[this->active_index].push(value);
   }
 
   void push(Q::value_type value, priority_t priority) {
-    this->containers.at(this->active_index).push(value, priority);
+    this->containers[this->active_index].push(value, priority);
   }
 
   void push_at(std::size_t index, Q::value_type value) {
-    this->containers.at(index).push(value);
+    this->containers[index].push(value);
   }
 
   void push_priority_at(std::size_t index, Q::value_type value, priority_t priority) {
     this->activate(index);
-    this->containers.at(index).push(value, priority);
+    this->containers[index].push(value, priority);
   }
 
   void push_random(Q::value_type value) {
-    this->containers.at(this->active_index).push_random(value);
+    this->containers[this->active_index].push_random(value);
   }
 
   void push_random_at(std::size_t index, Q::value_type value) {
-    this->containers.at(index).push_random(value);
+    this->containers[index].push_random(value);
   }
 
   [[nodiscard]] const Q::value_type &top() const {
-    return this->containers.at(this->active_index).top();
+    return this->containers[this->active_index].top();
   }
 
   [[nodiscard]] const Element<typename Q::value_type> &top_element() const {
-    return this->containers.at(this->active_index).top_element();
+    return this->containers[this->active_index].top_element();
   };
 
   void pop() {
-    this->containers.at(this->active_index).pop();
+    this->containers[this->active_index].pop();
   }
 };

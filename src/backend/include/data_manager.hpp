@@ -458,13 +458,8 @@ public:
   }
 
   [[nodiscard]] inline std::size_t count_valid(dataid_t data_id) const {
-    std::size_t count = 0;
-    for (devid_t i = 0; i < num_devices; i++) {
-      if (is_valid(data_id, i)) {
-        count++;
-      }
-    }
-    return count;
+    return std::count(locations.data() + data_id * num_devices,
+                      locations.data() + (data_id + 1) * num_devices, 1);
   }
 
   [[nodiscard]] inline std::span<const int8_t> get_location_flags(dataid_t data_id) const {
@@ -1351,7 +1346,6 @@ public:
     launched_locations.set_valid(data_id, destination, current_time);
     reserved_locations.set_valid(data_id, destination, current_time);
     mapped_locations.set_valid(data_id, destination, current_time);
-    // lru_manager.read(destination, data_id, data.get().get_size(data_id));
     movement_manager.remove(data_id, destination);
 
     communication_manager.get().release_connection(source, destination);
