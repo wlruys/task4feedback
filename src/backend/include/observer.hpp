@@ -18,13 +18,13 @@
 using op_t = int32_t;
 using f_t = float_t;
 
-enum class NodeType {
+enum class NodeType : int8_t {
   TASK = 0,
   DATA_BLOCK = 1,
   DEVICE = 2
 };
 
-enum class EdgeType {
+enum class EdgeType : int8_t {
   TASK_TASK = 0,
   TASK_DATA = 1,
   TASK_DEVICE = 2,

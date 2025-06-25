@@ -6,6 +6,7 @@
 #include "spdlog/spdlog.h"
 #include <array>
 #include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <ostream>
 #include <set>
@@ -17,14 +18,14 @@
 #include <utility>
 #include <vector>
 
-enum class TaskType {
+enum class TaskType : int8_t {
   COMPUTE = 0,
   DATA = 1,
   EVICTION = 2,
 };
 constexpr std::size_t num_task_types = 2;
 
-enum class TaskState {
+enum class TaskState : int8_t {
   SPAWNED = 0,
   MAPPED = 1,
   RESERVED = 2,
@@ -60,7 +61,7 @@ inline std::ostream &operator<<(std::ostream &os, const TaskState &state) {
   return os;
 }
 
-enum class TaskStatus {
+enum class TaskStatus : int8_t {
   NONE = -1,
   MAPPABLE = 0,
   RESERVABLE = 1,

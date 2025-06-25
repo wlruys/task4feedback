@@ -5,7 +5,7 @@
 
 #define HOST_ID 0
 
-enum class DeviceType {
+enum class DeviceType : int8_t {
   NONE = -1,
   CPU = 0,
   GPU = 1

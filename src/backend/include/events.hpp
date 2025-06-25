@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-enum class EventType {
+enum class EventType : int8_t {
   MAPPER = 0,
   RESERVER = 1,
   LAUNCHER = 2,

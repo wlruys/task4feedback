@@ -64,7 +64,7 @@ target_precompile_headers(backend PRIVATE
     <fmt/format.h>
 )
 
-target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt tracy_headers)
+target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt tracy_headers unordered_dense::unordered_dense)
 
 if(SIM_TRACK_RESOURCES)
     target_compile_definitions(backend PUBLIC SIM_TRACK_RESOURCES)

@@ -43,7 +43,7 @@ class TransitionConditions;
 class Scheduler;
 class Mapper;
 
-enum class ExecutionState {
+enum class ExecutionState : int8_t {
   NONE = 0,
   RUNNING = 1,
   COMPLETE = 2,
@@ -798,7 +798,7 @@ struct SuccessPair {
   const TaskIDList *task_list = nullptr;
 };
 
-enum class EvictionState {
+enum class EvictionState : int8_t {
   NONE = 0,
   WAITING_FOR_COMPLETION = 1,
   RUNNING = 2,
@@ -1242,7 +1242,7 @@ public:
 
     timecount_t max_time = 0;
     for (auto dep_id : dependencies) {
-      timecount_t dep_time = finish_time_record.at(dep_id);
+      timecount_t dep_time = finish_time_record[dep_id];
       max_time = std::max(max_time, dep_time);
     }
 
@@ -1250,33 +1250,31 @@ public:
   }
 
   void fill_finish_time_buffer(taskid_t task_id, const SchedulerState &state) {
-    const auto &task_manager = state.get_task_manager();
-    const auto &device_manager = state.get_device_manager();
-    const auto &devices = device_manager.get_devices();
     finish_time_buffer.clear();
+    finish_time_buffer.reserve(device_buffer.size());
 
     timecount_t dep_time = get_dependency_finish_time(task_id, state);
 
     for (auto device_id : device_buffer) {
-      timecount_t start_time = get_device_available_time(device_id, state);
-      start_time = std::max(start_time, dep_time);
-      timecount_t finish_time = get_finish_time(task_id, device_id, start_time, state);
-      finish_time_buffer.emplace_back(device_id, finish_time);
+      const timecount_t device_available = get_device_available_time(device_id, state);
+      const timecount_t start_time = std::max(device_available, dep_time);
+      const timecount_t finish_time = get_finish_time(task_id, device_id, start_time, state);
+      finish_time_buffer.emplace_back(DeviceTime{device_id, finish_time});
     }
   }
 
   DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
     fill_finish_time_buffer(task_id, state);
-    auto min_time = std::numeric_limits<timecount_t>::max();
-    devid_t best_device = 0;
 
-    for (std::size_t i = 0; i < finish_time_buffer.size(); i++) {
-      devid_t device_id = finish_time_buffer.at(i).device_id;
-      timecount_t finish_time = finish_time_buffer.at(i).time;
+    auto min_time = finish_time_buffer[0].time;
+    auto best_device = finish_time_buffer[0].device_id;
 
-      if (finish_time < min_time) {
-        min_time = finish_time;
-        best_device = device_id;
+    // Start from index 1, use range-based loop for better optimization
+    for (std::size_t i = 1; i < finish_time_buffer.size(); ++i) {
+      const auto &entry = finish_time_buffer[i];
+      if (entry.time < min_time) {
+        min_time = entry.time;
+        best_device = entry.device_id;
       }
     }
 

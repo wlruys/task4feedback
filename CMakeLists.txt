@@ -20,7 +20,7 @@ option(PGO_MODE "PGO mode: Generate / Use / None"       "None")
 option(SIM_TRACK_RESOURCES  "Enable resource-usage logging"  ON)
 option(SIM_TRACK_LOCATION   "Enable data-location logging"   ON)
 option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
-option(ENABLE_TRACY         "Enable Tracy profiler support"   ON)
+option(ENABLE_TRACY         "Enable Tracy profiler support"   OFF)
 option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" ON)
 
 
@@ -36,6 +36,22 @@ if(ENABLE_CCACHE)
     endif()
 endif()
 
+
+# Make martinus/unordered_dense ankerl::unordereed_map available
+FetchContent_Declare(
+    ankerl_unordered_dense
+    GIT_REPOSITORY https://github.com/martinus/unordered_dense.git
+    GIT_TAG        v4.5.0
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE
+)
+FetchContent_MakeAvailable(ankerl_unordered_dense)
+
+
+
+
+
+
 if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)  # Don't use with AddressSanitizer
     find_package(mimalloc CONFIG QUIET)
     if(mimalloc_FOUND)
@@ -46,6 +62,8 @@ if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)  # Don't use with AddressSanitizer
         FetchContent_Declare(
             mimalloc
             GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
+            GIT_SHALLOW    TRUE
+            GIT_PROGRESS   TRUE
             GIT_TAG        v2.1.7
         )
         
@@ -117,6 +135,8 @@ else()
       fmt
       GIT_REPOSITORY https://github.com/fmtlib/fmt.git
       GIT_TAG        10.2.1
+      GIT_SHALLOW    TRUE
+      GIT_PROGRESS   TRUE
     )
     # build fmt as static with PIC by default
     set(FMT_DOC OFF CACHE BOOL "" FORCE)
@@ -145,7 +165,9 @@ else()
   FetchContent_Declare(
       spdlog
       GIT_REPOSITORY https://github.com/gabime/spdlog.git
-      GIT_TAG        v1.14.1          
+      GIT_TAG        v1.14.1
+      GIT_SHALLOW    TRUE
+      GIT_PROGRESS   TRUE          
   )
 
   FetchContent_MakeAvailable(spdlog)
@@ -166,7 +188,6 @@ include_directories(${Python_INCLUDE_DIRS})
 include_directories(${Python_NumPy_INCLUDE_DIRS})
 
 add_library(project_warnings INTERFACE)
-
 
 if(ENABLE_ASAN)
     target_compile_options(project_warnings INTERFACE -fsanitize=address -fno-omit-frame-pointer)

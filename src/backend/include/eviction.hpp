@@ -8,6 +8,7 @@
 #include "spdlog/spdlog.h"
 #include "tasks.hpp"
 #include <algorithm>
+#include <ankerl/unordered_dense.h>
 #include <cstddef>
 #include <functional>
 #include <ranges>
@@ -107,7 +108,7 @@ private:
 
   devid_t num_devices_;
   std::vector<std::list<Node>> nodes_;
-  std::vector<std::unordered_map<dataid_t, typename std::list<Node>::iterator>> maps_;
+  std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<Node>::iterator>> maps_;
   std::vector<DataIDList> lru_ids_;
   mem_t evictable_size_ = 0;
 };

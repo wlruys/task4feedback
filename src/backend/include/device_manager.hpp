@@ -2,6 +2,7 @@
 #include "devices.hpp"
 #include "settings.hpp"
 #include "tasks.hpp"
+#include <ankerl/unordered_dense.h>
 #include <cassert>
 #include <functional>
 #include <unordered_map>
@@ -132,55 +133,59 @@ public:
 
   [[nodiscard]] vcu_t get_vcu(devid_t id) const {
     assert(id < vcu.size());
-    return vcu.at(id);
+    return vcu[id];
   }
   [[nodiscard]] mem_t get_mem(devid_t id) const {
     assert(id < mem.size());
-    return mem.at(id);
+    return mem[id];
   }
 
   vcu_t add_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     assert(id < vcu.size());
-    vcu.at(id) += vcu_;
-    vcu_tracker[id].add_change(current_time, vcu.at(id));
-    return vcu.at(id);
+    auto &v = vcu[id];
+    v += vcu_;
+    vcu_tracker[id].add_change(current_time, v);
+    return v;
   }
   mem_t add_mem(devid_t id, mem_t m, timecount_t current_time) {
     assert(id < mem.size());
-    mem.at(id) += m;
-    mem_tracker[id].add_change(current_time, mem.at(id));
-    return mem.at(id);
+    auto &v = mem[id];
+    v += m;
+    mem_tracker[id].add_change(current_time, v);
+    return v;
   }
 
   vcu_t remove_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     assert(id < vcu.size());
     assert(vcu.at(id) >= vcu_);
-    vcu.at(id) -= vcu_;
-    vcu_tracker[id].add_change(current_time, vcu.at(id));
-    return vcu.at(id);
+    auto &v = vcu[id];
+    v -= vcu_;
+    vcu_tracker[id].add_change(current_time, v);
+    return v;
   }
   mem_t remove_mem(devid_t id, mem_t m, timecount_t current_time) {
     assert(id < mem.size());
     assert(mem.at(id) >= m);
-    mem.at(id) -= m;
-    mem_tracker[id].add_change(current_time, mem.at(id));
-    return mem.at(id);
+    auto &v = mem[id];
+    v -= m;
+    mem_tracker[id].add_change(current_time, v);
+    return v;
   }
 
   Resources add_resources(devid_t id, const Resources &r, timecount_t current_time) {
     add_vcu(id, r.vcu, current_time);
     add_mem(id, r.mem, current_time);
-    return {vcu.at(id), mem.at(id)};
+    return {vcu[id], mem[id]};
   }
 
   Resources remove_resources(devid_t id, const Resources &r, timecount_t current_time) {
     remove_vcu(id, r.vcu, current_time);
     remove_mem(id, r.mem, current_time);
-    return {vcu.at(id), mem.at(id)};
+    return {vcu[id], mem[id]};
   }
 
   [[nodiscard]] vcu_t overflow_vcu(devid_t id, vcu_t query, vcu_t max) const {
-    const vcu_t request = vcu.at(id) + query;
+    const vcu_t request = vcu[id] + query;
     if (request <= max) {
       return 0;
     }
@@ -188,7 +193,7 @@ public:
   }
 
   [[nodiscard]] mem_t overflow_mem(devid_t id, mem_t query, mem_t max) const {
-    const mem_t request = mem.at(id) + query;
+    const mem_t request = mem[id] + query;
     if (request <= max) {
       return 0;
     }
@@ -238,8 +243,8 @@ protected:
   std::array<DeviceIDList, num_device_types> type_map;
   std::vector<std::string> device_names;
 
-  std::unordered_map<std::string, devid_t> device_name_map;
-  std::unordered_map<devid_t, devid_t> global_to_local;
+  ankerl::unordered_dense::map<std::string, devid_t> device_name_map;
+  ankerl::unordered_dense::map<devid_t, devid_t> global_to_local;
 
   void resize(std::size_t n_devices) {
     devices.resize(n_devices);
@@ -272,15 +277,15 @@ public:
   }
 
   [[nodiscard]] const DeviceIDList &get_devices(DeviceType type) const {
-    return type_map.at(static_cast<std::size_t>(type));
+    return type_map[static_cast<std::size_t>(type)];
   }
 
   [[nodiscard]] const Resources &get_max_resources(devid_t id) const {
-    return devices.at(id).max_resources;
+    return devices[id].max_resources;
   }
 
   [[nodiscard]] DeviceType get_type(devid_t id) const {
-    return devices.at(id).arch;
+    return devices[id].arch;
   }
 
   [[nodiscard]] devid_t get_device_id(std::string name) const {
@@ -292,7 +297,7 @@ public:
   }
 
   [[nodiscard]] devid_t get_global_id(DeviceType arch, devid_t local_id) const {
-    return type_map.at(static_cast<std::size_t>(arch)).at(local_id);
+    return type_map[static_cast<std::size_t>(arch)][local_id];
   }
 
   void create_device(devid_t id, std::string name, DeviceType arch, vcu_t vcu, mem_t mem) {
@@ -301,14 +306,14 @@ public:
     }
 
     assert(id < devices.size());
-    devices.at(id) = Device(id, arch, vcu, mem);
-    type_map.at(static_cast<std::size_t>(arch)).push_back(id);
+    devices[id] = Device(id, arch, vcu, mem);
+    type_map[static_cast<std::size_t>(arch)].push_back(id);
 
     device_name_map[name] = id;
-    devid_t local_id = type_map.at(static_cast<std::size_t>(arch)).size() - 1;
+    devid_t local_id = type_map[static_cast<std::size_t>(arch)].size() - 1;
     global_to_local[id] = local_id;
 
-    device_names.at(id) = std::move(name);
+    device_names[id] = std::move(name);
   }
 
   devid_t append_device(std::string name, DeviceType arch, vcu_t vcu, mem_t mem) {

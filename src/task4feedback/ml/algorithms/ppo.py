@@ -141,7 +141,7 @@ def run_ppo(
             env_workers()[0],
             policy=actor_critic_module.actor,
             frames_per_batch=max_states_per_collection,
-            reset_at_each_iter=False if ppo_config.rollout_steps > 0 else True,
+            reset_at_each_iter=True if ppo_config.rollout_steps > 0 else True,
             policy_device=ppo_config.collect_device,
             storing_device=ppo_config.storing_device,
             env_device="cpu",

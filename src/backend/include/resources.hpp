@@ -5,7 +5,7 @@
 #include <limits>
 #include <sys/types.h>
 
-enum class ResourceType {
+enum class ResourceType : int8_t {
   VCUS = 0,
   MEM = 1,
   TIME = 2

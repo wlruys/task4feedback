@@ -51,7 +51,7 @@ public:
   bool check_task_breakpoint(EventType type, taskid_t task) {
     bool is_breakpoint = check_event(breakpoints, type);
     if (is_breakpoint) {
-      is_breakpoint = check_task(breakpoints.at(type), task);
+      is_breakpoint = check_task(breakpoints[type], task);
     }
     if (is_breakpoint) {
       breakpoint_status = true;

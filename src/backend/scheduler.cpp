@@ -1655,15 +1655,15 @@ void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &even
       ++it;
     }
   }
-  // spdlog::debug("Newly launchable compute tasks: {}",
-  //               newly_launchable_tasks.size());
 
   success_count += 1;
+
   breakpoints.check_task_breakpoint(EventType::COMPLETER, task_id);
+  const auto eviction_state = this->eviction_state;
   if (scheduler_event_count == 0) {
-    if (this->eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
+    if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
       event_manager.create_event(EventType::EVICTOR, s.global_time + SCHEDULER_TIME_GAP);
-    } else if (this->eviction_state == EvictionState::RUNNING) {
+    } else if (eviction_state == EvictionState::RUNNING) {
       if (eviction_count) {
         event_manager.create_event(EventType::LAUNCHER, s.global_time + SCHEDULER_TIME_GAP);
       } else {
@@ -1676,6 +1676,8 @@ void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &even
     }
     scheduler_event_count += 1;
   }
+
+#if SPDLOG_ACTIVE_LEVEL == SPDLOG_LEVEL_DEBUG
   if (spdlog::get_level() == spdlog::level::debug) {
     auto &device_manager = s.get_device_manager();
     auto &lru_manager = s.get_data_manager().get_lru_manager();
@@ -1696,4 +1698,5 @@ void Scheduler::complete_task(CompleterEvent &complete_event, EventManager &even
       SPDLOG_DEBUG("Memory state is inconsistent");
     }
   }
+#endif
 }

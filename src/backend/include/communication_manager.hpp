@@ -6,6 +6,7 @@
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
 #include <algorithm>
+#include <ankerl/unordered_dense.h>
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -54,11 +55,12 @@ struct CommunicationRequest {
 
 class Topology {
   devid_t num_devices = 0;
+
+public:
   std::vector<timecount_t> latency;
   std::vector<mem_t> bandwidths;
   std::vector<copy_t> links;
 
-public:
   Topology(devid_t num_devices)
       : latency(num_devices * num_devices), bandwidths(num_devices * num_devices),
         links(num_devices * num_devices), num_devices(num_devices) {
@@ -97,7 +99,8 @@ class CommunicationNoise {
 protected:
   unsigned int seed = 0;
   std::reference_wrapper<Topology> topology;
-  std::unordered_map<CommunicationRequest, CommunicationStats, CommunicationRequest::Hash> record;
+  ankerl::unordered_dense::map<CommunicationRequest, CommunicationStats, CommunicationRequest::Hash>
+      record;
   mutable std::mt19937 gen;
 
   struct request_high_precision {
@@ -134,9 +137,9 @@ protected:
     return {bw, latency};
   };
 
-  static uint64_t calculate_checksum(
-      const std::unordered_map<CommunicationRequest, CommunicationStats, CommunicationRequest::Hash>
-          &data) {
+  static uint64_t
+  calculate_checksum(const ankerl::unordered_dense::map<CommunicationRequest, CommunicationStats,
+                                                        CommunicationRequest::Hash> &data) {
     const uint64_t prime = 0x100000001B3ull; // FNV prime
     uint64_t hash = 0xcbf29ce484222325ull;   // FNV offset basis
 
@@ -189,7 +192,8 @@ public:
     record[req] = stats;
   }
 
-  void set(std::unordered_map<CommunicationRequest, CommunicationStats, CommunicationRequest::Hash>
+  void set(ankerl::unordered_dense::map<CommunicationRequest, CommunicationStats,
+                                        CommunicationRequest::Hash>
                record_) {
     record = std::move(record_);
   }
@@ -337,21 +341,33 @@ struct SourceRequest {
 };
 
 class CommunicationManager {
+  devid_t num_devices = 0;
   std::reference_wrapper<Devices> devices;
   std::reference_wrapper<Topology> topology;
   std::reference_wrapper<CommunicationNoise> noise;
   std::vector<copy_t> incoming;
   std::vector<copy_t> outgoing;
   std::vector<copy_t> active_links;
+  std::vector<double> bandwidth_reciprocals;
 
-  [[nodiscard]] std::size_t get_device_type_idx(devid_t device_id) const {
-    return static_cast<std::size_t>(devices.get().get_type(device_id));
+  [[nodiscard]] inline int8_t get_device_type_idx(devid_t device_id) const {
+    return static_cast<int8_t>(devices.get().get_type(device_id));
   }
 
 public:
   CommunicationManager(Topology &topology_, Devices &devices_, CommunicationNoise &noise_)
-      : devices(devices_), topology(topology_), noise(noise_), incoming(devices_.size(), 0),
-        outgoing(devices_.size(), 0), active_links(devices_.size() * devices_.size(), 0) {
+      : num_devices(devices_.size()), devices(devices_), topology(topology_), noise(noise_),
+        incoming(devices_.size(), 0), outgoing(devices_.size(), 0),
+        active_links(devices_.size() * devices_.size(), 0) {
+    precompute_reciprocals();
+  }
+
+  void precompute_reciprocals() {
+    bandwidth_reciprocals.resize(num_devices * num_devices);
+    const auto &bandwidth = topology.get().bandwidths;
+    for (size_t i = 0; i < bandwidth.size(); ++i) {
+      bandwidth_reciprocals[i] = 1.0 / static_cast<double>(bandwidth[i]);
+    }
   }
 
   CommunicationManager(const CommunicationManager &c) = default;
@@ -361,79 +377,82 @@ public:
   void initialize() {
   }
 
-  void increase_incoming(devid_t device_id) {
-    incoming.at(device_id) += 1;
+  inline void increase_incoming(devid_t device_id) {
+    incoming[device_id] += 1;
   }
-  void decrease_incoming(devid_t device_id) {
+  inline void decrease_incoming(devid_t device_id) {
     assert(incoming[device_id] >= 1);
-    incoming.at(device_id) -= 1;
+    incoming[device_id] -= 1;
   }
 
-  void increase_outgoing(devid_t device_id) {
-    outgoing.at(device_id) += 1;
+  inline void increase_outgoing(devid_t device_id) {
+    outgoing[device_id] += 1;
   }
-  void decrease_outgoing(devid_t device_id) {
+  inline void decrease_outgoing(devid_t device_id) {
     assert(outgoing[device_id] >= 1);
-    outgoing.at(device_id) -= 1;
+    outgoing[device_id] -= 1;
   }
 
-  void increase_active_links(devid_t src, devid_t dst) {
-    active_links.at(src * devices.get().size() + dst) += 1;
+  inline void increase_active_links(devid_t src, devid_t dst) {
+    active_links[src * num_devices + dst] += 1;
   }
 
-  void decrease_active_links(devid_t src, devid_t dst) {
-    assert(active_links[src * devices.get().size() + dst] >= 1);
-    active_links.at(src * devices.get().size() + dst) -= 1;
+  inline void decrease_active_links(devid_t src, devid_t dst) {
+    assert(active_links[src * num_devices + dst] >= 1);
+    active_links[src * num_devices + dst] -= 1;
   }
 
-  void reserve_connection(devid_t src, devid_t dst) {
+  inline void reserve_connection(devid_t src, devid_t dst) {
     increase_incoming(dst);
     increase_outgoing(src);
     increase_active_links(src, dst);
   }
 
-  void release_connection(devid_t src, devid_t dst) {
+  inline void release_connection(devid_t src, devid_t dst) {
     decrease_incoming(dst);
     decrease_outgoing(src);
     decrease_active_links(src, dst);
   }
 
-  [[nodiscard]] copy_t get_active(devid_t src, devid_t dst) const {
-    return active_links.at(src * devices.get().size() + dst);
+  [[nodiscard]] inline copy_t get_active(devid_t src, devid_t dst) const {
+    return active_links[src * devices.get().size() + dst];
   }
 
-  [[nodiscard]] copy_t get_incoming(devid_t device_id) const {
-    return incoming.at(device_id);
+  [[nodiscard]] inline copy_t get_incoming(devid_t device_id) const {
+    return incoming[device_id];
   }
 
-  [[nodiscard]] copy_t get_outgoing(devid_t device_id) const {
-    return outgoing.at(device_id);
+  [[nodiscard]] inline copy_t get_outgoing(devid_t device_id) const {
+    return outgoing[device_id];
   }
 
-  [[nodiscard]] copy_t get_total_usage(devid_t device_id) const {
-    return incoming.at(device_id) + outgoing.at(device_id);
+  [[nodiscard]] inline copy_t get_total_usage(devid_t device_id) const {
+    return incoming[device_id] + outgoing[device_id];
   }
 
-  [[nodiscard]] bool is_device_available(devid_t device_id) const {
+  [[nodiscard]] inline bool is_device_available(devid_t device_id) const {
     auto used = get_total_usage(device_id);
-    auto available = max_total_copies.at(get_device_type_idx(device_id));
+    auto available = max_total_copies[get_device_type_idx(device_id)];
     return used <= available;
   }
 
-  [[nodiscard]] bool is_link_available(devid_t src, devid_t dst) const {
+  [[nodiscard]] inline bool is_link_available(devid_t src, devid_t dst) const {
     auto used = get_active(src, dst);
     auto available = topology.get().get_max_connections(src, dst);
     return used <= available;
   }
 
-  [[nodiscard]] bool check_connection(devid_t src, devid_t dst) const {
-    const bool src_available = is_device_available(src);
-    const bool dst_available = is_device_available(dst);
-    const bool link_available = is_link_available(src, dst);
-    SPDLOG_DEBUG("Check connection: src={}, dst={}, src_available={}, "
-                 "dst_available={}, link_available={}",
-                 src, dst, src_available, dst_available, link_available);
-    return is_device_available(src) && is_device_available(dst) && is_link_available(src, dst);
+  [[nodiscard]] inline bool check_connection(devid_t src, devid_t dst) const {
+    // Early return for same device
+    if (src == dst)
+      return true;
+
+    if (!is_link_available(src, dst)) {
+      return false;
+    }
+
+    // check device availability
+    return is_device_available(src) && is_device_available(dst);
   }
 
   [[nodiscard]] mem_t get_bandwidth(devid_t src, devid_t dst) const {
@@ -455,24 +474,25 @@ public:
     const auto bw = static_cast<double>(bandwidth);
     const auto s = static_cast<double>(size);
     timecount_t time = latency + static_cast<timecount_t>(s / bw);
-    return std::max(time, static_cast<timecount_t>(0));
+    return time;
   }
 
-  [[nodiscard]] timecount_t ideal_time_to_transfer(mem_t size, devid_t src, devid_t dst) const {
+  [[nodiscard]] inline timecount_t ideal_time_to_transfer(mem_t size, devid_t src,
+                                                          devid_t dst) const {
 
     if (src == dst || size == 0) {
       return 0;
     }
 
-    const auto bw = static_cast<double>(get_bandwidth(src, dst));
+    const auto bw_r = bandwidth_reciprocals[src * num_devices + dst];
     const auto latency = static_cast<timecount_t>(topology.get().get_latency(src, dst));
     const auto s = static_cast<double>(size);
-    auto time = latency + static_cast<timecount_t>(s / bw);
+    auto time = latency + static_cast<timecount_t>(s * bw_r);
 
     SPDLOG_DEBUG("Calculating ideal time to transfer {} bytes from device {} "
                  "to device {} with bandwidth {} and latency {}",
                  size, src, dst, bw, latency);
-    return std::max(time, static_cast<timecount_t>(0));
+    return time;
   }
 
   [[nodiscard]] SourceRequest
@@ -498,6 +518,84 @@ public:
         }
       }
     }
+    return {found, best_source};
+  }
+
+  // [[nodiscard]] SourceRequest
+  // get_best_available_source(devid_t dst, std::span<const int8_t> possible_source_flags) const {
+  //   // Return the source with the highest bandwidth
+  //   // If no source is available, return found=false
+
+  //   bool found = false;
+  //   devid_t best_source = 0;
+  //   mem_t best_bandwidth = 0;
+  //   for (devid_t src = 0; src < possible_source_flags.size(); ++src) {
+  //     if (possible_source_flags[src] == 0) {
+  //       continue; // Skip invalid sources
+  //     }
+
+  //     if (src == dst) {
+  //       return {true, src};
+  //     }
+
+  //     if (check_connection(src, dst)) {
+  //       auto bandwidth = get_available_bandwidth(src, dst);
+  //       if (bandwidth > best_bandwidth) {
+  //         best_bandwidth = bandwidth;
+  //         best_source = src;
+  //         found = true;
+  //       }
+  //     }
+  //   }
+  //   return {found, best_source};
+  // }
+
+  [[nodiscard]] SourceRequest
+  get_best_available_source(devid_t dst, std::span<const int8_t> possible_source_flags) const {
+    // Early return for local data
+    if (possible_source_flags[dst] != 0) {
+      return {true, dst};
+    }
+
+    const auto *bandwidth_data = topology.get().bandwidths.data();
+    const auto *active_links_data = active_links.data();
+    const auto *max_links_data = topology.get().links.data();
+
+    devid_t best_source = 0;
+    mem_t best_bandwidth = 0;
+    bool found = false;
+
+    const auto size = static_cast<devid_t>(possible_source_flags.size());
+    for (devid_t src = 0; src < size; ++src) {
+      if (possible_source_flags[src] == 0) {
+        continue;
+      }
+
+      const auto used_links = active_links_data[src * num_devices + dst];
+      const auto max_links = max_links_data[src * num_devices + dst];
+
+      if (used_links > max_links) {
+        continue;
+      }
+
+      // Inline device availability check
+      const auto src_usage = incoming[src] + outgoing[src];
+      const auto dst_usage = incoming[dst] + outgoing[dst];
+      const auto src_limit = max_total_copies[get_device_type_idx(src)];
+      const auto dst_limit = max_total_copies[get_device_type_idx(dst)];
+
+      if (src_usage > src_limit || dst_usage > dst_limit) {
+        continue;
+      }
+
+      const auto bandwidth = bandwidth_data[src * num_devices + dst];
+
+      const bool is_better = bandwidth > best_bandwidth;
+      best_bandwidth = is_better ? bandwidth : best_bandwidth;
+      best_source = is_better ? src : best_source;
+      found = found || is_better;
+    }
+
     return {found, best_source};
   }
 

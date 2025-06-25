@@ -34,14 +34,14 @@ taskid_t min(taskid_t a, taskid_t b) {
   return a < b ? a : b;
 }
 
-enum class NodeType {
+enum class NodeType : int8_t {
   ANY = -1,
   TASK = 0,
   DATA_BLOCK = 1,
   DEVICE = 2
 };
 
-enum class EdgeType {
+enum class EdgeType : int8_t {
   ANY = -1,
   TASK_TASK = 0,
   TASK_DATA = 1,

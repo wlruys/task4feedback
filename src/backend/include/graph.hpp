@@ -5,12 +5,12 @@
 #include "resources.hpp"
 #include "settings.hpp"
 #include "tasks.hpp"
+#include <ankerl/unordered_dense.h>
 #include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
 struct Writer {
   bool found = false;
   taskid_t task_id = 0;
@@ -27,7 +27,7 @@ public:
   std::vector<std::array<std::array<int64_t, 4>, num_device_types>> variant_info;
   std::vector<std::vector<taskid_t>> dependencies;
 
-  std::unordered_map<std::string, taskid_t> task_name_to_id;
+  ankerl::unordered_dense::map<std::string, taskid_t> task_name_to_id;
 
   GraphTemplate() {
     task_tags.reserve(100);
@@ -230,7 +230,7 @@ public:
     }
   }
 
-  GraphTemplate reindex(std::unordered_map<std::string, taskid_t> &task_name_to_new_id) {
+  GraphTemplate reindex(ankerl::unordered_dense::map<std::string, taskid_t> &task_name_to_new_id) {
 
     GraphTemplate new_graph;
     new_graph.resize(size());
@@ -353,28 +353,30 @@ public:
 class GraphManager {
 
 private:
-  static std::unordered_map<taskid_t, MinimalTask> create_minimal_tasks(const TaskIDList &task_ids,
-                                                                        Tasks &tasks);
+  static ankerl::unordered_dense::map<taskid_t, MinimalTask>
+  create_minimal_tasks(const TaskIDList &task_ids, Tasks &tasks);
 
-  static std::unordered_map<taskid_t, MinimalTask>
+  static ankerl::unordered_dense::map<taskid_t, MinimalTask>
   create_minimal_tasks(const ComputeTaskList &tasks);
 
   static void find_recent_writers(TaskIDList &sorted, Tasks &tasks,
-                                  std::unordered_map<taskid_t, dataid_t> &writers);
+                                  ankerl::unordered_dense::map<taskid_t, dataid_t> &writers);
 
 public:
   static void populate_data_dependencies(TaskIDList &sorted, Tasks &tasks, bool create_data_tasks,
                                          bool add_missing_writers);
   static void populate_dependents(Tasks &tasks);
-  static void add_missing_writer_dependencies(std::unordered_map<dataid_t, taskid_t> &writers,
-                                              ComputeTask &task, Tasks &tasks);
+  static void
+  add_missing_writer_dependencies(ankerl::unordered_dense::map<dataid_t, taskid_t> &writers,
+                                  ComputeTask &task, Tasks &tasks);
 
-  static void create_data_tasks(std::unordered_map<dataid_t, taskid_t> &writers, ComputeTask &task,
-                                Tasks &tasks);
+  static void create_data_tasks(ankerl::unordered_dense::map<dataid_t, taskid_t> &writers,
+                                ComputeTask &task, Tasks &tasks);
 
-  static Writer find_writer(std::unordered_map<dataid_t, taskid_t> &writers, dataid_t data_id);
+  static Writer find_writer(ankerl::unordered_dense::map<dataid_t, taskid_t> &writers,
+                            dataid_t data_id);
 
-  static void update_writers(std::unordered_map<dataid_t, taskid_t> &writers,
+  static void update_writers(ankerl::unordered_dense::map<dataid_t, taskid_t> &writers,
                              const DataIDList &write, taskid_t task_id);
 
   static void calculate_depth(TaskIDList &sorted, Tasks &tasks);

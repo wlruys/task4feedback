@@ -8,13 +8,16 @@
 #include "spdlog/spdlog.h"
 #include "tasks.hpp"
 #include <algorithm>
+#include <ankerl/unordered_dense.h>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <span>
 #include <string>
+#include <tracy/Tracy.hpp>
 #include <unordered_map>
 
-enum class DataState {
+enum class DataState : int8_t {
   NONE = 0,
   PLANNED = 1,
   MOVING = 2,
@@ -488,7 +491,7 @@ public:
     }
   }
 
-  bool validate(dataid_t data_id, devid_t device_id, timecount_t current_time) {
+  bool inline validate(dataid_t data_id, devid_t device_id, timecount_t current_time) {
     if (is_valid(data_id, device_id)) {
       return false;
     }
@@ -550,35 +553,29 @@ public:
 };
 
 struct MovementPair {
-  dataid_t data_id = 0;
-  devid_t destination = 0;
-
-  MovementPair() = default;
+  dataid_t data_id{};
+  devid_t destination{};
 
   MovementPair(dataid_t data_id, devid_t destination) : data_id(data_id), destination(destination) {
   }
 
-  bool operator==(const MovementPair &other) const {
+  auto operator==(const MovementPair &other) const -> bool {
     return data_id == other.data_id && destination == other.destination;
   }
+};
 
-  // Hash function for MovementPair
-  struct Hash {
-    std::size_t operator()(const MovementPair &pair) const {
-      // NOTE(wlr): I have no idea what the collision rate of this is
-      //            Keep this in mind if something starts failing
-      return std::hash<dataid_t>()(pair.data_id) ^ std::hash<devid_t>()(pair.destination);
-    }
-  };
+struct mp_hash {
+  using is_avalanching = void;
 
-  bool operator<(const MovementPair &other) const {
-    return data_id < other.data_id || (data_id == other.data_id && destination < other.destination);
+  [[nodiscard]] auto operator()(MovementPair const &f) const noexcept -> uint64_t {
+    static_assert(std::has_unique_object_representations_v<MovementPair>);
+    return ankerl::unordered_dense::detail::wyhash::hash(&f, sizeof(f));
   }
 };
 
 class MovementManager {
 protected:
-  std::unordered_map<MovementPair, timecount_t, MovementPair::Hash> movement_times;
+  ankerl::unordered_dense::map<MovementPair, timecount_t, mp_hash> movement_times;
 
 public:
   MovementManager() = default;
@@ -604,7 +601,7 @@ public:
 
 class DeviceDataCounts {
 protected:
-  using DataCount = std::unordered_map<dataid_t, std::size_t>;
+  using DataCount = ankerl::unordered_dense::map<dataid_t, std::size_t>;
   DataCount mapped_counts;
   DataCount reserved_counts;
   DataCount launched_counts;
@@ -887,8 +884,9 @@ private:
   //  - a map from data_id → its position in that list
   //  - a map from data_id → its mem_size
   std::vector<std::list<dataid_t>> lru_lists_;
-  std::vector<std::unordered_map<dataid_t, typename std::list<dataid_t>::iterator>> position_maps_;
-  std::vector<std::unordered_map<dataid_t, mem_t>> size_maps_;
+  std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<dataid_t>::iterator>>
+      position_maps_;
+  std::vector<ankerl::unordered_dense::map<dataid_t, mem_t>> size_maps_;
   std::vector<mem_t> sizes_;
   std::vector<mem_t> max_sizes_;
   mem_t evicted_size = 0;
@@ -957,19 +955,18 @@ public:
   DataManager &operator=(const DataManager &o_) = delete;
 
   void initialize() {
+    ZoneScoped;
     for (dataid_t i = 0; i < data.get().size(); i++) {
       auto initial_location = data.get().get_location(i);
       if (initial_location > -1) {
         mapped_locations.set_valid(i, initial_location, 0);
         reserved_locations.set_valid(i, initial_location, 0);
         launched_locations.set_valid(i, initial_location, 0);
-        device_manager.get().add_mem<TaskState::MAPPED>(initial_location, data.get().get_size(i),
-                                                        0);
-        device_manager.get().add_mem<TaskState::RESERVED>(initial_location, data.get().get_size(i),
-                                                          0);
-        device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, data.get().get_size(i),
-                                                          0);
-        lru_manager.read(initial_location, i, data.get().get_size(i));
+        const auto size = data.get().get_size(i);
+        device_manager.get().add_mem<TaskState::MAPPED>(initial_location, size, 0);
+        device_manager.get().add_mem<TaskState::RESERVED>(initial_location, size, 0);
+        device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, size, 0);
+        lru_manager.read(initial_location, i, size);
       }
     }
     valid_location_buffer.reserve(device_manager.get().size());
@@ -1119,20 +1116,18 @@ public:
     // Memory change is handled by task complete
   }
 
-  void add_memory(dataid_t data_id, devid_t device_id, timecount_t current_time) {
-    SPDLOG_DEBUG("Adding data block {} to device {} with size {}", data_id, device_id,
-                 data.get().get_size(data_id));
-    device_manager.get().add_mem<TaskState::LAUNCHED>(device_id, data.get().get_size(data_id),
-                                                      current_time);
-    lru_manager.read(device_id, data_id, data.get().get_size(data_id));
+  void add_memory(dataid_t data_id, devid_t device_id, timecount_t current_time, mem_t size) {
+    SPDLOG_DEBUG("Adding data block {} to device {} with size {}", data_id, device_id, size);
+    device_manager.get().add_mem<TaskState::LAUNCHED>(device_id, size, current_time);
   }
 
   void read_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
     for (auto data_id : list) {
-      lru_manager.read(device_id, data_id, data.get().get_size(data_id));
+      const auto size = data.get().get_size(data_id);
+      lru_manager.read(device_id, data_id, size);
       bool changed = read_update(data_id, device_id, launched_locations, current_time);
       if (changed) {
-        add_memory(data_id, device_id, current_time);
+        add_memory(data_id, device_id, current_time, size);
       }
     }
   }
@@ -1238,22 +1233,13 @@ public:
   }
 
   SourceRequest request_source(dataid_t data_id, devid_t destination) {
-    auto &valid_locations = this->valid_location_buffer;
-    valid_locations.clear();
-    valid_locations.reserve(device_manager.get().size());
-
-    launched_locations.populate_valid_locations(data_id, valid_locations);
-    assert(!valid_locations.empty());
-
-    if (launched_locations.is_valid(data_id, destination)) {
-      return {true, destination};
-    }
+    auto location_flags = launched_locations.get_location_flags(data_id);
 
     SPDLOG_DEBUG("Requesting source for data block {} to device {}", data_id, destination);
-    SPDLOG_DEBUG("Number of valid locations: {}", valid_locations.size());
+    // SPDLOG_DEBUG("Number of valid locations: {}", valid_locations.size());
 
     SourceRequest req =
-        communication_manager.get().get_best_available_source(destination, valid_locations);
+        communication_manager.get().get_best_available_source(destination, location_flags);
 
     return req;
   }
@@ -1278,10 +1264,13 @@ public:
     SPDLOG_DEBUG("Starting move of data block {} from device {} to device {}", data_id, source,
                  destination);
 
-    add_memory(data_id, destination, current_time);
+    const auto size = data.get().get_size(data_id);
 
-    timecount_t duration = communication_manager.get().ideal_time_to_transfer(
-        data.get().get_size(data_id), source, destination);
+    lru_manager.read(destination, data_id, size);
+    add_memory(data_id, destination, current_time, size);
+
+    timecount_t duration =
+        communication_manager.get().ideal_time_to_transfer(size, source, destination);
 
     if (duration == 0) {
       assert(source != destination);
