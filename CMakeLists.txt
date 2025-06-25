@@ -21,7 +21,7 @@ option(SIM_TRACK_RESOURCES  "Enable resource-usage logging"  ON)
 option(SIM_TRACK_LOCATION   "Enable data-location logging"   ON)
 option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
 option(ENABLE_TRACY         "Enable Tracy profiler support"   OFF)
-option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" ON)
+option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" OFF)
 
 
 if(ENABLE_CCACHE)

@@ -47,19 +47,16 @@ if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)
     target_compile_definitions(fastsim2 PRIVATE MI_MALLOC_OVERRIDE=1)
 endif()
 
-# if(CMAKE_BUILD_TYPE STREQUAL "Release")
-#     nanobind_lto(fastsim2)
-#     nanobind_strip(fastsim2)
-# endif()
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    nanobind_lto(fastsim2)
+    nanobind_strip(fastsim2)
+endif()
 
-# Remove -Os -DNDEBUG from the fastsim2 target
-# This is necessary to avoid issues with nanobind and the -Os optimization level.
-
-target_link_options(fastsim2 PRIVATE -Wl,--no-gc-sections)
-target_compile_options(fastsim2 PRIVATE -fno-function-sections -fno-data-sections)
-set_target_properties(fastsim2 PROPERTIES
-                      CXX_VISIBILITY_PRESET default
-                      VISIBILITY_INLINES_HIDDEN OFF)
+# target_link_options(fastsim2 PRIVATE -Wl,--no-gc-sections)
+# target_compile_options(fastsim2 PRIVATE -fno-function-sections -fno-data-sections)
+# set_target_properties(fastsim2 PROPERTIES
+#                       CXX_VISIBILITY_PRESET default
+#                       VISIBILITY_INLINES_HIDDEN OFF)
 
 
 # nanobind_add_stub(fastsim2_stub

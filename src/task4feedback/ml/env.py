@@ -245,6 +245,7 @@ class RuntimeEnv(EnvBase):
         return buf
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+        start_t = perf_counter()
         self.resets += 1
         self.step_count = 0
         current_priority_seed = self.simulator_factory.pseed
@@ -289,6 +290,8 @@ class RuntimeEnv(EnvBase):
 
         obs = self._get_observation()
         td.set(self.observation_n, obs)
+        end_t = perf_counter()
+        # print("Reset took %.2f ms", (end_t - start_t) * 1000, flush=True)
         return td
 
     @property
@@ -466,13 +469,15 @@ class IncrementalEFT(RuntimeEnv):
         self.simulator.simulator.map_tasks(
             [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
         )
-
+        start_time = perf_counter()
         sim_ml = self.simulator.copy()
         sim_ml.disable_external_mapper()
+        end_time = perf_counter()
+        # print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
         start_time = perf_counter()
         sim_ml.run()
         end_time = perf_counter()
-        training.info(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
+        # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
 
         ml_time = sim_ml.time
 
