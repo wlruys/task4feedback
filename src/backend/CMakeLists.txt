@@ -1,13 +1,8 @@
 add_library(backend STATIC)
 target_sources(backend
   PRIVATE
-    data_manager.cpp
-    device_manager.cpp
-    graph.cpp
     queues.cpp
     scheduler.cpp
-    task_manager.cpp
-    tasks.cpp
 )
 
 target_sources(backend
@@ -20,11 +15,9 @@ target_sources(backend
         include/data_manager.hpp
         include/device_manager.hpp
         include/communication_manager.hpp
-        include/observer.hpp
         include/devices.hpp
         include/event_manager.hpp
         include/events.hpp
-        include/graph.hpp
         include/iterator.hpp
         include/macros.hpp
         include/noise.hpp
@@ -34,7 +27,6 @@ target_sources(backend
         include/settings.hpp
         include/simulator.hpp
         include/stats.hpp
-        include/task_manager.hpp
         include/tasks.hpp
 )
 

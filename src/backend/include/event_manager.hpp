@@ -28,12 +28,27 @@ public:
   }
 
   // Completer with TaskIDList:
-  inline void create_event(EventType t, timecount_t time, taskid_t task_id) {
-    if (t != EventType::COMPLETER) {
-      std::cout << "create_event: expected COMPLETER got " << t;
-      throw std::invalid_argument("create_event: expected COMPLETER");
+  inline void create_event(EventType t, timecount_t time, taskid_t task_id, devid_t device_id) {
+    // if (t != EventType::COMPLETER) {
+    //   std::cout << "create_event: expected COMPLETER got " << t;
+    //   throw std::invalid_argument("create_event: expected COMPLETER");
+    // }
+    switch (t) {
+    case EventType::MAPPER:
+      events_.push(MapperEvent{time});
+      break;
+    case EventType::RESERVER:
+      events_.push(ReserverEvent{time});
+      break;
+    case EventType::LAUNCHER:
+      events_.push(LauncherEvent{time});
+      break;
+    case EventType::EVICTOR:
+      events_.push(EvictorEvent{time});
+      break;
+    default:
+      throw std::invalid_argument("create_event(type,time) only for MAPPER/RESERVER/LAUNCHER");
     }
-    events_.push(CompleterEvent{time, task_id});
   }
 
   // Push an existing variant:

@@ -477,8 +477,8 @@ public:
 
   // getLRUids: fill id_buffer[device_id] with the least-recently-used data_ids
   // until their cumulative mem_size ≥ requested mem_size, and return it.
-  const DataIDList &getLRUids(devid_t device_id, std::size_t mem_size,
-                              const DataIDList &used_ids) const {
+  const std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
+                                            std::span<const dataid_t> used_ids) const {
     assert(device_id >= 0 && device_id < n_devices_);
 
     auto &lst = lru_lists_[device_id];
@@ -541,7 +541,7 @@ protected:
     return locations.is_valid(data_id, device_id);
   }
 
-  static bool check_valid(const DataIDList &list, const LocationManager &locations,
+  static bool check_valid(std::span<const dataid_t> list, const LocationManager &locations,
                           devid_t device_id) {
     return std::ranges::all_of(
         list, [&](auto data_id) { return !locations.is_invalid(data_id, device_id); });
@@ -624,7 +624,7 @@ public:
     return launched_locations;
   }
 
-  bool check_valid_mapped(const DataIDList &list, devid_t device_id) const {
+  bool check_valid_mapped(std::span<const dataid_t> list, devid_t device_id) const {
     return check_valid(list, mapped_locations, device_id);
   }
 
@@ -632,7 +632,7 @@ public:
     return check_valid(data_id, mapped_locations, device_id);
   }
 
-  bool check_valid_reserved(const DataIDList &list, devid_t device_id) const {
+  bool check_valid_reserved(std::span<const dataid_t> &list, devid_t device_id) const {
     return check_valid(list, reserved_locations, device_id);
   }
 
@@ -640,7 +640,7 @@ public:
     return check_valid(data_id, reserved_locations, device_id);
   }
 
-  bool check_valid_launched(const DataIDList &list, devid_t device_id) const {
+  bool check_valid_launched(std::span<const dataid_t> list, devid_t device_id) const {
     return check_valid(list, launched_locations, device_id);
   }
 
@@ -648,7 +648,7 @@ public:
     return check_valid(data_id, launched_locations, device_id);
   }
 
-  [[nodiscard]] mem_t total_size(const DataIDList &list) const {
+  [[nodiscard]] mem_t total_size(std::span<const dataid_t> list) const {
     mem_t total_size = 0;
     for (auto data_id : list) {
       total_size += data.get().get_size(data_id);
@@ -656,11 +656,11 @@ public:
     return total_size;
   }
 
-  [[nodiscard]] mem_t local_size(const DataIDList &list, devid_t device_id) const {
+  [[nodiscard]] mem_t local_size(std::span<const dataid_t> list, devid_t device_id) const {
     return local_size(list, mapped_locations, device_id);
   }
 
-  [[nodiscard]] mem_t local_size(const DataIDList &list, const LocationManager &locations,
+  [[nodiscard]] mem_t local_size(std::span<const dataid_t> list, const LocationManager &locations,
                                  devid_t device_id) const {
     mem_t local_size = 0;
     for (auto data_id : list) {
@@ -671,20 +671,20 @@ public:
     return local_size;
   }
 
-  mem_t local_size_mapped(const DataIDList &list, devid_t device_id) const {
+  mem_t local_size_mapped(std::span<const dataid_t> list, devid_t device_id) const {
     return local_size(list, mapped_locations, device_id);
   }
 
-  mem_t local_size_reserved(const DataIDList &list, devid_t device_id) const {
+  mem_t local_size_reserved(std::span<const dataid_t> list, devid_t device_id) const {
     return local_size(list, reserved_locations, device_id);
   }
 
-  mem_t local_size_launched(const DataIDList &list, devid_t device_id) const {
+  mem_t local_size_launched(std::span<const dataid_t> list, devid_t device_id) const {
     return local_size(list, launched_locations, device_id);
   }
 
-  [[nodiscard]] mem_t non_local_size(const DataIDList &list, const LocationManager &locations,
-                                     devid_t device_id) const {
+  [[nodiscard]] mem_t non_local_size(std::span<const dataid_t> list,
+                                     const LocationManager &locations, devid_t device_id) const {
     mem_t non_local_size = 0;
     for (auto data_id : list) {
       if (locations.is_invalid(data_id, device_id)) {
@@ -694,19 +694,19 @@ public:
     return non_local_size;
   }
 
-  mem_t non_local_size_mapped(const DataIDList &list, devid_t device_id) const {
+  mem_t non_local_size_mapped(std::span<const dataid_t> list, devid_t device_id) const {
     return non_local_size(list, mapped_locations, device_id);
   }
 
-  mem_t non_local_size_reserved(const DataIDList &list, devid_t device_id) const {
+  mem_t non_local_size_reserved(std::span<const dataid_t> list, devid_t device_id) const {
     return non_local_size(list, reserved_locations, device_id);
   }
 
-  mem_t non_local_size_launched(const DataIDList &list, devid_t device_id) const {
+  mem_t non_local_size_launched(std::span<const dataid_t> list, devid_t device_id) const {
     return non_local_size(list, launched_locations, device_id);
   }
 
-  mem_t shared_size(const DataIDList &list1, const DataIDList &list2) const {
+  mem_t shared_size(std::span<const dataid_t> list1, std::span<const dataid_t> list2) const {
     mem_t shared_size = 0;
     for (auto data_id : list1) {
       if (std::find(list2.begin(), list2.end(), data_id) != list2.end()) {
@@ -716,28 +716,32 @@ public:
     return shared_size;
   }
 
-  void read_update_mapped(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+  void read_update_mapped(std::span<const dataid_t> list, devid_t device_id,
+                          timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, mapped_locations, current_time);
     }
     // Memory change is handled by task request in mapper
   }
 
-  void write_update_mapped(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+  void write_update_mapped(std::span<const dataid_t> list, devid_t device_id,
+                           timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, mapped_locations, current_time);
     }
     // Memory change is handled by task complete
   }
 
-  void read_update_reserved(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+  void read_update_reserved(std::span<const dataid_t> list, devid_t device_id,
+                            timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, reserved_locations, current_time);
     }
     // Memory change is handeled by task request in reserver
   }
 
-  void write_update_reserved(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+  void write_update_reserved(std::span<const dataid_t> list, devid_t device_id,
+                             timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, reserved_locations, current_time);
     }
@@ -749,7 +753,8 @@ public:
     device_manager.get().add_mem<TaskState::LAUNCHED>(device_id, size, current_time);
   }
 
-  void read_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+  void read_update_launched(std::span<const dataid_t> list, devid_t device_id,
+                            timecount_t current_time) {
     for (auto data_id : list) {
       const auto size = data.get().get_size(data_id);
       lru_manager.read(device_id, data_id, size);
@@ -760,71 +765,70 @@ public:
     }
   }
 
-  void write_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time) {
+  void write_update_launched(std::span<const dataid_t> list, devid_t device_id,
+                             timecount_t current_time) {
     for (auto data_id : list) {
       auto changed_flags = write_update(data_id, device_id, launched_locations, current_time);
       remove_memory(changed_flags, data_id, current_time);
     }
   }
 
-  void evict_on_update_launched(const DataIDList &list, devid_t device_id, timecount_t current_time,
+  void evict_on_update_launched(dataid_t data_id, devid_t device_id, timecount_t current_time,
                                 bool future_usage, bool write_after_read) {
-    for (auto data_id : list) {
-      auto updated_devices_launched =
-          evict_on_update(data_id, device_id, launched_locations, current_time);
-      auto updated_devices_reserved =
-          evict_on_update(data_id, device_id, reserved_locations, current_time);
+    auto updated_devices_launched =
+        evict_on_update(data_id, device_id, launched_locations, current_time);
+    auto updated_devices_reserved =
+        evict_on_update(data_id, device_id, reserved_locations, current_time);
 
-      auto size = data.get().get_size(data_id);
-      for (devid_t device = 0; device < updated_devices_launched.size(); device++) {
-        if (updated_devices_launched[device]) {
-          SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
-          device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
-          device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-          lru_manager.invalidate(device, data_id, true);
-        }
+    auto size = data.get().get_size(data_id);
+    for (devid_t device = 0; device < updated_devices_launched.size(); device++) {
+      if (updated_devices_launched[device]) {
+        SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
+        device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
+        device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+        lru_manager.invalidate(device, data_id, true);
       }
-      if (!future_usage) {
-        // If there are no further usage for the data block (in mapped but not reserved tasks).
-        // Invalidate for future mapping decisions.
-        device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
-        mapped_locations.set_invalid(data_id, device_id, current_time);
-      }
-      // else if (mapped_locations.is_invalid(data_id, device_id) || write_after_read) {
-      else if (write_after_read) {
-        // write_after_read is needed to handle a case where the next usage for the data block is
-        // write from the other device. Since launched_location is invalidated by the eviction
-        // this redundant mapped_memory will not be removed. (Which should be).
-        // mapped_locations.is_invalid(data_id, device_id) is only checking a subset of above
-        // cases since to be valid in launced_location and invalid in mapped_location there is
-        // only one scenario.
-        // -> the last operation to the data block in mapped_but_not_reserved_tasks is a write
-        // from another device.
-        //   GPU0   |   GPU1
-        // ---------|----------
-        // read B0  |
-        // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
-        // read B0  |
-        // ~~~~~~~~~~~~~~~~~~~~~ < other ops
-        //          |  Write B0
-        // ---------|---------- <- Mapped but not reserved: B0 invalid in mapped_location GPU0
-        //
-        // However below case is not handeled
-        //
-        //   GPU0   |   GPU1
-        // ---------|----------
-        // read B0  |
-        // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
-        //          |  Write B0
-        // ~~~~~~~~~~~~~~~~~~~~~ < other ops
-        // read B0  |
-        // ---------|---------- <- Mapped but not reserved: B0 valid in mapped_location GPU0
-        //
-        // Write B0 from the GPU should have removed the mapped memory from GPU0 since
-        // launched_location is valid (without eviction).
-        // After eviction launched_location has changed and the removal doesn't happen.
-        device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
-      }
+    }
+    if (!future_usage) {
+      // If there are no further usage for the data block (in mapped but not reserved tasks).
+      // Invalidate for future mapping decisions.
+      device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
+      mapped_locations.set_invalid(data_id, device_id, current_time);
+    }
+    // else if (mapped_locations.is_invalid(data_id, device_id) || write_after_read) {
+    else if (write_after_read) {
+      // write_after_read is needed to handle a case where the next usage for the data block is
+      // write from the other device. Since launched_location is invalidated by the eviction
+      // this redundant mapped_memory will not be removed. (Which should be).
+      // mapped_locations.is_invalid(data_id, device_id) is only checking a subset of above
+      // cases since to be valid in launced_location and invalid in mapped_location there is
+      // only one scenario.
+      // -> the last operation to the data block in mapped_but_not_reserved_tasks is a write
+      // from another device.
+      //   GPU0   |   GPU1
+      // ---------|----------
+      // read B0  |
+      // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
+      // read B0  |
+      // ~~~~~~~~~~~~~~~~~~~~~ < other ops
+      //          |  Write B0
+      // ---------|---------- <- Mapped but not reserved: B0 invalid in mapped_location GPU0
+      //
+      // However below case is not handeled
+      //
+      //   GPU0   |   GPU1
+      // ---------|----------
+      // read B0  |
+      // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
+      //          |  Write B0
+      // ~~~~~~~~~~~~~~~~~~~~~ < other ops
+      // read B0  |
+      // ---------|---------- <- Mapped but not reserved: B0 valid in mapped_location GPU0
+      //
+      // Write B0 from the GPU should have removed the mapped memory from GPU0 since
+      // launched_location is valid (without eviction).
+      // After eviction launched_location has changed and the removal doesn't happen.
+      device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
     }
   }
 

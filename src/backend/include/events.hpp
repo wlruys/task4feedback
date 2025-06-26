@@ -12,9 +12,11 @@ enum class EventType : int8_t {
   RESERVER = 1,
   LAUNCHER = 2,
   EVICTOR = 3,
-  COMPLETER = 4,
+  COMPUTE_COMPLETER = 4,
+  DATA_COMPLETER = 5,
+  EVICTOR_COMPLETER = 6
 };
-constexpr std::size_t num_event_types = 5;
+constexpr std::size_t num_event_types = 7;
 
 inline std::string to_string(EventType t) {
   switch (t) {
@@ -26,8 +28,12 @@ inline std::string to_string(EventType t) {
     return "LAUNCHER";
   case EventType::EVICTOR:
     return "EVICTOR";
-  case EventType::COMPLETER:
-    return "COMPLETER";
+  case EventType::COMPUTE_COMPLETER:
+    return "COMPUTE_COMPLETER";
+  case EventType::DATA_COMPLETER:
+    return "DATA_COMPLETER";
+  case EventType::EVICTOR_COMPLETER:
+    return "EVICTOR_COMPLETER";
   }
   return "UNKNOWN";
 }
@@ -65,15 +71,36 @@ struct EvictorEvent {
 };
 
 struct CompleterEvent {
-  static constexpr EventType type = EventType::COMPLETER;
   timecount_t time;
   taskid_t task;
-  CompleterEvent(timecount_t t, taskid_t tid) : time(t), task(tid) {
+  devid_t device;
+  CompleterEvent(timecount_t t, taskid_t tid, devid_t did) : time(t), task(tid), device(did) {
   }
 };
 
+struct ComputeCompleterEvent : public CompleterEvent {
+  static constexpr EventType type = EventType::COMPUTE_COMPLETER;
+  ComputeCompleterEvent(timecount_t t, taskid_t tid, devid_t did) : CompleterEvent(t, tid, did) {
+  }
+};
+
+struct DataCompleterEvent : public CompleterEvent {
+  static constexpr EventType type = EventType::DATA_COMPLETER;
+  DataCompleterEvent(timecount_t t, taskid_t tid, devid_t did) : CompleterEvent(t, tid, did) {
+  }
+};
+
+struct EvictorCompleterEvent : public CompleterEvent {
+  static constexpr EventType type = EventType::EVICTOR_COMPLETER;
+  EvictorCompleterEvent(timecount_t t, taskid_t tid) : CompleterEvent(t, tid, 0) {
+  }
+};
+
+using CompleterVariant =
+    std::variant<ComputeCompleterEvent, DataCompleterEvent, EvictorCompleterEvent>;
+
 using EventVariant =
-    std::variant<MapperEvent, ReserverEvent, LauncherEvent, EvictorEvent, CompleterEvent>;
+    std::variant<MapperEvent, ReserverEvent, LauncherEvent, EvictorEvent, CompleterVariant>;
 
 struct TypeExtractor {
   EventType operator()(MapperEvent const &) const noexcept {
@@ -88,8 +115,8 @@ struct TypeExtractor {
   EventType operator()(EvictorEvent const &) const noexcept {
     return EventType::EVICTOR;
   }
-  EventType operator()(CompleterEvent const &) const noexcept {
-    return EventType::COMPLETER;
+  EventType operator()(CompleterVariant const &cv) const noexcept {
+    return std::visit([](auto const &e) -> EventType { return e.type; }, cv);
   }
 };
 
@@ -98,11 +125,19 @@ inline EventType get_type(EventVariant const &v) {
 }
 
 inline timecount_t get_time(EventVariant const &v) {
-  return std::visit([](auto const &e) -> timecount_t { return e.time; }, v);
+  return std::visit(
+      [](auto const &e) -> timecount_t {
+        if constexpr (std::is_same_v<std::decay_t<decltype(e)>, CompleterVariant>) {
+          return std::visit([](auto const &ce) -> timecount_t { return ce.time; }, e);
+        } else {
+          return e.time;
+        }
+      },
+      v);
 }
 
-// Comparator for a min-heap (earlier time ⇒ higher priority;
-// on tie, larger EventType ⇒ higher priority so COMPLETER (4) goes first)
+// Comparator for our min-heap priority queue (earlier time ⇒ higher priority);
+// on tie, larger EventType -> higher priority so COMPLETER (4) goes first)
 struct EventVariantCompare {
   bool operator()(EventVariant const &a, EventVariant const &b) const {
     auto ta = get_time(a), tb = get_time(b);

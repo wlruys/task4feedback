@@ -122,30 +122,40 @@ public:
 
   ExecutionState handle_event(EventVariant &event) {
     ZoneScoped;
-    auto event_type = get_type(event);
+    return std::visit(
+        [this](auto &e) {
+          using T = std::decay_t<decltype(e)>;
 
-    switch (event_type) {
-    case EventType::MAPPER:
-      return dispatch_mapper(std::get<MapperEvent>(event));
-      break;
-    case EventType::RESERVER:
-      scheduler.reserve_tasks(std::get<ReserverEvent>(event), event_manager);
-      return ExecutionState::RUNNING;
-      break;
-    case EventType::LAUNCHER:
-      scheduler.launch_tasks(std::get<LauncherEvent>(event), event_manager);
-      return ExecutionState::RUNNING;
-      break;
-    case EventType::EVICTOR:
-      scheduler.evict(std::get<EvictorEvent>(event), event_manager);
-      return ExecutionState::RUNNING;
-      break;
-    case EventType::COMPLETER:
-      scheduler.complete_task(std::get<CompleterEvent>(event), event_manager);
-      return ExecutionState::RUNNING;
-      break;
-    }
-    return {};
+          if constexpr (std::is_same_v<T, MapperEvent>) {
+            return dispatch_mapper(e);
+          } else if constexpr (std::is_same_v<T, ReserverEvent>) {
+            scheduler.reserve_task(e, event_manager);
+            return ExecutionState::RUNNING;
+          } else if constexpr (std::is_same_v<T, LauncherEvent>) {
+            scheduler.launch_tasks(e, event_manager);
+            return ExecutionState::RUNNING;
+          } else if constexpr (std::is_same_v<T, EvictorEvent>) {
+            scheduler.evict(e, event_manager);
+            return ExecutionState::RUNNING;
+          } else if constexpr (std::is_same_v<T, CompleterVariant>) {
+            std::visit(
+                [this](auto &completer_event) {
+                  using CT = std::decay_t<decltype(completer_event)>;
+
+                  if constexpr (std::is_same_v<CT, ComputeCompleterEvent>) {
+                    scheduler.complete_compute_task(completer_event, event_manager);
+                    return ExecutionState::RUNNING;
+                  } else if constexpr (std::is_same_v<CT, DataCompleterEvent>) {
+                    scheduler.complete_data_task(completer_event, event_manager);
+                    return ExecutionState::RUNNING;
+                  } else if constexpr (std::is_same_v<CT, EvictorCompleterEvent>) {
+                    scheduler.complete_evictor_task(completer_event, event_manager);
+                  }
+                },
+                e);
+          }
+        },
+        event);
   }
 
   void update_time(EventVariant &event) {
@@ -269,10 +279,6 @@ public:
     return scheduler.get_state().get_data_manager().get_lru_manager().get_evicted_memory_size();
   }
 
-  [[nodiscard]] timecount_t get_task_finish_time(taskid_t task_id) const {
-    return scheduler.get_state().get_task_manager().records.get_completed_time(task_id);
-  }
-
   void add_task_breakpoint(EventType type, taskid_t task) {
     scheduler.breakpoints.add_breakpoint(type, task);
   }
@@ -284,277 +290,4 @@ public:
   void add_time_breakpoint(timecount_t time) {
     scheduler.breakpoints.add_time_breakpoint(time);
   }
-
-  [[nodiscard]] devid_t get_mapping(taskid_t task_id) const {
-    /*Get mapped location of task */
-    return scheduler.get_state().get_mapping(task_id);
-  }
-
-  [[nodiscard]] priority_t get_mapping_priority(taskid_t task_id) const {
-    return scheduler.get_state().get_mapping_priority(task_id);
-  }
-
-  [[nodiscard]] priority_t get_reserving_priority(taskid_t task_id) const {
-    return scheduler.get_state().get_reserving_priority(task_id);
-  }
-
-  [[nodiscard]] priority_t get_launching_priority(taskid_t task_id) const {
-    return scheduler.get_state().get_reserving_priority(task_id);
-  }
-
-  [[nodiscard]] timecount_t get_mapped_time(taskid_t task_id) const {
-    /*Get the time a task was mapped */
-    const auto &s = scheduler.get_state();
-    const auto &records = s.get_task_manager().get_records();
-    return records.get_mapped_time(task_id);
-  }
-
-  [[nodiscard]] timecount_t get_reserved_time(taskid_t task_id) const {
-    /*Get the time a task was reserved */
-    const auto &s = scheduler.get_state();
-    const auto &records = s.get_task_manager().get_records();
-    return records.get_reserved_time(task_id);
-  }
-
-  [[nodiscard]] timecount_t get_launched_time(taskid_t task_id) const {
-    /*Get the time a task was launched */
-    const auto &s = scheduler.get_state();
-    const auto &records = s.get_task_manager().get_records();
-    return records.get_launched_time(task_id);
-  }
-
-  [[nodiscard]] timecount_t get_completed_time(taskid_t task_id) const {
-    /*Get the time a task was completed */
-    const auto &s = scheduler.get_state();
-    const auto &records = s.get_task_manager().get_records();
-    return records.get_completed_time(task_id);
-  }
-
-  bool track_resource_guard() const {
-/* Compilation guard for when resource tracking (memory and vcu usage over time) is disabled */
-#ifndef SIM_TRACK_RESOURCES
-    spdlog::warn("SIM_TRACK_RESOURCES not defined. Resource tracking is disabled.");
-    return true;
-#else
-    return false;
-#endif
-  }
-
-  bool track_location_guard() const {
-/* Compilation guard for when location tracking (data location over time) is disabled */
-#ifndef SIM_TRACK_LOCATION
-    spdlog::warn("SIM_TRACK_LOCATION not defined. Location tracking is disabled.");
-    return true;
-#else
-    return false;
-#endif
-  }
-
-  [[nodiscard]] vcu_t get_mapped_vcu_at_time(devid_t device_id, timecount_t time) const {
-    /* Get the VCU mapped to a device at a given time */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_vcu_at_time<TaskState::MAPPED>(device_id, time);
-  }
-
-  [[nodiscard]] mem_t get_mapped_mem_at_time(devid_t device_id, timecount_t time) const {
-    /* Get the memory mapped to a device at a given time */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_mem_at_time<TaskState::MAPPED>(device_id, time);
-  }
-
-  [[nodiscard]] vcu_t get_reserved_vcu_at_time(devid_t device_id, timecount_t time) const {
-    /* Get the VCU reserved to a device at a given time */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_vcu_at_time<TaskState::RESERVED>(device_id, time);
-  }
-
-  [[nodiscard]] mem_t get_reserved_mem_at_time(devid_t device_id, timecount_t time) const {
-    /* Get the memory reserved to a device at a given time */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_mem_at_time<TaskState::RESERVED>(device_id, time);
-  }
-
-  [[nodiscard]] vcu_t get_launched_vcu_at_time(devid_t device_id, timecount_t time) const {
-    /* Get the VCU launched to a device at a given time */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_vcu_at_time<TaskState::LAUNCHED>(device_id, time);
-  }
-
-  [[nodiscard]] mem_t get_launched_mem_at_time(devid_t device_id, timecount_t time) const {
-    /* Get the memory launched to a device at a given time */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_mem_at_time<TaskState::LAUNCHED>(device_id, time);
-  }
-
-  ResourceEventArray<vcu_t> get_vcu_events_mapped(devid_t device_id) const {
-    /* Get the VCU events for a device */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_vcu_events<TaskState::MAPPED>(device_id);
-  }
-
-  ResourceEventArray<vcu_t> get_vcu_events_reserved(devid_t device_id) const {
-    /* Get the VCU events for a device */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_vcu_events<TaskState::RESERVED>(device_id);
-  }
-
-  ResourceEventArray<vcu_t> get_vcu_events_launched(devid_t device_id) const {
-    /* Get the VCU events for a device */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_vcu_events<TaskState::LAUNCHED>(device_id);
-  }
-
-  ResourceEventArray<mem_t> get_mem_events_mapped(devid_t device_id) const {
-    /* Get the memory events for a device */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_mem_events<TaskState::MAPPED>(device_id);
-  }
-
-  ResourceEventArray<mem_t> get_mem_events_reserved(devid_t device_id) const {
-    /* Get the memory events for a device */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_mem_events<TaskState::RESERVED>(device_id);
-  }
-
-  ResourceEventArray<mem_t> get_mem_events_launched(devid_t device_id) const {
-    /* Get the memory events for a device */
-    if (track_resource_guard()) {
-      return {};
-    }
-
-    const auto &s = scheduler.get_state();
-    const auto &device_manager = s.get_device_manager();
-    return device_manager.get_mem_events<TaskState::LAUNCHED>(device_id);
-  }
-
-  [[nodiscard]] TaskState get_state_at_time(taskid_t task_id, timecount_t time) const {
-    /* Get the state of a task at a given time */
-    if (track_resource_guard()) {
-      return {};
-    }
-    const auto &s = scheduler.get_state();
-    const auto &records = s.get_task_manager().get_records();
-    return records.get_state_at_time(task_id, time);
-  }
-
-  // ValidEventArray &get_valid_intervals_mapped(dataid_t data_id, devid_t device_id) {
-  //   /* Get the valid intervals for a data mapped to a device */
-  //   if (track_location_guard()) {
-  //     return {};
-  //   }
-
-  //   const auto &s = scheduler.get_state();
-  //   auto &data_manager = s.get_data_manager();
-  //   return data_manager.get_valid_intervals_mapped(data_id, device_id);
-  // }
-
-  // ValidEventArray &get_valid_intervals_reserved(dataid_t data_id, devid_t device_id) {
-  //   /* Get the valid intervals for a data reserved to a device*/
-  //   if (track_location_guard()) {
-  //     return {};
-  //   }
-
-  //   const auto &s = scheduler.get_state();
-  //   auto &data_manager = s.get_data_manager();
-  //   return data_manager.get_valid_intervals_reserved(data_id, device_id);
-  // }
-
-  // ValidEventArray &get_valid_intervals_launched(dataid_t data_id, devid_t device_id) {
-  //   /* Get the valid intervals for a data launched to a device */
-  //   if (track_location_guard()) {
-  //     return {};
-  //   }
-
-  //   const auto &s = scheduler.get_state();
-  //   auto &data_manager = s.get_data_manager();
-  //   return data_manager.get_valid_intervals_launched(data_id, device_id);
-  // }
-
-  // bool check_valid_mapped(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
-  //   /* Check if a data is valid at a given time (in the mapping location table) */
-  //   if (track_location_guard()) {
-  //     return false;
-  //   }
-
-  //   const auto &s = scheduler.get_state();
-  //   const auto &data_manager = s.get_data_manager();
-  //   return data_manager.check_valid_at_time_mapped(data_id, device_id, query_time);
-  // }
-
-  // bool check_valid_reserved(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
-  //   /* Check if a data is valid at a given time (in the reservation location table) */
-  //   if (track_location_guard()) {
-  //     return false;
-  //   }
-
-  //   const auto &s = scheduler.get_state();
-  //   const auto &data_manager = s.get_data_manager();
-  //   return data_manager.check_valid_at_time_reserved(data_id, device_id, query_time);
-  // }
-
-  // bool check_valid_launched(dataid_t data_id, devid_t device_id, timecount_t query_time) const {
-  //   /* Check if a data is valid at a given time (in the launch location table) */
-  //   if (track_location_guard()) {
-  //     return false;
-  //   }
-
-  //   const auto &s = scheduler.get_state();
-  //   const auto &data_manager = s.get_data_manager();
-  //   return data_manager.check_valid_at_time_launched(data_id, device_id, query_time);
-  // }
 };

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <functional>
 #include <random>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -52,11 +53,11 @@ public:
   static constexpr size_t BUFFER_SIZE = 8192;
   bool generated = false;
 
-  TaskNoise(taskid_t n_tasks, unsigned int seed_ = 0, unsigned int pseed = 1000)
-      : n_tasks(n_tasks), seed(seed_), pseed(pseed), gen(seed_), pgen(pseed),
-        task_durations(n_tasks * num_device_types, 0), mapping_priority(n_tasks, 0) {
-    generate_duration();
-    generate_priority();
+  TaskNoise(StaticTaskInfo &static_graph, unsigned int seed_ = 0, unsigned int pseed = 1000)
+      : n_tasks(static_graph.get_n_compute_tasks()), seed(seed_), pseed(pseed), gen(seed_),
+        pgen(pseed), task_durations(n_tasks * num_device_types, 0), mapping_priority(n_tasks, 0) {
+    generate_duration(static_graph);
+    generate_priority(static_graph);
   }
 
   void set_seed(unsigned int seed_) {
@@ -94,17 +95,17 @@ public:
     return mapping_priority.at(task_id);
   }
 
-  std::vector<timecount_t> &get_durations() {
+  std::span<timecount_t> get_durations() {
     return task_durations;
-  }
-  std::vector<priority_t> &get_priorities() {
-    return mapping_priority;
   }
 
-  const std::vector<timecount_t> &get_durations() const {
+  std::span<priority_t> get_priorities() {
+    return mapping_priority;
+  }
+  const std::span<const timecount_t> get_durations() const {
     return task_durations;
   }
-  const PriorityList &get_priorities() const {
+  const std::span<const priority_t> get_priorities() const {
     return mapping_priority;
   }
 

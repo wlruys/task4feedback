@@ -199,7 +199,7 @@ if(ENABLE_NATIVE_TUNING)
 endif()
 
 add_subdirectory(src/backend)      # defines backend target
-add_subdirectory(src/bindings)     # defines python module 
+#add_subdirectory(src/bindings)     # defines python module 
 
 include(CPack)                     #for packaging
 include(GNUInstallDirs)            #for install dirs

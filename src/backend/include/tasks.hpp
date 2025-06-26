@@ -1,5 +1,6 @@
 #pragma once
 #include "devices.hpp"
+#include "queues.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
@@ -11,6 +12,7 @@
 #include <ostream>
 #include <set>
 #include <span>
+#include <stack>
 #include <string>
 #include <tracy/Tracy.hpp>
 #include <type_traits>
@@ -21,6 +23,7 @@
 
 #define TASK_BUFFER_SIZE 20
 #define EXPECTED_EVICTION_TASKS 1000
+#define INITIAL_TASKS_SIZE 1000
 
 template <typename T> inline std::vector<T> as_vector(ankerl::unordered_dense::set<T> &set) {
   std::vector<T> vec;
@@ -32,8 +35,8 @@ template <typename T> inline std::vector<T> as_vector(ankerl::unordered_dense::s
 }
 
 template <typename K, typename V>
-inline std::vector<T> as_vector(ankerl::unordered_dense::map<K, V> &map) {
-  std::vector<T> vec;
+inline std::vector<V> as_vector(ankerl::unordered_dense::map<K, V> &map) {
+  std::vector<V> vec;
   vec.reserve(map.size());
   for (const auto &item : map) {
     vec.push_back(item.second);
@@ -217,13 +220,16 @@ struct alignas(16) DataTaskRuntimeInfo {
   int32_t launch_priority{};
 };
 
-struct alignas(16) EvictionTaskRuntimeInfo {
+struct alignas(32) EvictionTaskRuntimeInfo {
   int8_t state{};
   int8_t flags{};
-  int16_t pad{}; // padding to align to 32 bytes
   int32_t data_id{};
   int32_t evicting_on{};
-  int32_t backup_to{};
+  int32_t compute_task{};
+  int32_t source_device{};
+  int32_t launch_priority{};
+  int16_t pad{};
+  int64_t pad2{};
 };
 
 struct alignas(32) TaskTimeRecord {
@@ -359,16 +365,16 @@ public:
 
   // Getters
 
-  [[nodiscard]] int32_t get_num_compute_tasks() const {
+  [[nodiscard]] int32_t get_n_compute_tasks() const {
     return static_cast<int32_t>(compute_task_dep_info.size());
   }
 
-  [[nodiscard]] int32_t get_num_data_tasks() const {
+  [[nodiscard]] int32_t get_n_data_tasks() const {
     return static_cast<int32_t>(data_task_static_info.size());
   }
 
-  [[nodiscard]] int32_t get_num_tasks() const {
-    return get_num_compute_tasks() + get_num_data_tasks();
+  [[nodiscard]] int32_t get_n_tasks() const {
+    return get_n_compute_tasks() + get_n_data_tasks();
   }
 
   [[nodiscard]] bool empty() const {
@@ -495,7 +501,7 @@ public:
     return data_task_names[id];
   }
 
-  [[nodiscard]] const taskid_t get_data_id(taskid_t id) const {
+  [[nodiscard]] const dataid_t get_data_id(taskid_t id) const {
     return data_task_static_info[id].data_id;
   }
 
@@ -538,8 +544,8 @@ protected:
 
 public:
   RuntimeTaskInfo(StaticTaskInfo &static_info) {
-    int32_t num_compute_tasks = static_cast<int32_t>(static_info.get_num_compute_tasks());
-    int32_t num_data_tasks = static_cast<int32_t>(static_info.get_num_data_tasks());
+    int32_t num_compute_tasks = static_cast<int32_t>(static_info.get_n_compute_tasks());
+    int32_t num_data_tasks = static_cast<int32_t>(static_info.get_n_data_tasks());
     compute_task_runtime_info.resize(num_compute_tasks);
     data_task_runtime_info.resize(num_data_tasks);
     compute_task_time_records.resize(num_compute_tasks);
@@ -582,36 +588,36 @@ public:
     set_data_task_incomplete(data_task_id, n_dependencies);
   }
 
-  int32_t add_eviction_task(const std::string &name, int32_t data_id, int32_t evicting_on,
-                            int32_t backup_to) {
+  int32_t add_eviction_task(const std::string &name, int32_t compute_task_id, int32_t data_id,
+                            int32_t evicting_on_device_id) {
     taskid_t id = static_cast<taskid_t>(eviction_task_runtime_info.size());
     eviction_task_runtime_info.emplace_back();
     eviction_task_time_records.emplace_back();
     eviction_task_names.push_back(name);
 
     set_eviction_task_state(id, TaskState::SPAWNED);
-    set_eviction_task_evicting_on(id, evicting_on);
-    set_eviction_task_backup_to(id, backup_to);
+    set_eviction_task_evicting_on(id, evicting_on_device_id);
     set_eviction_task_data_id(id, data_id);
+    set_eviction_task_compute_task(id, compute_task_id);
     return id;
   }
 
   // Getters
 
-  [[nodiscard]] int32_t get_num_compute_tasks() const {
+  [[nodiscard]] int32_t get_n_compute_tasks() const {
     return static_cast<int32_t>(compute_task_runtime_info.size());
   }
 
-  [[nodiscard]] int32_t get_num_data_tasks() const {
+  [[nodiscard]] int32_t get_n_data_tasks() const {
     return static_cast<int32_t>(data_task_runtime_info.size());
   }
 
-  [[nodiscard]] int32_t get_num_eviction_tasks() const {
+  [[nodiscard]] int32_t get_n_eviction_tasks() const {
     return static_cast<int32_t>(eviction_task_runtime_info.size());
   }
 
-  [[nodiscard]] int32_t get_num_tasks() const {
-    return get_num_compute_tasks() + get_num_data_tasks() + get_num_eviction_tasks();
+  [[nodiscard]] int32_t get_n_tasks() const {
+    return get_n_compute_tasks() + get_n_data_tasks() + get_n_eviction_tasks();
   }
 
   [[nodiscard]] bool empty() const {
@@ -691,8 +697,12 @@ public:
     return eviction_task_runtime_info[id].evicting_on;
   }
 
-  [[nodiscard]] const int32_t get_eviction_task_backup_to(taskid_t id) const {
-    return eviction_task_runtime_info[id].backup_to;
+  [[nodiscard]] const int32_t get_eviction_task_data_id(taskid_t id) const {
+    return eviction_task_runtime_info[id].data_id;
+  }
+
+  [[nodiscard]] const int32_t get_eviction_task_source_device(taskid_t id) const {
+    return eviction_task_runtime_info[id].source_device;
   }
 
   [[nodiscard]] const timecount_t get_compute_task_mapped_time(taskid_t id) const {
@@ -954,8 +964,13 @@ public:
   void set_eviction_task_evicting_on(taskid_t id, int32_t evicting_on) {
     eviction_task_runtime_info[id].evicting_on = evicting_on;
   }
-  void set_eviction_task_backup_to(taskid_t id, int32_t backup_to) {
-    eviction_task_runtime_info[id].backup_to = backup_to;
+
+  void set_eviction_task_compute_task(taskid_t id, int32_t compute_task_id) {
+    eviction_task_runtime_info[id].compute_task = compute_task_id;
+  }
+
+  void set_eviction_task_source_device(taskid_t id, int32_t source_device) {
+    eviction_task_runtime_info[id].source_device = source_device;
   }
 
   void set_eviction_task_data_id(taskid_t id, int32_t data_id) {
@@ -1023,9 +1038,11 @@ public:
     return (info.incomplete == 0) && (info.state >= static_cast<int8_t>(TaskState::RESERVED));
   }
 
-  const std::vector<taskid_t> &
-  compute_notify_mapped(taskid_t compute_task_id, devid_t mapped_device, int32_t reserve_priority,
-                        int32_t launch_priority, timecount_t time, StaticTaskInfo &static_info) {
+  const std::vector<taskid_t> &compute_notify_mapped(taskid_t compute_task_id,
+                                                     devid_t mapped_device,
+                                                     int32_t reserve_priority,
+                                                     int32_t launch_priority, timecount_t time,
+                                                     const StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.mapped_device = mapped_device;
@@ -1049,7 +1066,7 @@ public:
 
   const std::vector<taskid_t> &compute_notify_reserved(taskid_t compute_task_id,
                                                        devid_t mapped_device, timecount_t time,
-                                                       StaticTaskInfo &static_info) {
+                                                       const StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.mapped_device = mapped_device;
@@ -1070,7 +1087,7 @@ public:
   }
 
   void compute_notify_launched(taskid_t compute_task_id, timecount_t time,
-                               StaticTaskInfo &static_info) {
+                               const StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.state = static_cast<int8_t>(TaskState::LAUNCHED);
@@ -1078,7 +1095,7 @@ public:
   }
 
   const std::vector<taskid_t> &compute_notify_completed(taskid_t compute_task_id, timecount_t time,
-                                                        StaticTaskInfo &static_info) {
+                                                        const StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.state = static_cast<int8_t>(TaskState::COMPLETED);
@@ -1099,7 +1116,7 @@ public:
 
   const std::vector<taskid_t> &compute_notify_data_completed(taskid_t compute_task_id,
                                                              timecount_t time,
-                                                             StaticTaskInfo &static_info) {
+                                                             const StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
 
     // state and time assumed to be updated by prior call to notify_completed
@@ -1116,32 +1133,34 @@ public:
     return task_buffer;
   }
 
-  void data_notify_reserved(taskid_t data, devid_t mapped_device, timecount_t time,
-                            StaticTaskInfo &static_info) {
-    auto &my_info = data_task_runtime_info[data];
-    auto &my_time_record = data_task_time_records[data];
+  void data_notify_reserved(taskid_t data_task_id, devid_t mapped_device, timecount_t time,
+                            const StaticTaskInfo &static_info) {
+    auto &my_info = data_task_runtime_info[data_task_id];
+    auto &my_time_record = data_task_time_records[data_task_id];
     my_info.mapped_device = mapped_device;
     my_info.state = static_cast<int8_t>(TaskState::RESERVED);
     my_time_record.reserved_time = time;
   }
 
-  void data_notify_launched(taskid_t data, timecount_t time, StaticTaskInfo &static_info) {
-    auto &my_info = data_task_runtime_info[data];
-    auto &my_time_record = data_task_time_records[data];
+  void data_notify_launched(taskid_t data_task_id, devid_t source_device, timecount_t time,
+                            const StaticTaskInfo &static_info) {
+    auto &my_info = data_task_runtime_info[data_task_id];
+    auto &my_time_record = data_task_time_records[data_task_id];
     my_info.state = static_cast<int8_t>(TaskState::LAUNCHED);
+    my_info.source_device = source_device;
     my_time_record.launched_time = time;
   }
 
-  const std::vector<taskid_t> &data_notify_completed(taskid_t data, timecount_t time,
-                                                     StaticTaskInfo &static_info) {
-    auto &my_info = data_task_runtime_info[data];
-    auto &my_time_record = data_task_time_records[data];
+  const std::vector<taskid_t> &data_notify_completed(taskid_t data_task_id, timecount_t time,
+                                                     const StaticTaskInfo &static_info) {
+    auto &my_info = data_task_runtime_info[data_task_id];
+    auto &my_time_record = data_task_time_records[data_task_id];
 
     my_info.state = static_cast<int8_t>(TaskState::COMPLETED);
     my_time_record.completed_time = time;
 
     task_buffer.clear();
-    auto my_dependents = static_info.get_data_task_dependents(data);
+    auto my_dependents = static_info.get_data_task_dependents(data_task_id);
 
     for (const auto &dependent_id : my_dependents) {
       if (decrement_data_task_incomplete(dependent_id)) {
@@ -1153,23 +1172,24 @@ public:
   }
 
   void eviction_notify_reserved(taskid_t eviction_task_id, timecount_t time,
-                                StaticTaskInfo &static_info) {
+                                const StaticTaskInfo &static_info) {
     auto &my_time_record = eviction_task_time_records[eviction_task_id];
     auto &my_info = eviction_task_runtime_info[eviction_task_id];
     my_info.state = static_cast<int8_t>(TaskState::RESERVED);
     my_time_record.reserved_time = time;
   }
 
-  void eviction_notify_launched(taskid_t eviction_task_id, timecount_t time,
-                                StaticTaskInfo &static_info) {
+  void eviction_notify_launched(taskid_t eviction_task_id, devid_t source_device_id,
+                                timecount_t time, const StaticTaskInfo &static_info) {
     auto &my_time_record = eviction_task_time_records[eviction_task_id];
     auto &my_info = eviction_task_runtime_info[eviction_task_id];
+    my_info.source_device = source_device_id;
     my_info.state = static_cast<int8_t>(TaskState::LAUNCHED);
     my_time_record.launched_time = time;
   }
 
   void eviction_notify_completed(taskid_t eviction_task_id, timecount_t time,
-                                 StaticTaskInfo &static_info) {
+                                 const StaticTaskInfo &static_info) {
     auto &my_time_record = eviction_task_time_records[eviction_task_id];
     auto &my_info = eviction_task_runtime_info[eviction_task_id];
     my_info.state = static_cast<int8_t>(TaskState::COMPLETED);
@@ -1238,6 +1258,10 @@ public:
     tasks.back().id = id;
     tasks.back().name = name;
     return id;
+  }
+
+  const std::span<const taskid_t> get_initial_tasks() const {
+    return std::span<const taskid_t>(initial_tasks);
   }
 
   taskid_t add_data_task(const std::string &name, taskid_t compute_task, dataid_t data_id) {
@@ -1364,6 +1388,7 @@ public:
   }
 
   void populate_initial_tasks() {
+    initial_tasks.reserve(INITIAL_TASKS_SIZE);
     for (const auto &task : tasks) {
       if (task.dependencies.empty()) {
         initial_tasks.push_back(task.id);
@@ -1371,9 +1396,9 @@ public:
     }
   }
 
-  void bfs() const {
+  void bfs() {
     sorted.clear();
-    sorted.resize(tasks.size());
+    sorted.reserve(tasks.size());
 
     std::queue<taskid_t> queue;
 
@@ -1404,7 +1429,7 @@ public:
 
   void dfs() {
     sorted.clear();
-    sorted.resize(tasks.size());
+    sorted.reserve(tasks.size());
 
     std::stack<taskid_t> stack;
 
@@ -1428,6 +1453,37 @@ public:
         tasks[dependent].temp_dependencies.erase(current);
         if (tasks[dependent].temp_dependencies.empty()) {
           stack.push(dependent);
+        }
+      }
+    }
+  }
+
+  void random_topological_sort(unsigned int seed = 0) {
+    sorted.clear();
+    sorted.reserve(tasks.size());
+
+    auto r = ContainerQueue<taskid_t, std::priority_queue>(seed);
+
+    for (auto &task : initial_tasks) {
+      r.push_random(task);
+    }
+
+    for (auto &task : tasks) {
+      task.temp_dependencies.clear();
+      task.temp_dependents.clear();
+      task.temp_dependencies.insert(task.dependencies.begin(), task.dependencies.end());
+      task.temp_dependents.insert(task.dependents.begin(), task.dependents.end());
+    }
+
+    while (!r.empty()) {
+      taskid_t current = r.top();
+      r.pop();
+      sorted.push_back(current);
+
+      for (const auto &dependent : tasks[current].temp_dependents) {
+        tasks[dependent].temp_dependencies.erase(current);
+        if (tasks[dependent].temp_dependencies.empty()) {
+          r.push_random(dependent);
         }
       }
     }
@@ -1537,8 +1593,8 @@ public:
     populate_data_dependents();
   }
 
-  TaskStaticInfo create_static_graph() const {
-    TaskStaticInfo static_info(tasks.size(), data_tasks.size());
+  StaticTaskInfo create_static_graph() const {
+    StaticTaskInfo static_info(tasks.size(), data_tasks.size());
 
     taskid_t compute_dependency_offset = 0;
     taskid_t compute_dependent_offset = 0;
@@ -1595,18 +1651,18 @@ public:
       compute_task_info.tag = task.tag;
       compute_task_info.type = task.type;
 
-      static_info.add_compute_task(task.id, task.name, compute_variant_info, compute_dep_info,
-                                   compute_data_info, compute_task_info);
+      static_info.add_compute_task(task.id, task.name, compute_dep_info, compute_data_info,
+                                   compute_task_info);
 
-      static_info.add_compute_dependencies(task.id, as_vector(task.dependencies));
-      static_info.add_compute_dependents(task.id, as_vector(task.dependents));
-      static_info.add_compute_data_dependencies(task.id, as_vector(task.data_dependencies));
-      static_info.add_compute_data_dependents(task.id, as_vector(task.data_dependents));
-      static_info.add_compute_read(task.id, task.v_read);
-      static_info.add_most_recent_writers(task.id, task.most_recent_writers);
-      static_info.static_info.add_compute_write(task.id, as_vector(task.write));
-      static_info.add_compute_retire(task.id, as_vector(task.retire));
-      static_info.add_compute_unique(task.id, as_vector(task.unique));
+      // static_info.add_compute_dependencies(task.id, as_vector(task.dependencies));
+      // static_info.add_compute_dependents(task.id, as_vector(task.dependents));
+      // static_info.add_compute_data_dependencies(task.id, as_vector(task.data_dependencies));
+      // static_info.add_compute_data_dependents(task.id, as_vector(task.data_dependents));
+      // static_info.add_read(task.id, task.v_read);
+      // static_info.add_most_recent_writers(task.id, task.most_recent_writers);
+      // static_info.static_info.add_write(task.id, as_vector(task.write));
+      // static_info.add_retire(task.id, as_vector(task.retire));
+      // static_info.add_unique(task.id, as_vector(task.unique));
 
       for (int i = 0; i < task.arch_mask.size(); ++i) {
         if (task.arch_mask[i]) {
@@ -1632,524 +1688,10 @@ public:
 
       static_info.add_data_task(data_task.id, data_task.name, data_task_info);
 
-      static_info.add_data_dependencies(data_task.id, as_vector(data_task.dependencies));
-      static_info.add_data_dependents(data_task.id, as_vector(data_task.dependents));
+      // static_info.add_data_dependencies(data_task.id, as_vector(data_task.dependencies));
+      // static_info.add_data_dependents(data_task.id, as_vector(data_task.dependents));
     }
 
     return static_info;
   }
 };
-
-// class Task {
-// protected:
-//   TaskIDList dependencies;
-//   TaskIDList dependents;
-
-// public:
-//   taskid_t id = 0;
-//   int32_t depth = 0;
-
-//   Task() = default;
-//   Task(taskid_t id) : id(id) {
-//   }
-
-//   void set_depth(int32_t depth_) {
-//     this->depth = depth_;
-//   }
-
-//   [[nodiscard]] taskid_t get_id() const {
-//     return id;
-//   }
-//   [[nodiscard]] int64_t get_depth() const {
-//     return depth;
-//   }
-
-//   void set_dependencies(TaskIDList _dependencies) {
-//     this->dependencies = std::move(_dependencies);
-//   }
-
-//   void set_dependents(TaskIDList _dependents) {
-//     this->dependents = std::move(_dependents);
-//   }
-
-//   [[nodiscard]] const TaskIDList &get_dependencies() const {
-//     return dependencies;
-//   }
-//   [[nodiscard]] const TaskIDList &get_dependents() const {
-//     return dependents;
-//   }
-
-//   void add_dependency(taskid_t dependency) {
-//     dependencies.push_back(dependency);
-//   }
-
-//   void add_dependent(taskid_t dependent) {
-//     dependents.push_back(dependent);
-//   }
-// };
-
-// class ComputeTask : public Task {
-// protected:
-//   TaskIDList data_dependencies;
-//   TaskIDList data_dependents;
-
-//   DataIDList read;
-//   DataIDList write;
-//   DataIDList unique;
-//   DataIDList retire;
-//   TaskIDList most_recent_writers;
-
-//   VariantList variants;
-
-//   int type = -1;
-//   int tag = -1;
-
-// public:
-//   static constexpr TaskType task_type = TaskType::COMPUTE;
-
-//   ComputeTask() = default;
-//   ComputeTask(taskid_t id) {
-//     this->id = id;
-//   }
-
-//   bool is_supported_architecture(DeviceType arch) const;
-
-//   void add_variant(DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time) {
-//     variants.at(static_cast<std::size_t>(arch)) = Variant(arch, vcu, mem, time);
-//   }
-
-//   void add_recent_writer(taskid_t writer_id, dataid_t data_id) {
-//     if (most_recent_writers.size() <= this->read.size()) {
-//       most_recent_writers.resize(this->read.size(), -1);
-//     }
-
-//     // Find the index of the data_id in the read list
-//     auto it = std::find(this->read.begin(), this->read.end(), data_id);
-//     if (it != this->read.end()) {
-//       std::size_t index = std::distance(this->read.begin(), it);
-//       most_recent_writers[index] = writer_id;
-//     } else {
-//       SPDLOG_DEBUG("ComputeTask::add_writer : Data ID {} not found in read list, writer {}",
-//                    data_id, writer_id);
-//     }
-//   }
-
-//   TaskIDList &get_most_recent_writers() {
-//     return most_recent_writers;
-//   }
-
-//   [[nodiscard]] const TaskIDList &get_most_recent_writers() const {
-//     return most_recent_writers;
-//   }
-
-//   taskid_t get_recent_writer_by_dataid(dataid_t data_id) const {
-//     auto it = std::find(this->read.begin(), this->read.end(), data_id);
-//     if (it != this->read.end()) {
-//       std::size_t index = std::distance(this->read.begin(), it);
-//       return most_recent_writers[index];
-//     }
-//     return -1;
-//   }
-
-//   taskid_t get_recent_writer(std::size_t index) const {
-//     assert(index < most_recent_writers.size());
-//     return most_recent_writers[index];
-//   }
-
-//   void add_variant(DeviceType arch, Variant variant) {
-//     variants.at(static_cast<std::size_t>(arch)) = variant;
-//   }
-
-//   Variant &get_variant(DeviceType arch) {
-//     return variants.at(static_cast<std::size_t>(arch));
-//   }
-
-//   [[nodiscard]] const Variant &get_variant(DeviceType arch) const {
-//     return variants.at(static_cast<std::size_t>(arch));
-//   }
-
-//   [[nodiscard]] const VariantList &get_variants() const {
-//     return variants;
-//   }
-//   [[nodiscard]] std::vector<Variant> get_variant_vector() const;
-
-//   void set_read(DataIDList _read) {
-//     this->read = std::move(_read);
-//     this->most_recent_writers.resize(read.size(), -1);
-//   }
-//   void set_write(DataIDList _write) {
-//     this->write = std::move(_write);
-//   }
-//   void set_retire(DataIDList _retire) {
-//     this->retire = std::move(_retire);
-//   }
-
-//   void set_type(int type_) {
-//     this->type = type_;
-//   }
-
-//   void set_tag(int tag_) {
-//     this->tag = tag_;
-//   }
-
-//   [[nodiscard]] int get_type() const {
-//     return type;
-//   }
-
-//   [[nodiscard]] int get_tag() const {
-//     return tag;
-//   }
-
-//   [[nodiscard]] std::vector<DeviceType> get_supported_architectures() const;
-
-//   [[nodiscard]] const DataIDList &get_read() const {
-//     return read;
-//   }
-//   [[nodiscard]] const DataIDList &get_write() const {
-//     return write;
-//   }
-
-//   [[nodiscard]] const DataIDList &get_retire() const {
-//     return retire;
-//   }
-
-//   void add_data_dependency(taskid_t dependency) {
-//     data_dependencies.push_back(dependency);
-//   }
-
-//   void add_data_dependent(taskid_t dependent) {
-//     data_dependents.push_back(dependent);
-//   }
-
-//   [[nodiscard]] const TaskIDList &get_data_dependencies() const {
-//     return data_dependencies;
-//   }
-
-//   [[nodiscard]] const TaskIDList &get_data_dependents() const {
-//     return data_dependents;
-//   }
-
-//   void find_unique_data() {
-//     std::unordered_set<dataid_t> unique_set;
-//     for (auto data_id : read) {
-//       unique_set.insert(data_id);
-//     }
-//     for (auto data_id : write) {
-//       unique_set.insert(data_id);
-//     }
-//     unique.assign(unique_set.begin(), unique_set.end());
-//   }
-
-//   [[nodiscard]] const DataIDList &get_unique() const {
-//     return unique;
-//   }
-// };
-
-// class DataTask : public Task {
-// private:
-//   dataid_t data_id;
-//   taskid_t compute_task;
-
-// public:
-//   static constexpr TaskType task_type = TaskType::DATA;
-
-//   DataTask() = default;
-//   DataTask(taskid_t id_) {
-//     this->id = id_;
-//   }
-
-//   void set_data_id(dataid_t data_id_) {
-//     this->data_id = data_id_;
-//   }
-//   void set_compute_task(taskid_t compute_task_) {
-//     this->compute_task = compute_task_;
-//   }
-
-//   [[nodiscard]] taskid_t get_compute_task() const {
-//     return compute_task;
-//   }
-
-//   [[nodiscard]] dataid_t get_data_id() const {
-//     return data_id;
-//   }
-// };
-
-// class EvictionTask : public DataTask {
-// protected:
-//   TaskIDList data_dependencies;
-//   TaskIDList data_dependents;
-//   devid_t device_id = HOST_ID;         // the backup device
-//   devid_t invalidate_device = HOST_ID; // the device to invalidate
-
-// public:
-//   static constexpr TaskType task_type = TaskType::EVICTION;
-
-//   EvictionTask() = default;
-//   EvictionTask(taskid_t id_) {
-//     this->id = id_;
-//   }
-
-//   [[nodiscard]] const TaskIDList &get_data_dependencies() const {
-//     return data_dependencies;
-//   }
-//   [[nodiscard]] const TaskIDList &get_data_dependents() const {
-//     return data_dependents;
-//   }
-//   void add_data_dependency(taskid_t dependency) {
-//     data_dependencies.push_back(dependency);
-//   }
-//   void add_data_dependent(taskid_t dependent) {
-//     data_dependents.push_back(dependent);
-//   }
-
-//   [[nodiscard]] devid_t get_device_id() const {
-//     return device_id;
-//   }
-
-//   void set_invalidate_device(devid_t invalidate_device_) {
-//     this->invalidate_device = invalidate_device_;
-//   }
-
-//   [[nodiscard]] devid_t get_invalidate_device() const {
-//     return invalidate_device;
-//   }
-
-//   void set_device_id(devid_t device_id_) {
-//     this->device_id = device_id_;
-//   }
-
-//   [[nodiscard]] bool is_eviction() const {
-//     return true;
-//   }
-// };
-
-// class MinimalTask {
-// public:
-//   taskid_t id;
-//   std::unordered_map<taskid_t, taskid_t> dependencies;
-//   std::vector<taskid_t> dependents;
-
-//   MinimalTask() = default;
-//   MinimalTask(taskid_t id) : id(id) {
-//   }
-
-//   MinimalTask(const MinimalTask &other) = default;
-
-//   MinimalTask(MinimalTask &&other) noexcept
-//       : id(std::exchange(other.id, 0)), dependencies(std::move(other.dependencies)),
-//         dependents(std::move(other.dependents)) {
-//   }
-
-//   MinimalTask(const Task &task) : id(task.id) {
-//     const auto &task_dependencies = task.get_dependencies();
-//     const auto &task_dependents = task.get_dependents();
-
-//     for (auto dep : task_dependencies) {
-//       dependencies[dep] = dep;
-//     }
-//     dependents.assign(task_dependents.begin(), task_dependents.end());
-//   }
-
-//   // Copy assignment operator
-//   MinimalTask &operator=(const MinimalTask &other) {
-//     if (this != &other) {
-//       id = other.id;
-//       dependencies = other.dependencies;
-//       dependents = other.dependents;
-//     }
-//     return *this;
-//   }
-
-//   // Move assignment operator
-//   MinimalTask &operator=(MinimalTask &&other) noexcept {
-//     if (this != &other) {
-//       id = std::exchange(other.id, 0);
-//       dependencies = std::move(other.dependencies);
-//       dependents = std::move(other.dependents);
-//     }
-//     return *this;
-//   }
-// };
-
-// struct TaskTypeBundle {
-//   TaskType type;
-//   taskid_t id;
-// };
-
-// using ComputeTaskList = std::vector<ComputeTask>;
-// using DataTaskList = std::vector<DataTask>;
-// using EvictionTaskList = std::vector<EvictionTask>;
-// using TaskList = std::vector<Task>;
-// using MixedTaskIDList = std::vector<TaskTypeBundle>;
-
-// class GraphManager;
-
-// class EvictionTasks {
-// protected:
-//   EvictionTaskList tasks;
-//   std::vector<std::string> task_names;
-//   taskid_t n_noneviction_tasks = 0;
-//   taskid_t n_eviction_tasks = 0;
-
-// public:
-//   EvictionTasks() = default;
-//   EvictionTasks(const EvictionTasks &other) = default;
-
-//   EvictionTasks(taskid_t n_tasks) : n_noneviction_tasks(n_tasks) {
-//     const int EXPECTED_EVICTION_TASKS = 1000;
-//     tasks.reserve(n_tasks + EXPECTED_EVICTION_TASKS);
-//     task_names.reserve(n_tasks + EXPECTED_EVICTION_TASKS);
-//   }
-
-//   taskid_t get_local_eviction_task_id(taskid_t id) const {
-//     assert(id < n_noneviction_tasks + n_eviction_tasks);
-//     assert(id >= n_noneviction_tasks);
-//     return id - n_noneviction_tasks;
-//   }
-
-//   taskid_t add_eviction_task(taskid_t compute_task, dataid_t data_id, devid_t backup_device,
-//                              devid_t invalidate_device) {
-//     taskid_t id = n_noneviction_tasks + n_eviction_tasks++;
-//     tasks.emplace_back(id);
-//     task_names.emplace_back("eviction[" + std::to_string(id) + "]");
-//     tasks.back().set_data_id(data_id);
-//     tasks.back().set_compute_task(compute_task);
-//     tasks.back().set_device_id(backup_device);
-//     tasks.back().set_invalidate_device(invalidate_device);
-//     return id;
-//   }
-
-//   bool is_eviction(taskid_t id) const {
-//     assert(id < n_noneviction_tasks + n_eviction_tasks);
-//     return id >= n_noneviction_tasks;
-//   }
-
-//   [[nodiscard]] EvictionTask &get_eviction_task(taskid_t id) {
-//     return tasks.at(get_local_eviction_task_id(id));
-//   }
-
-//   [[nodiscard]] const EvictionTask &get_eviction_task(taskid_t id) const {
-//     return tasks.at(get_local_eviction_task_id(id));
-//   }
-
-//   [[nodiscard]] const std::string &get_name(taskid_t id) const {
-//     assert(id < n_noneviction_tasks + n_eviction_tasks);
-//     return task_names.at(get_local_eviction_task_id(id));
-//   }
-
-//   [[nodiscard]] std::size_t get_n_eviction_tasks() const {
-//     return n_eviction_tasks;
-//   }
-// };
-
-// class Tasks {
-// protected:
-//   const taskid_t num_compute_tasks;
-//   taskid_t current_task_id = 0;
-//   ComputeTaskList compute_tasks;
-//   DataTaskList data_tasks;
-//   std::vector<std::string> task_names;
-//   mutable bool initialized = false;
-
-//   ComputeTaskList &get_compute_tasks() {
-//     return compute_tasks;
-//   }
-//   DataTaskList &get_data_tasks() {
-//     return data_tasks;
-//   }
-
-//   ComputeTask &get_compute_task(taskid_t id) {
-//     return compute_tasks[id];
-//   }
-//   DataTask &get_data_task(taskid_t id) {
-//     return data_tasks[id - num_compute_tasks];
-//   }
-//   Task &get_task(taskid_t id);
-
-//   void create_data_task(ComputeTask &task, bool has_writer, taskid_t writer_id, dataid_t
-//   data_id);
-
-// public:
-//   Tasks(taskid_t num_compute_tasks);
-
-//   [[nodiscard]] bool is_initialized() const {
-//     return initialized;
-//   }
-
-//   void set_initalized() const {
-//     assert(!initialized);
-//     initialized = true;
-//   }
-
-//   StatsBundle<timecount_t> get_duration_statistics(std::vector<DeviceType> &device_types)
-//   const;
-
-//   [[nodiscard]] std::size_t size() const;
-//   [[nodiscard]] std::size_t compute_size() const;
-//   [[nodiscard]] std::size_t data_size() const;
-//   [[nodiscard]] bool empty() const;
-//   [[nodiscard]] bool is_compute(taskid_t id) const;
-//   [[nodiscard]] bool is_data(taskid_t id) const;
-//   [[nodiscard]] bool is_eviction(taskid_t id) const;
-
-//   void add_compute_task(ComputeTask task);
-//   void add_data_task(DataTask task);
-
-//   void create_compute_task(taskid_t tid, std::string name, TaskIDList dependencies);
-//   void add_variant(taskid_t id, DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time);
-//   void set_read(taskid_t id, DataIDList read);
-//   void set_write(taskid_t id, DataIDList write);
-//   void set_retire(taskid_t id, DataIDList retire);
-//   void set_type(taskid_t id, int type);
-//   void set_tag(taskid_t id, int tag);
-
-//   [[nodiscard]] int get_type(taskid_t id) const;
-//   [[nodiscard]] int get_tag(taskid_t id) const;
-
-//   [[nodiscard]] const ComputeTaskList &get_compute_tasks() const {
-//     return compute_tasks;
-//   }
-//   [[nodiscard]] const DataTaskList &get_data_tasks() const {
-//     return data_tasks;
-//   }
-
-//   [[nodiscard]] const ComputeTask &get_compute_task(taskid_t id) const {
-//     assert(id < num_compute_tasks);
-//     return compute_tasks.at(id);
-//   }
-//   [[nodiscard]] const DataTask &get_data_task(taskid_t id) const {
-//     assert(id >= num_compute_tasks);
-//     return data_tasks.at(id - num_compute_tasks);
-//   }
-
-//   [[nodiscard]] const TaskIDList &get_dependencies(taskid_t id) const;
-//   [[nodiscard]] const TaskIDList &get_dependents(taskid_t id) const;
-//   [[nodiscard]] const VariantList &get_variants(taskid_t id) const;
-//   [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const;
-//   [[nodiscard]] const DataIDList &get_read(taskid_t id) const;
-//   [[nodiscard]] const DataIDList &get_write(taskid_t id) const;
-//   [[nodiscard]] const DataIDList &get_retire(taskid_t id) const;
-
-//   [[nodiscard]] const Resources &get_task_resources(taskid_t id) const;
-//   [[nodiscard]] const Resources &get_task_resources(taskid_t id, DeviceType arch) const;
-
-//   [[nodiscard]] const TaskIDList &get_data_dependencies(taskid_t id) const;
-//   [[nodiscard]] const TaskIDList &get_data_dependents(taskid_t id) const;
-
-//   [[nodiscard]] std::size_t get_depth(taskid_t id) const;
-//   [[nodiscard]] dataid_t get_data_id(taskid_t id) const;
-
-//   [[nodiscard]] std::string const &get_name(taskid_t id) const {
-//     return task_names.at(id);
-//   }
-
-//   [[nodiscard]] std::vector<DeviceType> get_supported_architectures(taskid_t id) const;
-
-//   [[nodiscard]] std::vector<Variant> get_variant_vector(taskid_t id) const {
-//     return get_compute_task(id).get_variant_vector();
-//   }
-
-//   [[nodiscard]] const Task &get_task(taskid_t id) const;
-
-//   friend class GraphManager;
-// };
