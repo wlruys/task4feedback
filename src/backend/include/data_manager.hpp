@@ -394,168 +394,6 @@ public:
   }
 };
 
-class DeviceDataCounts {
-protected:
-  using DataCount = ankerl::unordered_dense::map<dataid_t, std::size_t>;
-  DataCount mapped_counts;
-  DataCount reserved_counts;
-  DataCount launched_counts;
-  DataCount moving_counts;
-
-  // Increment the count of a data block, return true if the block is new
-  static bool increment(DataCount &counts, dataid_t data_id) {
-    auto it = counts.find(data_id);
-    if (it == counts.end()) {
-      counts.at(data_id) = 1;
-      return true;
-    }
-    it->second++;
-    return false;
-  }
-
-  // Decrement the count of a data block, removing it if the count reaches 0 and
-  // return true if the block is removed
-  static bool decrement(DataCount &counts, dataid_t data_id) {
-    auto it = counts.find(data_id);
-    if (it == counts.end()) {
-      return false;
-    }
-    it->second--;
-    if (it->second == 0) {
-      counts.erase(it);
-      return true;
-    }
-    return false;
-  }
-
-public:
-  DeviceDataCounts() = default;
-
-  DeviceDataCounts(const DeviceDataCounts &other) {
-    mapped_counts = other.mapped_counts;
-    reserved_counts = other.reserved_counts;
-    launched_counts = other.launched_counts;
-    moving_counts = other.moving_counts;
-  }
-
-  bool increment_mapped(dataid_t data_id) {
-    return increment(mapped_counts, data_id);
-  }
-
-  bool increment_reserved(dataid_t data_id) {
-    return increment(reserved_counts, data_id);
-  }
-
-  bool increment_launched(dataid_t data_id) {
-    return increment(launched_counts, data_id);
-  }
-
-  bool increment_moving(dataid_t data_id) {
-    return increment(moving_counts, data_id);
-  }
-
-  bool decrement_mapped(dataid_t data_id) {
-    return decrement(mapped_counts, data_id);
-  }
-
-  bool decrement_reserved(dataid_t data_id) {
-    return decrement(reserved_counts, data_id);
-  }
-
-  bool decrement_launched(dataid_t data_id) {
-    return decrement(launched_counts, data_id);
-  }
-
-  bool decrement_moving(dataid_t data_id) {
-    return decrement(moving_counts, data_id);
-  }
-
-  [[nodiscard]] std::size_t count_mapped(dataid_t data_id) const {
-    auto it = mapped_counts.find(data_id);
-    return it == mapped_counts.end() ? 0 : it->second;
-  }
-
-  [[nodiscard]] std::size_t count_reserved(dataid_t data_id) const {
-    auto it = reserved_counts.find(data_id);
-    return it == reserved_counts.end() ? 0 : it->second;
-  }
-
-  [[nodiscard]] std::size_t count_launched(dataid_t data_id) const {
-    auto it = launched_counts.find(data_id);
-    return it == launched_counts.end() ? 0 : it->second;
-  }
-
-  [[nodiscard]] std::size_t count_moving(dataid_t data_id) const {
-    auto it = moving_counts.find(data_id);
-    return it == moving_counts.end() ? 0 : it->second;
-  }
-
-  void run_asserts(dataid_t data_id) const {
-    assert(count_mapped(data_id) >= count_reserved(data_id));
-    assert(count_reserved(data_id) >= count_launched(data_id));
-    assert(count_reserved(data_id) >= count_moving(data_id));
-  }
-
-  friend class DataCounts;
-};
-
-class DataCounts {
-protected:
-  std::vector<DeviceDataCounts> device_counts;
-
-public:
-  DataCounts(std::size_t n_devices) : device_counts(n_devices) {
-  }
-
-  bool increment_mapped(dataid_t data_id, devid_t device_id) {
-    return device_counts.at(device_id).increment_mapped(data_id);
-  }
-
-  bool increment_reserved(dataid_t data_id, devid_t device_id) {
-    return device_counts.at(device_id).increment_reserved(data_id);
-  }
-
-  bool increment_launched(dataid_t data_id, devid_t device_id) {
-    return device_counts.at(device_id).increment_launched(data_id);
-  }
-
-  bool increment_moving(dataid_t data_id, devid_t device_id) {
-    return device_counts.at(device_id).increment_moving(data_id);
-  }
-
-  bool decrement_mapped(dataid_t data_id, devid_t device_id) {
-    return device_counts.at(device_id).decrement_mapped(data_id);
-  }
-
-  bool decrement_reserved(dataid_t data_id, devid_t device_id) {
-    return device_counts.at(device_id).decrement_reserved(data_id);
-  }
-
-  bool decrement_launched(dataid_t data_id, devid_t device_id) {
-    return device_counts.at(device_id).decrement_launched(data_id);
-  }
-
-  bool decrement_moving(dataid_t data_id, devid_t device_id) {
-    return device_counts.at(device_id).decrement_moving(data_id);
-  }
-
-  [[nodiscard]] std::size_t count_mapped(dataid_t data_id, devid_t device_id) const {
-    return device_counts.at(device_id).count_mapped(data_id);
-  }
-
-  [[nodiscard]] std::size_t count_reserved(dataid_t data_id, devid_t device_id) const {
-    return device_counts.at(device_id).count_reserved(data_id);
-  }
-
-  [[nodiscard]] std::size_t count_launched(dataid_t data_id, devid_t device_id) const {
-    return device_counts.at(device_id).count_launched(data_id);
-  }
-
-  [[nodiscard]] std::size_t count_moving(dataid_t data_id, devid_t device_id) const {
-    return device_counts.at(device_id).count_moving(data_id);
-  }
-};
-
 struct MovementStatus {
   bool is_virtual = false;
   timecount_t duration = 0;
@@ -697,7 +535,6 @@ protected:
   LocationManager reserved_locations;
   LocationManager launched_locations;
   MovementManager movement_manager;
-  DataCounts counts;
   LRU_manager lru_manager;
 
   static bool check_valid(size_t data_id, const LocationManager &locations, devid_t device_id) {
@@ -735,7 +572,7 @@ public:
         mapped_locations(data.get().size(), device_manager_.size()),
         reserved_locations(data.get().size(), device_manager_.size()),
         launched_locations(data.get().size(), device_manager_.size()),
-        counts(device_manager_.size()), lru_manager(device_manager_) {
+        lru_manager(device_manager_) {
   }
 
   DataManager(const DataManager &o_, DeviceManager &device_manager_,
@@ -743,7 +580,7 @@ public:
       : data(o_.data), device_manager(device_manager_),
         communication_manager(communication_manager_), mapped_locations(o_.mapped_locations),
         reserved_locations(o_.reserved_locations), launched_locations(o_.launched_locations),
-        movement_manager(o_.movement_manager), counts(o_.counts), lru_manager(o_.lru_manager) {
+        movement_manager(o_.movement_manager), lru_manager(o_.lru_manager) {
   }
 
   DataManager(const DataManager &o_) = delete;
@@ -785,10 +622,6 @@ public:
 
   [[nodiscard]] const LocationManager &get_launched_locations() const {
     return launched_locations;
-  }
-
-  [[nodiscard]] const DataCounts &get_counts() const {
-    return counts;
   }
 
   bool check_valid_mapped(const DataIDList &list, devid_t device_id) const {

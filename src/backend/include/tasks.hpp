@@ -1,8 +1,7 @@
 #pragma once
+#include "devices.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
-
-#include "devices.hpp"
 #include "spdlog/spdlog.h"
 #include <ankerl/unordered_dense.h>
 #include <array>
@@ -158,7 +157,7 @@ using VariantList = std::array<Variant, num_device_types>;
 struct alignas(8) ComputeTaskStaticInfo {
   int32_t tag{};
   int32_t type{};
-}
+};
 
 struct ComputeTaskVariantInfo {
   int8_t mask = 0; // bitmask for supported architectures
@@ -174,7 +173,7 @@ struct alignas(32) ComputeTaskDepInfo {
   int32_t e_data_dependencies;
   int32_t s_data_dependents;
   int32_t e_data_dependents;
-}
+};
 
 struct alignas(32) ComputeTaskDataInfo {
   int32_t s_read{};
@@ -185,7 +184,7 @@ struct alignas(32) ComputeTaskDataInfo {
   int32_t e_retire{};
   int32_t s_unique{};
   int32_t e_unique{};
-}
+};
 
 struct alignas(32) DataTaskStaticInfo {
   int32_t s_dependencies{};
@@ -225,7 +224,7 @@ struct alignas(16) EvictionTaskRuntimeInfo {
   int32_t data_id{};
   int32_t evicting_on{};
   int32_t backup_to{};
-}
+};
 
 struct alignas(32) TaskTimeRecord {
   timecount_t mapped_time{};
@@ -292,91 +291,63 @@ public:
 
   void add_compute_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
     auto &info = compute_task_dep_info[id];
-    // copy dependencies to corresponding location
-    auto s_idx = info.s_dependencies;
-    auto e_idx = info.e_dependencies;
-    std::copy(compute_task_dependencies.begin() + s_idx, compute_task_dependencies.begin() + e_idx,
-              dependencies.begin());
+    std::copy(dependencies.begin(), dependencies.end(),
+              compute_task_dependencies.begin() + info.s_dependencies);
   }
 
   void add_compute_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
     auto &info = compute_task_dep_info[id];
-    // copy dependents to corresponding location
-    auto s_idx = info.s_dependents;
-    auto e_idx = info.e_dependents;
-    std::copy(compute_task_dependents.begin() + s_idx, compute_task_dependents.begin() + e_idx,
-              dependents.begin());
+    std::copy(dependents.begin(), dependents.end(),
+              compute_task_dependents.begin() + info.s_dependents);
   }
 
   void add_compute_task_data_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
     auto &info = compute_task_dep_info[id];
-    // copy dependencies to corresponding location
-    auto s_idx = info.s_data_dependencies;
-    auto e_idx = info.e_data_dependencies;
-    std::copy(compute_task_data_dependencies.begin() + s_idx,
-              compute_task_data_dependencies.begin() + e_idx, dependencies.begin());
+    std::copy(dependencies.begin(), dependencies.end(),
+              compute_task_data_dependencies.begin() + info.s_data_dependencies);
   }
 
   void add_data_task_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
     auto &info = data_task_static_info[id];
-    // copy dependencies to corresponding location
-    auto s_idx = info.s_dependencies;
-    auto e_idx = info.e_dependencies;
-    std::copy(data_task_dependencies.begin() + s_idx, data_task_dependencies.begin() + e_idx,
-              dependencies.begin());
+    std::copy(dependencies.begin(), dependencies.end(),
+              data_task_dependencies.begin() + info.s_dependencies);
   }
 
   void add_data_task_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
     auto &info = data_task_static_info[id];
     // copy dependents to corresponding location
-    auto s_idx = info.s_dependents;
-    auto e_idx = info.e_dependents;
-    std::copy(data_task_dependents.begin() + s_idx, data_task_dependents.begin() + e_idx,
-              dependents.begin());
+    std::copy(dependents.begin(), dependents.end(),
+              data_task_dependents.begin() + info.s_dependents);
   }
 
   void add_read(taskid_t id, const std::vector<dataid_t> &read) {
     auto &info = compute_task_data_info[id];
     // copy read data to corresponding location
-    auto s_idx = info.s_read;
-    auto e_idx = info.e_read;
-    std::copy(compute_task_read.begin() + s_idx, compute_task_read.begin() + e_idx, read.begin());
+    std::copy(read.begin(), read.end(), compute_task_read.begin() + info.s_read);
   }
 
   void add_most_recent_writers(taskid_t id, const std::vector<taskid_t> &writers) {
     auto &info = compute_task_data_info[id];
-    // copy most recent writers to corresponding location
-    auto s_idx = info.s_read; // assuming s_read is used for recent writers
-    auto e_idx = info.e_read; // assuming e_read is used for recent writers
-    std::copy(compute_task_recent_writers.begin() + s_idx,
-              compute_task_recent_writers.begin() + e_idx, writers.begin());
+    std::copy(writers.begin(), writers.end(),
+              compute_task_most_recent_writers.begin() + info.s_read);
   }
 
   void add_write(taskid_t id, const std::vector<dataid_t> &write) {
     auto &info = compute_task_data_info[id];
     // copy write data to corresponding location
-    auto s_idx = info.s_write;
-    auto e_idx = info.e_write;
-    std::copy(compute_task_write.begin() + s_idx, compute_task_write.begin() + e_idx,
-              write.begin());
+    std::copy(write.begin(), write.end(), compute_task_write.begin() + info.s_write);
   }
 
   void add_retire(taskid_t id, const std::vector<dataid_t> &retire) {
     auto &info = compute_task_data_info[id];
     // copy retire data to corresponding location
-    auto s_idx = info.s_retire;
-    auto e_idx = info.e_retire;
-    std::copy(compute_task_retire.begin() + s_idx, compute_task_retire.begin() + e_idx,
-              retire.begin());
+    std::copy(retire.begin(), retire.end(), compute_task_retire.begin() + info.s_retire);
   }
 
   void add_unique(taskid_t id, const std::vector<dataid_t> &unique) {
     auto &info = compute_task_data_info[id];
     // copy unique data to corresponding location
-    auto s_idx = info.s_unique;
-    auto e_idx = info.e_unique;
-    std::copy(compute_task_unique.begin() + s_idx, compute_task_unique.begin() + e_idx,
-              unique.begin());
+    std::copy(unique.begin(), unique.end(), compute_task_unique.begin() + info.s_unique);
   }
 
   void add_compute_variant(taskid_t id, DeviceType arch, mem_t mem, vcu_t vcu, timecount_t time) {
@@ -471,10 +442,10 @@ public:
   }
 
   [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const {
-    return variants(id)[static_cast<std::size_t>(arch)];
+    return compute_task_variant_info[id].variants[static_cast<std::size_t>(arch)];
   }
 
-  [[nodiscard]] const Resources &get_compute_task_resources(taskid_t id, Devicetype arch) const {
+  [[nodiscard]] const Resources &get_compute_task_resources(taskid_t id, DeviceType arch) const {
     auto &info = compute_task_variant_info[id];
     int8_t arch_type = static_cast<int8_t>(arch);
     // assert that mask flag is set for the given architecture
@@ -497,13 +468,13 @@ public:
   }
 
   // TODO(wlr): Deprecate this to avoid allocation. Loop over mask direcly where this is used.
-  [[nodiscard]] std::vector<Devicetype>
+  [[nodiscard]] std::vector<DeviceType>
   get_compute_task_supported_architectures(taskid_t id) const {
-    std::vector<Devicetype> supported_architectures;
+    std::vector<DeviceType> supported_architectures;
     auto &info = compute_task_variant_info[id];
     for (int i = 0; i < num_device_types; ++i) {
       if ((info.mask & (1 << i)) != 0) {
-        supported_architectures.push_back(static_cast<Devicetype>(i));
+        supported_architectures.push_back(static_cast<DeviceType>(i));
       }
     }
     return supported_architectures;
@@ -531,6 +502,24 @@ public:
   [[nodiscard]] const taskid_t get_compute_task(taskid_t id) const {
     return data_task_static_info[id].compute_task;
   }
+
+  // Getters for static task info
+
+  [[nodiscard]] const ComputeTaskDepInfo &get_compute_task_dep_info(taskid_t id) const {
+    return compute_task_dep_info[id];
+  }
+
+  [[nodiscard]] const ComputeTaskDataInfo &get_compute_task_data_info(taskid_t id) const {
+    return compute_task_data_info[id];
+  }
+
+  [[nodiscard]] const DataTaskStaticInfo &get_data_task_static_info(taskid_t id) const {
+    return data_task_static_info[id];
+  }
+
+  [[nodiscard]] const ComputeTaskStaticInfo &get_compute_task_static_info(taskid_t id) const {
+    return compute_task_static_info[id];
+  }
 };
 
 class RuntimeTaskInfo {
@@ -545,18 +534,10 @@ protected:
   std::vector<TaskTimeRecord> data_task_time_records;
   std::vector<TaskTimeRecord> eviction_task_time_records;
 
-  std::vector<taskid_t> eviction_task_names;
+  std::vector<std::string> eviction_task_names;
 
 public:
-  RuntimeTaskInfo() = default;
-
-  RuntimeTaskInfo(int32_t num_compute_tasks, int32_t num_data_tasks)
-      : compute_task_runtime_info(num_compute_tasks), data_task_runtime_info(num_data_tasks), ,
-        compute_task_time_records(num_compute_tasks), data_task_time_records(num_data_tasks), {
-    task_buffer.reserve(TASK_BUFFER_SIZE);
-  }
-
-  RuntimeTaskInfo(TaskStaticInfo &static_info) {
+  RuntimeTaskInfo(StaticTaskInfo &static_info) {
     int32_t num_compute_tasks = static_cast<int32_t>(static_info.get_num_compute_tasks());
     int32_t num_data_tasks = static_cast<int32_t>(static_info.get_num_data_tasks());
     compute_task_runtime_info.resize(num_compute_tasks);
@@ -571,11 +552,18 @@ public:
     for (int32_t i = 0; i < num_data_tasks; ++i) {
       initialize_data_runtime(i, static_info);
     }
+
+    task_buffer.reserve(TASK_BUFFER_SIZE);
+    eviction_task_runtime_info.reserve(EXPECTED_EVICTION_TASKS);
+    eviction_task_time_records.reserve(EXPECTED_EVICTION_TASKS);
+    eviction_task_names.reserve(EXPECTED_EVICTION_TASKS);
   }
+
+  RuntimeTaskInfo(const RuntimeTaskInfo &other) = default;
 
   // Creation and Initialization
 
-  void initialize_compute_runtime(int32_t compute_task_id, const TaskStaticInfo &static_info) {
+  void initialize_compute_runtime(int32_t compute_task_id, const StaticTaskInfo &static_info) {
     set_compute_task_state(compute_task_id, TaskState::SPAWNED);
 
     auto &dep_info = static_info.get_compute_task_dep_info(compute_task_id);
@@ -586,11 +574,11 @@ public:
     set_compute_task_incomplete(compute_task_id, n_dependencies + n_data_dependencies);
   }
 
-  void initialize_data_runtime(int32_t data_task_id, const TaskStaticInfo &static_info) {
+  void initialize_data_runtime(int32_t data_task_id, const StaticTaskInfo &static_info) {
     set_data_task_state(data_task_id, TaskState::SPAWNED);
 
-    auto &static_info = static_info.get_data_task_static_info(data_task_id);
-    auto n_dependencies = static_info.e_dependencies - static_info.s_dependencies;
+    auto &info = static_info.get_data_task_static_info(data_task_id);
+    auto n_dependencies = info.e_dependencies - info.s_dependencies;
     set_data_task_incomplete(data_task_id, n_dependencies);
   }
 
@@ -609,6 +597,31 @@ public:
   }
 
   // Getters
+
+  [[nodiscard]] int32_t get_num_compute_tasks() const {
+    return static_cast<int32_t>(compute_task_runtime_info.size());
+  }
+
+  [[nodiscard]] int32_t get_num_data_tasks() const {
+    return static_cast<int32_t>(data_task_runtime_info.size());
+  }
+
+  [[nodiscard]] int32_t get_num_eviction_tasks() const {
+    return static_cast<int32_t>(eviction_task_runtime_info.size());
+  }
+
+  [[nodiscard]] int32_t get_num_tasks() const {
+    return get_num_compute_tasks() + get_num_data_tasks() + get_num_eviction_tasks();
+  }
+
+  [[nodiscard]] bool empty() const {
+    return (compute_task_runtime_info.empty() && data_task_runtime_info.empty() &&
+            eviction_task_runtime_info.empty());
+  }
+
+  [[nodiscard]] const std::vector<taskid_t> &get_task_buffer() const {
+    return task_buffer;
+  }
 
   [[nodiscard]] const std::string get_eviction_task_name(taskid_t id) const {
     return eviction_task_names[id];
@@ -916,6 +929,11 @@ public:
     data_task_runtime_info[id].flags = virtual_task ? (data_task_runtime_info[id].flags | 0x01)
                                                     : (data_task_runtime_info[id].flags & ~0x01);
   }
+
+  void set_data_task_incomplete(taskid_t id, int16_t incomplete) {
+    data_task_runtime_info[id].incomplete = incomplete;
+  }
+
   void set_data_task_source_device(taskid_t id, int32_t source_device) {
     data_task_runtime_info[id].source_device = source_device;
   }
@@ -945,16 +963,38 @@ public:
   }
 
   void record_mapped(taskid_t id, timecount_t mapped_time) {
-    task_time_records[id].mapped_time = mapped_time;
+    compute_task_time_records[id].mapped_time = mapped_time;
   }
   void record_reserved(taskid_t id, timecount_t reserved_time) {
-    task_time_records[id].reserved_time = reserved_time;
+    compute_task_time_records[id].reserved_time = reserved_time;
   }
   void record_launched(taskid_t id, timecount_t launched_time) {
-    task_time_records[id].launched_time = launched_time;
+    compute_task_time_records[id].launched_time = launched_time;
   }
   void record_completed(taskid_t id, timecount_t completed_time) {
-    task_time_records[id].completed_time = completed_time;
+    compute_task_time_records[id].completed_time = completed_time;
+  }
+
+  void record_data_reserved(taskid_t id, timecount_t reserved_time) {
+    data_task_time_records[id].reserved_time = reserved_time;
+  }
+  void record_data_launched(taskid_t id, timecount_t launched_time) {
+    data_task_time_records[id].launched_time = launched_time;
+  }
+  void record_data_completed(taskid_t id, timecount_t completed_time) {
+    data_task_time_records[id].completed_time = completed_time;
+  }
+
+  void record_eviction_reserved(taskid_t id, timecount_t reserved_time) {
+    eviction_task_time_records[id].reserved_time = reserved_time;
+  }
+
+  void record_eviction_launched(taskid_t id, timecount_t launched_time) {
+    eviction_task_time_records[id].launched_time = launched_time;
+  }
+
+  void record_eviction_completed(taskid_t id, timecount_t completed_time) {
+    eviction_task_time_records[id].completed_time = completed_time;
   }
 
   // Task State modifiers
@@ -983,23 +1023,20 @@ public:
     return (info.incomplete == 0) && (info.state >= static_cast<int8_t>(TaskState::RESERVED));
   }
 
-  bool decrement_eviction_task_incomplete(taskid_t id) {
-    auto &info = eviction_task_runtime_info[id];
-    info.incomplete--;
-    return (info.incomplete == 0) && (info.state >= static_cast<int8_t>(TaskState::RESERVED));
-  }
-
-  const std::vector<taskid_t> &compute_notify_mapped(taskid_t compute_task_id,
-                                                     devid_t mapped_device, timecount_t time) {
+  const std::vector<taskid_t> &
+  compute_notify_mapped(taskid_t compute_task_id, devid_t mapped_device, int32_t reserve_priority,
+                        int32_t launch_priority, timecount_t time, StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.mapped_device = mapped_device;
+    my_info.reserve_priority = reserve_priority;
+    my_info.launch_priority = launch_priority;
     my_info.state = static_cast<int8_t>(TaskState::MAPPED);
     my_time_record.mapped_time = time;
 
     task_buffer.clear();
 
-    auto my_dependents = get_compute_task_dependents(compute_task_id);
+    auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
 
     for (const auto &dependent_id : my_dependents) {
       if (decrement_compute_task_unmapped(dependent_id)) {
@@ -1011,7 +1048,8 @@ public:
   }
 
   const std::vector<taskid_t> &compute_notify_reserved(taskid_t compute_task_id,
-                                                       devid_t mapped_device, timecount_t time) {
+                                                       devid_t mapped_device, timecount_t time,
+                                                       StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.mapped_device = mapped_device;
@@ -1020,7 +1058,7 @@ public:
 
     task_buffer.clear();
 
-    auto my_dependents = get_compute_task_dependents(compute_task_id);
+    auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
 
     for (const auto &dependent_id : my_dependents) {
       if (decrement_compute_task_unreserved(dependent_id)) {
@@ -1031,15 +1069,16 @@ public:
     return task_buffer;
   }
 
-  void compute_notify_launched(taskid_t compute_task_id, timecount_t time) {
+  void compute_notify_launched(taskid_t compute_task_id, timecount_t time,
+                               StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.state = static_cast<int8_t>(TaskState::LAUNCHED);
     my_time_record.launched_time = time;
   }
 
-  const std::vector<taskid_t> &compute_notify_completed(taskid_t compute_task_id,
-                                                        timecount_t time) {
+  const std::vector<taskid_t> &compute_notify_completed(taskid_t compute_task_id, timecount_t time,
+                                                        StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.state = static_cast<int8_t>(TaskState::COMPLETED);
@@ -1047,7 +1086,7 @@ public:
 
     task_buffer.clear();
 
-    auto my_dependents = get_compute_task_dependents(compute_task_id);
+    auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
 
     for (const auto &dependent_id : my_dependents) {
       if (decrement_compute_task_incomplete(dependent_id)) {
@@ -1059,13 +1098,14 @@ public:
   }
 
   const std::vector<taskid_t> &compute_notify_data_completed(taskid_t compute_task_id,
-                                                             timecount_t time) {
+                                                             timecount_t time,
+                                                             StaticTaskInfo &static_info) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
 
     // state and time assumed to be updated by prior call to notify_completed
 
     task_buffer.clear();
-    auto my_data_dependents = get_compute_task_data_dependents(compute_task_id);
+    auto my_data_dependents = static_info.get_compute_task_data_dependents(compute_task_id);
 
     for (const auto &dependent_id : my_data_dependents) {
       if (decrement_data_task_incomplete(dependent_id)) {
@@ -1076,7 +1116,24 @@ public:
     return task_buffer;
   }
 
-  const std::vector<taskid_t> &data_notify_completed(taskid_t data, timecount_t time) {
+  void data_notify_reserved(taskid_t data, devid_t mapped_device, timecount_t time,
+                            StaticTaskInfo &static_info) {
+    auto &my_info = data_task_runtime_info[data];
+    auto &my_time_record = data_task_time_records[data];
+    my_info.mapped_device = mapped_device;
+    my_info.state = static_cast<int8_t>(TaskState::RESERVED);
+    my_time_record.reserved_time = time;
+  }
+
+  void data_notify_launched(taskid_t data, timecount_t time, StaticTaskInfo &static_info) {
+    auto &my_info = data_task_runtime_info[data];
+    auto &my_time_record = data_task_time_records[data];
+    my_info.state = static_cast<int8_t>(TaskState::LAUNCHED);
+    my_time_record.launched_time = time;
+  }
+
+  const std::vector<taskid_t> &data_notify_completed(taskid_t data, timecount_t time,
+                                                     StaticTaskInfo &static_info) {
     auto &my_info = data_task_runtime_info[data];
     auto &my_time_record = data_task_time_records[data];
 
@@ -1084,7 +1141,7 @@ public:
     my_time_record.completed_time = time;
 
     task_buffer.clear();
-    auto my_dependents = get_data_task_dependents(data);
+    auto my_dependents = static_info.get_data_task_dependents(data);
 
     for (const auto &dependent_id : my_dependents) {
       if (decrement_data_task_incomplete(dependent_id)) {
@@ -1093,6 +1150,30 @@ public:
     }
 
     return task_buffer;
+  }
+
+  void eviction_notify_reserved(taskid_t eviction_task_id, timecount_t time,
+                                StaticTaskInfo &static_info) {
+    auto &my_time_record = eviction_task_time_records[eviction_task_id];
+    auto &my_info = eviction_task_runtime_info[eviction_task_id];
+    my_info.state = static_cast<int8_t>(TaskState::RESERVED);
+    my_time_record.reserved_time = time;
+  }
+
+  void eviction_notify_launched(taskid_t eviction_task_id, timecount_t time,
+                                StaticTaskInfo &static_info) {
+    auto &my_time_record = eviction_task_time_records[eviction_task_id];
+    auto &my_info = eviction_task_runtime_info[eviction_task_id];
+    my_info.state = static_cast<int8_t>(TaskState::LAUNCHED);
+    my_time_record.launched_time = time;
+  }
+
+  void eviction_notify_completed(taskid_t eviction_task_id, timecount_t time,
+                                 StaticTaskInfo &static_info) {
+    auto &my_time_record = eviction_task_time_records[eviction_task_id];
+    auto &my_info = eviction_task_runtime_info[eviction_task_id];
+    my_info.state = static_cast<int8_t>(TaskState::COMPLETED);
+    my_time_record.completed_time = time;
   }
 };
 

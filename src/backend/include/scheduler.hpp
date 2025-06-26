@@ -32,6 +32,9 @@
 #define TIME_TO_RESERVE 0
 #define TIME_TO_LAUNCH 0
 #define SCHEDULER_TIME_GAP 0
+#define INITIAL_TASK_BUFFER_SIZE 10
+#define INITIAL_DEVICE_BUFFER_SIZE 10
+#define INITIAL_EVENT_BUFFER_SIZE 5000
 
 using TaskQueue3 = ContainerQueue<taskid_t, TopKQueueHelper<1>::queue_type>;
 using TaskQueue = ContainerQueue<taskid_t, std::priority_queue>;
@@ -104,19 +107,31 @@ public:
   SchedulerQueues(const SchedulerQueues &other) = default;
   SchedulerQueues &operator=(const SchedulerQueues &other) = default;
 
-  void push_mappable(taskid_t id, priority_t p);
-  void push_mappable(const TaskIDList &ids, const PriorityList &ps);
+  void push_mappable(taskid_t id, priority_t p) {
+    mappable.push(id, p);
+  }
 
-  void push_reservable(taskid_t id, priority_t p, devid_t device);
-  void push_reservable(const TaskIDList &ids, const PriorityList &ps, devid_t device);
-  void push_launchable(taskid_t id, priority_t p, devid_t device);
-  void push_launchable(const TaskIDList &ids, const PriorityList &ps, devid_t device);
+  void push_mappable(const TaskIDList &ids, const PriorityList &ps) {
+    for (int32_t i = 0; i < ids.size(); i++) {
+      push_mappable(ids[i], ps[i]);
+    }
+  }
 
-  void push_launchable_data(taskid_t id, priority_t p, devid_t device);
-  void push_launchable_data(const TaskIDList &ids, const PriorityList &ps, devid_t device);
+  void push_reservable(taskid_t id, priority_t p, devid_t device) {
+    reservable[device].push(id, p);
+  }
 
-  void push_launchable_eviction(taskid_t id, priority_t p, devid_t device);
-  void push_launchable_eviction(const TaskIDList &ids, const PriorityList &ps, devid_t device);
+  void push_launchable(taskid_t id, priority_t p, devid_t device) {
+    launchable[device].push(id, p);
+  }
+
+  void push_launchable_data(taskid_t id, priority_t p, devid_t device) {
+    data_launchable[device].push(id, p);
+  }
+
+  void push_launchable_eviction(taskid_t id, priority_t p, devid_t device) {
+    eviction_launchable[device].push(id, p);
+  }
 
   [[nodiscard]] std::size_t n_mappable() const {
     return mappable.size();
@@ -178,9 +193,6 @@ public:
     return eviction_launchable.total_active_size() > 0;
   }
 
-  // void populate(const TaskManager &task_manager);
-  // void populate(const TaskIDList &ids, const TaskManager &task_manager);
-
   friend class Scheduler;
 };
 
@@ -188,13 +200,39 @@ class TaskCountInfo {
 public:
   ankerl::unordered_dense::set<taskid_t> active_tasks;
 
-  TaskCountInfo(std::size_t n_devices);
-  void count_mapped(taskid_t task_id, devid_t device_id);
-  void count_reserved(taskid_t task_id, devid_t device_id);
-  void count_launched(taskid_t task_id, devid_t device_id);
+  TaskCountInfo(std::size_t n_devices) : n_devices(n_devices), per_device_counts(n_devices * 6) {};
 
-  void count_completed(taskid_t task_id, devid_t device_id);
-  void count_data_completed(taskid_t task_id, devid_t device_id);
+  void count_mapped(taskid_t task_id, devid_t device_id) {
+    n_active_tasks += 1;
+    n_mapped_tasks += 1;
+    per_device_counts[device_id] += 1;
+    active_tasks.insert(task_id);
+  }
+  void count_reserved(taskid_t task_id, devid_t device_id) {
+    n_reserved_tasks += 1;
+    per_device_counts[n_devices + device_id] += 1;
+  }
+  void count_launched(taskid_t task_id, devid_t device_id) {
+    n_launched_tasks += 1;
+    per_device_counts[2 * n_devices + device_id] += 1;
+  }
+
+  void count_completed(taskid_t task_id, devid_t device_id) {
+    n_active_tasks -= 1;
+    n_mapped_tasks -= 1;
+    n_reserved_tasks -= 1;
+    n_launched_tasks -= 1;
+    n_completed_tasks += 1;
+    per_device_counts[device_id] -= 1;
+    per_device_counts[n_devices + device_id] -= 1;
+    per_device_counts[2 * n_devices + device_id] -= 1;
+    per_device_counts[3 * n_devices + device_id] += 1;
+    active_tasks.erase(task_id);
+  }
+  void count_data_completed(taskid_t task_id, devid_t device_id) {
+    n_data_completed_tasks += 1;
+    per_device_counts[4 * n_devices + device_id] += 1;
+  }
 
   auto get_active_task_list() const {
     return TaskIDList(active_tasks.begin(), active_tasks.end());
@@ -224,77 +262,84 @@ public:
   }
 
   [[nodiscard]] std::size_t n_active(devid_t device_id) const {
-    return per_device_mapped_tasks.at(device_id);
+    return per_device_counts[device_id];
   }
 
   [[nodiscard]] std::size_t n_mapped(devid_t device_id) const {
-    return per_device_mapped_tasks.at(device_id);
+    return per_device_counts[n_devices + device_id];
   }
 
   [[nodiscard]] std::size_t n_reserved(devid_t device_id) const {
-    return per_device_reserved_tasks.at(device_id);
+    return per_device_counts[2 * n_devices + device_id];
   }
 
   [[nodiscard]] std::size_t n_launched(devid_t device_id) const {
-    return per_device_launched_tasks.at(device_id);
+    return per_device_counts[3 * n_devices + device_id];
   }
 
   [[nodiscard]] std::size_t n_completed(devid_t device_id) const {
-    return per_device_completed_tasks.at(device_id);
+    return per_device_counts[4 * n_devices + device_id];
   }
 
   [[nodiscard]] std::size_t n_data_completed(devid_t device_id) const {
-    return per_device_data_completed_tasks.at(device_id);
+    return per_device_counts[4 * n_devices + device_id];
   }
 
 protected:
-  std::size_t n_active_tasks = 0;
-  std::size_t n_mapped_tasks = 0;
-  std::vector<std::size_t> per_device_mapped_tasks;
-  std::size_t n_reserved_tasks = 0;
-  std::vector<std::size_t> per_device_reserved_tasks;
-  std::size_t n_launched_tasks = 0;
-  std::vector<std::size_t> per_device_launched_tasks;
-  std::size_t n_completed_tasks = 0;
-  std::vector<std::size_t> per_device_completed_tasks;
-  std::size_t n_data_completed_tasks = 0;
-  std::vector<std::size_t> per_device_data_completed_tasks;
+  int32_t n_devices{};
+  int32_t n_active_tasks{};
+  int32_t n_mapped_tasks{};
+  int32_t n_reserved_tasks{};
+  int32_t n_launched_tasks{};
+  int32_t n_completed_tasks{};
+  int32_t n_data_completed_tasks{};
+  std::vector<int32_t> per_device_counts{};
 };
 
 class TaskCostInfo {
 public:
-  TaskCostInfo(std::size_t n_tasks, std::size_t n_devices);
-  void count_mapped(devid_t device_id, timecount_t time);
-  void count_reserved(devid_t device_id, timecount_t time);
-  void count_launched(devid_t device_id, timecount_t time);
+  TaskCostInfo(std::size_t n_devices) : n_devices(n_devices), per_device_costs(n_devices * 5) {};
+  void count_mapped(devid_t device_id, timecount_t time) {
+    per_device_costs[device_id] += time;
+  }
+  void count_reserved(devid_t device_id, timecount_t time) {
+    per_device_costs[n_devices + device_id] += time;
+  }
+  void count_launched(devid_t device_id, timecount_t time) {
+    per_device_costs[2 * n_devices + device_id] += time;
+  }
 
-  void count_completed(devid_t device_id, timecount_t time);
+  void count_completed(devid_t device_id, timecount_t time) {
+    per_device_costs[device_id] -= time;
+    per_device_costs[n_devices + device_id] -= time;
+    per_device_costs[2 * n_devices + device_id] -= time;
+    per_device_costs[3 * n_devices + device_id] += time;
+  }
 
-  void count_data_completed(devid_t device_id, timecount_t time);
+  void count_data_completed(devid_t device_id, timecount_t time) {
+    per_device_costs[4 * n_devices + device_id] += time;
+  }
 
   [[nodiscard]] timecount_t get_mapped_time(devid_t device_id) const {
-    return per_device_mapped_time.at(device_id);
+    return per_device_costs[device_id];
   }
   [[nodiscard]] timecount_t get_reserved_time(devid_t device_id) const {
-    return per_device_reserved_time.at(device_id);
+    return per_device_costs[n_devices + device_id];
   }
   [[nodiscard]] timecount_t get_launched_time(devid_t device_id) const {
-    return per_device_launched_time.at(device_id);
+    return per_device_costs[2 * n_devices + device_id];
   }
 
   [[nodiscard]] timecount_t get_completed_time(devid_t device_id) const {
-    return per_device_completed_time.at(device_id);
+    return per_device_costs[3 * n_devices + device_id];
   }
   [[nodiscard]] timecount_t get_data_completed_time(devid_t device_id) const {
-    return per_device_data_completed_time.at(device_id);
+    return per_device_costs[4 * n_devices + device_id];
   }
 
 protected:
-  std::vector<timecount_t> per_device_mapped_time;
-  std::vector<timecount_t> per_device_reserved_time;
-  std::vector<timecount_t> per_device_launched_time;
-  std::vector<timecount_t> per_device_completed_time;
-  std::vector<timecount_t> per_device_data_completed_time;
+  int32_t n_devices{};
+  std::vector<timecount_t> per_device_costs;
 };
 
 struct ResourceRequest {
@@ -303,7 +348,7 @@ struct ResourceRequest {
 };
 
 struct SchedulerInput {
-  std::reference_wrapper<Tasks> tasks;
+  std::reference_wrapper<StaticTaskInfo> tasks;
   std::reference_wrapper<Data> data;
   std::reference_wrapper<Devices> devices;
   std::reference_wrapper<Topology> topology;
@@ -311,7 +356,7 @@ struct SchedulerInput {
   std::reference_wrapper<CommunicationNoise> comm_noise;
   std::reference_wrapper<TransitionConditions> conditions;
 
-  SchedulerInput(Tasks &tasks, Data &data, Devices &devices, Topology &topology,
+  SchedulerInput(StaticTaskInfo &tasks, Data &data, Devices &devices, Topology &topology,
                  TaskNoise &task_noise, CommunicationNoise &comm_noise,
                  TransitionConditions &conditions)
       : tasks(tasks), data(data), devices(devices), topology(topology), task_noise(task_noise),
@@ -342,65 +387,88 @@ struct SchedulerInput {
   }
 };
 
-struct GraphStats {
-  StatsBundle<timecount_t> duration_stats;
-  StatsBundle<mem_t> block_size_stats;
-  StatsBundle<mem_t> io_stats;
-  StatsBundle<taskid_t> indegree_stats;
-  StatsBundle<taskid_t> outdegree_stats;
-  StatsBundle<taskid_t> depth_stats;
-  StatsBundle<taskid_t> tag_stats;
-};
-
 class SchedulerState {
 protected:
   timecount_t global_time = 0;
-  TaskManager task_manager;
+  std::reference_wrapper<Graph> graph;
+  std::reference_wrapper<StaticTaskInfo> tasks;
+  std::reference_wrapper<Data> data;
+  std::reference_wrapper<Devices> devices;
+  std::reference_wrapper<Topology> topology;
+  std::reference_wrapper<TaskNoise> task_noise;
+  std::reference_wrapper<CommunicationNoise> comm_noise;
+  RuntimeTaskInfo task_runtime;
   DeviceManager device_manager;
   CommunicationManager communication_manager;
   DataManager data_manager;
-  TaskIDList unlaunched_compute_tasks;
-  std::unordered_set<taskid_t> mapped_but_not_reserved_tasks;
+  ankerl::unordered_dense::set<taskid_t> mapped_but_not_reserved_tasks;
 
-  [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id, devid_t device_id) const;
+  [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id, devid_t device_id) const {
+    const auto static_graph = get_tasks();
+    const auto arch = get_devices().get_type(device_id);
+    const Resources &task_resources = static_graph.get_compute_task_resources(task_id, arch);
+    mem_t non_local_memory =
+        data_manager.non_local_size_mapped(static_graph.get_unique(task_id), device_id);
+    Resources requested = {task_resources.vcu, task_resources.mem + non_local_memory};
+    Resources missing;
+    return {.requested = requested, .missing = missing};
+  }
+
   [[nodiscard]] ResourceRequest request_reserve_resources(taskid_t task_id,
-                                                          devid_t device_id) const;
+                                                          devid_t device_id) const {
+    const auto static_graph = get_tasks();
+    const auto arch = get_devices().get_type(device_id);
+    const Resources &task_resources = static_graph.get_compute_task_resources(task_id, arch);
+    mem_t non_local_memory =
+        data_manager.non_local_size_reserved(static_graph.get_unique(task_id), device_id);
+    Resources requested = {task_resources.vcu, task_resources.mem + non_local_memory};
+    auto missing_memory =
+        device_manager.overflow_mem<TaskState::RESERVED>(device_id, requested.mem);
+    return {.requested = requested, .missing = Resources(0, missing_memory)};
+  }
   [[nodiscard]] ResourceRequest request_launch_resources(taskid_t task_id, devid_t device_id) const;
 
-  void map_resources(taskid_t task_id, devid_t device_id, const Resources &requested);
+  void map_resources(taskid_t task_id, devid_t device_id, const Resources &requested) {
+    device_manager.add_resources<TaskState::MAPPED>(device_id, requested, global_time);
+  }
 
-  void reserve_resources(taskid_t task_id, devid_t device_id, const Resources &requested);
+  void reserve_resources(taskid_t task_id, devid_t device_id, const Resources &requested) {
+    device_manager.add_resources<TaskState::RESERVED>(device_id, requested, global_time);
+  }
 
-  void launch_resources(taskid_t task_id, devid_t device_id, const Resources &requested);
+  void launch_resources(taskid_t task_id, devid_t device_id, const Resources &requested) {
+    device_manager.add_resources<TaskState::LAUNCHED>(device_id, requested, global_time);
+  }
 
-  void free_resources(taskid_t task_id);
-
-  const TaskIDList &notify_mapped(taskid_t task_id);
-  const TaskIDList &notify_reserved(taskid_t task_id);
-  void notify_launched(taskid_t task_id);
-  const TaskIDList &notify_completed(taskid_t task_id);
-  const TaskIDList &notify_data_completed(taskid_t task_id);
+  void free_resources(taskid_t task_id) {
+    auto mapped_device_id = task_runtime.get_compute_task_mapped_device(task_id);
+    const auto &task_resources = get_task_resources(task_id, mapped_device_id);
+    device_manager.remove_resources<TaskState::MAPPED>(mapped_device_id, task_resources,
+                                                       global_time);
+    device_manager.remove_resources<TaskState::RESERVED>(mapped_device_id, task_resources,
+                                                         global_time);
+    device_manager.remove_resources<TaskState::LAUNCHED>(mapped_device_id, task_resources,
+                                                         global_time);
+  }
 
 public:
   TaskCountInfo counts;
   TaskCostInfo costs;
-  GraphStats stats;
 
   SchedulerState(SchedulerInput &input)
-      : task_manager(TaskManager(input.tasks, input.task_noise)),
-        device_manager(DeviceManager(input.devices)),
+      : global_time(0), tasks(input.tasks), data(input.data), topology(input.topology),
+        task_noise(input.task_noise), comm_noise(input.comm_noise),
+        task_runtime(RuntimeTaskInfo(input.tasks)), device_manager(DeviceManager(input.devices)),
         communication_manager(input.topology, input.devices, input.comm_noise),
         data_manager(input.data, device_manager, communication_manager),
-        counts(input.devices.get().size()),
-        costs(input.tasks.get().size(), input.devices.get().size()) {
+        counts(input.devices.get().size()), costs(input.devices.get().size()) {
   }
 
   SchedulerState(const SchedulerState &other)
-      : global_time(other.global_time), task_manager(other.task_manager),
+      : global_time(other.global_time), task_runtime(other.task_runtime),
         device_manager(other.device_manager), communication_manager(other.communication_manager),
         data_manager(other.data_manager, device_manager, communication_manager),
         counts(other.counts), costs(other.costs),
-        unlaunched_compute_tasks(other.unlaunched_compute_tasks),
         mapped_but_not_reserved_tasks(other.mapped_but_not_reserved_tasks) {
   }
 
@@ -411,7 +479,7 @@ public:
   }
 
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = true) {
-    task_manager.initialize(create_data_tasks);
+    task_runtime.initialize();
     device_manager.initialize();
     communication_manager.initialize();
     if (initialize_data_manager) {
@@ -419,207 +487,135 @@ public:
     }
   }
 
+  void randomize_durations() {
+    get_task_noise().generate_duration(tasks);
+  }
+
+  void randomize_priority() {
+    get_task_noise().generate_priority(tasks);
+  }
+
   void initialize_data_manager() {
     data_manager.initialize();
   }
 
   [[nodiscard]] bool is_complete() const {
-    const auto &tasks = task_manager.get_tasks();
-    bool data_complete = counts.n_data_completed() ==
-                         (tasks.data_size() + task_manager.eviction_tasks.get_n_eviction_tasks());
-    bool compute_complete = counts.n_completed() == tasks.compute_size();
-    return data_complete and compute_complete;
+    int32_t n_data_tasks = task_runtime.get_n_data_tasks();
+    int32_t n_compute_tasks = task_runtime.get_n_compute_tasks();
+    int32_t n_eviction_tasks = task_runtime.get_n_eviction_tasks();
+    bool data_complete = counts.n_data_completed() == (n_data_tasks + n_eviction_tasks);
+    bool compute_complete = counts.n_completed() == n_compute_tasks;
+    return data_complete && compute_complete;
   }
 
-  [[nodiscard]] const Resources &get_task_resources(taskid_t task_id, devid_t device_id) const;
-
-  [[nodiscard]] const Resources &get_task_resources(taskid_t task_id) const;
-
-  [[nodiscard]] const std::string &get_task_name(taskid_t task_id) const {
-    if (task_id < task_manager.n_non_eviction_tasks) {
-      return task_manager.get_tasks().get_name(task_id);
-    } else {
-      return task_manager.eviction_tasks.get_name(task_id);
-    }
-  }
-  [[nodiscard]] const std::string &get_device_name(devid_t device_id) const {
-    return device_manager.devices.get().get_name(device_id);
+  [[nodiscard]] const Resources &get_task_resources(taskid_t compute_task_id,
+                                                    devid_t device_id) const {
+    DeviceType arch = get_devices().get_type(device_id);
+    const Resources &task_resources =
+        task_runtime.get_compute_task_resources(compute_task_id, arch);
+    return task_resources;
   }
 
-  [[nodiscard]] bool is_compute_task(taskid_t task_id) const;
-  [[nodiscard]] bool is_data_task(taskid_t task_id) const;
-  [[nodiscard]] bool is_eviction_task(taskid_t task_id) const;
+  [[nodiscard]] const Resources &get_task_resources(taskid_t compute_task_id) const {
+    devid_t device_id = task_runtime.get_compute_task_mapped_device(compute_task_id);
+    DeviceType arch = get_devices().get_type(device_id);
+    const Resources &task_resources =
+        task_runtime.get_compute_task_resources(compute_task_id, arch);
+    return task_resources;
+  }
 
-  [[nodiscard]] bool is_mapped(taskid_t task_id) const;
-  [[nodiscard]] bool is_reserved(taskid_t task_id) const;
-  [[nodiscard]] bool is_launched(taskid_t task_id) const;
+  void update_mapped_cost(taskid_t task_id, devid_t device_id) {
+    DeviceType arch = get_devices().get_type(device_id);
+    timecount_t time = get_tasks().get_mean_duration(task_id, arch);
+    costs.count_mapped(device_id, time);
+    counts.count_mapped(task_id, device_id);
+  }
 
-  [[nodiscard]] bool is_mappable(taskid_t task_id) const;
-  [[nodiscard]] bool is_reservable(taskid_t task_id) const;
-  [[nodiscard]] bool is_launchable(taskid_t task_id) const;
+  void update_reserved_cost(taskid_t task_id, devid_t device_id) {
+    DeviceType arch = get_devices().get_type(device_id);
+    timecount_t time = get_tasks().get_mean_duration(task_id, arch);
+    costs.count_reserved(device_id, time);
+    counts.count_reserved(task_id, device_id);
+  }
 
-  void set_mapping(taskid_t task_id, devid_t device_id);
-  [[nodiscard]] devid_t get_mapping(taskid_t task_id) const;
-  [[nodiscard]] std::vector<devid_t> &get_mappings();
+  void update_launched_cost(taskid_t task_id, devid_t device_id) {
+    DeviceType arch = get_devices().get_type(device_id);
+    timecount_t time = get_tasks().get_mean_duration(task_id, arch);
+    costs.count_launched(device_id, time);
+    counts.count_launched(task_id, device_id);
+  }
 
-  [[nodiscard]] timecount_t get_mapped_time(taskid_t task_id) const;
-  [[nodiscard]] timecount_t get_reserved_time(taskid_t task_id) const;
-  [[nodiscard]] timecount_t get_launched_time(taskid_t task_id) const;
-  [[nodiscard]] timecount_t get_completed_time(taskid_t task_id) const;
+  // TODO(wlr): Reenable these interfaces when refactor is complete
+  //   bool track_resource_guard() const {
+  // /* Compilation guard for when resource tracking (memory and vcu usage over time) is disabled */
+  // #ifndef SIM_TRACK_RESOURCES
+  //     spdlog::warn("SIM_TRACK_RESOURCES not defined. Resource tracking is disabled.");
+  //     return true;
+  // #else
+  //     return false;
+  // #endif
+  //   }
 
-  bool track_resource_guard() const;
-  bool track_location_guard() const;
+  //   bool track_location_guard() const {
+  // /* Compilation guard for when location tracking (data location over time) is disabled */
+  // #ifndef SIM_TRACK_LOCATION
+  //     spdlog::warn("SIM_TRACK_LOCATION not defined. Location tracking is disabled.");
+  //     return true;
+  // #else
+  //     return false;
+  // #endif
+  //   }
 
-  [[nodiscard]] vcu_t get_mapped_vcu_at(devid_t device_id, timecount_t time) const;
-  [[nodiscard]] vcu_t get_reserved_vcu_at(devid_t device_id, timecount_t time) const;
-  [[nodiscard]] vcu_t get_launched_vcu_at(devid_t device_id, timecount_t time) const;
+  //  [[nodiscard]] vcu_t get_mapped_vcu_at(devid_t device_id, timecount_t time) const;
+  //  [[nodiscard]] vcu_t get_reserved_vcu_at(devid_t device_id, timecount_t time) const;
+  //  [[nodiscard]] vcu_t get_launched_vcu_at(devid_t device_id, timecount_t time) const;
 
-  [[nodiscard]] mem_t get_mapped_mem_at(devid_t device_id, timecount_t time) const;
-  [[nodiscard]] mem_t get_reserved_mem_at(devid_t device_id, timecount_t time) const;
-  [[nodiscard]] mem_t get_launched_mem_at(devid_t device_id, timecount_t time) const;
+  // [[nodiscard]] mem_t get_mapped_mem_at(devid_t device_id, timecount_t time) const;
+  // [[nodiscard]] mem_t get_reserved_mem_at(devid_t device_id, timecount_t time) const;
+  // [[nodiscard]] mem_t get_launched_mem_at(devid_t device_id, timecount_t time) const;
 
-  [[nodiscard]] ResourceEventArray<vcu_t> get_mapped_vcu_events(devid_t device_id) const;
-  [[nodiscard]] ResourceEventArray<vcu_t> get_reserved_vcu_events(devid_t device_id) const;
-  [[nodiscard]] ResourceEventArray<vcu_t> get_launched_vcu_events(devid_t device_id) const;
+  // [[nodiscard]] ResourceEventArray<vcu_t> get_mapped_vcu_events(devid_t device_id) const;
+  // [[nodiscard]] ResourceEventArray<vcu_t> get_reserved_vcu_events(devid_t device_id) const;
+  // [[nodiscard]] ResourceEventArray<vcu_t> get_launched_vcu_events(devid_t device_id) const;
 
-  [[nodiscard]] ResourceEventArray<mem_t> get_mapped_mem_events(devid_t device_id) const;
-  [[nodiscard]] ResourceEventArray<mem_t> get_reserved_mem_events(devid_t device_id) const;
-  [[nodiscard]] ResourceEventArray<mem_t> get_launched_mem_events(devid_t device_id) const;
+  // [[nodiscard]] ResourceEventArray<mem_t> get_mapped_mem_events(devid_t device_id) const;
+  // [[nodiscard]] ResourceEventArray<mem_t> get_reserved_mem_events(devid_t device_id) const;
+  // [[nodiscard]] ResourceEventArray<mem_t> get_launched_mem_events(devid_t device_id) const;
 
-  [[nodiscard]] TaskState get_state_at(taskid_t task_id, timecount_t time) const;
+  // [[nodiscard]] TaskState get_state_at(taskid_t task_id, timecount_t time) const;
 
-  [[nodiscard]] ValidEventArray get_valid_intervals_mapped(dataid_t data_id,
-                                                           devid_t device_id) const;
-  [[nodiscard]] ValidEventArray get_valid_intervals_reserved(dataid_t data_id,
-                                                             devid_t device_id) const;
-  [[nodiscard]] ValidEventArray get_valid_intervals_launched(dataid_t data_id,
-                                                             devid_t device_id) const;
+  // [[nodiscard]] ValidEventArray get_valid_intervals_mapped(dataid_t data_id,
+  //                                                          devid_t device_id) const;
+  // [[nodiscard]] ValidEventArray get_valid_intervals_reserved(dataid_t data_id,
+  //                                                            devid_t device_id) const;
+  // [[nodiscard]] ValidEventArray get_valid_intervals_launched(dataid_t data_id,
+  //                                                            devid_t device_id) const;
 
-  [[nodiscard]] bool check_valid_mapped_at(dataid_t data_id, devid_t device_id,
-                                           timecount_t query_time) const;
-  [[nodiscard]] bool check_valid_reserved_at(dataid_t data_id, devid_t device_id,
-                                             timecount_t query_time) const;
-  [[nodiscard]] bool check_valid_launched_at(dataid_t data_id, devid_t device_id,
-                                             timecount_t query_time) const;
+  // [[nodiscard]] bool check_valid_mapped_at(dataid_t data_id, devid_t device_id,
+  //                                          timecount_t query_time) const;
+  // [[nodiscard]] bool check_valid_reserved_at(dataid_t data_id, devid_t device_id,
+  //                                            timecount_t query_time) const;
+  // [[nodiscard]] bool check_valid_launched_at(dataid_t data_id, devid_t device_id,
+  //                                            timecount_t query_time) const;
 
   // [[nodiscard]] check_valid_mapped(dataid_t data_id, devid_t device_id) const;
   // [[nodiscard]] check_valid_reserved(dataid_t data_id, devid_t device_id) const;
   // [[nodiscard]] check_valid_launched(dataid_t data_id, devid_t device_id) const;
 
-  [[nodiscard]] const PriorityList &get_mapping_priorities() const;
-  [[nodiscard]] const PriorityList &get_reserving_priorities() const;
-  [[nodiscard]] const PriorityList &get_launching_priorities() const;
-
-  [[nodiscard]] priority_t get_mapping_priority(taskid_t task_id) const;
-  [[nodiscard]] priority_t get_reserving_priority(taskid_t task_id) const;
-  [[nodiscard]] priority_t get_launching_priority(taskid_t task_id) const;
-
-  template <typename precision_t>
-  void fill_supported_devices(taskid_t task_id, std::span<precision_t> valid_devices) const;
-
-  void set_mapping_priority(taskid_t task_id, priority_t priority);
-  void set_reserving_priority(taskid_t task_id, priority_t priority);
-  void set_launching_priority(taskid_t task_id, priority_t priority);
-
-  void update_mapped_cost(taskid_t task_id, devid_t device_id);
-  void update_reserved_cost(taskid_t task_id, devid_t device_id);
-  void update_launched_cost(taskid_t task_id, devid_t device_id);
-  void update_completed_cost(taskid_t task_id, devid_t device_id);
-
-  devid_t get_data_task_source(taskid_t task_id) const;
-  bool is_data_task_virtual(taskid_t task_id) const;
-
-  [[nodiscard]] timecount_t get_execution_time(taskid_t task_id) const;
-
-  StatsBundle<mem_t> get_io_statistics(std::vector<DeviceType> &device_types) const {
-    const auto &tasks = task_manager.get_tasks();
-    const auto &data = data_manager.get_data();
-    std::vector<mem_t> sizes;
-    sizes.reserve(tasks.size() + 10 * data.size());
-
-    for (const auto &task : tasks.get_compute_tasks()) {
-      const auto &read = task.get_read();
-      const auto &write = task.get_write();
-      mem_t input_size = data.get_total_size(read);
-      mem_t output_size = data.get_total_size(write);
-      mem_t internal_size = 0;
-      for (const auto &device_type : device_types) {
-        const auto &variant = task.get_variant(device_type);
-        internal_size += variant.get_mem();
-      }
-      internal_size = internal_size / device_types.size();
-
-      sizes.push_back(input_size);
-      sizes.push_back(output_size);
-      sizes.push_back(internal_size);
-    }
-
-    return StatsBundle<mem_t>(sizes);
+  [[nodiscard]] priority_t get_mapping_priority(taskid_t compute_task_id) const {
+    return get_task_noise().get_priority(compute_task_id);
+  }
+  [[nodiscard]] priority_t get_reserving_priority(taskid_t compute_task_id) const {
+    return task_runtime.get_compute_task_reserve_priority(compute_task_id);
+  }
+  [[nodiscard]] priority_t get_launching_priority(taskid_t compute_task_id) const {
+    return task_runtime.get_compute_task_launch_priority(compute_task_id);
   }
 
-  // StatsBundle<timecount_t> get_total_statistics(std::vector<DeviceType> &device_types) const {
-  //    Sum up all in terms of time
-  //   const auto &tasks = task_manager.get_tasks();
-  //   const auto &data = data_manager.get_data();
-  //   std::vector<timecount_t> durations;
-  //   durations.reserve(tasks.size());
-
-  // }
-
-  void get_degree_statistics(std::vector<DeviceType> &device_types) {
-    const auto &tasks = task_manager.get_tasks();
-
-    std::vector<taskid_t> in_degrees;
-    std::vector<taskid_t> out_degrees;
-
-    for (const auto &task : tasks.get_compute_tasks()) {
-      taskid_t in_degree = task.get_dependencies().size();
-      taskid_t out_degree = task.get_dependents().size();
-
-      in_degrees.push_back(in_degree);
-      out_degrees.push_back(out_degree);
-    }
-
-    this->stats.indegree_stats = StatsBundle<taskid_t>(in_degrees);
-    this->stats.outdegree_stats = StatsBundle<taskid_t>(out_degrees);
-  }
-
-  StatsBundle<taskid_t> get_depth_statistics() const {
-    const auto &tasks = task_manager.get_tasks();
-    std::vector<taskid_t> depths;
-
-    for (const auto &task : tasks.get_compute_tasks()) {
-      taskid_t depth = task.get_depth();
-      depths.push_back(depth);
-    }
-
-    return StatsBundle<taskid_t>(depths);
-  }
-
-  StatsBundle<taskid_t> get_tag_statistics() const {
-
-    const auto &tasks = task_manager.get_tasks();
-    std::vector<taskid_t> tags;
-
-    for (const auto &task : tasks.get_compute_tasks()) {
-      taskid_t tag = task.get_tag();
-      tags.push_back(tag);
-    }
-
-    return StatsBundle<taskid_t>(tags);
-  }
-
-  void gather_graph_statistics(std::vector<DeviceType> &device_types) {
-    // const auto &tasks = task_manager.get_tasks();
-    // const auto &data = data_manager.get_data();
-    // const auto &devices = device_manager.devices.get();
-
-    // this->stats.duration_stats = tasks.get_duration_statistics(device_types);
-    // this->stats.block_size_stats = data.get_block_statistics(device_types);
-    // this->stats.io_stats = get_io_statistics(device_types);
-    // this->get_degree_statistics(device_types);
-    // this->stats.tag_stats = get_tag_statistics();
-    // this->stats.depth_stats = get_depth_statistics();
+  [[nodiscard]] timecount_t get_execution_time(taskid_t compute_task_id) const {
+    auto mapped_device_id = task_runtime.get_compute_mapped_device(compute_task_id);
+    auto arch = get_devices().get_type(mapped_device_id);
+    return get_task_noise().get(compute_task_id, arch);
   }
 
   [[nodiscard]] timecount_t get_global_time() const {
@@ -627,12 +623,72 @@ public:
     return global_time;
   }
 
-  [[nodiscard]] const TaskManager &get_task_manager() const {
-    return task_manager;
+  [[nodiscard]] const StaticTaskInfo &get_tasks() const {
+    return tasks.get();
+  }
+
+  [[nodiscard]] StaticTaskInfo &get_tasks() {
+    return tasks.get();
+  }
+
+  [[nodiscard]] const Data &get_data() const {
+    return data.get();
+  }
+
+  [[nodiscard]] Data &get_data() {
+    return data.get();
+  }
+
+  [[nodiscard]] const Topology &get_topology() const {
+    return topology.get();
+  }
+
+  [[nodiscard]] Topology &get_topology() {
+    return topology.get();
+  }
+
+  [[nodiscard]] const Devices &get_devices() const {
+    return devices.get();
+  }
+
+  [[nodiscard]] Devices &get_devices() {
+    return devices.get();
+  }
+
+  [[nodiscard]] const TaskNoise &get_task_noise() const {
+    return task_noise.get();
+  }
+
+  [[nodiscard]] TaskNoise &get_task_noise() {
+    return task_noise.get();
+  }
+
+  [[nodiscard]] const CommunicationNoise &get_comm_noise() const {
+    return comm_noise.get();
+  }
+
+  [[nodiscard]] CommunicationNoise &get_comm_noise() {
+    return comm_noise.get();
+  }
+
+  [[nodiscard]] RuntimeTaskInfo &get_task_runtime() {
+    return task_runtime;
+  }
+
+  [[nodiscard]] const RuntimeTaskInfo &get_task_runtime() const {
+    return task_runtime;
   }
 
   [[nodiscard]] const DeviceManager &get_device_manager() const {
     return device_manager;
+  }
+
+  [[nodiscard]] DeviceManager &get_device_manager() {
+    return device_manager;
+  }
+
+  [[nodiscard]] const CommunicationManager &get_communication_manager() {
+    return communication_manager;
   }
 
   [[nodiscard]] const CommunicationManager &get_communication_manager() const {
@@ -695,7 +751,6 @@ public:
 
 static_assert(TransitionConditionConcept<TransitionConditions>);
 
-// TODO(wlr): Define these (restruct number of mapped and reservable tasks)
 class DefaultTransitionConditions : public TransitionConditions {};
 
 class RangeTransitionConditions : public TransitionConditions {
@@ -750,23 +805,11 @@ public:
     auto &counts = state.counts;
     auto n_mapped = counts.n_mapped();
     bool space_flag = (n_mapped <= max_in_flight + active_batch);
-    // std::cout << "n_mapped: " << n_mapped << "\n";
-    // std::cout << "Max in flight: " << max_in_flight << "\n";
-    // std::cout << "Active batch: " << active_batch << "\n";
-    // if (space_flag) {
-    //   std::cout << "Remaining space: " << (max_in_flight + active_batch - n_mapped) << "\n";
-    // } else {
-    //   std::cout << "Overfill: " << (n_mapped - max_in_flight - active_batch) << "\n";
-    // }
-
     bool workqueue_flag = false;
-
-    const devid_t n_devices = state.get_device_manager().get_devices().size();
-
+    const devid_t n_devices = state.get_devices().size();
     for (int i = 1; i < n_devices; i++) {
       if (counts.n_mapped(i) < queue_threshold) {
         workqueue_flag = true;
-        // std::cout << "Device " << i << " only has " << counts.n_mapped(i) << " mapped tasks.\n";
         break;
       }
     }
@@ -775,13 +818,10 @@ public:
 
     if (flag) {
       if (active_batch == 0) {
-        // std::cout << "Setting active batch to " << batch_size << "at time "
-        //           << state.get_global_time() << "\n";
         last_accessed = state.get_global_time();
         active_batch = batch_size;
       }
     } else {
-      // std::cout << "Resetting active batch to 0 at time " << state.get_global_time() << "\n";
       active_batch = 0;
     }
 
@@ -789,12 +829,8 @@ public:
   }
 };
 
-#define INITIAL_TASK_BUFFER_SIZE 10
-#define INITIAL_DEVICE_BUFFER_SIZE 10
-#define INITIAL_EVENT_BUFFER_SIZE 5000
-
 struct SuccessPair {
-  bool success = false;
+  int8_t success = 0;
   const TaskIDList *task_list = nullptr;
 };
 
@@ -810,20 +846,14 @@ protected:
   SchedulerState state;
   SchedulerQueues queues;
 
-  std::size_t scheduler_event_count = 1;
-  std::size_t success_count = 0;
-  std::size_t eviction_count = 0;
-  std::size_t compute_on_fly = 0;
-
-  bool can_map = true;
-  bool can_reserve = true;
-  bool can_launch = true;
+  std::int16_t scheduler_event_count = 1;
+  std::int16_t success_count = 0;
+  std::int16_t eviction_count = 0;
 
   EvictionState eviction_state = EvictionState::NONE;
 
   TaskIDList task_buffer;
   DeviceIDList device_buffer;
-  TaskDeviceList tasks_requesting_eviction;
 
   void enqueue_data_tasks(taskid_t task_id);
 
@@ -836,7 +866,6 @@ public:
       : state(input), queues(input.devices), conditions(input.conditions) {
     task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
-    tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
   }
 
   Scheduler(const Scheduler &other) = default;
@@ -862,7 +891,6 @@ public:
   }
 
   size_t get_mappable_candidates(std::span<int64_t> v);
-  TaskIDList &get_mappable_candidates();
 
   const TaskIDList &map_task(taskid_t task_id, Action &action);
   void remove_mapped_tasks(ActionList &action_list);
@@ -887,12 +915,6 @@ public:
   [[nodiscard]] const TaskIDList &get_task_buffer() const {
     return task_buffer;
   }
-
-  // void clear_event_buffer() {
-  //   event_buffer.clear();
-  //   event_buffer.reserve(INITIAL_EVENT_BUFFER_SIZE);
-  //   assert(event_buffer.empty());
-  // }
 
   void clear_task_buffer() {
     task_buffer.clear();
@@ -1005,7 +1027,7 @@ protected:
 
   void fill_arch_targets(taskid_t task_id, const SchedulerState &state) {
     arch_buffer.clear();
-    const auto &tasks = state.get_task_manager().get_tasks();
+    const auto &tasks = state.get_tasks();
     arch_buffer = tasks.get_supported_architectures(task_id);
     assert(!arch_buffer.empty());
   }
