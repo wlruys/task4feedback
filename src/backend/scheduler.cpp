@@ -58,6 +58,7 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
   s.map_resources(compute_task_id, chosen_device, requested);
 
   // Update data locations
+  // TODO(wlr): These need to be udpated for span accesses
   data_manager.read_update_mapped(static_graph.get_unique(compute_task_id), chosen_device,
                                   current_time);
   data_manager.write_update_mapped(static_graph.get_write(compute_task_id), chosen_device,
@@ -81,13 +82,13 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
   // We check if there are any usage of the data by the victim device.
   // If there are, it means that
 
-  s.mapped_but_not_reserved_tasks.insert(task_id);
-
   // Notify dependents and enqueue newly mappable tasks
   const auto &newly_mappable_tasks = task_runtime.compute_notify_mapped(
       compute_task_id, mapped_device, rp, lp, current_time, static_graph);
   s.update_mapped_cost(compute_task_id, chosen_device);
   success_count += 1;
+
+  s.mapped_but_not_reserved_tasks.insert(compute_task_id);
 
   breakpoints.check_task_breakpoint(EventType::MAPPER, compute_task_id);
 
@@ -95,6 +96,7 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
   if (runtime.is_compute_reserveable(compute_task_id)) {
     SPDLOG_DEBUG("Time:{} Task {} is reservable", current_time,
                  static_graph.get_compute_name(compute_task_id));
+    // TODO(wlr): Check if delayed enqueue is faster
     queues.push_reservable(compute_task_id, chosen_device);
   }
 
@@ -178,6 +180,8 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
     //              s.get_task_name(task_id), current_time, action.device);
     const auto &newly_mappable_tasks = map_task(task_id, action);
     // spdlog::debug("Newly mappable tasks: {}", newly_mappable_tasks.size());
+
+    // TODO(wlr): Check if delayed enqueue is faster
     push_mappable(newly_mappable_tasks);
   }
 
@@ -192,23 +196,22 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
   event_manager.create_event(EventType::RESERVER, reserver_time);
 }
 
-void Scheduler::enqueue_data_tasks(taskid_t id) {
+void Scheduler::enqueue_data_tasks(taskid_t compute_task_id) {
   auto &s = this->state;
-  auto &task_manager = state.task_manager;
+  auto &task_runtime = s.task_runtime;
+  auto &static_graph = s.get_tasks();
   auto current_time = s.global_time;
   const auto &tasks = state.task_manager.get_tasks();
 
-  assert(tasks.is_compute(id));
-
-  const auto &data_dependencies = tasks.get_data_dependencies(id);
+  devid_t mapped_device = s.get_mapping(compute_task_id);
+  const auto data_dependencies = task_runtime.get_compute_task_data_dependencies(compute_task_id);
 
   SPDLOG_DEBUG("Time:{} Enqueueing {} data tasks for task {}", current_time,
-               data_dependencies.size(), s.get_task_name(id));
+               data_dependencies.size(), static_graph.get_compute_name(compute_task_id));
 
+  // TODO(wlr): Check if delayed enqueue is faster
   for (auto data_task_id : data_dependencies) {
-    assert(tasks.is_data(data_task_id));
-
-    task_manager.set_state(data_task_id, TaskState::RESERVED);
+    task_runtime.data_notify_reserved(data_task_id, mapped_device, current_time, static_graph);
     if (s.is_launchable(data_task_id)) {
       SPDLOG_DEBUG("Time:{} Data task {} is launchable", current_time,
                    s.get_task_name(data_task_id));
@@ -217,64 +220,63 @@ void Scheduler::enqueue_data_tasks(taskid_t id) {
   }
 }
 
-SuccessPair Scheduler::reserve_task(taskid_t task_id, devid_t device_id,
+SuccessPair Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id,
                                     TaskDeviceList &tasks_requesting_eviction) {
   ZoneScoped;
 
   auto &s = this->state;
+  auto &task_runtime = s.task_runtime;
+  auto &static_graph = s.get_tasks();
   auto current_time = s.global_time;
   auto &mapped = s.mapped_but_not_reserved_tasks;
+  auto &device_manager = s.get_device_manager();
 
-  assert(s.is_compute_task(task_id));
-  assert(s.is_reservable(task_id));
-  assert(s.get_mapping(task_id) == device_id);
+  assert(task_runtime.is_compute_reserveable(compute_task_id));
+  assert(task_runtime.get_compute_task_mapped_device(compute_task_id) == device_id);
 
   SPDLOG_DEBUG("Time:{} Attempting to reserve task {} on device {}", current_time,
-               s.get_task_name(task_id), device_id);
+               static_graph.get_compute_task_name(compute_task_id), device_id);
 
   // Get total required task memory
-  const auto [requested, missing] = s.request_reserve_resources(task_id, device_id);
+  const auto [requested, missing] = s.request_reserve_resources(compute_task_id, device_id);
 
   if (missing.mem > 0) {
     SPDLOG_DEBUG(
         "Time:{} Task {} will evict memory on device {} since requested {} memory but missing {} "
         "memory",
-        current_time, s.get_task_name(task_id), device_id, requested.mem, missing.mem);
-    tasks_requesting_eviction.push_back(std::make_tuple(task_id, device_id));
+        current_time, static_graph.get_compute_task_name(compute_task_id), device_id, requested.mem,
+        missing.mem);
+    tasks_requesting_eviction.push_back(std::make_tuple(compute_task_id, device_id));
     return {false, nullptr};
   }
 
-  SPDLOG_DEBUG("Time:{} Reserving task {} on device {}", current_time, s.get_task_name(task_id),
-               device_id);
-
   // Update reserved resources
-  s.reserve_resources(task_id, device_id, requested);
+  s.reserve_resources(compute_task_id, device_id, requested);
   SPDLOG_DEBUG("Time:{} Task {} requested memsize {} resulting in reserved size of {} at device {}",
-               current_time, s.get_task_name(task_id), requested.mem,
-               s.get_device_manager().get_mem<TaskState::RESERVED>(device_id), device_id);
+               current_time, static_graph.get_compute_task_name(compute_task_id), requested.mem,
+               device_manager.get_mem<TaskState::RESERVED>(device_id), device_id);
 
   // Update data locations
-  const ComputeTask &task = s.task_manager.get_tasks().get_compute_task(task_id);
-  s.data_manager.read_update_reserved(task.get_unique(), device_id, current_time);
-  s.data_manager.write_update_reserved(task.get_write(), device_id, current_time);
+  s.data_manager.read_update_reserved(static_graph.get_unique(compute_task_id), device_id,
+                                      current_time);
+  s.data_manager.write_update_reserved(static_graph.get_write(compute_task_id), device_id,
+                                       current_time);
 
   // erase task_id from s.mapped_but_not_reserved_tasks
-  mapped.erase(mapped.find(task_id));
+  mapped.erase(mapped.find(compute_task_id));
 
-  const auto &newly_reservable_tasks = s.notify_reserved(task_id);
+  const auto &newly_reservable_tasks =
+      task_runtime.compute_notify_reserved(compute_task_id, device_id, current_time, static_graph);
 
   success_count += 1;
-  enqueue_data_tasks(task_id);
-  s.counts.count_reserved(task_id, device_id);
-  s.update_reserved_cost(task_id, device_id);
-  breakpoints.check_task_breakpoint(EventType::RESERVER, task_id);
+  enqueue_data_tasks(compute_task_id);
+  s.update_reserved_cost(compute_task_id, device_id);
+  breakpoints.check_task_breakpoint(EventType::RESERVER, compute_task_id);
 
   // Check if the reserved task is launchable, and if so, enqueue it
-  if (s.is_launchable(task_id)) {
-    SPDLOG_DEBUG("Time:{} Task {} is launchable", current_time, s.get_task_name(task_id));
-    push_launchable(task_id, device_id);
-  } else {
-    s.unlaunched_compute_tasks.push_back(task_id);
+  if (s.is_launchable(compute_task_id)) {
+    SPDLOG_DEBUG("Time:{} Task {} is launchable", current_time, s.get_task_name(compute_task_id));
+    push_launchable(compute_task_id, device_id);
   }
 
   return {true, &newly_reservable_tasks};
