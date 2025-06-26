@@ -1939,26 +1939,26 @@ struct DeviceTimeFeature : public StateFeature<DeviceTimeFeature> {
   }
 
   size_t getFeatureDimImpl() const {
-    return 3;
+    return 1;
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID device_id, Span output) const {
     const auto &s = this->state;
     const auto &device_manager = s.get_device_manager();
     auto mapped_time = static_cast<double>(s.costs.get_mapped_time(device_id));
-    auto reserved_time = static_cast<double>(s.costs.get_reserved_time(device_id));
-    auto launched_time = static_cast<double>(s.costs.get_launched_time(device_id));
+    // auto reserved_time = static_cast<double>(s.costs.get_reserved_time(device_id));
+    // auto launched_time = static_cast<double>(s.costs.get_launched_time(device_id));
 
     // Normalize by mean duration
     auto mean_duration = static_cast<double>(s.stats.duration_stats.mean);
-    auto std_duration = static_cast<double>(s.stats.duration_stats.stddev);
+    // auto std_duration = static_cast<double>(s.stats.duration_stats.stddev);
     mapped_time = guarded_divide(mapped_time, mean_duration);
-    reserved_time = guarded_divide(reserved_time, mean_duration);
-    launched_time = guarded_divide(launched_time, mean_duration);
+    // reserved_time = guarded_divide(reserved_time, mean_duration);
+    // launched_time = guarded_divide(launched_time, mean_duration);
 
     output[0] = mapped_time;
-    output[1] = reserved_time;
-    output[2] = launched_time;
+    // output[1] = reserved_time;
+    // output[2] = launched_time;
   }
 };
 

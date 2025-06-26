@@ -903,3 +903,19 @@ class VectorObserver(ExternalObserver):
         # Used for Depth Normalization
         output["tasks"][:, 0] -= output["tasks"][output["tasks"][:, -1] > 0, 0][0]
         output["tasks"][:, 0] /= graph.config.n - 1
+
+        # for k in range(1):
+        #     for i in range(4):
+        #         for j in range(4):
+        #             print(
+        #                 f"{output['tasks'][i * graph.config.n + j][k+1].item():.1f}",
+        #                 end=" ",
+        #             )
+        #         print("")
+        #     print("\n")
+        # print("------------------------------------------\n\n")
+
+    def device_observation(self, output: TensorDict):
+        super().device_observation(output)
+        # output["devices"][:, 0] /= output["devices"][:, 0].max()
+        # print(output["devices"][:, 0])

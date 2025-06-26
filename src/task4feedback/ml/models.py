@@ -111,6 +111,7 @@ class HeteroDataWrapper(nn.Module):
 @dataclass
 class FeatureDimConfig:
     task_feature_dim: int = 12
+    device_feature_dim: int = 12
 
     @staticmethod
     def from_observer(observer: ExternalObserver):
@@ -124,7 +125,7 @@ class FeatureDimConfig:
         return FeatureDimConfig(
             task_feature_dim=observer.task_feature_dim,
             # data_feature_dim=observer.data_feature_dim,
-            # device_feature_dim=observer.device_feature_dim,
+            device_feature_dim=observer.device_feature_dim,
             # task_data_edge_dim=observer.task_data_edge_dim,
             # task_device_edge_dim=observer.task_device_edge_dim,
             # task_task_edge_dim=observer.task_task_edge_dim,
@@ -649,27 +650,54 @@ class TaskTaskGAT1Layer(nn.Module):
 
 
 class OutputHead(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, logits=True):
+    """
+    Output head with configurable number of hidden layers.
+
+    Args:
+        input_dim (int): Dimensionality of input features.
+        hidden_dim (int): Dimensionality of each hidden layer.
+        output_dim (int): Dimensionality of the output.
+        num_layers (int): Number of hidden layers (default: 1).
+        logits (bool): If True, initializes output weights for logits (small uniform);
+                       otherwise uses Xavier uniform initialization.
+    """
+
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers=1, logits=True):
         super(OutputHead, self).__init__()
 
-        self.fc1 = layer_init(nn.Linear(input_dim, hidden_dim))
-        self.layer_norm1 = nn.LayerNorm(hidden_dim)
-        self.activation = nn.LeakyReLU(negative_slope=0.01)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        # Build hidden layers dynamically
+        self.hidden_layers = nn.ModuleList()
+        self.norm_layers = nn.ModuleList()
+        in_dim = input_dim
+        for _ in range(num_layers):
+            # Linear layer with custom initialization
+            self.hidden_layers.append(layer_init(nn.Linear(in_dim, hidden_dim)))
+            # Layer normalization after linear
+            self.norm_layers.append(nn.LayerNorm(hidden_dim))
+            in_dim = hidden_dim
 
+        # Final output layer
+        self.output_layer = nn.Linear(in_dim, output_dim)
+
+        # Initialize output layer weights/bias
         if logits:
-            # nn.init.normal_(self.fc2.weight, mean=0.0, std=0.01)
-            nn.init.uniform_(self.fc2.weight, a=-0.001, b=0.001)
-            nn.init.constant_(self.fc2.bias, 0.0)
+            nn.init.uniform_(self.output_layer.weight, a=-0.001, b=0.001)
+            nn.init.constant_(self.output_layer.bias, 0.0)
         else:
-            nn.init.xavier_uniform_(self.fc2.weight)
-            nn.init.constant_(self.fc2.bias, 0.0)
+            nn.init.xavier_uniform_(self.output_layer.weight)
+            nn.init.constant_(self.output_layer.bias, 0.0)
+
+        # Activation function
+        self.activation = nn.LeakyReLU(negative_slope=0.01)
 
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.layer_norm1(x)
-        x = self.activation(x)
-        x = self.fc2(x)
+        # Pass through each hidden block: Linear -> Norm -> Activation
+        for layer, norm in zip(self.hidden_layers, self.norm_layers):
+            x = layer(x)
+            x = norm(x)
+            x = self.activation(x)
+        # Final projection
+        x = self.output_layer(x)
         return x
 
 

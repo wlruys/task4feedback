@@ -65,9 +65,7 @@ class RuntimeEnv(EnvBase):
         self.randomize_interval = randomize_interval
         self.only_gpu = only_gpu
         if location_list is None:
-            location_list = range(
-                int(only_gpu), simulator_factory.graph_spec.max_devices
-            )
+            location_list = range(simulator_factory.graph_spec.max_devices)
         self.location_list = location_list
         # if self.only_gpu and (0 in self.location_list):
         #     print(
@@ -246,7 +244,7 @@ class RuntimeEnv(EnvBase):
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
             obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f} EFT vs Optimal: {self.EFT_baseline / self.optimal_time:.2f}   "
             )
 
         out = obs
@@ -342,6 +340,26 @@ class RuntimeEnv(EnvBase):
                 n_parts=4,
                 offset=1,
             )
+            current_loc = self.graph.get_cell_locations(as_dict=False)
+            labels = list(set(self.answer[0]))
+            best_mismatches = len(self.answer[0]) + 1
+            best_relabelled = None
+            for perm in itertools.permutations(labels):
+                # perm is a tuple like (2,1,3,4), meaning: send 1→2, 2→1, 3→3, 4→4.
+                # Build a small lookup table of size 5 so that lookup[a] == π(a):
+                lookup = np.zeros(5, dtype=int)
+                for a, mapped in zip(labels, perm):
+                    lookup[a] = mapped
+
+                # apply π to the entire answer array:
+                relabelled = lookup[self.answer[0]]
+                # count how many positions i have relabelled[i] != current_loc[i]
+                mismatches = np.count_nonzero(relabelled != current_loc)
+                if mismatches < best_mismatches:
+                    best_mismatches = mismatches
+                    best_relabelled = relabelled.copy()
+            self.graph.partitions[0] = best_relabelled.tolist()
+            self.answer, _, _ = self.graph.align_partitions()
             partition_mapper = LevelPartitionMapper(level_cell_mapping=self.answer)
             opt_sim = self.simulator.copy()
             opt_sim.external_mapper = partition_mapper
@@ -443,6 +461,13 @@ class EvalEnv(RuntimeEnv):
         global_task_id = candidate_workspace[0].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
 
+        # level = self.graph.task_to_level[global_task_id]
+        # cell_id = self.graph.task_to_cell[global_task_id]
+        # total_levels = self.graph.config.steps
+        # chosen_device = self.answer[level // (total_levels // len(self.answer))][
+        #     cell_id
+        # ]
+
         self.simulator.simulator.map_tasks(
             [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
         )
@@ -541,7 +566,7 @@ class RunningAvgEnv(RuntimeEnv):
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
             obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Took: {duration} | Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Took: {duration} Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f} EFT vs Optimal: {self.EFT_baseline / self.optimal_time:.2f}   "
             )
 
         out = obs
@@ -1102,7 +1127,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
             obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
             obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             print(
-                f"Took: {duration} | Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Took: {duration} Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f} EFT vs Optimal: {self.EFT_baseline / self.optimal_time:.2f}   "
             )
 
         out = obs

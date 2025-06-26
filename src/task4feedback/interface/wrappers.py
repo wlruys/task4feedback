@@ -1040,9 +1040,6 @@ class ExternalObserver:
         task_ids: Optional[torch.Tensor] = None,
     ):
         self.get_task_features(self.task_ids, output["tasks"])
-        self.get_device_features(
-            list(range(1, self.graph_spec.max_devices)), output["devices"]
-        )
         # print("Task attribute", output["nodes"]["tasks"]["attr"])
 
     # def data_observation(self, output: TensorDict):
@@ -1059,20 +1056,10 @@ class ExternalObserver:
     #         output["nodes"]["data"]["glb"][:count], output["nodes"]["data"]["attr"]
     #     )
 
-    # def device_observation(self, output: TensorDict):
-    #     assert (
-    #         False
-    #     ), "Device observation is not supported in the vector env implementation"
-    #     # print("Device observation")
-    #     count = output["nodes"]["devices"]["glb"].shape[0]
-    #     output["nodes"]["devices"]["count"][0] = count
-    #     output["nodes"]["devices"]["glb"][:count] = torch.arange(
-    #         count, dtype=torch.int64
-    #     )
-    #     self.get_device_features(
-    #         output["nodes"]["devices"]["glb"][:count],
-    #         output["nodes"]["devices"]["attr"],
-    #     )
+    def device_observation(self, output: TensorDict):
+        self.get_device_features(
+            torch.Tensor(range(1, self.graph_spec.max_devices)), output["devices"]
+        )
 
     # def task_task_observation(self, output: TensorDict):
     #     assert (
@@ -1159,10 +1146,10 @@ class ExternalObserver:
         self.candidate_observation(output)
 
         # Node observations (all nodes must be processed before edges)
-        self.task_observation(output=output)
+        self.task_observation(output)
         # print("Task observation", output["tasks"])
         # self.data_observation(output)
-        # self.device_observation(output)
+        self.device_observation(output)
 
         # print("Task attribute", output["nodes"]["tasks"]["attr"])
         # print("Data attribute", output["nodes"]["data"]["attr"])

@@ -40,7 +40,8 @@ class DynamicJacobiData(JacobiData):
         boundary_size = int(self.config.boundary_interior_ratio * interior_size)
 
         base_workload = self.config.start_workload
-        sum_data = []
+        interior_data = []
+        boundary_data = []
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
             # Create 2 data blocks per cell
@@ -51,10 +52,12 @@ class DynamicJacobiData(JacobiData):
                 new_data_size = int(interior_size * new_data_ratio)
 
                 self.add_block(DataKey(Cell(cell), i), size=new_data_size, location=0)
-                if new_data_size > 0:
-                    sum_data.append(new_data_size)
+                interior_data.append(new_data_size)
+                assert (
+                    new_data_size > 0 or i == self.config.steps
+                ), "Interior data size must be positive "
 
-            # Create 2 data blocks per edge
+            # Create 8 data blocks per edge
             for edge in self.geometry.cell_edges[cell]:
                 for i in range(self.config.steps + 1):
                     workload = self.workload.get_workload(i)[cell]
@@ -67,12 +70,17 @@ class DynamicJacobiData(JacobiData):
                         size=new_data_size,
                         location=0,
                     )
-                    if new_data_size > 0:
-                        sum_data.append(new_data_size)
+                    boundary_data.append(new_data_size)
+                    assert (
+                        new_data_size > 0 or i == self.config.steps
+                    ), "Boundary data size must be positive"
         self.data_stat = {
-            "average": sum(sum_data) / len(sum_data),
-            "minimum": min(sum_data),
-            "maximum": max(sum_data),
+            "interior_average": sum(interior_data) / len(interior_data),
+            "interior_minimum": min(interior_data),
+            "interior_maximum": max(interior_data),
+            "boundary_average": sum(boundary_data) / len(boundary_data),
+            "boundary_minimum": min(boundary_data),
+            "boundary_maximum": max(boundary_data),
         }
 
 

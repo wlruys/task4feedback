@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, List, Dict, Any, Tuple
 from torchrl.collectors import MultiSyncDataCollector, SyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
-from torchrl.data.replay_buffers.storages import LazyTensorStorage
+from torchrl.data.replay_buffers.storages import LazyTensorStorage, TensorStorage
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
@@ -22,6 +22,7 @@ import torch
 from torchrl.envs import set_exploration_type, ExplorationType
 from task4feedback.graphs.mesh.plot import *
 from tensordict.nn import TensorDictSequential as Sequential
+import tensordict
 
 
 @dataclass
@@ -753,33 +754,45 @@ def run_ppo_torchrl(
     wandb.finish()
 
 
-class Concat2Embeds(nn.Module):
+class ConcatCNNRNN(nn.Module):
     def forward(self, cnn_embed, rnn_embed):
         # assumes last dim is feature dim
         return torch.cat([cnn_embed, rnn_embed], dim=-1)
 
 
+class ConcatObservation(nn.Module):
+    def __init__(self, concat_progress: bool = False):
+        super().__init__()
+        self.concat_progress = concat_progress
+
+    def forward(self, cnn_embed, observation):
+        devices = observation["devices"]
+        devices = devices.flatten(start_dim=-2, end_dim=-1)
+        if self.concat_progress:
+            progress = observation["aux", "progress"].unsqueeze(-1)
+            return torch.cat([cnn_embed, devices, progress], dim=-1)
+        return torch.cat([cnn_embed, devices], dim=-1)
+
+
 class Concat3Embeds(nn.Module):
-    def forward(self, cnn_embed, rnn_embed, additional_embed):
-        # assumes last dim is feature dim
-        if len(additional_embed["aux", "progress"].shape) == 1:
-            return torch.cat(
-                [
-                    cnn_embed,
-                    rnn_embed,
-                    additional_embed["aux", "progress"].unsqueeze(1),
-                ],
-                dim=-1,
-            )
-        elif len(additional_embed["aux", "progress"].shape) == 2:
-            return torch.cat(
-                [
-                    cnn_embed,
-                    rnn_embed,
-                    additional_embed["aux", "progress"].unsqueeze(2),
-                ],
-                dim=-1,
-            )
+    def __init__(self, add_progress: bool = True, add_device: bool = False):
+        super().__init__()
+        self.add_progress = add_progress
+        self.add_device = add_device
+
+    def forward(self, cnn_embed, rnn_embed, observation):
+        parts = [cnn_embed, rnn_embed]
+
+        if self.add_device:
+            devices = observation["devices"]
+            devices = devices.flatten(start_dim=-2, end_dim=-1)
+            parts.append(devices)
+
+        if self.add_progress:
+            progress = observation["aux", "progress"].unsqueeze(-1)
+            parts.append(progress)
+
+        return torch.cat(parts, dim=-1)
 
 
 def run_rnn_ppo_torchrl(
@@ -811,51 +824,76 @@ def run_rnn_ppo_torchrl(
     else:
         raise ValueError(f"Invalid RNN model: {rnn_model}")
 
+    module_action_list = []
+
     module_action_cnn = TensorDictModule(
         _actor_cnn,
         in_keys=["observation"],
         out_keys=["actor_cnn_embed"],
     )
+    module_action_cnn_obs = TensorDictModule(
+        ConcatObservation(),
+        in_keys=["actor_cnn_embed", "observation"],
+        out_keys=["actor_cnn_concat"],
+    )
 
-    obs_size = module_action_cnn(env.reset())["actor_cnn_embed"].shape[-1]
+    obs_size = module_action_cnn_obs(module_action_cnn(env.reset()))[
+        "actor_cnn_concat"
+    ].shape[-1]
 
     print(
         "Module Action CNN Output Size:",
         module_action_cnn(env.reset())["actor_cnn_embed"].shape,
+        "Concat Size:",
+        module_action_cnn_obs(module_action_cnn(env.reset()))["actor_cnn_concat"].shape,
     )
+
     module_action_rnn = RNNModule(
         input_size=obs_size,
         hidden_size=rnn_hidden_size,
-        in_key="actor_cnn_embed",
+        in_key="actor_cnn_concat",
         out_key="actor_rnn_embed",
     )
-
-    module_action_concat = TensorDictModule(
-        Concat2Embeds(),
-        in_keys=["actor_cnn_embed", "actor_rnn_embed"],
-        out_keys=["actor_concat_embed"],
-    )
+    # module_action_concat = TensorDictModule(
+    #     Concat3Embeds(
+    #         add_progress=False,
+    #         add_device=env.simulator.observer.device_feature_dim != 0,
+    #     ),
+    #     in_keys=["actor_cnn_embed", "actor_rnn_embed", "observation"],
+    #     out_keys=["actor_concat_embed"],
+    # )
 
     module_action_fc = TensorDictModule(
         OutputHead(
-            rnn_hidden_size + obs_size,
+            rnn_hidden_size,
+            # + obs_size
+            # + env.simulator.observer.device_feature_dim
+            # * (actor_critic_base.n_devices - 1),
             actor_critic_base.layer_config.hidden_channels,
             actor_critic_base.n_devices - 1,
+            num_layers=1,
             logits=True,
         ),
-        in_keys=["actor_concat_embed"],
+        in_keys=["actor_rnn_embed"],
         out_keys=["logits"],
     )
 
     td_module_action = ProbabilisticActor(
+        # module=Sequential(
+        #     module_action_cnn, module_action_rnn, module_action_concat, module_action_fc
+        # ),
         module=Sequential(
-            module_action_cnn, module_action_rnn, module_action_concat, module_action_fc
+            module_action_cnn,
+            module_action_cnn_obs,
+            module_action_rnn,
+            module_action_fc,
         ),
         in_keys=["logits"],
         out_keys=["action"],
         distribution_class=torch.distributions.Categorical,
-        cache_dist=False,
+        cache_dist=True,
         return_log_prob=True,
+        default_interaction_type=tensordict.nn.InteractionType.RANDOM,
     )
 
     module_critic_cnn = TensorDictModule(
@@ -864,31 +902,55 @@ def run_rnn_ppo_torchrl(
         out_keys=["critic_cnn_embed"],
     )
 
+    module_critic_cnn_obs = TensorDictModule(
+        ConcatObservation(concat_progress=True),
+        in_keys=["critic_cnn_embed", "observation"],
+        out_keys=["critic_cnn_concat"],
+    )
+
+    obs_size = module_critic_cnn_obs(module_critic_cnn(env.reset()))[
+        "critic_cnn_concat"
+    ].shape[-1]
+    print(
+        "Module Critic CNN Output Size:",
+        module_critic_cnn(env.reset())["critic_cnn_embed"].shape,
+        "Concat Size:",
+        module_critic_cnn_obs(module_critic_cnn(env.reset()))[
+            "critic_cnn_concat"
+        ].shape,
+    )
     module_critic_rnn = RNNModule(
         input_size=obs_size,
         hidden_size=rnn_hidden_size,
-        in_key="critic_cnn_embed",
+        in_key="critic_cnn_concat",
         out_key="critic_rnn_embed",
     )
 
-    module_critic_concat = TensorDictModule(
-        Concat3Embeds(),
-        in_keys=["critic_cnn_embed", "critic_rnn_embed", "observation"],
-        out_keys=["critic_concat_embed"],
-    )
+    # module_critic_concat = TensorDictModule(
+    #     Concat3Embeds(
+    #         add_progress=True, add_device=env.simulator.observer.device_feature_dim != 0
+    #     ),
+    #     in_keys=["critic_cnn_embed", "critic_rnn_embed", "observation"],
+    #     out_keys=["critic_concat_embed"],
+    # )
 
     module_critic_fc = TensorDictModule(
         OutputHead(
-            rnn_hidden_size + obs_size + 1,
+            rnn_hidden_size,
+            # + obs_size
+            # + 1
+            # + env.simulator.observer.device_feature_dim
+            # * (actor_critic_base.n_devices - 1),
             actor_critic_base.layer_config.hidden_channels,
             1,  # Single value output
+            num_layers=1,
             logits=False,
         ),
-        in_keys=["critic_concat_embed"],
+        in_keys=["critic_rnn_embed"],
         out_keys=["state_value"],
     )
     td_critic_module = Sequential(
-        module_critic_cnn, module_critic_rnn, module_critic_concat, module_critic_fc
+        module_critic_cnn, module_critic_cnn_obs, module_critic_rnn, module_critic_fc
     )
 
     def make_env():
@@ -897,6 +959,8 @@ def run_rnn_ppo_torchrl(
         env.append_transform(module_critic_rnn.make_tensordict_primer())
         return env
 
+    print(td_module_action)
+    print(td_critic_module)
     td_module_action = td_module_action.to(config.train_device)
     td_critic_module = td_critic_module.to(config.train_device)
     train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
