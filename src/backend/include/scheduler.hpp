@@ -261,6 +261,18 @@ public:
     return n_data_completed_tasks;
   }
 
+  [[nodiscard]] std::size_t n_unlaunched_reserved() const {
+    return n_reserved_tasks - n_launched_tasks;
+  }
+
+  [[nodiscard]] std::size_t n_unlaunched_mapped() const {
+    return n_mapped_tasks - n_launched_tasks;
+  }
+
+  [[nodiscard]] std::size_t n_unreserved_mapped() const {
+    return n_mapped_tasks - n_reserved_tasks;
+  }
+
   [[nodiscard]] std::size_t n_active(devid_t device_id) const {
     return per_device_counts[device_id];
   }

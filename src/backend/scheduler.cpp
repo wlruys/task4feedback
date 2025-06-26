@@ -328,8 +328,8 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
 
     // Notify dependents and enqueue newly reservable tasks
 
-    // spdlog::debug("Newly reservable tasks: {}",
-    // newly_reservable_tasks.size());
+    // TODO(wlr): Outer scope should own newly_reservable_tasks buffer NOT the inner scope
+    // (notify_reserved)
     if (newly_reservable_tasks != nullptr) {
       if (!newly_reservable_tasks->empty()) {
         push_reservable(*newly_reservable_tasks);
@@ -345,28 +345,28 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
     event_manager.create_event(EventType::RESERVER, reserver_time);
     return;
   }
+
+  // NOTE(wlr): Shouldn't eviction pause new tasks from being reserved? We can just wait for current
+  // tasks to complete?
+
   if (!tasks_requesting_eviction.empty()) {
     // Should not start eviction if there are tasks not launchable due to data movement.
-    if (s.unlaunched_compute_tasks.empty()) {
+    if (s.counts.unlaunched_reserved() == 0) {
       SPDLOG_DEBUG("Time:{} Eviction will start for {} tasks", current_time,
                    tasks_requesting_eviction.size());
       this->eviction_state = EvictionState::WAITING_FOR_COMPLETION; // This should be set to false
                                                                     // after the eviction is over
     } else {
       SPDLOG_DEBUG("Time:{} Eviction will start after launching {} tasks", current_time,
-                   s.unlaunched_compute_tasks.size());
+                   s.counts.unlaunched_reserved());
     }
-    // timecount_t launcher_time = s.global_time + TIME_TO_LAUNCH;
-    // // The next event is a eviction event
-    // event_manager.create_event(EventType::EVICTOR, launcher_time);
   }
-  // else {
-  // The next event is a launching event
+
   timecount_t launcher_time = current_time + TIME_TO_LAUNCH;
   event_manager.create_event(EventType::LAUNCHER, launcher_time);
-  // }
 }
 
+// TODO(wlr): Start from here.
 bool Scheduler::launch_compute_task(taskid_t task_id, devid_t device_id,
                                     EventManager &event_manager) {
   ZoneScoped;
