@@ -1579,6 +1579,50 @@ struct ReadDataLocationFeature : public StateFeature<ReadDataLocationFeature> {
   }
 };
 
+struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
+  PrevReadSizeFeature(const SchedulerState &state)
+      : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 3;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = data_manager.get_data();
+    double max_size = static_cast<double>(state.stats.total_read_stats.max);
+
+    task_id -= 16;
+    int i = 0;
+    while (task_id >= 0 && i < 3) {
+      const ComputeTask &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
+      double total_read = static_cast<double>(data.get_total_size(task.get_read()));
+      output[i] = guarded_divide(total_read, max_size);
+      task_id -= 16;
+      i++;
+    }
+  }
+};
+
+struct TagCandidateFeature : public StateFeature<TagCandidateFeature> {
+  TagCandidateFeature(const SchedulerState &state)
+      : StateFeature<TagCandidateFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1; // Exclude CPU
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    if (task_id == state.current_candidate) {
+      output[0] = 1.0; // Current candidate
+    } else {
+      output[0] = 0.0; // Not current candidate
+    }
+  }
+};
+
 struct TagTaskFeature : public StateFeature<TagTaskFeature> {
   // Generally task tags are categorical, but currently this is a standin for location within the
   // subgraph
@@ -1959,6 +2003,36 @@ struct DeviceTimeFeature : public StateFeature<DeviceTimeFeature> {
     output[0] = mapped_time;
     // output[1] = reserved_time;
     // output[2] = launched_time;
+  }
+};
+
+struct DeviceReadDataFeature : public StateFeature<DeviceReadDataFeature> {
+  DeviceReadDataFeature(const SchedulerState &state)
+      : StateFeature<DeviceReadDataFeature>(state, NodeType::DEVICE) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID device_id, Span output) const {
+    const ComputeTask &task =
+        state.get_task_manager().get_tasks().get_compute_task(state.current_candidate);
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = data_manager.get_data();
+    const auto &devices = state.get_device_manager().get_devices();
+    double max_size = static_cast<double>(state.stats.total_read_stats.max);
+    double total_read = static_cast<double>(data.get_total_size(task.get_read()));
+    output[0] = guarded_divide(total_read, max_size);
+    // for (devid_t i = 1; i < devices.size(); i++) {
+    //   // output[i - 1] = -guarded_divide(total_read, max_size);
+    //   for (auto data_id : task.get_read()) {
+    //     if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_id), i)) {
+    //       auto data_size = static_cast<double>(data.get_size(data_id));
+    //       output[i - 1] += guarded_divide(data_size, max_size);
+    //     }
+    //   }
+    // }
   }
 };
 

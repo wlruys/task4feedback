@@ -384,6 +384,7 @@ public:
   TaskCountInfo counts;
   TaskCostInfo costs;
   GraphStats stats;
+  taskid_t current_candidate = 0;
 
   SchedulerState(SchedulerInput &input)
       : task_manager(TaskManager(input.tasks, input.task_noise)),

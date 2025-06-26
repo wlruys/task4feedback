@@ -281,6 +281,8 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_feature<TagTaskFeature>(m, "TagTaskFeature");
   bind_state_feature<DepthTaskFeature>(m, "DepthTaskFeature");
   bind_state_feature<ReadDataLocationFeature>(m, "ReadDataLocationFeature");
+  bind_state_feature<PrevReadSizeFeature>(m, "PrevReadSizeFeature");
+  bind_state_feature<TagCandidateFeature>(m, "TagCandidateFeature");
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");
@@ -297,6 +299,7 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_feature<DeviceTimeFeature>(m, "DeviceTimeFeature");
   bind_state_feature<DeviceIDFeature>(m, "DeviceIDFeature");
   bind_state_feature<DeviceArchitectureFeature>(m, "DeviceArchitectureFeature");
+  bind_state_feature<DeviceReadDataFeature>(m, "DeviceReadDataFeature");
 
   // Task Task Features
   bind_int_edge_feature<EmptyTaskTaskFeature>(m, "EmptyTaskTaskFeature");

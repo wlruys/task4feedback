@@ -663,7 +663,7 @@ TaskIDList &Scheduler::get_mappable_candidates() {
 
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
-
+  state.current_candidate = top_k_tasks[0];
   task_buffer.insert(task_buffer.end(), top_k_tasks.begin(), top_k_tasks.end());
   return task_buffer;
 }

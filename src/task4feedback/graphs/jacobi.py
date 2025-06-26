@@ -236,7 +236,6 @@ class JacobiGraph(ComputeDataGraph):
                 self.add_write_data(task_id, write_blocks)
                 if i > 0 and retire_data:
                     self.add_retire_data(task_id, prev_interiors[(cell, i - 1)])
-
         self.fill_data_flow_dependencies()
 
     def __init__(self, geometry: Geometry, config: JacobiConfig):
@@ -853,6 +852,7 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
         # task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
         # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
         task_feature_factory.add(fastsim.ReadDataLocationFeature)
+        task_feature_factory.add(fastsim.PrevReadSizeFeature)
         task_feature_factory.add(
             fastsim.EmptyTaskFeature, 1
         )  # last for whether it is candidate or not
@@ -861,7 +861,8 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
         # device_feature_factory.add(fastsim.DeviceIDFeature)
         # device_feature_factory.add(fastsim.DeviceMemoryFeature)
-        device_feature_factory.add(fastsim.DeviceTimeFeature)
+        # device_feature_factory.add(fastsim.DeviceTimeFeature)
+        # device_feature_factory.add(fastsim.DeviceReadDataFeature)
 
         super().__init__(
             spec,
