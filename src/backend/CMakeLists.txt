@@ -12,11 +12,9 @@ target_sources(backend
       FILES
         include/action.hpp
         include/breakpoints.hpp
-        include/data_manager.hpp
-        include/device_manager.hpp
-        include/communication_manager.hpp
+        include/data.hpp
         include/devices.hpp
-        include/event_manager.hpp
+        include/communication.hpp
         include/events.hpp
         include/iterator.hpp
         include/macros.hpp

@@ -1,4 +1,4 @@
-#include "communication_manager.hpp"
+#include "communication.hpp"
 #include "nbh.hpp"
 
 namespace nb = nanobind;

@@ -1,5 +1,4 @@
 #pragma once
-#include "device_manager.hpp"
 #include "devices.hpp"
 #include "macros.hpp"
 #include "resources.hpp"

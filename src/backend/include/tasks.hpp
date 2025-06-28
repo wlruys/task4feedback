@@ -25,6 +25,34 @@
 #define EXPECTED_EVICTION_TASKS 1000
 #define INITIAL_TASKS_SIZE 1000
 
+enum class DeviceType : int8_t {
+  NONE = -1,
+  CPU = 0,
+  GPU = 1
+};
+constexpr std::size_t num_device_types = 2;
+
+inline auto to_string(const DeviceType &arch) {
+  switch (arch) {
+  case DeviceType::NONE:
+    return "NONE";
+    break;
+  case DeviceType::CPU:
+    return "CPU";
+    break;
+  case DeviceType::GPU:
+    return "GPU";
+    break;
+  default:
+    return "UNKNOWN";
+  }
+}
+
+inline std::ostream &operator<<(std::ostream &os, const DeviceType &arch) {
+  os << to_string(arch);
+  return os;
+}
+
 template <typename T> inline std::vector<T> as_vector(ankerl::unordered_dense::set<T> &set) {
   std::vector<T> vec;
   vec.reserve(set.size());

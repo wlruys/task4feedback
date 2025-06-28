@@ -1,8 +1,7 @@
 #pragma once
 #include "action.hpp"
-#include "communication_manager.hpp"
+#include "communication.hpp"
 #include "devices.hpp"
-#include "event_manager.hpp"
 #include "events.hpp"
 #include "scheduler.hpp"
 #include "settings.hpp"

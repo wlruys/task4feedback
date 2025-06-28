@@ -1,7 +1,6 @@
 #pragma once
 
-#include "communication_manager.hpp"
-#include "device_manager.hpp"
+#include "communication.hpp"
 #include "devices.hpp"
 #include "resources.hpp"
 #include "settings.hpp"

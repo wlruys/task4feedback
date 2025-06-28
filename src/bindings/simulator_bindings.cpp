@@ -1,6 +1,6 @@
 #include "action.hpp"
-#include "communication_manager.hpp"
-#include "data_manager.hpp"
+#include "communication.hpp"
+#include "data.hpp"
 #include "device_manager.hpp"
 #include "devices.hpp"
 #include "nbh.hpp"
