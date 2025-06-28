@@ -95,239 +95,6 @@ public:
   }
 };
 
-class CommunicationNoise {
-protected:
-  unsigned int seed = 0;
-  std::reference_wrapper<Topology> topology;
-  ankerl::unordered_dense::map<CommunicationRequest, CommunicationStats, CommunicationRequest::Hash>
-      record;
-  mutable std::mt19937 gen;
-
-  struct request_high_precision {
-    uint64_t data_task_id = 0;
-    uint64_t source = 0;
-    uint64_t destination = 0;
-    uint64_t size = 0;
-
-    request_high_precision() = default;
-
-    request_high_precision(const CommunicationRequest &req) {
-      data_task_id = req.data_task_id;
-      source = req.source;
-      destination = req.destination;
-      size = req.size;
-    }
-  };
-
-  struct stats_high_precision {
-    int64_t latency = 0;
-    int64_t bandwidth = 0;
-
-    stats_high_precision() = default;
-
-    stats_high_precision(const CommunicationStats &stats) {
-      latency = stats.latency;
-      bandwidth = stats.bandwidth;
-    }
-  };
-
-  [[nodiscard]] virtual CommunicationStats sample_stats(const CommunicationRequest &req) const {
-    auto bw = topology.get().get_bandwidth(req.source, req.destination);
-    auto latency = topology.get().get_latency(req.source, req.destination);
-    return {bw, latency};
-  };
-
-  static uint64_t
-  calculate_checksum(const ankerl::unordered_dense::map<CommunicationRequest, CommunicationStats,
-                                                        CommunicationRequest::Hash> &data) {
-    const uint64_t prime = 0x100000001B3ull; // FNV prime
-    uint64_t hash = 0xcbf29ce484222325ull;   // FNV offset basis
-
-    // Store all data in a vector, sort by request
-    std::vector<std::pair<CommunicationRequest, CommunicationStats>> sdata(data.begin(),
-                                                                           data.end());
-
-    std::sort(sdata.begin(), sdata.end(),
-              [](const auto &a, const auto &b) { return a.first < b.first; });
-
-    for (const auto &[req, stats] : sdata) {
-      hash ^= static_cast<uint64_t>(req.source);
-      hash *= prime;
-      hash ^= static_cast<uint64_t>(req.destination);
-      hash *= prime;
-      hash ^= static_cast<uint64_t>(req.data_task_id);
-      hash *= prime;
-      hash ^= static_cast<uint64_t>(req.size);
-      hash *= prime;
-
-      // Hash CommunicationStats
-      const char *stats_data = reinterpret_cast<const char *>(&stats);
-      for (size_t i = 0; i < sizeof(CommunicationStats); ++i) {
-        hash ^= static_cast<uint64_t>(stats_data[i]);
-        hash *= prime;
-      }
-    }
-
-    return hash;
-  }
-
-public:
-  static constexpr uint32_t FILE_VERSION = 1;
-  static constexpr size_t BUFFER_SIZE = 8192;
-
-  CommunicationNoise(Topology &topology_, unsigned int seed_ = 0)
-      : seed(seed_), gen(seed_), topology(topology_) {
-  }
-
-  [[nodiscard]] CommunicationStats get(const CommunicationRequest &req) {
-    auto it = record.find(req);
-    if (it != record.end()) {
-      return it->second;
-    }
-    set(req, sample_stats(req));
-    return record[req];
-  }
-
-  void set(const CommunicationRequest &req, const CommunicationStats &stats) {
-    record[req] = stats;
-  }
-
-  void set(ankerl::unordered_dense::map<CommunicationRequest, CommunicationStats,
-                                        CommunicationRequest::Hash>
-               record_) {
-    record = std::move(record_);
-  }
-
-  [[nodiscard]] CommunicationStats operator()(const CommunicationRequest &req) {
-    return get(req);
-  }
-
-  void operator()(const CommunicationRequest &req, const CommunicationStats &stats) {
-    set(req, stats);
-  }
-
-  void operator()(const CommunicationRequest &req, timecount_t latency, mem_t bandwidth) {
-    set(req, {latency, bandwidth});
-  }
-
-  void dump_to_binary(const std::string &filename) const {
-
-    std::ofstream file(filename, std::ios::binary);
-    if (!file) {
-      throw std::runtime_error("Unable to open file for writing: " + filename);
-    }
-
-    // Set up buffering
-    std::array<char, BUFFER_SIZE> buffer;
-    file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
-
-    // Write header
-    file.write("COMM", 4);
-    file.write(reinterpret_cast<const char *>(&FILE_VERSION), sizeof(FILE_VERSION));
-
-    // Write data size
-    uint64_t data_size = record.size();
-    file.write(reinterpret_cast<const char *>(&data_size), sizeof(data_size));
-
-    // Write data
-    for (const auto &[lreq, lstats] : record) {
-      request_high_precision req(lreq);
-      stats_high_precision stats(lstats);
-      file.write(reinterpret_cast<const char *>(&req), sizeof(request_high_precision));
-      file.write(reinterpret_cast<const char *>(&stats), sizeof(stats_high_precision));
-    }
-
-    // Write checksum
-    uint64_t checksum = calculate_checksum(record);
-    file.write(reinterpret_cast<const char *>(&checksum), sizeof(checksum));
-
-    if (file.fail()) {
-      throw std::runtime_error("Error writing to file: " + filename);
-    }
-  }
-
-  void load_from_binary(const std::string &filename) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file) {
-      throw std::runtime_error("Unable to open file for reading: " + filename);
-    }
-
-    // Set up buffering
-    std::array<char, BUFFER_SIZE> buffer;
-    file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
-
-    // Read and verify header
-    std::array<char, 4> header;
-    file.read(header.data(), header.size());
-    if (std::string(header.data(), header.size()) != "COMM") {
-      throw std::runtime_error("Invalid file format");
-    }
-
-    uint32_t version;
-    file.read(reinterpret_cast<char *>(&version), sizeof(version));
-    if (version != FILE_VERSION) {
-      throw std::runtime_error("Unsupported file version");
-    }
-
-    // Read data size
-    uint64_t data_size;
-    file.read(reinterpret_cast<char *>(&data_size), sizeof(data_size));
-
-    // Read data
-    record.clear();
-    for (uint64_t i = 0; i < data_size; ++i) {
-      request_high_precision hreq;
-      stats_high_precision hstats;
-      file.read(reinterpret_cast<char *>(&hreq), sizeof(request_high_precision));
-      file.read(reinterpret_cast<char *>(&hstats), sizeof(stats_high_precision));
-      CommunicationRequest req = {
-          static_cast<taskid_t>(hreq.data_task_id), static_cast<devid_t>(hreq.source),
-          static_cast<devid_t>(hreq.destination), static_cast<mem_t>(hreq.size)};
-      CommunicationStats stats = {static_cast<timecount_t>(hstats.latency),
-                                  static_cast<mem_t>(hstats.bandwidth)};
-      record[req] = stats;
-    }
-
-    // Read and verify checksum
-    uint64_t stored_checksum;
-    file.read(reinterpret_cast<char *>(&stored_checksum), sizeof(stored_checksum));
-    uint64_t calculated_checksum = calculate_checksum(record);
-
-    if (stored_checksum != calculated_checksum) {
-      throw std::runtime_error("Checksum mismatch - file may be corrupted");
-    }
-
-    if (file.fail()) {
-      throw std::runtime_error("Error reading from file: " + filename);
-    }
-  }
-
-  void clear() {
-    record.clear();
-  }
-};
-
-class UniformCommunicationNoise : public CommunicationNoise {
-protected:
-  CommunicationStats sample_stats(const CommunicationRequest &req) const override {
-    auto mean_bw = topology.get().get_bandwidth(req.source, req.destination);
-    auto mean_latency = topology.get().get_latency(req.source, req.destination);
-
-    std::uniform_int_distribution<timecount_t> latency_dist(mean_latency - mean_latency / 2,
-                                                            mean_latency + mean_latency / 2);
-
-    std::uniform_int_distribution<mem_t> bandwidth_dist(mean_bw - mean_bw / 2,
-                                                        mean_bw + mean_bw / 2);
-
-    return {latency_dist(gen), bandwidth_dist(gen)};
-  }
-
-public:
-  UniformCommunicationNoise(Topology &topology_, unsigned int seed_ = 0)
-      : CommunicationNoise(topology_, seed_) {
-  }
-};
-
 // constant array of device types to max copies
 // TODO(wlr): Should be a property of the device thats configurable at runtime
 // but I'm lazy rn and don't want to change the interface
@@ -342,40 +109,39 @@ struct SourceRequest {
 
 class CommunicationManager {
   devid_t num_devices = 0;
-  std::reference_wrapper<Devices> devices;
-  std::reference_wrapper<Topology> topology;
-  std::reference_wrapper<CommunicationNoise> noise;
   std::vector<copy_t> incoming;
   std::vector<copy_t> outgoing;
   std::vector<copy_t> active_links;
+  std::vector<copy_t> max_total_copies;
   std::vector<double> bandwidth_reciprocals;
 
-  [[nodiscard]] inline int8_t get_device_type_idx(devid_t device_id) const {
-    return static_cast<int8_t>(devices.get().get_type(device_id));
-  }
-
-public:
-  CommunicationManager(Topology &topology_, Devices &devices_, CommunicationNoise &noise_)
-      : num_devices(devices_.size()), devices(devices_), topology(topology_), noise(noise_),
-        incoming(devices_.size(), 0), outgoing(devices_.size(), 0),
-        active_links(devices_.size() * devices_.size(), 0) {
-    precompute_reciprocals();
-  }
-
-  void precompute_reciprocals() {
+  void precompute_reciprocals(const Topology &topology) {
     bandwidth_reciprocals.resize(num_devices * num_devices);
-    const auto &bandwidth = topology.get().bandwidths;
+    const auto &bandwidth = topology.bandwidths;
     for (size_t i = 0; i < bandwidth.size(); ++i) {
       bandwidth_reciprocals[i] = 1.0 / static_cast<double>(bandwidth[i]);
     }
   }
 
+  void precompute_max_copies(const Devices &devices) {
+    max_total_copies.resize(num_devices);
+    for (devid_t i = 0; i < num_devices; ++i) {
+      const auto device = devices.get_device(i);
+      max_total_copies[i] = device.get_max_copy();
+    }
+  }
+
+public:
+  CommunicationManager(const Topology &topology_, const Devices &devices_)
+      : num_devices(devices_.size()), incoming(devices_.size(), 0), outgoing(devices_.size(), 0),
+        active_links(devices_.size() * devices_.size(), 0) {
+    precompute_reciprocals(topology_);
+    precompute_max_copies(devices_);
+  }
+
   CommunicationManager(const CommunicationManager &c) = default;
 
   CommunicationManager &operator=(const CommunicationManager &c) = default;
-
-  void initialize() {
-  }
 
   inline void increase_incoming(devid_t device_id) {
     incoming[device_id] += 1;
@@ -415,7 +181,7 @@ public:
   }
 
   [[nodiscard]] inline copy_t get_active(devid_t src, devid_t dst) const {
-    return active_links[src * devices.get().size() + dst];
+    return active_links[src * num_devices + dst];
   }
 
   [[nodiscard]] inline copy_t get_incoming(devid_t device_id) const {
@@ -431,23 +197,25 @@ public:
   }
 
   [[nodiscard]] inline bool is_device_available(devid_t device_id) const {
-    auto used = get_total_usage(device_id);
-    auto available = max_total_copies[get_device_type_idx(device_id)];
+    const auto used = get_total_usage(device_id);
+    const auto available = max_total_copies[device_id];
     return used <= available;
   }
 
-  [[nodiscard]] inline bool is_link_available(devid_t src, devid_t dst) const {
-    auto used = get_active(src, dst);
-    auto available = topology.get().get_max_connections(src, dst);
+  [[nodiscard]] inline bool is_link_available(const Topology &topology, devid_t src,
+                                              devid_t dst) const {
+    const auto used = get_active(src, dst);
+    const auto available = topology.get_max_connections(src, dst);
     return used <= available;
   }
 
-  [[nodiscard]] inline bool check_connection(devid_t src, devid_t dst) const {
+  [[nodiscard]] inline bool check_connection(const Topology &topology, devid_t src,
+                                             devid_t dst) const {
     // Early return for same device
     if (src == dst)
       return true;
 
-    if (!is_link_available(src, dst)) {
+    if (!is_link_available(topology, src, dst)) {
       return false;
     }
 
@@ -455,37 +223,24 @@ public:
     return is_device_available(src) && is_device_available(dst);
   }
 
-  [[nodiscard]] mem_t get_bandwidth(devid_t src, devid_t dst) const {
-    return topology.get().get_bandwidth(src, dst);
+  [[nodiscard]] mem_t get_bandwidth(const Topology &topology, devid_t src, devid_t dst) const {
+    return topology.get_bandwidth(src, dst);
   }
 
-  [[nodiscard]] mem_t get_available_bandwidth(devid_t src, devid_t dst) const {
-    return get_bandwidth(src, dst);
+  [[nodiscard]] mem_t get_available_bandwidth(const Topology &topology, devid_t src,
+                                              devid_t dst) const {
+    return get_bandwidth(topology, src, dst);
   }
 
-  [[nodiscard]] timecount_t time_to_transfer(taskid_t data_task_id, mem_t size, devid_t src,
-                                             devid_t dst) const {
-
-    if (src == dst || size == 0) {
-      return 0;
-    }
-
-    auto [latency, bandwidth] = noise.get().get({data_task_id, src, dst, size});
-    const auto bw = static_cast<double>(bandwidth);
-    const auto s = static_cast<double>(size);
-    timecount_t time = latency + static_cast<timecount_t>(s / bw);
-    return time;
-  }
-
-  [[nodiscard]] inline timecount_t ideal_time_to_transfer(mem_t size, devid_t src,
-                                                          devid_t dst) const {
+  [[nodiscard]] inline timecount_t ideal_time_to_transfer(const Topology &topology, mem_t size,
+                                                          devid_t src, devid_t dst) const {
 
     if (src == dst || size == 0) {
       return 0;
     }
 
     const auto bw_r = bandwidth_reciprocals[src * num_devices + dst];
-    const auto latency = static_cast<timecount_t>(topology.get().get_latency(src, dst));
+    const auto latency = static_cast<timecount_t>(topology.get_latency(src, dst));
     const auto s = static_cast<double>(size);
     auto time = latency + static_cast<timecount_t>(s * bw_r);
 
@@ -496,70 +251,16 @@ public:
   }
 
   [[nodiscard]] SourceRequest
-  get_best_available_source(devid_t dst, const DeviceIDList &possible_sources) const {
-    // Return the source with the highest bandwidth
-    // If no source is available, return found=false
-
-    bool found = false;
-    devid_t best_source = 0;
-    mem_t best_bandwidth = 0;
-    for (auto src : possible_sources) {
-
-      if (src == dst) {
-        return {true, src};
-      }
-
-      if (check_connection(src, dst)) {
-        auto bandwidth = get_available_bandwidth(src, dst);
-        if (bandwidth > best_bandwidth) {
-          best_bandwidth = bandwidth;
-          best_source = src;
-          found = true;
-        }
-      }
-    }
-    return {found, best_source};
-  }
-
-  // [[nodiscard]] SourceRequest
-  // get_best_available_source(devid_t dst, std::span<const int8_t> possible_source_flags) const {
-  //   // Return the source with the highest bandwidth
-  //   // If no source is available, return found=false
-
-  //   bool found = false;
-  //   devid_t best_source = 0;
-  //   mem_t best_bandwidth = 0;
-  //   for (devid_t src = 0; src < possible_source_flags.size(); ++src) {
-  //     if (possible_source_flags[src] == 0) {
-  //       continue; // Skip invalid sources
-  //     }
-
-  //     if (src == dst) {
-  //       return {true, src};
-  //     }
-
-  //     if (check_connection(src, dst)) {
-  //       auto bandwidth = get_available_bandwidth(src, dst);
-  //       if (bandwidth > best_bandwidth) {
-  //         best_bandwidth = bandwidth;
-  //         best_source = src;
-  //         found = true;
-  //       }
-  //     }
-  //   }
-  //   return {found, best_source};
-  // }
-
-  [[nodiscard]] SourceRequest
-  get_best_available_source(devid_t dst, std::span<const int8_t> possible_source_flags) const {
+  get_best_available_source(const Topology &topology, devid_t dst,
+                            std::span<const int8_t> possible_source_flags) const {
     // Early return for local data
     if (possible_source_flags[dst] != 0) {
       return {true, dst};
     }
 
-    const auto *bandwidth_data = topology.get().bandwidths.data();
+    const auto *bandwidth_data = topology.bandwidths.data();
     const auto *active_links_data = active_links.data();
-    const auto *max_links_data = topology.get().links.data();
+    const auto *max_links_data = topology.links.data();
 
     devid_t best_source = 0;
     mem_t best_bandwidth = 0;
@@ -571,8 +272,9 @@ public:
         continue;
       }
 
-      const auto used_links = active_links_data[src * num_devices + dst];
-      const auto max_links = max_links_data[src * num_devices + dst];
+      const std::size_t index = src * num_devices + dst;
+      const auto used_links = active_links_data[index];
+      const auto max_links = max_links_data[index];
 
       if (used_links > max_links) {
         continue;
@@ -581,14 +283,14 @@ public:
       // Inline device availability check
       const auto src_usage = incoming[src] + outgoing[src];
       const auto dst_usage = incoming[dst] + outgoing[dst];
-      const auto src_limit = max_total_copies[get_device_type_idx(src)];
-      const auto dst_limit = max_total_copies[get_device_type_idx(dst)];
+      const auto src_limit = max_total_copies[src];
+      const auto dst_limit = max_total_copies[dst];
 
       if (src_usage > src_limit || dst_usage > dst_limit) {
         continue;
       }
 
-      const auto bandwidth = bandwidth_data[src * num_devices + dst];
+      const auto bandwidth = bandwidth_data[index];
 
       const bool is_better = bandwidth > best_bandwidth;
       best_bandwidth = is_better ? bandwidth : best_bandwidth;
@@ -599,7 +301,7 @@ public:
     return {found, best_source};
   }
 
-  [[nodiscard]] SourceRequest get_best_source(devid_t dst,
+  [[nodiscard]] SourceRequest get_best_source(const Topology &topology, devid_t dst,
                                               std::span<const int8_t> possible_source_flags) const {
     // Return the source with the highest bandwidth
     // If no source is available, return found=false
@@ -617,31 +319,7 @@ public:
         return {true, src};
       }
 
-      auto bandwidth = get_available_bandwidth(src, dst);
-      if (bandwidth > best_bandwidth) {
-        best_bandwidth = bandwidth;
-        best_source = src;
-        found = true;
-      }
-    }
-    return {found, best_source};
-  }
-
-  [[nodiscard]] SourceRequest get_best_source(devid_t dst,
-                                              const DeviceIDList &possible_source) const {
-    // Return the source with the highest bandwidth
-    // If no source is available, return found=false
-
-    bool found = false;
-    devid_t best_source = 0;
-    mem_t best_bandwidth = 0;
-
-    for (auto src : possible_source) {
-      if (src == dst) {
-        return {true, src};
-      }
-
-      auto bandwidth = get_available_bandwidth(src, dst);
+      auto bandwidth = get_available_bandwidth(topology, src, dst);
       if (bandwidth > best_bandwidth) {
         best_bandwidth = bandwidth;
         best_source = src;

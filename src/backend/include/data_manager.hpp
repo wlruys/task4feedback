@@ -108,7 +108,7 @@ public:
     name_to_id[data_names.at(id)] = id;
   }
 
-  dataid_t get_id(const std::string &name) {
+  dataid_t get_id(const std::string &name) const {
     return name_to_id.at(name);
   }
 
@@ -145,7 +145,7 @@ public:
     return sizes[id];
   }
 
-  [[nodiscard]] mem_t get_total_size(const std::vector<dataid_t> &ids) const {
+  [[nodiscard]] mem_t get_total_size(const std::span<const dataid_t> ids) const {
     mem_t total_size = 0;
     for (const auto &id : ids) {
       total_size += sizes[id];
@@ -400,17 +400,31 @@ struct MovementStatus {
 };
 
 class LRU_manager {
+private:
+  mem_t evicted_size = 0;
+  std::size_t n_devices_;
+  // For each device:
+  //  - a list maintaining LRU (front) → MRU (back)
+  //  - a map from data_id → its position in that list
+  //  - a map from data_id → its mem_size
+  std::vector<std::list<dataid_t>> lru_lists_;
+  std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<dataid_t>::iterator>>
+      position_maps_;
+  std::vector<ankerl::unordered_dense::map<dataid_t, mem_t>> size_maps_;
+  std::vector<mem_t> sizes_;
+  std::vector<mem_t> max_sizes_;
+  mutable DataIDList id_buffer;
+
 public:
   // Constructor: initialize for n_devices [0 .. n_devices-1]
-  explicit LRU_manager(DeviceManager &device_manager)
-      : n_devices_(device_manager.size()), lru_lists_(device_manager.size()),
-        position_maps_(device_manager.size()), size_maps_(device_manager.size()),
-        sizes_(device_manager.size()), max_sizes_(device_manager.size()) {
+  explicit LRU_manager(const Devices &devices)
+      : n_devices_(devices.size()), lru_lists_(devices.size()), position_maps_(devices.size()),
+        size_maps_(devices.size()), sizes_(devices.size()), max_sizes_(devices.size()) {
     for (auto &size : sizes_) {
       size = 0;
     }
-    for (int i = 0; i < device_manager.size(); i++) {
-      max_sizes_[i] = device_manager.devices.get().get_max_resources(i).mem;
+    for (int i = 0; i < devices.size(); i++) {
+      max_sizes_[i] = devices.get_max_resources(i).mem;
     }
     id_buffer.reserve(20);
   }
@@ -508,29 +522,10 @@ public:
   mem_t get_evicted_memory_size() const {
     return evicted_size;
   }
-
-private:
-  std::size_t n_devices_;
-
-  // For each device:
-  //  - a list maintaining LRU (front) → MRU (back)
-  //  - a map from data_id → its position in that list
-  //  - a map from data_id → its mem_size
-  std::vector<std::list<dataid_t>> lru_lists_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<dataid_t>::iterator>>
-      position_maps_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, mem_t>> size_maps_;
-  std::vector<mem_t> sizes_;
-  std::vector<mem_t> max_sizes_;
-  mem_t evicted_size = 0;
-  mutable DataIDList id_buffer;
 };
 
 class DataManager {
 protected:
-  std::reference_wrapper<Data> data;
-  std::reference_wrapper<DeviceManager> device_manager;
-  std::reference_wrapper<CommunicationManager> communication_manager;
   LocationManager mapped_locations;
   LocationManager reserved_locations;
   LocationManager launched_locations;
@@ -566,46 +561,34 @@ protected:
 
 public:
   std::vector<devid_t> valid_location_buffer;
-  DataManager(Data &data_, DeviceManager &device_manager_,
-              CommunicationManager &communication_manager_)
-      : data(data_), device_manager(device_manager_), communication_manager(communication_manager_),
-        mapped_locations(data.get().size(), device_manager_.size()),
-        reserved_locations(data.get().size(), device_manager_.size()),
-        launched_locations(data.get().size(), device_manager_.size()),
-        lru_manager(device_manager_) {
+  DataManager(const Data &data, const Devices &devices)
+      : mapped_locations(data.size(), devices.size()),
+        reserved_locations(data.size(), devices.size()),
+        launched_locations(data.size(), devices.size()), lru_manager(devices) {
   }
 
-  DataManager(const DataManager &o_, DeviceManager &device_manager_,
-              CommunicationManager &communication_manager_)
-      : data(o_.data), device_manager(device_manager_),
-        communication_manager(communication_manager_), mapped_locations(o_.mapped_locations),
-        reserved_locations(o_.reserved_locations), launched_locations(o_.launched_locations),
-        movement_manager(o_.movement_manager), lru_manager(o_.lru_manager) {
+  DataManager(const DataManager &o_)
+      : mapped_locations(o_.mapped_locations), reserved_locations(o_.reserved_locations),
+        launched_locations(o_.launched_locations), movement_manager(o_.movement_manager),
+        lru_manager(o_.lru_manager) {
   }
 
-  DataManager(const DataManager &o_) = delete;
-  DataManager &operator=(const DataManager &o_) = delete;
-
-  void initialize() {
+  void initialize(const Data &data, const Devices &devices, DeviceManager &device_manager) {
     ZoneScoped;
-    for (dataid_t i = 0; i < data.get().size(); i++) {
-      auto initial_location = data.get().get_location(i);
+    for (dataid_t i = 0; i < data.size(); i++) {
+      auto initial_location = data.get_location(i);
       if (initial_location > -1) {
         mapped_locations.set_valid(i, initial_location, 0);
         reserved_locations.set_valid(i, initial_location, 0);
         launched_locations.set_valid(i, initial_location, 0);
-        const auto size = data.get().get_size(i);
-        device_manager.get().add_mem<TaskState::MAPPED>(initial_location, size, 0);
-        device_manager.get().add_mem<TaskState::RESERVED>(initial_location, size, 0);
-        device_manager.get().add_mem<TaskState::LAUNCHED>(initial_location, size, 0);
+        const auto size = data.get_size(i);
+        device_manager.add_mem<TaskState::MAPPED>(initial_location, size, 0);
+        device_manager.add_mem<TaskState::RESERVED>(initial_location, size, 0);
+        device_manager.add_mem<TaskState::LAUNCHED>(initial_location, size, 0);
         lru_manager.read(initial_location, i, size);
       }
     }
-    valid_location_buffer.reserve(device_manager.get().size());
-  }
-
-  [[nodiscard]] const Data &get_data() const {
-    return data;
+    valid_location_buffer.reserve(devices.size());
   }
 
   [[nodiscard]] const LRU_manager &get_lru_manager() const {
@@ -648,75 +631,79 @@ public:
     return check_valid(data_id, launched_locations, device_id);
   }
 
-  [[nodiscard]] mem_t total_size(std::span<const dataid_t> list) const {
+  [[nodiscard]] mem_t total_size(const Data &data, std::span<const dataid_t> list) const {
     mem_t total_size = 0;
     for (auto data_id : list) {
-      total_size += data.get().get_size(data_id);
+      total_size += data.get_size(data_id);
     }
     return total_size;
   }
 
-  [[nodiscard]] mem_t local_size(std::span<const dataid_t> list, devid_t device_id) const {
-    return local_size(list, mapped_locations, device_id);
-  }
-
-  [[nodiscard]] mem_t local_size(std::span<const dataid_t> list, const LocationManager &locations,
-                                 devid_t device_id) const {
+  [[nodiscard]] mem_t local_size(const Data &data, std::span<const dataid_t> list,
+                                 const LocationManager &locations, devid_t device_id) const {
     mem_t local_size = 0;
     for (auto data_id : list) {
       if (locations.is_valid(data_id, device_id)) {
-        local_size += data.get().get_size(data_id);
+        local_size += data.get_size(data_id);
       }
     }
     return local_size;
   }
 
-  mem_t local_size_mapped(std::span<const dataid_t> list, devid_t device_id) const {
-    return local_size(list, mapped_locations, device_id);
+  mem_t local_size_mapped(const Data &data, std::span<const dataid_t> list,
+                          devid_t device_id) const {
+    return local_size(data, list, mapped_locations, device_id);
   }
 
-  mem_t local_size_reserved(std::span<const dataid_t> list, devid_t device_id) const {
-    return local_size(list, reserved_locations, device_id);
+  mem_t local_size_reserved(const Data &data, std::span<const dataid_t> list,
+                            devid_t device_id) const {
+    return local_size(data, list, reserved_locations, device_id);
   }
 
-  mem_t local_size_launched(std::span<const dataid_t> list, devid_t device_id) const {
-    return local_size(list, launched_locations, device_id);
+  mem_t local_size_launched(const Data &data, std::span<const dataid_t> list,
+                            devid_t device_id) const {
+    return local_size(data, list, launched_locations, device_id);
   }
 
-  [[nodiscard]] mem_t non_local_size(std::span<const dataid_t> list,
+  [[nodiscard]] mem_t non_local_size(const Data &data, std::span<const dataid_t> list,
                                      const LocationManager &locations, devid_t device_id) const {
     mem_t non_local_size = 0;
     for (auto data_id : list) {
       if (locations.is_invalid(data_id, device_id)) {
-        non_local_size += data.get().get_size(data_id);
+        non_local_size += data.get_size(data_id);
       }
     }
     return non_local_size;
   }
 
-  mem_t non_local_size_mapped(std::span<const dataid_t> list, devid_t device_id) const {
-    return non_local_size(list, mapped_locations, device_id);
+  mem_t non_local_size_mapped(const Data &data, std::span<const dataid_t> list,
+                              devid_t device_id) const {
+    return non_local_size(data, list, mapped_locations, device_id);
   }
 
-  mem_t non_local_size_reserved(std::span<const dataid_t> list, devid_t device_id) const {
-    return non_local_size(list, reserved_locations, device_id);
+  mem_t non_local_size_reserved(const Data &data, std::span<const dataid_t> list,
+                                devid_t device_id) const {
+    return non_local_size(data, list, reserved_locations, device_id);
   }
 
-  mem_t non_local_size_launched(std::span<const dataid_t> list, devid_t device_id) const {
-    return non_local_size(list, launched_locations, device_id);
+  mem_t non_local_size_launched(const Data &data, std::span<const dataid_t> list,
+                                devid_t device_id) const {
+    return non_local_size(data, list, launched_locations, device_id);
   }
 
-  mem_t shared_size(std::span<const dataid_t> list1, std::span<const dataid_t> list2) const {
+  mem_t shared_size(const Data &data, std::span<const dataid_t> list1,
+                    std::span<const dataid_t> list2) const {
     mem_t shared_size = 0;
     for (auto data_id : list1) {
       if (std::find(list2.begin(), list2.end(), data_id) != list2.end()) {
-        shared_size += data.get().get_size(data_id);
+        shared_size += data.get_size(data_id);
       }
     }
     return shared_size;
   }
 
-  void read_update_mapped(std::span<const dataid_t> list, devid_t device_id,
+  void read_update_mapped(const Data &data, DeviceManager &device_manager,
+                          std::span<const dataid_t> list, devid_t device_id,
                           timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, mapped_locations, current_time);
@@ -724,7 +711,8 @@ public:
     // Memory change is handled by task request in mapper
   }
 
-  void write_update_mapped(std::span<const dataid_t> list, devid_t device_id,
+  void write_update_mapped(const Data &data, DeviceManager &device_manager,
+                           std::span<const dataid_t> list, devid_t device_id,
                            timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, mapped_locations, current_time);
@@ -732,7 +720,8 @@ public:
     // Memory change is handled by task complete
   }
 
-  void read_update_reserved(std::span<const dataid_t> list, devid_t device_id,
+  void read_update_reserved(const Data &data, DeviceManager &device_manager,
+                            std::span<const dataid_t> list, devid_t device_id,
                             timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, reserved_locations, current_time);
@@ -740,7 +729,8 @@ public:
     // Memory change is handeled by task request in reserver
   }
 
-  void write_update_reserved(std::span<const dataid_t> list, devid_t device_id,
+  void write_update_reserved(const Data &data, DeviceManager &device_manager,
+                             std::span<const dataid_t> list, devid_t device_id,
                              timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, reserved_locations, current_time);
@@ -748,51 +738,56 @@ public:
     // Memory change is handled by task complete
   }
 
-  void add_memory(dataid_t data_id, devid_t device_id, timecount_t current_time, mem_t size) {
+  void add_memory(DeviceManager &device_manager, devid_t device_id, dataid_t data_id, mem_t size,
+                  timecount_t current_time) {
     SPDLOG_DEBUG("Adding data block {} to device {} with size {}", data_id, device_id, size);
-    device_manager.get().add_mem<TaskState::LAUNCHED>(device_id, size, current_time);
+    device_manager.add_mem<TaskState::LAUNCHED>(device_id, size, current_time);
   }
 
-  void read_update_launched(std::span<const dataid_t> list, devid_t device_id,
+  void read_update_launched(const Data &data, DeviceManager &device_manager,
+                            std::span<const dataid_t> list, devid_t device_id,
                             timecount_t current_time) {
     for (auto data_id : list) {
-      const auto size = data.get().get_size(data_id);
+      const auto size = data.get_size(data_id);
       lru_manager.read(device_id, data_id, size);
       bool changed = read_update(data_id, device_id, launched_locations, current_time);
       if (changed) {
-        add_memory(data_id, device_id, current_time, size);
+        add_memory(device_manager, device_id, data_id, size, current_time);
       }
     }
   }
 
-  void write_update_launched(std::span<const dataid_t> list, devid_t device_id,
+  void write_update_launched(const Data &data, DeviceManager &device_manager,
+                             std::span<const dataid_t> list, devid_t device_id,
                              timecount_t current_time) {
     for (auto data_id : list) {
       auto changed_flags = write_update(data_id, device_id, launched_locations, current_time);
-      remove_memory(changed_flags, data_id, current_time);
+      const auto size = data.get_size(data_id);
+      remove_memory(device_manager, changed_flags, data_id, size, current_time);
     }
   }
 
-  void evict_on_update_launched(dataid_t data_id, devid_t device_id, timecount_t current_time,
-                                bool future_usage, bool write_after_read) {
+  void evict_on_update_launched(const Data &data, DeviceManager &device_manager, dataid_t data_id,
+                                devid_t device_id, timecount_t current_time, bool future_usage,
+                                bool write_after_read) {
     auto updated_devices_launched =
         evict_on_update(data_id, device_id, launched_locations, current_time);
     auto updated_devices_reserved =
         evict_on_update(data_id, device_id, reserved_locations, current_time);
 
-    auto size = data.get().get_size(data_id);
+    auto size = data.get_size(data_id);
     for (devid_t device = 0; device < updated_devices_launched.size(); device++) {
       if (updated_devices_launched[device]) {
         SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
-        device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
-        device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+        device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
+        device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id, true);
       }
     }
     if (!future_usage) {
       // If there are no further usage for the data block (in mapped but not reserved tasks).
       // Invalidate for future mapping decisions.
-      device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
+      device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
       mapped_locations.set_invalid(data_id, device_id, current_time);
     }
     // else if (mapped_locations.is_invalid(data_id, device_id) || write_after_read) {
@@ -828,7 +823,7 @@ public:
       // Write B0 from the GPU should have removed the mapped memory from GPU0 since
       // launched_location is valid (without eviction).
       // After eviction launched_location has changed and the removal doesn't happen.
-      device_manager.get().remove_mem<TaskState::MAPPED>(device_id, size, current_time);
+      device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
     }
   }
 
@@ -844,20 +839,22 @@ public:
     return launched_locations.get_location_flags(data_id);
   }
 
-  SourceRequest request_source(dataid_t data_id, devid_t destination) {
+  SourceRequest request_source(const Topology &topology, CommunicationManager &comm_manager,
+                               dataid_t data_id, devid_t destination) {
     auto location_flags = launched_locations.get_location_flags(data_id);
 
     SPDLOG_DEBUG("Requesting source for data block {} to device {}", data_id, destination);
     // SPDLOG_DEBUG("Number of valid locations: {}", valid_locations.size());
 
     SourceRequest req =
-        communication_manager.get().get_best_available_source(destination, location_flags);
+        comm_manager.get_best_available_source(topology, destination, location_flags);
 
     return req;
   }
 
-  MovementStatus start_move(dataid_t data_id, devid_t source, devid_t destination,
-                            timecount_t current_time) {
+  MovementStatus start_move(const Topology &topology, CommunicationManager &comm_manager,
+                            DeviceManager &device_manager, const Data &data, dataid_t data_id,
+                            devid_t source, devid_t destination, timecount_t current_time) {
     assert(launched_locations.is_valid(data_id, source));
 
     bool is_moving = movement_manager.is_moving(data_id, destination);
@@ -876,13 +873,12 @@ public:
     SPDLOG_DEBUG("Starting move of data block {} from device {} to device {}", data_id, source,
                  destination);
 
-    const auto size = data.get().get_size(data_id);
+    const auto size = data.get_size(data_id);
 
     lru_manager.read(destination, data_id, size);
-    add_memory(data_id, destination, current_time, size);
+    add_memory(device_manager, destination, data_id, size, current_time);
 
-    timecount_t duration =
-        communication_manager.get().ideal_time_to_transfer(size, source, destination);
+    timecount_t duration = comm_manager.ideal_time_to_transfer(topology, size, source, destination);
 
     if (duration == 0) {
       assert(source != destination);
@@ -892,13 +888,13 @@ public:
 
     movement_manager.set_completion(data_id, destination, current_time + duration);
 
-    communication_manager.get().reserve_connection(source, destination);
+    comm_manager.reserve_connection(source, destination);
 
     return {.is_virtual = false, .duration = duration};
   }
 
-  void complete_move(dataid_t data_id, devid_t source, devid_t destination, bool is_virtual,
-                     timecount_t current_time) {
+  void complete_move(CommunicationManager &comm_manager, dataid_t data_id, devid_t source,
+                     devid_t destination, bool is_virtual, timecount_t current_time) {
 
     if (is_virtual) {
       SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
@@ -926,14 +922,13 @@ public:
 
     assert(movement_manager.is_moving(data_id, destination));
     launched_locations.set_valid(data_id, destination, current_time);
-    // lru_manager.read(destination, data_id, data.get().get_size(data_id));
     movement_manager.remove(data_id, destination);
 
-    communication_manager.get().release_connection(source, destination);
+    comm_manager.release_connection(source, destination);
   }
 
-  void complete_eviction_move(dataid_t data_id, devid_t source, devid_t destination,
-                              bool is_virtual, timecount_t current_time) {
+  void complete_eviction_move(CommunicationManager &comm_manager, dataid_t data_id, devid_t source,
+                              devid_t destination, bool is_virtual, timecount_t current_time) {
 
     if (is_virtual) {
       SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
@@ -965,25 +960,26 @@ public:
     mapped_locations.set_valid(data_id, destination, current_time);
     movement_manager.remove(data_id, destination);
 
-    communication_manager.get().release_connection(source, destination);
+    comm_manager.release_connection(source, destination);
   }
 
-  void remove_memory(std::span<int8_t> &changed_flags, dataid_t data_id, timecount_t current_time) {
+  void remove_memory(DeviceManager &device_manager, std::span<int8_t> &changed_flags,
+                     dataid_t data_id, mem_t size, timecount_t current_time) {
     const devid_t n_devices = changed_flags.size();
     for (devid_t device = 0; device < n_devices; device++) {
       if (changed_flags[device]) {
-        auto size = data.get().get_size(data_id);
         SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device, size);
-        device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
-        device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
-        device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+        device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
+        device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
+        device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id);
       }
     }
   }
 
-  void retire_data(dataid_t data_id, devid_t device_id, timecount_t current_time) {
-    auto size = data.get().get_size(data_id);
+  void retire_data(const Data &data, DeviceManager &device_manager, dataid_t data_id,
+                   devid_t device_id, timecount_t current_time) {
+    auto size = data.get_size(data_id);
     SPDLOG_DEBUG("Retiring data block {} from device {} with size {}", data_id, device_id, size);
 
     auto mapped_flags = mapped_locations.invalidate_all(data_id, current_time);
@@ -993,13 +989,13 @@ public:
 
     for (devid_t device = 0; device < n_devices; device++) {
       if (mapped_flags[device]) {
-        device_manager.get().remove_mem<TaskState::MAPPED>(device, size, current_time);
+        device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
       }
       if (reserved_flags[device]) {
-        device_manager.get().remove_mem<TaskState::RESERVED>(device, size, current_time);
+        device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
       }
       if (launched_flags[device]) {
-        device_manager.get().remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+        device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id);
       }
     }
@@ -1009,18 +1005,6 @@ public:
     mapped_locations.finalize(current_time);
     reserved_locations.finalize(current_time);
     launched_locations.finalize(current_time);
-  }
-
-  ValidEventArray &get_valid_intervals_mapped(dataid_t data_id, devid_t device_id) {
-    return mapped_locations.get_valid_intervals(data_id, device_id);
-  }
-
-  ValidEventArray &get_valid_intervals_reserved(dataid_t data_id, devid_t device_id) {
-    return reserved_locations.get_valid_intervals(data_id, device_id);
-  }
-
-  ValidEventArray &get_valid_intervals_launched(dataid_t data_id, devid_t device_id) {
-    return launched_locations.get_valid_intervals(data_id, device_id);
   }
 
   friend class SchedulerState;

@@ -44,6 +44,25 @@ inline std::vector<V> as_vector(ankerl::unordered_dense::map<K, V> &map) {
   return vec;
 }
 
+template <typename T> inline std::vector<T> as_vector(const ankerl::unordered_dense::set<T> &set) {
+  std::vector<T> vec;
+  vec.reserve(set.size());
+  for (const auto &item : set) {
+    vec.push_back(item);
+  }
+  return vec;
+}
+
+template <typename K, typename V>
+inline std::vector<V> as_vector(const ankerl::unordered_dense::map<K, V> &map) {
+  std::vector<V> vec;
+  vec.reserve(map.size());
+  for (const auto &item : map) {
+    vec.push_back(item.second);
+  }
+  return vec;
+}
+
 enum class TaskType : int8_t {
   COMPUTE = 0,
   DATA = 1,
@@ -157,9 +176,10 @@ public:
 
 using VariantList = std::array<Variant, num_device_types>;
 
-struct alignas(8) ComputeTaskStaticInfo {
+struct alignas(16) ComputeTaskStaticInfo {
   int32_t tag{};
   int32_t type{};
+  int32_t depth{};
 };
 
 struct ComputeTaskVariantInfo {
@@ -200,34 +220,33 @@ struct alignas(32) DataTaskStaticInfo {
 };
 
 struct alignas(32) ComputeTaskRuntimeInfo {
-  int8_t state{};
-  int8_t flags{};
-  int16_t unmapped{};
-  int16_t unreserved{};
-  int16_t incomplete{};
   int32_t mapped_device{-1};
   int32_t reserve_priority{};
   int32_t launch_priority{};
-  int32_t depth{};
+  int16_t unmapped{};
+  int16_t unreserved{};
+  int16_t incomplete{};
+  int8_t state{};
+  int8_t flags{};
 };
 
 struct alignas(16) DataTaskRuntimeInfo {
-  int8_t state{};
-  int8_t flags{};
-  int16_t incomplete{};
   int32_t source_device{};
   int32_t mapped_device{-1};
   int32_t launch_priority{};
+  int16_t incomplete{};
+  int8_t state{};
+  int8_t flags{};
 };
 
 struct alignas(32) EvictionTaskRuntimeInfo {
-  int8_t state{};
-  int8_t flags{};
   int32_t data_id{};
   int32_t evicting_on{};
   int32_t compute_task{};
   int32_t source_device{};
   int32_t launch_priority{};
+  int8_t state{};
+  int8_t flags{};
   int16_t pad{};
   int64_t pad2{};
 };
@@ -295,13 +314,13 @@ public:
     data_task_names[id] = name;
   }
 
-  void add_compute_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
+  void add_compute_task_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
     auto &info = compute_task_dep_info[id];
     std::copy(dependencies.begin(), dependencies.end(),
               compute_task_dependencies.begin() + info.s_dependencies);
   }
 
-  void add_compute_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
+  void add_compute_task_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
     auto &info = compute_task_dep_info[id];
     std::copy(dependents.begin(), dependents.end(),
               compute_task_dependents.begin() + info.s_dependents);
@@ -311,6 +330,12 @@ public:
     auto &info = compute_task_dep_info[id];
     std::copy(dependencies.begin(), dependencies.end(),
               compute_task_data_dependencies.begin() + info.s_data_dependencies);
+  }
+
+  void add_compute_task_data_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
+    auto &info = compute_task_dep_info[id];
+    std::copy(dependents.begin(), dependents.end(),
+              compute_task_data_dependents.begin() + info.s_data_dependents);
   }
 
   void add_data_task_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
@@ -437,6 +462,18 @@ public:
     return {compute_task_unique.data() + info.s_unique, compute_task_unique.data() + info.e_unique};
   }
 
+  [[nodiscard]] int32_t get_out_degree(taskid_t compute_task_id) const {
+    return get_compute_task_dependencies(compute_task_id).size();
+  }
+
+  [[nodiscard]] int32_t get_in_degree(taskid_t compute_task_id) const {
+    return get_compute_task_dependents(compute_task_id).size();
+  }
+
+  [[nodiscard]] const int32_t get_depth(taskid_t id) const {
+    return compute_task_static_info[id].depth;
+  }
+
   [[nodiscard]] std::span<const taskid_t> get_most_recent_writers(taskid_t id) const {
     auto &info = compute_task_data_info[id];
     return {compute_task_recent_writers.data() + info.s_read,
@@ -475,9 +512,9 @@ public:
 
   // TODO(wlr): Deprecate this to avoid allocation. Loop over mask direcly where this is used.
   [[nodiscard]] std::vector<DeviceType>
-  get_compute_task_supported_architectures(taskid_t id) const {
+  get_supported_architectures(taskid_t compute_task_id) const {
     std::vector<DeviceType> supported_architectures;
-    auto &info = compute_task_variant_info[id];
+    auto &info = compute_task_variant_info[compute_task_id];
     for (int i = 0; i < num_device_types; ++i) {
       if ((info.mask & (1 << i)) != 0) {
         supported_architectures.push_back(static_cast<DeviceType>(i));
@@ -486,8 +523,8 @@ public:
     return supported_architectures;
   }
 
-  [[nodiscard]] bool is_compute_task_architecture_supported(taskid_t id, DeviceType arch) const {
-    auto &info = compute_task_variant_info[id];
+  [[nodiscard]] bool is_architecture_supported(taskid_t compute_task_id, DeviceType arch) const {
+    auto &info = compute_task_variant_info[compute_task_id];
     int8_t arch_type = static_cast<int8_t>(arch);
     // assert that mask flag is set for the given architecture
     return (info.mask & arch_type) != 0;
@@ -665,10 +702,6 @@ public:
     return compute_task_runtime_info[id].flags;
   }
 
-  [[nodiscard]] const int32_t get_compute_task_depth(taskid_t id) const {
-    return compute_task_runtime_info[id].depth;
-  }
-
   [[nodiscard]] const int8_t get_data_task_state(taskid_t id) const {
     return data_task_runtime_info[id].state;
   }
@@ -800,14 +833,29 @@ public:
     return info.unmapped == 0 && info.state >= static_cast<int8_t>(TaskState::SPAWNED);
   }
 
+  bool is_compute_mapped(taskid_t compute_task_id) const {
+    auto &info = compute_task_runtime_info[compute_task_id];
+    return info.state >= static_cast<int8_t>(TaskState::MAPPED);
+  }
+
   bool is_compute_reservable(taskid_t id) const {
     auto &info = compute_task_runtime_info[id];
     return info.unreserved == 0 && info.state >= static_cast<int8_t>(TaskState::MAPPED);
   }
 
-  bool is_compute_launchable(taskid_t id) const {
+  bool is_compute_reserved(taskid_t id) const {
     auto &info = compute_task_runtime_info[id];
     return info.state >= static_cast<int8_t>(TaskState::RESERVED);
+  }
+
+  bool is_compute_launchable(taskid_t id) const {
+    auto &info = compute_task_runtime_info[id];
+    return info.incomplete == 0 && info.state >= static_cast<int8_t>(TaskState::RESERVED);
+  }
+
+  bool is_compute_launched(taskid_t id) const {
+    auto &info = compute_task_runtime_info[id];
+    return info.state >= static_cast<int8_t>(TaskState::LAUNCHED);
   }
 
   bool is_compute_completed(taskid_t id) const {
@@ -920,10 +968,6 @@ public:
   }
   void set_compute_task_launch_priority(taskid_t id, int32_t launch_priority) {
     compute_task_runtime_info[id].launch_priority = launch_priority;
-  }
-
-  void set_compute_task_depth(taskid_t id, int32_t depth) {
-    compute_task_runtime_info[id].depth = depth;
   }
 
   void set_compute_task_state(taskid_t id, int8_t state) {
@@ -1654,15 +1698,15 @@ public:
       static_info.add_compute_task(task.id, task.name, compute_dep_info, compute_data_info,
                                    compute_task_info);
 
-      // static_info.add_compute_dependencies(task.id, as_vector(task.dependencies));
-      // static_info.add_compute_dependents(task.id, as_vector(task.dependents));
-      // static_info.add_compute_data_dependencies(task.id, as_vector(task.data_dependencies));
-      // static_info.add_compute_data_dependents(task.id, as_vector(task.data_dependents));
-      // static_info.add_read(task.id, task.v_read);
-      // static_info.add_most_recent_writers(task.id, task.most_recent_writers);
-      // static_info.static_info.add_write(task.id, as_vector(task.write));
-      // static_info.add_retire(task.id, as_vector(task.retire));
-      // static_info.add_unique(task.id, as_vector(task.unique));
+      static_info.add_compute_task_dependencies(task.id, as_vector(task.dependencies));
+      static_info.add_compute_task_dependents(task.id, as_vector(task.dependents));
+      static_info.add_compute_task_data_dependencies(task.id, as_vector(task.data_dependencies));
+      static_info.add_compute_task_data_dependents(task.id, as_vector(task.data_dependents));
+      static_info.add_read(task.id, task.v_read);
+      static_info.add_most_recent_writers(task.id, task.most_recent_writers);
+      static_info.add_write(task.id, as_vector(task.write));
+      static_info.add_retire(task.id, as_vector(task.retire));
+      static_info.add_unique(task.id, task.unique);
 
       for (int i = 0; i < task.arch_mask.size(); ++i) {
         if (task.arch_mask[i]) {

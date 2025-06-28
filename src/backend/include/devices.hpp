@@ -35,13 +35,14 @@ inline std::ostream &operator<<(std::ostream &os, const DeviceType &arch) {
 
 class Device {
 public:
-  devid_t id = 0;
-  DeviceType arch = DeviceType::NONE;
   Resources max_resources;
+  devid_t id = 0;
+  copy_t max_copy = 0;
+  DeviceType arch = DeviceType::NONE;
 
   Device() = default;
-  Device(devid_t id, DeviceType arch, vcu_t vcu, mem_t mem)
-      : id(id), arch(arch), max_resources(vcu, mem) {
+  Device(devid_t id, DeviceType arch, copy_t max_copy, vcu_t vcu, mem_t mem)
+      : id(id), arch(arch), max_resources(vcu, mem), max_copy(max_copy) {
   }
 
   [[nodiscard]] mem_t get_mem() const {
@@ -49,5 +50,9 @@ public:
   }
   [[nodiscard]] vcu_t get_vcu() const {
     return max_resources.vcu;
+  }
+
+  [[nodiscard]] copy_t get_max_copy() const {
+    return max_copy;
   }
 };

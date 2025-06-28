@@ -7,6 +7,9 @@
 #include <functional>
 #include <unordered_map>
 
+#define memory as maximum of int64_t
+#define MAX_MEM std::numeric_limits<mem_t>::max()
+
 class DeviceManager;
 
 template <typename T> struct ResourceEventArray {
@@ -104,13 +107,15 @@ protected:
 public:
   std::vector<vcu_t> vcu;
   std::vector<mem_t> mem;
+  std::vector<mem_t> mem_max;
 
   std::vector<ResourceTracker<vcu_t>> vcu_tracker;
   std::vector<ResourceTracker<mem_t>> mem_tracker;
 
   DeviceResources() {};
 
-  DeviceResources(std::size_t n) : vcu(n, 0), mem(n, 0), vcu_tracker(n), mem_tracker(n) {
+  DeviceResources(std::size_t n)
+      : vcu(n, 0), mem(n, 0), mem_max(n, MAX_MEM), vcu_tracker(n), mem_tracker(n) {
   }
 
   DeviceResources(const DeviceResources &other) {
@@ -121,6 +126,11 @@ public:
   }
 
   DeviceResources &operator=(const DeviceResources &other) = default;
+
+  void set_max_mem(devid_t id, mem_t m) {
+    assert(id < mem_max.size());
+    mem_max[id] = m;
+  }
 
   void set_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     vcu[id] = vcu_;
@@ -184,36 +194,37 @@ public:
     return {vcu[id], mem[id]};
   }
 
-  [[nodiscard]] vcu_t overflow_vcu(devid_t id, vcu_t query, vcu_t max) const {
+  [[nodiscard]] vcu_t overflow_vcu(devid_t id, vcu_t query) const {
     const vcu_t request = vcu[id] + query;
-    if (request <= max) {
+    if (request <= MAX_VCUS) {
       return 0;
     }
-    return request - max;
+    return request - MAX_VCUS;
   }
 
-  [[nodiscard]] mem_t overflow_mem(devid_t id, mem_t query, mem_t max) const {
+  [[nodiscard]] mem_t overflow_mem(devid_t id, mem_t query) const {
     const mem_t request = mem[id] + query;
+    const auto max = mem_max[id];
     if (request <= max) {
       return 0;
     }
     return request - max;
   }
 
-  [[nodiscard]] bool fit_vcu(devid_t id, vcu_t query, vcu_t max) const {
-    return vcu[id] + query <= max;
+  [[nodiscard]] bool fit_vcu(devid_t id, vcu_t query) const {
+    return vcu[id] + query <= MAX_VCUS;
   }
-  [[nodiscard]] bool fit_mem(devid_t id, mem_t query, mem_t max) const {
-    return mem[id] + query <= max;
-  }
-
-  [[nodiscard]] bool fit_resources(devid_t id, Resources &r, Resources &max) const {
-    return fit_vcu(id, r.vcu, max.vcu) && fit_mem(id, r.mem, max.mem);
+  [[nodiscard]] bool fit_mem(devid_t id, mem_t query) const {
+    return mem[id] + query <= mem_max[id];
   }
 
-  Resources overflow_resources(devid_t id, Resources &r, Resources &max) const {
-    vcu_t vcu_overflow = overflow_vcu(id, r.vcu, max.vcu);
-    mem_t mem_overflow = overflow_mem(id, r.mem, max.mem);
+  [[nodiscard]] bool fit_resources(devid_t id, Resources &r) const {
+    return fit_vcu(id, r.vcu) && fit_mem(id, r.mem);
+  }
+
+  Resources overflow_resources(devid_t id, Resources &r) const {
+    vcu_t vcu_overflow = overflow_vcu(id, r.vcu);
+    mem_t mem_overflow = overflow_mem(id, r.mem);
     return {vcu_overflow, mem_overflow};
   }
 
@@ -242,7 +253,6 @@ protected:
   std::vector<Device> devices;
   std::array<DeviceIDList, num_device_types> type_map;
   std::vector<std::string> device_names;
-
   ankerl::unordered_dense::map<std::string, devid_t> device_name_map;
   ankerl::unordered_dense::map<devid_t, devid_t> global_to_local;
 
@@ -300,13 +310,14 @@ public:
     return type_map[static_cast<std::size_t>(arch)][local_id];
   }
 
-  void create_device(devid_t id, std::string name, DeviceType arch, vcu_t vcu, mem_t mem) {
+  void create_device(devid_t id, std::string name, DeviceType arch, copy_t max_copy, vcu_t vcu,
+                     mem_t mem) {
     if (id >= devices.size()) {
       resize(id + 1);
     }
 
     assert(id < devices.size());
-    devices[id] = Device(id, arch, vcu, mem);
+    devices[id] = Device(id, arch, max_copy, vcu, mem);
     type_map[static_cast<std::size_t>(arch)].push_back(id);
 
     device_name_map[name] = id;
@@ -316,9 +327,9 @@ public:
     device_names[id] = std::move(name);
   }
 
-  devid_t append_device(std::string name, DeviceType arch, vcu_t vcu, mem_t mem) {
+  devid_t append_device(std::string name, DeviceType arch, copy_t max_copy, vcu_t vcu, mem_t mem) {
     devid_t id = devices.size();
-    create_device(id, std::move(name), arch, vcu, mem);
+    create_device(id, std::move(name), arch, max_copy, vcu, mem);
     return id;
   }
 
@@ -333,34 +344,24 @@ protected:
     launched.resize(n_devices);
   }
 
-  [[nodiscard]] Devices &get_devices() {
-    return devices.get();
-  }
-
 public:
-  std::reference_wrapper<Devices> devices;
-
   DeviceResources mapped;
   DeviceResources reserved;
   DeviceResources launched;
 
-  DeviceManager(Devices &devices_)
-      : devices(devices_), mapped(devices_.size()), reserved(devices_.size()),
-        launched(devices_.size()) {};
+  DeviceManager(const Devices &devices_)
+      : mapped(devices_.size()), reserved(devices_.size()), launched(devices_.size()) {};
 
   DeviceManager(const DeviceManager &other) = default;
 
   DeviceManager &operator=(const DeviceManager &other) = default;
 
-  void initialize() {
-  }
-
-  [[nodiscard]] std::size_t size() const {
-    return devices.get().size();
-  }
-
-  [[nodiscard]] const Devices &get_devices() const {
-    return devices;
+  void initialize(const Devices &devices_) {
+    for (devid_t id = 0; id < devices_.size(); ++id) {
+      mapped.set_max_mem(id, devices_.get_max_resources(id).mem);
+      reserved.set_max_mem(id, devices_.get_max_resources(id).mem);
+      launched.set_max_mem(id, devices_.get_max_resources(id).mem);
+    }
   }
 
   template <TaskState State> [[nodiscard]] const DeviceResources &get_resources() const {
@@ -424,26 +425,22 @@ public:
 
   template <TaskState State> [[nodiscard]] bool can_fit_mem(devid_t id, mem_t mem_) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get().get_max_resources(id);
-    return state_resources.fit_mem(id, mem_, device_max_resources.mem);
+    return state_resources.fit_mem(id, mem_);
   }
 
   template <TaskState State> [[nodiscard]] bool can_fit_vcu(devid_t id, vcu_t vcu_) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get().get_max_resources(id);
-    return state_resources.fit_vcu(id, vcu_, device_max_resources.vcu);
+    return state_resources.fit_vcu(id, vcu_);
   }
 
   template <TaskState State> [[nodiscard]] mem_t overflow_mem(devid_t id, mem_t mem_) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get().get_max_resources(id);
-    return state_resources.overflow_mem(id, mem_, device_max_resources.mem);
+    return state_resources.overflow_mem(id, mem_);
   }
 
   template <TaskState State> [[nodiscard]] vcu_t overflow_vcu(devid_t id, vcu_t vcu_) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get().get_max_resources(id);
-    return state_resources.overflow_vcu(id, vcu_, device_max_resources.vcu);
+    return state_resources.overflow_vcu(id, vcu_);
   }
 
   template <TaskState State>
@@ -461,8 +458,7 @@ public:
   template <TaskState State>
   [[nodiscard]] Resources overflow_resources(devid_t id, const Resources &r) const {
     auto &state_resources = get_resources<State>();
-    const auto &device_max_resources = devices.get().get_max_resources(id);
-    return state_resources.overflow_resources(id, r, device_max_resources);
+    return state_resources.overflow_resources(id, r);
   }
 
   template <TaskState State>

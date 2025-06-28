@@ -391,14 +391,12 @@ struct SchedulerInput {
   std::reference_wrapper<Devices> devices;
   std::reference_wrapper<Topology> topology;
   std::reference_wrapper<TaskNoise> task_noise;
-  std::reference_wrapper<CommunicationNoise> comm_noise;
   std::reference_wrapper<TransitionConditions> conditions;
 
   SchedulerInput(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
-                 Topology &topology, TaskNoise &task_noise, CommunicationNoise &comm_noise,
-                 TransitionConditions &conditions)
+                 Topology &topology, TaskNoise &task_noise, TransitionConditions &conditions)
       : graph(graph), tasks(tasks), data(data), devices(devices), topology(topology),
-        task_noise(task_noise), comm_noise(comm_noise), conditions(conditions) {
+        task_noise(task_noise), conditions(conditions) {
   }
 
   SchedulerInput(const SchedulerInput &other) = default;
@@ -408,8 +406,7 @@ struct SchedulerInput {
   // Shallow copy constructor
   SchedulerInput(SchedulerInput &&other) noexcept
       : graph(other.graph), tasks(other.tasks), data(other.data), devices(other.devices),
-        topology(other.topology), task_noise(other.task_noise), comm_noise(other.comm_noise),
-        conditions(other.conditions) {
+        topology(other.topology), task_noise(other.task_noise), conditions(other.conditions) {
   }
 
   SchedulerInput &operator=(SchedulerInput &&other) noexcept {
@@ -420,7 +417,6 @@ struct SchedulerInput {
       devices = other.devices;
       topology = other.topology;
       task_noise = other.task_noise;
-      comm_noise = other.comm_noise;
       conditions = other.conditions;
     }
     return *this;
@@ -430,25 +426,24 @@ struct SchedulerInput {
 class SchedulerState {
 protected:
   timecount_t global_time = 0;
+  RuntimeTaskInfo task_runtime;
+  DeviceManager device_manager;
+  CommunicationManager communication_manager;
+  DataManager data_manager;
+  ankerl::unordered_dense::set<taskid_t> mapped_but_not_reserved_tasks;
   std::reference_wrapper<Graph> graph;
   std::reference_wrapper<StaticTaskInfo> tasks;
   std::reference_wrapper<Data> data;
   std::reference_wrapper<Devices> devices;
   std::reference_wrapper<Topology> topology;
   std::reference_wrapper<TaskNoise> task_noise;
-  std::reference_wrapper<CommunicationNoise> comm_noise;
-  RuntimeTaskInfo task_runtime;
-  DeviceManager device_manager;
-  CommunicationManager communication_manager;
-  DataManager data_manager;
-  ankerl::unordered_dense::set<taskid_t> mapped_but_not_reserved_tasks;
 
   [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id, devid_t device_id) const {
     const auto static_graph = get_tasks();
     const auto arch = get_devices().get_type(device_id);
     const Resources &task_resources = static_graph.get_compute_task_resources(task_id, arch);
     mem_t non_local_memory =
-        data_manager.non_local_size_mapped(static_graph.get_unique(task_id), device_id);
+        data_manager.non_local_size_mapped(data.get(), static_graph.get_unique(task_id), device_id);
     Resources requested = {task_resources.vcu, task_resources.mem + non_local_memory};
     Resources missing;
     return {.requested = requested, .missing = missing};
@@ -459,8 +454,8 @@ protected:
     const auto static_graph = get_tasks();
     const auto arch = get_devices().get_type(device_id);
     const Resources &task_resources = static_graph.get_compute_task_resources(task_id, arch);
-    mem_t non_local_memory =
-        data_manager.non_local_size_reserved(static_graph.get_unique(task_id), device_id);
+    mem_t non_local_memory = data_manager.non_local_size_reserved(
+        data.get(), static_graph.get_unique(task_id), device_id);
     Resources requested = {task_resources.vcu, task_resources.mem + non_local_memory};
     auto missing_memory =
         device_manager.overflow_mem<TaskState::RESERVED>(device_id, requested.mem);
@@ -480,7 +475,7 @@ protected:
     device_manager.add_resources<TaskState::LAUNCHED>(device_id, requested, global_time);
   }
 
-  void free_resources(taskid_t task_id) {
+  void free_task_resources(taskid_t task_id) {
     auto mapped_device_id = task_runtime.get_compute_task_mapped_device(task_id);
     const auto &task_resources = get_task_resources(task_id, mapped_device_id);
     device_manager.remove_resources<TaskState::MAPPED>(mapped_device_id, task_resources,
@@ -498,11 +493,10 @@ public:
   SchedulerState(SchedulerInput &input)
       : global_time(0), graph(input.graph), tasks(input.tasks), data(input.data),
         devices(input.devices), topology(input.topology), task_noise(input.task_noise),
-        comm_noise(input.comm_noise), task_runtime(RuntimeTaskInfo(input.tasks)),
-        device_manager(DeviceManager(input.devices)),
-        communication_manager(input.topology, input.devices, input.comm_noise),
-        data_manager(input.data, device_manager, communication_manager),
-        counts(input.devices.get().size()), costs(input.devices.get().size()) {
+        task_runtime(RuntimeTaskInfo(input.tasks)), device_manager(DeviceManager(input.devices)),
+        communication_manager(input.topology, input.devices),
+        data_manager(input.data, input.devices), counts(input.devices.get().size()),
+        costs(input.devices.get().size()) {
   }
 
   void update_time(timecount_t time) {
@@ -513,10 +507,9 @@ public:
 
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = true) {
     // task_runtime.initialize();
-    device_manager.initialize();
-    communication_manager.initialize();
+    device_manager.initialize(get_devices());
     if (initialize_data_manager) {
-      data_manager.initialize();
+      data_manager.initialize(get_data(), get_devices(), device_manager);
     }
   }
 
@@ -529,7 +522,7 @@ public:
   }
 
   void initialize_data_manager() {
-    data_manager.initialize();
+    data_manager.initialize(get_data(), get_devices(), device_manager);
   }
 
   [[nodiscard]] bool is_complete() const {
@@ -716,15 +709,7 @@ public:
     return topology.get();
   }
 
-  [[nodiscard]] Topology &get_topology() {
-    return topology.get();
-  }
-
   [[nodiscard]] const Devices &get_devices() const {
-    return devices.get();
-  }
-
-  [[nodiscard]] Devices &get_devices() {
     return devices.get();
   }
 
@@ -734,14 +719,6 @@ public:
 
   [[nodiscard]] TaskNoise &get_task_noise() {
     return task_noise.get();
-  }
-
-  [[nodiscard]] const CommunicationNoise &get_comm_noise() const {
-    return comm_noise.get();
-  }
-
-  [[nodiscard]] CommunicationNoise &get_comm_noise() {
-    return comm_noise.get();
   }
 
   [[nodiscard]] RuntimeTaskInfo &get_task_runtime() {
@@ -760,7 +737,7 @@ public:
     return device_manager;
   }
 
-  [[nodiscard]] const CommunicationManager &get_communication_manager() {
+  [[nodiscard]] CommunicationManager &get_communication_manager() {
     return communication_manager;
   }
 
@@ -1097,9 +1074,9 @@ protected:
   std::vector<DeviceType> arch_buffer;
   ActionList action_buffer;
 
-  void fill_arch_targets(taskid_t task_id, const SchedulerState &state) {
+  void fill_arch_targets(taskid_t compute_task_id, const SchedulerState &state) {
     arch_buffer.clear();
-    arch_buffer = state.get_tasks().get_compute_task_supported_architectures(task_id);
+    arch_buffer = state.get_tasks().get_supported_architectures(compute_task_id);
     assert(!arch_buffer.empty());
   }
 
@@ -1242,8 +1219,8 @@ public:
       lp = launching_priorities.at(compute_task_id % launching_priorities.size());
     }
 
-    assert(state.get_tasks().is_compute_task_architecture_supported(
-        compute_task_id, state.get_devices().get_type(device_id)));
+    assert(state.get_tasks().is_architecture_supported(compute_task_id,
+                                                       state.get_devices().get_type(device_id)));
     assert(device_id < state.get_device_manager().size());
 
     return Action(0, device_id, rp, lp);
@@ -1290,10 +1267,13 @@ public:
     auto &data_manager = state.get_data_manager();
     const auto &communication_manager = state.get_communication_manager();
     auto location_flags = data_manager.get_mapped_location_flags(data_id);
-    const mem_t data_size = data_manager.get_data().get_size(data_id);
-    SourceRequest req = communication_manager.get_best_source(destination, location_flags);
+    const auto &topology = state.get_topology();
+    const mem_t data_size = state.get_data().get_size(data_id);
+    SourceRequest req =
+        communication_manager.get_best_source(topology, destination, location_flags);
     assert(req.found);
-    return communication_manager.ideal_time_to_transfer(data_size, req.source, destination);
+    return communication_manager.ideal_time_to_transfer(topology, data_size, req.source,
+                                                        destination);
   }
 
   timecount_t get_finish_time(taskid_t compute_task_id, devid_t device_id, timecount_t start_t,

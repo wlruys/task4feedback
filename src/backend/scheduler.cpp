@@ -42,6 +42,7 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
   auto &static_graph = s.get_tasks();
   auto &data_manager = s.data_manager;
   auto current_time = s.global_time;
+  const auto &data = s.get_data();
 
   devid_t chosen_device = action.device;
 
@@ -59,10 +60,11 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
 
   // Update data locations
   // TODO(wlr): These need to be udpated for span accesses
-  data_manager.read_update_mapped(static_graph.get_unique(compute_task_id), chosen_device,
-                                  current_time);
-  data_manager.write_update_mapped(static_graph.get_write(compute_task_id), chosen_device,
-                                   current_time);
+  auto &device_manager = s.get_device_manager();
+  data_manager.read_update_mapped(data, device_manager, static_graph.get_unique(compute_task_id),
+                                  chosen_device, current_time);
+  data_manager.write_update_mapped(data, device_manager, static_graph.get_write(compute_task_id),
+                                   chosen_device, current_time);
   // Ground truth
   // Consider this scenario:
   //   GPU0   |   GPU1
@@ -226,8 +228,9 @@ SuccessPair Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id,
   auto current_time = s.global_time;
   auto &mapped = s.mapped_but_not_reserved_tasks;
   auto &device_manager = s.get_device_manager();
+  const auto &data = s.get_data();
 
-  assert(task_runtime.is_compute_reserveable(compute_task_id));
+  assert(task_runtime.is_compute_reservable(compute_task_id));
   assert(task_runtime.get_compute_task_mapped_device(compute_task_id) == device_id);
 
   SPDLOG_DEBUG("Time:{} Attempting to reserve task {} on device {}", current_time,
@@ -253,10 +256,10 @@ SuccessPair Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id,
                device_manager.get_mem<TaskState::RESERVED>(device_id), device_id);
 
   // Update data locations
-  s.data_manager.read_update_reserved(static_graph.get_unique(compute_task_id), device_id,
-                                      current_time);
-  s.data_manager.write_update_reserved(static_graph.get_write(compute_task_id), device_id,
-                                       current_time);
+  s.data_manager.read_update_reserved(
+      data, device_manager, static_graph.get_unique(compute_task_id), device_id, current_time);
+  s.data_manager.write_update_reserved(
+      data, device_manager, static_graph.get_write(compute_task_id), device_id, current_time);
 
   // erase task_id from s.mapped_but_not_reserved_tasks
   mapped.erase(mapped.find(compute_task_id));
@@ -371,6 +374,8 @@ bool Scheduler::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
   auto &task_runtime = s.task_runtime;
   auto &data_manager = s.data_manager;
   const auto &static_graph = s.get_tasks();
+  auto &device_manager = s.get_device_manager();
+  const auto &data = s.get_data();
 
   SPDLOG_DEBUG("Time:{} Attempting to launch compute task {} on device {}", current_time,
                static_graph.get_compute_task_name(compute_task_id), device_id);
@@ -389,9 +394,9 @@ bool Scheduler::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
 
   // Update data locations for WRITE data (create them here)
   auto write_data = static_graph.get_write(compute_task_id);
-  data_manager.read_update_launched(write_data, device_id,
+  data_manager.read_update_launched(data, device_manager, write_data, device_id,
                                     current_time); // This adds memory
-  data_manager.write_update_launched(write_data, device_id,
+  data_manager.write_update_launched(data, device_manager, write_data, device_id,
                                      current_time); // This invalidates other devices
 
   // All READ data should already be here (prefetched by data tasks)
@@ -423,6 +428,9 @@ bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_devi
   auto &task_runtime = s.task_runtime;
   auto &data_manager = s.data_manager;
   const auto &static_graph = s.get_tasks();
+  const auto &data = s.get_data();
+  auto &comm_manager = s.get_communication_manager();
+  auto &device_manager = s.get_device_manager();
 
   SPDLOG_DEBUG("Time:{} Attempting to launch data task {} on device {}", current_time,
                static_graph.get_data_task_name(data_task_id), destination_device_id);
@@ -430,15 +438,17 @@ bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_devi
   assert(task_runtime.is_data_launchable(data_task_id));
 
   const dataid_t data_id = static_graph.get_data_id(data_task_id);
-  auto [found, source_device_id] = data_manager.request_source(data_id, destination_device_id);
+  const auto &topology = s.get_topology();
+  auto [found, source_device_id] =
+      data_manager.request_source(topology, comm_manager, data_id, destination_device_id);
 
   if (!found) {
     SPDLOG_DEBUG("Time:{} Data task {} missing available source", current_time,
                  static_graph.get_data_task_name(data_task_id));
     return false;
   }
-  auto duration =
-      data_manager.start_move(data_id, source_device_id, destination_device_id, current_time);
+  auto duration = data_manager.start_move(topology, comm_manager, device_manager, data, data_id,
+                                          source_device_id, destination_device_id, current_time);
 
   if (duration.is_virtual) {
     SPDLOG_DEBUG("Time:{} Data task {} is virtual", curren_time,
@@ -470,6 +480,7 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
   auto &task_runtime = s.task_runtime;
   auto &data_manager = s.data_manager;
   const auto &static_graph = s.get_tasks();
+  auto &device_manager = s.get_device_manager();
 
   SPDLOG_DEBUG("Time:{} Attempting to launch eviction task {} on device {}", current_time, task_id,
                destination_device_id);
@@ -478,7 +489,10 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
 
   const dataid_t data_id = task_runtime.get_eviction_task_data_id(eviction_task_id);
 
-  auto [found, source_device_id] = data_manager.request_source(data_id, destination_device_id);
+  auto &comm_manager = s.get_communication_manager();
+  const auto &topology = s.get_topology();
+  auto [found, source_device_id] =
+      data_manager.request_source(topology, comm_manager, data_id, destination_device_id);
 
   if (!found) {
     SPDLOG_DEBUG("Time:{} Eviction task {} missing available source for block {}", current_time,
@@ -491,7 +505,8 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
 
   task_runtime.set_eviction_task_source_device(eviction_task_id, source_device_id);
   auto duration =
-      data_manager.start_move(data_id, source_device_id, destination_device_id, current_time);
+      data_manager.start_move(topology, comm_manager, s.get_device_manager(), s.get_data(), data_id,
+                              source_device_id, destination_device_id, current_time);
 
   if (duration.is_virtual) {
     SPDLOG_DEBUG("Time:{} Eviction task {} is virtual", current_time, eviction_task_id);
@@ -624,7 +639,6 @@ bool Scheduler::launch_eviction_tasks(EventManager &event_manager) {
     }
 
     taskid_t task_id = eviction_launchable.top();
-    assert(s.is_eviction_task(task_id));
     auto device_id = static_cast<devid_t>(eviction_launchable.get_active_index());
     // This should always be the host device
     assert(device_id == HOST_ID);
@@ -834,8 +848,9 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
 
               SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}", current_time,
                            data_id, static_graph.get_compute_task_name(compute_task_id), device_id);
-              s.data_manager.evict_on_update_launched(data_id, device_id, current_time,
-                                                      future_usage, write_after_read);
+              s.data_manager.evict_on_update_launched(s.get_data(), s.get_device_manager(), data_id,
+                                                      device_id, current_time, future_usage,
+                                                      write_after_read);
             }
           }
         } else {
@@ -892,6 +907,8 @@ void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager
   auto &task_runtime = s.task_runtime;
   auto current_time = s.global_time;
   auto &data_manager = s.data_manager;
+  const auto &data = s.get_data();
+  auto &device_manager = s.device_manager;
 
   const taskid_t compute_task_id = event.task;
   const devid_t device_id = event.device;
@@ -900,11 +917,11 @@ void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager
                static_graph.get_compute_task_name(compute_task_id), device_id);
 
   // Free mapped, reserved, and launched resources (uses task static info, variants / data usage)
-  s.free_resources(compute_task_id);
+  s.free_task_resources(compute_task_id);
 
   // Remove retired data (uses task static info, data usage)
   for (const auto data_id : static_graph.get_retire(compute_task_id)) {
-    data_manager.retire_data(data_id, device_id, s.global_time);
+    data_manager.retire_data(data, device_manager, data_id, device_id, s.global_time);
   }
 
   // Notify dependents that the task has completed (uses task static info, dependents, and task
@@ -931,6 +948,7 @@ void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &even
   auto current_time = s.global_time;
   const auto &static_graph = s.get_tasks();
   auto &task_runtime = s.task_runtime;
+  auto &comm_manager = s.get_communication_manager();
 
   const taskid_t data_task_id = event.task;
   const devid_t destination_id = event.device;
@@ -942,7 +960,8 @@ void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &even
   const auto source_id = task_runtime.get_data_task_source_device(data_task_id);
   const auto is_virtual = task_runtime.is_data_task_virtual(data_task_id);
   const auto data_id = static_graph.get_data_id(data_task_id);
-  s.data_manager.complete_move(data_id, source_id, destination_id, is_virtual, current_time);
+  s.data_manager.complete_move(comm_manager, data_id, source_id, destination_id, is_virtual,
+                               current_time);
 
   // Notify dependents that the data task has completed
   // (uses task static info, dependents, and task runtime info of dependents)
@@ -963,6 +982,7 @@ void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManage
   auto &data_manager = s.data_manager;
   auto &device_manager = s.device_manager;
   auto &static_graph = s.get_tasks();
+  auto &comm_manager = s.get_communication_manager();
 
   const taskid_t eviction_task_id = event.task;
   const devid_t destination_id = 0; // This is always the host device
@@ -976,8 +996,9 @@ void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManage
   auto is_virtual = task_runtime.is_eviction_task_virtual(eviction_task_id);
   auto data_id = task_runtime.get_eviction_task_data_id(eviction_task_id);
 
-  data_manager.complete_eviction_move(data_id, source_id, destination_id, is_virtual, current_time);
-  const auto data_size = data_manager.get_data().get_size(data_id);
+  data_manager.complete_eviction_move(comm_manager, data_id, source_id, destination_id, is_virtual,
+                                      current_time);
+  const auto data_size = s.get_data().get_size(data_id);
   device_manager.add_mem<TaskState::MAPPED>(destination_id, data_size, current_time);
   device_manager.add_mem<TaskState::RESERVED>(destination_id, data_size, current_time);
 
@@ -1093,8 +1114,8 @@ void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManage
     }
   }
 
-  data_manager.evict_on_update_launched(data_id, invalidate_device_id, current_time, future_usage,
-                                        write_after_read);
+  data_manager.evict_on_update_launched(s.get_data(), device_manager, data_id, invalidate_device_id,
+                                        current_time, future_usage, write_after_read);
 
   eviction_count -= 1;
   SPDLOG_DEBUG("Time:{} Eviction task {} completed {} left", current_time, eviction_task_id,
