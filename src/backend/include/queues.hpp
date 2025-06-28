@@ -372,7 +372,7 @@ int ContainerQueue<T, Queue, Compare>::topk_size() {
 template <typename T, template <typename...> class Queue, typename Compare>
 T &ContainerQueue<T, Queue, Compare>::at(std::size_t i) {
   if constexpr (is_top_k_queue<QueueType>) {
-    return pq.get_top_k().at(i);
+    return pq.get_top_k()[i];
   } else {
     throw std::out_of_range("at() called on a non-top-k queue");
   }
@@ -455,7 +455,7 @@ T &TopKQueue<T, k, Container, Compare>::at(std::size_t i) {
   if (i >= top_k.size()) {
     throw std::out_of_range("at() called with an index out of range");
   }
-  return top_k.at(i);
+  return top_k[i];
 }
 template <typename T, int k, typename Container, typename Compare>
 void TopKQueue<T, k, Container, Compare>::remove_at(std::size_t i) {

@@ -1130,12 +1130,12 @@ protected:
 
   DeviceType choose_random_architecture(std::vector<DeviceType> &arch_buffer) {
     std::uniform_int_distribution<std::size_t> dist(0, arch_buffer.size() - 1);
-    return arch_buffer.at(dist(gen));
+    return arch_buffer[dist(gen)];
   }
 
   devid_t choose_random_device(DeviceIDList &device_buffer) {
     std::uniform_int_distribution<std::size_t> dist(0, device_buffer.size() - 1);
-    return device_buffer.at(dist(gen));
+    return device_buffer[dist(gen)];
   }
 
 public:

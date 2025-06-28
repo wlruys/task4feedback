@@ -31,18 +31,18 @@ struct XYPosition {
 class Data {
 protected:
   std::vector<mem_t> sizes;
+  std::vector<XYPosition> xy_positions;
+  std::vector<int32_t> data_types;
+  std::vector<int32_t> data_tags;
   std::vector<devid_t> initial_location;
   std::vector<std::string> data_names;
-  std::vector<int> data_types;
-  std::vector<int> data_tags;
-  std::vector<XYPosition> xy_positions;
-
   std::unordered_map<std::string, dataid_t> name_to_id;
 
 public:
   Data() = default;
   Data(std::size_t num_data)
-      : sizes(num_data), initial_location(num_data), data_names(num_data), xy_positions(num_data) {
+      : sizes(num_data), xy_positions(num_data), initial_location(num_data, 0),
+        data_names(num_data), data_types(num_data, 0), data_tags(num_data, 0) {
   }
 
   [[nodiscard]] bool empty() const {
@@ -67,11 +67,11 @@ public:
   }
 
   [[nodiscard]] float get_x_pos(dataid_t id) const {
-    return xy_positions.at(id).x;
+    return xy_positions[id].x;
   }
 
   [[nodiscard]] float get_y_pos(dataid_t id) const {
-    return xy_positions.at(id).y;
+    return xy_positions[id].y;
   }
 
   int get_tag(dataid_t id) const {
@@ -83,13 +83,13 @@ public:
   }
 
   int get_type(dataid_t id) const {
-    return data_types.at(id);
+    return data_types[id];
   }
 
   void set_location(dataid_t id, devid_t location) {
     assert(id < initial_location.size());
 
-    initial_location.at(id) = location;
+    initial_location[id] = location;
   }
   void set_name(dataid_t id, std::string name) {
     data_names[id] = std::move(name);

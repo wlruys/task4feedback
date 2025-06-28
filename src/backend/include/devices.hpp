@@ -194,7 +194,7 @@ public:
 
   vcu_t remove_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     assert(id < vcu.size());
-    assert(vcu.at(id) >= vcu_);
+    assert(vcu[id] >= vcu_);
     auto &v = vcu[id];
     v -= vcu_;
     vcu_tracker[id].add_change(current_time, v);
@@ -202,7 +202,7 @@ public:
   }
   mem_t remove_mem(devid_t id, mem_t m, timecount_t current_time) {
     assert(id < mem.size());
-    assert(mem.at(id) >= m);
+    assert(mem[id] >= m);
     auto &v = mem[id];
     v -= m;
     mem_tracker[id].add_change(current_time, v);
@@ -299,14 +299,14 @@ public:
   }
 
   [[nodiscard]] const Device &get_device(devid_t id) const {
-    return devices.at(id);
+    return devices[id];
   }
 
   [[nodiscard]] std::string &get_name(devid_t id) {
     return device_names[id];
   }
   [[nodiscard]] const std::string &get_name(devid_t id) const {
-    return device_names.at(id);
+    return device_names[id];
   }
 
   [[nodiscard]] std::size_t size() const {

@@ -64,20 +64,20 @@ public:
     return tsize;
   }
 
-  void set_active_queue(std::size_t index) noexcept {
+  void set_active_queue(int index) noexcept {
     active_index = index;
   }
-  std::size_t get_active_index() noexcept {
+  int get_active_index() noexcept {
     return active_index;
   }
 
-  void deactivate(std::size_t index) noexcept {
-    active.at(index) = false;
+  void deactivate(int index) noexcept {
+    active[index] = false;
     num_active--;
   }
 
   void deactivate() {
-    active.at(active_index) = false;
+    active[active_index] = false;
     num_active--;
   }
 
