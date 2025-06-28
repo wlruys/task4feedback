@@ -17,14 +17,6 @@
 #include <tracy/Tracy.hpp>
 #include <unordered_map>
 
-enum class DataState : int8_t {
-  NONE = 0,
-  PLANNED = 1,
-  MOVING = 2,
-  VALID = 3,
-};
-constexpr std::size_t num_data_states = 4;
-
 struct XYPosition {
   float x = 0.0f;
   float y = 0.0f;
@@ -36,7 +28,7 @@ struct XYPosition {
   bool operator==(const XYPosition &other) const {
     return x == other.x && y == other.y;
   }
-}
+};
 
 class Data {
 protected:
