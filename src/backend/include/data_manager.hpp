@@ -25,6 +25,19 @@ enum class DataState : int8_t {
 };
 constexpr std::size_t num_data_states = 4;
 
+struct XYPosition {
+  float x = 0.0f;
+  float y = 0.0f;
+
+  XYPosition() = default;
+  XYPosition(float x, float y) : x(x), y(y) {
+  }
+
+  bool operator==(const XYPosition &other) const {
+    return x == other.x && y == other.y;
+  }
+}
+
 class Data {
 protected:
   std::vector<mem_t> sizes;
@@ -32,16 +45,14 @@ protected:
   std::vector<std::string> data_names;
   std::vector<int> data_types;
   std::vector<int> data_tags;
-  std::vector<float> x_pos;
-  std::vector<float> y_pos;
+  std::vector<XYPosition> xy_positions;
 
   std::unordered_map<std::string, dataid_t> name_to_id;
 
 public:
   Data() = default;
   Data(std::size_t num_data)
-      : sizes(num_data), initial_location(num_data), data_names(num_data), x_pos(num_data, 0.0f),
-        y_pos(num_data, 0.0f) {
+      : sizes(num_data), initial_location(num_data), data_names(num_data), xy_positions(num_data) {
   }
 
   [[nodiscard]] bool empty() const {
@@ -49,48 +60,36 @@ public:
   }
 
   void set_size(dataid_t id, mem_t size) {
-    assert(id < sizes.size());
-    sizes.at(id) = size;
+    sizes[id] = size;
   }
 
   void set_tag(dataid_t id, int tag) {
     assert(id < data_tags.size());
-    data_tags.at(id) = tag;
+    data_tags[id] = tag;
   }
 
   void set_x_pos(dataid_t id, float x) {
-    assert(id < x_pos.size());
-    x_pos.at(id) = x;
+    xy_positions[id].x = x;
   }
 
   void set_y_pos(dataid_t id, float y) {
-    assert(id < y_pos.size());
-    y_pos.at(id) = y;
+    xy_positions[id].y = y;
   }
 
   [[nodiscard]] float get_x_pos(dataid_t id) const {
-    return x_pos.at(id);
+    return xy_positions.at(id).x;
   }
 
   [[nodiscard]] float get_y_pos(dataid_t id) const {
-    return y_pos.at(id);
-  }
-
-  [[nodiscard]] const std::vector<float> &get_x_pos_vec() const {
-    return x_pos;
-  }
-
-  [[nodiscard]] const std::vector<float> &get_y_pos_vec() const {
-    return y_pos;
+    return xy_positions.at(id).y;
   }
 
   int get_tag(dataid_t id) const {
-    return data_tags.at(id);
+    return data_tags[id];
   }
 
   void set_type(dataid_t id, int type) {
-    assert(id < data_types.size());
-    data_types.at(id) = type;
+    data_types[id] = type;
   }
 
   int get_type(dataid_t id) const {
@@ -103,9 +102,8 @@ public:
     initial_location.at(id) = location;
   }
   void set_name(dataid_t id, std::string name) {
-    assert(id < data_names.size());
-    data_names.at(id) = std::move(name);
-    name_to_id[data_names.at(id)] = id;
+    data_names[id] = std::move(name);
+    name_to_id[data_names[id]] = id;
   }
 
   dataid_t get_id(const std::string &name) const {
@@ -120,8 +118,7 @@ public:
       data_names.resize(id + 1);
       data_types.resize(id + 1);
       data_tags.resize(id + 1);
-      x_pos.resize(id + 1, 0.0f);
-      y_pos.resize(id + 1, 0.0f);
+      xy_positions.resize(id + 1);
     }
 
     assert(id < sizes.size());
