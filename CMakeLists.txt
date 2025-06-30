@@ -198,8 +198,8 @@ if(ENABLE_NATIVE_TUNING)
     target_compile_options(project_warnings INTERFACE -march=native -mtune=native)
 endif()
 
-add_subdirectory(src/backend)      # defines backend target
-#add_subdirectory(src/bindings)     # defines python module 
+add_subdirectory(src/backend)      # builds simulator library
+add_subdirectory(src/bindings)     # builds python module 
 
 include(CPack)                     #for packaging
 include(GNUInstallDirs)            #for install dirs
