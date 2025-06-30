@@ -10,7 +10,7 @@ from task4feedback.ml.util import *
 from task4feedback.ml.env import *
 
 from dataclasses import dataclass
-from task4feedback.ml.ppo import *
+from task4feedback.ml.algorithms.ppo import *
 from typing import Callable, List, Self
 import numpy as np
 from task4feedback import fastsim2 as fastsim
@@ -59,10 +59,8 @@ from tensordict.nn import (
 )
 import torchrl
 import torch_geometric
-import aim
-from aim.pytorch import track_gradients_dists, track_params_dists
 
-
+start_logger()
 seed = 1
 random.seed(seed)
 np.random.seed(seed)
@@ -70,35 +68,11 @@ torch.manual_seed(seed)
 torch.backends.cudnn.deterministic = True
 
 
-@dataclass
-class JacobiConfig:
-    L: int = 4
-    n: int = 4
-    steps: int = 1
-    n_part: int = 4
-    randomness: float = 0
-    permute_idx: int = 0
-
-
-class JacobiVariant(VariantBuilder):
-    @staticmethod
-    def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
-        memory_usage = 0
-        vcu_usage = 1
-        expected_time = 1000
-        if arch == DeviceType.GPU:
-            return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
-        else:
-            return None
-
-
 def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
     mesh = generate_quad_mesh(L=config.L, n=config.n)
     geom = build_geometry(mesh)
 
-    jgraph = JacobiGraph(geom, config.steps)
-
-    jgraph.apply_variant(JacobiVariant)
+    jgraph = JacobiGraph(geom, config, JacobiVariant)
 
     partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
     # offset by 1 to ignore cpu
@@ -111,79 +85,72 @@ def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
 
 def make_jacobi_env(config: JacobiConfig):
     gmsh.initialize()
-    s = uniform_connected_devices(5, 1000000000, 1, 2000)
+    s = uniform_connected_devices(5, 1000000000, 1, 1)
     jgraph = build_jacobi_graph(config)
 
     d = jgraph.get_blocks()
     m = jgraph
-    m.finalize_tasks()
+    print(f"Jacobi graph: {m}")
     spec = create_graph_spec()
+    print(f"Graph spec: {spec}")
     input = SimulatorInput(
         m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
     )
+    print(f"Simulator input: {input}")
     env = RuntimeEnv(
-        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+        SimulatorFactory(input, spec, CandidateObserverFactory), device="cpu"
     )
-    env = TransformedEnv(env, StepCounter())
-    env = TransformedEnv(env, TrajCounter())
+    
+    print(f"Runtime environment created: {env}")
+    
+    
 
     return env
 
 
 if __name__ == "__main__":
-    jacobi_config = JacobiConfig(steps=14, randomness=1)
+    jacobi_config = JacobiConfig(n = 8, L = 1, steps=60, randomness=1)
 
     def make_env() -> RuntimeEnv:
         return make_jacobi_env(jacobi_config)
 
     env = make_env()
-
-    # start_logger()
-
     sim = env.simulator
-    jgraph = env.simulator_factory.input.graph
-    mappings = jgraph.get_mapping_from_locations()
-    cell_locations = jgraph.get_cell_locations()
-
-    relabel_dict = {}
-    for i in range(1, 5):
-        relabel_dict[i] = i
-
-    # Form all permutations of relabel_dict
-
-    import itertools
-
-    p = list(itertools.permutations(relabel_dict.values()))
-    print(p)
-
-    jgraph.randomize_locations(1, location_list=[1, 2, 3, 4])
-    # print(mappings)
-
-    # # save cell locations to pickle file
-    # with open("cell_locations.pkl", "wb") as f:
-    #     import pickle
-
-    #     pickle.dump(cell_locations, f)
-
-    # #save cell location dict to json
-    # import json
-    # with open("cell_locations.json", "w") as f:
-    #     json.dump(cell_locations, f)
-
-    # load cell locations from pickle file
-    import pickle
-
-    with open("cell_locations.pkl", "rb") as f:
-        cell_locations = pickle.load(f)
-
-    print("Cell locations saved to cell_locations.pkl")
-
-    sim.external_mapper = PartitionMapper(cell_to_mapping=cell_locations, level_start=0)
-    sim.enable_external_mapper()
-    # sim.disable_external_mapper()
+    import time 
+    
+    sim.disable_external_mapper()
+    start_t = time.perf_counter()
     sim.run()
-
+    end_t = time.perf_counter()
+    print(f"Simulation completed in (ms) {(end_t - start_t) * 1000:.2f} ms")
     print(f"Final state: {sim.status}")
     print(f"Final time: {sim.time}")
 
-    animate_mesh_graph(env, time_interval=250, show=False, title="test_part_mapper")
+    # relabel_dict = {}
+    # for i in range(1, 5):
+    #     relabel_dict[i] = i
+
+    # # Form all permutations of relabel_dict
+
+    # import itertools
+
+    # p = list(itertools.permutations(relabel_dict.values()))
+    # print(p)
+
+    # jgraph.randomize_locations(1, location_list=[1, 2, 3, 4])
+    # print(mappings)
+
+    # with open("cell_locations.pkl", "rb") as f:
+    #     cell_locations = pickle.load(f)
+
+    # print("Cell locations saved to cell_locations.pkl")
+
+    # sim.external_mapper = PartitionMapper(cell_to_mapping=cell_locations, level_start=0)
+    # sim.enable_external_mapper()
+    # # sim.disable_external_mapper()
+    # sim.run()
+
+    # print(f"Final state: {sim.status}")
+    # print(f"Final time: {sim.time}")
+
+    # animate_mesh_graph(env, time_interval=250, show=False, title="test_part_mapper")
