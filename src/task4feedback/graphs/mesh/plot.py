@@ -12,7 +12,7 @@ from collections import defaultdict
 from task4feedback.fastsim2 import TaskState
 import task4feedback.fastsim2 as fastsim
 import copy
-from ..base import EnvironmentState
+#from ..base import EnvironmentState
 
 import wandb
 import os
@@ -546,30 +546,30 @@ def make_mesh_graph_animation(
     return ani
 
 
-def animate_mesh_graph(
-    env,
-    time_interval=250,
-    show=True,
-    title="mesh_animation",
-    folder=None,
-    figsize=(8, 8),
-    dpi=None,
-    bitrate=None,
-):
-    current_time = env.simulator.time
-    state_list = []
-    for t in range(0, current_time, time_interval):
-        state = EnvironmentState.from_env(env, t)
-        state_list.append(state)
+# def animate_mesh_graph(
+#     env,
+#     time_interval=250,
+#     show=True,
+#     title="mesh_animation",
+#     folder=None,
+#     figsize=(8, 8),
+#     dpi=None,
+#     bitrate=None,
+# ):
+#     current_time = env.simulator.time
+#     state_list = []
+#     for t in range(0, current_time, time_interval):
+#         state = EnvironmentState.from_env(env, t)
+#         state_list.append(state)
 
-    print(f"Number of states: {len(state_list)}")
-    return make_mesh_graph_animation(
-        env.simulator.input.graph,
-        state_list,
-        title=title,
-        show=show,
-        folder=None,
-        figsize=figsize,
-        dpi=dpi,
-        bitrate=bitrate,
-    )
+#     print(f"Number of states: {len(state_list)}")
+#     return make_mesh_graph_animation(
+#         env.simulator.input.graph,
+#         state_list,
+#         title=title,
+#         show=show,
+#         folder=None,
+#         figsize=figsize,
+#         dpi=dpi,
+#         bitrate=bitrate,
+#     )

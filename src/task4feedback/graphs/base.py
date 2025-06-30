@@ -1,5 +1,5 @@
 from .mesh.base import Geometry, Cell, Edge
-from ..interface import DataBlocks, Graph
+from ..interface import DataBlocks, TaskGraph
 from dataclasses import dataclass, field
 from collections import defaultdict
 import networkx as nx
@@ -183,7 +183,7 @@ class DataGeometry:
         return self.map.get_blocks(object)
 
 
-class ComputeDataGraph(Graph):
+class ComputeDataGraph(TaskGraph):
     def ___init__(self, data: DataGeometry):
         super(ComputeDataGraph, self).__init__()
         self.data = data
@@ -306,71 +306,71 @@ def weighted_cell_partition(cell_graph: WeightedCellGraph, nparts: int):
     return edgecuts, parts
 
 
-@dataclass
-class EnvironmentState:
-    time: int
-    compute_tasks: List[fastsim.ComputeTask]
-    data_tasks: List[fastsim.DataTask]
-    compute_tasks_by_state: dict
-    data_tasks_by_state: dict
-    mapping_dict: dict
-    data_task_source_device: dict
-    data_task_virtual: dict
-    data_task_block: dict
+# @dataclass
+# class EnvironmentState:
+#     time: int
+#     compute_tasks: List[fastsim.ComputeTask]
+#     data_tasks: List[fastsim.DataTask]
+#     compute_tasks_by_state: dict
+#     data_tasks_by_state: dict
+#     mapping_dict: dict
+#     data_task_source_device: dict
+#     data_task_virtual: dict
+#     data_task_block: dict
 
-    def parse_state(env, time: Optional[int] = None):
-        if time is None:
-            time = env.simulator.time
+#     def parse_state(env, time: Optional[int] = None):
+#         if time is None:
+#             time = env.simulator.time
 
-        graph = env.simulator_factory.input.graph
-        data = env.simulator_factory.input.data
-        sim = env.simulator
-        assert graph.ctasks is not None
-        compute_tasks = graph.ctasks.get_compute_tasks()
-        data_tasks = graph.ctasks.get_data_tasks()
-        simulator_state = sim.state
+#         graph = env.simulator_factory.input.graph
+#         data = env.simulator_factory.input.data
+#         sim = env.simulator
+#         assert graph.ctasks is not None
+#         compute_tasks = graph.ctasks.get_compute_tasks()
+#         data_tasks = graph.ctasks.get_data_tasks()
+#         simulator_state = sim.state
 
-        compute_tasks_by_state = defaultdict(lambda: list())
-        mapping_dict = {}
+#         compute_tasks_by_state = defaultdict(lambda: list())
+#         mapping_dict = {}
 
-        for task in compute_tasks:
-            # print(f"Supported arch: {task.supported_architectures}")
-            task_state = simulator_state.get_state_at(task.id, time)
-            compute_tasks_by_state[task_state].append(task.id)
-            device_id = simulator_state.get_mapping(task.id)
-            mapping_dict[task.id] = device_id
+#         for task in compute_tasks:
+#             # print(f"Supported arch: {task.supported_architectures}")
+#             task_state = simulator_state.get_state_at(task.id, time)
+#             compute_tasks_by_state[task_state].append(task.id)
+#             device_id = simulator_state.get_mapping(task.id)
+#             mapping_dict[task.id] = device_id
 
-        data_tasks_by_state = defaultdict(lambda: list())
-        data_task_source_device = {}
-        data_task_virtual = {}
-        data_task_block = {}
-        for task in data_tasks:
-            task_state = simulator_state.get_state_at(task.id, time)
-            data_tasks_by_state[task_state].append(task.id)
-            associated_compute_task_id = task.get_compute_task()
-            device_id = simulator_state.get_mapping(associated_compute_task_id)
-            source_device = simulator_state.get_data_task_source(task.id)
-            data_task_source_device[task.id] = source_device
-            is_virtual = simulator_state.is_data_task_virtual(task.id)
-            data_task_virtual[task.id] = is_virtual
-            mapping_dict[task.id] = device_id
-            data_task_block[task.id] = task.get_data_id()
+#         data_tasks_by_state = defaultdict(lambda: list())
+#         data_task_source_device = {}
+#         data_task_virtual = {}
+#         data_task_block = {}
+#         for task in data_tasks:
+#             task_state = simulator_state.get_state_at(task.id, time)
+#             data_tasks_by_state[task_state].append(task.id)
+#             associated_compute_task_id = task.get_compute_task()
+#             device_id = simulator_state.get_mapping(associated_compute_task_id)
+#             source_device = simulator_state.get_data_task_source(task.id)
+#             data_task_source_device[task.id] = source_device
+#             is_virtual = simulator_state.is_data_task_virtual(task.id)
+#             data_task_virtual[task.id] = is_virtual
+#             mapping_dict[task.id] = device_id
+#             data_task_block[task.id] = task.get_data_id()
 
-        return EnvironmentState(
-            time=time,
-            compute_tasks=compute_tasks,
-            data_tasks=data_tasks,
-            compute_tasks_by_state=compute_tasks_by_state,
-            data_tasks_by_state=data_tasks_by_state,
-            mapping_dict=mapping_dict,
-            data_task_source_device=data_task_source_device,
-            data_task_virtual=data_task_virtual,
-            data_task_block=data_task_block,
-        )
+#         return EnvironmentState(
+#             time=time,
+#             compute_tasks=compute_tasks,
+#             data_tasks=data_tasks,
+#             compute_tasks_by_state=compute_tasks_by_state,
+#             data_tasks_by_state=data_tasks_by_state,
+#             mapping_dict=mapping_dict,
+#             data_task_source_device=data_task_source_device,
+#             data_task_virtual=data_task_virtual,
+#             data_task_block=data_task_block,
+#         )
 
-    @staticmethod
-    def from_env(env, time: Optional[int] = None):
-        return EnvironmentState.parse_state(env, time)
+#     @staticmethod
+#     def from_env(env, time: Optional[int] = None):
+#         return EnvironmentState.parse_state(env, time)
 
 
 class DynamicWorkload:
@@ -718,11 +718,11 @@ class GraphConfig:
 
 
 class GraphRegistry:
-    _registry: dict[Type, Callable[[Geometry, GraphConfig], Graph]] = {}
+    _registry: dict[Type, Callable[[Geometry, GraphConfig], TaskGraph]] = {}
 
     @classmethod
     def register(
-        cls, func: Callable[[Geometry, GraphConfig], Graph], config: Type[GraphConfig]
+        cls, func: Callable[[Geometry, GraphConfig], TaskGraph], config: Type[GraphConfig]
     ):
         print(f"Registering graph type: {config}")
         cls._registry[config] = func
@@ -731,11 +731,11 @@ class GraphRegistry:
     @classmethod
     def get(
         cls, config: Type[GraphConfig]
-    ) -> Optional[Callable[[Geometry, GraphConfig], Graph]]:
+    ) -> Optional[Callable[[Geometry, GraphConfig], TaskGraph]]:
         return cls._registry.get(config)
 
     @classmethod
-    def build(cls, geometry: Geometry, config: GraphConfig) -> Optional[Graph]:
+    def build(cls, geometry: Geometry, config: GraphConfig) -> Optional[TaskGraph]:
         """
         Build a graph of the specified type using the provided geometry and configuration.
         """

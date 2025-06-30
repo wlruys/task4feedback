@@ -18,19 +18,30 @@
 
 void init_simulator_logger() {
   try {
-    // Create unique name using process ID and thread ID
-    std::stringstream ss;
-    ss << "console_" << getpid() << "_" << std::this_thread::get_id();
-    std::string logger_name = ss.str();
+    // Use a simpler, static logger name to avoid potential threading issues
+    static bool logger_initialized = false;
+    if (logger_initialized) {
+      return;
+    }
+
+    // Use a simple static name instead of dynamic generation
+    std::string logger_name = "simulator_console";
+
+    // Drop existing logger if it exists
+    spdlog::drop(logger_name);
 
     auto logger = spdlog::stdout_color_mt(logger_name);
     spdlog::set_default_logger(logger);
-    spdlog::set_level(spdlog::level::debug);
-    spdlog::set_pattern("[%l][%s:%#]\t%v - %!()");
+    spdlog::set_level(spdlog::level::critical);
+
+    logger_initialized = true;
   } catch (const spdlog::spdlog_ex &ex) {
     std::cerr << "Logger initialization failed: " << ex.what() << std::endl;
+  } catch (...) {
+    std::cerr << "Unknown error during logger initialization" << std::endl;
   }
 }
+
 class Simulator {
 protected:
   void add_initial_event() {
@@ -73,11 +84,6 @@ public:
     mapper = mapper_;
   }
 
-  void gather_graph_statistics(std::vector<DeviceType> &device_types) {
-    ZoneScoped;
-    scheduler.get_state().gather_graph_statistics(device_types);
-  }
-
   const SchedulerState &get_state() const {
     return scheduler.get_state();
   }
@@ -91,7 +97,8 @@ public:
       spdlog::warn("Simulator already initialized ...skipping.");
       return;
     }
-
+    std::cout << "Initializing simulator with create_data_tasks: " << create_data_tasks
+              << " and initialize_data_manager: " << initialize_data_manager << std::endl;
     add_initial_event();
     scheduler.initialize(create_data_tasks, initialize_data_manager);
     initialized = true;
@@ -111,7 +118,6 @@ public:
     }
     scheduler.initialize_data_manager();
     std::vector<DeviceType> device_types = {DeviceType::GPU};
-    this->gather_graph_statistics(device_types);
     data_initialized = true;
   }
 
@@ -122,13 +128,13 @@ public:
   ExecutionState handle_event(EventVariant &event) {
     ZoneScoped;
     return std::visit(
-        [this](auto &e) {
+        [this](auto &e) -> ExecutionState {
           using T = std::decay_t<decltype(e)>;
 
           if constexpr (std::is_same_v<T, MapperEvent>) {
             return dispatch_mapper(e);
           } else if constexpr (std::is_same_v<T, ReserverEvent>) {
-            scheduler.reserve_task(e, event_manager);
+            scheduler.reserve_tasks(e, event_manager);
             return ExecutionState::RUNNING;
           } else if constexpr (std::is_same_v<T, LauncherEvent>) {
             scheduler.launch_tasks(e, event_manager);
@@ -137,8 +143,8 @@ public:
             scheduler.evict(e, event_manager);
             return ExecutionState::RUNNING;
           } else if constexpr (std::is_same_v<T, CompleterVariant>) {
-            std::visit(
-                [this](auto &completer_event) {
+            return std::visit(
+                [this](auto &completer_event) -> ExecutionState {
                   using CT = std::decay_t<decltype(completer_event)>;
 
                   if constexpr (std::is_same_v<CT, ComputeCompleterEvent>) {
@@ -148,10 +154,18 @@ public:
                     scheduler.complete_data_task(completer_event, event_manager);
                     return ExecutionState::RUNNING;
                   } else if constexpr (std::is_same_v<CT, EvictorCompleterEvent>) {
-                    scheduler.complete_evictor_task(completer_event, event_manager);
+                    scheduler.complete_eviction_task(completer_event, event_manager);
+                    return ExecutionState::RUNNING;
+                  } else {
+                    spdlog::critical("Unknown completer event type: {}",
+                                     typeid(completer_event).name());
+                    return ExecutionState::ERROR;
                   }
                 },
                 e);
+          } else {
+            spdlog::critical("Unknown event type: {}", typeid(e).name());
+            return ExecutionState::ERROR;
           }
         },
         event);
@@ -214,6 +228,8 @@ public:
   }
   ExecutionState run() {
     ZoneScoped;
+
+    SPDLOG_DEBUG("Running simulator");
 
     if (last_state == ExecutionState::NONE) {
       last_state = ExecutionState::RUNNING;

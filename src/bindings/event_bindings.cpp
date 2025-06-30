@@ -10,6 +10,8 @@ void init_event_ext(nb::module_ &m) {
       .value("RESERVER", EventType::RESERVER)
       .value("LAUNCHER", EventType::LAUNCHER)
       .value("EVICTOR", EventType::EVICTOR)
-      .value("COMPLETER", EventType::COMPLETER)
+      .value("COMPUTE_COMPLETER", EventType::COMPUTE_COMPLETER)
+      .value("DATA_COMPLETER", EventType::DATA_COMPLETER)
+      .value("EVICTOR_COMPLETER", EventType::EVICTOR_COMPLETER)
       .export_values();
 }

@@ -21,7 +21,6 @@ void init_device_ext(nb::module_ &m) {
       .export_values();
 
   nb::enum_<DeviceType>(m, "DeviceType", nb::is_arithmetic())
-      .value("NONE", DeviceType::NONE)
       .value("CPU", DeviceType::CPU)
       .value("GPU", DeviceType::GPU)
       .export_values();
@@ -47,7 +46,8 @@ void init_device_ext(nb::module_ &m) {
 
   nb::class_<Device>(m, "Device")
       .def(nb::init<>())
-      .def(nb::init<devid_t, DeviceType, vcu_t, mem_t>(), "id"_a, "arch"_a, "vcu"_a, "mem"_a)
+      .def(nb::init<devid_t, DeviceType, copy_t, vcu_t, mem_t>(), "id"_a, "arch"_a, "copy"_a,
+           "vcu"_a, "mem"_a)
       .def_ro("id", &Device::id)
       .def_ro("arch", &Device::arch)
       .def_ro("max_resources", &Device::max_resources, nb::rv_policy::copy)
@@ -57,8 +57,10 @@ void init_device_ext(nb::module_ &m) {
   nb::class_<Devices>(m, "Devices")
       .def(nb::init<>())
       .def(nb::init<std::size_t>(), "n_devices"_a)
-      .def("create_device", &Devices::create_device, "id"_a, "name"_a, "arch"_a, "vcus"_a, "mem"_a)
-      .def("append_device", &Devices::append_device, "name"_a, "arch"_a, "vcus"_a, "mem"_a)
+      .def("create_device", &Devices::create_device, "id"_a, "name"_a, "arch"_a, "copy"_a, "vcus"_a,
+           "mem"_a)
+      .def("append_device", &Devices::append_device, "name"_a, "arch"_a, "copy"_a, "vcus"_a,
+           "mem"_a)
       .def("get_device", nb::overload_cast<devid_t>(&Devices::get_device, nb::const_), "id"_a,
            nb::rv_policy::reference_internal)
       .def("get_device_id", &Devices::get_device_id, "name"_a)

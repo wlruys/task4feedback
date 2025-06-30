@@ -16,7 +16,7 @@ from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
 from torchrl.envs.utils import make_composite_from_td
 from torchrl.envs import StepCounter, TrajCounter, TransformedEnv
 from tensordict import TensorDict
-from task4feedback.graphs.base import Graph, DataBlocks, ComputeDataGraph
+from task4feedback.graphs.base import TaskGraph, DataBlocks, ComputeDataGraph
 import random
 from task4feedback.graphs.mesh.plot import *
 from task4feedback.legacy_graphs import *

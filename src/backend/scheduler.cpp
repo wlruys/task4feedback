@@ -44,7 +44,7 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
   devid_t chosen_device = action.device;
 
   SPDLOG_DEBUG("Time:{} Mapping task {} to device {}", current_time,
-               static_graph.get_compute_name(compute_task_id), chosen_device);
+               static_graph.get_compute_task_name(compute_task_id), chosen_device);
 
   assert(task_runtime.is_compute_mappable(compute_task_id));
 
@@ -94,7 +94,7 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
   // Check if the mapped task is reservable, and if so, enqueue it
   if (task_runtime.is_compute_reservable(compute_task_id)) {
     SPDLOG_DEBUG("Time:{} Task {} is reservable", current_time,
-                 static_graph.get_compute_name(compute_task_id));
+                 static_graph.get_compute_task_name(compute_task_id));
     // TODO(wlr): Check if delayed enqueue is faster
     push_reservable(compute_task_id, chosen_device);
   }
@@ -154,7 +154,6 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
 void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper) {
   ZoneScoped;
   success_count = 0;
-
   auto &s = this->state;
   auto &task_runtime = s.task_runtime;
   auto current_time = s.global_time;
@@ -202,14 +201,14 @@ void Scheduler::enqueue_data_tasks(taskid_t compute_task_id) {
   const auto data_dependencies = static_graph.get_compute_task_data_dependencies(compute_task_id);
 
   SPDLOG_DEBUG("Time:{} Enqueueing {} data tasks for task {}", current_time,
-               data_dependencies.size(), static_graph.get_compute_name(compute_task_id));
+               data_dependencies.size(), static_graph.get_compute_task_name(compute_task_id));
 
   // TODO(wlr): Check if delayed enqueue is faster
   for (auto data_task_id : data_dependencies) {
     task_runtime.data_notify_reserved(data_task_id, mapped_device, current_time, static_graph);
     if (task_runtime.is_data_launchable(data_task_id)) {
-      SPDLOG_DEBUG("Time:{} Data task {} is launchable", current_time,
-                   s.get_task_name(data_task_id));
+      SPDLOG_DEBUG("Time:{} Data task {}:{} is launchable", current_time,
+                   static_graph.get_data_task_name(data_task_id), data_task_id);
       push_launchable_data(data_task_id);
     }
   }
@@ -355,7 +354,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
                                                                     // after the eviction is over
     } else {
       SPDLOG_DEBUG("Time:{} Eviction will start after launching {} tasks", current_time,
-                   s.counts.unlaunched_reserved());
+                   s.counts.n_unlaunched_reserved());
     }
   }
 
@@ -448,12 +447,13 @@ bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_devi
                                           source_device_id, destination_device_id, current_time);
 
   if (duration.is_virtual) {
-    SPDLOG_DEBUG("Time:{} Data task {} is virtual", curren_time,
+    SPDLOG_DEBUG("Time:{} Data task {} is virtual", current_time,
                  static_graph.get_data_task_name(data_task_id));
     task_runtime.set_data_task_virtual(data_task_id, true);
   } else {
-    SPDLOG_DEBUG("Time:{} Data task {} moving from {} to {}", s.global_time,
-                 s.get_task_name(task_id), source_id, destination_device_id);
+    SPDLOG_DEBUG("Time:{} Data task {} moving from {} to {}", current_time,
+                 static_graph.get_data_task_name(data_task_id), source_device_id,
+                 destination_device_id);
   }
 
   // Record launching time
@@ -479,8 +479,8 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
   const auto &static_graph = s.get_tasks();
   auto &device_manager = s.get_device_manager();
 
-  SPDLOG_DEBUG("Time:{} Attempting to launch eviction task {} on device {}", current_time, task_id,
-               destination_device_id);
+  SPDLOG_DEBUG("Time:{} Attempting to launch eviction task {} on device {}", current_time,
+               eviction_task_id, destination_device_id);
 
   assert(task_runtime.is_eviction_launchable(eviction_task_id));
 
@@ -497,8 +497,8 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
     return false;
   }
 
-  SPDLOG_DEBUG("Time:{} Eviction task {} found source {} for block {}", current_time, task_id,
-               source_device_id, data_id);
+  SPDLOG_DEBUG("Time:{} Eviction task {} found source {} for block {}", current_time,
+               eviction_task_id, source_device_id, data_id);
 
   task_runtime.set_eviction_task_source_device(eviction_task_id, source_device_id);
   auto duration =
@@ -509,7 +509,7 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
     SPDLOG_DEBUG("Time:{} Eviction task {} is virtual", current_time, eviction_task_id);
     task_runtime.set_eviction_task_virtual(eviction_task_id, true);
   } else {
-    SPDLOG_DEBUG("Time:{} Eviction task {} moving from {} to {}", current_time, evictinon_task_id,
+    SPDLOG_DEBUG("Time:{} Eviction task {} moving from {} to {}", current_time, eviction_task_id,
                  source_device_id, destination_device_id);
   }
 
@@ -950,8 +950,8 @@ void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &even
   const taskid_t data_task_id = event.task;
   const devid_t destination_id = event.device;
 
-  SPDLOG_DEBUG("Time:{} Completing data task {} on device {}", current_time,
-               static_graph.get_data_task_name(data_task_id), destination_id);
+  SPDLOG_DEBUG("Time:{} Completing data task {}:{} on device {}", current_time,
+               static_graph.get_data_task_name(data_task_id), data_task_id, destination_id);
 
   // Updates data location and eviction manager (uses task runtime info of data task)
   const auto source_id = task_runtime.get_data_task_source_device(data_task_id);

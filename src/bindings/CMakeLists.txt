@@ -6,14 +6,13 @@ set(bindings_src
     event_bindings.cpp
     device_bindings.cpp
     task_bindings.cpp
-    graph_bindings.cpp
     data_bindings.cpp
     task_noise_bindings.cpp
     topology_bindings.cpp
     mapper_bindings.cpp
     scheduler_bindings.cpp
-    simulator_bindings.cpp
-    observer_bindings.cpp)
+    feature_bindings.cpp
+    simulator_bindings.cpp)
 
 nanobind_add_module(fastsim2 NB_STATIC ${bindings_src})
 

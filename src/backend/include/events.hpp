@@ -176,27 +176,23 @@ public:
     }
   }
 
-  // Completer with TaskIDList:
   inline void create_event(EventType t, timecount_t time, taskid_t task_id, devid_t device_id) {
-    // if (t != EventType::COMPLETER) {
-    //   std::cout << "create_event: expected COMPLETER got " << t;
-    //   throw std::invalid_argument("create_event: expected COMPLETER");
-    // }
     switch (t) {
-    case EventType::MAPPER:
-      events_.push(MapperEvent{time});
+    case EventType::COMPUTE_COMPLETER: {
+      events_.push(ComputeCompleterEvent{time, task_id, device_id});
       break;
-    case EventType::RESERVER:
-      events_.push(ReserverEvent{time});
+    }
+    case EventType::DATA_COMPLETER: {
+      events_.push(DataCompleterEvent{time, task_id, device_id});
       break;
-    case EventType::LAUNCHER:
-      events_.push(LauncherEvent{time});
+    }
+    case EventType::EVICTOR_COMPLETER: {
+      events_.push(EvictorCompleterEvent{time, task_id});
       break;
-    case EventType::EVICTOR:
-      events_.push(EvictorEvent{time});
-      break;
+    }
     default:
-      throw std::invalid_argument("create_event(type,time) only for MAPPER/RESERVER/LAUNCHER");
+      throw std::invalid_argument("create_event(type,time, task_id, device_id) only for "
+                                  "COMPUTE_COMPLETER/DATA_COMPLETER/EVICTOR_COMPLETER");
     }
   }
 

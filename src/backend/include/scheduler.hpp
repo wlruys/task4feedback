@@ -437,7 +437,7 @@ protected:
   std::reference_wrapper<TaskNoise> task_noise;
 
   [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id, devid_t device_id) const {
-    const auto static_graph = get_tasks();
+    const auto &static_graph = get_tasks();
     const auto arch = get_devices().get_type(device_id);
     const Resources &task_resources = static_graph.get_compute_task_resources(task_id, arch);
     mem_t non_local_memory =
@@ -449,7 +449,7 @@ protected:
 
   [[nodiscard]] ResourceRequest request_reserve_resources(taskid_t task_id,
                                                           devid_t device_id) const {
-    const auto static_graph = get_tasks();
+    const auto &static_graph = get_tasks();
     const auto arch = get_devices().get_type(device_id);
     const Resources &task_resources = static_graph.get_compute_task_resources(task_id, arch);
     mem_t non_local_memory = data_manager.non_local_size_reserved(
@@ -459,7 +459,20 @@ protected:
         device_manager.overflow_mem<TaskState::RESERVED>(device_id, requested.mem);
     return {.requested = requested, .missing = Resources(0, missing_memory)};
   }
-  [[nodiscard]] ResourceRequest request_launch_resources(taskid_t task_id, devid_t device_id) const;
+
+  [[nodiscard]] ResourceRequest request_launch_resources(taskid_t compute_task_id,
+                                                         devid_t device_id) const {
+    const auto &static_graph = get_tasks();
+    const auto arch = get_devices().get_type(device_id);
+    const Resources &task_resources =
+        static_graph.get_compute_task_resources(compute_task_id, arch);
+    SPDLOG_DEBUG("Requesting launch resources for task {} on device {}",
+                 static_graph.get_compute_task_name(compute_task_id), device_id);
+    SPDLOG_DEBUG("Task resources: VCU: {}, MEM: {}", task_resources.vcu, task_resources.mem);
+    Resources requested = {task_resources.vcu, task_resources.mem};
+    auto missing_vcu = device_manager.overflow_vcu<TaskState::LAUNCHED>(device_id, requested.vcu);
+    return {requested, Resources(missing_vcu, 0)};
+  }
 
   void map_resources(taskid_t task_id, devid_t device_id, const Resources &requested) {
     device_manager.add_resources<TaskState::MAPPED>(device_id, requested, global_time);
@@ -931,6 +944,7 @@ public:
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = false) {
     state.initialize(create_data_tasks, initialize_data_manager);
     auto initial_tasks = initially_mappable_tasks();
+    // std::cout << "Initial tasks: " << initial_tasks.size() << std::endl;
     queues.push_mappable(initial_tasks, state.get_task_noise().get_priorities());
     initialized = true;
   }
@@ -1219,7 +1233,7 @@ public:
 
     assert(state.get_tasks().is_architecture_supported(compute_task_id,
                                                        state.get_devices().get_type(device_id)));
-    assert(device_id < state.get_device_manager().size());
+    assert(device_id < state.get_devices().size());
 
     return Action(0, device_id, rp, lp);
   }

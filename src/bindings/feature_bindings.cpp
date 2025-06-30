@@ -270,7 +270,7 @@ void bind_edge_feature_extractor(nb::module_ &m, const char *class_name) {
 }
 
 // ----- Nanobind Module -----
-void init_observer_ext(nb::module_ &m) {
+void init_feature_ext(nb::module_ &m) {
   nb::bind_vector<std::vector<std::shared_ptr<IFeature>>>(m, "IFeatureVector");
   nb::bind_vector<std::vector<std::shared_ptr<IEdgeFeature>>>(m, "IEdgeFeatureVector");
   nb::bind_vector<std::vector<std::string>>(m, "StringVector");
@@ -279,43 +279,35 @@ void init_observer_ext(nb::module_ &m) {
   bind_int_feature<EmptyTaskFeature>(m, "EmptyTaskFeature");
   bind_state_feature<InDegreeTaskFeature>(m, "InDegreeTaskFeature");
   bind_state_feature<OutDegreeTaskFeature>(m, "OutDegreeTaskFeature");
-  bind_state_feature<DurationTaskFeature>(m, "DurationTaskFeature");
-  bind_state_feature<MemoryTaskFeature>(m, "MemoryTaskFeature");
+  bind_state_feature<GPUDurationTaskFeature>(m, "DurationTaskFeature");
   bind_state_feature<OneHotMappedDeviceTaskFeature>(m, "OneHotMappedDeviceTaskFeature");
   bind_state_feature<TaskStateFeature>(m, "TaskStateFeature");
-  bind_state_feature<StandardizedGPUDurationTaskFeature>(m, "StandardizedGPUDurationTaskFeature");
-  bind_state_feature<StandardizedInputOutputTaskFeature>(m, "StandardizedInputOutputTaskFeature");
-  bind_state_feature<TagTaskFeature>(m, "TagTaskFeature");
+  bind_state_feature<InputOutputTaskFeature>(m, "StandardizedInputOutputTaskFeature");
   bind_state_feature<DepthTaskFeature>(m, "DepthTaskFeature");
   bind_state_feature<TaskDeviceMappedTime>(m, "TaskDeviceMappedTimeFeature");
-  bind_state_feature<TaskDataMappedLocations>(m, "TaskDataMappedLocationsFeature");
+  bind_state_feature<TaskDataMappedSize>(m, "TaskDataMappedSizeFeature");
   bind_state_feature<TaskDataMappedCoordinates>(m, "TaskDataMappedCoordinatesFeature");
   bind_state_feature<CandidateVector>(m, "CandidateVectorFeature");
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");
   bind_state_feature<DataMappedLocations>(m, "DataMappedLocationsFeature");
-  bind_state_feature<ScaledDataMappedLocations>(m, "ScaledDataMappedLocationsFeature");
   bind_state_feature<DataReservedLocations>(m, "DataReservedLocationsFeature");
   bind_state_feature<DataLaunchedLocations>(m, "DataLaunchedLocationsFeature");
   bind_state_feature<DataSizeFeature>(m, "DataSizeFeature");
-  bind_state_feature<StandardizedDataSizeFeature>(m, "StandardizedDataSizeFeature");
 
   // Device Features
   bind_int_feature<EmptyDeviceFeature>(m, "EmptyDeviceFeature");
   bind_state_feature<DeviceMemoryFeature>(m, "DeviceMemoryFeature");
   bind_state_feature<DeviceTimeFeature>(m, "DeviceTimeFeature");
   bind_state_feature<DeviceIDFeature>(m, "DeviceIDFeature");
-  bind_state_feature<DeviceArchitectureFeature>(m, "DeviceArchitectureFeature");
 
   // Task Task Features
   bind_int_edge_feature<EmptyTaskTaskFeature>(m, "EmptyTaskTaskFeature");
-  bind_state_edge_feature<TaskTaskSharedDataFeature>(m, "TaskTaskSharedDataFeature");
   bind_state_edge_feature<TaskTaskDefaultEdgeFeature>(m, "TaskTaskDefaultEdgeFeature");
 
   // Task Data Features
   bind_int_edge_feature<EmptyTaskDataFeature>(m, "EmptyTaskDataFeature");
-  bind_state_edge_feature<TaskDataRelativeSizeFeature>(m, "TaskDataRelativeSizeFeature");
   bind_state_edge_feature<TaskDataUsageFeature>(m, "TaskDataUsageFeature");
   bind_state_edge_feature<TaskDataDefaultEdgeFeature>(m, "TaskDataDefaultEdgeFeature");
 
@@ -326,14 +318,15 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_edge_feature<DataDeviceDefaultEdgeFeature>(m, "DataDeviceDefaultEdgeFeature");
 
   // PrecompiledFeatureExtractors
-  bind_feature_extractor<InDegreeTaskFeature, OutDegreeTaskFeature, OneHotMappedDeviceTaskFeature>(
-      m, "TaskFeatureExtractor");
-  bind_feature_extractor<DataSizeFeature, DataMappedLocations>(m, "DataFeatureExtractor");
-  bind_feature_extractor<DeviceArchitectureFeature, DeviceIDFeature, DeviceMemoryFeature,
-                         DeviceTimeFeature>(m, "DeviceFeatureExtractor");
-  bind_edge_feature_extractor<TaskTaskSharedDataFeature>(m, "TaskTaskFeatureExtractor");
-  bind_edge_feature_extractor<TaskDataRelativeSizeFeature, TaskDataUsageFeature>(
-      m, "TaskDataFeatureExtractor");
+  // bind_feature_extractor<InDegreeTaskFeature, OutDegreeTaskFeature,
+  // OneHotMappedDeviceTaskFeature>(
+  //     m, "TaskFeatureExtractor");
+  // bind_feature_extractor<DataSizeFeature, DataMappedLocations>(m, "DataFeatureExtractor");
+  // bind_feature_extractor<DeviceArchitectureFeature, DeviceIDFeature, DeviceMemoryFeature,
+  //                        DeviceTimeFeature>(m, "DeviceFeatureExtractor");
+  // bind_edge_feature_extractor<TaskTaskSharedDataFeature>(m, "TaskTaskFeatureExtractor");
+  // bind_edge_feature_extractor<TaskDataRelativeSizeFeature, TaskDataUsageFeature>(
+  //     m, "TaskDataFeatureExtractor");
 
   nb::class_<IFeature>(m, "IFeature")
       .def_prop_ro("feature_dim", &IFeature::get_feature_dim)
@@ -386,11 +379,6 @@ void init_observer_ext(nb::module_ &m) {
       .def_rw("max_tasks", &GraphSpec::max_tasks)
       .def_rw("max_data", &GraphSpec::max_data)
       .def_rw("max_devices", &GraphSpec::max_devices)
-      .def("compute_max_degree",
-           nb::overload_cast<const SchedulerState &>(&GraphSpec::compute_max_degree))
-      .def("compute_max_tasks", &GraphSpec::compute_max_tasks)
-      .def("compute_max_data", &GraphSpec::compute_max_data)
-      .def("finalize", &GraphSpec::finalize)
       .def("__str__", [](const GraphSpec &self) {
         return "GraphSpec {\n"
                "  Nodes:\n"
@@ -447,6 +435,5 @@ void init_observer_ext(nb::module_ &m) {
       .def("get_task_data_edges_read_mapped", &GraphExtractor::get_task_data_edges_read_mapped)
       .def("get_task_device_edges", &GraphExtractor::get_task_device_edges)
       .def("get_data_device_edges", &GraphExtractor::get_data_device_edges)
-      .def("get_task_device_edges_mapped", &GraphExtractor::get_task_device_edges_mapped)
       .def("get_unique_data", &GraphExtractor::get_unique_data);
 }

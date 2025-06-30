@@ -1,5 +1,5 @@
 from .mesh.base import Geometry, Cell, Edge
-from ..interface import DataBlocks, Graph, DeviceType, TaskTuple, VariantTuple
+from ..interface import DataBlocks, DeviceType, TaskTuple, VariantTuple
 from .base import (
     DataGeometry,
     DataKey,
@@ -194,7 +194,7 @@ class JacobiGraph(ComputeDataGraph):
                 idx = self.data.idx_at_step(i)
 
                 name = f"Task(Cell({cell}), {i})"
-                task_id = self.add_task(name, j)
+                task_id = self.add_task(name)
 
                 self.task_to_cell[task_id] = cell
                 self.task_to_level[task_id] = i
@@ -226,13 +226,15 @@ class JacobiGraph(ComputeDataGraph):
                 self.add_read_data(task_id, read_blocks)
                 self.add_write_data(task_id, write_blocks)
 
-        self.fill_data_flow_dependencies()
 
-    def __init__(self, geometry: Geometry, config: JacobiConfig):
+    def __init__(self, geometry: Geometry, config: JacobiConfig, variant: Optional[VariantBuilder] = None):
         super(JacobiGraph, self).__init__()
         self.data = JacobiData.from_mesh(geometry, config)
         self.config = config
         self._build_graph()
+        if variant is not None:
+            self.apply_variant(variant)
+        self.finalize()
 
     def randomize_locations(
         self,

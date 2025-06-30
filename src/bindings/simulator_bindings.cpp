@@ -1,7 +1,6 @@
 #include "action.hpp"
 #include "communication.hpp"
 #include "data.hpp"
-#include "device_manager.hpp"
 #include "devices.hpp"
 #include "nbh.hpp"
 #include "noise.hpp"
@@ -31,13 +30,12 @@ void init_simulator_ext(nb::module_ &m) {
       .export_values();
 
   nb::class_<SchedulerInput>(m, "SchedulerInput")
-      .def(nb::init<Tasks &, Data &, Devices &, Topology &, TaskNoise &, CommunicationNoise &,
+      .def(nb::init<Graph &, StaticTaskInfo &, Data &, Devices &, Topology &, TaskNoise &,
                     TransitionConditions &>(),
-           "tasks"_a, "data"_a, "devices"_a, "topology"_a, "task_noise"_a, "communication_noise"_a,
-           "transition_conditions"_a, nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(),
-           nb::keep_alive<1, 4>(), nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(),
-           nb::keep_alive<1, 7>(), nb::keep_alive<1, 8>()) // Keep all referenced objects alive
-      .def(nb::init<SchedulerInput &>());
+           nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(),
+           nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>(),
+           nb::keep_alive<1, 8>())
+      .def(nb::init<SchedulerInput &>(), nb::keep_alive<1, 2>());
 
   nb::class_<Simulator>(m, "Simulator")
       .def_ro("initialized", &Simulator::initialized)
@@ -50,8 +48,6 @@ void init_simulator_ext(nb::module_ &m) {
       .def("initialize", &Simulator::initialize, "create_data_tasks"_a = true,
            "initialize_data_manager"_a = false)
       .def("initialize_data", &Simulator::initialize_data_manager)
-      .def("gather_graph_statistics", &Simulator::gather_graph_statistics,
-           "device_types"_a = std::vector<DeviceType>())
       .def("enable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(true); })
       .def("disable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(false); })
       .def("skip_external_mapping", &Simulator::skip_external_mapping,
@@ -61,7 +57,6 @@ void init_simulator_ext(nb::module_ &m) {
            nb::rv_policy::reference_internal)
       .def("run", &Simulator::run, nb::call_guard<nb::gil_scoped_acquire>())
       .def("get_current_time", &Simulator::get_current_time)
-      .def("get_task_finish_time", &Simulator::get_task_finish_time)
       .def("get_mappable_candidates",
            [](Simulator &s, TorchInt64Arr1D &arr) {
              nb::gil_scoped_acquire gil;

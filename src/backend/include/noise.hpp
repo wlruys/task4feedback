@@ -55,9 +55,25 @@ public:
 
   TaskNoise(StaticTaskInfo &static_graph, unsigned int seed_ = 0, unsigned int pseed = 1000)
       : n_tasks(static_graph.get_n_compute_tasks()), seed(seed_), pseed(pseed), gen(seed_),
-        pgen(pseed), task_durations(n_tasks * num_device_types, 0), mapping_priority(n_tasks, 0) {
-    generate_duration(static_graph);
-    generate_priority(static_graph);
+        pgen(pseed) {
+    try {
+      auto n_compute_tasks = static_graph.get_n_compute_tasks();
+      size_t duration_size =
+          static_cast<size_t>(n_compute_tasks) * static_cast<size_t>(num_device_types);
+      size_t priority_size = static_cast<size_t>(n_compute_tasks);
+
+      task_durations.reserve(duration_size);
+      task_durations.resize(duration_size, 0);
+
+      mapping_priority.reserve(priority_size);
+      mapping_priority.resize(priority_size, 0);
+
+      generate_duration(static_graph);
+      generate_priority(static_graph);
+
+    } catch (const std::bad_alloc &e) {
+      throw std::runtime_error("Memory allocation failed in TaskNoise constructor");
+    }
   }
 
   void set_seed(unsigned int seed_) {
@@ -71,11 +87,13 @@ public:
   }
 
   [[nodiscard]] timecount_t get(taskid_t task_id, DeviceType arch) const {
-    return task_durations[task_id * num_device_types + static_cast<std::size_t>(arch)];
+    const uint8_t arch_type = static_cast<uint8_t>(arch);
+    return task_durations[task_id * num_device_types + __builtin_ctz(arch_type)];
   }
 
   void set(taskid_t task_id, DeviceType arch, timecount_t value) {
-    task_durations[task_id * num_device_types + static_cast<std::size_t>(arch)] = value;
+    const uint8_t arch_type = static_cast<uint8_t>(arch);
+    task_durations[task_id * num_device_types + __builtin_ctz(arch_type)] = value;
   }
 
   void set(std::vector<timecount_t> values_) {
@@ -118,16 +136,20 @@ public:
   }
 
   virtual void generate_duration(StaticTaskInfo &task_info) {
+    std::cout << "Generating task durations for " << n_tasks << " tasks." << std::endl;
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
       for (std::size_t i = 0; i < num_device_types; i++) {
-        auto arch = static_cast<DeviceType>(i);
-        auto observed_time = sample_duration(task_info.get_mean_duration(task_id, arch));
+        auto arch = static_cast<DeviceType>(1 << i);
+        bool is_supported = task_info.is_architecture_supported(task_id, arch);
+        timecount_t observed_time =
+            is_supported ? sample_duration(task_info.get_mean_duration(task_id, arch)) : 0;
         set(task_id, arch, observed_time);
       }
     }
   }
 
   virtual void generate_priority(StaticTaskInfo &task_info) {
+    std::cout << "Generating task priorities for " << n_tasks << " tasks." << std::endl;
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
       set_priority(task_id, sample_priority(task_id));
     }

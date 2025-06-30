@@ -1,27 +1,26 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from ..fastsim2 import DeviceType, BYTES_IN_POWER
-
 
 @dataclass
 class DeviceTuple:
     name: str
     global_id: int = -1
     local_id: int = -1
-    arch: DeviceType = DeviceType.NONE
+    arch: DeviceType = DeviceType.CPU
     memory: int = 0
     vcu: int = 0
 
 
 @dataclass
 class TaskTuple:
-    id: int
-    name: str
-    tag: int
-    dependencies: list
-    read: list
-    write: list
-    type: int
+    id: int = 0
+    name: str = ""
+    tag: int = 0
+    dependencies: list = field(default_factory=list)
+    read: list = field(default_factory=list)
+    write: list = field(default_factory=list)
+    type: int = 0
 
 
 @dataclass

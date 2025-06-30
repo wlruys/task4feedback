@@ -76,9 +76,9 @@ protected:
   TaskSet visited;
   ankerl::unordered_dense::set<dataid_t> data_visited;
   ankerl::unordered_dense::set<taskid_t> local_visited;
-  ankerl::unordered_dense::set<taskid_t, taskid_t> task_index_map;
-  ankerl::unordered_dense::map<dataid_t, dataid_t> data_index_map;
-  ankerl::unordered_dense::map<devid_t, devid_t> device_index_map;
+  ankerl::unordered_dense::map<taskid_t, int64_t> task_index_map;
+  ankerl::unordered_dense::map<dataid_t, int64_t> data_index_map;
+  ankerl::unordered_dense::map<devid_t, int64_t> device_index_map;
   std::vector<op_t> source_list;
   std::vector<op_t> target_list;
   std::reference_wrapper<const SchedulerState> state;
@@ -106,11 +106,11 @@ public:
     const auto &s = this->state.get();
     const auto &device_manager = s.get_device_manager();
     const auto &devices = s.get_devices();
-    const auto &task_runtime = s.get_task_runtime();
+    const auto &static_graph = s.get_tasks();
 
     for (int i = 0; i < devices.size(); i++) {
       const auto arch = devices.get_type(i);
-      bool is_supported = task_runtime.is_architecture_supported(task_id, arch);
+      bool is_supported = static_graph.is_architecture_supported(task_id, arch);
       v(i) = is_supported ? 1 : 0;
     }
   }
@@ -940,7 +940,7 @@ public:
     for (int64_t i = 0; i < task_ids_span.size(); i++) {
       const auto &task_id = static_cast<taskid_t>(task_ids_span[i]);
       const auto &read = static_graph.get_read(task_id);
-      const auto &recent_writers = static_graph.get_recent_writers(task_id);
+      const auto &recent_writers = static_graph.get_most_recent_writers(task_id);
 
       for (int j = 0; j < read.size(); j++) {
         auto data_id = read[j];
@@ -1316,7 +1316,7 @@ struct DepthTaskFeature : public StateFeature<DepthTaskFeature> {
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &static_graph = state.get_tasks();
-    output[0] = static_cast<f_t>(static_graph.get_depth(task_id)) :
+    output[0] = static_cast<f_t>(static_graph.get_depth(task_id));
   }
 };
 
@@ -1418,6 +1418,9 @@ struct CandidateVector : public StateFeature<CandidateVector> {
     const auto &read = static_graph.get_read(task_id);
     const auto &devices = state.get_devices();
     const int n_devices = static_cast<int>(devices.size());
+    const auto &data = state.get_data();
+    const auto &data_manager = state.get_data_manager();
+
     f_t input_size = static_cast<f_t>(data.get_total_size(read));
 
     int64_t sum = 0.0;
@@ -1467,7 +1470,9 @@ struct TaskDataMappedSize : public StateFeature<TaskDataMappedSize> {
     const auto &static_graph = state.get_tasks();
     const auto read = static_graph.get_read(task_id);
     const auto &data = state.get_data();
-    const auto &read = task.get_read();
+    const auto &devices = state.get_devices();
+    const auto &data_manager = state.get_data_manager();
+
     for (int32_t i = 0; i < read.size(); i++) {
       auto data_id = read[i];
       const auto data_size = static_cast<double>(data.get_size(data_id));
@@ -1492,6 +1497,9 @@ struct TaskDataMappedCoordinates : public StateFeature<TaskDataMappedCoordinates
     const auto &task_runtime = state.get_task_runtime();
     const auto &static_graph = state.get_tasks();
     const auto read = static_graph.get_read(task_id);
+    const auto &data = state.get_data();
+    const auto &data_manager = state.get_data_manager();
+    const auto &devices = state.get_devices();
 
     const int n_devices = static_cast<int>(devices.size());
 
@@ -1527,11 +1535,10 @@ struct TaskDeviceMappedTime : public StateFeature<TaskDeviceMappedTime> {
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
 
-    const auto &devices = state.get_device_manager().get_devices();
+    const auto &devices = state.get_devices();
 
     for (int i = 0; i < devices.size(); i++) {
       auto mapped_time = static_cast<double>(state.costs.get_mapped_time(i));
-      mapped_time = guarded_divide(mapped_time, mean_duration);
       output[i] = static_cast<f_t>(mapped_time);
     }
 
@@ -1629,7 +1636,7 @@ struct DataSizeFeature : public StateFeature<DataSizeFeature> {
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID data_id, Span output) const {
-    const auto &data = state.get_data_manager().get_data();
+    const auto &data = state.get_data();
     output[0] = static_cast<f_t>(data.get_size(data_id));
   }
 };

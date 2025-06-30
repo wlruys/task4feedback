@@ -18,7 +18,7 @@ public:
   Resources max_resources;
   devid_t id = 0;
   copy_t max_copy = 0;
-  DeviceType arch = DeviceType::NONE;
+  DeviceType arch = DeviceType::CPU;
 
   Device() = default;
   Device(devid_t id, DeviceType arch, copy_t max_copy, vcu_t vcu, mem_t mem)
@@ -334,7 +334,7 @@ public:
   }
 
   [[nodiscard]] devid_t get_global_id(DeviceType arch, devid_t local_id) const {
-    return type_map[static_cast<std::size_t>(arch)][local_id];
+    return type_map[__builtin_ctz(static_cast<std::size_t>(arch))][local_id];
   }
 
   void create_device(devid_t id, std::string name, DeviceType arch, copy_t max_copy, vcu_t vcu,
@@ -345,10 +345,10 @@ public:
 
     assert(id < devices.size());
     devices[id] = Device(id, arch, max_copy, vcu, mem);
-    type_map[static_cast<std::size_t>(arch)].push_back(id);
+    type_map[__builtin_ctz(static_cast<uint8_t>(arch))].push_back(id);
 
     device_name_map[name] = id;
-    devid_t local_id = type_map[static_cast<std::size_t>(arch)].size() - 1;
+    devid_t local_id = type_map[__builtin_ctz(static_cast<uint8_t>(arch))].size() - 1;
     global_to_local[id] = local_id;
 
     device_names[id] = std::move(name);

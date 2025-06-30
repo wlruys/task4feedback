@@ -1,5 +1,5 @@
 from .mesh.base import Geometry, Cell, Edge
-from ..interface import DataBlocks, Graph, DeviceType, TaskTuple, VariantTuple
+from ..interface import DataBlocks, TaskGraph, DeviceType, TaskTuple, VariantTuple
 from .base import DataGeometry, DataKey, GeometryIDMap, ComputeDataGraph, GraphConfig
 from dataclasses import dataclass
 from ..interface.lambdas import VariantBuilder

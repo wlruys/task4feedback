@@ -17,11 +17,11 @@ import task4feedback.fastsim2 as fastsim
 from task4feedback.fastsim2 import (
     Devices,
     Topology,
-    Tasks,
+    Graph,
     TaskNoise,
-    CommunicationNoise,
+    StaticTaskInfo,
+    RuntimeTaskInfo,
     Data,
-    GraphTemplate,
     DeviceType,
     SchedulerInput,
     RangeTransitionConditions,
@@ -76,80 +76,56 @@ def _make_index_tensor(n):
     )
 
 
-class Graph:
+class TaskGraph:
     def __init__(self):
-        self.graph = GraphTemplate()
-        self.ctasks = None
+        self.graph = Graph()
+        self.static_graph = None
+        self.tasks = {}
 
-    def add_task(self, name, tag):
-        return self.graph.add_task(name, tag)
-
-    def __len__(self):
-        return self.graph.size()
-
-    def get_task(self, task, convert=False):
-        if convert and isinstance(task, str):
-            task = self.graph.get_id(task)
-
-        id = task
-        name = self.graph.get_name(id)
-        tag = self.graph.get_tag(id)
-        dependencies = self.graph.get_dependencies(id)
-        read = self.graph.get_read_data(id)
-        write = self.graph.get_write_data(id)
-        type = self.graph.get_type(id)
-
-        return TaskTuple(id, name, tag, dependencies, read, write, type)
+    def add_task(self, name):
+        idx = self.graph.add_task(name)
+        self.tasks[idx] = TaskTuple(id=idx, name=name)
+        return idx
+    
+    def add_tag(self, task_id, tag):
+        self.graph.set_tag(task_id, tag)
+        self.tasks[task_id].tag = tag
+        
+    def get_task(self, task_id):
+        if task_id in self.tasks:
+            return self.tasks[task_id]
+        else:
+            raise KeyError(f"Task with ID {task_id} does not exist in the graph.")
 
     def __len__(self):
         return self.graph.size()
 
-    def convert_list_to_ids(self, tasklist):
-        return [
-            self.graph.get_id(task) if isinstance(task, str) else task
-            for task in tasklist
-        ]
+    def __len__(self):
+        return self.graph.size()
+    
+    def __iter__(self):
+        return iter(self.tasks.values())
 
-    def convert_ids_to_names(self, tasklist):
-        return [
-            self.graph.get_name(task) if isinstance(task, int) else task
-            for task in tasklist
-        ]
-
-    def get_id(self, name):
-        return self.graph.get_id(name)
-
-    def get_name(self, task):
-        return self.graph.get_name(task)
-
-    def add_dependencies(self, task, dependencies, convert=False):
-        if convert and isinstance(task, str):
-            task = self.graph.get_id(task)
+    def add_dependencies(self, task, dependencies):
+        self.tasks[task].dependencies.extend(dependencies)
         self.graph.add_dependencies(task, dependencies)
 
-    def add_dependency(self, task, dependency, convert=False):
-        if convert and isinstance(task, str):
-            task = self.graph.get_id(task)
-        if convert and isinstance(dependency, str):
-            dependency = self.graph.get_id(dependency)
+    def add_dependency(self, task, dependency):
+        self.tasks[task].dependencies.append(dependency)
         self.graph.add_dependency(task, dependency)
 
-    def add_read_data(self, task, dataidlist, convert=False):
-        if convert and isinstance(task, str):
-            task = self.graph.get_id(task)
+    def add_read_data(self, task, dataidlist):
+        self.tasks[task].read.extend(dataidlist)
         self.graph.add_read_data(task, dataidlist)
 
-    def add_write_data(self, task, dataidlist, convert=False):
-        if convert and isinstance(task, str):
-            task = self.graph.get_id(task)
+    def add_write_data(self, task, dataidlist):
+        self.tasks[task].write.extend(dataidlist)
         self.graph.add_write_data(task, dataidlist)
 
     def apply_variant(self, variant_builder: type[VariantBuilder]):
-        for i in range(self.graph.size()):
+        for i in range(self.graph.get_n_compute_tasks()):
             task = self.get_task(i)
             for arch in DeviceType:
-                if arch == DeviceType.NONE:
-                    continue
 
                 variant = variant_builder.build_variant(arch, task)
 
@@ -157,61 +133,18 @@ class Graph:
                     continue
 
                 vcu_usage = int(variant.vcu_usage * fastsim.MAX_VCUS)
-                self.graph.add_variant(
+                self.graph.set_variant(
                     i,
                     arch,
                     vcu_usage,
                     variant.memory_usage,
                     variant.expected_time,
                 )
+                
+    def finalize(self):
+        self.graph.finalize()
+        self.static_graph = StaticTaskInfo(self.graph)
 
-    def apply_tag(self, tag_builder: TaskLabeler):
-        for i in range(self.graph.size()):
-            task = self.get_task(i)
-            tag = tag_builder.label(task)
-            self.graph.set_tag(i, tag)
-
-    def apply_type(self, type_builder: TaskLabeler):
-        for i in range(self.graph.size()):
-            task = self.get_task(i)
-            type = type_builder.label(task)
-            self.graph.set_type(i, type)
-
-    def finalize_tasks(
-        self, create_data_tasks=True, add_missing_dependencies=False, verbose=False
-    ):
-        if verbose:
-            print(f"..finalizing GraphWrapper with {self.graph.size()} tasks.")
-        self.ctasks = self.graph.to_tasks()
-        fastsim.GraphManager.finalize(
-            self.ctasks, create_data_tasks, add_missing_dependencies
-        )
-        if verbose:
-            print(f"..created {self.ctasks.data_size()} data tasks.")
-
-    def fill_data_flow_dependencies(self):
-        self.graph.fill_dependencies_from_data_usage()
-
-    def get_c_tasks(self):
-        assert self.ctasks is not None
-        return self.ctasks
-
-    def __iter__(self):
-        for i in range(self.graph.size()):
-            yield self.get_task(i)
-
-    def to_networkx(self):
-        import networkx as nx
-
-        G = nx.DiGraph()
-
-        for task in self:
-            G.add_node(task.id, label=task.name)
-
-            for dep_id in task.dependencies:
-                G.add_edge(dep_id, task.id)
-
-        return G
 
     @staticmethod
     def create_from_legacy_graph(graph, datamap):
@@ -294,9 +227,8 @@ class Graph:
         return g
 
     def print_variants(self):
-        for i in range(self.graph.size()):
+        for i in range(self.graph.get_n_compute_tasks()):
             task = self.get_task(i)
-            compute_task = self.ctasks.get_compute_task(i)
             print(f"Task {task.id}: {task.name} (Tag: {task.tag})")
             print("  Variants:")
             print(compute_task.get_variants())
@@ -306,14 +238,12 @@ class Graph:
             print(compute_task.get_read())
             print("Write Data:")
             print(compute_task.get_write())
-            print("Data Dependencies:")
-            print(compute_task.get_data_dependencies())
 
     def __str__(self):
         result = []
 
-        task_count = self.graph.size()
-        result.append(f"GraphWrapper with {task_count} tasks:")
+        task_count = self.graph.get_n_compute_tasks()
+        result.append(f"TaskGraph with {task_count} tasks:")
 
         for i in range(task_count):
             task = self.get_task(i)
@@ -455,13 +385,13 @@ class System:
         self.devices = Devices()
         self.topology = None
 
-    def create_device(self, name, arch, memory, vcu, id=None):
+    def create_device(self, name, arch, copy, memory, vcu, id=None):
         MAX_VCUS = fastsim.MAX_VCUS
         vcu = int(vcu * MAX_VCUS)
         if id is None:
-            id = self.devices.append_device(name, arch, vcu, memory)
+            id = self.devices.append_device(name, arch, copy, vcu, memory)
         else:
-            self.devices.create_device(id, name, arch, vcu, memory)
+            self.devices.create_device(id, name, arch, copy, vcu, memory)
 
         return DeviceTuple(name, id, self.devices.get_local_id(id), arch, memory, vcu)
 
@@ -575,18 +505,14 @@ class System:
 @dataclass
 class NoiseConfig:
     task_noise: TaskNoise
-    comm_noise: CommunicationNoise
 
     def __init__(
         self,
-        graph: Graph,
-        system: System,
+        graph: TaskGraph,
         duration_seed: int = 0,
         priority_seed: int = 0,
-        comm_seed: int = 0,
     ):
-        self.task_noise = TaskNoise(graph.get_c_tasks(), duration_seed, priority_seed)
-        self.comm_noise = CommunicationNoise(system.topology, comm_seed)
+        self.task_noise = TaskNoise(graph.static_graph, duration_seed, priority_seed)
 
 
 class ExternalMapper:
@@ -633,7 +559,7 @@ class StaticExternalMapper:
 
 @dataclass
 class SimulatorInput:
-    graph: Graph
+    graph: TaskGraph
     data: DataBlocks
     system: System
     noise: NoiseConfig
@@ -641,7 +567,7 @@ class SimulatorInput:
 
     def __init__(
         self,
-        graph: Graph,
+        graph: TaskGraph,
         data: DataBlocks,
         system: System,
         noise: Optional[NoiseConfig] = None,
@@ -649,9 +575,9 @@ class SimulatorInput:
     ):
         if transition_conditions is None:
             transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
-            # transition_conditions = DefaultTransitionConditions()
         if noise is None:
-            noise = NoiseConfig(graph, system)
+            noise = NoiseConfig(graph)
+        print("Using noise config:", noise.task_noise)
         self.noise = noise
         self.graph = graph
         self.data = data
@@ -660,12 +586,12 @@ class SimulatorInput:
 
     def to_input(self):
         return SchedulerInput(
-            self.graph.get_c_tasks(),
+            self.graph.graph,
+            self.graph.static_graph,
             self.data.data,
             self.system.devices,
             self.system.topology,
             self.noise.task_noise,
-            self.noise.comm_noise,
             self.transition_conditions,
         )
 
@@ -2075,8 +2001,8 @@ class SimulatorFactory:
             internal_mapper=self.internal_mapper,
             external_mapper=self.external_mapper,
         )
-        self.input.noise.task_noise.randomize_duration()
-        self.input.noise.task_noise.randomize_priority()
+        self.input.noise.task_noise.randomize_duration(self.input.graph.static_graph)
+        self.input.noise.task_noise.randomize_priority(self.input.graph.static_graph)
         simulator.initialize()
         simulator.initialize_data()
         if use_external_mapper:
@@ -2121,9 +2047,9 @@ def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth:
     s = System()
     n_gpus = n_devices - 1
 
-    s.create_device("CPU:0", DeviceType.CPU, mem, 1)
+    s.create_device("CPU:0", DeviceType.CPU, 4, mem, 1)
     for i in range(n_gpus):
-        s.create_device(f"GPU:{i}", DeviceType.GPU, mem, 1)
+        s.create_device(f"GPU:{i}", DeviceType.GPU, 2, mem, 1)
 
     s.finalize_devices()
 
