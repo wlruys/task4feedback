@@ -637,6 +637,7 @@ size_t Scheduler::get_mappable_candidates(TorchInt64Arr1D &output_tensor) {
   bool condition = queues.has_mappable() && conditions.get().should_map(s, queues);
 
   if (!condition) {
+    state.current_candidate = 0;
     return 0;
   }
 
@@ -644,7 +645,7 @@ size_t Scheduler::get_mappable_candidates(TorchInt64Arr1D &output_tensor) {
   auto top_k_tasks = mappable.get_top_k();
 
   const auto copy_size = std::min(output_tensor.size(), top_k_tasks.size());
-
+  state.current_candidate = top_k_tasks[0];
   for (size_t i = 0; i < copy_size; i++) {
     v(i) = top_k_tasks[i];
   }
@@ -658,6 +659,7 @@ TaskIDList &Scheduler::get_mappable_candidates() {
   clear_task_buffer();
 
   if (!condition) {
+    state.current_candidate = 0;
     return task_buffer;
   }
 

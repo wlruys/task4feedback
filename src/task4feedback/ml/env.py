@@ -55,7 +55,6 @@ class RuntimeEnv(EnvBase):
         randomize_interval: int = 1,
     ):
         super().__init__(device=device)
-        # print("Initializing environment")
 
         self.change_priority = change_priority
         self.change_duration = change_duration
@@ -65,12 +64,9 @@ class RuntimeEnv(EnvBase):
         self.randomize_interval = randomize_interval
         self.only_gpu = only_gpu
         if location_list is None:
-            location_list = range(simulator_factory.graph_spec.max_devices)
-        self.location_list = location_list
-        # if self.only_gpu and (0 in self.location_list):
-        #     print(
-        #         "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
-        #     )
+            self.location_list = list(range(simulator_factory.graph_spec.max_devices))
+        else:
+            self.location_list = location_list
 
         self.simulator_factory = simulator_factory
         self.simulator: SimulatorDriver = simulator_factory.create(
@@ -79,8 +75,6 @@ class RuntimeEnv(EnvBase):
 
         self.buffer_idx = 0
         self.resets = 0
-        # print("Change locations:", self.change_locations)
-        # print("Change priority:", self.change_priority)
         graph = simulator_factory.input.graph
 
         if (
@@ -105,9 +99,7 @@ class RuntimeEnv(EnvBase):
                 )
                 self.metis = np.array([i + 1 for i in self.metis])
 
-        # print("Creating environment spec")
         self.observation_spec = self._create_observation_spec()
-        # print("Observation spec created")
         self.action_spec = self._create_action_spec()
         self.reward_spec = self._create_reward_spec()
         self.done_spec = Binary(shape=(1,), device=self.device, dtype=torch.bool, n=1)
@@ -254,7 +246,6 @@ class RuntimeEnv(EnvBase):
         return out
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        # print("Resetting environment")
         self.resets += 1
         self.step_count = 0
         current_priority_seed = self.simulator_factory.pseed
@@ -690,7 +681,7 @@ class TerminalEnv(RuntimeEnv):
             obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
             reward[0] = obs["observation"]["aux"]["improvement"][0] - 1
             print(
-                f"Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
+                f"Time: {sim_time} / EFT: {self.EFT_baseline} / OPT: {self.optimal_time} / Improvement: {obs['observation']['aux']['improvement'][0]:.2f} / vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f} / EFT vs Optimal: {self.EFT_baseline / self.optimal_time:.2f}   "
             )
 
         out = obs

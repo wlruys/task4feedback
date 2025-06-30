@@ -214,6 +214,23 @@ template <typename FEType> void bind_state_feature(nb::module_ &m, const char *c
       });
 }
 
+template <typename FEType> void bind_frames_feature(nb::module_ &m, const char *class_name) {
+  nb::class_<FEType>(m, class_name)
+      .def(nb::init<SchedulerState &, int, bool, int>())
+      .def_prop_ro("feature_dim", &FEType::getFeatureDim)
+      .def("extract_feature",
+           [](const FEType &self, int32_t task_id,
+              nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
+             float *data = arr.data();
+             std::span<float> sp(data, self.getFeatureDim());
+             self.extractFeature(task_id, sp);
+           })
+      .def_static("create",
+                  [](SchedulerState &n, int w, bool b, int h) -> std::shared_ptr<IFeature> {
+                    return std::make_shared<FeatureAdapter<FEType>>(FEType(n, w, b, h));
+                  });
+}
+
 template <typename FEType> void bind_state_edge_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
       .def(nb::init<SchedulerState &>())
@@ -281,7 +298,7 @@ void init_observer_ext(nb::module_ &m) {
   bind_state_feature<TagTaskFeature>(m, "TagTaskFeature");
   bind_state_feature<DepthTaskFeature>(m, "DepthTaskFeature");
   bind_state_feature<ReadDataLocationFeature>(m, "ReadDataLocationFeature");
-  bind_state_feature<PrevReadSizeFeature>(m, "PrevReadSizeFeature");
+  bind_frames_feature<PrevReadSizeFeature>(m, "PrevReadSizeFeature");
   bind_state_feature<TagCandidateFeature>(m, "TagCandidateFeature");
 
   // Data Features

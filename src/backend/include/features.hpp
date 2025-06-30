@@ -1580,26 +1580,35 @@ struct ReadDataLocationFeature : public StateFeature<ReadDataLocationFeature> {
 };
 
 struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
-  PrevReadSizeFeature(const SchedulerState &state)
-      : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK) {
+  const int stride;
+  const int frames;
+  const bool add_current;
+  PrevReadSizeFeature(const SchedulerState &state, int width, bool add_current = false,
+                      int frames = 3)
+      : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK), stride(width * width),
+        frames(frames), add_current(add_current) {
   }
 
   size_t getFeatureDimImpl() const {
-    return 3;
+    const auto &devices = this->state.get_device_manager().get_devices();
+    return frames * (devices.size() - 1);
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &data_manager = state.get_data_manager();
     const auto &data = data_manager.get_data();
     double max_size = static_cast<double>(state.stats.total_read_stats.max);
+    auto n_devices = state.get_device_manager().get_devices().size() - 1;
+    if (!add_current)
+      task_id -= stride;
 
-    task_id -= 16;
     int i = 0;
-    while (task_id >= 0 && i < 3) {
+    while (task_id >= 0 && i < frames) {
       const ComputeTask &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
       double total_read = static_cast<double>(data.get_total_size(task.get_read()));
-      output[i] = guarded_divide(total_read, max_size);
-      task_id -= 16;
+      auto mapped_loc = (state.get_mapping(task_id) - 1);
+      output[i * n_devices + mapped_loc] = guarded_divide(total_read, max_size);
+      task_id -= stride;
       i++;
     }
   }
