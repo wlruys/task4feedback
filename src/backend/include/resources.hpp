@@ -44,7 +44,7 @@ consteval vcu_t operator""_vcus(long double val) {
   return static_cast<vcu_t>(val * MAX_VCUS);
 }
 
-struct alignas(16) Resources {
+struct Resources {
   vcu_t vcu{};
   mem_t mem{};
 

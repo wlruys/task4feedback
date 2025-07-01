@@ -645,7 +645,7 @@ public:
 
 using VariantList = std::array<Variant, num_device_types>;
 
-struct alignas(16) ComputeTaskStaticInfo {
+struct ComputeTaskStaticInfo {
   int32_t tag{};
   int32_t type{};
   int32_t depth{};
@@ -656,7 +656,7 @@ struct ComputeTaskVariantInfo {
   std::array<Variant, num_device_types> variants{};
 };
 
-struct alignas(32) ComputeTaskDepInfo {
+struct ComputeTaskDepInfo {
   int32_t s_dependencies;
   int32_t e_dependencies;
   int32_t s_dependents;
@@ -667,7 +667,7 @@ struct alignas(32) ComputeTaskDepInfo {
   int32_t e_data_dependents;
 };
 
-struct alignas(32) ComputeTaskDataInfo {
+struct ComputeTaskDataInfo {
   int32_t s_read{};
   int32_t e_read{};
   int32_t s_write{};
@@ -678,7 +678,7 @@ struct alignas(32) ComputeTaskDataInfo {
   int32_t e_unique{};
 };
 
-struct alignas(32) DataTaskStaticInfo {
+struct DataTaskStaticInfo {
   int32_t s_dependencies{};
   int32_t e_dependencies{};
   int32_t s_dependents{};
@@ -688,7 +688,7 @@ struct alignas(32) DataTaskStaticInfo {
   int64_t pad{}; // padding to align to 32 bytes
 };
 
-struct alignas(32) ComputeTaskRuntimeInfo {
+struct ComputeTaskRuntimeInfo {
   int32_t mapped_device{-1};
   int32_t reserve_priority{};
   int32_t launch_priority{};
@@ -699,7 +699,7 @@ struct alignas(32) ComputeTaskRuntimeInfo {
   uint8_t flags{};
 };
 
-struct alignas(16) DataTaskRuntimeInfo {
+struct DataTaskRuntimeInfo {
   int32_t source_device{};
   int32_t mapped_device{-1};
   int32_t launch_priority{};
@@ -708,7 +708,7 @@ struct alignas(16) DataTaskRuntimeInfo {
   uint8_t flags{};
 };
 
-struct alignas(32) EvictionTaskRuntimeInfo {
+struct EvictionTaskRuntimeInfo {
   int32_t data_id{};
   int32_t evicting_on{};
   int32_t compute_task{};
@@ -720,7 +720,7 @@ struct alignas(32) EvictionTaskRuntimeInfo {
   int64_t pad2{};
 };
 
-struct alignas(32) TaskTimeRecord {
+struct TaskTimeRecord {
   timecount_t mapped_time{};
   timecount_t reserved_time{};
   timecount_t launched_time{};
@@ -1101,7 +1101,9 @@ public:
     uint8_t arch_type = static_cast<uint8_t>(arch);
     info.mask |= arch_type;
     ;
-    info.variants[__builtin_ctz(arch_type)] = Variant(arch, vcu, mem, time);
+    const auto idx = __builtin_ctz(arch_type);
+    assert(idx < info.variants.size() && "Architecture index is out of bounds");
+    info.variants[idx] = Variant(arch, vcu, mem, time);
 
     // std::cout << "Adding compute variant for task ID: " << id
     //           << ", architecture: " << static_cast<int>(arch) << std::endl;
@@ -1218,7 +1220,9 @@ public:
     uint8_t arch_type = static_cast<uint8_t>(arch);
     // assert that mask flag is set for the given architecture
     assert((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
-    const auto &variant = info.variants[__builtin_ctz(arch_type)];
+    const auto idx = __builtin_ctz(arch_type);
+    assert(idx < info.variants.size() && "Architecture index is out of bounds");
+    const auto &variant = info.variants[idx];
     return variant.get_resources();
   }
 
@@ -1227,7 +1231,9 @@ public:
     uint8_t arch_type = static_cast<uint8_t>(arch);
     // assert that mask flag is set for the given architecture
     assert((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
-    const auto &variant = info.variants[__builtin_ctz(arch_type)];
+    const auto idx = __builtin_ctz(arch_type);
+    assert(idx < info.variants.size() && "Architecture index is out of bounds");
+    const auto &variant = info.variants[idx];
     return variant.get_mean_duration();
   }
 

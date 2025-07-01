@@ -271,16 +271,13 @@ public:
   uint8_t invalidate_except(dataid_t data_id, devid_t device_id, timecount_t current_time) {
     assert(data_id < num_data && device_id < num_devices);
     uint8_t old_status = locations[data_id];
-
-    // Create mask with only the specified device bit set
     uint8_t keep_mask = (1 << device_id);
-
     // Keep only the specified device, invalidate all others
     locations[data_id] &= keep_mask;
 
     // which bits changed from 1 to 0
+    // assumes that data was already valid on device_id
     uint8_t changed_bits = old_status ^ locations[data_id];
-    changed_bits &= ~keep_mask; // clear the bit for the kept device
 
     return changed_bits;
   }
