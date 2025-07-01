@@ -31,7 +31,7 @@
 #define TIME_TO_LAUNCH 0
 #define SCHEDULER_TIME_GAP 0
 
-using TaskQueue3 = ContainerQueue<taskid_t, TopKQueueHelper<1>::queue_type>;
+using TaskQueue3 = ContainerQueue<taskid_t, TopKQueueHelper<25>::queue_type>;
 using TaskQueue = ContainerQueue<taskid_t, std::priority_queue>;
 using DeviceQueue = ActiveQueueIterator<TaskQueue>;
 

@@ -3321,3 +3321,209 @@ class ActorCriticCNNBase(nn.Module):
 
     def forward(self, data: HeteroData | Batch, counts=None):
         raise NotImplementedError("This method should be overridden by subclasses.")
+
+
+import torch.nn.functional as F
+
+
+class UNetActor(nn.Module):
+    def __init__(self, in_channels, num_workers, base_filters=32, width=5):
+        super().__init__()
+        # Encoder
+        self.in_channels = in_channels
+        self.width = width
+        self.num_workers = num_workers
+        # Encoder
+        self.enc1 = nn.Sequential(
+            nn.Conv2d(in_channels, base_filters, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.enc2 = nn.Sequential(
+            nn.Conv2d(base_filters, base_filters * 2, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.pool = nn.MaxPool2d(2, 2)
+
+        # Bottleneck
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(base_filters * 2, base_filters * 4, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+
+        # Decoder — now using ConvTranspose2d
+        self.up2 = nn.ConvTranspose2d(
+            base_filters * 4, base_filters * 2, kernel_size=2, stride=2
+        )
+        self.dec2 = nn.Sequential(
+            nn.Conv2d(base_filters * 4, base_filters * 2, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.up1 = nn.ConvTranspose2d(
+            base_filters * 2, base_filters, kernel_size=2, stride=2
+        )
+        self.dec1 = nn.Sequential(
+            nn.Conv2d(base_filters * 2, base_filters, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+
+        # Final per-pixel logits
+        self.out_conv = nn.Conv2d(base_filters, num_workers, 1)
+
+    def _align_and_concat(self, up_feat, enc_feat):
+        """
+        If up_feat is smaller (by at most 1) than enc_feat, pad it.
+        If it's bigger, center-crop it.
+        """
+        uh, uw = up_feat.shape[-2:]
+        eh, ew = enc_feat.shape[-2:]
+        dh, dw = eh - uh, ew - uw
+
+        # pad if needed
+        if dh > 0 or dw > 0:
+            pad = [
+                dw // 2,
+                dw - dw // 2,
+                dh // 2,
+                dh - dh // 2,
+            ]  # [left, right, top, bottom]
+            up_feat = F.pad(up_feat, pad)
+        # crop if needed
+        elif dh < 0 or dw < 0:
+            top = (-dh) // 2
+            left = (-dw) // 2
+            up_feat = up_feat[..., top : top + eh, left : left + ew]
+        # now sizes match exactly
+        return torch.cat([up_feat, enc_feat], dim=1)
+
+    def forward(self, x):
+
+        single = x.batch_size == torch.Size([])
+        x = x["tasks"]
+        # print("UNetActor input shape:", x.shape)
+        if single:
+            x = x.unsqueeze(0)  # → (1, N*N, C)
+
+        bsz = x.size(0)
+        x = x.view(bsz, self.width, self.width, self.in_channels).permute(0, 3, 1, 2)
+
+        # x: (B, C, N, N)
+
+        e1 = self.enc1(x)  # → (B, f, H, W)
+        p1 = self.pool(e1)  # → (B, f, H//2, W//2)
+        e2 = self.enc2(p1)  # → (B, 2f, H//2, W//2)
+        p2 = self.pool(e2)  # → (B, 2f, H//4, W//4)
+
+        b = self.bottleneck(p2)  # → (B, 4f, H//4, W//4)
+
+        # Upsample with ConvTranspose2d
+        u2 = self.up2(b)  # → roughly (B, 2f, H//2, W//2)
+        d2 = self.dec2(self._align_and_concat(u2, e2))
+
+        u1 = self.up1(d2)  # → roughly (B, f, H, W)
+        d1 = self.dec1(self._align_and_concat(u1, e1))
+
+        logits = self.out_conv(d1)  # → (B, P, H, W)
+        # print("UNetActor logits shape:", logits.shape)
+        # Reshape logits to (B, N*N, P)
+        logits = logits.permute(0, 2, 3, 1)
+        logits = logits.reshape(bsz, self.width * self.width, self.num_workers)
+        if single:
+            logits = logits.squeeze(0)
+        # print("UNetActor output shape:", logits.shape)
+        return logits  # interpret per-pixel Categorical over P
+
+
+class UNetCritic(nn.Module):
+    def __init__(self, in_channels, base_filters=32, fc_dim=256, width=5):
+        super().__init__()
+        self.in_channels = in_channels
+        self.width = width
+        self.enc1 = nn.Sequential(
+            nn.Conv2d(in_channels, base_filters, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.pool = nn.MaxPool2d(2, 2)
+        self.enc2 = nn.Sequential(
+            nn.Conv2d(base_filters, base_filters * 2, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.enc3 = nn.Sequential(
+            nn.Conv2d(base_filters * 2, base_filters * 4, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+
+        # After downsampling twice, flatten and FC
+        # We don’t need to know H/W here; we’ll infer it at runtime
+        self.fc1 = nn.Linear(base_filters * 4, fc_dim)
+        self.fc2 = nn.Linear(fc_dim, 1)
+
+    def forward(self, x):
+        single = x.batch_size == torch.Size([])
+        x = x["tasks"]
+        # print("UNetCritic input shape:", x.shape)
+
+        if single:
+            x = x.unsqueeze(0)  # → (1, N*N, C)
+
+        bsz = x.size(0)
+        x = x.view(bsz, self.width, self.width, self.in_channels).permute(0, 3, 1, 2)
+
+        # x: (B, C, H, W)
+        h1 = self.enc1(x)  # → (B, f, H, W)
+        h2 = self.enc2(self.pool(h1))  # → (B, 2f, H1, W1)
+        h3 = self.enc3(self.pool(h2))  # → (B, 4f, H2, W2)
+
+        # Global average pool to get fixed-size vector
+        gap = h3.mean(dim=(-2, -1))  # → (B, 4f)
+
+        v = F.relu(self.fc1(gap))  # → (B, fc_dim)
+        v = self.fc2(v)
+
+        v = v.contiguous().view(bsz, -1)
+        if single:
+            v = v.squeeze(0)
+        # v = v.squeeze(-1)  # remove the last dimension → (B,)
+        # v = v.expand(-1, self.width * self.width)  # (B, N*N)
+        # print("UNetCritic output shape:", v.shape)
+        return v  # (B,)
+
+
+class BatchNetBase(nn.Module):
+    """
+    Wrapper module for separate actor and critic networks using individual Conv layers.
+
+    Unlike `OldCombinedNet`, this class assigns a distinct Conv layer to each of the actor and critic networks.
+
+    Args:
+        n_devices (int): The number of mappable devices. Check whether this includes the CPU.
+    """
+
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        layer_config: LayerConfig,
+        n_devices: int,
+    ):
+        super(BatchNetBase, self).__init__()
+        self.feature_config = feature_config
+        self.layer_config = layer_config
+
+        self.actor = UNetActor(
+            in_channels=feature_config.task_feature_dim,
+            num_workers=n_devices - 1,
+            # base_filters=layer_config.hidden_channels,
+            width=layer_config.width,
+        )
+        self.critic = UNetCritic(
+            in_channels=feature_config.task_feature_dim,
+            # base_filters=layer_config.hidden_channels,
+            # fc_dim=layer_config.hidden_channels,
+            width=layer_config.width,
+        )
+
+    def forward(self, data):
+        # if any(p.is_cuda for p in self.actor.parameters()):
+        #     data = data.to("cuda", non_blocking=True)
+        d_logits = self.actor(data)
+        v = self.critic(data)
+        return d_logits, v

@@ -884,23 +884,6 @@ class ExternalObserver:
     task_features: fastsim.RuntimeFeatureExtractor
     device_features: fastsim.RuntimeFeatureExtractor
     truncate: bool = False
-    task_ids = None
-
-    def reset(self):
-        self.task_ids = torch.Tensor(
-            [-1 for _ in range(self.simulator.input.graph.config.n**2)]
-        )
-        graph = self.simulator.input.graph
-        for task in graph.level_to_task[0]:
-            x, y = graph.xy_from_id(task)
-            assert (
-                0 <= x < graph.config.n and 0 <= y < graph.config.n
-            ), f"Task {task} has invalid coordinates ({x}, {y}) for graph size {graph.config.n}."
-            self.task_ids[int(x * graph.config.n + y)] = task
-        if -1 in self.task_ids:
-            raise ValueError(
-                "Not all task ids were set during reset. Check the graph initialization."
-            )
 
     def store_feature_types(self):
         """
@@ -1039,7 +1022,7 @@ class ExternalObserver:
         output: TensorDict,
         task_ids: Optional[torch.Tensor] = None,
     ):
-        self.get_task_features(self.task_ids, output["tasks"])
+        self.get_task_features(task_ids, output["tasks"])
         # print("Task attribute", output["nodes"]["tasks"]["attr"])
 
     # def data_observation(self, output: TensorDict):
@@ -1129,8 +1112,6 @@ class ExternalObserver:
     #     )
 
     def candidate_observation(self, output: TensorDict):
-        # print("Candidate observation")
-        # print("Candidate observation", type(self))
         count = self.simulator.simulator.get_mappable_candidates(
             output["aux"]["candidates"]["idx"]
         )
@@ -1140,31 +1121,32 @@ class ExternalObserver:
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
 
-        # print(output)
-
         # Get mappable candidates
-        self.candidate_observation(output)
+        # self.candidate_observation(output)
 
-        # Node observations (all nodes must be processed before edges)
-        self.task_observation(output)
-        # print("Task observation", output["tasks"])
-        # self.data_observation(output)
-        self.device_observation(output)
+        candidates = torch.zeros((self.graph_spec.max_candidates), dtype=torch.int64)
+        count = self.simulator.get_mappable_candidates(candidates)
 
-        # print("Task attribute", output["nodes"]["tasks"]["attr"])
-        # print("Data attribute", output["nodes"]["data"]["attr"])
-        # print("Device attribute", output["nodes"]["devices"]["attr"])
+        assert (
+            count == self.graph_spec.max_candidates or count == 0
+        ), f"Expected {self.graph_spec.max_candidates} candidates, got {count}"
 
-        # Edge observations (edges depend on ids collected during node observation)
-        # self.task_task_observation(output)
-        # self.task_data_observation(output)
-        # self.task_device_observation(output)
+        output["aux"]["candidates"]["count"][0] = count
+        graph = self.simulator.input.graph
+        # Reorder candidates to match the graph's xy coordinates
+        for i in range(count):
+            x, y = graph.xy_from_id(candidates[i].item())
+            output["aux"]["candidates"]["idx"][x * graph.config.n + y] = candidates[i]
 
-        # Auxiliary observations
+        # self.task_observation(
+        #     output=output, task_ids=output["aux"]["candidates"]["idx"]
+        # )
+        self.get_task_features(output["aux"]["candidates"]["idx"], output["tasks"])
+        # self.device_observation(output)
+
         output["aux"]["time"][0] = self.simulator.time
         output["aux"]["improvement"][0] = -2.0
         output["aux"]["vsoptimal"][0] = -2.0
-        # print("Auxiliary observation")
 
         return output
 

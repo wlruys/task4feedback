@@ -849,7 +849,7 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
         # This factory is used for Jacobi
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.DepthTaskFeature)
+        # task_feature_factory.add(fastsim.DepthTaskFeature)
         # task_feature_factory.add(fastsim.EmptyTaskFeature, 1)
         # task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
         # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
@@ -859,7 +859,7 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
         #     fastsim.EmptyTaskFeature, 1
         # )
         # task_feature_factory.add(fastsim.TagCandidateFeature)
-        task_feature_factory.add(fastsim.EmptyTaskFeature, 3)  # For x, y position
+        task_feature_factory.add(fastsim.EmptyTaskFeature, 5)  # For x, y position
 
         device_feature_factory = FeatureExtractorFactory()
         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
@@ -888,7 +888,6 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
             task_feature_extractor,
             device_feature_extractor,
         )
-        observer.reset()
         return observer
 
 
@@ -909,18 +908,18 @@ class VectorObserver(ExternalObserver):
 
     def task_observation(self, output: TensorDict):
         graph: JacobiGraph = self.simulator.input.graph
-        candidate = output["aux", "candidates", "idx"][0].item()
-        x, y = graph.xy_from_id(candidate)
-        (
-            output["observation", "aux", "x_coord"],
-            output["observation", "aux", "y_coord"],
-        ) = (x, y)
+        # candidate = output["aux", "candidates", "idx"][0].item()
+        # x, y = graph.xy_from_id(candidate)
+        # (
+        #     output["observation", "aux", "x_coord"],
+        #     output["observation", "aux", "y_coord"],
+        # ) = (x, y)
         # print(f"Task Observation: {candidate} at ({x}, {y})")
         super().task_observation(output)
-        output["tasks"][x * graph.config.n + y][-3] = 1.0
+        # output["tasks"][x * graph.config.n + y][-3] = 1.0
         # Used for Depth Normalization
-        output["tasks"][:, 0] -= output["tasks"][output["tasks"][:, -3] > 0, 0][0]
-        output["tasks"][:, 0] /= graph.config.n - 1
+        # output["tasks"][:, 0] -= output["tasks"][output["tasks"][:, -3] > 0, 0][0]
+        # output["tasks"][:, 0] /= graph.config.n - 1
         output["tasks"][:, -2:] = self.spatial_bias
         # for i in range(n):
         #     for j in range(n):
