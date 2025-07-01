@@ -503,7 +503,7 @@ public:
                         taskid_t writer_id = -1) {
 
     auto &task = tasks[task_id];
-    auto data_name = task.name + "_data_" + std::to_string(data_id);
+    auto data_name = "_data_" + std::to_string(data_id);
     auto data_task_id = add_data_task(data_name, task_id, data_id);
     auto &data_task = data_tasks[data_task_id];
 

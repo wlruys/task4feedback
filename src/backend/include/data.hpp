@@ -187,15 +187,12 @@ class LocationManager {
 protected:
   const devid_t num_devices;
   const dataid_t num_data;
-  std::vector<int8_t> locations;
-  std::vector<int8_t> flag_buffer;
+  std::vector<uint8_t> locations;
   std::vector<ValidEventArray> valid_intervals;
 
 public:
   LocationManager(dataid_t num_data, devid_t num_devices)
-      : locations(num_data * num_devices, 0), num_devices(num_devices), num_data(num_data) {
-
-    flag_buffer.resize(num_devices, 0);
+      : locations(num_data, 0), num_devices(num_devices), num_data(num_data) {
 
 #ifdef SIM_TRACK_LOCATION
     constexpr size_t buffer_initial_size = 100;
@@ -209,7 +206,8 @@ public:
 
   [[nodiscard]] inline bool is_valid(dataid_t data_id, devid_t device_id) const {
     assert(data_id < num_data && device_id < num_devices);
-    return locations[data_id * num_devices + device_id] == 1;
+    // Check if "device_id"-th bit of "data_id"-th location is set
+    return locations[data_id] & (1 << device_id);
   }
 
   [[nodiscard]] inline bool is_invalid(dataid_t data_id, devid_t device_id) const {
@@ -217,7 +215,7 @@ public:
   }
 
   inline int8_t set_valid(dataid_t data_id, devid_t device_id, timecount_t current_time) {
-    auto old_status = locations[data_id * num_devices + device_id];
+    auto old_status = locations[data_id] & (1 << device_id);
 
 #ifdef SIM_TRACK_LOCATION
     if (old_status) {
@@ -227,12 +225,12 @@ public:
     }
 #endif
 
-    locations[data_id * num_devices + device_id] = 1;
+    locations[data_id] |= (1 << device_id);
     return old_status;
   }
 
   inline int8_t set_invalid(dataid_t data_id, devid_t device_id, timecount_t current_time) {
-    auto old_status = locations[data_id * num_devices + device_id];
+    auto old_status = locations[data_id] & (1 << device_id);
 #ifdef SIM_TRACK_LOCATION
     if (is_valid(data_id, device_id)) {
       locations[data_id * num_devices + device_id] = 0;
@@ -241,7 +239,7 @@ public:
     }
 #endif
 
-    locations[data_id * num_devices + device_id] = 0;
+    locations[data_id] &= ~(1 << device_id);
     return old_status;
   }
 
@@ -250,12 +248,12 @@ public:
                       locations.data() + (data_id + 1) * num_devices, 1);
   }
 
-  [[nodiscard]] inline std::span<const int8_t> get_location_flags(dataid_t data_id) const {
-    return std::span<const int8_t>(locations.data() + data_id * num_devices, num_devices);
+  [[nodiscard]] inline uint8_t get_location_flags(dataid_t data_id) const {
+    return locations[data_id];
   }
 
-  [[nodiscard]] inline std::span<int8_t> get_location_flags(dataid_t data_id) {
-    return std::span<int8_t>(locations.data() + data_id * num_devices, num_devices);
+  [[nodiscard]] inline uint8_t get_location_flags(dataid_t data_id) {
+    return locations[data_id];
   }
 
   void populate_valid_locations(dataid_t data_id, std::vector<devid_t> &valid_locations) const {
@@ -270,52 +268,44 @@ public:
     return set_valid(data_id, device_id, current_time) == 0;
   }
 
-  std::span<int8_t> invalidate_except(dataid_t data_id, devid_t device_id,
-                                      timecount_t current_time) {
-    std::span<int8_t> flags = get_location_flags(data_id);
+  uint8_t invalidate_except(dataid_t data_id, devid_t device_id, timecount_t current_time) {
+    assert(data_id < num_data && device_id < num_devices);
+    uint8_t old_status = locations[data_id];
 
-    // Copy flags to buffer
-    std::copy(flags.begin(), flags.end(), flag_buffer.begin());
+    // Create mask with only the specified device bit set
+    uint8_t keep_mask = (1 << device_id);
 
-    // Invalidate all except the specified device
-    std::fill(flags.begin(), flags.end(), 0);
-    flags[device_id] = flag_buffer[device_id];
+    // Keep only the specified device, invalidate all others
+    locations[data_id] &= keep_mask;
 
-    // Set the flag buffer to be 1 if the value changed, 0 otherwise
-    for (devid_t i = 0; i < num_devices; i++) {
-      flag_buffer[i] = (flag_buffer[i] ^ flags[i]) != 0;
-    }
+    // which bits changed from 1 to 0
+    uint8_t changed_bits = old_status ^ locations[data_id];
+    changed_bits &= ~keep_mask; // clear the bit for the kept device
 
-    return flag_buffer;
+    return changed_bits;
   }
 
-  std::span<int8_t> invalidate_all(dataid_t data_id, timecount_t current_time) {
-    std::span<int8_t> flags = get_location_flags(data_id);
+  uint8_t invalidate_all(dataid_t data_id, timecount_t current_time) {
 
-    // Copy flags to buffer
-    std::copy(flags.begin(), flags.end(), flag_buffer.begin());
+    uint8_t old_status = locations[data_id];
 
     // Invalidate all devices
-    std::fill(flags.begin(), flags.end(), 0);
+    locations[data_id] = 0;
 
-    // Set the flag buffer to be 1 if the value changed, 0 otherwise
-    for (devid_t i = 0; i < num_devices; i++) {
-      flag_buffer[i] = (flag_buffer[i] ^ flags[i]) != 0;
-    }
+    // which bits changed from 1 to 0
+    uint8_t changed_bits = old_status ^ locations[data_id];
 
-    return flag_buffer;
+    return changed_bits;
   }
 
-  std::span<int8_t> invalidate_on(dataid_t data_id, devid_t device_id, timecount_t current_time) {
+  uint8_t invalidate_on(dataid_t data_id, devid_t device_id, timecount_t current_time) {
 
-    std::fill(flag_buffer.begin(), flag_buffer.end(), 0);
+    uint8_t old_status = locations[data_id];
 
-    std::span<int8_t> flags = get_location_flags(data_id);
+    locations[data_id] &= ~(1 << device_id); // invalidate the specified device
+    uint8_t changed_bits = old_status ^ locations[data_id];
 
-    flags[device_id] = 0; // invalidate the specified device
-    flag_buffer[device_id] = (flag_buffer[device_id] ^ flags[device_id]) != 0;
-
-    return flag_buffer;
+    return changed_bits;
   }
 
   void finalize(timecount_t current_time) {
@@ -763,8 +753,9 @@ public:
         evict_on_update(data_id, device_id, reserved_locations, current_time);
 
     auto size = data.get_size(data_id);
-    for (devid_t device = 0; device < updated_devices_launched.size(); device++) {
-      if (updated_devices_launched[device]) {
+    const devid_t n_devices = device_manager.n_devices;
+    for (devid_t device = 0; device < n_devices; device++) {
+      if (updated_devices_launched & (1 << device)) {
         SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
         device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
@@ -814,15 +805,15 @@ public:
     }
   }
 
-  std::span<const int8_t> get_mapped_location_flags(dataid_t data_id) const {
+  uint8_t get_mapped_location_flags(dataid_t data_id) const {
     return mapped_locations.get_location_flags(data_id);
   }
 
-  std::span<const int8_t> get_reserved_location_flags(dataid_t data_id) const {
+  uint8_t get_reserved_location_flags(dataid_t data_id) const {
     return reserved_locations.get_location_flags(data_id);
   }
 
-  std::span<const int8_t> get_launched_location_flags(dataid_t data_id) const {
+  uint8_t get_launched_location_flags(dataid_t data_id) const {
     return launched_locations.get_location_flags(data_id);
   }
 
@@ -950,11 +941,11 @@ public:
     comm_manager.release_connection(source, destination);
   }
 
-  void remove_memory(DeviceManager &device_manager, std::span<int8_t> &changed_flags,
-                     dataid_t data_id, mem_t size, timecount_t current_time) {
-    const devid_t n_devices = changed_flags.size();
+  void remove_memory(DeviceManager &device_manager, const uint8_t changed_flags, dataid_t data_id,
+                     mem_t size, timecount_t current_time) {
+    const devid_t n_devices = device_manager.n_devices;
     for (devid_t device = 0; device < n_devices; device++) {
-      if (changed_flags[device]) {
+      if (changed_flags & (1 << device)) {
         SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device, size);
         device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
         device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
@@ -972,16 +963,17 @@ public:
     auto mapped_flags = mapped_locations.invalidate_all(data_id, current_time);
     auto reserved_flags = reserved_locations.invalidate_all(data_id, current_time);
     auto launched_flags = launched_locations.invalidate_all(data_id, current_time);
-    const devid_t n_devices = mapped_flags.size();
+    const devid_t n_devices = device_manager.n_devices;
 
     for (devid_t device = 0; device < n_devices; device++) {
-      if (mapped_flags[device]) {
+      const uint8_t device_mask = (1 << device);
+      if (mapped_flags & device_mask) {
         device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
       }
-      if (reserved_flags[device]) {
+      if (reserved_flags & device_mask) {
         device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
       }
-      if (launched_flags[device]) {
+      if (launched_flags & device_mask) {
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id);
       }

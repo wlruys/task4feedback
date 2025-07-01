@@ -53,9 +53,8 @@ struct CommunicationRequest {
 };
 
 class Topology {
-  devid_t num_devices = 0;
-
 public:
+  devid_t num_devices = 0;
   std::vector<timecount_t> latency;
   std::vector<mem_t> bandwidths;
   std::vector<copy_t> links;
@@ -303,11 +302,13 @@ public:
   //   return {found, best_source};
   // }
 
-  [[nodiscard]] SourceRequest
-  get_best_available_source(const Topology &topology, devid_t dst,
-                            std::span<const int8_t> possible_source_flags) const {
+  [[nodiscard]] SourceRequest get_best_available_source(const Topology &topology, devid_t dst,
+                                                        const uint8_t possible_source_flags) const {
+
+    const uint8_t destination_mask = (1 << dst);
+
     // Early return for local data
-    if (possible_source_flags[dst] != 0) {
+    if (possible_source_flags & destination_mask) {
       return {true, dst};
     }
 
@@ -319,9 +320,10 @@ public:
     mem_t best_bandwidth = 0;
     bool found = false;
 
-    const auto size = static_cast<devid_t>(possible_source_flags.size());
-    for (devid_t src = 0; src < size; ++src) {
-      if (possible_source_flags[src] == 0) {
+    const auto n_devices = topology.num_devices;
+    for (devid_t src = 0; src < n_devices; ++src) {
+      const uint8_t src_mask = (1 << src);
+      if (possible_source_flags & src_mask) {
         continue;
       }
 
@@ -355,7 +357,7 @@ public:
   }
 
   [[nodiscard]] SourceRequest get_best_source(const Topology &topology, devid_t dst,
-                                              std::span<const int8_t> possible_source_flags) const {
+                                              uint8_t possible_source_flags) const {
     // Return the source with the highest bandwidth
     // If no source is available, return found=false
 
@@ -363,8 +365,8 @@ public:
     devid_t best_source = 0;
     mem_t best_bandwidth = 0;
 
-    for (devid_t src = 0; src < possible_source_flags.size(); ++src) {
-      if (possible_source_flags[src] == 0) {
+    for (devid_t src = 0; src < topology.num_devices; ++src) {
+      if (possible_source_flags & (1 << src)) {
         continue; // Skip invalid sources
       }
 

@@ -375,9 +375,11 @@ public:
   DeviceResources mapped;
   DeviceResources reserved;
   DeviceResources launched;
+  std::size_t n_devices{};
 
   DeviceManager(const Devices &devices_)
-      : mapped(devices_.size()), reserved(devices_.size()), launched(devices_.size()) {};
+      : n_devices{devices_.size()}, mapped(devices_.size()), reserved(devices_.size()),
+        launched(devices_.size()) {};
 
   DeviceManager(const DeviceManager &other) = default;
 
