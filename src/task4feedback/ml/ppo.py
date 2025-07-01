@@ -966,7 +966,7 @@ def run_rnn_ppo_torchrl(
     train_actor_network = copy.deepcopy(td_module_action).to(config.train_device)
     train_critic_network = copy.deepcopy(td_critic_module).to(config.train_device)
     model = torch.nn.ModuleList([train_actor_network, train_critic_network])
-
+    model.eval()
     # Create evaluation environment if not provided
     if eval_env_fn is None:
         eval_env_fn = make_env
