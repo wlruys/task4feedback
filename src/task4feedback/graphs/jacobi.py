@@ -844,7 +844,7 @@ class XYMinimalObserverFactory(XYExternalObserverFactory):
 @dataclass(kw_only=True)
 class VectorExternalObserverFactory(ExternalObserverFactory):
 
-    def __init__(self, spec: fastsim.GraphSpec, width: int = 4):
+    def __init__(self, spec: fastsim.GraphSpec, width: int = 4, prev: int = 5):
         print("[Critical] Using VectorExternalObserverFactory with width of ", width)
         # This factory is used for Jacobi
         graph_extractor_t = fastsim.GraphExtractor
@@ -854,7 +854,7 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
         # task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
         # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
         task_feature_factory.add(fastsim.ReadDataLocationFeature)
-        task_feature_factory.add(fastsim.PrevReadSizeFeature, width, False, 5)
+        task_feature_factory.add(fastsim.PrevReadSizeFeature, width, False, prev)
         # task_feature_factory.add(
         #     fastsim.EmptyTaskFeature, 1
         # )
