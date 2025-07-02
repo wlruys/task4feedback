@@ -1949,7 +1949,7 @@ class SimulatorFactory:
         observer_factory: ExternalObserverFactory | Type[ExternalObserverFactory],
         internal_mapper: (
             fastsim.Mapper | Type[fastsim.Mapper]
-        ) = fastsim.RoundRobinMapper,
+        ) = fastsim.DequeueEFTMapper,
         external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
         seed: int = 0,
         priority_seed: int = 0,

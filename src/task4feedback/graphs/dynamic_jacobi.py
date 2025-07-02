@@ -68,7 +68,12 @@ class DynamicJacobiData(JacobiData):
 
 
 class DynamicJacobiGraph(JacobiGraph):
-    def __init__(self, geometry: Geometry, config: DynamicJacobiConfig):
+    def __init__(
+        self,
+        geometry: Geometry,
+        config: DynamicJacobiConfig,
+        variant: Optional[VariantBuilder] = None,
+    ):
         workload_class = config.workload_class
         self.workload = workload_class(geometry)
         self.workload.generate_initial_mass(
@@ -80,6 +85,7 @@ class DynamicJacobiGraph(JacobiGraph):
         self.data = DynamicJacobiData.from_mesh(geometry, config, self.workload)
         self._build_graph()
         self._apply_workload_variant()
+        self.finalize()
 
     def _apply_workload_variant(self):
         task_to_level = self.task_to_level

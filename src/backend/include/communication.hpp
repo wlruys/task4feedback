@@ -53,12 +53,12 @@ struct CommunicationRequest {
 };
 
 class Topology {
-  devid_t num_devices = 0;
 
 public:
   std::vector<timecount_t> latency;
   std::vector<mem_t> bandwidths;
   std::vector<copy_t> links;
+  devid_t num_devices = 0;
 
   Topology(devid_t num_devices)
       : latency(num_devices * num_devices), bandwidths(num_devices * num_devices),
@@ -324,9 +324,12 @@ public:
 
   [[nodiscard]] inline SourceRequest
   get_best_available_source(const Topology &topology, devid_t dst,
-                            std::span<const int8_t> possible_source_flags) const {
+                            const uint8_t possible_source_flags) const {
+
+    const uint8_t destination_mask = (1 << dst);
+
     // Early return for local data
-    if (possible_source_flags[dst] != 0) {
+    if (possible_source_flags & destination_mask) {
       SPDLOG_DEBUG("Data is local, returning {} as best source", dst);
       return {true, dst};
     }
@@ -335,14 +338,15 @@ public:
     mem_t best_bandwidth = 0;
     bool found = false;
 
-    const auto size = static_cast<devid_t>(possible_source_flags.size());
+    const auto size = topology.num_devices;
     for (devid_t src = 0; src < size; ++src) {
+      const uint8_t src_mask = (1 << src);
 
-      const bool is_valid = possible_source_flags[src] != 0 && is_link_available(src, dst) &&
+      const bool is_valid = (possible_source_flags & src_mask) && is_link_available(src, dst) &&
                             is_device_available(src) && is_device_available(dst);
 
       SPDLOG_DEBUG("Checking source {} for destination {}: is_valid = {}", src, dst, is_valid);
-      SPDLOG_DEBUG("HAS_DATA = {}", possible_source_flags[src] != 0);
+      SPDLOG_DEBUG("HAS_DATA = {}", possible_source_flags & src_mask);
       SPDLOG_DEBUG("LINK_AVAILABLE = {}", is_link_available(src, dst));
       SPDLOG_DEBUG("SRC_AVAILABLE = {}", is_device_available(src));
       SPDLOG_DEBUG("DST_AVAILABLE = {}", is_device_available(dst));
@@ -358,20 +362,21 @@ public:
     return {found, best_source};
   }
 
-  [[nodiscard]] inline SourceRequest
-  get_best_source(const Topology &topology, devid_t dst,
-                  std::span<const int8_t> possible_source_flags) const {
+  [[nodiscard]] inline SourceRequest get_best_source(const Topology &topology, devid_t dst,
+                                                     const uint8_t possible_source_flags) const {
 
-    if (possible_source_flags[dst] != 0) {
+    const uint8_t destination_mask = (1 << dst);
+    if (possible_source_flags & destination_mask) {
       return {true, dst}; // Local data is always available
     }
-
+    // Early return for local data
     devid_t best_source = 0;
     mem_t best_bandwidth = 0;
     bool found = false;
 
-    for (devid_t src = 0; src < possible_source_flags.size(); ++src) {
-      bool is_valid = possible_source_flags[src] != 0 && is_link_available(src, dst) &&
+    for (devid_t src = 0; src < topology.num_devices; ++src) {
+      const uint8_t src_mask = (1 << src);
+      bool is_valid = (possible_source_flags & src_mask) && is_link_available(src, dst) &&
                       is_device_available(src) && is_device_available(dst);
 
       auto bandwidth = get_available_bandwidth(topology, src, dst);

@@ -735,7 +735,8 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
           auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, unique_data);
           for (auto data_id : data_ids) {
             auto location_flags = data_manager.get_launched_location_flags(data_id);
-            devid_t n_sources = std::count(location_flags.begin(), location_flags.end(), 1);
+            // count set bits in location_flags
+            devid_t n_sources = __builtin_popcount(location_flags);
             assert(n_sources > 0);
             if (n_sources == 1) {
               eviction_count += 1;
