@@ -46,7 +46,7 @@ class PPOConfig:
     gae_gamma: float = 1
     gae_lmbda: float = 0.99
     normalize_advantage: bool = True
-    value_norm: str = "l2"
+    value_norm: str = "smooth_l1"
     eval_interval: int = 10  # Evaluate every N collections
     eval_episodes: int = 1  # Number of episodes to evaluate
 
@@ -505,10 +505,22 @@ def run_ppo_torchrl(
     if eval_env_fn is None:
         eval_env_fn = make_env
 
+    # if model_path:
+    #     ckpts = torch.load(model_path)  # this is a list or tuple of two dicts
+    #     model[0].load_state_dict(ckpts[0])  # only load the first one
+    #     print("Loaded model[0] from path:", model_path)
+    #     # model.load_state_dict(torch.load(model_path))
+    #     # print("Loaded model from path:", model_path)
     if model_path:
-        model.load_state_dict(torch.load(model_path))
-        print("Loaded model from path:", model_path)
-
+        full_sd = torch.load(model_path)
+        sd0 = {
+            k.replace("module0.", ""): v
+            for k, v in full_sd.items()
+            if k.startswith("module0.")
+        }
+        model[0].load_state_dict(sd0, strict=False)
+        print("Loaded only model[0] parameters")
+    model.eval()
     if do_rollout:
 
         def rollout_env():

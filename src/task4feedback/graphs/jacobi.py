@@ -520,24 +520,32 @@ class LevelPartitionMapper:
         self.level_cell_mapping = level_cell_mapping
 
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
-        candidates = torch.zeros((1), dtype=torch.int64)
-        simulator.simulator.get_mappable_candidates(candidates)
-        global_task_id = candidates[0].item()
-        local_id = 0
-        graph = simulator.input.graph
+        graph: JacobiGraph = simulator.input.graph
         assert isinstance(graph, JacobiGraph)
-        level = graph.task_to_level[global_task_id]
-        cell_id = graph.task_to_cell[global_task_id]
-        total_levels = graph.config.steps
-        if len(self.level_cell_mapping) != total_levels:
-            device = self.level_cell_mapping[
-                level // (total_levels // len(self.level_cell_mapping))
-            ][cell_id]
-        else:
-            device = self.level_cell_mapping[level][cell_id]
-        state = simulator.simulator.get_state()
-        mapping_priority = state.get_mapping_priority(global_task_id)
-        return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
+
+        candidates = torch.zeros((graph.config.n**2), dtype=torch.int64)
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item()
+            local_id = i
+            level = graph.task_to_level[global_task_id]
+            cell_id = graph.task_to_cell[global_task_id]
+            total_levels = graph.config.steps
+            if len(self.level_cell_mapping) != total_levels:
+                chunk = level // (total_levels // len(self.level_cell_mapping))
+                if chunk >= len(self.level_cell_mapping):
+                    chunk = len(self.level_cell_mapping) - 1
+                device = self.level_cell_mapping[chunk][cell_id]
+            else:
+                device = self.level_cell_mapping[level][cell_id]
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(local_id, device, mapping_priority, mapping_priority)
+            )
+        return mapping_result
 
 
 class JacobiVariantGPUOnly(VariantBuilder):

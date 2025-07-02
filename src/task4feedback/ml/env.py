@@ -320,9 +320,9 @@ class RuntimeEnv(EnvBase):
                     best_mismatches = mismatches
                     best_relabelled = relabelled.copy()
             self.answer = best_relabelled.tolist()
-            partition_mapper = PartitionMapper(cell_to_mapping=self.answer)
+            self.partition_mapper = PartitionMapper(cell_to_mapping=self.answer)
             opt_sim = self.simulator.copy()
-            opt_sim.external_mapper = partition_mapper
+            opt_sim.external_mapper = self.partition_mapper
         else:  # Dynamic
             assert isinstance(self.graph.config, DynamicJacobiConfig)
             self.answer = self.graph.mincut_per_levels(
@@ -351,9 +351,9 @@ class RuntimeEnv(EnvBase):
                     best_relabelled = relabelled.copy()
             self.graph.partitions[0] = best_relabelled.tolist()
             self.answer, _, _ = self.graph.align_partitions()
-            partition_mapper = LevelPartitionMapper(level_cell_mapping=self.answer)
+            self.partition_mapper = LevelPartitionMapper(level_cell_mapping=self.answer)
             opt_sim = self.simulator.copy()
-            opt_sim.external_mapper = partition_mapper
+            opt_sim.external_mapper = self.partition_mapper
 
         opt_sim.enable_external_mapper()
         opt_sim.run()
@@ -393,34 +393,55 @@ class SanityCheckEnv(RuntimeEnv):
             dtype=torch.int64,
         )
 
-        self.simulator.get_mappable_candidates(candidate_workspace)
-        chosen_device = td["action"].item() + int(self.only_gpu)
-        global_task_id = candidate_workspace[0].item()
-        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+        num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
 
-        self.simulator.simulator.map_tasks(
-            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
-        )
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidate_workspace[i].item()
+            x, y = self.graph.xy_from_id(global_task_id)
+            chosen_device = td["action"][x * self.graph.config.n + y].item() + int(
+                self.only_gpu
+            )
 
-        cell_id = self.graph.task_to_cell[global_task_id]
-        answer = self.answer[cell_id]
-        if answer == chosen_device:
-            reward[0] = 1
-        else:
-            reward[0] = -1
+            mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+            mapping_result.append(
+                fastsim.Action(
+                    i,
+                    chosen_device,
+                    mapping_priority,
+                    mapping_priority,
+                )
+            )
+
+        self.simulator.simulator.map_tasks(mapping_result)
+        total_levels = self.graph.config.steps
+        reward[0] = 0
+        for i in range(num_candidates):
+            global_task_id = candidate_workspace[i].item()
+            cell_id = self.graph.task_to_cell[global_task_id]
+            level = self.graph.task_to_level[global_task_id]
+            chunk = level // (total_levels // len(self.answer))
+            if chunk >= len(self.answer):
+                chunk = len(self.answer) - 1
+            device = self.answer[chunk][cell_id]
+            if mapping_result[i].device != device:
+                reward[0] -= 1
+            else:
+                reward[0] += 1
+        reward[0] /= num_candidates
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
 
-        if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
-            for next_id in self.graph.level_to_task[
-                self.graph.task_to_level[global_task_id] + 1
-            ]:
-                if (
-                    self.graph.task_to_cell[global_task_id]
-                    == self.graph.task_to_cell[next_id]
-                ):
-                    x, y = self.graph.xy_from_id(global_task_id)
-                    self.observer.task_ids[x * self.graph.config.n + y] = next_id
+        # if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+        #     for next_id in self.graph.level_to_task[
+        #         self.graph.task_to_level[global_task_id] + 1
+        #     ]:
+        #         if (
+        #             self.graph.task_to_cell[global_task_id]
+        #             == self.graph.task_to_cell[next_id]
+        #         ):
+        #             x, y = self.graph.xy_from_id(global_task_id)
+        #             self.observer.task_ids[x * self.graph.config.n + y] = next_id
 
         obs = self._get_observation()
         sim_time = obs["observation"]["aux"]["time"].item()
@@ -1127,6 +1148,125 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
             reward_sum = min(reward_sum, 0)
 
         reward[0] = reward_sum / (self.EFT_baseline / self.graph.config.steps)
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        # if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+        #     for next_id in self.graph.level_to_task[
+        #         self.graph.task_to_level[global_task_id] + 1
+        #     ]:
+        #         if (
+        #             self.graph.task_to_cell[global_task_id]
+        #             == self.graph.task_to_cell[next_id]
+        #         ):
+        #             x, y = self.graph.xy_from_id(global_task_id)
+        #             self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
+        obs = self._get_observation()
+        sim_time = obs["observation"]["aux"]["time"].item()
+        if done:
+            duration = time.time() - self.start_time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
+            print(
+                f"Took: {duration} Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f} EFT vs Optimal: {self.EFT_baseline / self.optimal_time:.2f}   "
+            )
+
+        out = obs
+        # print("Reward: ", reward)
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
+class GeneralizedIncrementalOPT(RuntimeEnv):
+    def __init__(
+        self,
+        *args,
+        gamma=0.4,
+        flip=True,
+        clip_total=False,
+        clip_individual=False,
+        binary=False,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.gamma = gamma
+        self.flip = flip
+        n_tasks = len(self.simulator_factory.input.graph)
+        self.opt_log = torch.zeros(n_tasks + 1, dtype=torch.int64)
+        self.max_steps = n_tasks
+        self.clip_total = clip_total
+        self.clip_individual = clip_individual
+        self.binary = binary
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.prev_makespan = self.optimal_time
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+            self.opt_log[self.step_count] = self.optimal_time
+            self.start_time = time.time()
+
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+
+        num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
+
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidate_workspace[i].item()
+            x, y = self.graph.xy_from_id(global_task_id)
+            chosen_device = td["action"][x * self.graph.config.n + y].item() + int(
+                self.only_gpu
+            )
+
+            mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+            mapping_result.append(
+                fastsim.Action(
+                    i,
+                    chosen_device,
+                    mapping_priority,
+                    mapping_priority,
+                )
+            )
+
+        self.simulator.simulator.map_tasks(mapping_result)
+
+        opt_rollout = self.simulator.copy()
+        opt_rollout.external_mapper = self.partition_mapper
+        opt_rollout.enable_external_mapper()
+        opt_rollout.run()
+        opt_time = opt_rollout.time
+        self.opt_log[self.step_count + 1] = opt_time
+        reward_sum = 0
+        for i in range(0, self.step_count, 1):
+            current = self.opt_log[i] - opt_time
+
+            if self.binary:
+                current = 1 if current > 0 else -1
+
+            if self.clip_individual:
+                current = max(current, 0)
+
+            if not self.flip:
+                discount = self.gamma * (1 - self.gamma) ** (
+                    self.max_steps - 1 - (self.step_count - i)
+                )
+            else:
+                discount = self.gamma * (1 - self.gamma) ** (self.step_count - 1 - i)
+
+            reward_sum += current * discount
+
+        if self.clip_total:
+            reward_sum = min(reward_sum, 0)
+
+        reward[0] = reward_sum / (self.optimal_time / self.graph.config.steps)
 
         simulator_status = self.simulator.run_until_external_mapping()
         done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
