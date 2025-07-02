@@ -517,7 +517,7 @@ class ExternalMapper:
         simulator.simulator.get_mappable_candidates(candidates)
         global_task_id = candidates[0]
         local_id = 0
-        device = 0
+        device = 1
         state = simulator.simulator.get_state()
         mapping_priority = state.get_mapping_priority(global_task_id)
         return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
@@ -2039,9 +2039,9 @@ def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth:
     s = System()
     n_gpus = n_devices - 1
 
-    s.create_device("CPU:0", DeviceType.CPU, 10000, mem)
+    s.create_device("CPU:0", DeviceType.CPU, 4, mem)
     for i in range(n_gpus):
-        s.create_device(f"GPU:{i}", DeviceType.GPU, 10000, mem)
+        s.create_device(f"GPU:{i}", DeviceType.GPU, 2, mem)
 
     s.finalize_devices()
 

@@ -46,6 +46,7 @@ void init_task_ext(nb::module_ &m) {
 
   nb::class_<Graph>(m, "Graph")
       .def(nb::init<>())
+      .def("size", &Graph::get_n_compute_tasks)
       .def("add_task", &Graph::add_task, "name"_a)
       .def("add_read_data", &Graph::add_read_data, "id"_a, "read_data"_a)
       .def("add_write_data", &Graph::add_write_data, "id"_a, "write_data"_a)

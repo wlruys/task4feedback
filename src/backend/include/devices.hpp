@@ -150,6 +150,8 @@ public:
     mem = other.mem;
     vcu_tracker = other.vcu_tracker;
     mem_tracker = other.mem_tracker;
+    mem_max = other.mem_max;
+    assert(vcu.size() == mem.size());
   }
 
   DeviceResources &operator=(const DeviceResources &other) = default;

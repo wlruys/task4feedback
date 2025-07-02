@@ -926,8 +926,8 @@ public:
   Scheduler(SchedulerInput &input)
       : state(input), queues(input.devices), conditions(input.conditions) {
     const auto &static_graph = state.get_tasks();
-    compute_task_buffer.reserve(static_graph.get_n_compute_tasks());
-    data_task_buffer.reserve(static_graph.get_n_data_tasks());
+    compute_task_buffer.resize(static_graph.get_n_compute_tasks(), 0);
+    data_task_buffer.resize(static_graph.get_n_data_tasks(), 0);
     device_buffer.reserve(input.devices.get().size());
     tasks_requesting_eviction.reserve(static_graph.get_n_compute_tasks());
   }
@@ -1090,27 +1090,39 @@ public:
 class Mapper {
 
 protected:
-  DeviceIDList device_buffer;
+  devid_t n_devices = 0;
+  uint8_t device_flags = 0;
+  uint8_t arch_flags = 0;
+  std::vector<devid_t> device_buffer;
   std::vector<DeviceType> arch_buffer;
   ActionList action_buffer;
 
   void fill_arch_targets(taskid_t compute_task_id, const SchedulerState &state) {
     arch_buffer.clear();
-    arch_buffer = state.get_tasks().get_supported_architectures(compute_task_id);
-    assert(!arch_buffer.empty());
+    const auto arch_mask = state.get_tasks().get_supported_architecture_mask(compute_task_id);
+    for (uint8_t i = 0; i < num_device_types; ++i) {
+      const uint8_t arch_flag = 1 << i;
+      if (arch_mask & arch_flag) {
+        arch_buffer.push_back(static_cast<DeviceType>(arch_flag));
+      }
+    }
   }
 
-  void fill_device_targets(taskid_t task_id, const SchedulerState &state) {
+  void fill_device_targets(taskid_t compute_task_id, const SchedulerState &state) {
     device_buffer.clear();
-    fill_arch_targets(task_id, state);
-    const auto &supported_architectures = arch_buffer;
     const auto &devices = state.get_devices();
+    const devid_t n_devices = devices.size();
+    const auto device_mask = state.get_tasks().get_supported_devices_mask(compute_task_id, devices);
 
-    for (auto arch : supported_architectures) {
-      const auto &device_ids = devices.get_devices(arch);
-      device_buffer.insert(device_buffer.end(), device_ids.begin(), device_ids.end());
+    SPDLOG_DEBUG("Filling device targets for task {} with mask {}", compute_task_id, device_mask);
+    for (uint8_t i = 0; i < n_devices; ++i) {
+      const uint8_t device_flag = 1 << i;
+      SPDLOG_DEBUG("Checking device {} with flag {}", i, device_flag);
+      if (device_mask & device_flag) {
+        SPDLOG_DEBUG("Device {}: supported", i);
+        device_buffer.push_back(static_cast<devid_t>(i));
+      }
     }
-    assert(!device_buffer.empty());
   }
 
   static const DeviceIDList &get_devices_from_arch(DeviceType arch, SchedulerState &state) {
@@ -1338,6 +1350,9 @@ public:
       const timecount_t device_available = get_device_available_time(device_id, state);
       const timecount_t start_time = std::max(device_available, dep_time);
       const timecount_t finish_time = get_finish_time(task_id, device_id, start_time, state);
+      SPDLOG_DEBUG("Task {} on device {}: start_time = {}, finish_time = {}, dep_time = {}, "
+                   "device_available = {}",
+                   task_id, device_id, start_time, finish_time, dep_time, device_available);
       finish_time_buffer.emplace_back(DeviceTime{device_id, finish_time});
     }
   }
@@ -1348,12 +1363,13 @@ public:
     auto min_time = finish_time_buffer[0].time;
     auto best_device = finish_time_buffer[0].device_id;
 
-    // Start from index 1, use range-based loop for better optimization
-    for (std::size_t i = 1; i < finish_time_buffer.size(); ++i) {
-      const auto &entry = finish_time_buffer[i];
-      if (entry.time < min_time) {
-        min_time = entry.time;
-        best_device = entry.device_id;
+    for (int i = 0; i < finish_time_buffer.size(); ++i) {
+      const auto &[device_id, time] = finish_time_buffer[i];
+      SPDLOG_DEBUG("Device {}: finish time = {}", device_id, time);
+      const bool is_better = (time < min_time);
+      if (is_better) {
+        min_time = time;
+        best_device = device_id;
       }
     }
 
@@ -1411,6 +1427,7 @@ public:
   }
 
   Action map_task(taskid_t compute_task_id, const SchedulerState &state) override {
+    SPDLOG_DEBUG("Mapping compute task {} with DequeueEFTMapper", compute_task_id);
     finish_time_record.resize(state.get_tasks().get_n_compute_tasks());
     finish_time_buffer.reserve(state.get_devices().size());
     device_available_time_buffer.resize(state.get_devices().size());

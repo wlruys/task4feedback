@@ -3,6 +3,7 @@ target_sources(backend
   PRIVATE
     queues.cpp
     scheduler.cpp
+    tasks.cpp
 )
 
 target_sources(backend

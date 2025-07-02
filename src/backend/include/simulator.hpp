@@ -109,11 +109,13 @@ public:
     ZoneScoped;
     if (!initialized) {
       spdlog::critical("Simulator not initialized.");
+      assert(false);
       return;
     }
 
     if (data_initialized) {
       spdlog::warn("Data Manager already initialized. ...skipping.");
+      assert(false);
       return;
     }
     scheduler.initialize_data_manager();
@@ -182,6 +184,7 @@ public:
   void map_tasks(ActionList &action_list) {
     if (this->last_state != ExecutionState::EXTERNAL_MAPPING) {
       spdlog::critical("Simulator not in external mapping state.");
+      assert(false);
       return;
     }
 
@@ -193,6 +196,7 @@ public:
   void skip_external_mapping(bool enqueue_mapping_event = true) {
     if (last_state != ExecutionState::EXTERNAL_MAPPING) {
       spdlog::critical("Simulator not in external mapping state.");
+      assert(false);
       return;
     }
 
@@ -221,6 +225,7 @@ public:
         return ExecutionState::COMPLETE;
       }
       spdlog::critical("No more events and not complete.");
+      assert(false);
       return ExecutionState::ERROR;
     }
 
@@ -238,17 +243,20 @@ public:
     if (!initialized) {
       last_state = ExecutionState::ERROR;
       spdlog::critical("Simulator not initialized.");
+      assert(false);
       return ExecutionState::ERROR;
     }
 
     if (!data_initialized) {
       last_state = ExecutionState::ERROR;
       spdlog::critical("Data Manager not initialized.");
+      assert(false);
       return ExecutionState::ERROR;
     }
 
     if (last_state == ExecutionState::ERROR) {
       spdlog::critical("Simulator in error state.");
+      assert(false);
       return ExecutionState::ERROR;
     }
 

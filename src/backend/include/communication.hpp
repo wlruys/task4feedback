@@ -369,15 +369,14 @@ public:
     if (possible_source_flags & destination_mask) {
       return {true, dst}; // Local data is always available
     }
-    // Early return for local data
+
     devid_t best_source = 0;
     mem_t best_bandwidth = 0;
     bool found = false;
 
     for (devid_t src = 0; src < topology.num_devices; ++src) {
       const uint8_t src_mask = (1 << src);
-      bool is_valid = (possible_source_flags & src_mask) && is_link_available(src, dst) &&
-                      is_device_available(src) && is_device_available(dst);
+      bool is_valid = (possible_source_flags & src_mask);
 
       auto bandwidth = get_available_bandwidth(topology, src, dst);
       const bool is_better = is_valid && (bandwidth > best_bandwidth);

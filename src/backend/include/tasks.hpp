@@ -45,6 +45,8 @@ inline auto to_string(const DeviceType &arch) {
   }
 }
 
+class Devices;
+
 inline std::ostream &operator<<(std::ostream &os, const DeviceType &arch) {
   os << to_string(arch);
   return os;
@@ -1229,8 +1231,12 @@ public:
     return variant.get_mean_duration();
   }
 
-  [[nodiscard]] const uint8_t get_compute_task_variant_mask(taskid_t id) const {
+  [[nodiscard]] uint8_t get_compute_task_variant_mask(taskid_t id) const {
     return compute_task_variant_info[id].mask;
+  }
+
+  [[nodiscard]] uint8_t get_supported_architecture_mask(taskid_t compute_task_id) const {
+    return get_compute_task_variant_mask(compute_task_id);
   }
 
   // TODO(wlr): Deprecate this to avoid allocation. Loop over mask direcly where this is used.
@@ -1252,6 +1258,9 @@ public:
     // assert that mask flag is set for the given architecture
     return (info.mask & arch_type) != 0;
   }
+
+  [[nodiscard]] uint8_t get_supported_devices_mask(taskid_t compute_task_id,
+                                                   const Devices &devices) const;
 
   [[nodiscard]] const std::string &get_compute_task_name(taskid_t id) const {
     return compute_task_names[id];
