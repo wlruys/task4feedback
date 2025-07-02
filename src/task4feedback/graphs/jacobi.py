@@ -226,8 +226,12 @@ class JacobiGraph(ComputeDataGraph):
                 self.add_read_data(task_id, read_blocks)
                 self.add_write_data(task_id, write_blocks)
 
-
-    def __init__(self, geometry: Geometry, config: JacobiConfig, variant: Optional[VariantBuilder] = None):
+    def __init__(
+        self,
+        geometry: Geometry,
+        config: JacobiConfig,
+        variant: Optional[VariantBuilder] = None,
+    ):
         super(JacobiGraph, self).__init__()
         self.data = JacobiData.from_mesh(geometry, config)
         self.config = config

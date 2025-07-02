@@ -529,7 +529,7 @@ public:
   }
 
   void randomize_priority() {
-    get_task_noise().generate_priority(tasks);
+    // get_task_noise().generate_priority(tasks);
   }
 
   void initialize_data_manager() {
@@ -891,8 +891,8 @@ public:
 };
 
 struct SuccessPair {
-  int8_t success = 0;
-  const TaskIDList *task_list = nullptr;
+  bool success = false;
+  taskid_t last_idx = 0;
 };
 
 enum class EvictionState : int8_t {
@@ -913,22 +913,23 @@ protected:
 
   EvictionState eviction_state = EvictionState::NONE;
   TaskDeviceList tasks_requesting_eviction;
-
-  TaskIDList task_buffer;
-  DeviceIDList device_buffer;
-
   void enqueue_data_tasks(taskid_t task_id);
 
 public:
+  TaskIDList compute_task_buffer;
+  TaskIDList data_task_buffer;
+  DeviceIDList device_buffer;
   bool initialized = false;
   BreakpointManager breakpoints;
   std::reference_wrapper<TransitionConditions> conditions;
 
   Scheduler(SchedulerInput &input)
       : state(input), queues(input.devices), conditions(input.conditions) {
-    task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
-    device_buffer.reserve(INITIAL_DEVICE_BUFFER_SIZE);
-    tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
+    const auto &static_graph = state.get_tasks();
+    compute_task_buffer.reserve(static_graph.get_n_compute_tasks());
+    data_task_buffer.reserve(static_graph.get_n_data_tasks());
+    device_buffer.reserve(input.devices.get().size());
+    tasks_requesting_eviction.reserve(static_graph.get_n_compute_tasks());
   }
 
   Scheduler(const Scheduler &other) = default;
@@ -944,8 +945,7 @@ public:
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = false) {
     state.initialize(create_data_tasks, initialize_data_manager);
     auto initial_tasks = initially_mappable_tasks();
-    // std::cout << "Initial tasks: " << initial_tasks.size() << std::endl;
-    queues.push_mappable(initial_tasks, state.get_task_noise().get_priorities());
+    push_mappable(initial_tasks);
     initialized = true;
   }
 
@@ -955,13 +955,12 @@ public:
 
   size_t get_mappable_candidates(std::span<int64_t> v);
 
-  const TaskIDList &map_task(taskid_t task_id, Action &action);
+  taskid_t map_task(taskid_t start_idx, taskid_t task_id, Action &action);
   void map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper);
   ExecutionState map_tasks_from_python(ActionList &action_list, EventManager &event_manager);
   void remove_mapped_tasks(ActionList &action_list);
 
-  SuccessPair reserve_task(taskid_t task_id, devid_t device_id,
-                           TaskDeviceList &tasks_requesting_eviction);
+  SuccessPair reserve_task(taskid_t start_idx, taskid_t task_id, devid_t device_id);
   void reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager);
 
   bool launch_compute_task(taskid_t task_id, devid_t device_id, EventManager &event_manager);
@@ -974,24 +973,11 @@ public:
 
   void evict(EvictorEvent &eviction_event, EventManager &event_manager);
 
-  void complete_compute_task(ComputeCompleterEvent &complete_event, EventManager &event_manager);
-  void complete_data_task(DataCompleterEvent &complete_event, EventManager &event_manager);
+  taskid_t complete_compute_task(ComputeCompleterEvent &complete_event,
+                                 EventManager &event_manager);
+  taskid_t complete_data_task(DataCompleterEvent &complete_event, EventManager &event_manager);
   void complete_eviction_task(EvictorCompleterEvent &complete_event, EventManager &event_manager);
   void complete_task_postmatter(EventManager &event_manager);
-
-  [[nodiscard]] const TaskIDList &get_task_buffer() const {
-    return task_buffer;
-  }
-
-  void clear_task_buffer() {
-    task_buffer.clear();
-    assert(task_buffer.empty());
-  }
-
-  TaskIDList &get_clear_task_buffer() {
-    task_buffer.clear();
-    return task_buffer;
-  }
 
   void update_time(timecount_t time) {
     state.update_time(time);
@@ -1012,16 +998,24 @@ public:
 
   void push_mappable(taskid_t compute_task_id) {
     priority_t p = state.get_task_noise().get_priority(compute_task_id);
+    SPDLOG_DEBUG("Pushing mappable compute task {} with priority {}", compute_task_id, p);
     queues.push_mappable(compute_task_id, p);
   }
 
   void push_mappable(const std::span<const taskid_t> compute_task_id) {
     const auto &ps = state.get_task_noise().get_priorities();
-    queues.push_mappable(compute_task_id, ps);
+    for (int i = 0; i < compute_task_id.size(); ++i) {
+      const taskid_t id = compute_task_id[i];
+      const priority_t p = ps[id];
+      SPDLOG_DEBUG("Pushing mappable compute task {} with priority {}", id, p);
+      queues.push_mappable(id, p);
+    }
   }
 
   void push_reservable(taskid_t compute_task_id, devid_t device) {
     priority_t p = state.task_runtime.get_compute_task_reserve_priority(compute_task_id);
+    SPDLOG_DEBUG("Time:{} Pushing reservable compute task {} with priority {} on device {}",
+                 state.get_global_time(), compute_task_id, p, device);
     queues.push_reservable(compute_task_id, p, device);
   }
 
@@ -1029,12 +1023,16 @@ public:
     for (auto id : compute_task_ids) {
       const priority_t p = state.task_runtime.get_compute_task_reserve_priority(id);
       const devid_t device = state.task_runtime.get_compute_task_mapped_device(id);
+      SPDLOG_DEBUG("Time:{} Pushing reservable compute task {} with priority {} on device {}",
+                   state.get_global_time(), id, p, device);
       queues.push_reservable(id, p, device);
     }
   }
 
   void push_launchable(taskid_t compute_task_id, devid_t device) {
     const priority_t p = state.task_runtime.get_compute_task_launch_priority(compute_task_id);
+    SPDLOG_DEBUG("Time:{} Pushing launchable compute task {} with priority {} on device {}",
+                 state.get_global_time(), compute_task_id, p, device);
     queues.push_launchable(compute_task_id, p, device);
   }
 
@@ -1042,6 +1040,8 @@ public:
     for (auto id : compute_task_ids) {
       const priority_t p = state.task_runtime.get_compute_task_launch_priority(id);
       const devid_t device = state.task_runtime.get_compute_task_mapped_device(id);
+      SPDLOG_DEBUG("Time:{} Pushing launchable compute task {} with priority {} on device {}",
+                   state.get_global_time(), id, p, device);
       queues.push_launchable(id, p, device);
     }
   }
@@ -1049,16 +1049,24 @@ public:
   void push_launchable_data(taskid_t data_task_id) {
     const priority_t p = state.task_runtime.get_data_task_launch_priority(data_task_id);
     const devid_t device = state.task_runtime.get_data_task_mapped_device(data_task_id);
+    SPDLOG_DEBUG("Time:{} Pushing launchable data task {} with priority {} on device {}",
+                 state.get_global_time(), data_task_id, p, device);
     queues.push_launchable_data(data_task_id, p, device);
   }
 
   void push_launchable_data(const std::span<const taskid_t> data_task_ids) {
-    for (auto id : data_task_ids) {
-      push_launchable_data(id);
+    for (auto data_task_id : data_task_ids) {
+      const priority_t p = state.task_runtime.get_data_task_launch_priority(data_task_id);
+      const devid_t device = state.task_runtime.get_data_task_mapped_device(data_task_id);
+      SPDLOG_DEBUG("Time:{} Pushing launchable data task {} with priority {} on device {}",
+                   state.get_global_time(), data_task_id, p, device);
+      queues.push_launchable_data(data_task_id, p, device);
     }
   }
 
   void push_launchable_eviction(taskid_t eviction_task_id) {
+    SPDLOG_DEBUG("Time:{} Pushing launchable eviction task {}", state.get_global_time(),
+                 eviction_task_id);
     queues.push_launchable_eviction(eviction_task_id, 0, 0);
   }
 
@@ -1271,7 +1279,7 @@ protected:
 
 public:
   void record_finish_time(taskid_t task_id, timecount_t time) {
-    finish_time_record.at(task_id) = time;
+    finish_time_record[task_id] = time;
   }
 
   timecount_t time_for_transfer(dataid_t data_id, devid_t destination,
@@ -1403,7 +1411,7 @@ public:
   }
 
   Action map_task(taskid_t compute_task_id, const SchedulerState &state) override {
-    finish_time_record.resize(state.get_tasks().get_n_tasks());
+    finish_time_record.resize(state.get_tasks().get_n_compute_tasks());
     finish_time_buffer.reserve(state.get_devices().size());
     device_available_time_buffer.resize(state.get_devices().size());
 

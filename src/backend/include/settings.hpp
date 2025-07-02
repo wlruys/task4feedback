@@ -23,7 +23,7 @@ using depcount_t = int32_t;
 using vcu_t = int64_t;
 using mem_t = int64_t;
 using timecount_t = int64_t;
-using copy_t = int8_t;
+using copy_t = int32_t;
 
 using TaskIDList = std::vector<taskid_t>;
 using TaskIDLinkedList = std::list<taskid_t>;

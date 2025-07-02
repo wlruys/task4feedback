@@ -183,7 +183,7 @@ public:
   std::vector<dataid_t> v_read;
   std::vector<taskid_t> most_recent_writers;
 
-  std::vector<uint8_t> arch_mask;
+  std::vector<uint8_t> arch;
   std::vector<vcu_t> vcu;
   std::vector<mem_t> mem;
   std::vector<timecount_t> time;
@@ -288,17 +288,11 @@ public:
   void set_variant(taskid_t task_id, DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time) {
     assert(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
-    size_t arch_index = static_cast<size_t>(arch);
-    if (arch_index >= task.arch_mask.size()) {
-      task.arch_mask.resize(arch_index + 1, 0);
-      task.vcu.resize(arch_index + 1);
-      task.mem.resize(arch_index + 1);
-      task.time.resize(arch_index + 1);
-    }
-    task.arch_mask[arch_index] = 1; // Set the architecture mask
-    task.vcu[arch_index] = vcu;
-    task.mem[arch_index] = mem;
-    task.time[arch_index] = time;
+
+    task.arch.push_back(static_cast<uint8_t>(arch));
+    task.vcu.push_back(vcu);
+    task.mem.push_back(mem);
+    task.time.push_back(time);
 
     std::cout << "Set variant for task " << task_id << ": "
               << "arch=" << to_string(arch) << ", vcu=" << vcu << ", mem=" << mem
@@ -503,7 +497,7 @@ public:
                         taskid_t writer_id = -1) {
 
     auto &task = tasks[task_id];
-    auto data_name = task.name + "_data_" + std::to_string(data_id);
+    auto data_name = std::to_string(task_id) + "_data_" + std::to_string(data_id);
     auto data_task_id = add_data_task(data_name, task_id, data_id);
     auto &data_task = data_tasks[data_task_id];
 
@@ -608,7 +602,7 @@ public:
     populate_initial_tasks();
     bfs();
     populate_data_dependencies(ensure_dependencies, create_data_tasks);
-    populate_data_dependents();
+    // populate_data_dependents();
   }
 };
 
@@ -887,16 +881,11 @@ public:
       add_retire(task.id, as_vector(task.retire));
       add_unique(task.id, task.unique);
 
-      for (int i = 0; i < task.arch_mask.size(); ++i) {
-        std::cout << "Checking compute variant for task " << task.id << " on architecture "
-                  << to_string(static_cast<DeviceType>(i)) << std::endl;
-        if (task.arch_mask[i]) {
-          std::cout << "Adding compute variant for task " << task.id << " on architecture "
-                    << to_string(static_cast<DeviceType>(i)) << " with VCU: " << task.vcu[i]
-                    << ", MEM: " << task.mem[i] << ", TIME: " << task.time[i] << std::endl;
-          add_compute_variant(task.id, static_cast<DeviceType>(i), task.vcu[i], task.mem[i],
-                              task.time[i]);
-        }
+      for (int i = 0; i < task.arch.size(); ++i) {
+        const auto arch = static_cast<DeviceType>(task.arch[i]);
+        std::cout << "Adding compute variant for task " << task.id << " on architecture "
+                  << to_string(arch) << std::endl;
+        add_compute_variant(task.id, arch, task.mem[i], task.vcu[i], task.time[i]);
       }
     }
 
@@ -1039,10 +1028,10 @@ public:
   void add_data_task_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
     assert(id < data_task_static_info.size() && "Task ID is out of bounds");
     auto &info = data_task_static_info[id];
-    std::cout << "Adding data task dependents for task ID: " << id
-              << ", expected size: " << info.e_dependents << std::endl;
-    std::cout << "Current size of data_task_dependents: " << data_task_dependents.size()
-              << std::endl;
+    // std::cout << "Adding data task dependents for task ID: " << id
+    //           << ", expected size: " << info.e_dependents << std::endl;
+    // std::cout << "Current size of data_task_dependents: " << data_task_dependents.size()
+    //           << std::endl;
     // Ensure there is enough space in the vector
     assert(data_task_dependents.size() >= info.e_dependents &&
            "Not enough space in data_task_dependents vector");
@@ -1100,15 +1089,17 @@ public:
     auto &info = compute_task_variant_info[id];
     uint8_t arch_type = static_cast<uint8_t>(arch);
     info.mask |= arch_type;
-    ;
-    info.variants[__builtin_ctz(arch_type)] = Variant(arch, vcu, mem, time);
+    const auto idx = __builtin_ctz(arch_type);
+    assert(idx < info.variants.size() && "Architecture index out of bounds");
+    info.variants[idx] = Variant(arch, vcu, mem, time);
 
-    // std::cout << "Adding compute variant for task ID: " << id
-    //           << ", architecture: " << static_cast<int>(arch) << std::endl;
-    // std::cout << "MASK: " << static_cast<int>(info.mask) << std::endl;
-    // std::cout << "VCU: " << info.variants[__builtin_ctz(arch_type)].get_vcus() << std::endl;
-    // std::cout << "MEM: " << info.variants[__builtin_ctz(arch_type)].get_mem() << std::endl;
-    // std::cout << "Time: " << info.variants[__builtin_ctz(arch_type)].get_mean_duration()
+    std::cout << "Adding compute variant for task ID: " << id
+              << ", architecture: " << static_cast<int>(arch) << std::endl;
+
+    std::cout << "Variant resources: VCU = " << vcu << ", MEM = " << mem << ", TIME = " << time
+              << ", ARCH = " << to_string(arch) << std::endl;
+    std::cout << "MASK" << " = " << static_cast<int>(info.mask)
+              << ", ARCH TYPE = " << static_cast<int>(arch_type) << std::endl;
 
     //           << std::endl;
   }
@@ -1210,7 +1201,10 @@ public:
   }
 
   [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const {
-    return compute_task_variant_info[id].variants[__builtin_ctz(static_cast<uint8_t>(arch))];
+    const auto idx = __builtin_ctz(static_cast<uint8_t>(arch));
+    assert(idx < compute_task_variant_info[id].variants.size() &&
+           "Architecture index out of bounds for compute task variants");
+    return compute_task_variant_info[id].variants[idx];
   }
 
   [[nodiscard]] const Resources &get_compute_task_resources(taskid_t id, DeviceType arch) const {
@@ -1218,7 +1212,9 @@ public:
     uint8_t arch_type = static_cast<uint8_t>(arch);
     // assert that mask flag is set for the given architecture
     assert((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
-    const auto &variant = info.variants[__builtin_ctz(arch_type)];
+    const auto idx = __builtin_ctz(arch_type);
+    assert(idx < info.variants.size() && "Architecture index out of bounds");
+    const auto &variant = info.variants[idx];
     return variant.get_resources();
   }
 
@@ -1227,7 +1223,9 @@ public:
     uint8_t arch_type = static_cast<uint8_t>(arch);
     // assert that mask flag is set for the given architecture
     assert((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
-    const auto &variant = info.variants[__builtin_ctz(arch_type)];
+    const auto idx = __builtin_ctz(arch_type);
+    assert(idx < info.variants.size() && "Architecture index out of bounds");
+    const auto &variant = info.variants[idx];
     return variant.get_mean_duration();
   }
 
@@ -1355,11 +1353,13 @@ public:
     set_data_task_incomplete(data_task_id, n_dependencies);
   }
 
-  int32_t add_eviction_task(const std::string &name, int32_t compute_task_id, int32_t data_id,
+  int32_t add_eviction_task(int32_t compute_task_id, int32_t data_id,
                             int32_t evicting_on_device_id) {
     taskid_t id = static_cast<taskid_t>(eviction_task_runtime_info.size());
     eviction_task_runtime_info.emplace_back();
     eviction_task_time_records.emplace_back();
+    std::string name = "EvictionTask_" + std::to_string(compute_task_id) + "_" +
+                       std::to_string(data_id) + "_" + std::to_string(evicting_on_device_id);
     eviction_task_names.push_back(name);
 
     set_eviction_task_state(id, TaskState::SPAWNED);
@@ -1522,13 +1522,13 @@ public:
     }
   }
 
-  [[nodiscard]] TaskState get_data_task_state_at_time(taskid_t id, timecount_t query) const {
+  TaskState get_data_task_state_at_time(taskid_t id, timecount_t query) const {
     if (query < data_task_time_records[id].reserved_time) {
       return TaskState::SPAWNED;
     } else if (query < data_task_time_records[id].launched_time) {
-      return TaskState::MAPPED;
-    } else if (query < data_task_time_records[id].completed_time) {
       return TaskState::RESERVED;
+    } else if (query < data_task_time_records[id].completed_time) {
+      return TaskState::LAUNCHED;
     } else {
       return TaskState::COMPLETED;
     }
@@ -1560,7 +1560,7 @@ public:
 
   bool is_compute_mappable(taskid_t id) const {
     auto &info = compute_task_runtime_info[id];
-    return info.unmapped == 0 && info.state >= static_cast<uint8_t>(TaskState::SPAWNED);
+    return info.unmapped == 0 && info.state == static_cast<uint8_t>(TaskState::SPAWNED);
   }
 
   bool is_compute_mapped(taskid_t compute_task_id) const {
@@ -1570,7 +1570,7 @@ public:
 
   bool is_compute_reservable(taskid_t id) const {
     auto &info = compute_task_runtime_info[id];
-    return info.unreserved == 0 && info.state >= static_cast<uint8_t>(TaskState::MAPPED);
+    return info.unreserved == 0 && info.state == static_cast<uint8_t>(TaskState::MAPPED);
   }
 
   bool is_compute_reserved(taskid_t id) const {
@@ -1585,7 +1585,7 @@ public:
     // std::cout << "Incomplete: " << info.incomplete << std::endl;
     // std::cout << "Unreserved: " << info.unreserved << std::endl;
     // std::cout << "Unmapped: " << info.unmapped << std::endl;
-    return info.incomplete == 0 && info.state >= static_cast<uint8_t>(TaskState::RESERVED);
+    return info.incomplete == 0 && info.state == static_cast<uint8_t>(TaskState::RESERVED);
   }
 
   bool is_compute_launched(taskid_t id) const {
@@ -1600,7 +1600,7 @@ public:
 
   bool is_data_launchable(taskid_t id) const {
     auto &info = data_task_runtime_info[id];
-    return info.incomplete == 0 && info.state >= static_cast<uint8_t>(TaskState::RESERVED);
+    return info.incomplete == 0 && info.state == static_cast<uint8_t>(TaskState::RESERVED);
   }
 
   bool is_data_completed(taskid_t id) const {
@@ -1796,32 +1796,35 @@ public:
   bool decrement_compute_task_unmapped(taskid_t id) {
     auto &info = compute_task_runtime_info[id];
     info.unmapped--;
+    assert(info.unmapped >= 0 && "Unmapped count cannot be negative");
     return (info.unmapped == 0) && (info.state >= static_cast<uint8_t>(TaskState::SPAWNED));
   }
 
   bool decrement_compute_task_unreserved(taskid_t id) {
     auto &info = compute_task_runtime_info[id];
     info.unreserved--;
+    assert(info.unreserved >= 0 && "Unreserved count cannot be negative");
     return (info.unreserved == 0) && (info.state >= static_cast<uint8_t>(TaskState::MAPPED));
   }
 
   bool decrement_compute_task_incomplete(taskid_t id) {
     auto &info = compute_task_runtime_info[id];
     info.incomplete--;
+    assert(info.incomplete >= 0 && "Incomplete count cannot be negative");
     return (info.incomplete == 0) && (info.state >= static_cast<uint8_t>(TaskState::RESERVED));
   }
 
   bool decrement_data_task_incomplete(taskid_t id) {
     auto &info = data_task_runtime_info[id];
     info.incomplete--;
+    assert(info.incomplete >= 0 && "Incomplete count cannot be negative");
     return (info.incomplete == 0) && (info.state >= static_cast<uint8_t>(TaskState::RESERVED));
   }
 
-  const std::vector<taskid_t> &compute_notify_mapped(taskid_t compute_task_id,
-                                                     devid_t mapped_device,
-                                                     int32_t reserve_priority,
-                                                     int32_t launch_priority, timecount_t time,
-                                                     const StaticTaskInfo &static_info) {
+  taskid_t compute_notify_mapped(taskid_t compute_task_id, devid_t mapped_device,
+                                 int32_t reserve_priority, int32_t launch_priority,
+                                 timecount_t time, const StaticTaskInfo &static_info,
+                                 std::span<taskid_t> compute_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.mapped_device = mapped_device;
@@ -1829,40 +1832,38 @@ public:
     my_info.launch_priority = launch_priority;
     my_info.state = static_cast<uint8_t>(TaskState::MAPPED);
     my_time_record.mapped_time = time;
-
-    task_buffer.clear();
+    taskid_t write_idx = 0;
 
     auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
 
     for (const auto &dependent_id : my_dependents) {
-      if (decrement_compute_task_unmapped(dependent_id)) {
-        task_buffer.push_back(dependent_id);
-      }
+      bool is_mappable = decrement_compute_task_unmapped(dependent_id);
+      compute_task_buffer[write_idx] = dependent_id;
+      write_idx += is_mappable ? 1 : 0;
     }
 
-    return task_buffer;
+    return write_idx;
   }
 
-  const std::vector<taskid_t> &compute_notify_reserved(taskid_t compute_task_id,
-                                                       devid_t mapped_device, timecount_t time,
-                                                       const StaticTaskInfo &static_info) {
+  taskid_t compute_notify_reserved(taskid_t compute_task_id, devid_t mapped_device,
+                                   timecount_t time, const StaticTaskInfo &static_info,
+                                   std::span<taskid_t> compute_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.mapped_device = mapped_device;
     my_info.state = static_cast<uint8_t>(TaskState::RESERVED);
     my_time_record.reserved_time = time;
 
-    task_buffer.clear();
-
+    taskid_t write_idx = 0;
     auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
 
     for (const auto &dependent_id : my_dependents) {
-      if (decrement_compute_task_unreserved(dependent_id)) {
-        task_buffer.push_back(dependent_id);
-      }
+      bool is_reservable = decrement_compute_task_unreserved(dependent_id);
+      compute_task_buffer[write_idx] = dependent_id;
+      write_idx += is_reservable ? 1 : 0;
     }
 
-    return task_buffer;
+    return write_idx;
   }
 
   void compute_notify_launched(taskid_t compute_task_id, timecount_t time,
@@ -1873,43 +1874,42 @@ public:
     my_time_record.launched_time = time;
   }
 
-  const std::vector<taskid_t> &compute_notify_completed(taskid_t compute_task_id, timecount_t time,
-                                                        const StaticTaskInfo &static_info) {
+  taskid_t compute_notify_completed(taskid_t compute_task_id, timecount_t time,
+                                    const StaticTaskInfo &static_info,
+                                    std::span<taskid_t> compute_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);
     my_time_record.completed_time = time;
-
-    task_buffer.clear();
+    taskid_t write_idx = 0;
 
     auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
 
     for (const auto &dependent_id : my_dependents) {
-      if (decrement_compute_task_incomplete(dependent_id)) {
-        task_buffer.push_back(dependent_id);
-      }
+      bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      compute_task_buffer[write_idx] = dependent_id;
+      write_idx += is_launchable ? 1 : 0;
     }
 
-    return task_buffer;
+    return write_idx;
   }
 
-  const std::vector<taskid_t> &compute_notify_data_completed(taskid_t compute_task_id,
-                                                             timecount_t time,
-                                                             const StaticTaskInfo &static_info) {
+  taskid_t compute_notify_data_completed(taskid_t compute_task_id, timecount_t time,
+                                         const StaticTaskInfo &static_info,
+                                         std::span<taskid_t> data_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
+    taskid_t write_idx = 0;
 
     // state and time assumed to be updated by prior call to notify_completed
-
-    task_buffer.clear();
     auto my_data_dependents = static_info.get_compute_task_data_dependents(compute_task_id);
 
     for (const auto &dependent_id : my_data_dependents) {
-      if (decrement_data_task_incomplete(dependent_id)) {
-        task_buffer.push_back(dependent_id);
-      }
+      bool is_launchable = decrement_data_task_incomplete(dependent_id);
+      data_task_buffer[write_idx] = dependent_id;
+      write_idx += is_launchable ? 1 : 0;
     }
 
-    return task_buffer;
+    return write_idx;
   }
 
   void data_notify_reserved(taskid_t data_task_id, devid_t mapped_device, timecount_t time,
@@ -1930,24 +1930,25 @@ public:
     my_time_record.launched_time = time;
   }
 
-  const std::vector<taskid_t> &data_notify_completed(taskid_t data_task_id, timecount_t time,
-                                                     const StaticTaskInfo &static_info) {
+  taskid_t data_notify_completed(taskid_t data_task_id, timecount_t time,
+                                 const StaticTaskInfo &static_info,
+                                 std::span<taskid_t> compute_task_buffer) {
     auto &my_info = data_task_runtime_info[data_task_id];
     auto &my_time_record = data_task_time_records[data_task_id];
 
     my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);
     my_time_record.completed_time = time;
+    taskid_t write_idx = 0;
 
-    task_buffer.clear();
     auto my_dependents = static_info.get_data_task_dependents(data_task_id);
 
     for (const auto &dependent_id : my_dependents) {
-      if (decrement_compute_task_incomplete(dependent_id)) {
-        task_buffer.push_back(dependent_id);
-      }
+      bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      compute_task_buffer[write_idx] = dependent_id;
+      write_idx += is_launchable ? 1 : 0;
     }
 
-    return task_buffer;
+    return write_idx;
   }
 
   void eviction_notify_reserved(taskid_t eviction_task_id, timecount_t time,

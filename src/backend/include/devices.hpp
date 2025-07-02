@@ -334,29 +334,33 @@ public:
   }
 
   [[nodiscard]] devid_t get_global_id(DeviceType arch, devid_t local_id) const {
-    return type_map[__builtin_ctz(static_cast<std::size_t>(arch))][local_id];
+    const auto idx = __builtin_ctz(static_cast<uint8_t>(arch));
+    assert(idx < type_map.size() && "Invalid device type index");
+    assert(local_id < type_map[idx].size() && "Local ID out of bounds for device type");
+    return type_map[idx][local_id];
   }
 
-  void create_device(devid_t id, std::string name, DeviceType arch, copy_t max_copy, vcu_t vcu,
-                     mem_t mem) {
+  void create_device(devid_t id, std::string name, DeviceType arch, copy_t max_copy, mem_t mem) {
     if (id >= devices.size()) {
       resize(id + 1);
     }
 
     assert(id < devices.size());
-    devices[id] = Device(id, arch, max_copy, vcu, mem);
-    type_map[__builtin_ctz(static_cast<uint8_t>(arch))].push_back(id);
+    devices[id] = Device(id, arch, max_copy, MAX_VCUS, mem);
+    const auto idx = __builtin_ctz(static_cast<uint8_t>(arch));
+    assert(idx < type_map.size() && "Invalid device type index");
+    type_map[idx].push_back(id);
 
     device_name_map[name] = id;
-    devid_t local_id = type_map[__builtin_ctz(static_cast<uint8_t>(arch))].size() - 1;
+    devid_t local_id = type_map[idx].size() - 1;
     global_to_local[id] = local_id;
 
     device_names[id] = std::move(name);
   }
 
-  devid_t append_device(std::string name, DeviceType arch, copy_t max_copy, vcu_t vcu, mem_t mem) {
+  devid_t append_device(std::string name, DeviceType arch, copy_t max_copy, mem_t mem) {
     devid_t id = devices.size();
-    create_device(id, std::move(name), arch, max_copy, vcu, mem);
+    create_device(id, std::move(name), arch, max_copy, mem);
     return id;
   }
 

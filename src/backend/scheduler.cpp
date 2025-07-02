@@ -32,7 +32,7 @@ size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
   return copy_size;
 }
 
-const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) {
+taskid_t Scheduler::map_task(taskid_t last_idx, taskid_t compute_task_id, Action &action) {
   ZoneScoped;
   auto &s = state;
   auto &task_runtime = s.task_runtime;
@@ -40,23 +40,24 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
   auto &data_manager = s.data_manager;
   auto current_time = s.global_time;
   const auto &data = s.get_data();
+  taskid_t mappable_write_idx = 0;
 
   devid_t chosen_device = action.device;
 
-  SPDLOG_DEBUG("Time:{} Mapping task {} to device {}", current_time,
-               static_graph.get_compute_task_name(compute_task_id), chosen_device);
+  SPDLOG_DEBUG("Time:{} Mapping task {}:{} to device {}", current_time,
+               static_graph.get_compute_task_name(compute_task_id), compute_task_id, chosen_device);
 
   assert(task_runtime.is_compute_mappable(compute_task_id));
 
   priority_t rp = action.reservable_priority;
   priority_t lp = action.launchable_priority;
+  SPDLOG_DEBUG("Time:{} Reservable priority: {}, Launchable priority: {}", current_time, rp, lp);
 
   // Update mapped resources
   auto [requested, missing] = s.request_map_resources(compute_task_id, chosen_device);
   s.map_resources(compute_task_id, chosen_device, requested);
 
   // Update data locations
-  // TODO(wlr): These need to be udpated for span accesses
   auto &device_manager = s.get_device_manager();
   data_manager.read_update_mapped(data, device_manager, static_graph.get_unique(compute_task_id),
                                   chosen_device, current_time);
@@ -81,13 +82,15 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
   // We check if there are any usage of the data by the victim device.
   // If there are, it means that
 
+  s.mapped_but_not_reserved_tasks.insert(compute_task_id);
+
   // Notify dependents and enqueue newly mappable tasks
-  const auto &newly_mappable_tasks = task_runtime.compute_notify_mapped(
-      compute_task_id, chosen_device, rp, lp, current_time, static_graph);
+  auto newly_mappable_tasks = std::span<taskid_t>(compute_task_buffer.data() + last_idx,
+                                                  compute_task_buffer.size() - last_idx);
+  const taskid_t n_newly_mappable = task_runtime.compute_notify_mapped(
+      compute_task_id, chosen_device, rp, lp, current_time, static_graph, newly_mappable_tasks);
   s.update_mapped_cost(compute_task_id, chosen_device);
   success_count += 1;
-
-  s.mapped_but_not_reserved_tasks.insert(compute_task_id);
 
   breakpoints.check_task_breakpoint(EventType::MAPPER, compute_task_id);
 
@@ -99,7 +102,9 @@ const TaskIDList &Scheduler::map_task(taskid_t compute_task_id, Action &action) 
     push_reservable(compute_task_id, chosen_device);
   }
 
-  return newly_mappable_tasks;
+  last_idx = last_idx + n_newly_mappable;
+
+  return last_idx;
 }
 
 void Scheduler::remove_mapped_tasks(ActionList &action_list) {
@@ -118,14 +123,18 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
   success_count = 0;
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
+  taskid_t last_idx = 0;
 
   if (!action_list.empty()) {
     TaskIDList nmt;
     for (auto &action : action_list) {
       const auto task_id = top_k_tasks[action.pos];
-      const auto &tasks = map_task(task_id, action);
-      nmt.insert(nmt.end(), tasks.begin(), tasks.end());
+      const auto n_newly_mappable = map_task(last_idx, task_id, action);
+      last_idx += n_newly_mappable;
     }
+
+    const auto newly_mappable_tasks =
+        std::span<const taskid_t>(compute_task_buffer.data(), last_idx);
     remove_mapped_tasks(action_list);
     push_mappable(nmt);
   }
@@ -161,6 +170,9 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
   SPDLOG_DEBUG("Time:{} Starting mapper", current_time);
   SPDLOG_DEBUG("Time:{} Mappable Queue Size: {}", current_time, queues.mappable.size());
   bool break_flag = false;
+  taskid_t last_idx = 0;
+
+  compute_task_buffer.clear();
 
   while (queues.has_mappable() && conditions.get().should_map(s, queues)) {
 
@@ -174,11 +186,11 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
     queues.mappable.pop();
     assert(task_runtime.is_compute_mappable(task_id));
     Action action = mapper.map_task(task_id, s);
-    const auto &newly_mappable_tasks = map_task(task_id, action);
-
-    // TODO(wlr): Check if delayed enqueue is faster
-    push_mappable(newly_mappable_tasks);
+    last_idx = map_task(last_idx, task_id, action);
   }
+
+  const auto newly_mappable_tasks = std::span<const taskid_t>(compute_task_buffer.data(), last_idx);
+  push_mappable(newly_mappable_tasks);
 
   if (break_flag) {
     timecount_t mapper_time = current_time;
@@ -214,8 +226,8 @@ void Scheduler::enqueue_data_tasks(taskid_t compute_task_id) {
   }
 }
 
-SuccessPair Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id,
-                                    TaskDeviceList &tasks_requesting_eviction) {
+SuccessPair Scheduler::reserve_task(taskid_t last_idx, taskid_t compute_task_id,
+                                    devid_t device_id) {
   ZoneScoped;
 
   auto &s = this->state;
@@ -242,7 +254,7 @@ SuccessPair Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id,
         current_time, static_graph.get_compute_task_name(compute_task_id), device_id, requested.mem,
         missing.mem);
     tasks_requesting_eviction.push_back(std::make_tuple(compute_task_id, device_id));
-    return {false, nullptr};
+    return {false, 0};
   }
 
   // Update reserved resources
@@ -260,8 +272,10 @@ SuccessPair Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id,
   // erase task_id from s.mapped_but_not_reserved_tasks
   mapped.erase(mapped.find(compute_task_id));
 
-  const auto &newly_reservable_tasks =
-      task_runtime.compute_notify_reserved(compute_task_id, device_id, current_time, static_graph);
+  auto newly_reservable_tasks = std::span<taskid_t>(compute_task_buffer.data() + last_idx,
+                                                    compute_task_buffer.size() - last_idx);
+  const auto n_newly_reservable = task_runtime.compute_notify_reserved(
+      compute_task_id, device_id, current_time, static_graph, newly_reservable_tasks);
 
   success_count += 1;
   enqueue_data_tasks(compute_task_id);
@@ -275,7 +289,7 @@ SuccessPair Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id,
     push_launchable(compute_task_id, device_id);
   }
 
-  return {true, &newly_reservable_tasks};
+  return {true, n_newly_reservable};
 }
 
 void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
@@ -295,6 +309,8 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
                queues.reservable.total_active_size());
   bool break_flag = false;
   bool success_flag = false;
+  taskid_t last_idx = 0;
+
   tasks_requesting_eviction.clear();
   while (queues.has_active_reservable() && conditions.get().should_reserve(s, queues)) {
 
@@ -311,30 +327,24 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
 
     auto device_id = static_cast<devid_t>(reservable.get_active_index());
     taskid_t task_id = reservable.top();
-    auto [success, newly_reservable_tasks] =
-        reserve_task(task_id, device_id, tasks_requesting_eviction);
+    auto [success, newly_reservable_tasks] = reserve_task(last_idx, task_id, device_id);
     if (!success) {
       reservable.deactivate();
       reservable.next();
       continue;
     }
     success_flag = true;
+    last_idx += newly_reservable_tasks;
 
     reservable.pop();
-
-    // Notify dependents and enqueue newly reservable tasks
-
-    // TODO(wlr): Outer scope should own newly_reservable_tasks buffer NOT the inner scope
-    // (notify_reserved)
-    if (newly_reservable_tasks != nullptr) {
-      if (!newly_reservable_tasks->empty()) {
-        push_reservable(*newly_reservable_tasks);
-      }
-    }
 
     // Cycle to the next active device queue
     reservable.next();
   }
+
+  const auto newly_reservable_tasks =
+      std::span<const taskid_t>(compute_task_buffer.data(), last_idx);
+  push_reservable(newly_reservable_tasks);
 
   if (break_flag) {
     timecount_t reserver_time = current_time;
@@ -373,8 +383,8 @@ bool Scheduler::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
   auto &device_manager = s.get_device_manager();
   const auto &data = s.get_data();
 
-  SPDLOG_DEBUG("Time:{} Attempting to launch compute task {} on device {}", current_time,
-               static_graph.get_compute_task_name(compute_task_id), device_id);
+  SPDLOG_DEBUG("Time:{} Attempting to launch compute task {}:{} on device {}", current_time,
+               static_graph.get_compute_task_name(compute_task_id), compute_task_id, device_id);
 
   assert(task_runtime.is_compute_launchable(compute_task_id));
   assert(task_runtime.get_compute_task_mapped_device(compute_task_id) == device_id);
@@ -382,9 +392,9 @@ bool Scheduler::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
   const auto [requested, missing] = s.request_launch_resources(compute_task_id, device_id);
 
   if (missing.vcu > 0) {
-    SPDLOG_DEBUG("Time:{} Task {} requested {} VCU but missing {} VCU",
-                 static_graph.get_compute_task_name(compute_task_id), current_time, requested.vcu,
-                 missing.vcu);
+    SPDLOG_DEBUG("Time:{} Task {}:{} requested {} VCU but missing {} VCU",
+                 static_graph.get_compute_task_name(compute_task_id), compute_task_id, current_time,
+                 requested.vcu, missing.vcu);
     return false;
   }
 
@@ -428,10 +438,11 @@ bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_devi
   auto &comm_manager = s.get_communication_manager();
   auto &device_manager = s.get_device_manager();
 
-  SPDLOG_DEBUG("Time:{} Attempting to launch data task {} on device {}", current_time,
-               static_graph.get_data_task_name(data_task_id), destination_device_id);
+  SPDLOG_DEBUG("Time:{} Attempting to launch data task {}:{} on device {}", current_time,
+               static_graph.get_data_task_name(data_task_id), data_task_id, destination_device_id);
 
   assert(task_runtime.is_data_launchable(data_task_id));
+  assert(task_runtime.get_data_task_mapped_device(data_task_id) == destination_device_id);
 
   const dataid_t data_id = static_graph.get_data_id(data_task_id);
   const auto &topology = s.get_topology();
@@ -439,20 +450,20 @@ bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_devi
       data_manager.request_source(topology, comm_manager, data_id, destination_device_id);
 
   if (!found) {
-    SPDLOG_DEBUG("Time:{} Data task {} missing available source", current_time,
-                 static_graph.get_data_task_name(data_task_id));
+    SPDLOG_DEBUG("Time:{} Data task {}:{} missing available source", current_time,
+                 static_graph.get_data_task_name(data_task_id), data_task_id);
     return false;
   }
   auto duration = data_manager.start_move(topology, comm_manager, device_manager, data, data_id,
                                           source_device_id, destination_device_id, current_time);
 
   if (duration.is_virtual) {
-    SPDLOG_DEBUG("Time:{} Data task {} is virtual", current_time,
-                 static_graph.get_data_task_name(data_task_id));
+    SPDLOG_DEBUG("Time:{} Data task {}:{} is virtual", current_time,
+                 static_graph.get_data_task_name(data_task_id), data_task_id);
     task_runtime.set_data_task_virtual(data_task_id, true);
   } else {
-    SPDLOG_DEBUG("Time:{} Data task {} moving from {} to {}", current_time,
-                 static_graph.get_data_task_name(data_task_id), source_device_id,
+    SPDLOG_DEBUG("Time:{} Data task {}:{} moving from {} to {}", current_time,
+                 static_graph.get_data_task_name(data_task_id), data_task_id, source_device_id,
                  destination_device_id);
   }
 
@@ -543,6 +554,9 @@ bool Scheduler::launch_compute_tasks(EventManager &event_manager) {
   bool break_flag = false;
 
   while (queues.has_active_launchable() && conditions.get().should_launch(s, queues)) {
+
+    SPDLOG_DEBUG("Time:{} Checking device queue {}", current_time, launchable.get_active_index());
+
     if (is_breakpoint()) {
       SPDLOG_DEBUG("Time:{} Breaking from launcher", current_time);
       break_flag = true;
@@ -550,6 +564,8 @@ bool Scheduler::launch_compute_tasks(EventManager &event_manager) {
     }
 
     if (launchable.get_active().empty()) {
+      SPDLOG_DEBUG("Time:{} No active launchable tasks on device queue {}", current_time,
+                   launchable.get_active_index());
       launchable.next();
       continue;
     }
@@ -724,7 +740,7 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
             if (n_sources == 1) {
               eviction_count += 1;
               auto eviction_task_id =
-                  task_runtime.add_eviction_task("", compute_task_id, data_id, device_id);
+                  task_runtime.add_eviction_task(compute_task_id, data_id, device_id);
 
               SPDLOG_DEBUG(
                   "Time:{} Launching eviction task {} to evict block {} for task {} on device {} ",
@@ -897,7 +913,8 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
   }
 }
 
-void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager &event_manager) {
+taskid_t Scheduler::complete_compute_task(ComputeCompleterEvent &event,
+                                          EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
   auto &static_graph = s.get_tasks();
@@ -909,9 +926,12 @@ void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager
 
   const taskid_t compute_task_id = event.task;
   const devid_t device_id = event.device;
+  taskid_t last_compute_idx = 0;
+  taskid_t last_data_idx = 0;
 
-  SPDLOG_DEBUG("Time:{} Completing compute task {} on device {}", current_time,
-               static_graph.get_compute_task_name(compute_task_id), device_id);
+  SPDLOG_DEBUG("Time:{} Completing compute task {}:{} on device {}", current_time,
+               static_graph.get_compute_task_name(compute_task_id), compute_task_id, device_id);
+  assert(task_runtime.get_compute_task_mapped_device(compute_task_id) == device_id);
 
   // Free mapped, reserved, and launched resources (uses task static info, variants / data usage)
   s.free_task_resources(compute_task_id);
@@ -923,12 +943,24 @@ void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager
 
   // Notify dependents that the task has completed (uses task static info, dependents, and task
   // runtime info of dependents)
-  const auto &newly_launchable_compute_tasks =
-      task_runtime.compute_notify_completed(compute_task_id, current_time, static_graph);
+  auto ctask_buffer = std::span<taskid_t>(compute_task_buffer.data() + last_compute_idx,
+                                          compute_task_buffer.size() - last_compute_idx);
+  auto n_newly_launchable_compute_tasks = task_runtime.compute_notify_completed(
+      compute_task_id, current_time, static_graph, ctask_buffer);
+
+  const auto newly_launchable_compute_tasks =
+      std::span<const taskid_t>(compute_task_buffer.data(), n_newly_launchable_compute_tasks);
+
   push_launchable(newly_launchable_compute_tasks);
 
-  const auto &newly_launchable_data_tasks =
-      task_runtime.compute_notify_data_completed(compute_task_id, current_time, static_graph);
+  auto dtask_buffer = std::span<taskid_t>(data_task_buffer.data() + last_data_idx,
+                                          data_task_buffer.size() - last_data_idx);
+
+  auto n_newly_launchable_data_tasks = task_runtime.compute_notify_data_completed(
+      compute_task_id, current_time, static_graph, dtask_buffer);
+
+  const auto newly_launchable_data_tasks =
+      std::span<const taskid_t>(data_task_buffer.data(), n_newly_launchable_data_tasks);
   push_launchable_data(newly_launchable_data_tasks);
 
   breakpoints.check_task_breakpoint(EventType::COMPUTE_COMPLETER, compute_task_id);
@@ -937,21 +969,25 @@ void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager
   s.update_completed_cost(compute_task_id, device_id);
 
   complete_task_postmatter(event_manager);
+
+  return last_compute_idx + n_newly_launchable_compute_tasks;
 }
 
-void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &event_manager) {
+taskid_t Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
   auto current_time = s.global_time;
   const auto &static_graph = s.get_tasks();
   auto &task_runtime = s.task_runtime;
   auto &comm_manager = s.get_communication_manager();
+  taskid_t last_compute_idx = 0;
 
   const taskid_t data_task_id = event.task;
   const devid_t destination_id = event.device;
 
   SPDLOG_DEBUG("Time:{} Completing data task {}:{} on device {}", current_time,
                static_graph.get_data_task_name(data_task_id), data_task_id, destination_id);
+  assert(task_runtime.get_data_task_mapped_device(data_task_id) == destination_id);
 
   // Updates data location and eviction manager (uses task runtime info of data task)
   const auto source_id = task_runtime.get_data_task_source_device(data_task_id);
@@ -962,14 +998,21 @@ void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &even
 
   // Notify dependents that the data task has completed
   // (uses task static info, dependents, and task runtime info of dependents)
-  const auto &newly_launchable_compute_tasks =
-      task_runtime.data_notify_completed(data_task_id, current_time, static_graph);
+  auto n_newly_launchable_compute_tasks = task_runtime.data_notify_completed(
+      data_task_id, current_time, static_graph,
+      std::span<taskid_t>(compute_task_buffer.data() + last_compute_idx,
+                          compute_task_buffer.size() - last_compute_idx));
+
+  const auto newly_launchable_compute_tasks =
+      std::span<const taskid_t>(compute_task_buffer.data(), n_newly_launchable_compute_tasks);
   push_launchable(newly_launchable_compute_tasks);
 
   // Updates task counter tables in scheduler
   s.update_data_completed_cost(data_task_id, destination_id);
 
   complete_task_postmatter(event_manager);
+
+  return last_compute_idx + n_newly_launchable_compute_tasks;
 }
 
 void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManager &event_manager) {

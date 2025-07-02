@@ -63,6 +63,20 @@ public:
   Topology(devid_t num_devices)
       : latency(num_devices * num_devices), bandwidths(num_devices * num_devices),
         links(num_devices * num_devices), num_devices(num_devices) {
+
+    for (devid_t i = 0; i < num_devices; ++i) {
+      for (devid_t j = 0; j < num_devices; ++j) {
+        if (i == j) {
+          latency[i * num_devices + j] = 0;
+          bandwidths[i * num_devices + j] = MAX_MEM;
+          links[i * num_devices + j] =
+              std::numeric_limits<copy_t>::max(); // Self-links are always available
+        } else {
+          bandwidths[i * num_devices + j] = 0;
+          links[i * num_devices + j] = 0; // No links by default
+        }
+      }
+    }
   }
 
   void set_bandwidth(devid_t src, devid_t dst, mem_t bandwidth) {
@@ -94,24 +108,26 @@ public:
   }
 };
 
-// constant array of device types to max copies
-// TODO(wlr): Should be a property of the device thats configurable at runtime
-// but I'm lazy rn and don't want to change the interface
-constexpr std::array<copy_t, num_device_types> max_incoming_copies = {4, 1};
-constexpr std::array<copy_t, num_device_types> max_outgoing_copies = {4, 1};
-constexpr std::array<copy_t, num_device_types> max_total_copies = {4, 2};
-
 struct SourceRequest {
   bool found = false;
   devid_t source = 0;
 };
 
+struct DeviceUsage {
+  copy_t incoming = 0;
+  copy_t outgoing = 0;
+  copy_t max = 0;
+};
+
+struct LinkUsage {
+  copy_t active = 0;
+  copy_t max = 0;
+};
+
 class CommunicationManager {
   devid_t num_devices = 0;
-  std::vector<copy_t> incoming;
-  std::vector<copy_t> outgoing;
-  std::vector<copy_t> active_links;
-  std::vector<copy_t> max_total_copies;
+  std::vector<DeviceUsage> device_usage;
+  std::vector<LinkUsage> link_usage;
   std::vector<double> bandwidth_reciprocals;
 
   void precompute_reciprocals(const Topology &topology) {
@@ -123,19 +139,32 @@ class CommunicationManager {
   }
 
   void precompute_max_copies(const Devices &devices) {
-    max_total_copies.resize(num_devices);
+    device_usage.resize(num_devices);
     for (devid_t i = 0; i < num_devices; ++i) {
       const auto &device = devices.get_device(i);
-      max_total_copies[i] = device.get_max_copy();
+      device_usage[i].max = device.get_max_copy();
+      SPDLOG_DEBUG("Precomputed max copies for device {}: {}", i, device_usage[i].max);
+    }
+  }
+
+  void precompute_link_max_copies(const Topology &topology) {
+    link_usage.resize(num_devices * num_devices);
+    for (devid_t src = 0; src < num_devices; ++src) {
+      for (devid_t dst = 0; dst < num_devices; ++dst) {
+        link_usage[src * num_devices + dst].max = topology.get_max_connections(src, dst);
+        SPDLOG_DEBUG("Precomputed max connections from device {} to device {}: {}", src, dst,
+                     link_usage[src * num_devices + dst].max);
+      }
     }
   }
 
 public:
   CommunicationManager(const Topology &topology_, const Devices &devices_)
-      : num_devices(devices_.size()), incoming(devices_.size(), 0), outgoing(devices_.size(), 0),
-        active_links(devices_.size() * devices_.size(), 0) {
+      : num_devices(devices_.size()), device_usage(num_devices),
+        link_usage(num_devices * num_devices) {
     precompute_reciprocals(topology_);
     precompute_max_copies(devices_);
+    precompute_link_max_copies(topology_);
   }
 
   CommunicationManager(const CommunicationManager &c) = default;
@@ -143,28 +172,28 @@ public:
   CommunicationManager &operator=(const CommunicationManager &c) = default;
 
   inline void increase_incoming(devid_t device_id) {
-    incoming[device_id] += 1;
+    device_usage[device_id].incoming += 1;
   }
   inline void decrease_incoming(devid_t device_id) {
-    assert(incoming[device_id] >= 1);
-    incoming[device_id] -= 1;
+    assert(device_usage[device_id].incoming >= 1);
+    device_usage[device_id].incoming -= 1;
   }
 
   inline void increase_outgoing(devid_t device_id) {
-    outgoing[device_id] += 1;
+    device_usage[device_id].outgoing += 1;
   }
   inline void decrease_outgoing(devid_t device_id) {
-    assert(outgoing[device_id] >= 1);
-    outgoing[device_id] -= 1;
+    assert(device_usage[device_id].outgoing >= 1);
+    device_usage[device_id].outgoing -= 1;
   }
 
   inline void increase_active_links(devid_t src, devid_t dst) {
-    active_links[src * num_devices + dst] += 1;
+    link_usage[src * num_devices + dst].active += 1;
   }
 
   inline void decrease_active_links(devid_t src, devid_t dst) {
-    assert(active_links[src * num_devices + dst] >= 1);
-    active_links[src * num_devices + dst] -= 1;
+    assert(link_usage[src * num_devices + dst].active >= 1);
+    link_usage[src * num_devices + dst].active -= 1;
   }
 
   inline void reserve_connection(devid_t src, devid_t dst) {
@@ -180,41 +209,40 @@ public:
   }
 
   [[nodiscard]] inline copy_t get_active(devid_t src, devid_t dst) const {
-    return active_links[src * num_devices + dst];
+    return link_usage[src * num_devices + dst].active;
   }
 
   [[nodiscard]] inline copy_t get_incoming(devid_t device_id) const {
-    return incoming[device_id];
+    return device_usage[device_id].incoming;
   }
 
   [[nodiscard]] inline copy_t get_outgoing(devid_t device_id) const {
-    return outgoing[device_id];
+    return device_usage[device_id].outgoing;
   }
 
   [[nodiscard]] inline copy_t get_total_usage(devid_t device_id) const {
-    return incoming[device_id] + outgoing[device_id];
+    return device_usage[device_id].incoming + device_usage[device_id].outgoing;
   }
 
   [[nodiscard]] inline bool is_device_available(devid_t device_id) const {
     const auto used = get_total_usage(device_id);
-    const auto available = max_total_copies[device_id];
+    const auto available = device_usage[device_id].max;
     return used <= available;
   }
 
-  [[nodiscard]] inline bool is_link_available(const Topology &topology, devid_t src,
-                                              devid_t dst) const {
+  [[nodiscard]] inline bool is_link_available(devid_t src, devid_t dst) const {
     const auto used = get_active(src, dst);
-    const auto available = topology.get_max_connections(src, dst);
+    const auto available = link_usage[src * num_devices + dst].max;
     return used <= available;
   }
 
-  [[nodiscard]] inline bool check_connection(const Topology &topology, devid_t src,
-                                             devid_t dst) const {
-    // Early return for same device
+  [[nodiscard]] inline bool check_connection(devid_t src, devid_t dst) const {
+    // No copy if same device
     if (src == dst)
       return true;
 
-    if (!is_link_available(topology, src, dst)) {
+    // check link availability
+    if (!is_link_available(src, dst)) {
       return false;
     }
 
@@ -248,15 +276,6 @@ public:
                  size, src, dst, bw_r, latency);
     return time;
   }
-
-  /// TODO(wlr) test repacked data
-  // Better: Structure of Arrays → Array of Structures for better cache locality
-  // struct LinkInfo {
-  //   copy_t used_links;
-  //   copy_t max_links;
-  //   mem_t bandwidth;
-  // };
-  // std::vector<LinkInfo> link_data; // Size: num_devices * num_devices
 
   // TODO(wlr): Test something like this that is "branchless" but computes for all devices
   //  [[nodiscard]] SourceRequest
@@ -303,17 +322,14 @@ public:
   //   return {found, best_source};
   // }
 
-  [[nodiscard]] SourceRequest
+  [[nodiscard]] inline SourceRequest
   get_best_available_source(const Topology &topology, devid_t dst,
                             std::span<const int8_t> possible_source_flags) const {
     // Early return for local data
     if (possible_source_flags[dst] != 0) {
+      SPDLOG_DEBUG("Data is local, returning {} as best source", dst);
       return {true, dst};
     }
-
-    const auto *bandwidth_data = topology.bandwidths.data();
-    const auto *active_links_data = active_links.data();
-    const auto *max_links_data = topology.links.data();
 
     devid_t best_source = 0;
     mem_t best_bandwidth = 0;
@@ -321,31 +337,19 @@ public:
 
     const auto size = static_cast<devid_t>(possible_source_flags.size());
     for (devid_t src = 0; src < size; ++src) {
-      if (possible_source_flags[src] == 0) {
-        continue;
-      }
 
-      const std::size_t index = src * num_devices + dst;
-      const auto used_links = active_links_data[index];
-      const auto max_links = max_links_data[index];
+      const bool is_valid = possible_source_flags[src] != 0 && is_link_available(src, dst) &&
+                            is_device_available(src) && is_device_available(dst);
 
-      if (used_links > max_links) {
-        continue;
-      }
+      SPDLOG_DEBUG("Checking source {} for destination {}: is_valid = {}", src, dst, is_valid);
+      SPDLOG_DEBUG("HAS_DATA = {}", possible_source_flags[src] != 0);
+      SPDLOG_DEBUG("LINK_AVAILABLE = {}", is_link_available(src, dst));
+      SPDLOG_DEBUG("SRC_AVAILABLE = {}", is_device_available(src));
+      SPDLOG_DEBUG("DST_AVAILABLE = {}", is_device_available(dst));
 
-      // Inline device availability check
-      const auto src_usage = incoming[src] + outgoing[src];
-      const auto dst_usage = incoming[dst] + outgoing[dst];
-      const auto src_limit = max_total_copies[src];
-      const auto dst_limit = max_total_copies[dst];
+      const auto bandwidth = topology.get_bandwidth(src, dst);
 
-      if (src_usage > src_limit || dst_usage > dst_limit) {
-        continue;
-      }
-
-      const auto bandwidth = bandwidth_data[index];
-
-      const bool is_better = bandwidth > best_bandwidth;
+      const bool is_better = is_valid && (bandwidth > best_bandwidth);
       best_bandwidth = is_better ? bandwidth : best_bandwidth;
       best_source = is_better ? src : best_source;
       found = found || is_better;
@@ -354,30 +358,27 @@ public:
     return {found, best_source};
   }
 
-  [[nodiscard]] SourceRequest get_best_source(const Topology &topology, devid_t dst,
-                                              std::span<const int8_t> possible_source_flags) const {
-    // Return the source with the highest bandwidth
-    // If no source is available, return found=false
+  [[nodiscard]] inline SourceRequest
+  get_best_source(const Topology &topology, devid_t dst,
+                  std::span<const int8_t> possible_source_flags) const {
 
-    bool found = false;
+    if (possible_source_flags[dst] != 0) {
+      return {true, dst}; // Local data is always available
+    }
+
     devid_t best_source = 0;
     mem_t best_bandwidth = 0;
+    bool found = false;
 
     for (devid_t src = 0; src < possible_source_flags.size(); ++src) {
-      if (possible_source_flags[src] == 0) {
-        continue; // Skip invalid sources
-      }
-
-      if (src == dst) {
-        return {true, src};
-      }
+      bool is_valid = possible_source_flags[src] != 0 && is_link_available(src, dst) &&
+                      is_device_available(src) && is_device_available(dst);
 
       auto bandwidth = get_available_bandwidth(topology, src, dst);
-      if (bandwidth > best_bandwidth) {
-        best_bandwidth = bandwidth;
-        best_source = src;
-        found = true;
-      }
+      const bool is_better = is_valid && (bandwidth > best_bandwidth);
+      best_bandwidth = is_better ? bandwidth : best_bandwidth;
+      best_source = is_better ? src : best_source;
+      found = found || is_better;
     }
     return {found, best_source};
   }

@@ -57,10 +57,8 @@ void init_device_ext(nb::module_ &m) {
   nb::class_<Devices>(m, "Devices")
       .def(nb::init<>())
       .def(nb::init<std::size_t>(), "n_devices"_a)
-      .def("create_device", &Devices::create_device, "id"_a, "name"_a, "arch"_a, "copy"_a, "vcus"_a,
-           "mem"_a)
-      .def("append_device", &Devices::append_device, "name"_a, "arch"_a, "copy"_a, "vcus"_a,
-           "mem"_a)
+      .def("create_device", &Devices::create_device, "id"_a, "name"_a, "arch"_a, "copy"_a, "mem"_a)
+      .def("append_device", &Devices::append_device, "name"_a, "arch"_a, "copy"_a, "mem"_a)
       .def("get_device", nb::overload_cast<devid_t>(&Devices::get_device, nb::const_), "id"_a,
            nb::rv_policy::reference_internal)
       .def("get_device_id", &Devices::get_device_id, "name"_a)

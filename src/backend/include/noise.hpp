@@ -67,9 +67,13 @@ public:
 
       mapping_priority.reserve(priority_size);
       mapping_priority.resize(priority_size, 0);
+      std::iota(mapping_priority.begin(), mapping_priority.end(), 0);
+
+      SPDLOG_DEBUG("TaskNoise initialized with {} tasks, seed: {}, pseed: {}", n_tasks, seed,
+                   pseed);
 
       generate_duration(static_graph);
-      generate_priority(static_graph);
+      // generate_priority(static_graph);
 
     } catch (const std::bad_alloc &e) {
       throw std::runtime_error("Memory allocation failed in TaskNoise constructor");
@@ -88,12 +92,18 @@ public:
 
   [[nodiscard]] timecount_t get(taskid_t task_id, DeviceType arch) const {
     const uint8_t arch_type = static_cast<uint8_t>(arch);
-    return task_durations[task_id * num_device_types + __builtin_ctz(arch_type)];
+    const auto idx = __builtin_ctz(arch_type);
+    assert(task_id < n_tasks && "Task ID is out of bounds");
+    assert(idx < num_device_types && "Architecture index out of bounds");
+    return task_durations[task_id * num_device_types + idx];
   }
 
   void set(taskid_t task_id, DeviceType arch, timecount_t value) {
     const uint8_t arch_type = static_cast<uint8_t>(arch);
-    task_durations[task_id * num_device_types + __builtin_ctz(arch_type)] = value;
+    const auto idx = __builtin_ctz(arch_type);
+    assert(task_id < n_tasks && "Task ID is out of bounds");
+    assert(idx < num_device_types && "Architecture index out of bounds");
+    task_durations[task_id * num_device_types + idx] = value;
   }
 
   void set(std::vector<timecount_t> values_) {
@@ -157,7 +167,7 @@ public:
 
   void generate(StaticTaskInfo &task_info) {
     generate_duration(task_info);
-    generate_priority(task_info);
+    // generate_priority(task_info);
   }
 
   // void dump_to_binary(const std::string &filename) const {

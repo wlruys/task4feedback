@@ -32,7 +32,7 @@ void init_simulator_logger() {
 
     auto logger = spdlog::stdout_color_mt(logger_name);
     spdlog::set_default_logger(logger);
-    spdlog::set_level(spdlog::level::critical);
+    spdlog::set_level(spdlog::level::debug);
 
     logger_initialized = true;
   } catch (const spdlog::spdlog_ex &ex) {

@@ -86,11 +86,11 @@ class TaskGraph:
         idx = self.graph.add_task(name)
         self.tasks[idx] = TaskTuple(id=idx, name=name)
         return idx
-    
+
     def add_tag(self, task_id, tag):
         self.graph.set_tag(task_id, tag)
         self.tasks[task_id].tag = tag
-        
+
     def get_task(self, task_id):
         if task_id in self.tasks:
             return self.tasks[task_id]
@@ -102,7 +102,7 @@ class TaskGraph:
 
     def __len__(self):
         return self.graph.size()
-    
+
     def __iter__(self):
         return iter(self.tasks.values())
 
@@ -126,7 +126,6 @@ class TaskGraph:
         for i in range(self.graph.get_n_compute_tasks()):
             task = self.get_task(i)
             for arch in DeviceType:
-
                 variant = variant_builder.build_variant(arch, task)
 
                 if variant is None:
@@ -140,11 +139,10 @@ class TaskGraph:
                     variant.memory_usage,
                     variant.expected_time,
                 )
-                
+
     def finalize(self):
         self.graph.finalize()
         self.static_graph = StaticTaskInfo(self.graph)
-
 
     @staticmethod
     def create_from_legacy_graph(graph, datamap):
@@ -385,15 +383,9 @@ class System:
         self.devices = Devices()
         self.topology = None
 
-    def create_device(self, name, arch, copy, memory, vcu, id=None):
-        MAX_VCUS = fastsim.MAX_VCUS
-        vcu = int(vcu * MAX_VCUS)
-        if id is None:
-            id = self.devices.append_device(name, arch, copy, vcu, memory)
-        else:
-            self.devices.create_device(id, name, arch, copy, vcu, memory)
-
-        return DeviceTuple(name, id, self.devices.get_local_id(id), arch, memory, vcu)
+    def create_device(self, name, arch, copy, memory):
+        id = self.devices.append_device(name, arch, copy, memory)
+        return DeviceTuple(name, id, self.devices.get_local_id(id), arch, memory)
 
     def finalize_devices(self):
         self.topology = Topology(self.devices.size())
@@ -1957,7 +1949,7 @@ class SimulatorFactory:
         observer_factory: ExternalObserverFactory | Type[ExternalObserverFactory],
         internal_mapper: (
             fastsim.Mapper | Type[fastsim.Mapper]
-        ) = fastsim.DequeueEFTMapper,
+        ) = fastsim.RoundRobinMapper,
         external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
         seed: int = 0,
         priority_seed: int = 0,
@@ -2002,7 +1994,7 @@ class SimulatorFactory:
             external_mapper=self.external_mapper,
         )
         self.input.noise.task_noise.randomize_duration(self.input.graph.static_graph)
-        self.input.noise.task_noise.randomize_priority(self.input.graph.static_graph)
+        # self.input.noise.task_noise.randomize_priority(self.input.graph.static_graph)
         simulator.initialize()
         simulator.initialize_data()
         if use_external_mapper:
@@ -2047,9 +2039,9 @@ def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth:
     s = System()
     n_gpus = n_devices - 1
 
-    s.create_device("CPU:0", DeviceType.CPU, 4, mem, 1)
+    s.create_device("CPU:0", DeviceType.CPU, 10000, mem)
     for i in range(n_gpus):
-        s.create_device(f"GPU:{i}", DeviceType.GPU, 2, mem, 1)
+        s.create_device(f"GPU:{i}", DeviceType.GPU, 10000, mem)
 
     s.finalize_devices()
 
@@ -2059,6 +2051,8 @@ def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth:
 
     for i in range(n_gpus):
         for j in range(n_gpus):
+            if i == j:
+                continue
             s.add_connection(i + 1, j + 1, bandwidth, latency)
             s.add_connection(j + 1, i + 1, bandwidth, latency)
 
