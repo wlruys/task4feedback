@@ -1806,12 +1806,16 @@ public:
     auto &info = compute_task_runtime_info[id];
     info.unmapped--;
     assert(info.unmapped >= 0 && "Unmapped count cannot be negative");
+    SPDLOG_DEBUG("decrement_compute_task_unmapped: id: {}, unmapped: {}, state: {}", id,
+                 info.unmapped, info.state);
     return (info.unmapped == 0) && (info.state >= static_cast<uint8_t>(TaskState::SPAWNED));
   }
 
   bool decrement_compute_task_unreserved(taskid_t id) {
     auto &info = compute_task_runtime_info[id];
     info.unreserved--;
+    SPDLOG_DEBUG("decrement_compute_task_unreserved: id: {}, unreserved: {}, state: {}", id,
+                 info.unreserved, info.state);
     assert(info.unreserved >= 0 && "Unreserved count cannot be negative");
     return (info.unreserved == 0) && (info.state >= static_cast<uint8_t>(TaskState::MAPPED));
   }
@@ -1819,6 +1823,8 @@ public:
   bool decrement_compute_task_incomplete(taskid_t id) {
     auto &info = compute_task_runtime_info[id];
     info.incomplete--;
+    SPDLOG_DEBUG("decrement_compute_task_incomplete: id: {}, incomplete: {}, state: {}", id,
+                 info.incomplete, info.state);
     assert(info.incomplete >= 0 && "Incomplete count cannot be negative");
     return (info.incomplete == 0) && (info.state >= static_cast<uint8_t>(TaskState::RESERVED));
   }
@@ -1826,6 +1832,8 @@ public:
   bool decrement_data_task_incomplete(taskid_t id) {
     auto &info = data_task_runtime_info[id];
     info.incomplete--;
+    SPDLOG_DEBUG("decrement_data_task_incomplete: id: {}, incomplete: {}, state: {}", id,
+                 info.incomplete, info.state);
     assert(info.incomplete >= 0 && "Incomplete count cannot be negative");
     return (info.incomplete == 0) && (info.state >= static_cast<uint8_t>(TaskState::RESERVED));
   }
@@ -1849,6 +1857,8 @@ public:
       bool is_mappable = decrement_compute_task_unmapped(dependent_id);
       compute_task_buffer[write_idx] = dependent_id;
       write_idx += is_mappable ? 1 : 0;
+      SPDLOG_DEBUG("compute_notify_mapped: dependent_id: {}, is_mappable: {}, write_idx: {}",
+                   dependent_id, is_mappable, write_idx);
     }
 
     return write_idx;
@@ -1870,6 +1880,8 @@ public:
       bool is_reservable = decrement_compute_task_unreserved(dependent_id);
       compute_task_buffer[write_idx] = dependent_id;
       write_idx += is_reservable ? 1 : 0;
+      SPDLOG_DEBUG("compute_notify_reserved: dependent_id: {}, is_reservable: {}, write_idx: {}",
+                   dependent_id, is_reservable, write_idx);
     }
 
     return write_idx;
@@ -1898,6 +1910,8 @@ public:
       bool is_launchable = decrement_compute_task_incomplete(dependent_id);
       compute_task_buffer[write_idx] = dependent_id;
       write_idx += is_launchable ? 1 : 0;
+      SPDLOG_DEBUG("compute_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
+                   dependent_id, is_launchable, write_idx);
     }
 
     return write_idx;
@@ -1916,6 +1930,9 @@ public:
       bool is_launchable = decrement_data_task_incomplete(dependent_id);
       data_task_buffer[write_idx] = dependent_id;
       write_idx += is_launchable ? 1 : 0;
+      SPDLOG_DEBUG("compute_notify_data_completed: dependent_id: {}, is_launchable: {}, "
+                   "write_idx: {}",
+                   dependent_id, is_launchable, write_idx);
     }
 
     return write_idx;
@@ -1955,6 +1972,8 @@ public:
       bool is_launchable = decrement_compute_task_incomplete(dependent_id);
       compute_task_buffer[write_idx] = dependent_id;
       write_idx += is_launchable ? 1 : 0;
+      SPDLOG_DEBUG("data_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
+                   dependent_id, is_launchable, write_idx);
     }
 
     return write_idx;

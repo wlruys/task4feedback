@@ -58,7 +58,7 @@ minimum-version = "0.11"
 wheel.packages = ["src/task4feedback"]
 install.components = ["python"]
 cmake.version = ">=3.29"
-cmake.build-type = "RelWithDebInfo"
+cmake.build-type = "Release"
 build.verbose = true
 build-dir = "build/{wheel_tag}"
 wheel.expand-macos-universal-tags = true
@@ -67,7 +67,7 @@ wheel.expand-macos-universal-tags = true
 [tool.scikit-build.cmake.define]
 SIM_TRACK_RESOURCES = { env = "SIM_TRACK_RESOURCES", default = "OFF" }
 SIM_TRACK_LOCATION = { env = "SIM_TRACK_LOCATION", default = "OFF" }
-SPDLOG_ACTIVE_LEVEL = { env = "SPDLOG_ACTIVE_LEVEL", default = "SPDLOG_LEVEL_OFF" }
+SPDLOG_ACTIVE_LEVEL = { env = "SPDLOG_ACTIVE_LEVEL", default = "SPDLOG_LEVEL_CRITICAL" }
 ENABLE_NATIVE_TUNING = "ON"
 
 [[tool.scikit-build.overrides]]

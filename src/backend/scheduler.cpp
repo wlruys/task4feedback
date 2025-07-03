@@ -126,17 +126,19 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
   taskid_t last_idx = 0;
 
   if (!action_list.empty()) {
-    TaskIDList nmt;
     for (auto &action : action_list) {
       const auto task_id = top_k_tasks[action.pos];
       const auto n_newly_mappable = map_task(last_idx, task_id, action);
       last_idx += n_newly_mappable;
     }
 
+    remove_mapped_tasks(action_list);
+
+    SPDLOG_DEBUG("Time:{} Newly mappable tasks: {}", state.global_time, last_idx);
+
     const auto newly_mappable_tasks =
         std::span<const taskid_t>(compute_task_buffer.data(), last_idx);
-    remove_mapped_tasks(action_list);
-    push_mappable(nmt);
+    push_mappable(newly_mappable_tasks);
   }
 
   /*If we still should be mapping, continue making calls to the mapper */
@@ -186,8 +188,10 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
     queues.mappable.pop();
     assert(task_runtime.is_compute_mappable(task_id));
     Action action = mapper.map_task(task_id, s);
-    last_idx = map_task(last_idx, task_id, action);
+    last_idx += map_task(last_idx, task_id, action);
   }
+
+  SPDLOG_DEBUG("Time:{} Newly mappable tasks: {}", current_time, last_idx);
 
   const auto newly_mappable_tasks = std::span<const taskid_t>(compute_task_buffer.data(), last_idx);
   push_mappable(newly_mappable_tasks);
@@ -341,6 +345,8 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
     // Cycle to the next active device queue
     reservable.next();
   }
+
+  SPDLOG_DEBUG("Time:{} Newly reservable tasks: {}", current_time, last_idx);
 
   const auto newly_reservable_tasks =
       std::span<const taskid_t>(compute_task_buffer.data(), last_idx);
@@ -952,6 +958,8 @@ taskid_t Scheduler::complete_compute_task(ComputeCompleterEvent &event,
   const auto newly_launchable_compute_tasks =
       std::span<const taskid_t>(compute_task_buffer.data(), n_newly_launchable_compute_tasks);
 
+  SPDLOG_DEBUG("Time:{} Newly launchable compute tasks: {}", current_time,
+               newly_launchable_compute_tasks.size());
   push_launchable(newly_launchable_compute_tasks);
 
   auto dtask_buffer = std::span<taskid_t>(data_task_buffer.data() + last_data_idx,
@@ -959,6 +967,9 @@ taskid_t Scheduler::complete_compute_task(ComputeCompleterEvent &event,
 
   auto n_newly_launchable_data_tasks = task_runtime.compute_notify_data_completed(
       compute_task_id, current_time, static_graph, dtask_buffer);
+
+  SPDLOG_DEBUG("Time:{} Newly launchable data tasks: {}", current_time,
+               n_newly_launchable_data_tasks);
 
   const auto newly_launchable_data_tasks =
       std::span<const taskid_t>(data_task_buffer.data(), n_newly_launchable_data_tasks);
@@ -1003,6 +1014,9 @@ taskid_t Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &
       data_task_id, current_time, static_graph,
       std::span<taskid_t>(compute_task_buffer.data() + last_compute_idx,
                           compute_task_buffer.size() - last_compute_idx));
+
+  SPDLOG_DEBUG("Time:{} Newly launchable compute tasks: {}", current_time,
+               n_newly_launchable_compute_tasks);
 
   const auto newly_launchable_compute_tasks =
       std::span<const taskid_t>(compute_task_buffer.data(), n_newly_launchable_compute_tasks);
