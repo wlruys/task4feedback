@@ -97,8 +97,8 @@ public:
       spdlog::warn("Simulator already initialized ...skipping.");
       return;
     }
-    std::cout << "Initializing simulator with create_data_tasks: " << create_data_tasks
-              << " and initialize_data_manager: " << initialize_data_manager << std::endl;
+    // std::cout << "Initializing simulator with create_data_tasks: " << create_data_tasks
+    //           << " and initialize_data_manager: " << initialize_data_manager << std::endl;
     add_initial_event();
     scheduler.initialize(create_data_tasks, initialize_data_manager);
     initialized = true;

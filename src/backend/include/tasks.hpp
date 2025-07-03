@@ -295,10 +295,6 @@ public:
     task.vcu.push_back(vcu);
     task.mem.push_back(mem);
     task.time.push_back(time);
-
-    std::cout << "Set variant for task " << task_id << ": "
-              << "arch=" << to_string(arch) << ", vcu=" << vcu << ", mem=" << mem
-              << ", time=" << time << std::endl;
   }
 
   void add_dependency(taskid_t task_id, taskid_t dependency_id) {
@@ -313,24 +309,15 @@ public:
   }
 
   void populate_dependencies_from_dataflow() {
-    std::cout << "Populating dependencies from dataflow..." << std::endl;
     ankerl::unordered_dense::map<dataid_t, taskid_t> last_writer;
     for (auto &task : tasks) {
-      std::cout << "Processing task " << task.id << ": " << task.name << std::endl;
       for (const auto &data_id : task.read) {
-        std::cout << "  Reading data ID: " << data_id << std::endl;
         auto it = last_writer.find(data_id);
-        std::cout << "  Last writer found: "
-                  << (it != last_writer.end() ? std::to_string(it->second) : "none") << std::endl;
         if (it != last_writer.end()) {
-          std::cout << "  Adding dependency from task " << task.id << " to writer task "
-                    << it->second << std::endl;
           add_dependency(task.id, it->second);
         }
       }
       for (const auto &data_id : task.write) {
-        std::cout << "Updating last writer for data ID: " << data_id << " to task ID: " << task.id
-                  << std::endl;
         last_writer[data_id] = task.id;
       }
     }
@@ -521,32 +508,18 @@ public:
 
       auto &task = tasks[task_id];
 
-      std::cout << "Total data tasks: " << data_tasks.size() << std::endl;
-
-      std::cout << "Processing task " << task_id << ": " << task.name << std::endl;
-      std::cout << "Task reads " << task.v_read.size() << " data items." << std::endl;
-      std::cout << "Task writes " << task.write.size() << " data items." << std::endl;
-      std::cout << "Task retires " << task.retire.size() << " data items." << std::endl;
-      std::cout << "Task has " << task.dependencies.size() << " dependencies." << std::endl;
-      std::cout << "Task has " << task.dependents.size() << " dependents." << std::endl;
-
       // Create data tasks for all reads from current task
       if (create_data_tasks) {
         for (int32_t i = 0; i < task.v_read.size(); ++i) {
-          std::cout << "Task " << task_id << " reads data ID: " << task.v_read[i] << std::endl;
           dataid_t data_id = task.v_read[i];
           auto it = writers.find(data_id);
           taskid_t writer_id = -1;
           bool has_writer = it != writers.end();
           if (has_writer) {
-            std::cout << "Most recent writer for data ID " << data_id
-                      << " is task ID: " << it->second << std::endl;
+
             writer_id = it->second;
             task.most_recent_writers[i] = it->second;
           }
-          std::cout << "Creating data task for read data ID: " << data_id
-                    << " with writer ID: " << (has_writer ? std::to_string(writer_id) : "none")
-                    << std::endl;
           create_data_task(task_id, data_id, has_writer, writer_id);
         }
       }
@@ -869,8 +842,6 @@ public:
       compute_task_info.tag = task.tag;
       compute_task_info.type = task.type;
 
-      std::cout << "Adding compute task: " << task.id << " with name: " << task.name << std::endl;
-
       add_compute_task(task.id, task.name, compute_dep_info, compute_data_info, compute_task_info);
 
       add_compute_task_dependencies(task.id, as_vector(task.dependencies));
@@ -885,8 +856,6 @@ public:
 
       for (int i = 0; i < task.arch.size(); ++i) {
         const auto arch = static_cast<DeviceType>(task.arch[i]);
-        std::cout << "Adding compute variant for task " << task.id << " on architecture "
-                  << to_string(arch) << std::endl;
         add_compute_variant(task.id, arch, task.mem[i], task.vcu[i], task.time[i]);
       }
     }
@@ -914,9 +883,6 @@ public:
 
       data_task_info.data_id = data_task.data_id;
       data_task_info.compute_task = data_task.compute_task;
-
-      std::cout << "Adding data task: " << data_task.id << " with name: " << data_task.name
-                << std::endl;
 
       add_data_task(data_task.id, data_task.name, data_task_info);
 
@@ -1030,11 +996,6 @@ public:
   void add_data_task_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
     assert(id < data_task_static_info.size() && "Task ID is out of bounds");
     auto &info = data_task_static_info[id];
-    // std::cout << "Adding data task dependents for task ID: " << id
-    //           << ", expected size: " << info.e_dependents << std::endl;
-    // std::cout << "Current size of data_task_dependents: " << data_task_dependents.size()
-    //           << std::endl;
-    // Ensure there is enough space in the vector
     assert(data_task_dependents.size() >= info.e_dependents &&
            "Not enough space in data_task_dependents vector");
     // copy dependents to corresponding location
@@ -1094,16 +1055,6 @@ public:
     const auto idx = __builtin_ctz(arch_type);
     assert(idx < info.variants.size() && "Architecture index out of bounds");
     info.variants[idx] = Variant(arch, vcu, mem, time);
-
-    std::cout << "Adding compute variant for task ID: " << id
-              << ", architecture: " << static_cast<int>(arch) << std::endl;
-
-    std::cout << "Variant resources: VCU = " << vcu << ", MEM = " << mem << ", TIME = " << time
-              << ", ARCH = " << to_string(arch) << std::endl;
-    std::cout << "MASK" << " = " << static_cast<int>(info.mask)
-              << ", ARCH TYPE = " << static_cast<int>(arch_type) << std::endl;
-
-    //           << std::endl;
   }
 
   // Getters
@@ -1313,7 +1264,6 @@ protected:
 
 public:
   RuntimeTaskInfo(StaticTaskInfo &static_info) {
-    std::cout << "Creating runtime task info..." << std::endl;
     int32_t num_compute_tasks = static_cast<int32_t>(static_info.get_n_compute_tasks());
     int32_t num_data_tasks = static_cast<int32_t>(static_info.get_n_data_tasks());
     compute_task_runtime_info.resize(num_compute_tasks);
@@ -1348,10 +1298,7 @@ public:
     set_compute_task_unmapped(compute_task_id, n_dependencies);
     set_compute_task_unreserved(compute_task_id, n_dependencies);
     set_compute_task_incomplete(compute_task_id, n_dependencies + n_data_dependencies);
-
-    // std::cout << "Initialized compute task runtime for task ID: " << compute_task_id
-    //           << ", unmapped: " << n_dependencies << ", unreserved: " << n_dependencies
-    //           << ", incomplete: " << n_dependencies + n_data_dependencies << std::endl;
+    ;
   }
 
   void initialize_data_runtime(int32_t data_task_id, const StaticTaskInfo &static_info) {
@@ -1589,11 +1536,6 @@ public:
 
   bool is_compute_launchable(taskid_t id) const {
     auto &info = compute_task_runtime_info[id];
-    // std::cout << "Checking if compute task is launchable: " << id
-    //           << ", state: " << static_cast<int>(info.state) << std::endl;
-    // std::cout << "Incomplete: " << info.incomplete << std::endl;
-    // std::cout << "Unreserved: " << info.unreserved << std::endl;
-    // std::cout << "Unmapped: " << info.unmapped << std::endl;
     return info.incomplete == 0 && info.state == static_cast<uint8_t>(TaskState::RESERVED);
   }
 

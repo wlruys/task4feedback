@@ -87,6 +87,7 @@ taskid_t Scheduler::map_task(taskid_t last_idx, taskid_t compute_task_id, Action
   // Notify dependents and enqueue newly mappable tasks
   auto newly_mappable_tasks = std::span<taskid_t>(compute_task_buffer.data() + last_idx,
                                                   compute_task_buffer.size() - last_idx);
+
   const taskid_t n_newly_mappable = task_runtime.compute_notify_mapped(
       compute_task_id, chosen_device, rp, lp, current_time, static_graph, newly_mappable_tasks);
   s.update_mapped_cost(compute_task_id, chosen_device);
@@ -102,9 +103,7 @@ taskid_t Scheduler::map_task(taskid_t last_idx, taskid_t compute_task_id, Action
     push_reservable(compute_task_id, chosen_device);
   }
 
-  last_idx = last_idx + n_newly_mappable;
-
-  return last_idx;
+  return n_newly_mappable;
 }
 
 void Scheduler::remove_mapped_tasks(ActionList &action_list) {
@@ -174,8 +173,6 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
   bool break_flag = false;
   taskid_t last_idx = 0;
 
-  compute_task_buffer.clear();
-
   while (queues.has_mappable() && conditions.get().should_map(s, queues)) {
 
     if (is_breakpoint()) {
@@ -188,7 +185,8 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
     queues.mappable.pop();
     assert(task_runtime.is_compute_mappable(task_id));
     Action action = mapper.map_task(task_id, s);
-    last_idx += map_task(last_idx, task_id, action);
+    const auto n_newly_mappable = map_task(last_idx, task_id, action);
+    last_idx += n_newly_mappable;
   }
 
   SPDLOG_DEBUG("Time:{} Newly mappable tasks: {}", current_time, last_idx);

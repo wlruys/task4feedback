@@ -244,11 +244,14 @@ def run_ppo(
         current_t = time.perf_counter()
         elapsed_time = current_t - start_t
         updates_per_second = (i + 1) / elapsed_time if elapsed_time > 0 else 0
+        seconds_per_update = elapsed_time / (i + 1) if (i + 1) > 0 else 0
 
         training.info(
             f"Collection {i + 1}/{ppo_config.num_collections}, "
             f"Collections/s: {updates_per_second:.2f}",
         )
+
+        print("ms/Update", seconds_per_update * 1000)
 
         tensordict_data = tensordict_data.to(
             ppo_config.update_device, non_blocking=True
