@@ -326,7 +326,7 @@ class RuntimeEnv(EnvBase):
         else:  # Dynamic
             assert isinstance(self.graph.config, DynamicJacobiConfig)
             self.answer = self.graph.mincut_per_levels(
-                bandwidth=1,
+                bandwidth=self.simulator_factory.input.system.bandwidth,
                 level_chunks=self.graph.config.level_chunks,
                 n_parts=4,
                 offset=1,
@@ -1077,7 +1077,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.flip = flip
-        n_tasks = len(self.simulator_factory.input.graph)
+        n_tasks = self.simulator_factory.input.graph.config.steps
         self.eft_log = torch.zeros(n_tasks + 1, dtype=torch.int64)
         self.max_steps = n_tasks
         self.clip_total = clip_total
@@ -1173,6 +1173,279 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
                 f"Took: {duration} Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f} EFT vs Optimal: {self.EFT_baseline / self.optimal_time:.2f}   "
             )
 
+        out = obs
+        # print("Reward: ", reward)
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
+class PBRS(RuntimeEnv):
+    def spearman_flat(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """
+        Compute Spearman’s rank correlation ρ between two 1D torch tensors of length N^2.
+
+        Parameters
+        ----------
+        a, b : torch.Tensor, shape (M,)
+            Input 1D tensors (flattened matrices), where M = N*N.
+
+        Returns
+        -------
+        rho : torch.Tensor
+            Spearman's rank correlation coefficient (scalar tensor).
+        """
+        if a.ndim != 1 or b.ndim != 1:
+            raise ValueError("Inputs must be 1D tensors")
+        if a.shape != b.shape:
+            raise ValueError("Inputs must have the same shape")
+        M = a.shape[0]
+
+        # Compute “ranks” by argsort twice (zero-based)
+        # ties get arbitrary but consistent ordering
+        a_rank = torch.argsort(torch.argsort(a, dim=0), dim=0).float()
+        b_rank = torch.argsort(torch.argsort(b, dim=0), dim=0).float()
+
+        # Subtract means
+        a_mean = a_rank.mean()
+        b_mean = b_rank.mean()
+        a_cent = a_rank - a_mean
+        b_cent = b_rank - b_mean
+
+        # Pearson correlation of the ranks
+        num = (a_cent * b_cent).sum()
+        den = torch.sqrt((a_cent**2).sum() * (b_cent**2).sum())
+        rho = num / den
+        return rho
+
+    def morans_i(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Compute Moran’s I for a flattened N×N grid given as a 1D torch tensor.
+
+        Adjacency: rook contiguity (4 neighbors).
+
+        Parameters
+        ----------
+        x : torch.Tensor, shape (M,)
+            Input values, where M = N*N.
+
+        Returns
+        -------
+        I : torch.Tensor
+            Moran's I statistic (scalar tensor).
+        """
+        if x.ndim != 1:
+            raise ValueError("Input must be a 1D tensor")
+        M = x.shape[0]
+        N = int(math.sqrt(M))
+        if N * N != M:
+            raise ValueError("Length of input must be a perfect square")
+
+        x = x.float()
+        x_mean = x.mean()
+        z = x - x_mean
+
+        # accumulate weight sum and numerator
+        W = 0.0
+        num = 0.0
+
+        # helper to convert (i,j) to linear index
+        def idx(i, j):
+            return i * N + j
+
+        # loop over grid cells
+        for i in range(N):
+            for j in range(N):
+                ii = idx(i, j)
+                # 4‐neighbors: up, down, left, right
+                for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    ni, nj = i + di, j + dj
+                    if 0 <= ni < N and 0 <= nj < N:
+                        jj = idx(ni, nj)
+                        W += 1
+                        num += z[ii] * z[jj]
+
+        # denominator: sum of squared deviations
+        denom = (z**2).sum()
+
+        # Moran's I
+        I = (M / W) * (num / denom)
+
+        return I
+
+    def overall_work_balance(
+        self, state: torch.Tensor, weight: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute an overall “balance” score ∈(0,1] for the entire N×N grid:
+        1 means every cell’s weight equals its category mean.
+
+        Parameters
+        ----------
+        state : Tensor, shape (M,)
+            Values in {1,...,P}.
+        weight : Tensor, shape (M,)
+            Nonnegative “work” values.
+        P : int
+            Number of categories (max state value).
+
+        Returns
+        -------
+        score : Tensor, shape (1,)
+            The mean of per‐cell balance ratios:
+                balance[i] = min(w_i, μ_cat(i)) / max(w_i, μ_cat(i))
+            so that 0 < score ≤ 1, with 1 iff every w_i == μ_cat(i).
+        """
+        if state.ndim != 1 or weight.ndim != 1 or state.shape != weight.shape:
+            raise ValueError("state and weight must be 1D tensors of equal length")
+        P = self.simulator_factory.graph_spec.max_devices - int(self.only_gpu)
+        M = state.numel()
+
+        # cast weights to float
+        w = weight.to(torch.float32)
+
+        # zero‐based category indices 0..P-1
+        cat = (state - 1).clamp(0, P - 1)
+
+        # sum of weights per category, in float
+        sum_w = torch.zeros(P, dtype=w.dtype).scatter_add_(0, cat, w)
+        # count per category (avoid divide-by-zero)
+        count = torch.bincount(cat, minlength=P).clamp(min=1).to(w.dtype)
+        mean_w = sum_w / count  # shape (P,)
+
+        # per-cell category mean
+        mean_per_cell = mean_w[cat]  # shape (M,)
+
+        # per-cell balance ratio in (0,1]
+        balance = torch.where(w <= mean_per_cell, w / mean_per_cell, mean_per_cell / w)
+
+        # return a 1‐element float tensor: the overall average
+        return balance.mean().unsqueeze(0)
+
+    def __init__(
+        self,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+            self.start_time = time.time()
+            self.sum_pbrs = 0
+            self.prev_loc = torch.zeros(
+                (self.simulator_factory.graph_spec.max_candidates,), dtype=torch.int64
+            )
+            get_initial_loc = self.graph.get_cell_locations(as_dict=True)
+            for k, v in get_initial_loc.items():
+                x, y = self.graph.xy_from_id(k)
+                self.prev_loc[x * self.graph.config.n + y] = v
+            self.potential = torch.zeros(
+                self.graph.config.steps + 1, dtype=torch.float32
+            )
+            self.potential[0] = -1  # self.EFT_baseline / self.EFT_baseline
+            self.potential[0] += self.morans_i(self.prev_loc)
+
+            # print(
+            #     self.graph.get_weighted_cell_graph(
+            #         DeviceType.GPU,
+            #         bandwidth=self.simulator_factory.input.system.bandwidth,
+            #         levels=list(range(5)),
+            #     ).cells
+            # )
+
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+
+        num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
+
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidate_workspace[i].item()
+            x, y = self.graph.xy_from_id(global_task_id)
+            chosen_device = td["action"][x * self.graph.config.n + y].item() + int(
+                self.only_gpu
+            )
+
+            mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+            mapping_result.append(
+                fastsim.Action(
+                    i,
+                    chosen_device,
+                    mapping_priority,
+                    mapping_priority,
+                )
+            )
+
+        self.simulator.simulator.map_tasks(mapping_result)
+
+        sim_ml = self.simulator.copy()
+        sim_ml.disable_external_mapper()
+        sim_ml.run()
+        ml_time = sim_ml.time
+        self.potential[self.step_count + 1] = -1 * ml_time / self.EFT_baseline
+
+        # spearman = self.spearman_flat(self.prev_loc, td["action"])
+        # self.prev_loc = td["action"].clone()
+        morans_i = self.morans_i(td["action"])
+        # weights = self.graph.get_weighted_cell_graph(
+        #     DeviceType.GPU,
+        #     bandwidth=self.simulator_factory.input.system.bandwidth,
+        #     levels=list(range(max(0, self.step_count - 5, self.step_count + 1))),
+        # ).vweights
+        # reordered_weights = torch.zeros_like(td["action"])
+        # for i in range(self.graph.config.n**2):
+        #     x, y = self.graph.xy_from_id(i)
+        #     reordered_weights[x * self.graph.config.n + y] = weights[i]
+        # overall_work_balance = self.overall_work_balance(
+        #     td["action"], reordered_weights
+        # )
+
+        # print(
+        #     f"Step: {self.step_count} Spearman: {spearman.item()}, Moran's I: {morans_i.item()}, Overall Work Balance: {overall_work_balance.item()}"
+        # )
+        # print(spearman + morans_i)
+        self.potential[self.step_count + 1] += morans_i  # + morans_i
+
+        # print(self.potential[self.step_count + 1], self.potential[self.step_count])
+        reward[0] = (
+            self.potential[self.step_count + 1] - self.potential[self.step_count]
+        )
+        # self.sum_pbrs += reward[0].item()
+        # print(f"Reward: {reward[0].item()}, Sum: {self.sum_pbrs}")
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        # if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+        #     for next_id in self.graph.level_to_task[
+        #         self.graph.task_to_level[global_task_id] + 1
+        #     ]:
+        #         if (
+        #             self.graph.task_to_cell[global_task_id]
+        #             == self.graph.task_to_cell[next_id]
+        #         ):
+        #             x, y = self.graph.xy_from_id(global_task_id)
+        #             self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
+        obs = self._get_observation()
+        sim_time = obs["observation"]["aux"]["time"].item()
+        if done:
+            duration = time.time() - self.start_time
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
+            reward[0] = (self.EFT_baseline - sim_time) / self.EFT_baseline
+            print(
+                f"Took: {duration:.1f} Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f} EFT vs Optimal: {self.EFT_baseline / self.optimal_time:.2f}   "
+            )
+        # print(reward[0].item())
         out = obs
         # print("Reward: ", reward)
         out.set("reward", reward)

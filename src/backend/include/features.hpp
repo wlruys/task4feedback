@@ -1582,17 +1582,19 @@ struct ReadDataLocationFeature : public StateFeature<ReadDataLocationFeature> {
 struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
   const int stride;
   const int frames;
-  const bool add_current;
-  PrevReadSizeFeature(const SchedulerState &state, int width, bool add_current = false,
+  const bool dim_device;
+  PrevReadSizeFeature(const SchedulerState &state, int width, bool dim_device = false,
                       int frames = 3)
       : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK), stride(width * width),
-        frames(frames), add_current(add_current) {
+        frames(frames), dim_device(dim_device) {
   }
 
   size_t getFeatureDimImpl() const {
     const auto &devices = this->state.get_device_manager().get_devices();
-    // return frames * (devices.size() - 1);
-    return frames;
+    if (dim_device)
+      return frames * (devices.size() - 1);
+    else
+      return frames;
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
@@ -1604,16 +1606,17 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
     auto n_devices = state.get_device_manager().get_devices().size() - 1;
     auto future_read = static_cast<double>(data.get_total_size(
         (state.get_task_manager().get_tasks().get_compute_task(task_id).get_read())));
-    if (!add_current)
-      task_id -= stride;
+    task_id -= stride;
 
     int i = 0;
     while (task_id >= 0 && i < frames) {
       const ComputeTask &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
       double total_read = static_cast<double>(data.get_total_size(task.get_read()));
       auto mapped_loc = (state.get_mapping(task_id) - 1);
-      // output[i * n_devices + mapped_loc] = guarded_divide(total_read, max_size);
-      output[i] = guarded_divide(future_read - total_read, max_size);
+      if (dim_device)
+        output[i * n_devices + mapped_loc] = guarded_divide(total_read, max_size);
+      else
+        output[i] = guarded_divide(future_read - total_read, max_size);
       task_id -= stride;
       future_read = total_read;
       i++;

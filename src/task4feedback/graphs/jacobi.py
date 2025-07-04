@@ -862,7 +862,7 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
         # task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
         # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
         task_feature_factory.add(fastsim.ReadDataLocationFeature)
-        task_feature_factory.add(fastsim.PrevReadSizeFeature, width, False, prev)
+        task_feature_factory.add(fastsim.PrevReadSizeFeature, width, True, prev)
         # task_feature_factory.add(
         #     fastsim.EmptyTaskFeature, 1
         # )

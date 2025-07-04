@@ -27,6 +27,7 @@ void init_observer_ext(nb::module_ &);
 void init_simulator_ext(nb::module_ &);
 
 NB_MODULE(fastsim2, m) {
+  nb::set_leak_warnings(false);
   nb::bind_vector<std::vector<uint32_t>>(m, "UInt32Vector");
   nb::bind_vector<std::vector<uint64_t>>(m, "UInt64Vector");
   nb::bind_vector<std::vector<int32_t>>(m, "Int32Vector");

@@ -444,9 +444,10 @@ class DataBlocks:
 
 
 class System:
-    def __init__(self):
+    def __init__(self, bandwidth=1):
         self.devices = Devices()
         self.topology = None
+        self.bandwidth = bandwidth
 
     def create_device(self, name, arch, memory, vcu, id=None):
         MAX_VCUS = fastsim.MAX_VCUS
@@ -1526,7 +1527,7 @@ def uniform_connected_devices(
     """
     assert n_devices > 1
 
-    s = System()
+    s = System(bandwidth=bandwidth)
     n_gpus = n_devices - 1
 
     s.create_device("CPU:0", DeviceType.CPU, 100000 * 1000 * 1000, 1)
