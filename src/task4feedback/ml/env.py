@@ -33,6 +33,7 @@ from task4feedback.graphs.jacobi import PartitionMapper, LevelPartitionMapper
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiConfig
 import itertools
 import time
+import gc
 
 MAX_BUFFERS = 2000
 
@@ -246,6 +247,7 @@ class RuntimeEnv(EnvBase):
         return out
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+        gc.collect()
         self.resets += 1
         self.step_count = 0
         current_priority_seed = self.simulator_factory.pseed
@@ -1329,6 +1331,10 @@ class PBRS(RuntimeEnv):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self.prev_loc = torch.zeros(
+            (self.simulator_factory.graph_spec.max_candidates,), dtype=torch.int64
+        )
+        self.potential = torch.zeros(self.graph.config.steps + 1, dtype=torch.float32)
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
@@ -1336,16 +1342,11 @@ class PBRS(RuntimeEnv):
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.start_time = time.time()
             self.sum_pbrs = 0
-            self.prev_loc = torch.zeros(
-                (self.simulator_factory.graph_spec.max_candidates,), dtype=torch.int64
-            )
             get_initial_loc = self.graph.get_cell_locations(as_dict=True)
             for k, v in get_initial_loc.items():
                 x, y = self.graph.xy_from_id(k)
                 self.prev_loc[x * self.graph.config.n + y] = v
-            self.potential = torch.zeros(
-                self.graph.config.steps + 1, dtype=torch.float32
-            )
+
             self.potential[0] = -1  # self.EFT_baseline / self.EFT_baseline
             self.potential[0] += self.morans_i(self.prev_loc)
 
@@ -1413,6 +1414,7 @@ class PBRS(RuntimeEnv):
         # )
         # print(spearman + morans_i)
         self.potential[self.step_count + 1] += morans_i  # + morans_i
+        # self.potential[self.step_count + 1] += overall_work_balance
 
         # print(self.potential[self.step_count + 1], self.potential[self.step_count])
         reward[0] = (

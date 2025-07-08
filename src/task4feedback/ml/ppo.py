@@ -471,7 +471,9 @@ def run_ppo_torchrl(
     wandb.define_metric("param_norm/*", step_metric="batch_loss/step")
     wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
-
+    env = make_env()
+    num_candidates = env.simulator_factory.graph_spec.max_candidates
+    print(f"{num_candidates} candidates per action")
     _actor_td = actor_critic_base.actor
     _critic_td = actor_critic_base.critic
     print(actor_critic_base)
@@ -607,7 +609,13 @@ def run_ppo_torchrl(
 
         with torch.no_grad():
             advantage_module(tensordict_data)
-
+            if num_candidates > 1:
+                tensordict_data["advantage"] = tensordict_data["advantage"].expand(
+                    -1, num_candidates
+                )
+                tensordict_data["advantage"] = tensordict_data["advantage"].unsqueeze(
+                    -1
+                )
             non_zero_rewards = tensordict_data["next", "reward"]
             improvements = tensordict_data["next", "observation", "aux", "improvement"]
             vsoptimals = tensordict_data["next", "observation", "aux", "vsoptimal"]
