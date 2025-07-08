@@ -15,7 +15,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # ---- project options -------------------------------------------------------
 option(ENABLE_ASAN          "Compile with AddressSanitizer"          OFF)
 option(ENABLE_MIMALLOC      "Use mimalloc memory allocator"          OFF)
-option(ENABLE_NATIVE_TUNING "Add -march=native / -mtune=native"      ON)
+option(ENABLE_NATIVE_TUNING "Add -march=native / -mtune=native"      OFF)
 option(PGO_MODE "PGO mode: Generate / Use / None"       "None")
 option(SIM_TRACK_RESOURCES  "Enable resource-usage logging"  OFF)
 option(SIM_TRACK_LOCATION   "Enable data-location logging"   OFF)

@@ -3,6 +3,7 @@ from task4feedback.graphs.mesh.partition import *
 from task4feedback.graphs.mesh.plot import *
 from task4feedback.graphs.base import *
 from task4feedback.graphs.jacobi import *
+from task4feedback.graphs.dynamic_jacobi import *
 from task4feedback.interface import TaskTuple
 import time
 from task4feedback.ml.models import *
@@ -72,7 +73,7 @@ def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
     mesh = generate_quad_mesh(L=config.L, n=config.n)
     geom = build_geometry(mesh)
 
-    jgraph = JacobiGraph(geom, config, JacobiVariant)
+    jgraph = DynamicJacobiGraph(geom, config, JacobiVariant)
 
     partition = metis_partition(geom.cells, geom.cell_neighbors, nparts=4)
     # offset by 1 to ignore cpu
@@ -85,46 +86,68 @@ def build_jacobi_graph(config: JacobiConfig) -> JacobiGraph:
 
 def make_jacobi_env(config: JacobiConfig):
     gmsh.initialize()
-    s = uniform_connected_devices(5, 1000000000, 1, 1)
+    s = uniform_connected_devices(5, 100000000000, 0, 1)
     jgraph = build_jacobi_graph(config)
 
     d = jgraph.get_blocks()
     m = jgraph
-    print(f"Jacobi graph: {m}")
     spec = create_graph_spec()
-    print(f"Graph spec: {spec}")
-    input = SimulatorInput(
-        m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
-    )
-    print(f"Simulator input: {input}")
-    env = RuntimeEnv(
+    input = SimulatorInput(m, d, s)
+    env = IncrementalEFT(
         SimulatorFactory(input, spec, CandidateObserverFactory), device="cpu"
     )
-    
-    print(f"Runtime environment created: {env}")
-    
-    
+
+    # print(f"Runtime environment created: {env}")
 
     return env
 
 
 if __name__ == "__main__":
-    jacobi_config = JacobiConfig(n = 8, L = 1, steps=60, randomness=1)
+    jacobi_config = DynamicJacobiConfig(
+        n=8,
+        L=1,
+        steps=60,
+        randomness=1,
+        interior_size=1000,
+        boundary_interior_ratio=1,
+    )
 
     def make_env() -> RuntimeEnv:
         return make_jacobi_env(jacobi_config)
 
-    env = make_env()
-    sim = env.simulator
-    import time 
-    
-    sim.disable_external_mapper()
-    start_t = time.perf_counter()
-    sim.run()
-    end_t = time.perf_counter()
-    print(f"Simulation completed in (ms) {(end_t - start_t) * 1000:.2f} ms")
-    print(f"Final state: {sim.status}")
-    print(f"Final time: {sim.time}")
+    for i in range(1):
+        env = make_env()
+        sim = env.simulator
+        import time
+
+        # sim.enable_external_mapper()
+        # sim.disable_external_mapper()
+        # # sim.run()
+        # k = 0
+        # sim.set_steps(80)
+        # print(f"Running simulation step {k + 1}")
+        # start_t = time.perf_counter()
+        # sim.run()
+        # end_t = time.perf_counter()
+        # print(
+        #     f"Simulation step {k + 1} completed in (ms) {(end_t - start_t) * 1000:.2f} ms"
+        # )
+
+        env.rollout(10000)
+
+        # s = sim.copy()
+        # s.start_drain()
+        # print(f"Running simulation step {k + 1} on copy")
+        # start_t = time.perf_counter()
+        # s.run()
+        # end_t = time.perf_counter()
+
+        # s.stop_drain()
+        # s.run()
+
+        # print(f"Simulation completed in (ms) {(end_t - start_t) * 1000:.2f} ms")
+        # print(f"Final state: {sim.status}, {s.status}")
+        # print(f"Final time: {sim.time}, {s.time}")
 
     # relabel_dict = {}
     # for i in range(1, 5):
