@@ -161,19 +161,6 @@ public:
     return data_names;
   }
 
-  StatsBundle<mem_t> get_block_statistics(const std::vector<DeviceType> &device_types) const {
-    std::vector<mem_t> block_sizes;
-    block_sizes.reserve(sizes.size());
-
-    for (const auto &device_type : device_types) {
-      for (const auto &size : sizes) {
-        block_sizes.push_back(size);
-      }
-    }
-
-    return StatsBundle(block_sizes);
-  }
-
   friend class DataManager;
 };
 
@@ -505,6 +492,7 @@ protected:
   LocationManager launched_locations;
   MovementManager movement_manager;
   LRU_manager lru_manager;
+  bool initialized = false;
 
   static bool check_valid(size_t data_id, const LocationManager &locations, devid_t device_id) {
     return locations.is_valid(data_id, device_id);
@@ -544,11 +532,16 @@ public:
   DataManager(const DataManager &o_)
       : mapped_locations(o_.mapped_locations), reserved_locations(o_.reserved_locations),
         launched_locations(o_.launched_locations), movement_manager(o_.movement_manager),
-        lru_manager(o_.lru_manager) {
+        lru_manager(o_.lru_manager), initialized(o_.initialized) {
   }
 
   void initialize(const Data &data, const Devices &devices, DeviceManager &device_manager) {
     ZoneScoped;
+    if (initialized) {
+      SPDLOG_WARN("DataManager already initialized. Skipping re-initialization.");
+      return;
+    }
+    initialized = true;
     for (dataid_t i = 0; i < data.size(); i++) {
       auto initial_location = data.get_location(i);
       if (initial_location > -1) {

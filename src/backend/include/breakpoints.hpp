@@ -5,15 +5,16 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <spdlog/spdlog.h>
 
 class Breakpoint {};
 
 class BreakpointManager {
 private:
-  timecount_t max_time = MAX_TIME;
-  // TODO(wlr): Replace with vector for better performance
-  // TODO(wlr): Add fast path for empty breakpoints
   std::map<EventType, TaskIDList> breakpoints;
+  timecount_t max_time = MAX_TIME;
+  int32_t steps_to_go = -1;
+
   volatile bool breakpoint_status = false;
 
   static bool check_task(TaskIDList &tasks, taskid_t task) {
@@ -43,30 +44,42 @@ private:
 
 public:
   [[nodiscard]] bool check_breakpoint() const {
+    SPDLOG_DEBUG("Breakpoint status: {}", breakpoint_status);
     return breakpoint_status;
   }
 
   void reset_breakpoint() {
+    SPDLOG_DEBUG("Resetting breakpoint status.");
     breakpoint_status = false;
   }
 
   bool check_task_breakpoint(EventType type, taskid_t task) {
+    SPDLOG_DEBUG("Checking task breakpoint for type: {} and task: {}", static_cast<int>(type),
+                 task);
     bool is_breakpoint = check_event(breakpoints, type);
     if (is_breakpoint) {
       is_breakpoint = check_task(breakpoints[type], task);
     }
-    if (is_breakpoint) {
-      breakpoint_status = true;
-    }
+    breakpoint_status |= is_breakpoint;
     return is_breakpoint;
   }
 
   bool check_time_breakpoint(timecount_t time) {
-    bool is_breakpoint = (time >= max_time);
-    if (is_breakpoint) {
-      breakpoint_status = true;
-    }
-    return is_breakpoint;
+    SPDLOG_DEBUG("Checking time breakpoint for time: {} with max_time: {}", time, max_time);
+    breakpoint_status |= (time >= max_time);
+    return breakpoint_status;
+  }
+
+  void set_steps_to_go(int32_t steps) {
+    SPDLOG_DEBUG("Setting steps to go: {}", steps);
+    steps_to_go = steps;
+  }
+
+  bool decrement_steps() {
+    SPDLOG_DEBUG("Decrementing steps: {}", steps_to_go);
+    breakpoint_status |= (steps_to_go > 0) ? (--steps_to_go == 0) : false;
+    SPDLOG_DEBUG("Breakpoint status after decrement: {}", breakpoint_status);
+    return breakpoint_status;
   }
 
   void add_breakpoint(EventType type, taskid_t task) {

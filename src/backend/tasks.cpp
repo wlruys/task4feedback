@@ -1,13 +1,15 @@
-uint8_t StaticTaskInfo::get_supported_devices_mask(taskid_t compute_task_id,
-                                                   const Devices &devices) const {
+#include "tasks.hpp"
+#include "devices.hpp"
+
+uint8_t StaticTaskInfo::get_supported_devices_mask(taskid_t compute_task_id) const {
   uint8_t mask = 0;
-  const devid_t n_devices = devices.size();
+  const devid_t n_devices = 5;
 
   auto arch_mask = get_supported_architecture_mask(compute_task_id);
   SPDLOG_DEBUG("Getting supported devices mask for task {} with arch mask: {}", compute_task_id,
                arch_mask);
   for (devid_t i = 0; i < n_devices; ++i) {
-    const auto arch = devices.get_type(i);
+    const auto arch = (i == 0) ? DeviceType::CPU : DeviceType::GPU;
     uint8_t arch_type = static_cast<uint8_t>(arch);
     SPDLOG_DEBUG("Checking device {} with arch type {}", i, arch_type);
     if ((arch_mask & arch_type) != 0) {

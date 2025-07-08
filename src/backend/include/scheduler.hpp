@@ -150,10 +150,19 @@ public:
     return reservable.total_active_size() > 0;
   }
 
+  [[nodiscard]] bool has_reservable() const {
+    return reservable.total_size() > 0;
+  }
+
   [[nodiscard]] std::size_t n_launchable(devid_t device) const {
     const auto &device_queue = launchable.at(device);
     return device_queue.size();
   }
+
+  [[nodiscard]] bool has_launchable() const {
+    return launchable.total_size() > 0;
+  }
+
   [[nodiscard]] bool has_launchable(devid_t device) const {
     const auto &device_queue = launchable.at(device);
     return !device_queue.empty();
@@ -189,6 +198,10 @@ public:
     return eviction_launchable.total_active_size() > 0;
   }
 
+  [[nodiscard]] bool has_eviction_launchable() const {
+    return eviction_launchable.total_size() > 0;
+  }
+
   friend class Scheduler;
 };
 
@@ -221,7 +234,7 @@ public:
     n_launched_tasks -= 1;
     n_completed_tasks += 1;
     per_device_counts[device_id] -= 1;
-    per_device_counts[n_devices + device_id] -= 1;
+    per_device_counts[1 * n_devices + device_id] -= 1;
     per_device_counts[2 * n_devices + device_id] -= 1;
     per_device_counts[3 * n_devices + device_id] += 1;
     active_tasks.erase(task_id);
@@ -421,6 +434,8 @@ struct SchedulerInput {
   }
 };
 
+constexpr uint8_t DRAIN_FLAG = 0b00000001;
+
 class SchedulerState {
 protected:
   timecount_t global_time = 0;
@@ -500,6 +515,7 @@ protected:
 public:
   TaskCountInfo counts;
   TaskCostInfo costs;
+  uint8_t flags = 0;
 
   SchedulerState(SchedulerInput &input)
       : global_time(0), graph(input.graph), tasks(input.tasks), data(input.data),
@@ -508,6 +524,18 @@ public:
         communication_manager(input.topology, input.devices),
         data_manager(input.data, input.devices), counts(input.devices.get().size()),
         costs(input.devices.get().size()) {
+  }
+
+  void start_drain() {
+    flags |= DRAIN_FLAG;
+  }
+
+  void stop_drain() {
+    flags &= ~DRAIN_FLAG;
+  }
+
+  [[nodiscard]] bool not_draining() const {
+    return (flags & DRAIN_FLAG) == 0;
   }
 
   void update_time(timecount_t time) {
@@ -540,9 +568,26 @@ public:
     int32_t n_data_tasks = task_runtime.get_n_data_tasks();
     int32_t n_compute_tasks = task_runtime.get_n_compute_tasks();
     int32_t n_eviction_tasks = task_runtime.get_n_eviction_tasks();
+
     bool data_complete = counts.n_data_completed() == (n_data_tasks + n_eviction_tasks);
     bool compute_complete = counts.n_completed() == n_compute_tasks;
     return data_complete && compute_complete;
+  }
+
+  [[nodiscard]] bool is_drain_complete() const {
+    bool no_mapped = counts.n_mapped() == 0;
+    bool no_reserved = counts.n_reserved() == 0;
+    bool no_launched = counts.n_launched() == 0;
+    bool no_data_reserved = counts.n_data_reserved() == 0;
+    bool no_data_launched = counts.n_data_launched() == 0;
+    bool no_active = counts.n_active() == 0;
+
+    SPDLOG_DEBUG("Drain complete check: Mapped: {}, Reserved: {}, Launched: {}, "
+                 "Data Reserved: {}, Data Launched: {}, Active: {}",
+                 no_mapped, no_reserved, no_launched, no_data_reserved, no_data_launched,
+                 no_active);
+    return no_mapped && no_reserved && no_launched && no_data_reserved && no_data_launched &&
+           no_active;
   }
 
   [[nodiscard]] const Resources &get_task_resources(taskid_t compute_task_id,
@@ -828,13 +873,10 @@ public:
 
   bool should_map(SchedulerState &state, SchedulerQueues &queues) override {
     MONUnusedParameter(queues);
-
     auto n_mapped = state.counts.n_mapped();
     auto n_reserved = state.counts.n_reserved();
     assert(n_mapped >= n_reserved);
-    bool flag = (n_mapped - n_reserved) <= mapped_reserved_gap;
-    flag = flag && (n_mapped <= total_in_flight);
-    return flag;
+    return ((n_mapped - n_reserved) <= mapped_reserved_gap) && (n_mapped <= total_in_flight);
   }
 
   bool should_reserve(SchedulerState &state, SchedulerQueues &queues) override {
@@ -842,9 +884,7 @@ public:
     auto n_reserved = state.counts.n_reserved();
     auto n_launched = state.counts.n_launched();
     assert(n_reserved >= n_launched);
-
-    bool flag = (n_reserved - n_launched) <= reserved_launched_gap;
-    return flag;
+    return (n_reserved - n_launched) <= reserved_launched_gap;
   }
 };
 
@@ -906,22 +946,21 @@ class Scheduler {
 protected:
   SchedulerState state;
   SchedulerQueues queues;
-
-  std::size_t scheduler_event_count = 1;
-  std::size_t success_count = 0;
-  std::size_t eviction_count = 0;
-
-  EvictionState eviction_state = EvictionState::NONE;
   TaskDeviceList tasks_requesting_eviction;
+  int64_t success_count = 0;
+  int64_t eviction_count = 0;
+  EvictionState eviction_state = EvictionState::NONE;
+
   void enqueue_data_tasks(taskid_t task_id);
 
 public:
+  BreakpointManager breakpoints;
   TaskIDList compute_task_buffer;
   TaskIDList data_task_buffer;
   DeviceIDList device_buffer;
-  bool initialized = false;
-  BreakpointManager breakpoints;
   std::reference_wrapper<TransitionConditions> conditions;
+  int64_t scheduler_event_count = 1;
+  bool initialized = false;
 
   Scheduler(SchedulerInput &input)
       : state(input), queues(input.devices), conditions(input.conditions) {
@@ -938,11 +977,27 @@ public:
     conditions = conditions_;
   }
 
+  void set_steps(int32_t steps) {
+    breakpoints.set_steps_to_go(steps);
+  }
+
+  void start_drain() {
+    state.start_drain();
+  }
+
+  void stop_drain() {
+    state.stop_drain();
+  }
+
   const std::span<const taskid_t> initially_mappable_tasks() {
     return state.get_graph().get_initial_tasks();
   }
 
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = false) {
+    if (initialized) {
+      SPDLOG_WARN("Scheduler already initialized. Skipping re-initialization.");
+      return;
+    }
     state.initialize(create_data_tasks, initialize_data_manager);
     auto initial_tasks = initially_mappable_tasks();
     push_mappable(initial_tasks);
@@ -956,11 +1011,13 @@ public:
   size_t get_mappable_candidates(std::span<int64_t> v);
 
   taskid_t map_task(taskid_t start_idx, taskid_t task_id, Action &action);
+  void skip_map_tasks(MapperEvent &map_event, EventManager &event_manager);
   void map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper);
   ExecutionState map_tasks_from_python(ActionList &action_list, EventManager &event_manager);
   void remove_mapped_tasks(ActionList &action_list);
 
   SuccessPair reserve_task(taskid_t start_idx, taskid_t task_id, devid_t device_id);
+  void skip_reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager);
   void reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager);
 
   bool launch_compute_task(taskid_t task_id, devid_t device_id, EventManager &event_manager);
@@ -1074,6 +1131,10 @@ public:
     return state.is_complete();
   }
 
+  [[nodiscard]] bool is_drain_complete() const {
+    return state.is_drain_complete();
+  }
+
   [[nodiscard]] bool is_breakpoint() const {
     bool breakpoint_status = breakpoints.check_breakpoint();
     return breakpoint_status;
@@ -1112,7 +1173,7 @@ protected:
     device_buffer.clear();
     const auto &devices = state.get_devices();
     const devid_t n_devices = devices.size();
-    const auto device_mask = state.get_tasks().get_supported_devices_mask(compute_task_id, devices);
+    const auto device_mask = state.get_tasks().get_supported_devices_mask(compute_task_id);
 
     SPDLOG_DEBUG("Filling device targets for task {} with mask {}", compute_task_id, device_mask);
     for (uint8_t i = 0; i < n_devices; ++i) {

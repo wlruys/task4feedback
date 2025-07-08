@@ -6,14 +6,15 @@
 template <typename T> class ActiveIterator {
 protected:
   std::vector<T> containers;
-  std::vector<int32_t> active;
+  std::vector<uint8_t> active;
   std::size_t active_index;
   std::size_t num_active;
+  std::size_t element_count{0};
 
 public:
   ActiveIterator() = default;
   ActiveIterator(std::size_t num_containers)
-      : containers(num_containers), active(num_containers, true), active_index(0),
+      : containers(num_containers), active(num_containers, 1), active_index(0),
         num_active(num_containers) {
   }
 

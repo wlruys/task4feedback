@@ -51,13 +51,25 @@ protected:
 
   ExecutionState dispatch_mapper(MapperEvent &event) {
     ZoneScoped;
-    if (use_python_mapper && scheduler.get_queues().has_mappable() &&
-        scheduler.conditions.get().should_map(scheduler.get_state(), scheduler.get_queues())) {
-      return ExecutionState::EXTERNAL_MAPPING;
+
+    auto &queues = scheduler.get_queues();
+    auto &state = scheduler.get_state();
+
+    if (state.not_draining() && queues.has_mappable() &&
+        scheduler.conditions.get().should_map(state, queues)) {
+      if (use_python_mapper) {
+        SPDLOG_DEBUG("Time: {} Releasing control to Python mapper", event.time);
+        return ExecutionState::EXTERNAL_MAPPING;
+      } else {
+        SPDLOG_DEBUG("Time: {} Running C++ mapper", event.time);
+        scheduler.map_tasks(event, event_manager, mapper.get());
+        return ExecutionState::RUNNING;
+      }
+    } else {
+      SPDLOG_DEBUG("Skipping mapping tasks, conditions not met.");
+      scheduler.skip_map_tasks(event, event_manager);
+      return ExecutionState::RUNNING;
     }
-    // otherwise just run the mapper from C++
-    scheduler.map_tasks(event, event_manager, mapper.get());
-    return ExecutionState::RUNNING;
   }
 
 public:
@@ -80,6 +92,24 @@ public:
     use_python_mapper = use_python_mapper_;
   }
 
+  void set_steps(int32_t steps) {
+    scheduler.set_steps(steps);
+  }
+
+  void start_drain() {
+    scheduler.start_drain();
+  }
+
+  void stop_drain() {
+    scheduler.stop_drain();
+
+    if (!event_manager.has_events()) {
+      const auto current_time = scheduler.get_state().get_global_time();
+      event_manager.create_event(EventType::MAPPER, current_time);
+      scheduler.scheduler_event_count += 1;
+    }
+  }
+
   void set_mapper(Mapper &mapper_) {
     mapper = mapper_;
   }
@@ -94,7 +124,7 @@ public:
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = false) {
     ZoneScoped;
     if (initialized) {
-      spdlog::warn("Simulator already initialized ...skipping.");
+      SPDLOG_WARN("Simulator already initialized ...skipping.");
       return;
     }
     // std::cout << "Initializing simulator with create_data_tasks: " << create_data_tasks
@@ -108,18 +138,17 @@ public:
   void initialize_data_manager() {
     ZoneScoped;
     if (!initialized) {
-      spdlog::critical("Simulator not initialized.");
+      SPDLOG_CRITICAL("Simulator not initialized.");
       assert(false);
       return;
     }
 
     if (data_initialized) {
-      spdlog::warn("Data Manager already initialized. ...skipping.");
+      SPDLOG_WARN("Data Manager already initialized. ...skipping.");
       assert(false);
       return;
     }
     scheduler.initialize_data_manager();
-    std::vector<DeviceType> device_types = {DeviceType::GPU};
     data_initialized = true;
   }
 
@@ -212,6 +241,7 @@ public:
 
   [[nodiscard]] ExecutionState check_breakpoints(ExecutionState ex_state) {
     if (scheduler.is_breakpoint()) {
+      SPDLOG_DEBUG("Breakpoint hit at time: {}", this->get_current_time());
       scheduler.breakpoints.reset_breakpoint();
       return ExecutionState::BREAKPOINT;
     }
@@ -223,6 +253,8 @@ public:
     if (!event_manager.has_events()) {
       if (scheduler.is_complete()) {
         return ExecutionState::COMPLETE;
+      } else if (scheduler.is_drain_complete()) {
+        return ExecutionState::BREAKPOINT;
       }
       spdlog::critical("No more events and not complete.");
       assert(false);
@@ -279,6 +311,7 @@ public:
       execution_state = check_breakpoints(execution_state);
 
       if (execution_state != ExecutionState::RUNNING) {
+        SPDLOG_DEBUG("Exiting run loop with state: {}", static_cast<int>(execution_state));
         break;
       }
 

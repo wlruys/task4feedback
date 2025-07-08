@@ -93,7 +93,7 @@ taskid_t Scheduler::map_task(taskid_t last_idx, taskid_t compute_task_id, Action
   s.update_mapped_cost(compute_task_id, chosen_device);
   success_count += 1;
 
-  breakpoints.check_task_breakpoint(EventType::MAPPER, compute_task_id);
+  breakpoints.decrement_steps();
 
   // Check if the mapped task is reservable, and if so, enqueue it
   if (task_runtime.is_compute_reservable(compute_task_id)) {
@@ -161,8 +161,22 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
   }
 }
 
+void Scheduler::skip_map_tasks(MapperEvent &map_event, EventManager &event_manager) {
+  success_count = 0;
+  SPDLOG_DEBUG("Time:{} Skipping mapper", state.global_time);
+  timecount_t reserver_time = state.global_time + SCHEDULER_TIME_GAP;
+  event_manager.create_event(EventType::RESERVER, reserver_time);
+}
+
+void Scheduler::skip_reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
+  SPDLOG_DEBUG("Time:{} Skipping reserver", state.global_time);
+  timecount_t launcher_time = state.global_time + SCHEDULER_TIME_GAP;
+  event_manager.create_event(EventType::LAUNCHER, launcher_time);
+}
+
 void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper) {
   ZoneScoped;
+
   success_count = 0;
   auto &s = this->state;
   auto &task_runtime = s.task_runtime;
@@ -220,6 +234,7 @@ void Scheduler::enqueue_data_tasks(taskid_t compute_task_id) {
   // TODO(wlr): Check if delayed enqueue is faster
   for (auto data_task_id : data_dependencies) {
     task_runtime.data_notify_reserved(data_task_id, mapped_device, current_time, static_graph);
+    s.update_data_reserved_cost(data_task_id, mapped_device);
     if (task_runtime.is_data_launchable(data_task_id)) {
       SPDLOG_DEBUG("Time:{} Data task {}:{} is launchable", current_time,
                    static_graph.get_data_task_name(data_task_id), data_task_id);
@@ -282,7 +297,6 @@ SuccessPair Scheduler::reserve_task(taskid_t last_idx, taskid_t compute_task_id,
   success_count += 1;
   enqueue_data_tasks(compute_task_id);
   s.update_reserved_cost(compute_task_id, device_id);
-  breakpoints.check_task_breakpoint(EventType::RESERVER, compute_task_id);
 
   // Check if the reserved task is launchable, and if so, enqueue it
   if (task_runtime.is_compute_launchable(compute_task_id)) {
@@ -420,8 +434,6 @@ bool Scheduler::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
   success_count += 1;
   s.update_launched_cost(compute_task_id, device_id);
 
-  breakpoints.check_task_breakpoint(EventType::LAUNCHER, compute_task_id);
-
   // Create completion event
   timecount_t completion_time = s.global_time + s.get_execution_time(compute_task_id);
   event_manager.create_event(EventType::COMPUTE_COMPLETER, completion_time, compute_task_id,
@@ -473,8 +485,8 @@ bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_devi
 
   // Record launching time
   task_runtime.data_notify_launched(data_task_id, source_device_id, current_time, static_graph);
+  s.update_data_launched_cost(data_task_id, destination_device_id);
   success_count += 1;
-  breakpoints.check_task_breakpoint(EventType::LAUNCHER, data_task_id);
 
   // Create completion event
   timecount_t completion_time = current_time + duration.duration;
@@ -531,6 +543,7 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
   // Record launching time
   task_runtime.eviction_notify_launched(eviction_task_id, source_device_id, current_time,
                                         static_graph);
+  s.update_eviction_launched_cost(eviction_task_id, 0);
   success_count += 1;
 
   // Create completion event
@@ -691,6 +704,8 @@ void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_ma
   launch_data_tasks(event_manager);
 
   scheduler_event_count -= 1;
+  assert(scheduler_event_count >= 0);
+
   if (scheduler_event_count == 0 and success_count > 0) {
     if (this->eviction_state != EvictionState::NONE) {
       if (this->eviction_state == EvictionState::RUNNING &&
@@ -751,7 +766,7 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
                   "Time:{} Launching eviction task {} to evict block {} for task {} on device {} ",
                   current_time, eviction_task_id, data_id,
                   static_graph.get_compute_task_name(compute_task_id), device_id);
-
+              state.update_eviction_reserved_cost(eviction_task_id, 0);
               push_launchable_eviction(eviction_task_id);
             } else { // There are multiple sources for this data
               // We need to invalidate the data on the device
@@ -899,6 +914,10 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
   auto current_time = s.global_time;
   success_count += 1;
 
+  SPDLOG_DEBUG("Time:{} Success count: {}, Scheduler event count: {}, Eviction state: {}",
+               current_time, success_count, scheduler_event_count,
+               static_cast<int>(this->eviction_state));
+
   const auto eviction_state = this->eviction_state;
   if (scheduler_event_count == 0) {
     if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
@@ -972,8 +991,6 @@ taskid_t Scheduler::complete_compute_task(ComputeCompleterEvent &event,
   const auto newly_launchable_data_tasks =
       std::span<const taskid_t>(data_task_buffer.data(), n_newly_launchable_data_tasks);
   push_launchable_data(newly_launchable_data_tasks);
-
-  breakpoints.check_task_breakpoint(EventType::COMPUTE_COMPLETER, compute_task_id);
 
   // Updates task counter tables in scheduler
   s.update_completed_cost(compute_task_id, device_id);

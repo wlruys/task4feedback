@@ -1815,6 +1815,19 @@ class SimulatorDriver:
             simulator=None,
         )
 
+    def set_steps(self, steps: int):
+        """
+        Set the number of mapping steps to run the simulator.
+        Will return in a breakpoint state.
+        """
+        self.simulator.set_steps(steps)
+
+    def start_drain(self):
+        self.simulator.start_drain()
+
+    def stop_drain(self):
+        self.simulator.stop_drain()
+
     def reset(self):
         """
         Return a fresh copy of the simulator driver with the same initial input and configuration.

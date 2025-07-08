@@ -431,9 +431,7 @@ void TopKQueue<T, k, Container, Compare>::push(const T &val) {
 
 template <typename T, int k, typename Container, typename Compare>
 void TopKQueue<T, k, Container, Compare>::pop() {
-  if (top_k.empty()) {
-    throw std::out_of_range("pop() called on an empty queue");
-  }
+  assert(!top_k.empty() && "pop() called on an empty queue");
   pop_front();
 
   if (!remaining_min_heap.empty()) {
@@ -444,25 +442,18 @@ void TopKQueue<T, k, Container, Compare>::pop() {
 
 template <typename T, int k, typename Container, typename Compare>
 const T &TopKQueue<T, k, Container, Compare>::top() const {
-  if (top_k.empty()) {
-    throw std::out_of_range("top() called on an empty queue");
-  }
+  assert(!top_k.empty() && "top() called on an empty queue");
   return top_k.front();
 }
 
 template <typename T, int k, typename Container, typename Compare>
 T &TopKQueue<T, k, Container, Compare>::at(std::size_t i) {
-  if (i >= top_k.size()) {
-    throw std::out_of_range("at() called with an index out of range");
-  }
+  assert(i < top_k.size() && "at() called with an index out of range");
   return top_k[i];
 }
 template <typename T, int k, typename Container, typename Compare>
 void TopKQueue<T, k, Container, Compare>::remove_at(std::size_t i) {
-  if (i >= top_k.size()) {
-    throw std::out_of_range("remove_at() called with an index out of range");
-  }
-
+  assert(i < top_k.size() && "remove_at() called with an index out of range");
   top_k.erase(top_k.begin() + i);
 
   if (!remaining_min_heap.empty()) {

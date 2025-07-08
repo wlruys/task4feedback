@@ -1,5 +1,4 @@
 #pragma once
-#include "devices.hpp"
 #include "queues.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
@@ -30,7 +29,7 @@ enum class DeviceType : uint8_t {
   CPU = 1,
   GPU = 2
 };
-constexpr std::size_t num_device_types = 2;
+constexpr int8_t num_device_types = 2;
 
 inline auto to_string(const DeviceType &arch) {
   switch (arch) {
@@ -44,8 +43,6 @@ inline auto to_string(const DeviceType &arch) {
     return "UNKNOWN";
   }
 }
-
-class Devices;
 
 inline std::ostream &operator<<(std::ostream &os, const DeviceType &arch) {
   os << to_string(arch);
@@ -1195,7 +1192,7 @@ public:
   get_supported_architectures(taskid_t compute_task_id) const {
     std::vector<DeviceType> supported_architectures;
     auto &info = compute_task_variant_info[compute_task_id];
-    for (int i = 0; i < num_device_types; ++i) {
+    for (int8_t i = 0; i < num_device_types; ++i) {
       if ((info.mask & (1 << i)) != 0) {
         supported_architectures.push_back(static_cast<DeviceType>(i));
       }
@@ -1210,8 +1207,7 @@ public:
     return (info.mask & arch_type) != 0;
   }
 
-  [[nodiscard]] uint8_t get_supported_devices_mask(taskid_t compute_task_id,
-                                                   const Devices &devices) const;
+  [[nodiscard]] uint8_t get_supported_devices_mask(taskid_t compute_task_id) const;
 
   [[nodiscard]] const std::string &get_compute_task_name(taskid_t id) const {
     return compute_task_names[id];

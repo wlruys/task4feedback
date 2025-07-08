@@ -151,6 +151,7 @@ class RuntimeEnv(EnvBase):
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
+            print("Calculating EFT baseline...")
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
@@ -159,6 +160,7 @@ class RuntimeEnv(EnvBase):
             assert final_state == fastsim.ExecutionState.COMPLETE, (
                 f"Baseline returned unexpected final state: {final_state}"
             )
+            print("EFT baseline calculated.")
             return simulator_copy.time
         return self.baseline_time
 
@@ -473,11 +475,11 @@ class IncrementalEFT(RuntimeEnv):
         sim_ml = self.simulator.copy()
         sim_ml.disable_external_mapper()
         end_time = perf_counter()
-        # print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
+        print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
         start_time = perf_counter()
         sim_ml.run()
         end_time = perf_counter()
-        # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
+        print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
 
         ml_time = sim_ml.time
 

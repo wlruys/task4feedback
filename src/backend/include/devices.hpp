@@ -382,6 +382,7 @@ public:
   DeviceResources reserved;
   DeviceResources launched;
   std::size_t n_devices{};
+  bool initialized = false;
 
   DeviceManager(const Devices &devices_)
       : n_devices{devices_.size()}, mapped(devices_.size()), reserved(devices_.size()),
@@ -392,6 +393,11 @@ public:
   DeviceManager &operator=(const DeviceManager &other) = default;
 
   void initialize(const Devices &devices_) {
+    if (initialized) {
+      SPDLOG_WARN("DeviceManager already initialized. Skipping re-initialization.");
+      return;
+    }
+    initialized = true;
     for (devid_t id = 0; id < devices_.size(); ++id) {
       mapped.set_max_mem(id, devices_.get_max_resources(id).mem);
       reserved.set_max_mem(id, devices_.get_max_resources(id).mem);

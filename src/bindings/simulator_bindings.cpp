@@ -47,6 +47,9 @@ void init_simulator_ext(nb::module_ &m) {
       .def(nb::init<Simulator &>(), "other"_a)
       .def("initialize", &Simulator::initialize, "create_data_tasks"_a = true,
            "initialize_data_manager"_a = false)
+      .def("set_steps", &Simulator::set_steps, "steps"_a)
+      .def("start_drain", &Simulator::start_drain)
+      .def("stop_drain", &Simulator::stop_drain)
       .def("initialize_data", &Simulator::initialize_data_manager)
       .def("enable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(true); })
       .def("disable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(false); })
