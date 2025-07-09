@@ -589,6 +589,7 @@ def run_ppo_torchrl(
         eval_metrics["eval/step"] = 0
         wandb.log(eval_metrics)
     prev_max_vsoptimal = 1.0
+    max_vsoptimal = 0.0
     for i, tensordict_data in enumerate(collector):
         # Run evaluation at specified intervals
         if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
@@ -697,6 +698,7 @@ def run_ppo_torchrl(
         # Update the policy
         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
+        max_vsoptimal = max(max_vsoptimal, avg_vsoptimal.item())
         wandb.log(
             {
                 "collect_loss/step": i,
@@ -705,6 +707,7 @@ def run_ppo_torchrl(
                 "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
                 "collect_loss/average_improvement": avg_improvement.item(),
                 "collect_loss/average_vsoptimal": avg_vsoptimal.item(),
+                "collect_loss/max_vsoptimal": max_vsoptimal,
                 "collect_loss/std_improvement": filtered_improvements.std().item(),
                 "collect_loss/std_return": tensordict_data["value_target"].std().item(),
                 "collect_loss/mean_return": tensordict_data["value_target"]
