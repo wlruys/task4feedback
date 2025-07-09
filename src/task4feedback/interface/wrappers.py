@@ -1142,7 +1142,8 @@ class ExternalObserver:
         # self.task_observation(
         #     output=output, task_ids=output["aux"]["candidates"]["idx"]
         # )
-        self.get_task_features(output["aux"]["candidates"]["idx"], output["tasks"])
+        # self.get_task_features(output["aux"]["candidates"]["idx"], output["tasks"])
+        self.task_observation(output, output["aux"]["candidates"]["idx"])
         # self.device_observation(output)
 
         output["aux"]["time"][0] = self.simulator.time

@@ -914,7 +914,11 @@ class VectorObserver(ExternalObserver):
                 coords[i * n + j, 1] = 2 * j / (n - 1) - 1  # y
         self.spatial_bias = coords
 
-    def task_observation(self, output: TensorDict):
+    def task_observation(
+        self,
+        output: TensorDict,
+        task_ids: Optional[torch.Tensor] = None,
+    ):
         graph: JacobiGraph = self.simulator.input.graph
         # candidate = output["aux", "candidates", "idx"][0].item()
         # x, y = graph.xy_from_id(candidate)
@@ -923,12 +927,13 @@ class VectorObserver(ExternalObserver):
         #     output["observation", "aux", "y_coord"],
         # ) = (x, y)
         # print(f"Task Observation: {candidate} at ({x}, {y})")
-        super().task_observation(output)
+        super().task_observation(output, task_ids)
         # output["tasks"][x * graph.config.n + y][-3] = 1.0
         # Used for Depth Normalization
         # output["tasks"][:, 0] -= output["tasks"][output["tasks"][:, -3] > 0, 0][0]
         # output["tasks"][:, 0] /= graph.config.n - 1
         output["tasks"][:, -2:] = self.spatial_bias
+
         # for i in range(n):
         #     for j in range(n):
         #         print(

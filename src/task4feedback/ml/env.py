@@ -1183,6 +1183,106 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
         return out
 
 
+class PBRS_GEFT(RuntimeEnv):
+    def __init__(
+        self,
+        *args,
+        gamma=0.4,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.gamma = gamma
+        n_tasks = self.simulator_factory.input.graph.config.steps
+        self.eft_log = torch.zeros(n_tasks + 1, dtype=torch.int64)
+        self.potential = torch.zeros(n_tasks + 1, dtype=torch.int64)
+        self.max_steps = n_tasks
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+            self.eft_log[self.step_count] = self.EFT_baseline
+            self.potential[self.step_count] = 0
+            self.start_time = time.time()
+
+        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
+        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
+        candidate_workspace = torch.zeros(
+            self.simulator_factory.graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
+
+        num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
+
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidate_workspace[i].item()
+            x, y = self.graph.xy_from_id(global_task_id)
+            chosen_device = td["action"][x * self.graph.config.n + y].item() + int(
+                self.only_gpu
+            )
+
+            mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+            mapping_result.append(
+                fastsim.Action(
+                    i,
+                    chosen_device,
+                    mapping_priority,
+                    mapping_priority,
+                )
+            )
+
+        self.simulator.simulator.map_tasks(mapping_result)
+
+        sim_ml = self.simulator.copy()
+        sim_ml.disable_external_mapper()
+        sim_ml.run()
+        ml_time = sim_ml.time
+        self.eft_log[self.step_count + 1] = ml_time
+        potential = 0
+        for i in range(0, self.step_count + 1, 1):
+            current = self.eft_log[i] - ml_time
+            discount = self.gamma * (1 - self.gamma) ** (self.step_count - 1 - i)
+            potential += current * discount
+
+        self.potential[self.step_count + 1] = potential / (self.EFT_baseline)
+        reward[0] = (
+            self.potential[self.step_count + 1] - self.potential[self.step_count]
+        )
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        # if self.graph.task_to_level[global_task_id] < (self.graph.config.steps - 1):
+        #     for next_id in self.graph.level_to_task[
+        #         self.graph.task_to_level[global_task_id] + 1
+        #     ]:
+        #         if (
+        #             self.graph.task_to_cell[global_task_id]
+        #             == self.graph.task_to_cell[next_id]
+        #         ):
+        #             x, y = self.graph.xy_from_id(global_task_id)
+        #             self.observer.task_ids[x * self.graph.config.n + y] = next_id
+
+        obs = self._get_observation()
+        sim_time = obs["observation"]["aux"]["time"].item()
+        if done:
+            duration = time.time() - self.start_time
+            reward[0] = (self.EFT_baseline - sim_time) / self.EFT_baseline
+            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / sim_time
+            obs["observation"]["aux"]["vsoptimal"][0] = self.optimal_time / sim_time
+            print(
+                f"Took: {duration} Time: {sim_time} / EFT: {self.EFT_baseline} OPT: {self.optimal_time} Improvement: {obs['observation']['aux']['improvement'][0]:.2f} vs Optimal: {obs['observation']['aux']['vsoptimal'][0]:.2f} EFT vs Optimal: {self.EFT_baseline / self.optimal_time:.2f}   "
+            )
+
+        out = obs
+        # print("Reward: ", reward)
+        out.set("reward", reward)
+        out.set("done", done)
+        self.step_count += 1
+        return out
+
+
 class PBRS(RuntimeEnv):
     def spearman_flat(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         """
