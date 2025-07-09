@@ -861,12 +861,12 @@ class DefaultTransitionConditions : public TransitionConditions {};
 
 class RangeTransitionConditions : public TransitionConditions {
 public:
-  std::size_t mapped_reserved_gap = 1;
-  std::size_t reserved_launched_gap = 1;
-  std::size_t total_in_flight = 1;
+  int32_t mapped_reserved_gap = 1;
+  int32_t reserved_launched_gap = 1;
+  int32_t total_in_flight = 1;
 
-  RangeTransitionConditions(std::size_t mapped_reserved_gap_, std::size_t reserved_launched_gap_,
-                            std::size_t total_in_flight_)
+  RangeTransitionConditions(int32_t mapped_reserved_gap_, int32_t reserved_launched_gap_,
+                            int32_t total_in_flight_)
       : mapped_reserved_gap(mapped_reserved_gap_), reserved_launched_gap(reserved_launched_gap_),
         total_in_flight(total_in_flight_) {
   }
@@ -890,14 +890,13 @@ public:
 
 class BatchTransitionConditions : public TransitionConditions {
 public:
-  std::size_t batch_size = 20;
-  std::size_t active_batch = 0;
-  std::size_t queue_threshold = 2;
-  std::size_t max_in_flight = 16;
   timecount_t last_accessed = 0;
+  int32_t batch_size = 20;
+  int32_t queue_threshold = 2;
+  int32_t max_in_flight = 16;
+  int32_t active_batch = 0;
 
-  BatchTransitionConditions(std::size_t batch_size_, std::size_t queue_threshold_,
-                            std::size_t max_in_flight_)
+  BatchTransitionConditions(int32_t batch_size_, int32_t queue_threshold_, int32_t max_in_flight_)
       : batch_size(batch_size_), queue_threshold(queue_threshold_), max_in_flight(max_in_flight_) {
   }
 

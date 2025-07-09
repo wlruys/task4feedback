@@ -476,6 +476,7 @@ class IncrementalEFT(RuntimeEnv):
         sim_ml.disable_external_mapper()
         end_time = perf_counter()
         print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
+        print(f"Current sim time {sim_ml.time}", flush=True)
         start_time = perf_counter()
         sim_ml.run()
         end_time = perf_counter()

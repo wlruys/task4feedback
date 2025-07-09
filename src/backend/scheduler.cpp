@@ -47,6 +47,9 @@ taskid_t Scheduler::map_task(taskid_t last_idx, taskid_t compute_task_id, Action
   SPDLOG_DEBUG("Time:{} Mapping task {}:{} to device {}", current_time,
                static_graph.get_compute_task_name(compute_task_id), compute_task_id, chosen_device);
 
+  std::cout << "Mapping task " << static_graph.get_compute_task_name(compute_task_id)
+            << " to device " << chosen_device << std::endl;
+
   assert(task_runtime.is_compute_mappable(compute_task_id));
 
   priority_t rp = action.reservable_priority;

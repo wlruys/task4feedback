@@ -26,8 +26,8 @@ void init_scheduler_ext(nb::module_ &m) {
       .def(nb::init<>());
 
   nb::class_<RangeTransitionConditions, TransitionConditions>(m, "RangeTransitionConditions")
-      .def(nb::init<std::size_t, std::size_t, std::size_t>(), "mapped_reserved_gap_"_a,
-           "reserved_launched_gap"_a, "total_in_flight_"_a)
+      .def(nb::init<std::size_t, std::size_t, std::size_t>(), "mapped_reserved_gap"_a,
+           "reserved_launched_gap"_a, "total_in_flight"_a)
       .def_ro("mapped_reserved_gap", &RangeTransitionConditions::mapped_reserved_gap)
       .def_ro("reserved_launched_gap", &RangeTransitionConditions::reserved_launched_gap)
       .def_ro("total_in_flight", &RangeTransitionConditions::total_in_flight);
