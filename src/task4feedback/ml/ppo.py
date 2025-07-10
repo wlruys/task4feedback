@@ -5,7 +5,10 @@ from typing import Callable, Optional, List, Dict, Any, Tuple
 from torchrl.collectors import MultiSyncDataCollector, SyncDataCollector
 from torchrl.data.replay_buffers import ReplayBuffer
 from torchrl.data.replay_buffers.storages import LazyTensorStorage, TensorStorage
-from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
+from torchrl.data.replay_buffers.samplers import (
+    SamplerWithoutReplacement,
+    SliceSamplerWithoutReplacement,
+)
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
@@ -49,6 +52,7 @@ class PPOConfig:
     value_norm: str = "smooth_l1"
     eval_interval: int = 10  # Evaluate every N collections
     eval_episodes: int = 1  # Number of episodes to evaluate
+    episode_length: int = 1000  # Length of each episode for evaluation
 
 
 def log_parameter_and_gradient_norms(model):
@@ -1166,6 +1170,350 @@ def run_rnn_ppo_torchrl(
                 "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
                 "collect_loss/average_improvement": avg_improvement.item(),
                 "collect_loss/average_vsoptimal": avg_vsoptimal.item(),
+                "collect_loss/std_improvement": filtered_improvements.std().item(),
+                "collect_loss/std_return": tensordict_data["value_target"].std().item(),
+                "collect_loss/mean_return": tensordict_data["value_target"]
+                .mean()
+                .item(),
+                "collect_loss/loss_critic": loss_vals["loss_critic"].item(),
+                "collect_loss/loss_entropy": loss_vals["loss_entropy"].item(),
+                "collect_loss/loss_total": loss_value.item(),
+                "collect_loss/grad_norm": grad_norm,
+                "collect_loss/advantage_mean": tensordict_data["advantage"]
+                .mean()
+                .item(),
+                "collect_loss/advantage_std": tensordict_data["advantage"].std().item(),
+            },
+        )
+        replay_buffer.empty()
+
+        if (i + 1) % 100 == 0:
+            if wandb.run.dir is None:
+                path = "."
+            else:
+                path = wandb.run.dir
+            torch.save(
+                model.state_dict(),
+                os.path.join(path, model_name + f"_{i+1}.pth"),
+            )
+
+        if avg_vsoptimal >= prev_max_vsoptimal + 0.01:
+            if wandb.run.dir is None:
+                path = "."
+            else:
+                path = wandb.run.dir
+            torch.save(
+                model.state_dict(),
+                os.path.join(path, "max_" + model_name + f"_{avg_vsoptimal}.pth"),
+            )
+            prev_max_vsoptimal = avg_vsoptimal
+
+    if config.eval_interval > 0 and i % config.eval_interval == 0:
+        eval_metrics = evaluate_policy(
+            policy=td_module_action,
+            eval_env_fn=eval_env_fn,
+            num_episodes=config.eval_episodes,
+            step=config.num_collections,
+        )
+        eval_metrics["eval/step"] = config.num_collections
+        wandb.log(eval_metrics)
+
+    # save final network
+    if wandb.run.dir is None:
+        path = "."
+    else:
+        path = wandb.run.dir
+    torch.save(
+        model.state_dict(),
+        os.path.join(path, model_name + f"_{config.num_collections}.pth"),
+    )
+    # save final optimizer state
+    torch.save(
+        optimizer.state_dict(),
+        os.path.join(
+            path, "optimizer_" + model_name + f"_{config.num_collections}.pth"
+        ),
+    )
+
+    collector.shutdown()
+    wandb.finish()
+
+
+def run_ppo_torchrl_batch(
+    feature_config: FeatureDimConfig,
+    layer_config: LayerConfig,
+    make_env: Callable[[], EnvBase],
+    config: PPOConfig,
+    model_name: str = "model",
+    model_path: str = None,
+    eval_env_fn: Optional[Callable[[], EnvBase]] = None,
+    rnn_model: str = "GRU",
+):
+    wandb.define_metric("batch_loss/step")
+    wandb.define_metric("collect_loss/step")
+    wandb.define_metric("batch_loss/*", step_metric="batch_loss/step")
+    wandb.define_metric("grad_norm/*", step_metric="batch_loss/step")
+    wandb.define_metric("param_norm/*", step_metric="batch_loss/step")
+    wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
+    wandb.define_metric("eval/*", step_metric="eval/step")
+    num_candidates = layer_config.width**2
+    _encoder = UNetEncoder(
+        in_channels=feature_config.task_feature_dim,
+        base_filters=layer_config.cnn_hidden_channels,
+        width=layer_config.width,
+    )
+    if rnn_model == "LSTM":
+        RNNModule = LSTMModule
+    elif rnn_model == "GRU":
+        RNNModule = GRUModule
+
+    rnn = RNNModule(
+        input_size=layer_config.cnn_hidden_channels * 4,
+        hidden_size=layer_config.cnn_hidden_channels * 4,
+        in_key="b",
+        out_key="b",
+    )
+
+    _decoder = UNetDecoder(
+        base_filters=layer_config.cnn_hidden_channels,
+        width=layer_config.width,
+    )
+
+    critic = UNetCritic(
+        in_channels=feature_config.task_feature_dim,
+        width=layer_config.width,
+        base_filters=layer_config.cnn_hidden_channels,
+        fc_dim=layer_config.hidden_channels,
+    )
+
+    encoder = TensorDictModule(
+        _encoder, in_keys=["observation"], out_keys=["e1", "e2", "e3", "b"]
+    )
+
+    decoder = TensorDictModule(
+        _decoder,
+        in_keys=["observation", "e1", "e2", "e3", "b"],
+        out_keys=["logits"],
+    )
+
+    td_module_action = ProbabilisticActor(
+        TensorDictSequential(encoder, rnn, decoder),
+        in_keys=["logits"],
+        out_keys=["action"],
+        distribution_class=torch.distributions.Categorical,
+        cache_dist=False,
+        return_log_prob=True,
+    )
+
+    td_critic_module = ValueOperator(
+        module=critic,
+        in_keys=["observation"],
+    )
+
+    model = torch.nn.ModuleList([td_module_action, td_critic_module])
+
+    # Create evaluation environment if not provided
+    if eval_env_fn is None:
+        eval_env_fn = make_env
+
+    # if model_path:
+    #     ckpts = torch.load(model_path)  # this is a list or tuple of two dicts
+    #     model[0].load_state_dict(ckpts[0])  # only load the first one
+    #     print("Loaded model[0] from path:", model_path)
+    #     # model.load_state_dict(torch.load(model_path))
+    #     # print("Loaded model from path:", model_path)
+    if model_path:
+        full_sd = torch.load(model_path)
+        sd0 = {
+            k.replace("module0.", ""): v
+            for k, v in full_sd.items()
+            if k.startswith("module0.")
+        }
+        model[0].load_state_dict(sd0, strict=False)
+        print("Loaded only model[0] parameters")
+    model.eval()
+    trajcounter = TrajCounter()
+
+    def _make_env():
+        env = make_env()
+        env.append_transform(rnn.make_tensordict_primer())
+
+        return env
+
+    collector = MultiSyncDataCollector(
+        [_make_env for _ in range(config.workers)],
+        model[0],
+        frames_per_batch=config.states_per_collection,
+        reset_at_each_iter=True,
+        # split_trajs=True,
+        cat_results=0,
+        device=config.train_device,
+        env_device="cpu",
+    )
+    out_seed = collector.set_seed(config.seed)
+    print("Collector seed:", out_seed)
+
+    replay_buffer = ReplayBuffer(
+        storage=LazyTensorStorage(
+            max_size=config.states_per_collection, device=config.train_device
+        ),
+        sampler=SliceSamplerWithoutReplacement(slice_len=config.episode_length),
+        pin_memory=torch.cuda.is_available(),
+        # prefetch=4,
+        batch_size=config.minibatch_size,
+    )
+
+    advantage_module = GAE(
+        gamma=config.gae_gamma,
+        lmbda=config.gae_lmbda,
+        value_network=model[1],
+        average_gae=False,
+        device=config.train_device,
+    )
+
+    loss_module = ClipPPOLoss(
+        actor_network=model[0],
+        critic_network=model[1],
+        clip_epsilon=config.clip_eps,
+        entropy_bonus=True,
+        entropy_coef=config.ent_coef,
+        critic_coef=config.val_coef,
+        loss_critic_type=config.value_norm,
+        clip_value=config.clip_vloss,
+        normalize_advantage=config.normalize_advantage,
+    )
+
+    optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
+
+    # Run initial evaluation
+    if config.eval_interval > 0:
+        eval_metrics = evaluate_policy(
+            policy=model[0],
+            eval_env_fn=eval_env_fn,
+            num_episodes=config.eval_episodes,
+            step=0,
+        )
+        eval_metrics["eval/step"] = 0
+        wandb.log(eval_metrics)
+    prev_max_vsoptimal = 1.0
+    max_vsoptimal = 0.0
+    for i, tensordict_data in enumerate(collector):
+        # Run evaluation at specified intervals
+        if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
+            eval_metrics = evaluate_policy(
+                policy=model[0],
+                eval_env_fn=eval_env_fn,
+                num_episodes=config.eval_episodes,
+                step=i + 1,
+            )
+            eval_metrics["eval/step"] = i + 1
+            wandb.log(eval_metrics)
+
+        if i >= config.num_collections:
+            break
+
+        print(f"Collection: {i}")
+        tensordict_data = tensordict_data.to(config.train_device, non_blocking=True)
+
+        with torch.no_grad():
+            advantage_module(tensordict_data)
+            if num_candidates > 1:
+                tensordict_data["advantage"] = tensordict_data["advantage"].expand(
+                    -1, num_candidates
+                )
+                tensordict_data["advantage"] = tensordict_data["advantage"].unsqueeze(
+                    -1
+                )
+            non_zero_rewards = tensordict_data["next", "reward"]
+            improvements = tensordict_data["next", "observation", "aux", "improvement"]
+            vsoptimals = tensordict_data["next", "observation", "aux", "vsoptimal"]
+            mask = improvements > -1.5
+            filtered_improvements = improvements[mask]
+            if filtered_improvements.numel() > 0:
+                avg_improvement = filtered_improvements.mean()
+            mask = vsoptimals > -1.5
+            filtered_vsoptimals = vsoptimals[mask]
+            if filtered_vsoptimals.numel() > 0:
+                avg_vsoptimal = filtered_vsoptimals.mean()
+
+            if len(non_zero_rewards) > 0:
+                avg_non_zero_reward = non_zero_rewards.mean().item()
+                std_rewards = non_zero_rewards.std().item()
+                print(f"Average reward: {avg_non_zero_reward}")
+                print(f"Average improvement: {avg_improvement}")
+                print(f"Average vs Optimal: {avg_vsoptimal}")
+
+        # replay_buffer.extend(tensordict_data.reshape(-1))
+        replay_buffer.extend(tensordict_data)
+        # Training loop
+        for j in range(config.num_epochs_per_collection):
+            n_batches = config.states_per_collection // config.episode_length
+            for k in range(n_batches):
+                subdata = replay_buffer.sample(config.episode_length)
+                subdata.to(config.train_device)
+
+                loss_vals = loss_module(subdata)
+                loss_value = (
+                    loss_vals["loss_objective"]
+                    + loss_vals["loss_critic"]
+                    + loss_vals["loss_entropy"]
+                )
+
+                optimizer.zero_grad()
+                loss_value.backward()
+
+                # Log pre-clipping gradient norms
+                pre_clip_norms = log_parameter_and_gradient_norms(loss_module)
+
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    loss_module.parameters(), max_norm=config.max_grad_norm
+                )
+
+                # Log post-clipping gradient norms
+                post_clip_norms = log_parameter_and_gradient_norms(loss_module)
+                post_clip_norms = {
+                    f"post_clip_{k}": v
+                    for k, v in post_clip_norms.items()
+                    if "grad_norm" in k
+                }
+
+                optimizer.step()
+
+                # Log norms for this batch
+                step = (
+                    i * config.num_epochs_per_collection * n_batches + j * n_batches + k
+                )
+                wandb.log(
+                    {
+                        **pre_clip_norms,
+                        **post_clip_norms,
+                        "batch_loss/step": step,
+                        "batch_loss/objective": loss_vals["loss_objective"].item(),
+                        "batch_loss/critic": loss_vals["loss_critic"].item(),
+                        "batch_loss/entropy": loss_vals["entropy"].item(),
+                        "batch_loss/total": loss_value.item(),
+                        "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
+                        "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),
+                        # "batch_loss/value_clip_fraction": loss_vals[
+                        #    "value_clip_fraction"
+                        # ].item(),
+                        "batch_loss/ESS": loss_vals["ESS"].item(),
+                    },
+                )
+
+        # Update the policy
+        collector.policy.load_state_dict(loss_module.actor_network.state_dict())
+        collector.update_policy_weights_(TensorDict.from_module(collector.policy))
+        max_vsoptimal = max(max_vsoptimal, avg_vsoptimal.item())
+        wandb.log(
+            {
+                "collect_loss/step": i,
+                "collect_loss/mean_nonzero_reward": avg_non_zero_reward,
+                "collect_loss/std_nonzero_reward": std_rewards,
+                "collect_loss/loss_objective": loss_vals["loss_objective"].item(),
+                "collect_loss/average_improvement": avg_improvement.item(),
+                "collect_loss/average_vsoptimal": avg_vsoptimal.item(),
+                "collect_loss/max_vsoptimal": max_vsoptimal,
                 "collect_loss/std_improvement": filtered_improvements.std().item(),
                 "collect_loss/std_return": tensordict_data["value_target"].std().item(),
                 "collect_loss/mean_return": tensordict_data["value_target"]

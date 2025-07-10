@@ -3325,6 +3325,8 @@ class ActorCriticCNNBase(nn.Module):
 
 import torch.nn.functional as F
 
+import math
+
 
 class UNetActor(nn.Module):
     def __init__(self, in_channels, num_workers, base_filters=32, width=5):
@@ -3396,7 +3398,6 @@ class UNetActor(nn.Module):
         return torch.cat([up_feat, enc_feat], dim=1)
 
     def forward(self, x):
-
         single = x.batch_size == torch.Size([])
         x = x["tasks"]
         # print("UNetActor input shape:", x.shape)
@@ -3458,34 +3459,57 @@ class UNetCritic(nn.Module):
         self.fc2 = nn.Linear(fc_dim, 1)
 
     def forward(self, x):
-        single = x.batch_size == torch.Size([])
-        x = x["tasks"]
-        # print("UNetCritic input shape:", x.shape)
+        # 1) pull out the tasks tensor
+        x_tasks = x["tasks"]
+        # x_tasks shape:  ( …batch_dims…, tasks, in_channels )
 
-        if single:
-            x = x.unsqueeze(0)  # → (1, N*N, C)
+        # 2) detect if we had no explicit batch dims (i.e. a single sample)
+        #    so we can squeeze correctly at the end
+        single_sample = x_tasks.dim() == 2  # only (tasks, C)
+        if single_sample:
+            x_tasks = x_tasks.unsqueeze(0)  # → (1, tasks, C)
 
-        bsz = x.size(0)
-        x = x.view(bsz, self.width, self.width, self.in_channels).permute(0, 3, 1, 2)
+        # 3) record batch_shape = all dims except the last two
+        batch_shape = list(x_tasks.shape[:-2])
+        tasks, in_channels = x_tasks.shape[-2:]
 
-        # x: (B, C, H, W)
-        h1 = self.enc1(x)  # → (B, f, H, W)
-        h2 = self.enc2(self.pool(h1))  # → (B, 2f, H1, W1)
-        h3 = self.enc3(self.pool(h2))  # → (B, 4f, H2, W2)
+        # 4) flatten all batch dims into one
+        flat_bs = math.prod(batch_shape)
+        x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
 
-        # Global average pool to get fixed-size vector
-        gap = h3.mean(dim=(-2, -1))  # → (B, 4f)
+        # 5) restore the “image” layout and permute to (B', C, H, W)
+        width = self.width
+        x_flat = x_flat.view(
+            flat_bs, width, width, in_channels
+        ).permute(  # (flat_bs, W, W, C)
+            0, 3, 1, 2
+        )  # → (flat_bs, C, W, W)
 
-        v = F.relu(self.fc1(gap))  # → (B, fc_dim)
-        v = self.fc2(v)
+        # 6) apply your encoder & pooling exactly as before
+        h1 = self.enc1(x_flat)  # → (flat_bs,   f,  W,  W)
+        h2 = self.enc2(self.pool(h1))  # → (flat_bs, 2f, W/2, W/2)
+        h3 = self.enc3(self.pool(h2))  # → (flat_bs, 4f, W/4, W/4)
 
-        v = v.contiguous().view(bsz, -1)
-        if single:
-            v = v.squeeze(0)
-        # v = v.squeeze(-1)  # remove the last dimension → (B,)
-        # v = v.expand(-1, self.width * self.width)  # (B, N*N)
-        # print("UNetCritic output shape:", v.shape)
-        return v  # (B,)
+        # 7) global average‐pool, fc, etc.
+        gap = h3.mean(dim=(-2, -1))  # → (flat_bs, 4f)
+        v_flat = F.relu(self.fc1(gap))  # → (flat_bs, fc_dim)
+        v_flat = self.fc2(v_flat)  # → (flat_bs, 1) or (flat_bs,)
+
+        # 8) make sure it's a flat scalar per example
+        v_flat = v_flat.view(flat_bs, -1)  # → (flat_bs, 1)
+        # or just (flat_bs,) if fc2 outputs [flat_bs]
+
+        # 9) un-flatten back to (*batch_shape, 1)
+        v = v_flat.view(*batch_shape, -1)  # → (...batch_dims..., 1)
+
+        # 10) squeeze if you started with a single sample
+        if single_sample:
+            v = v.squeeze(0)  # → (1,) → () or (tasks,)
+
+        return v  # shape is now:
+        #  • () or (tasks,) for single sample
+        #  • (B,) for simple batch
+        #  • (B, T, 1) for batched time‐series
 
 
 class BatchNetBase(nn.Module):
@@ -3527,3 +3551,118 @@ class BatchNetBase(nn.Module):
         d_logits = self.actor(data)
         v = self.critic(data)
         return d_logits, v
+
+
+class UNetEncoder(nn.Module):
+    def __init__(self, in_channels, base_filters=32, width=8):
+        super().__init__()
+        self.width = width
+        self.in_channels = in_channels
+        # encoder blocks
+        self.enc1 = nn.Sequential(
+            nn.Conv2d(in_channels, base_filters, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.enc2 = nn.Sequential(
+            nn.Conv2d(base_filters, base_filters * 2, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.enc3 = nn.Sequential(
+            nn.Conv2d(base_filters * 2, base_filters * 4, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.pool = nn.MaxPool2d(2, 2)
+        # bottleneck
+
+    def forward(self, obs):
+        single = obs.batch_size == torch.Size([])
+        x = obs["tasks"]
+        if single:
+            # if td is a single sample, add batch dimension
+            # Input of shape (N*N, C) → (1, N*N, C)
+            x = x.unsqueeze(0)
+        bsz = x.size(0)
+        x = x.view(bsz, self.width, self.width, self.in_channels).permute(0, 3, 1, 2)
+        # Now x is (B, C, H, W) where B=bsz, C=in_channels, H=W=width
+        # -- first conv block
+        e1 = self.enc1(x)  # (B,   f, H, W)
+        p1 = self.pool(e1)  # (B,   f, H/2, W/2)
+        # -- second conv block
+        e2 = self.enc2(p1)  # (B, 2f, H/2, W/2)
+        p2 = self.pool(e2)  # (B, 2f, H/4, W/4)
+        # -- third conv block
+        e3 = self.enc3(p2)  # (B, 4f, H/4, W/4)
+        b = self.pool(e3)  # (B, 4f, H/8, W/8)
+        # -- pooling is not needed here, we go directly
+        # -- bottleneck
+
+        # flatten b
+        b = b.flatten(start_dim=1)  # (B, 4f * H/8 * W/8)
+        if single:
+            b = b.squeeze(0)  # remove artificial batch dim
+        # pack into new TensorDict
+        return e1, e2, e3, b
+
+
+class UNetDecoder(nn.Module):
+    def __init__(self, base_filters=32, width=8, num_workers=4):
+        super().__init__()
+        # up‐sampling
+        self.width = width
+        self.num_workers = num_workers
+        self.base_filters = base_filters
+        self.up3 = nn.ConvTranspose2d(base_filters * 4, base_filters * 4, 2, 2)
+        self.dec3 = nn.Sequential(
+            nn.Conv2d(base_filters * 8, base_filters * 4, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.up2 = nn.ConvTranspose2d(base_filters * 4, base_filters * 2, 2, 2)
+        self.dec2 = nn.Sequential(
+            nn.Conv2d(base_filters * 4, base_filters * 2, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.up1 = nn.ConvTranspose2d(base_filters * 2, base_filters, 2, 2)
+        self.dec1 = nn.Sequential(
+            nn.Conv2d(base_filters * 2, base_filters, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.out_conv = nn.Conv2d(base_filters, num_workers, 1)
+
+    def _align_and_concat(self, up_feat, enc_feat):
+        uh, uw = up_feat.shape[-2:]
+        eh, ew = enc_feat.shape[-2:]
+        dh, dw = eh - uh, ew - uw
+        if dh > 0 or dw > 0:
+            pad = [dw // 2, dw - dw // 2, dh // 2, dh - dh // 2]
+            up_feat = F.pad(up_feat, pad)
+        elif dh < 0 or dw < 0:
+            top, left = (-dh) // 2, (-dw) // 2
+            up_feat = up_feat[..., top : top + eh, left : left + ew]
+        return torch.cat([up_feat, enc_feat], dim=1)
+
+    def forward(self, obs, e1, e2, e3, b):
+        single = obs.batch_size == torch.Size([])
+        if single:
+            b = b.unsqueeze(0)
+        b = b.view(b.size(0), self.base_filters * 4, self.width // 8, self.width // 8)
+        # Stage 1: b → match e3
+        u3 = self.up3(b)  # (B, 4f, H/4, W/4)
+        d3 = self.dec3(self._align_and_concat(u3, e3))  # (B, 4f, H/4, W/4)
+
+        # Stage 2: d3 → match e2
+        u2 = self.up2(d3)  # (B, 2f, H/2, W/2)
+        d2 = self.dec2(self._align_and_concat(u2, e2))  # (B, 2f, H/2, W/2)
+
+        # Stage 3: d2 → match e1
+        u1 = self.up1(d2)  # (B, f,   H,   W)
+        d1 = self.dec1(self._align_and_concat(u1, e1))  # (B, f,   H,   W)
+        # final logits
+        logits = self.out_conv(d1)  # (B, P, H, W)
+
+        # 1) permute to (B, H, W, P) then flatten H×W into one dim:
+        logits = logits.permute(0, 2, 3, 1).flatten(1, 2)
+        if single:
+            # if td is a single sample, add batch dimension
+            # Input of shape (N*N, C) → (1, N*N, C)
+            logits = logits.squeeze(0)
+        return logits

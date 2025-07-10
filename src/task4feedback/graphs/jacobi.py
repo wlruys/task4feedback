@@ -862,12 +862,13 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
         # task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
         # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
         task_feature_factory.add(fastsim.ReadDataLocationFeature)
-        task_feature_factory.add(fastsim.PrevReadSizeFeature, width, True, prev)
+        if prev > 0:
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, True, prev)
         # task_feature_factory.add(
         #     fastsim.EmptyTaskFeature, 1
         # )
         # task_feature_factory.add(fastsim.TagCandidateFeature)
-        task_feature_factory.add(fastsim.EmptyTaskFeature, 2)  # For x, y position
+        # task_feature_factory.add(fastsim.EmptyTaskFeature, 2)  # For x, y position
 
         device_feature_factory = FeatureExtractorFactory()
         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
@@ -903,23 +904,23 @@ class VectorExternalObserverFactory(ExternalObserverFactory):
 class VectorObserver(ExternalObserver):
     spatial_bias: torch.Tensor = None
 
-    def __post_init__(self):
-        graph: JacobiGraph = self.simulator.input.graph
-        n = graph.config.n
-        # Generate spatial bias just once
-        coords = torch.zeros((n * n, 2), dtype=torch.float32)
-        for i in range(n):
-            for j in range(n):
-                coords[i * n + j, 0] = 2 * i / (n - 1) - 1  # x
-                coords[i * n + j, 1] = 2 * j / (n - 1) - 1  # y
-        self.spatial_bias = coords
+    # def __post_init__(self):
+    #     graph: JacobiGraph = self.simulator.input.graph
+    #     n = graph.config.n
+    #     # Generate spatial bias just once
+    #     coords = torch.zeros((n * n, 2), dtype=torch.float32)
+    #     for i in range(n):
+    #         for j in range(n):
+    #             coords[i * n + j, 0] = 2 * i / (n - 1) - 1  # x
+    #             coords[i * n + j, 1] = 2 * j / (n - 1) - 1  # y
+    #     self.spatial_bias = coords
 
     def task_observation(
         self,
         output: TensorDict,
         task_ids: Optional[torch.Tensor] = None,
     ):
-        graph: JacobiGraph = self.simulator.input.graph
+        # graph: JacobiGraph = self.simulator.input.graph
         # candidate = output["aux", "candidates", "idx"][0].item()
         # x, y = graph.xy_from_id(candidate)
         # (
@@ -932,7 +933,7 @@ class VectorObserver(ExternalObserver):
         # Used for Depth Normalization
         # output["tasks"][:, 0] -= output["tasks"][output["tasks"][:, -3] > 0, 0][0]
         # output["tasks"][:, 0] /= graph.config.n - 1
-        output["tasks"][:, -2:] = self.spatial_bias
+        # output["tasks"][:, -2:] = self.spatial_bias
 
         # for i in range(n):
         #     for j in range(n):

@@ -1517,9 +1517,10 @@ class PBRS(RuntimeEnv):
         # self.potential[self.step_count + 1] += overall_work_balance
 
         # print(self.potential[self.step_count + 1], self.potential[self.step_count])
-        reward[0] = (
+        reward[0] = 4 * (
             self.potential[self.step_count + 1] - self.potential[self.step_count]
         )
+
         # self.sum_pbrs += reward[0].item()
         # print(f"Reward: {reward[0].item()}, Sum: {self.sum_pbrs}")
 
