@@ -21,9 +21,9 @@
 #include <utility>
 #include <vector>
 
-#define TASK_BUFFER_SIZE 20
-#define EXPECTED_EVICTION_TASKS 1000
-#define INITIAL_TASKS_SIZE 1000
+constexpr int32_t TASK_BUFFER_SIZE= 20;
+constexpr int32_t EXPECTED_EVICTION_TASKS = 1000;
+constexpr int32_t INITIAL_TASKS_SIZE = 1000;
 
 enum class DeviceType : uint8_t {
   CPU = 1,
@@ -693,6 +693,11 @@ struct TaskTimeRecord {
   timecount_t completed_time{};
 };
 
+struct DataTaskTimeRecord {
+  timecount_t launched_time{};
+  timecount_t completed_time{};
+};
+
 class StaticTaskInfo {
 
 protected:
@@ -1250,15 +1255,16 @@ protected:
   std::vector<DataTaskRuntimeInfo> data_task_runtime_info;
   std::vector<EvictionTaskRuntimeInfo> eviction_task_runtime_info;
 
-  std::vector<taskid_t> task_buffer;
-
   std::vector<TaskTimeRecord> compute_task_time_records;
-  std::vector<TaskTimeRecord> data_task_time_records;
-  std::vector<TaskTimeRecord> eviction_task_time_records;
+  std::vector<DataTaskTimeRecord> data_task_time_records;
+  std::vector<DataTaskTimeRecord> eviction_task_time_records;
 
   std::vector<std::string> eviction_task_names;
 
 public:
+
+  RuntimeTaskInfo() = default;
+
   RuntimeTaskInfo(StaticTaskInfo &static_info) {
     int32_t num_compute_tasks = static_cast<int32_t>(static_info.get_n_compute_tasks());
     int32_t num_data_tasks = static_cast<int32_t>(static_info.get_n_data_tasks());
@@ -1275,13 +1281,48 @@ public:
       initialize_data_runtime(i, static_info);
     }
 
-    task_buffer.reserve(TASK_BUFFER_SIZE);
-    eviction_task_runtime_info.reserve(EXPECTED_EVICTION_TASKS);
-    eviction_task_time_records.reserve(EXPECTED_EVICTION_TASKS);
-    eviction_task_names.reserve(EXPECTED_EVICTION_TASKS);
+    // eviction_task_runtime_info.reserve(EXPECTED_EVICTION_TASKS);
+    // eviction_task_time_records.reserve(EXPECTED_EVICTION_TASKS);
+    // eviction_task_names.reserve(EXPECTED_EVICTION_TASKS);
   }
 
-  RuntimeTaskInfo(const RuntimeTaskInfo &other) = default;
+  RuntimeTaskInfo(const RuntimeTaskInfo &other) {
+
+    {
+      ZoneScopedN("Copy ComputeTaskRuntimeInfo");
+      compute_task_runtime_info = other.compute_task_runtime_info;
+    }
+
+    {
+      ZoneScopedN("Copy DataTaskRuntimeInfo");
+      data_task_runtime_info = other.data_task_runtime_info;
+    }
+
+    {
+      ZoneScopedN("Copy EvictionTaskRuntimeInfo");
+      eviction_task_runtime_info = other.eviction_task_runtime_info;
+    }
+
+    {
+      ZoneScopedN("Copy ComputeTaskTimeRecords");
+      compute_task_time_records = other.compute_task_time_records;
+    }
+
+    {
+      ZoneScopedN("Copy DataTaskTimeRecords");
+      data_task_time_records = other.data_task_time_records;
+    }
+
+    {
+      ZoneScopedN("Copy EvictionTaskTimeRecords");
+      eviction_task_time_records = other.eviction_task_time_records;
+    }
+
+    {
+      ZoneScopedN("Copy EvictionTaskNames");
+      eviction_task_names = other.eviction_task_names;
+    }
+  }
 
   // Creation and Initialization
 
@@ -1342,10 +1383,6 @@ public:
   [[nodiscard]] bool empty() const {
     return (compute_task_runtime_info.empty() && data_task_runtime_info.empty() &&
             eviction_task_runtime_info.empty());
-  }
-
-  [[nodiscard]] const std::vector<taskid_t> &get_task_buffer() const {
-    return task_buffer;
   }
 
   [[nodiscard]] const std::string get_eviction_task_name(taskid_t id) const {
@@ -1436,20 +1473,12 @@ public:
     return compute_task_time_records[id].completed_time;
   }
 
-  [[nodiscard]] const timecount_t get_data_task_reserved_time(taskid_t id) const {
-    return data_task_time_records[id].reserved_time;
-  }
-
   [[nodiscard]] const timecount_t get_data_task_launched_time(taskid_t id) const {
     return data_task_time_records[id].launched_time;
   }
 
   [[nodiscard]] const timecount_t get_data_task_completed_time(taskid_t id) const {
     return data_task_time_records[id].completed_time;
-  }
-
-  [[nodiscard]] const timecount_t get_eviction_task_reserved_time(taskid_t id) const {
-    return eviction_task_time_records[id].reserved_time;
   }
 
   [[nodiscard]] const timecount_t get_eviction_task_launched_time(taskid_t id) const {
@@ -1475,9 +1504,7 @@ public:
   }
 
   TaskState get_data_task_state_at_time(taskid_t id, timecount_t query) const {
-    if (query < data_task_time_records[id].reserved_time) {
-      return TaskState::SPAWNED;
-    } else if (query < data_task_time_records[id].launched_time) {
+    if (query < data_task_time_records[id].launched_time) {
       return TaskState::RESERVED;
     } else if (query < data_task_time_records[id].completed_time) {
       return TaskState::LAUNCHED;
@@ -1487,9 +1514,7 @@ public:
   }
 
   [[nodiscard]] TaskState get_eviction_task_state_at_time(taskid_t id, timecount_t query) const {
-    if (query < eviction_task_time_records[id].reserved_time) {
-      return TaskState::SPAWNED;
-    } else if (query < eviction_task_time_records[id].launched_time) {
+    if (query < eviction_task_time_records[id].launched_time) {
       return TaskState::MAPPED;
     } else if (query < eviction_task_time_records[id].completed_time) {
       return TaskState::RESERVED;
@@ -1612,10 +1637,10 @@ public:
   [[nodiscard]] TaskTimeRecord &get_compute_task_time_record(taskid_t id) {
     return compute_task_time_records[id];
   }
-  [[nodiscard]] TaskTimeRecord &get_data_task_time_record(taskid_t id) {
+  [[nodiscard]] DataTaskTimeRecord &get_data_task_time_record(taskid_t id) {
     return data_task_time_records[id];
   }
-  [[nodiscard]] TaskTimeRecord &get_eviction_task_time_record(taskid_t id) {
+  [[nodiscard]] DataTaskTimeRecord &get_eviction_task_time_record(taskid_t id) {
     return eviction_task_time_records[id];
   }
 
@@ -1716,18 +1741,12 @@ public:
     compute_task_time_records[id].completed_time = completed_time;
   }
 
-  void record_data_reserved(taskid_t id, timecount_t reserved_time) {
-    data_task_time_records[id].reserved_time = reserved_time;
-  }
+
   void record_data_launched(taskid_t id, timecount_t launched_time) {
     data_task_time_records[id].launched_time = launched_time;
   }
   void record_data_completed(taskid_t id, timecount_t completed_time) {
     data_task_time_records[id].completed_time = completed_time;
-  }
-
-  void record_eviction_reserved(taskid_t id, timecount_t reserved_time) {
-    eviction_task_time_records[id].reserved_time = reserved_time;
   }
 
   void record_eviction_launched(taskid_t id, timecount_t launched_time) {
@@ -1779,7 +1798,7 @@ public:
   taskid_t compute_notify_mapped(taskid_t compute_task_id, devid_t mapped_device,
                                  int32_t reserve_priority, int32_t launch_priority,
                                  timecount_t time, const StaticTaskInfo &static_info,
-                                 std::span<taskid_t> compute_task_buffer) {
+                                 TaskIDList &compute_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.mapped_device = mapped_device;
@@ -1790,6 +1809,7 @@ public:
     taskid_t write_idx = 0;
 
     auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
+    compute_task_buffer.resize(my_dependents.size());
 
     for (const auto &dependent_id : my_dependents) {
       bool is_mappable = decrement_compute_task_unmapped(dependent_id);
@@ -1798,13 +1818,13 @@ public:
       SPDLOG_DEBUG("compute_notify_mapped: dependent_id: {}, is_mappable: {}, write_idx: {}",
                    dependent_id, is_mappable, write_idx);
     }
-
+    compute_task_buffer.resize(write_idx);
     return write_idx;
   }
 
   taskid_t compute_notify_reserved(taskid_t compute_task_id, devid_t mapped_device,
                                    timecount_t time, const StaticTaskInfo &static_info,
-                                   std::span<taskid_t> compute_task_buffer) {
+                                   TaskIDList &compute_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.mapped_device = mapped_device;
@@ -1813,6 +1833,7 @@ public:
 
     taskid_t write_idx = 0;
     auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
+    compute_task_buffer.resize(my_dependents.size());
 
     for (const auto &dependent_id : my_dependents) {
       bool is_reservable = decrement_compute_task_unreserved(dependent_id);
@@ -1821,7 +1842,7 @@ public:
       SPDLOG_DEBUG("compute_notify_reserved: dependent_id: {}, is_reservable: {}, write_idx: {}",
                    dependent_id, is_reservable, write_idx);
     }
-
+    compute_task_buffer.resize(write_idx);
     return write_idx;
   }
 
@@ -1835,7 +1856,7 @@ public:
 
   taskid_t compute_notify_completed(taskid_t compute_task_id, timecount_t time,
                                     const StaticTaskInfo &static_info,
-                                    std::span<taskid_t> compute_task_buffer) {
+                                    TaskIDList& compute_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);
@@ -1843,6 +1864,7 @@ public:
     taskid_t write_idx = 0;
 
     auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
+    compute_task_buffer.resize(my_dependents.size());
 
     for (const auto &dependent_id : my_dependents) {
       bool is_launchable = decrement_compute_task_incomplete(dependent_id);
@@ -1851,18 +1873,20 @@ public:
       SPDLOG_DEBUG("compute_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
                    dependent_id, is_launchable, write_idx);
     }
+    compute_task_buffer.resize(write_idx);
 
     return write_idx;
   }
 
   taskid_t compute_notify_data_completed(taskid_t compute_task_id, timecount_t time,
                                          const StaticTaskInfo &static_info,
-                                         std::span<taskid_t> data_task_buffer) {
+                                         TaskIDList& data_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     taskid_t write_idx = 0;
 
     // state and time assumed to be updated by prior call to notify_completed
     auto my_data_dependents = static_info.get_compute_task_data_dependents(compute_task_id);
+    data_task_buffer.resize(my_data_dependents.size());
 
     for (const auto &dependent_id : my_data_dependents) {
       bool is_launchable = decrement_data_task_incomplete(dependent_id);
@@ -1872,6 +1896,7 @@ public:
                    "write_idx: {}",
                    dependent_id, is_launchable, write_idx);
     }
+    data_task_buffer.resize(write_idx);
 
     return write_idx;
   }
@@ -1882,7 +1907,6 @@ public:
     auto &my_time_record = data_task_time_records[data_task_id];
     my_info.mapped_device = mapped_device;
     my_info.state = static_cast<uint8_t>(TaskState::RESERVED);
-    my_time_record.reserved_time = time;
   }
 
   void data_notify_launched(taskid_t data_task_id, devid_t source_device, timecount_t time,
@@ -1896,7 +1920,7 @@ public:
 
   taskid_t data_notify_completed(taskid_t data_task_id, timecount_t time,
                                  const StaticTaskInfo &static_info,
-                                 std::span<taskid_t> compute_task_buffer) {
+                                 TaskIDList & compute_task_buffer) {
     auto &my_info = data_task_runtime_info[data_task_id];
     auto &my_time_record = data_task_time_records[data_task_id];
 
@@ -1905,6 +1929,7 @@ public:
     taskid_t write_idx = 0;
 
     auto my_dependents = static_info.get_data_task_dependents(data_task_id);
+    compute_task_buffer.resize(my_dependents.size());
 
     for (const auto &dependent_id : my_dependents) {
       bool is_launchable = decrement_compute_task_incomplete(dependent_id);
@@ -1913,6 +1938,7 @@ public:
       SPDLOG_DEBUG("data_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
                    dependent_id, is_launchable, write_idx);
     }
+    compute_task_buffer.resize(write_idx);
 
     return write_idx;
   }
@@ -1922,7 +1948,6 @@ public:
     auto &my_time_record = eviction_task_time_records[eviction_task_id];
     auto &my_info = eviction_task_runtime_info[eviction_task_id];
     my_info.state = static_cast<uint8_t>(TaskState::RESERVED);
-    my_time_record.reserved_time = time;
   }
 
   void eviction_notify_launched(taskid_t eviction_task_id, devid_t source_device_id,

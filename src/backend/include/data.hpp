@@ -172,14 +172,17 @@ struct ValidEventArray {
 
 class LocationManager {
 protected:
-  const devid_t num_devices;
-  const dataid_t num_data;
+  devid_t num_devices{0};
+  dataid_t num_data{0};
   std::vector<uint8_t> locations;
   std::vector<ValidEventArray> valid_intervals;
 
 public:
+
+  LocationManager() = default;
+
   LocationManager(dataid_t num_data, devid_t num_devices)
-      : locations(num_data, 0), num_devices(num_devices), num_data(num_data) {
+      : num_devices(num_devices), num_data(num_data), locations(num_data, 0){
 
 #ifdef SIM_TRACK_LOCATION
     constexpr size_t buffer_initial_size = 100;
@@ -190,6 +193,8 @@ public:
     }
 #endif
   }
+
+  LocationManager(const LocationManager &) = default;
 
   [[nodiscard]] inline bool is_valid(dataid_t data_id, devid_t device_id) const {
     assert(data_id < num_data && device_id < num_devices);
@@ -255,7 +260,7 @@ public:
     return set_valid(data_id, device_id, current_time) == 0;
   }
 
-  uint8_t invalidate_except(dataid_t data_id, devid_t device_id, timecount_t current_time) {
+  inline uint8_t invalidate_except(dataid_t data_id, devid_t device_id, timecount_t current_time) {
     assert(data_id < num_data && device_id < num_devices);
     uint8_t old_status = locations[data_id];
     uint8_t keep_mask = (1 << device_id);
@@ -269,7 +274,7 @@ public:
     return changed_bits;
   }
 
-  uint8_t invalidate_all(dataid_t data_id, timecount_t current_time) {
+  inline uint8_t invalidate_all(dataid_t data_id, timecount_t current_time) {
 
     uint8_t old_status = locations[data_id];
 
@@ -282,7 +287,7 @@ public:
     return changed_bits;
   }
 
-  uint8_t invalidate_on(dataid_t data_id, devid_t device_id, timecount_t current_time) {
+  inline uint8_t invalidate_on(dataid_t data_id, devid_t device_id, timecount_t current_time) {
 
     uint8_t old_status = locations[data_id];
 
@@ -363,7 +368,7 @@ struct MovementStatus {
 class LRU_manager {
 private:
   mem_t evicted_size = 0;
-  std::size_t n_devices_;
+  uint32_t n_devices_{0};
   // For each device:
   //  - a list maintaining LRU (front) → MRU (back)
   //  - a map from data_id → its position in that list
@@ -377,6 +382,9 @@ private:
   mutable DataIDList id_buffer;
 
 public:
+
+  LRU_manager() = default;
+
   // Constructor: initialize for n_devices [0 .. n_devices-1]
   explicit LRU_manager(const Devices &devices)
       : n_devices_(devices.size()), lru_lists_(devices.size()), position_maps_(devices.size()),
@@ -422,6 +430,7 @@ public:
       : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
         position_maps_(other.n_devices_), size_maps_(other.size_maps_), sizes_(other.sizes_),
         max_sizes_(other.max_sizes_), evicted_size(other.evicted_size) {
+    ZoneScoped;
     // Rebuild position_maps_
     for (devid_t dev = 0; dev < n_devices_; ++dev) {
       for (auto it = lru_lists_[dev].begin(); it != lru_lists_[dev].end(); ++it) {
@@ -430,6 +439,7 @@ public:
     }
     id_buffer.reserve(other.id_buffer.capacity());
   }
+
   // invalidate: remove (device_id, data_id); assert if missing
   void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
     assert(device_id >= 0 && device_id < n_devices_);
@@ -487,12 +497,12 @@ public:
 
 class DataManager {
 protected:
-  LocationManager mapped_locations;
-  LocationManager reserved_locations;
-  LocationManager launched_locations;
-  MovementManager movement_manager;
-  LRU_manager lru_manager;
-  bool initialized = false;
+    LocationManager mapped_locations;
+    LocationManager reserved_locations;
+    LocationManager launched_locations;
+    MovementManager movement_manager;
+    LRU_manager lru_manager;
+    bool initialized = false;
 
   static bool check_valid(size_t data_id, const LocationManager &locations, devid_t device_id) {
     return locations.is_valid(data_id, device_id);
@@ -523,16 +533,36 @@ protected:
 
 public:
   std::vector<devid_t> valid_location_buffer;
+
+  DataManager() = default;
+
   DataManager(const Data &data, const Devices &devices)
       : mapped_locations(data.size(), devices.size()),
         reserved_locations(data.size(), devices.size()),
         launched_locations(data.size(), devices.size()), lru_manager(devices) {
   }
 
-  DataManager(const DataManager &o_)
-      : mapped_locations(o_.mapped_locations), reserved_locations(o_.reserved_locations),
-        launched_locations(o_.launched_locations), movement_manager(o_.movement_manager),
-        lru_manager(o_.lru_manager), initialized(o_.initialized) {
+  DataManager(const DataManager &o_) : lru_manager(o_.lru_manager) {
+    ZoneScopedN("Copy DataManager");
+    {
+      ZoneScopedN("Copy Mapped Locations");
+      mapped_locations = o_.mapped_locations;
+    }
+    {
+      ZoneScopedN("Copy Reserved Locations");
+      reserved_locations = o_.reserved_locations;
+    }
+
+    {
+      ZoneScopedN("Copy Launched Locations");
+      launched_locations = o_.launched_locations;
+    }
+
+    {
+      ZoneScopedN("Copy Movement Manager");
+      movement_manager = o_.movement_manager;
+    }
+    initialized = o_.initialized;
   }
 
   void initialize(const Data &data, const Devices &devices, DeviceManager &device_manager) {
@@ -739,8 +769,7 @@ public:
                                 bool write_after_read) {
     auto updated_devices_launched =
         evict_on_update(data_id, device_id, launched_locations, current_time);
-    auto updated_devices_reserved =
-        evict_on_update(data_id, device_id, reserved_locations, current_time);
+    evict_on_update(data_id, device_id, reserved_locations, current_time);
 
     auto size = data.get_size(data_id);
     const devid_t n_devices = device_manager.n_devices;

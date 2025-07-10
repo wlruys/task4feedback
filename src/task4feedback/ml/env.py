@@ -43,7 +43,7 @@ class RuntimeEnv(EnvBase):
         priority_seed=0,
         location_randomness=1,
         location_list: Optional[List[int]] = None,
-        max_samples_per_iter: int = 3840,
+        max_samples_per_iter: int = 0,random_start: bool = True
     ):
         super().__init__(device=device)
         # print("Initializing environment")
@@ -52,7 +52,8 @@ class RuntimeEnv(EnvBase):
         self.change_duration = change_duration
         self.change_locations = change_locations
         self.location_seed = location_seed
-        self.location_randomness = location_randomness
+        self.location_randomness = location_randomness 
+        self.random_start = random_start
         if location_list is None:
             location_list = [
                 i for i in range(int(only_gpu), len(simulator_factory.input.system))
@@ -151,7 +152,7 @@ class RuntimeEnv(EnvBase):
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
-            print("Calculating EFT baseline...")
+            #print("Calculating EFT baseline...")
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
@@ -160,7 +161,7 @@ class RuntimeEnv(EnvBase):
             assert final_state == fastsim.ExecutionState.COMPLETE, (
                 f"Baseline returned unexpected final state: {final_state}"
             )
-            print("EFT baseline calculated.")
+            #cprint("EFT baseline calculated.")
             return simulator_copy.time
         return self.baseline_time
 
@@ -279,6 +280,18 @@ class RuntimeEnv(EnvBase):
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
+        
+        if self.resets < 2 and self.random_start:
+            # Run the simulator for a random number of steps
+            n_steps = random.randint(1, len(self.simulator_factory.input.graph) - 1)
+            print("Running simulator for a random number of steps to offset each environment.")
+            self.simulator.disable_external_mapper()
+            self.simulator.set_steps(
+                n_steps
+            )
+            self.simulator.run()
+            self.simulator.enable_external_mapper()
+            
 
         simulator_status = self.simulator.run_until_external_mapping()
         assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
@@ -475,12 +488,12 @@ class IncrementalEFT(RuntimeEnv):
         sim_ml = self.simulator.copy()
         sim_ml.disable_external_mapper()
         end_time = perf_counter()
-        print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
-        print(f"Current sim time {sim_ml.time}", flush=True)
+        #print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
+        #print(f"Current sim time {sim_ml.time}", flush=True)
         start_time = perf_counter()
         sim_ml.run()
         end_time = perf_counter()
-        print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
+        #print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
 
         ml_time = sim_ml.time
 
@@ -508,6 +521,93 @@ class IncrementalEFT(RuntimeEnv):
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
+class DelayIncrementalEFT(IncrementalEFT):
+    
+    def __init__(
+        self,
+        simulator_factory: SimulatorFactory,
+        seed: int = 0,
+        device="cpu",
+        baseline_time=4000 * 5,
+        change_priority=False,
+        change_duration=False,
+        change_locations=False,
+        only_gpu=True,
+        location_seed=0,
+        priority_seed=0,
+        location_randomness=1,
+        location_list: Optional[List[int]] = None,
+        max_samples_per_iter: int = 0,
+        delay: int = 10,
+    ):
+        super().__init__(simulator_factory=simulator_factory,
+                         seed=seed,
+                         device=device,
+                         baseline_time=baseline_time,
+                         change_priority=change_priority,
+                         change_duration=change_duration,
+                         change_locations=change_locations,
+                         only_gpu=only_gpu,
+                         location_seed=location_seed,
+                         priority_seed=priority_seed,
+                         location_randomness=location_randomness,
+                         location_list=location_list,
+                         max_samples_per_iter=max_samples_per_iter)
+        self.delay = delay
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+            self.eft_time = self.EFT_baseline
+
+        
+        flag = (self.step_count + 1) % self.delay
+        
+        self.step_count += 1
+
+        self.simulator.get_mappable_candidates(self.candidate_workspace)
+        chosen_device = td[self.action_n].item() + int(self.only_gpu)
+        global_task_id = self.candidate_workspace[0].item()
+        mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
+        
+        
+        if flag == 0:
+            sim_ml = self.simulator.copy()
+            sim_ml.disable_external_mapper()
+            sim_ml.run()
+            ml_time = sim_ml.time
+            reward = (self.eft_time - ml_time) / self.size()
+            self.eft_time = ml_time
+        else:
+            reward = 0.0
+            
+        simulator_status = self.simulator.run_until_external_mapping()
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        if done:
+            time = obs[self.time_key][0].item()
+            improvement = (self.EFT_baseline - time) / self.EFT_baseline
+            obs.set_at_(self.improvement_key, improvement, 0)
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
+            )
+
+        buf = td.empty()
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
+        buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
+        return buf
 
 # class kHopEFTIncrementalEnv(RuntimeEnv):
 #     def _step(self, td: TensorDict) -> TensorDict:

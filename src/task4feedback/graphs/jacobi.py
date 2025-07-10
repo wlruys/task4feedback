@@ -238,6 +238,8 @@ class JacobiGraph(ComputeDataGraph):
         self._build_graph()
         if variant is not None:
             self.apply_variant(variant)
+        else:
+            self.apply_variant(JacobiVariant)
         self.finalize()
 
     def randomize_locations(

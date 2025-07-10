@@ -22,7 +22,7 @@ public:
 
   Device() = default;
   Device(devid_t id, DeviceType arch, copy_t max_copy, vcu_t vcu, mem_t mem)
-      : id(id), arch(arch), max_resources(vcu, mem), max_copy(max_copy) {
+      : id(id), max_resources(vcu, mem), max_copy(max_copy), arch(arch) {
   }
 
   [[nodiscard]] mem_t get_mem() const {
@@ -381,12 +381,14 @@ public:
   DeviceResources mapped;
   DeviceResources reserved;
   DeviceResources launched;
-  std::size_t n_devices{};
+  std::size_t n_devices{0};
   bool initialized = false;
 
+  DeviceManager() = default;
+
   DeviceManager(const Devices &devices_)
-      : n_devices{devices_.size()}, mapped(devices_.size()), reserved(devices_.size()),
-        launched(devices_.size()) {};
+      : mapped(devices_.size()), reserved(devices_.size()), launched(devices_.size()),
+        n_devices{devices_.size()}{};
 
   DeviceManager(const DeviceManager &other) = default;
 

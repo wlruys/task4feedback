@@ -24,6 +24,64 @@ def compute_advantage(td: TensorDict):
         td["advantage"] = cumulative_rewards - state_values
     return td
 
+def redistribute_rewards_uniform(td: TensorDict) -> TensorDict:
+    """
+    Redistribute each non‐zero (bagged) reward uniformly across the
+    preceding zero‐reward steps of the same trajectory.
+    """
+    # [workers, time_dim, 1]
+    rewards = td.get(("next", "reward"))
+    # [workers, time_dim]
+    traj_ids = td.get(("collector", "traj_ids"))
+    device = rewards.device
+
+    W, T, _ = rewards.shape
+    new_rewards = torch.zeros_like(rewards, dtype=torch.float32, device=device)
+
+    with torch.no_grad():
+        for w in range(W):
+            # shape: [time_dim]
+            local_r = rewards[w, :, 0]
+            local_traj = traj_ids[w]
+            buffer = torch.zeros_like(local_r, dtype=torch.float32, device=device)
+
+            for traj in local_traj.unique():
+                mask = local_traj == traj
+                if not mask.any():
+                    continue
+
+                # pull out just this trajectory’s rewards
+                traj_r = local_r[mask]  # shape: [n_steps_for_traj]
+
+                # reverse so that we can group “backwards from each nonzero”
+                r_rev = traj_r.flip(0)
+                # group‐id increases by 1 at each nonzero
+                groups = torch.cumsum(r_rev != 0, dim=0)
+                # number of distinct groups = max_group_id + 1
+                n_groups = int(groups.max().item()) + 1
+
+                # accumulate sums and counts per group
+                sum_per_group = torch.zeros(n_groups, device=device)
+                cnt_per_group = torch.zeros(n_groups, device=device)
+                sum_per_group.scatter_add_(0, groups, r_rev)
+                cnt_per_group.scatter_add_(0, groups, torch.ones_like(r_rev))
+
+                # compute the uniform share for each reversed position
+                avg_per_group = sum_per_group / cnt_per_group
+                share_rev = avg_per_group[groups]  # shape: same as r_rev
+
+                # flip back to original order
+                share = share_rev.flip(0)
+                # write into the buffer at the masked positions
+                buffer[mask] = share
+
+            # assign back into the [workers, time_dim, 1] tensor
+            new_rewards[w, :, 0] = buffer
+
+        # overwrite the tensordict’s reward field
+        td.set(("next", "reward"), new_rewards)
+
+    return td
 
 # def compute_gae(tensordict_data, gamma=1, lam=0.99):
 #     with torch.no_grad():

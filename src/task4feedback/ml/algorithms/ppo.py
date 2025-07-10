@@ -11,8 +11,9 @@ from torchrl.data.replay_buffers import (
 from torchrl.data.replay_buffers.storages import LazyTensorStorage, TensorStorage
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.objectives import ClipPPOLoss
-from torchrl.objectives.value import GAE
+from torchrl.objectives.value import GAE, VTrace
 from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
+from torchrl.objectives.utils import ValueEstimators
 from torchrl.envs import TransformedEnv
 import copy
 from tensordict import TensorDict
@@ -49,8 +50,8 @@ class PPOConfig(AlgorithmConfig):
     collect_device: str = "cpu"
     update_device: str = "cpu"
     storing_device: str = "cpu"
-    gae_gamma: float = 1
-    gae_lmbda: float = 0.99
+    gamma: float = 1
+    lmbda: float = 0.99
     normalize_advantage: bool = False
     value_norm: str = "l2"
     compile_policy: bool = False
@@ -63,6 +64,8 @@ class PPOConfig(AlgorithmConfig):
     )
     slice_len: int = 16  # length of slices for LSTM, only used if sample_slices is True
     rollout_steps: int = 250
+    advantage_type: str = "gae"  # "gae" or "vtrace"
+    bagged_policy: str = "uniform"
 
 
 def run_ppo(
@@ -93,15 +96,27 @@ def run_ppo(
         max_tasks = ppo_config.rollout_steps
 
     max_states_per_collection = ppo_config.graphs_per_collection * max_tasks
+    
+    
+    if ppo_config.advantage_type == "gae":
+        training.info("Using GAE for advantage estimation")
 
-    advantage_module = GAE(
-        gamma=ppo_config.gae_gamma,
-        lmbda=ppo_config.gae_lmbda,
-        value_network=actor_critic_module.critic,
-        average_gae=False,
-        device=ppo_config.update_device,
-        vectorized=(False if ppo_config.compile_advantage else True),
-    )
+        advantage_module = GAE(
+            gamma=ppo_config.gamma,
+            lmbda=ppo_config.lmbda,
+            value_network=actor_critic_module.critic,
+            average_gae=False,
+            device=ppo_config.update_device,
+            vectorized=(False if ppo_config.compile_advantage else True),
+        )
+    elif ppo_config.advantage_type == "vtrace":
+        training.info("Using VTrace for advantage estimation")
+        advantage_module = VTrace(
+            gamma=ppo_config.gamma,
+            value_network=actor_critic_module.critic,
+            actor_network=actor_critic_module.actor,
+            device=ppo_config.update_device,
+        )
 
     replay_buffer = TensorDictReplayBuffer(
         storage=LazyTensorStorage(
@@ -169,6 +184,11 @@ def run_ppo(
         clip_value=ppo_config.clip_vloss,
         normalize_advantage=ppo_config.normalize_advantage,
     )
+
+    if ppo_config.advantage_type == "gae":
+        loss_module.make_value_estimator(ValueEstimators.GAE)
+    elif ppo_config.advantage_type == "vtrace":
+        loss_module.make_value_estimator(ValueEstimators.VTrace)
 
     # optimizer = instantiate(opt_cfg, params=loss_module.parameters())
     optimizer = torch.optim.Adam(
@@ -261,6 +281,9 @@ def run_ppo(
 
         adv_start_t = time.perf_counter()
         with torch.no_grad():
+            # Redistribute Rewards
+            if ppo_config.bagged_policy == "uniform":
+                redistribute_rewards_uniform(tensordict_data)
             # Compute advantages
             advantage_module(tensordict_data)
         adv_end_t = time.perf_counter()
@@ -378,12 +401,25 @@ def run_ppo_lstm(
         max_tasks = ppo_config.rollout_steps
 
     max_states_per_collection = ppo_config.graphs_per_collection * max_tasks
+    
+    if ppo_config.advantage_type == "gae":
+        training.info("Using GAE for advantage estimation")
+        advantage_module = GAE(
+            gamma=ppo_config.gamma,
+            lmbda=ppo_config.lmbda,
+            value_network=actor_critic_module.critic,
+            average_gae=False,
+            device=ppo_config.update_device,
+            deactivate_vmap=True,
+        )
 
-    advantage_module = GAE(
-        gamma=ppo_config.gae_gamma,
-        lmbda=ppo_config.gae_lmbda,
-        value_network=actor_critic_module.critic,
-        average_gae=False,
+    elif ppo_config.advantage_type == "vtrace":
+        training.info("Using VTrace for advantage estimation")
+        advantage_module = VTrace(
+            gamma=ppo_config.gamma,
+            lmbda=ppo_config.lmbda,
+            value_network=actor_critic_module.critic,
+            actor_network=actor_critic_module.actor,
         device=ppo_config.update_device,
         deactivate_vmap=True,
     )
@@ -466,6 +502,11 @@ def run_ppo_lstm(
         clip_value=ppo_config.clip_vloss,
         normalize_advantage=ppo_config.normalize_advantage,
     )
+    
+    if ppo_config.advantage_type == "gae":
+        loss_module.make_value_estimator(ValueEstimators.GAE)
+    elif ppo_config.advantage_type == "vtrace":
+        loss_module.make_value_estimator(ValueEstimators.VTrace)
 
     # optimizer = instantiate(opt_cfg, params=loss_module.parameters())
     optimizer = torch.optim.AdamW(

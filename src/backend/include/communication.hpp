@@ -159,6 +159,9 @@ class CommunicationManager {
   }
 
 public:
+
+  CommunicationManager() = default;
+
   CommunicationManager(const Topology &topology_, const Devices &devices_)
       : num_devices(devices_.size()), device_usage(num_devices),
         link_usage(num_devices * num_devices) {
