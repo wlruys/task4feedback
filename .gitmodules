@@ -1,6 +1,0 @@
-[submodule "external/doozer"]
-	path = external/doozer
-	url = https://github.com/wlruys/doozer.git
-[submodule "external/tabulate"]
-	path = external/tabulate
-	url = https://github.com/p-ranav/tabulate.git
