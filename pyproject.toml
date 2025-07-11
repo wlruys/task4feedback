@@ -65,7 +65,7 @@ wheel.expand-macos-universal-tags = true
 
 
 [tool.scikit-build.cmake.define]
-SIM_RECORD = { env = "SIM_RECORD", default = "ON" }
+SIM_RECORD = { env = "SIM_RECORD", default = "OFF" }
 SPDLOG_ACTIVE_LEVEL = { env = "SPDLOG_ACTIVE_LEVEL", default = "SPDLOG_LEVEL_CRITICAL" }
 ENABLE_NATIVE_TUNING = "ON"
 
