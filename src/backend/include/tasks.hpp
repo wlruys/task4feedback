@@ -1192,19 +1192,6 @@ public:
     return get_compute_task_variant_mask(compute_task_id);
   }
 
-  // TODO(wlr): Deprecate this to avoid allocation. Loop over mask direcly where this is used.
-  [[nodiscard]] std::vector<DeviceType>
-  get_supported_architectures(taskid_t compute_task_id) const {
-    std::vector<DeviceType> supported_architectures;
-    auto &info = compute_task_variant_info[compute_task_id];
-    for (int8_t i = 0; i < num_device_types; ++i) {
-      if ((info.mask & (1 << i)) != 0) {
-        supported_architectures.push_back(static_cast<DeviceType>(i));
-      }
-    }
-    return supported_architectures;
-  }
-
   [[nodiscard]] bool is_architecture_supported(taskid_t compute_task_id, DeviceType arch) const {
     auto &info = compute_task_variant_info[compute_task_id];
     uint8_t arch_type = static_cast<uint8_t>(arch);
