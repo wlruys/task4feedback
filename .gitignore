@@ -6,6 +6,10 @@ __pycache__/
 outputs/
 run.txt
 .aim
+wandb/
+logs/
+log/
+.wandb/
 multirun
 # C extensions
 *.so
