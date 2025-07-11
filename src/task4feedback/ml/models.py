@@ -3572,6 +3572,12 @@ class UNetEncoder(nn.Module):
             nn.ReLU(inplace=True),
         )
         self.pool = nn.MaxPool2d(2, 2)
+
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(base_filters * 4, base_filters * 4, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+
         # bottleneck
 
     def forward(self, obs):
@@ -3592,9 +3598,9 @@ class UNetEncoder(nn.Module):
         p2 = self.pool(e2)  # (B, 2f, H/4, W/4)
         # -- third conv block
         e3 = self.enc3(p2)  # (B, 4f, H/4, W/4)
-        b = self.pool(e3)  # (B, 4f, H/8, W/8)
-        # -- pooling is not needed here, we go directly
+        p3 = self.pool(e3)  # (B, 4f, H/8, W/8)
         # -- bottleneck
+        b = self.bottleneck(p3)  # (B, 4f, H/8, W/8)
 
         # flatten b
         b = b.flatten(start_dim=1)  # (B, 4f * H/8 * W/8)
