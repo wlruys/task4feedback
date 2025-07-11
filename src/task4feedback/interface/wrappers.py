@@ -569,7 +569,6 @@ class SimulatorInput:
             transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
         if noise is None:
             noise = NoiseConfig(graph)
-        print("Using noise config:", noise.task_noise)
         self.noise = noise
         self.graph = graph
         self.data = data

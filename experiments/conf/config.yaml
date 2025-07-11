@@ -1,13 +1,18 @@
 # conf/config.yaml
 defaults:
   - graph: static_jacobi
-  - reward: ieft
+  - reward: dieft
   - system: uniform
   - feature: candidate_coordinate
   - network: vector_baseline
   - algorithm: ppo
-  - runtime: default
+  - runtime: batch
   - wandb: default
   - logging: default
   - lr_scheduler: none 
   - optimizer: adamw
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: train.GitInfo

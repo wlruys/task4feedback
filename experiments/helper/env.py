@@ -57,18 +57,10 @@ def make_env(
     d = graph.get_blocks()
     m = graph
 
-    # m.finalize_tasks()
-
-
     transition_conditions = create_conditions(cfg)
     runtime_env_t = create_runtime_reward(cfg)
     observer_factory, graph_spec = create_observer_factory(cfg)
-
-    print("Running make_env", flush=True)
     input = SimulatorInput(m, d, s, transition_conditions=transition_conditions)
-    
-    print(runtime_env_t, flush=True)
-    print(type(runtime_env_t), flush=True)
 
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),

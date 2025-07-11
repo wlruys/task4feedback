@@ -14,14 +14,13 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ---- project options -------------------------------------------------------
 option(ENABLE_ASAN          "Compile with AddressSanitizer"          OFF)
-option(ENABLE_MIMALLOC      "Use mimalloc memory allocator"          ON)
+option(ENABLE_MIMALLOC      "Use mimalloc memory allocator"          OFF)
 option(ENABLE_NATIVE_TUNING "Add -march=native / -mtune=native"      ON)
 option(PGO_MODE "PGO mode: Generate / Use / None"       "None")
-option(SIM_TRACK_RESOURCES  "Enable resource-usage logging"  OFF)
-option(SIM_TRACK_LOCATION   "Enable data-location logging"   OFF)
+option(SIM_RECORD  "Enable resource-usage and data-location logging"  OFF)
 option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
-option(ENABLE_TRACY         "Enable Tracy profiler support"   ON)
-option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" ON)
+option(ENABLE_TRACY         "Enable Tracy profiler support"   OFF)
+option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" OFF)
 
 
 if(ENABLE_CCACHE)
@@ -46,10 +45,6 @@ FetchContent_Declare(
     GIT_PROGRESS   TRUE
 )
 FetchContent_MakeAvailable(ankerl_unordered_dense)
-
-
-
-
 
 
 if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)  # Don't use with AddressSanitizer
@@ -172,11 +167,6 @@ else()
 
   FetchContent_MakeAvailable(spdlog)
 endif()
-
-
-# add_compile_options(-Wextra -Wall)
-# add_compile_options(-fsanitize=memory -fsanitize-memory-track-origins=2)
-# add_link_options(-fsanitize=memory)
 
 
 if(PGO_MODE STREQUAL "Generate")

@@ -17,11 +17,7 @@ def cfg_hash(cfg: DictConfig, *, n=8) -> str:
     as_json = json.dumps(OmegaConf.to_container(cfg, resolve=True), sort_keys=True)
     return hashlib.blake2b(as_json.encode(), digest_size=n).hexdigest()
 
-
 def make_run_name(cfg: DictConfig) -> str:
-    """
-    Build a wandb‐friendly run name from a Hydra DictConfig.
-    """
     slug = slugify(
         [
             cfg.get("graph", {}).get("name", ""),

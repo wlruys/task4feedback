@@ -727,7 +727,6 @@ class GraphRegistry:
     def register(
         cls, func: Callable[[Geometry, GraphConfig], TaskGraph], config: Type[GraphConfig]
     ):
-        print(f"Registering graph type: {config}")
         cls._registry[config] = func
         return func
 

@@ -49,9 +49,6 @@ def make_graph_function(
         if cfg.init.gpu_only:
             partition = [x + 1 for x in partition]  # offset by 1 to ignore cpu
             location_list = [i + 1 for i in range(0, cfg.init.nparts)]
-
-            print(f"Partitioning: {partition}")
-            print(f"Location list: {location_list}")
         else:
             location_list = [i for i in range(cfg.init.nparts + 1)]  # include cpu as 0
 

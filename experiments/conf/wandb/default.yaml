@@ -1,4 +1,4 @@
 project: dynamic_jac_lstm
 name: default
 enabled: true
-dir: /home/wlruys/workspace/scheduling/logs
+dir: /home/wlruys/ws/scheduling/logs

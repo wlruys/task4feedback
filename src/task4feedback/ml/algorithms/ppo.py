@@ -67,14 +67,95 @@ class PPOConfig(AlgorithmConfig):
     advantage_type: str = "gae"  # "gae" or "vtrace"
     bagged_policy: str = "uniform"
 
+def should_log(
+    n_updates: int,
+    logging_config: Optional[LoggingConfig],
+) -> bool:
+    """Check if we should log based on the current update count and logging configuration."""
+    if logging_config is None:
+        return False
+    return n_updates % logging_config.stats_interval == 0
+
+def log_training_metrics(
+    flattened_data: TensorDict,
+    tensordict_data: TensorDict,
+    loss: Dict[str, torch.Tensor],
+    loss_module: ClipPPOLoss,
+    optimizer: torch.optim.Optimizer,
+    n_updates: int,
+    i: int,
+    n_samples: int,
+) -> None:
+    """Log training metrics to wandb."""
+    with torch.no_grad():
+        rewards = flattened_data["next", "reward"]
+        improvements = flattened_data["next", "observation", "aux", "improvement"]
+        valid_improvement_mask = torch.isfinite(improvements) & (improvements > -100)
+        valid_improvements = improvements[valid_improvement_mask]
+
+        # Calculate improvement metrics
+        if valid_improvements.numel() > 0:
+            avg_improvement = valid_improvements.mean().item()
+            max_improvement = valid_improvements.max().item()
+            min_improvement = valid_improvements.min().item()
+            std_improvement = valid_improvements.std().item()
+
+        # Calculate reward metrics
+        if rewards.numel() > 0:
+            avg_reward = rewards.mean().item()
+            std_reward = rewards.std().item()
+
+        # Calculate advantage and value target metrics
+        advantage_mean = tensordict_data["advantage"].mean().item()
+        advantage_std = tensordict_data["advantage"].std().item()
+        value_target_mean = tensordict_data["value_target"].mean().item()
+        value_target_std = tensordict_data["value_target"].std().item()
+
+        # Get gradient and parameter norms
+        post_clip_norms = log_parameter_and_gradient_norms(loss_module)
+
+        # Base log payload
+        log_payload = {
+            **post_clip_norms,
+            "batch/n_updates": n_updates,
+            "batch/n_collections": i + 1,
+            "batch/avg_reward": avg_reward,
+            "batch/std_reward": std_reward,
+            "batch/n_samples": n_samples,
+            "batch/policy_loss": loss["loss_objective"].item(),
+            "batch/critic_loss": loss["loss_critic"].item(),
+            "batch/entropy_loss": loss["loss_entropy"].item(),
+            "batch/entropy": loss["entropy"].item(),
+            "batch/kl_approx": loss["kl_approx"].item(),
+            "batch/clip_fraction": loss["clip_fraction"].item(),
+            "batch/ESS": loss["ESS"].item(),
+            "batch/advantage_mean": advantage_mean,
+            "batch/advantage_std": advantage_std,
+            "batch/mean_value_target": value_target_mean,
+            "batch/std_value_target": value_target_std,
+            "batch/lr": optimizer.param_groups[0]["lr"],
+        }
+
+        # Add improvement metrics if available
+        if valid_improvements.numel() > 0:
+            log_payload.update(
+                {
+                    "batch/mean_improvement": avg_improvement,
+                    "batch/std_improvement": std_improvement,
+                    "batch/max_improvement": max_improvement,
+                    "batch/min_improvement": min_improvement,
+                }
+            )
+
+        wandb.log(log_payload)
 
 def run_ppo(
     actor_critic_module: ActorCriticModule,
     env_constructors: List[Callable[[], EnvBase]],
     ppo_config: PPOConfig,
     logging_config: Optional[LoggingConfig],
-    opt_cfg: Optional[DictConfig] = None,
-    lr_cfg: Optional[DictConfig] = None,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None
 ):
     if logging_config is not None and (
         logging_frequency := logging_config.stats_interval
@@ -90,7 +171,6 @@ def run_ppo(
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
 
     max_tasks = max([make_env().size() for make_env in env_constructors])
-    print(f"Max tasks in env constructors: {max_tasks}")
 
     if ppo_config.rollout_steps > 0:
         max_tasks = ppo_config.rollout_steps
@@ -100,7 +180,6 @@ def run_ppo(
     
     if ppo_config.advantage_type == "gae":
         training.info("Using GAE for advantage estimation")
-
         advantage_module = GAE(
             gamma=ppo_config.gamma,
             lmbda=ppo_config.lmbda,
@@ -133,8 +212,6 @@ def run_ppo(
             env_constructors[i % len(env_constructors)]
             for i in range(ppo_config.workers)
         ]
-
-    print(f"Creating collector with {ppo_config.workers} workers")
 
     if ppo_config.collector == "multi_sync":
         collector = MultiSyncDataCollector(
@@ -190,22 +267,20 @@ def run_ppo(
     elif ppo_config.advantage_type == "vtrace":
         loss_module.make_value_estimator(ValueEstimators.VTrace)
 
-    # optimizer = instantiate(opt_cfg, params=loss_module.parameters())
-    optimizer = torch.optim.Adam(
-        loss_module.parameters(),
-        lr=opt_cfg.lr if opt_cfg is not None else 3e-4,
-        eps=opt_cfg.eps if opt_cfg is not None else 1e-5,
-    )
+    if optimizer is None:
+        optimizer = torch.optim.Adam(loss_module.parameters())
+    else:
+        optimizer = optimizer(loss_module.parameters())
+    training.info(f"Using optimizer: {optimizer}")
+
+    if lr_scheduler is not None:
+        lr_scheduler = lr_scheduler(optimizer)
+        training.info(f"Using learning rate scheduler: {lr_scheduler}")
 
     loss_module = loss_module.to(ppo_config.update_device)
     advantage_module = advantage_module.to(ppo_config.update_device)
 
-    if lr_cfg is not None:
-        lr_scheduler = instantiate(lr_cfg, optimizer=optimizer)
-    else:
-        lr_scheduler = None
-
-    def update(batch, i, j, k):
+    def update(batch, loss_module, optimizer,ppo_config):
         loss_vals = loss_module(batch)
         loss_value = (
             loss_vals["loss_objective"]
@@ -221,10 +296,7 @@ def run_ppo(
         )
 
         optimizer.step()
-
-        if lr_scheduler is not None:
-            lr_scheduler.step()
-
+    
         return loss_vals
 
     if ppo_config.compile_advantage:
@@ -238,7 +310,11 @@ def run_ppo(
     states_per_collection = min(
         ppo_config.states_per_collection, max_states_per_collection
     )
-    n_batch = states_per_collection // ppo_config.minibatch_size
+    n_batch = max(1, states_per_collection // ppo_config.minibatch_size)
+    if ppo_config.minibatch_size > states_per_collection:
+        training.warning(
+            f"Minibatch size <{ppo_config.minibatch_size}> is larger than states per collection <{states_per_collection}>. "
+        )
 
     training.info(
         f"Starting PPO training with {ppo_config.num_collections} collections, "
@@ -268,16 +344,13 @@ def run_ppo(
 
         training.info(
             f"Collection {i + 1}/{ppo_config.num_collections}, "
-            f"Collections/s: {updates_per_second:.2f}",
+            f"Collections/s: {updates_per_second:.2f}, "
+            f"ms/Update: {seconds_per_update * 1000:.2f}"
         )
-
-        print("ms/Update", seconds_per_update * 1000)
 
         tensordict_data = tensordict_data.to(
             ppo_config.update_device, non_blocking=True
         )
-
-        print(f"Processing collection {i + 1} with {tensordict_data.shape} shape")
 
         adv_start_t = time.perf_counter()
         with torch.no_grad():
@@ -291,7 +364,8 @@ def run_ppo(
         training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")
 
         flattened_data = tensordict_data.reshape(-1)
-        n_samples += flattened_data.shape[0]
+        samples_in_collection = flattened_data.shape[0]
+        n_samples += samples_in_collection
 
         replay_buffer.extend(flattened_data)
 
@@ -300,67 +374,20 @@ def run_ppo(
             for k in range(n_batch):
                 batch = replay_buffer.sample(ppo_config.minibatch_size)
                 batch.to(ppo_config.update_device, non_blocking=True)
-                loss = update(batch, i, j, k)
+                loss = update(batch, loss_module, optimizer, ppo_config)
 
-                if (
-                    n_updates % logging_config.stats_interval == 0
-                    and logging_config is not None
-                ):
-                    with torch.no_grad():
-                        non_zero_rewards = flattened_data["next", "reward"]
-                        improvements = flattened_data[
-                            "next", "observation", "aux", "improvement"
-                        ]
-                        mask = improvements > -100
-                        filtered_improvements = improvements[mask]
-
-                        if filtered_improvements.numel() > 0:
-                            avg_improvement = filtered_improvements.mean()
-                        else:
-                            avg_improvement = torch.tensor(
-                                0.0, device=ppo_config.update_device
-                            )
-
-                        if len(non_zero_rewards) > 0:
-                            avg_non_zero_reward = non_zero_rewards.mean().item()
-                            std_rewards = non_zero_rewards.std().item()
-                        else:
-                            avg_non_zero_reward = 0.0
-                            std_rewards = 0.0
-
-                        post_clip_norms = log_parameter_and_gradient_norms(loss_module)
-                        wandb.log(
-                            {
-                                **post_clip_norms,
-                                "batch/n_updates": n_updates,
-                                "batch/n_collections": i + 1,
-                                "batch/mean_reward": avg_non_zero_reward,
-                                "batch/std_reward": std_rewards,
-                                "batch/improvement": avg_improvement.item(),
-                                "batch/n_samples": n_samples,
-                                "batch/policy_loss": loss["loss_objective"].item(),
-                                "batch/critic_loss": loss["loss_critic"].item(),
-                                "batch/entropy_loss": loss["loss_entropy"].item(),
-                                "batch/entropy": loss["entropy"].item(),
-                                "batch/kl_approx": loss["kl_approx"].item(),
-                                "batch/clip_fraction": loss["clip_fraction"].item(),
-                                "batch/ESS": loss["ESS"].item(),
-                                "batch/advantage_mean": tensordict_data["advantage"]
-                                .mean()
-                                .item(),
-                                "batch/advantage_std": tensordict_data["advantage"]
-                                .std()
-                                .item(),
-                                "batch/mean_return": tensordict_data["value_target"]
-                                .mean()
-                                .item(),
-                                "batch/std_return": tensordict_data["value_target"]
-                                .std()
-                                .item(),
-                                "batch/mean_improvement": filtered_improvements.mean().item(),
-                                "batch/std_improvement": filtered_improvements.std().item(),
-                            },
-                        )
+                if should_log(n_updates, logging_config):
+                    log_training_metrics(
+                        flattened_data,
+                        tensordict_data,
+                        loss,
+                        loss_module,
+                        optimizer,
+                        n_updates,
+                        i,
+                        n_samples,
+                    )
+                    
                 n_updates += 1
 
             collector.update_policy_weights_(
@@ -371,6 +398,9 @@ def run_ppo(
         update_end_t = time.perf_counter()
         update_elapsed_time = update_end_t - update_start_t
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
+
+        if lr_scheduler is not None:
+            lr_scheduler.step()
 
 
 def run_ppo_lstm(
@@ -509,11 +539,15 @@ def run_ppo_lstm(
         loss_module.make_value_estimator(ValueEstimators.VTrace)
 
     # optimizer = instantiate(opt_cfg, params=loss_module.parameters())
-    optimizer = torch.optim.AdamW(
-        loss_module.parameters(),
-        lr=opt_cfg.lr if opt_cfg is not None else 3e-4,
-        eps=opt_cfg.eps if opt_cfg is not None else 1e-5,
-    )
+    # optimizer = torch.optim.AdamW(
+    #     loss_module.parameters(),
+    #     lr=opt_cfg.lr if opt_cfg is not None else 3e-4,
+    #     eps=opt_cfg.eps if opt_cfg is not None else 1e-5,
+    # )
+    
+    optimizer = optimizer(loss_module.parameters())
+    
+    print(f"Using optimizer: {optimizer}")
 
     loss_module = loss_module.to(ppo_config.update_device)
     advantage_module = advantage_module.to(ppo_config.update_device)

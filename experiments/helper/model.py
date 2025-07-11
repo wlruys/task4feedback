@@ -44,8 +44,6 @@ def create_actor_critic_models(
         _recursive_=False,
     )
 
-    # remove "add_progress" key from critic_layer config
-    critic_layer
     value_output_module = instantiate(
         critic_layer,
         input_dim=critic_state_module.output_dim,

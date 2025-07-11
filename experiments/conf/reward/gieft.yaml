@@ -5,3 +5,4 @@ flip: True
 clip_total: False
 clip_individual: False
 binary: False
+random_start: true
