@@ -26,8 +26,9 @@ public:
         lru_ids_(other.lru_ids_) {
     for (devid_t d = 0; d < num_devices_; ++d) {
       nodes_[d] = other.nodes_[d];
+      maps_[d].reserve(other.maps_[d].size());
       for (auto it = nodes_[d].begin(); it != nodes_[d].end(); ++it) {
-        maps_[d][it->id] = it;
+        maps_[d].emplace(it->id, it);
       }
     }
   }
@@ -100,14 +101,14 @@ public:
 
 private:
   struct Node {
+    mem_t size;
     dataid_t id;
     int in_use;
-    mem_t size;
   };
 
-  devid_t num_devices_;
   std::vector<std::list<Node>> nodes_;
   std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<Node>::iterator>> maps_;
   std::vector<DataIDList> lru_ids_;
   mem_t evictable_size_ = 0;
+  devid_t num_devices_;
 };

@@ -272,7 +272,7 @@ protected:
 
 public:
   Devices() = default;
-  Devices(std::size_t n_devices) {
+  Devices(devid_t n_devices) {
     resize(n_devices);
   }
 

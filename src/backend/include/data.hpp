@@ -442,6 +442,7 @@ public:
     ZoneScoped;
     // Rebuild position_maps_
     for (devid_t dev = 0; dev < n_devices_; ++dev) {
+      position_maps_[dev].reserve(other.position_maps_[dev].size());
       for (auto it = lru_lists_[dev].begin(); it != lru_lists_[dev].end(); ++it) {
         position_maps_[dev][*it] = it;
       }
