@@ -1,6 +1,6 @@
 [project]
 name = "task4feedback"
-version = "0.2.0"
+version = "0.2.1"
 authors = [
     { name = "William Ruys", email = "will.ruys@gmail.com" },
     { name = "Jaeyoung Park", email = "jaeyoung@utexas.edu" },
@@ -95,6 +95,17 @@ inherit.cmake.define = "append"
 cmake.build-type = "Debug"
 cmake.define.ENABLE_NATIVE_TUNING = "OFF"
 
+[[tool.scikit-build.overrides]]
+if.env.CMAKE_BUILD_TYPE = "Release"
+inherit.cmake.define = "append"
+cmake.build-type = "Release"
+cmake.define.ENABLE_NATIVE_TUNING = "ON"
+
+[[tool.scikit-build.overrides]]
+if.env.CMAKE_BUILD_TYPE = "RelWithDebInfo"
+inherit.cmake.define = "append"
+cmake.build-type = "RelWithDebInfo"
+cmake.define.ENABLE_NATIVE_TUNING = "OFF"
 
 [tool.ruff]
 target-version = "py312"
