@@ -1,0 +1,15 @@
+defaults:
+  - architecture/vector_state_net@layers.state
+  - architecture/output_head@layers.actor
+  - architecture/output_head@layers.critic
+
+layers:
+  state:
+    hidden_channels: []
+  actor:
+    hidden_channels: 128
+  critic:
+    hidden_channels: 128
+
+critic:
+  add_progress: true

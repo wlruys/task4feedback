@@ -1,0 +1,4 @@
+_target_: task4feedback.fastsim2.RangeTransitionConditions
+mapped_reserved_gap: 5
+reserved_launched_gap: 5
+total_in_flight: 16

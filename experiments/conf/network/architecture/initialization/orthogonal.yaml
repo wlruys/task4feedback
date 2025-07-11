@@ -1,0 +1,3 @@
+_target_: task4feedback.ml.models.orthogonal_init
+_partial_: true
+gain: 1.0

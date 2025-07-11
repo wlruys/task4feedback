@@ -1,0 +1,3 @@
+_target_: torch.optim.lr_scheduler.LinearLR
+start_factor: 1.0
+end_factor: 0.0

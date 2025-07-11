@@ -1,0 +1,4 @@
+_target_: torchrl.modules.LSTMModule
+hidden_size: 32
+in_key: "embed"
+out_key: "embed"

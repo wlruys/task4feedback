@@ -1,0 +1,6 @@
+_target_: task4feedback.ml.algorithms.LoggingConfig
+stats_interval: 50
+save_interval: 50
+eval_interval: 100
+dpi: 100
+bitrate: 50

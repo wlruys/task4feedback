@@ -1,0 +1,20 @@
+mesh:
+  _target_: task4feedback.graphs.mesh.generate_quad_mesh
+config:
+  _target_: task4feedback.graphs.jacobi.JacobiConfig
+  interior_size: 1000
+  boundary_interior_ratio: 1
+  randomness: 1
+  L: 1
+  n: 8
+  steps: 30
+  permute_idx: 0
+init:
+  partitioner: metis
+  nparts: 4
+  gpu_only: True
+  randomize: True
+env:
+  change_priority: True
+  change_locations: True
+  seed: 1

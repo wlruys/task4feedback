@@ -1,0 +1,5 @@
+_target_: task4feedback.ml.models.kaiming_init
+_partial_: true
+mode: fan_in
+nonlinearity: leaky_relu
+a: 0.01

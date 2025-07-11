@@ -1,0 +1,13 @@
+# conf/feature/candidate_coordinate.yaml
+observer:
+  _target_: task4feedback.graphs.jacobi.CandidateCoordinateObserverFactory
+  spec:
+    _target_: task4feedback.interface.create_graph_spec
+    max_tasks: 1
+    max_data: 1
+    max_devices: 1
+    max_edges_tasks_tasks: 1
+    max_edges_tasks_data: 1
+    max_edges_data_devices: 1
+    max_edges_tasks_devices: 1
+    max_candidates: 1
