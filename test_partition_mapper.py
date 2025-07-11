@@ -92,7 +92,9 @@ def make_jacobi_env(config: JacobiConfig):
     d = jgraph.get_blocks()
     m = jgraph
     spec = create_graph_spec()
-    input = SimulatorInput(m, d, s)
+    input = SimulatorInput(
+        m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 5, 16)
+    )
     env = IncrementalEFT(
         SimulatorFactory(input, spec, CandidateObserverFactory), device="cpu"
     )
@@ -104,9 +106,9 @@ def make_jacobi_env(config: JacobiConfig):
 
 if __name__ == "__main__":
     jacobi_config = DynamicJacobiConfig(
-        n=8,
+        n=4,
         L=1,
-        steps=60,
+        steps=5,
         randomness=1,
         interior_size=1000,
         boundary_interior_ratio=1,
@@ -121,10 +123,20 @@ if __name__ == "__main__":
         import time
 
         # sim.enable_external_mapper()
-        # sim.disable_external_mapper()
-        # # sim.run()
-        # k = 0
-        # sim.set_steps(80)
+        # sim.set_steps(4)
+        sim.disable_external_mapper()
+        sim.run() 
+        print(f"Final state: {sim.status}")
+        print(f"Final time: {sim.time}")
+        
+        animate_mesh_graph(env, show=True)
+        
+        # for k in range(10):
+        #     start_t = time.perf_counter()
+        #     s = sim.copy()
+        #     end_t = time.perf_counter()
+        #     print(f"Copy completed in (ms) {(end_t - start_t) * 1000:.2f} ms")
+        
         # print(f"Running simulation step {k + 1}")
         # start_t = time.perf_counter()
         # sim.run()
@@ -133,7 +145,7 @@ if __name__ == "__main__":
         #     f"Simulation step {k + 1} completed in (ms) {(end_t - start_t) * 1000:.2f} ms"
         # )
 
-        env.rollout(10000)
+        #env.rollout(10000)
 
         # s = sim.copy()
         # s.start_drain()
