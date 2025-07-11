@@ -261,7 +261,7 @@ protected:
   ankerl::unordered_dense::map<std::string, devid_t> device_name_map;
   ankerl::unordered_dense::map<devid_t, devid_t> global_to_local;
 
-  void resize(std::size_t n_devices) {
+  void resize(devid_t n_devices) {
     devices.resize(n_devices);
     device_names.resize(n_devices);
   }
