@@ -1,6 +1,7 @@
 #include "action.hpp"
 #include "nbh.hpp"
 #include "scheduler.hpp"
+#include "tasks.hpp"
 #include <cstdint>
 
 namespace nb = nanobind;
@@ -15,7 +16,14 @@ void init_scheduler_ext(nb::module_ &m) {
       .def("get_reserving_priority", &SchedulerState::get_reserving_priority, "task_id"_a,
            nb::rv_policy::reference_internal)
       .def("get_launching_priority", &SchedulerState::get_launching_priority, "task_id"_a,
-           nb::rv_policy::reference_internal);
+           nb::rv_policy::reference_internal)
+      .def(
+          "get_task_runtime",
+          [](const SchedulerState &self) -> const auto & { return self.get_task_runtime(); },
+          nb::rv_policy::reference_internal)
+      .def(
+          "get_tasks", [](const SchedulerState &self) -> const auto & { return self.get_tasks(); },
+          nb::rv_policy::reference_internal);
 
   nb::class_<TransitionConditions>(m, "TransitionConditions")
       .def("should_map", &TransitionConditions::should_map)

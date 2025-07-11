@@ -42,6 +42,7 @@ void init_simulator_ext(nb::module_ &m) {
       .def_ro("use_python_mapper", &Simulator::use_python_mapper)
       .def_ro("last_execution_state", &Simulator::last_state)
       .def_ro("data_initialized", &Simulator::data_initialized)
+      .def_ro("events_processed", &Simulator::events_processed)
       .def(nb::init<SchedulerInput &, Mapper &>(), nb::keep_alive<1, 2>(),
            nb::keep_alive<1, 3>()) // Keep input and mapper alive
       .def(nb::init<Simulator &>(), "other"_a)
@@ -58,11 +59,10 @@ void init_simulator_ext(nb::module_ &m) {
       .def("set_mapper", &Simulator::set_mapper, nb::keep_alive<1, 2>()) // Keep mapper alive
       .def("get_state", nb::overload_cast<>(&Simulator::get_state, nb::const_),
            nb::rv_policy::reference_internal)
-      .def("run", &Simulator::run, nb::call_guard<nb::gil_scoped_acquire>())
+      .def("run", &Simulator::run)
       .def("get_current_time", &Simulator::get_current_time)
       .def("get_mappable_candidates",
            [](Simulator &s, TorchInt64Arr1D &arr) {
-             nb::gil_scoped_acquire gil;
              std::span<int64_t> span(arr.data(), arr.size());
              return s.get_mappable_candidates(span);
            })

@@ -42,85 +42,54 @@ class DeviceManager;
 template <typename T> struct ResourceEventArray {
   std::vector<timecount_t> times;
   std::vector<T> resources;
-  std::size_t size;
-};
-
-template <typename T> struct ResourceEvent {
-  timecount_t time = 0;
-  T resource = 0;
-};
-
-template <typename T> class ResourceTracker {
-  std::vector<ResourceEvent<T>> events;
-
-public:
-  ResourceTracker() {
-#ifdef SIM_TRACK_RESOURCES
-    events.reserve(2000);
-#endif // SIM_TRACK_RESOURCES
-  }
 
   void add_set(timecount_t time, T resource) {
-#ifdef SIM_TRACK_RESOURCES
-    events.emplace_back(time, resource);
-#endif // SIM_TRACK_RESOURCES
+    times.push_back(time);
+    resources.push_back(resource);
   }
 
   void add_change(timecount_t time, T resource) {
-#ifdef SIM_TRACK_RESOURCES
-    events.emplace_back(time, resource);
-#endif // SIM_TRACK_RESOURCES
+    times.push_back(time);
+    resources.push_back(resource);
   }
 
-  [[nodiscard]] T get_resource(timecount_t time) const {
+  [[nodiscard]] std::size_t size() const {
+    return times.size();
+  }
+
+  [[nodiscard]] bool empty() const {
+    return times.empty();
+  }
+
+  void clear() {
+    times.clear();
+    resources.clear();
+  }
+
+  [[nodiscard]] timecount_t get_time(std::size_t index) const {
+    assert(index < times.size());
+    return times[index];
+  }
+
+  [[nodiscard]] T get_resource(std::size_t index) const {
+    assert(index < resources.size());
+    return resources[index];
+  }
+
+  [[nodiscard]] T get_resource_at_time(timecount_t time) const {
     // Assume events are sorted access with binary search
-
-#ifndef SIM_TRACK_RESOURCES
-    return 0;
-#endif // SIM_TRACK_RESOURCES
-
-    if (events.empty()) {
+    if (empty()) {
       return 0;
     }
 
-    auto it = std::lower_bound(events.begin(), events.end(), time,
-                               [](const ResourceEvent<T> &e, timecount_t t) { return e.time < t; });
-    if (it == events.end()) {
-      return events.back().resource;
+    auto it = std::lower_bound(times.begin(), times.end(), time);
+    if (it == times.end()) {
+      return resources.back();
     }
-    return it->resource;
-  }
-
-  void reset() {
-    events.clear();
-  }
-
-  ResourceEventArray<T> get_events() const {
-    // Returns a copy of the events
-    ResourceEventArray<T> result;
-
-    result.size = events.size();
-
-    if (result.size == 0) {
-      // If no events, return a single event with time 0 and resource 0
-      result.times.resize(1);
-      result.resources.resize(1);
-      result.times[0] = 0;
-      result.resources[0] = 0;
-      return result;
-    }
-
-    result.times.resize(events.size());
-    result.resources.resize(events.size());
-
-    for (int i = 0; i < events.size(); i++) {
-      result.times[i] = events[i].time;
-      result.resources[i] = events[i].resource;
-    }
-
-    return result;
+    return resources[it - times.begin()];
   }
 };
+
 
 class DeviceResources {
 protected:
@@ -136,13 +105,28 @@ public:
   std::vector<mem_t> mem;
   std::vector<mem_t> mem_max;
 
-  std::vector<ResourceTracker<vcu_t>> vcu_tracker;
-  std::vector<ResourceTracker<mem_t>> mem_tracker;
+  std::vector<ResourceEventArray<vcu_t>> vcu_tracker;
+  std::vector<ResourceEventArray<mem_t>> mem_tracker;
+  bool record{false};
 
   DeviceResources() {};
 
-  DeviceResources(std::size_t n)
+  DeviceResources(devid_t n)
       : vcu(n, 0), mem(n, 0), mem_max(n, MAX_MEM), vcu_tracker(n), mem_tracker(n) {
+  }
+
+  void start_record() {
+    record = true;
+  }
+
+  void stop_record(){
+    record = false;
+    for (auto &tracker : vcu_tracker) {
+      tracker.clear();
+    }
+    for (auto &tracker : mem_tracker) {
+      tracker.clear();
+    }
   }
 
   DeviceResources(const DeviceResources &other) {
@@ -263,14 +247,6 @@ public:
 
   mem_t get_mem_at_time(devid_t id, timecount_t time) const {
     return mem_tracker[id].get_resource(time);
-  }
-
-  ResourceEventArray<vcu_t> get_vcu_events(devid_t id) const {
-    return vcu_tracker[id].get_events();
-  }
-
-  ResourceEventArray<mem_t> get_mem_events(devid_t id) const {
-    return mem_tracker[id].get_events();
   }
 
   friend class DeviceManager;

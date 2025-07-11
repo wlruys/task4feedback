@@ -57,12 +57,8 @@ target_precompile_headers(backend PRIVATE
 
 target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt tracy_headers unordered_dense::unordered_dense)
 
-if(SIM_TRACK_RESOURCES)
-    target_compile_definitions(backend PUBLIC SIM_TRACK_RESOURCES)
-endif()
-
-if(SIM_TRACK_LOCATION)
-    target_compile_definitions(backend PUBLIC SIM_TRACK_LOCATION)
+if(SIM_RECORD)
+    target_compile_definitions(backend PUBLIC SIM_RECORD)
 endif()
 
 if(DEFINED SPDLOG_ACTIVE_LEVEL)

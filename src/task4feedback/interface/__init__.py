@@ -17,6 +17,7 @@ from .wrappers import (
     System,
     SimulatorInput,
     SimulatorDriver,
+    SimulatorFactory,
     ExecutionState,
     ExternalMapper,
     ExternalObserver,
@@ -27,4 +28,5 @@ from .wrappers import (
     uniform_connected_devices,
     start_logger,
     SchedulerState,
+    create_graph_spec,
 )

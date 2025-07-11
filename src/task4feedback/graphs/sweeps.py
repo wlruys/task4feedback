@@ -143,7 +143,6 @@ class SweepData(DataGeometry):
                 )
             )
         )
-        print("Step list", step, len(self.directions), step_list)
         id_list = self.map.key_to_block.get_leaves(obj, values=step_list)
         for i in id_list:
             self.blocks.set_location(i, location)

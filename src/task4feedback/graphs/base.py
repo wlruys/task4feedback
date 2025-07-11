@@ -306,71 +306,74 @@ def weighted_cell_partition(cell_graph: WeightedCellGraph, nparts: int):
     return edgecuts, parts
 
 
-# @dataclass
-# class EnvironmentState:
-#     time: int
-#     compute_tasks: List[fastsim.ComputeTask]
-#     data_tasks: List[fastsim.DataTask]
-#     compute_tasks_by_state: dict
-#     data_tasks_by_state: dict
-#     mapping_dict: dict
-#     data_task_source_device: dict
-#     data_task_virtual: dict
-#     data_task_block: dict
+@dataclass
+class EnvironmentState:
+    time: int
+    compute_tasks_by_state: dict
+    compute_task_mapping_dict: dict
+    
+    data_task_mapping_dict: dict 
+    data_tasks_by_state: dict
+    data_task_source_device: dict
+    data_task_virtual: dict
+    data_task_block: dict
 
-#     def parse_state(env, time: Optional[int] = None):
-#         if time is None:
-#             time = env.simulator.time
+    def parse_state(env, time: Optional[int] = None):
+        if time is None:
+            time = env.simulator.time
 
-#         graph = env.simulator_factory.input.graph
-#         data = env.simulator_factory.input.data
-#         sim = env.simulator
-#         assert graph.ctasks is not None
-#         compute_tasks = graph.ctasks.get_compute_tasks()
-#         data_tasks = graph.ctasks.get_data_tasks()
-#         simulator_state = sim.state
+        sim = env.simulator
+        simulator_state = sim.state
+        task_runtime = simulator_state.get_task_runtime()
+        static_graph = simulator_state.get_tasks()
+        
+        n_compute_tasks = task_runtime.get_n_compute_tasks()
+        n_data_tasks = task_runtime.get_n_data_tasks() 
+        
+        
+        compute_tasks_by_state = defaultdict(lambda: list())
+        data_tasks_by_state = defaultdict(lambda: list())
+        compute_task_mapping_dict = {}
+        
+        data_task_mapping_dict = {}
+        data_task_source_device = {}
+        data_task_virtual = {}
+        data_task_block = {}
+        
+        for i in range(n_compute_tasks):
+            task_state = task_runtime.get_compute_task_state_at_time(i, time)
+            compute_tasks_by_state[task_state].append(i)
+            device_id = task_runtime.get_compute_task_mapped_device(i)
+            compute_task_mapping_dict[i] = device_id
+            
+        for i in range(n_data_tasks):
+            task_state = task_runtime.get_data_task_state_at_time(i, time)
+            data_tasks_by_state[task_state].append(i)
+            data_id = static_graph.get_data_id(i)
+            
+            device_id = task_runtime.get_data_task_mapped_device(i)
+            source_device = task_runtime.get_data_task_source_device(i)
+            is_virtual = task_runtime.is_data_task_virtual(i)
+            
+            data_task_source_device[i] = source_device
+            data_task_virtual[i] = is_virtual
+            data_task_mapping_dict[i] = device_id
+            data_task_block[i] = data_id
 
-#         compute_tasks_by_state = defaultdict(lambda: list())
-#         mapping_dict = {}
+        return EnvironmentState(
+            time=time,
+            compute_tasks_by_state=compute_tasks_by_state,
+            data_tasks_by_state=data_tasks_by_state,
+            compute_task_mapping_dict=compute_task_mapping_dict,
+            data_task_mapping_dict=data_task_mapping_dict,
+            data_task_source_device=data_task_source_device,
+            data_task_virtual=data_task_virtual,
+            data_task_block=data_task_block,
+        )
 
-#         for task in compute_tasks:
-#             # print(f"Supported arch: {task.supported_architectures}")
-#             task_state = simulator_state.get_state_at(task.id, time)
-#             compute_tasks_by_state[task_state].append(task.id)
-#             device_id = simulator_state.get_mapping(task.id)
-#             mapping_dict[task.id] = device_id
-
-#         data_tasks_by_state = defaultdict(lambda: list())
-#         data_task_source_device = {}
-#         data_task_virtual = {}
-#         data_task_block = {}
-#         for task in data_tasks:
-#             task_state = simulator_state.get_state_at(task.id, time)
-#             data_tasks_by_state[task_state].append(task.id)
-#             associated_compute_task_id = task.get_compute_task()
-#             device_id = simulator_state.get_mapping(associated_compute_task_id)
-#             source_device = simulator_state.get_data_task_source(task.id)
-#             data_task_source_device[task.id] = source_device
-#             is_virtual = simulator_state.is_data_task_virtual(task.id)
-#             data_task_virtual[task.id] = is_virtual
-#             mapping_dict[task.id] = device_id
-#             data_task_block[task.id] = task.get_data_id()
-
-#         return EnvironmentState(
-#             time=time,
-#             compute_tasks=compute_tasks,
-#             data_tasks=data_tasks,
-#             compute_tasks_by_state=compute_tasks_by_state,
-#             data_tasks_by_state=data_tasks_by_state,
-#             mapping_dict=mapping_dict,
-#             data_task_source_device=data_task_source_device,
-#             data_task_virtual=data_task_virtual,
-#             data_task_block=data_task_block,
-#         )
-
-#     @staticmethod
-#     def from_env(env, time: Optional[int] = None):
-#         return EnvironmentState.parse_state(env, time)
+    @staticmethod
+    def from_env(env, time: Optional[int] = None):
+        return EnvironmentState.parse_state(env, time)
 
 
 class DynamicWorkload:

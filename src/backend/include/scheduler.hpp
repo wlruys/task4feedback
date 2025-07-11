@@ -452,8 +452,6 @@ struct SchedulerInput {
   }
 };
 
-constexpr uint8_t DRAIN_FLAG = 0b00000001;
-
 class SchedulerState {
 protected:
   timecount_t global_time = 0;
@@ -468,6 +466,9 @@ protected:
   std::reference_wrapper<Devices> devices;
   std::reference_wrapper<Topology> topology;
   std::reference_wrapper<TaskNoise> task_noise;
+
+  static constexpr uint8_t DRAIN_FLAG = 0b00000001;
+  static constexpr uint8_t RECORD_FLAG = 0b00000010;
 
   [[nodiscard]] ResourceRequest request_map_resources(taskid_t task_id, devid_t device_id) const {
     const auto &static_graph = get_tasks();
@@ -597,6 +598,22 @@ public:
 
   void stop_drain() {
     flags &= ~DRAIN_FLAG;
+  }
+
+  void start_record() {
+    flags |= RECORD_FLAG;
+  }
+
+  void stop_record() {
+    flags &= ~RECORD_FLAG;
+  }
+
+  [[nodiscard]] bool is_recording() const {
+    return (flags & RECORD_FLAG) != 0;
+  }
+
+  [[nodiscard]] bool is_draining() const {
+    return (flags & DRAIN_FLAG) != 0;
   }
 
   [[nodiscard]] bool not_draining() const {

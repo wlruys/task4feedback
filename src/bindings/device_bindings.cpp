@@ -30,17 +30,9 @@ void init_device_ext(nb::module_ &m) {
       .def_ro("vcus", &Resources::vcu)
       .def_ro("mem", &Resources::mem);
 
-  using ResourceEventType = ResourceEvent<int64_t>;
-  nb::class_<ResourceEventType>(m, "ResourceEvent")
-      .def(nb::init<>())
-      .def(nb::init<timecount_t, mem_t>())
-      .def_ro("time", &ResourceEventType::time)
-      .def_ro("resource", &ResourceEventType::resource);
-
   using ResourceArrayType = ResourceEventArray<int64_t>;
   nb::class_<ResourceArrayType>(m, "ResourceEventVector")
       .def(nb::init<>())
-      .def_rw("size", &ResourceArrayType::size)
       .def_rw("times", &ResourceArrayType::times)
       .def_rw("resources", &ResourceArrayType::resources);
 
@@ -56,7 +48,7 @@ void init_device_ext(nb::module_ &m) {
 
   nb::class_<Devices>(m, "Devices")
       .def(nb::init<>())
-      .def(nb::init<std::size_t>(), "n_devices"_a)
+      .def(nb::init<devid_t>(), "n_devices"_a)
       .def("create_device", &Devices::create_device, "id"_a, "name"_a, "arch"_a, "copy"_a, "mem"_a)
       .def("append_device", &Devices::append_device, "name"_a, "arch"_a, "copy"_a, "mem"_a)
       .def("get_device", nb::overload_cast<devid_t>(&Devices::get_device, nb::const_), "id"_a,

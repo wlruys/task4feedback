@@ -12,7 +12,7 @@ from collections import defaultdict
 from task4feedback.fastsim2 import TaskState
 import task4feedback.fastsim2 as fastsim
 import copy
-#from ..base import EnvironmentState
+from ..base import EnvironmentState
 
 import wandb
 import os
@@ -80,7 +80,6 @@ def create_mesh_plot(
 ):
     """
     Return a figure and axis with the complete mesh plot with cells, edges, and vertices.
-    Used as a base canvas for further plotting.
     """
     points, cells, unique_edges = geometry.cell_points, geometry.cells, geometry.edges
 
@@ -211,13 +210,9 @@ def label_cells(ax, points, cells, cell_labels, z_order=8):
       A list of matplotlib artist objects for later removal.
     """
     artists = []
-    # Highlight cells with custom colors and add labels at their center
     for label, cell_ids in cell_labels.items():
         for cid in cell_ids:
             poly_coords = points[cells[cid]]
-            # ax.add_patch(patch)
-            # artists.append(patch)
-            # Compute centroid and add text label
             centroid = poly_coords.mean(axis=0)
             text = ax.text(
                 centroid[0],
@@ -324,7 +319,7 @@ def highlight_boundary(ax, geom, side_highlights, zorder=6, h=0.2):
     edges = geom.edges
     cells = geom.cells
 
-    # preallocate numpy array for all verts we will need to plot
+    # preallocate numpy array for all verts 
     c = 0
     for edge in side_highlights:
         for cell in side_highlights[edge]:
@@ -335,8 +330,6 @@ def highlight_boundary(ax, geom, side_highlights, zorder=6, h=0.2):
     for eid in side_highlights:
         # Unpack vertex indices and cell ids
         v1_idx, v2_idx = edges[eid]
-
-        # Retrieve vertex coordinates
         v1 = points[int(v1_idx)]
         v2 = points[int(v2_idx)]
 
@@ -382,12 +375,10 @@ def animate_highlights(
 
     def update(frame):
         nonlocal highlight_artists
-
-        # Clear text labels on plot
+        
         for text in ax.texts:
             text.set_visible(False)
 
-        # Remove previous highlight artists
         for art in highlight_artists:
             art.remove()
         highlight_artists.clear()
@@ -424,7 +415,6 @@ def animate_highlights(
         # highlight_artists.extend(new_artists_3)
         return highlight_artists
 
-    # Create the animation (update every 1000ms)
     ani = animation.FuncAnimation(
         fig,
         update,
@@ -454,7 +444,7 @@ def animate_state_list(graph, state_list, figsize=(8, 8)):
 
                 if cell_id < len(graph.data.geometry.cells):
                     if state_type == fastsim.TaskState.LAUNCHED:
-                        mapped_device = state.mapping_dict[task]
+                        mapped_device = state.compute_task_mapping_dict[task]
                         cell_highlights[device_to_color[mapped_device]].append(cell_id)
 
                         label = graph.task_to_level[task]
@@ -481,7 +471,7 @@ def animate_state_list(graph, state_list, figsize=(8, 8)):
                             cell = obj.id[0]
                             edge_id = edge.id
                             cell_id = cell.id
-                            target_device = state.mapping_dict[task]
+                            target_device = state.data_task_mapping_dict[task]
                             boundary_highlights[edge_id].update(
                                 {cell_id: device_to_color[target_device]}
                             )
@@ -526,7 +516,7 @@ def make_mesh_graph_animation(
     bitrate=None,
 ):
     if folder is None:
-        if wandb.run.dir is None:
+        if wandb is None or wandb.run is None or wandb.run.dir is None:
             folder = "."
         else:
             folder = wandb.run.dir
@@ -546,30 +536,29 @@ def make_mesh_graph_animation(
     return ani
 
 
-# def animate_mesh_graph(
-#     env,
-#     time_interval=250,
-#     show=True,
-#     title="mesh_animation",
-#     folder=None,
-#     figsize=(8, 8),
-#     dpi=None,
-#     bitrate=None,
-# ):
-#     current_time = env.simulator.time
-#     state_list = []
-#     for t in range(0, current_time, time_interval):
-#         state = EnvironmentState.from_env(env, t)
-#         state_list.append(state)
+def animate_mesh_graph(
+    env,
+    time_interval=1000,
+    show=True,
+    title="mesh_animation",
+    folder=None,
+    figsize=(8, 8),
+    dpi=300,
+    bitrate=300,
+):
+    current_time = env.simulator.time
+    state_list = []
+    for t in range(0, current_time, time_interval):
+        state = EnvironmentState.from_env(env, t)
+        state_list.append(state)
 
-#     print(f"Number of states: {len(state_list)}")
-#     return make_mesh_graph_animation(
-#         env.simulator.input.graph,
-#         state_list,
-#         title=title,
-#         show=show,
-#         folder=None,
-#         figsize=figsize,
-#         dpi=dpi,
-#         bitrate=bitrate,
-#     )
+    return make_mesh_graph_animation(
+        env.simulator.input.graph,
+        state_list,
+        title=title,
+        show=show,
+        folder=None,
+        figsize=figsize,
+        dpi=dpi,
+        bitrate=bitrate,
+    )

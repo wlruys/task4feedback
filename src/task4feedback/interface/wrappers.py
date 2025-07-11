@@ -1730,6 +1730,10 @@ class SimulatorDriver:
     @property
     def state(self):
         return self.simulator.get_state()
+    
+    @property
+    def processed_events(self):
+        return self.simulator.processed_events
 
     @property
     def status(self):

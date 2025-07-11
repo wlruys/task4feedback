@@ -76,13 +76,18 @@ public:
   EventManager event_manager;
   Scheduler scheduler;
   std::reference_wrapper<Mapper> mapper;
+  uint64_t events_processed{0};
+  bool initialized{false};
+  bool data_initialized{false};
+  bool use_python_mapper{false};
+  // uint8_t flags{0};
 
-  bool initialized = false;
-  bool data_initialized = false;
-  bool use_python_mapper = false;
+  // constexpr static uint8_t FLAG_USE_PYTHON_MAPPER = 0x01;
+  // constexpr static uint8_t FLAG_INITIALIZED = 0x02;
+  // constexpr static uint8_t FLAG_DATA_INITIALIZED = 0x04;
 
-  ExecutionState last_state = ExecutionState::NONE;
-  EventVariant last_event = MapperEvent(0);
+  ExecutionState last_state{ExecutionState::NONE};
+  EventVariant last_event{MapperEvent(0)};
 
   Simulator(SchedulerInput &input, Mapper &mapper)
       : event_manager(EventManager()), scheduler(Scheduler(input)), mapper(mapper) {
@@ -316,6 +321,7 @@ public:
       }
 
       current_event = event_manager.pop_event();
+      events_processed++;
       update_time(current_event);
       execution_state = handle_event(current_event);
       scheduler.check_time_breakpoint();

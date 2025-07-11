@@ -172,10 +172,11 @@ struct ValidEventArray {
 
 class LocationManager {
 protected:
-  devid_t num_devices{0};
+  uint8_t num_devices{0};
   dataid_t num_data{0};
   std::vector<uint8_t> locations;
   std::vector<ValidEventArray> valid_intervals;
+  bool record{false};
 
 public:
 
@@ -184,7 +185,7 @@ public:
   LocationManager(dataid_t num_data, devid_t num_devices)
       : num_devices(num_devices), num_data(num_data), locations(num_data, 0){
 
-#ifdef SIM_TRACK_LOCATION
+#ifdef SIM_RECORD
     constexpr size_t buffer_initial_size = 100;
     valid_intervals.resize(num_data * num_devices);
     for (auto &intervals : valid_intervals) {
@@ -207,31 +208,37 @@ public:
   }
 
   inline int8_t set_valid(dataid_t data_id, devid_t device_id, timecount_t current_time) {
-    auto old_status = locations[data_id] & (1 << device_id);
+    const uint8_t mask = (1 << device_id);
+    auto old_status = locations[data_id] & mask;
 
-#ifdef SIM_TRACK_LOCATION
-    if (old_status) {
-      // start new interval
-      valid_intervals[data_id * num_devices + device_id].starts.push_back(current_time);
-      valid_intervals[data_id * num_devices + device_id].stops.push_back(MAX_TIME);
+#ifdef SIM_RECORD
+    if (record){
+      if (old_status) {
+        // start new interval
+        valid_intervals[data_id * num_devices + device_id].starts.push_back(current_time);
+        valid_intervals[data_id * num_devices + device_id].stops.push_back(MAX_TIME);
+      }
     }
 #endif
 
-    locations[data_id] |= (1 << device_id);
+    locations[data_id] |= mask;
     return old_status;
   }
 
   inline int8_t set_invalid(dataid_t data_id, devid_t device_id, timecount_t current_time) {
-    auto old_status = locations[data_id] & (1 << device_id);
-#ifdef SIM_TRACK_LOCATION
-    if (is_valid(data_id, device_id)) {
-      locations[data_id * num_devices + device_id] = 0;
-      // close the current interval
-      valid_intervals[data_id * num_devices + device_id].stops.back() = current_time;
+    const uint8_t mask = (1 << device_id);
+    auto old_status = locations[data_id] & mask;
+#ifdef SIM_RECORD
+    if (record) {
+      if (is_valid(data_id, device_id)) {
+        locations[data_id * num_devices + device_id] = 0;
+        // close the current interval
+        valid_intervals[data_id * num_devices + device_id].stops.back() = current_time;
+      }
     }
 #endif
 
-    locations[data_id] &= ~(1 << device_id);
+    locations[data_id] &= ~mask;
     return old_status;
   }
 
@@ -249,7 +256,7 @@ public:
   }
 
   void populate_valid_locations(dataid_t data_id, std::vector<devid_t> &valid_locations) const {
-    for (devid_t i = 0; i < num_devices; i++) {
+    for (uint8_t i = 0; i < num_devices; i++) {
       if (is_valid(data_id, i)) {
         valid_locations.push_back(i);
       }
@@ -299,13 +306,15 @@ public:
 
   void finalize(timecount_t current_time) {
     // tie off any open/hanging interval at the end of the simulation
+    #ifdef SIM_RECORD
     for (dataid_t i = 0; i < num_data; i++) {
-      for (devid_t j = 0; j < num_devices; j++) {
+      for (uint8_t j = 0; j < num_devices; j++) {
         if (is_valid(i, j)) {
           valid_intervals[i * num_devices + j].stops.back() = current_time;
         }
       }
     }
+    #endif
   }
 
   ValidEventArray &get_valid_intervals(dataid_t data_id, devid_t device_id) {

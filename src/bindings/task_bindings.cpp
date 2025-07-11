@@ -62,7 +62,19 @@ void init_task_ext(nb::module_ &m) {
            "create_data_tasks"_a = true);
 
   nb::class_<StaticTaskInfo>(m, "StaticTaskInfo")
-      .def(nb::init<Graph &>(), "graph"_a, nb::keep_alive<1, 2>());
+      .def(nb::init<Graph &>(), "graph"_a, nb::keep_alive<1, 2>())
+      .def("get_data_id", &StaticTaskInfo::get_data_id, "task_id"_a)
+      .def("get_compute_task", &StaticTaskInfo::get_compute_task, "task_id"_a);
 
-  nb::class_<RuntimeTaskInfo>(m, "RuntimeTaskInfo");
+  nb::class_<RuntimeTaskInfo>(m, "RuntimeTaskInfo")
+  .def("get_n_compute_tasks", &RuntimeTaskInfo::get_n_compute_tasks)
+  .def("get_n_data_tasks", &RuntimeTaskInfo::get_n_data_tasks)
+  .def("get_n_eviction_tasks", &RuntimeTaskInfo::get_n_eviction_tasks)
+  .def("get_n_tasks", &RuntimeTaskInfo::get_n_tasks)
+  .def("get_compute_task_state_at_time", &RuntimeTaskInfo::get_compute_task_state_at_time)
+  .def("get_data_task_state_at_time", &RuntimeTaskInfo::get_data_task_state_at_time)
+  .def("get_data_task_mapped_device", &RuntimeTaskInfo::get_data_task_mapped_device)
+  .def("get_compute_task_mapped_device", &RuntimeTaskInfo::get_compute_task_mapped_device)
+  .def("get_data_task_source_device", &RuntimeTaskInfo::get_data_task_source_device)
+  .def("is_data_task_virtual", &RuntimeTaskInfo::is_data_task_virtual);
 }
