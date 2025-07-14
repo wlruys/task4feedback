@@ -177,10 +177,9 @@ elseif(PGO_MODE STREQUAL "Use")
     add_link_options   (-fprofile-use)
 endif()
 
-find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 
 include_directories(${Python_INCLUDE_DIRS})
-include_directories(${Python_NumPy_INCLUDE_DIRS})
 
 add_library(project_warnings INTERFACE)
 
