@@ -12,11 +12,11 @@ setup-dev: install-build-deps install-dev
 	pre-commit install
 	@echo "Development environment setup complete!"
 build-dev: install-build-deps
-	CMAKE_BUILD_TYPE=Debug $(PIP) install -e .[dev] -v --no-build-isolation
+	SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG CMAKE_BUILD_TYPE=Debug $(PIP) install -e .[dev] -v --no-build-isolation
 build-release: install-build-deps
 	CMAKE_BUILD_TYPE=Release $(PIP) install -e .[dev] -v --no-build-isolation
 build-deb: install-build-deps
-	CMAKE_BUILD_TYPE=RelWithDebInfo $(PIP) install -e .[dev] -v --no-build-isolation
+	SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG CMAKE_BUILD_TYPE=RelWithDebInfo $(PIP) install -e .[dev] -v --no-build-isolation
 # Force rebuild (clean first)
 rebuild-dev: clean build-dev
 rebuild-release: clean build-release
