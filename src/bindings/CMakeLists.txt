@@ -51,18 +51,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     nanobind_strip(fastsim2)
 endif()
 
-# target_link_options(fastsim2 PRIVATE -Wl,--no-gc-sections)
-# target_compile_options(fastsim2 PRIVATE -fno-function-sections -fno-data-sections)
-# set_target_properties(fastsim2 PROPERTIES
-#                       CXX_VISIBILITY_PRESET default
-#                       VISIBILITY_INLINES_HIDDEN OFF)
 
-
-# nanobind_add_stub(fastsim2_stub
-#     MODULE fastsim2
-#     OUTPUT fastsim2.pyi
-#     MARKER_FILE py.typed
-#     DEPENDS fastsim2)
+nanobind_add_stub(fastsim2_stub
+    MODULE fastsim2
+    OUTPUT fastsim2.pyi
+    MARKER_FILE py.typed
+    DEPENDS fastsim2)
 
 install(TARGETS fastsim2
         COMPONENT python
