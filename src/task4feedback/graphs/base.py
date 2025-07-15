@@ -311,8 +311,8 @@ class EnvironmentState:
     time: int
     compute_tasks_by_state: dict
     compute_task_mapping_dict: dict
-    
-    data_task_mapping_dict: dict 
+
+    data_task_mapping_dict: dict
     data_tasks_by_state: dict
     data_task_source_device: dict
     data_task_virtual: dict
@@ -326,35 +326,34 @@ class EnvironmentState:
         simulator_state = sim.state
         task_runtime = simulator_state.get_task_runtime()
         static_graph = simulator_state.get_tasks()
-        
+
         n_compute_tasks = task_runtime.get_n_compute_tasks()
-        n_data_tasks = task_runtime.get_n_data_tasks() 
-        
-        
+        n_data_tasks = task_runtime.get_n_data_tasks()
+
         compute_tasks_by_state = defaultdict(lambda: list())
         data_tasks_by_state = defaultdict(lambda: list())
         compute_task_mapping_dict = {}
-        
+
         data_task_mapping_dict = {}
         data_task_source_device = {}
         data_task_virtual = {}
         data_task_block = {}
-        
+
         for i in range(n_compute_tasks):
             task_state = task_runtime.get_compute_task_state_at_time(i, time)
             compute_tasks_by_state[task_state].append(i)
             device_id = task_runtime.get_compute_task_mapped_device(i)
             compute_task_mapping_dict[i] = device_id
-            
+
         for i in range(n_data_tasks):
             task_state = task_runtime.get_data_task_state_at_time(i, time)
             data_tasks_by_state[task_state].append(i)
             data_id = static_graph.get_data_id(i)
-            
+
             device_id = task_runtime.get_data_task_mapped_device(i)
             source_device = task_runtime.get_data_task_source_device(i)
             is_virtual = task_runtime.is_data_task_virtual(i)
-            
+
             data_task_source_device[i] = source_device
             data_task_virtual[i] = is_virtual
             data_task_mapping_dict[i] = device_id
@@ -692,12 +691,17 @@ class TrajectoryWorkload(DynamicWorkload):
         self,
         num_levels: int,
         start_step: int = 0,
-        number_of_trajectories: int = 1,
+        lower_bound: float = 0,
         upper_bound: float = 3000,
+        radius: float = 0.25,
         scale: float = 0.05,
+        max_angle: float = 0.5,
     ):
+        print(
+            num_levels, start_step, lower_bound, upper_bound, radius, scale, max_angle
+        )
         trajectory = make_circle_trajectory(
-            self.geom, num_steps=num_levels, radius=0.25, max_angle=0.5
+            self.geom, num_steps=num_levels, radius=radius, max_angle=max_angle
         )
 
         centroids = np.zeros((self.num_cells, 2))
@@ -712,7 +716,9 @@ class TrajectoryWorkload(DynamicWorkload):
             )
             self.level_workload[j] += gaussian_workload
 
-            self.level_workload[j] = np.clip(self.level_workload[j], 0, None)
+            self.level_workload[j] = np.clip(
+                a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound
+            )
 
 
 @dataclass
@@ -725,7 +731,9 @@ class GraphRegistry:
 
     @classmethod
     def register(
-        cls, func: Callable[[Geometry, GraphConfig], TaskGraph], config: Type[GraphConfig]
+        cls,
+        func: Callable[[Geometry, GraphConfig], TaskGraph],
+        config: Type[GraphConfig],
     ):
         cls._registry[config] = func
         return func

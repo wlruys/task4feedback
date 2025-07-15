@@ -52,10 +52,18 @@ def make_graph_function(
         else:
             location_list = [i for i in range(cfg.init.nparts + 1)]  # include cpu as 0
 
-        graph.set_cell_locations(partition)
+        if isinstance(graph, DynamicJacobiGraph):
+            graph.set_cell_locations([-1 for _ in range(len(partition))])
+            graph.set_cell_locations(partition, step=0)
+        else:
+            graph.set_cell_locations(partition)
 
         if cfg.init.randomize:
-            graph.randomize_locations(graph_cfg.randomness, location_list=location_list)
+            graph.randomize_locations(
+                graph_cfg.randomness,
+                location_list=location_list,
+                step=0 if isinstance(graph, DynamicJacobiGraph) else None,
+            )
 
         return graph
 
@@ -70,4 +78,3 @@ def make_graph_builder(cfg: DictConfig) -> GraphBuilder:
     graph_config = instantiate(graph_info.config)
     graph_function = make_graph_function(graph_config, graph_info)
     return GraphBuilder(config=graph_config, function=graph_function)
-

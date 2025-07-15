@@ -125,13 +125,15 @@ class JacobiData(DataGeometry):
         for i, location in enumerate(location_list):
             self.set_location(Cell(i), location, step)
 
-    def randomize_locations(self, num_changes: int, location_list: list[int]):
+    def randomize_locations(
+        self, num_changes: int, location_list: list[int], step: Optional[int] = None
+    ):
         new_locations = []
 
         selected_cells = random.sample(range(len(self.geometry.cells)), num_changes)
         for i, cell in enumerate(selected_cells):
             new_location = random.choice(location_list)
-            self.set_location(Cell(cell), new_location)
+            self.set_location(Cell(cell), new_location, step)
             new_locations.append(new_location)
 
         return selected_cells, new_locations
@@ -181,10 +183,15 @@ class JacobiData(DataGeometry):
 
 
 class JacobiGraph(ComputeDataGraph):
-    def _build_graph(self):
+    def _build_graph(self, retire_data: bool = False):
         self.task_to_cell = {}
         self.task_to_level = {}
         self.level_to_task = defaultdict(list)
+        prev_interiors = {}
+        if retire_data:
+            self.dynamic = True
+        else:
+            self.dynamic = False
         for i in range(self.config.steps):
             for j, (cell, edges) in enumerate(self.data.geometry.cell_edges.items()):
                 # Create task that:
@@ -222,9 +229,11 @@ class JacobiGraph(ComputeDataGraph):
 
                 read_blocks = interior_edges + exterior_edges + [interior_block]
                 write_blocks = next_interior_edges + [next_interior_block]
-
+                prev_interiors[(cell, i)] = interior_edges + [interior_block]
                 self.add_read_data(task_id, read_blocks)
                 self.add_write_data(task_id, write_blocks)
+                if i > 0 and retire_data:
+                    self.add_retire_data(task_id, prev_interiors[(cell, i - 1)])
 
     def __init__(
         self,
@@ -249,6 +258,7 @@ class JacobiGraph(ComputeDataGraph):
         min_loc: int = 0,
         max_loc: Optional[int] = None,
         verbose: bool = False,
+        step: Optional[int] = None,
     ):
         num_changes = int(perc_change * len(self.data.geometry.cells))
         if verbose:
@@ -261,11 +271,13 @@ class JacobiGraph(ComputeDataGraph):
             location_list = list(range(min_loc, max_loc))
 
         selected_cells, new_locations = self.data.randomize_locations(
-            num_changes, location_list
+            num_changes, location_list, step
         )
 
         if verbose:
-            print(f"Randomized locations for {len(selected_cells)} cells:")
+            print(
+                f"Randomized locations for {len(selected_cells)} cells on step {step}:"
+            )
             for cell, new_location in zip(selected_cells, new_locations):
                 print(f"Cell {cell} -> New Location: {new_location}")
 
@@ -379,6 +391,7 @@ class JacobiGraph(ComputeDataGraph):
         bandwidth: int = 1000,
         level_chunks: int = 1,
         n_parts: int = 4,
+        offset: int = 0,  # 1 to ignore cpu
     ):
         partitions = []
         for i in range(level_chunks):
@@ -393,7 +406,7 @@ class JacobiGraph(ComputeDataGraph):
                 arch, bandwidth=bandwidth, levels=levels
             )
             edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
-
+            partition = [x + offset for x in partition]
             partitions.append(partition)
 
         self.partitions = partitions
@@ -464,9 +477,9 @@ class PartitionMapper:
         level_start: int = 0,
     ):
         if mapper is not None:
-            assert isinstance(mapper, PartitionMapper), (
-                "Mapper must be of type PartitionMapper, is " + str(type(mapper))
-            )
+            assert isinstance(
+                mapper, PartitionMapper
+            ), "Mapper must be of type PartitionMapper, is " + str(type(mapper))
             self.cell_to_mapping = mapper.cell_to_mapping
 
         elif cell_to_mapping is not None:
@@ -480,25 +493,28 @@ class PartitionMapper:
         self.cell_to_mapping = cell_to_mapping
 
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
-        candidates = torch.zeros((1), dtype=torch.int64)
-        simulator.simulator.get_mappable_candidates(candidates)
-        global_task_id = candidates[0].item()
-        local_id = 0
-        graph = simulator.input.graph
-        assert isinstance(graph, JacobiGraph)
-        level = graph.task_to_level[global_task_id]
-
-        cell_id = graph.task_to_cell[global_task_id]
-
-        device = self.cell_to_mapping[cell_id]
-
-        if level < self.level_start:
-            device = np.random.randint(1, 4)
-
-        # print(global_task_id, cell_id, device)
-        state = simulator.simulator.get_state()
-        mapping_priority = state.get_mapping_priority(global_task_id)
-        return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item()
+            local_id = i
+            graph = simulator.input.graph
+            assert isinstance(graph, JacobiGraph)
+            level = graph.task_to_level[global_task_id]
+            cell_id = graph.task_to_cell[global_task_id]
+            device = self.cell_to_mapping[cell_id]
+            if level < self.level_start:
+                device = np.random.randint(1, 4)
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(local_id, device, mapping_priority, mapping_priority)
+            )
+        return mapping_result
 
 
 class LevelPartitionMapper:
@@ -517,18 +533,33 @@ class LevelPartitionMapper:
         self.level_cell_mapping = level_cell_mapping
 
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
-        candidates = torch.zeros((1), dtype=torch.int64)
-        simulator.simulator.get_mappable_candidates(candidates)
-        global_task_id = candidates[0].item()
-        local_id = 0
-        graph = simulator.input.graph
+        graph: JacobiGraph = simulator.input.graph
         assert isinstance(graph, JacobiGraph)
-        level = graph.task_to_level[global_task_id]
-        cell_id = graph.task_to_cell[global_task_id]
-        device = self.level_cell_mapping[level][cell_id]
-        state = simulator.simulator.get_state()
-        mapping_priority = state.get_mapping_priority(global_task_id)
-        return [fastsim.Action(local_id, device, mapping_priority, mapping_priority)]
+
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item()
+            level = graph.task_to_level[global_task_id]
+            cell_id = graph.task_to_cell[global_task_id]
+            total_levels = graph.config.steps
+            if len(self.level_cell_mapping) != total_levels:
+                chunk = level // (total_levels // len(self.level_cell_mapping))
+                if chunk >= len(self.level_cell_mapping):
+                    chunk = len(self.level_cell_mapping) - 1
+                device = self.level_cell_mapping[chunk][cell_id]
+            else:
+                device = self.level_cell_mapping[level][cell_id]
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(i, device, mapping_priority, mapping_priority)
+            )
+        return mapping_result
 
 
 class JacobiVariantGPUOnly(VariantBuilder):

@@ -3,13 +3,20 @@ mesh:
 config:
   _target_: task4feedback.graphs.dynamic_jacobi.DynamicJacobiConfig
   interior_size: 1000
+  start_workload: 1000
+  level_chunks: 1
   boundary_interior_ratio: 1
   randomness: 1
   L: 1
   n: 4
-  steps: 5
+  steps: 30
   permute_idx: 0
-  start_workload: 1000 
+  workload_args:
+    max_angle: 1
+    lower_bound: 1000
+    upper_bound: 3000
+    radius: 0.25
+    scale: 0.05
 init:
   partitioner: metis
   nparts: 4

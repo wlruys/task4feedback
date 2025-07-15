@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from ..fastsim2 import DeviceType, BYTES_IN_POWER
 
+
 @dataclass
 class DeviceTuple:
     name: str
@@ -20,6 +21,7 @@ class TaskTuple:
     dependencies: list = field(default_factory=list)
     read: list = field(default_factory=list)
     write: list = field(default_factory=list)
+    retire: list = field(default_factory=list)
     type: int = 0
 
 

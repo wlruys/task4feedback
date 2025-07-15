@@ -80,7 +80,7 @@ class TaskGraph:
     def __init__(self):
         self.graph = Graph()
         self.static_graph = None
-        self.tasks = {}
+        self.tasks: dict[int, TaskTuple] = {}
 
     def add_task(self, name):
         idx = self.graph.add_task(name)
@@ -121,6 +121,10 @@ class TaskGraph:
     def add_write_data(self, task, dataidlist):
         self.tasks[task].write.extend(dataidlist)
         self.graph.add_write_data(task, dataidlist)
+
+    def add_retire_data(self, task, dataidlist):
+        self.tasks[task].retire.extend(dataidlist)
+        self.graph.add_retire_data(task, dataidlist)
 
     def apply_variant(self, variant_builder: type[VariantBuilder]):
         for i in range(self.graph.get_n_compute_tasks()):
@@ -1729,7 +1733,7 @@ class SimulatorDriver:
     @property
     def state(self):
         return self.simulator.get_state()
-    
+
     @property
     def processed_events(self):
         return self.simulator.processed_events
@@ -2055,7 +2059,7 @@ def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth:
     s = System()
     n_gpus = n_devices - 1
 
-    s.create_device("CPU:0", DeviceType.CPU, 4, mem)
+    s.create_device("CPU:0", DeviceType.CPU, 4, 1000000000)
     for i in range(n_gpus):
         s.create_device(f"GPU:{i}", DeviceType.GPU, 2, mem)
 
