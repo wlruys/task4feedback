@@ -44,7 +44,7 @@ class RuntimeEnv(EnvBase):
         location_randomness=1,
         location_list: Optional[List[int]] = None,
         max_samples_per_iter: int = 0,
-        random_start: bool = False
+        random_start: bool = False,
     ):
         super().__init__(device=device)
         # print("Initializing environment")
@@ -53,7 +53,7 @@ class RuntimeEnv(EnvBase):
         self.change_duration = change_duration
         self.change_locations = change_locations
         self.location_seed = location_seed
-        self.location_randomness = location_randomness 
+        self.location_randomness = location_randomness
         self.random_start = random_start
         if location_list is None:
             location_list = [
@@ -153,16 +153,16 @@ class RuntimeEnv(EnvBase):
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
-            #print("Calculating EFT baseline...")
+            # print("Calculating EFT baseline...")
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, (
-                f"Baseline returned unexpected final state: {final_state}"
-            )
-            #cprint("EFT baseline calculated.")
+            assert (
+                final_state == fastsim.ExecutionState.COMPLETE
+            ), f"Baseline returned unexpected final state: {final_state}"
+            # cprint("EFT baseline calculated.")
             return simulator_copy.time
         return self.baseline_time
 
@@ -249,7 +249,7 @@ class RuntimeEnv(EnvBase):
         return buf
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        start_t = perf_counter()
+        # start_t = perf_counter()
         self.resets += 1
         self.step_count = 0
         current_priority_seed = self.simulator_factory.pseed
@@ -264,9 +264,22 @@ class RuntimeEnv(EnvBase):
                 for i in range(data.size()):
                     data.set_location(i, random.choice(self.location_list))
             else:
-                graph.randomize_locations(
-                    self.location_randomness, self.location_list, verbose=False
-                )
+                assert hasattr(
+                    graph, "randomize_locations"
+                ), "Graph does not have randomize_locations method."
+                if isinstance(graph, JacobiGraph):
+                    graph.randomize_locations(
+                        self.location_randomness,
+                        self.location_list,
+                        verbose=False,
+                        step=0 if graph.dynamic else None,
+                    )
+                else:
+                    graph.randomize_locations(
+                        self.location_randomness,
+                        self.location_list,
+                        verbose=False,
+                    )
 
         if self.change_priority:
             new_priority_seed = int(current_priority_seed + self.resets)
@@ -281,22 +294,19 @@ class RuntimeEnv(EnvBase):
         self.simulator = self.simulator_factory.create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
-        
+
         if self.resets < 10 and self.random_start:
             # Run the simulator for a random number of steps
             n_steps = random.randint(1, len(self.simulator_factory.input.graph) - 1)
             self.simulator.disable_external_mapper()
-            self.simulator.set_steps(
-                n_steps
-            )
+            self.simulator.set_steps(n_steps)
             self.simulator.run()
             self.simulator.enable_external_mapper()
-            
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-            f"Unexpected simulator status: {simulator_status}"
-        )
+        assert (
+            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+        ), f"Unexpected simulator status: {simulator_status}"
 
         if td is None:
             td = TensorDict()
@@ -305,7 +315,7 @@ class RuntimeEnv(EnvBase):
 
         obs = self._get_observation()
         td.set(self.observation_n, obs)
-        end_t = perf_counter()
+        # end_t = perf_counter()
         # print("Reset took %.2f ms", (end_t - start_t) * 1000, flush=True)
         return td
 
@@ -326,11 +336,11 @@ class RuntimeEnv(EnvBase):
 
 
 class IncrementalEFT(RuntimeEnv):
-    
+
     def __init__(self, *args, gamma: float = 1.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
-    
+
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(use_eft=True)
@@ -352,12 +362,12 @@ class IncrementalEFT(RuntimeEnv):
         sim_ml = self.simulator.copy()
         sim_ml.disable_external_mapper()
         end_time = perf_counter()
-        #print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
-        #print(f"Current sim time {sim_ml.time}", flush=True)
+        # print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
+        # print(f"Current sim time {sim_ml.time}", flush=True)
         start_time = perf_counter()
         sim_ml.run()
         end_time = perf_counter()
-        #print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
+        # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
 
         ml_time = sim_ml.time
 
@@ -385,8 +395,9 @@ class IncrementalEFT(RuntimeEnv):
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
+
 class DelayIncrementalEFT(IncrementalEFT):
-    
+
     def __init__(
         self,
         *args,
@@ -403,9 +414,8 @@ class DelayIncrementalEFT(IncrementalEFT):
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
 
-        
         flag = (self.step_count + 1) % self.delay
-        
+
         self.step_count += 1
 
         self.simulator.get_mappable_candidates(self.candidate_workspace)
@@ -416,8 +426,7 @@ class DelayIncrementalEFT(IncrementalEFT):
         self.simulator.simulator.map_tasks(
             [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
         )
-        
-        
+
         if flag == 0:
             sim_ml = self.simulator.copy()
             sim_ml.disable_external_mapper()
@@ -427,7 +436,7 @@ class DelayIncrementalEFT(IncrementalEFT):
             self.eft_time = ml_time
         else:
             reward = 0.0
-            
+
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
 
@@ -452,11 +461,7 @@ class DelayIncrementalEFT(IncrementalEFT):
 
 
 class BaselineImprovementEFT(RuntimeEnv):
-    def __init__(self, 
-                 *args, 
-                 delay = 10,
-                 **kwargs
-                ):
+    def __init__(self, *args, delay=10, **kwargs):
         super().__init__(*args, **kwargs)
         self.delay = delay
 
@@ -484,9 +489,7 @@ class BaselineImprovementEFT(RuntimeEnv):
             sim_ml.disable_external_mapper()
             sim_ml.run()
             ml_time = sim_ml.time
-            reward = (
-                self.EFT_baseline - ml_time
-            ) / self.size()
+            reward = (self.EFT_baseline - ml_time) / self.size()
         else:
             reward = 0.0
 
@@ -510,7 +513,7 @@ class BaselineImprovementEFT(RuntimeEnv):
             self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
         )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
-        return buf    
+        return buf
 
 
 class GeneralizedIncrementalEFT(RuntimeEnv):
@@ -652,6 +655,7 @@ class SanityCheckEnv(RuntimeEnv):
         out.set("done", done)
         self.step_count += 1
         return out
+
 
 # class kHopEFTIncrementalEnv(RuntimeEnv):
 #     def _step(self, td: TensorDict) -> TensorDict:
@@ -1154,9 +1158,9 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
         )
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-            f"Unexpected simulator status: {simulator_status}"
-        )
+        assert (
+            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+        ), f"Unexpected simulator status: {simulator_status}"
 
         obs = self._get_observation()
         return obs
@@ -1242,9 +1246,9 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
         )
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-            f"Unexpected simulator status: {simulator_status}"
-        )
+        assert (
+            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+        ), f"Unexpected simulator status: {simulator_status}"
 
         obs = self._get_observation()
         return obs
@@ -1304,9 +1308,9 @@ class IncrementalMappingEnv(EnvBase):
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, (
-                f"Baseline returned unexpected final state: {final_state}"
-            )
+            assert (
+                final_state == fastsim.ExecutionState.COMPLETE
+            ), f"Baseline returned unexpected final state: {final_state}"
             return simulator_copy.time
         return self.baseline_time
 
@@ -1452,9 +1456,9 @@ class IncrementalMappingEnv(EnvBase):
         self.EFT_baseline = self._get_baseline(use_eft=True)
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
-            f"Unexpected simulator status: {simulator_status}"
-        )
+        assert (
+            simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING
+        ), f"Unexpected simulator status: {simulator_status}"
 
         obs = self._get_observation()
         return obs

@@ -245,6 +245,7 @@ class JacobiGraph(ComputeDataGraph):
         self.data = JacobiData.from_mesh(geometry, config)
         self.config = config
         self._build_graph()
+        self.dynamic = False
         if variant is not None:
             self.apply_variant(variant)
         else:
