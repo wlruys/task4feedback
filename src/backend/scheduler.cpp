@@ -728,11 +728,9 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
   auto current_time = s.global_time;
 
   if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
-    if (s.counts.n_reserved() + s.counts.n_data_reserved() + s.counts.n_launched() +
-            s.counts.n_data_launched() >
-        0) {
+    if (s.counts.n_reserved() + s.counts.n_data_reserved() > 0) {
       SPDLOG_DEBUG("Time:{} Evictor waiting for all {} compute and {} data task to finish",
-                   current_time, s.counts.n_reserved(), s.counts.n_reserved());
+                   current_time, s.counts.n_reserved(), s.counts.n_data_reserved());
       event_manager.create_event(EventType::LAUNCHER, current_time);
       return;
     } else {
@@ -932,22 +930,26 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
 
   auto &device_manager = s.get_device_manager();
   auto &lru_manager = s.get_data_manager().get_lru_manager();
-  // check memory state, whether it is consistent for debugging purpose
-  bool flag = false;
-  for (devid_t i = 0; i < device_manager.n_devices; i++) {
-    mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i);
-    mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i);
-    mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i);
-    mem_t lru_mem = lru_manager.get_mem(i);
-    SPDLOG_DEBUG("Device {}: launched {}, lru {}, reserved {}, mapped {}", i, launched_mem, lru_mem,
-                 reserved_mem, mapped_mem);
-    if (i > 0 && mapped_mem < launched_mem)
-      flag = true;
-    assert(launched_mem == lru_mem);
-  }
-  if (flag) {
-    SPDLOG_DEBUG("Memory state is inconsistent");
-  }
+
+  
+  #ifdef DEBUG
+    // check memory state, whether it is consistent for debugging purpose
+    bool flag = false;
+    for (devid_t i = 0; i < device_manager.n_devices; i++) {
+      mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i);
+      mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i);
+      mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i);
+      mem_t lru_mem = lru_manager.get_mem(i);
+      SPDLOG_DEBUG("Device {}: launched {}, lru {}, reserved {}, mapped {}", i, launched_mem, lru_mem,
+                   reserved_mem, mapped_mem);
+      if (i > 0 && mapped_mem < launched_mem)
+        flag = true;
+      assert(launched_mem == lru_mem);
+    }
+    if (flag) {
+      SPDLOG_DEBUG("Memory state is inconsistent");
+    }
+  #endif
 }
 
 void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager &event_manager) {
