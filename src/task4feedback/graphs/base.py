@@ -195,15 +195,17 @@ class ComputeDataGraph(TaskGraph):
         return self.data
 
     def get_compute_cost(self, task_id: int, arch: DeviceType):
-        return self.graph.get_time(task_id, arch)
+        time = self.graph.get_time(task_id, arch)
+        assert time >= 0, f"Task {task_id} has no time for architecture {arch}"
+        return time
 
     def get_shared_data(self, task_self: int, task_other: int):
         # Total size of all shared data blocks from task_other to task_self
         # For example, if task_self depends on task_other it is the size of the data that task_self needs to read from task_other
-        read_self = self.graph.get_read_data(task_self)
+        read_self = self.tasks[task_self].read
 
-        read_other = self.graph.get_read_data(task_other)
-        write_other = self.graph.get_write_data(task_other)
+        read_other = self.tasks[task_other].read
+        write_other = self.tasks[task_other].write
 
         shared = set(read_self) & (set(read_other) | set(write_other))
 
@@ -235,9 +237,7 @@ class ComputeDataGraph(TaskGraph):
             compute_cost = self.get_compute_cost(task_id, arch)
             vweights.append(compute_cost)
 
-            # print(f"task_id: {task_id}, compute_cost: {compute_cost}")
-
-            for dep_task_id in self.graph.get_dependencies(task_id):
+            for dep_task_id in self.tasks[task_id].dependencies:
                 if dep_task_id not in task_ids:
                     continue
                 data_cost = self.get_shared_data(task_id, dep_task_id)
@@ -279,6 +279,37 @@ def weighted_partition(
     vweights = vweights.astype(np.int32)
     eweights = eweights.astype(np.int32)
 
+    # --- SYMMETRY FIX: average weights on mismatched edges ---
+    nverts = vweights.shape[0]
+    for u in range(nverts):
+        start_u = adj_starts[u]
+        end_u = adj_starts[u + 1]
+        for idx in range(start_u, end_u):
+            v = int(adjacency_list[idx])
+            w_uv = int(eweights[idx])
+
+            # find reverse edge v -> u
+            start_v = adj_starts[v]
+            end_v = adj_starts[v + 1]
+            rev_idx = None
+            for j in range(start_v, end_v):
+                if int(adjacency_list[j]) == u:
+                    rev_idx = j
+                    break
+
+            if rev_idx is not None:
+                w_vu = int(eweights[rev_idx])
+                if w_uv != w_vu:
+                    avg = (w_uv + w_vu) // 2
+                    eweights[idx] = avg
+                    eweights[rev_idx] = avg
+                    # print(
+                    #     f"Fixed mismatch: set both edges ({u}->{v}) and ({v}->{u}) to weight {avg}"
+                    # )
+            # else:
+            # optionally handle missing reverse edges
+            # print(f"Warning: no reverse edge for {u}->{v}, weight={w_uv}")
+    # ---------------------------------------------------------
     return pymetis.part_graph(
         nparts=nparts,
         adjncy=adjacency_list,

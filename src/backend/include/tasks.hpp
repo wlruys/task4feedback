@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-constexpr int32_t TASK_BUFFER_SIZE= 20;
+constexpr int32_t TASK_BUFFER_SIZE = 20;
 constexpr int32_t EXPECTED_EVICTION_TASKS = 1000;
 constexpr int32_t INITIAL_TASKS_SIZE = 1000;
 
@@ -236,6 +236,24 @@ public:
 
   std::size_t get_n_data_tasks() const {
     return data_tasks.size();
+  }
+
+  timecount_t get_time(taskid_t task_id, DeviceType arch) const {
+    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    auto &task = tasks[task_id];
+    for (std::size_t i = 0; i < task.arch.size(); i++) {
+      if (task.arch[i] == static_cast<uint8_t>(arch)) {
+        return task.time[i];
+      }
+    }
+    return -1; // Return -1 if no time is found for the specified architecture
+  }
+
+  // Returns a vector of dependency task IDs for the given task
+  std::vector<taskid_t> get_task_dependencies(taskid_t task_id) const {
+    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    const auto &deps = tasks[task_id].dependencies;
+    return std::vector<taskid_t>(deps.begin(), deps.end());
   }
 
   taskid_t add_data_task(const std::string &name, taskid_t compute_task, dataid_t data_id) {
@@ -1249,7 +1267,6 @@ protected:
   std::vector<std::string> eviction_task_names;
 
 public:
-
   RuntimeTaskInfo() = default;
 
   RuntimeTaskInfo(StaticTaskInfo &static_info) {
@@ -1728,7 +1745,6 @@ public:
     compute_task_time_records[id].completed_time = completed_time;
   }
 
-
   void record_data_launched(taskid_t id, timecount_t launched_time) {
     data_task_time_records[id].launched_time = launched_time;
   }
@@ -1843,7 +1859,7 @@ public:
 
   taskid_t compute_notify_completed(taskid_t compute_task_id, timecount_t time,
                                     const StaticTaskInfo &static_info,
-                                    TaskIDList& compute_task_buffer) {
+                                    TaskIDList &compute_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);
@@ -1867,7 +1883,7 @@ public:
 
   taskid_t compute_notify_data_completed(taskid_t compute_task_id, timecount_t time,
                                          const StaticTaskInfo &static_info,
-                                         TaskIDList& data_task_buffer) {
+                                         TaskIDList &data_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
     taskid_t write_idx = 0;
 
@@ -1907,7 +1923,7 @@ public:
 
   taskid_t data_notify_completed(taskid_t data_task_id, timecount_t time,
                                  const StaticTaskInfo &static_info,
-                                 TaskIDList & compute_task_buffer) {
+                                 TaskIDList &compute_task_buffer) {
     auto &my_info = data_task_runtime_info[data_task_id];
     auto &my_time_record = data_task_time_records[data_task_id];
 

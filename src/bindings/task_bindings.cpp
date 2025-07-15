@@ -58,6 +58,8 @@ void init_task_ext(nb::module_ &m) {
       .def("set_variant", &Graph::set_variant, "id"_a, "arch"_a, "vcu"_a, "mem"_a, "time"_a)
       .def("get_n_compute_tasks", &Graph::get_n_compute_tasks)
       .def("get_n_data_tasks", &Graph::get_n_data_tasks)
+      .def("get_time", &Graph::get_time, "task_id"_a, "arch"_a)
+      .def("get_task_dependencies", &Graph::get_task_dependencies, "task_id"_a)
       .def("finalize", &Graph::finalize, "ensure_dependencies"_a = false,
            "create_data_tasks"_a = true);
 
@@ -67,14 +69,14 @@ void init_task_ext(nb::module_ &m) {
       .def("get_compute_task", &StaticTaskInfo::get_compute_task, "task_id"_a);
 
   nb::class_<RuntimeTaskInfo>(m, "RuntimeTaskInfo")
-  .def("get_n_compute_tasks", &RuntimeTaskInfo::get_n_compute_tasks)
-  .def("get_n_data_tasks", &RuntimeTaskInfo::get_n_data_tasks)
-  .def("get_n_eviction_tasks", &RuntimeTaskInfo::get_n_eviction_tasks)
-  .def("get_n_tasks", &RuntimeTaskInfo::get_n_tasks)
-  .def("get_compute_task_state_at_time", &RuntimeTaskInfo::get_compute_task_state_at_time)
-  .def("get_data_task_state_at_time", &RuntimeTaskInfo::get_data_task_state_at_time)
-  .def("get_data_task_mapped_device", &RuntimeTaskInfo::get_data_task_mapped_device)
-  .def("get_compute_task_mapped_device", &RuntimeTaskInfo::get_compute_task_mapped_device)
-  .def("get_data_task_source_device", &RuntimeTaskInfo::get_data_task_source_device)
-  .def("is_data_task_virtual", &RuntimeTaskInfo::is_data_task_virtual);
+      .def("get_n_compute_tasks", &RuntimeTaskInfo::get_n_compute_tasks)
+      .def("get_n_data_tasks", &RuntimeTaskInfo::get_n_data_tasks)
+      .def("get_n_eviction_tasks", &RuntimeTaskInfo::get_n_eviction_tasks)
+      .def("get_n_tasks", &RuntimeTaskInfo::get_n_tasks)
+      .def("get_compute_task_state_at_time", &RuntimeTaskInfo::get_compute_task_state_at_time)
+      .def("get_data_task_state_at_time", &RuntimeTaskInfo::get_data_task_state_at_time)
+      .def("get_data_task_mapped_device", &RuntimeTaskInfo::get_data_task_mapped_device)
+      .def("get_compute_task_mapped_device", &RuntimeTaskInfo::get_compute_task_mapped_device)
+      .def("get_data_task_source_device", &RuntimeTaskInfo::get_data_task_source_device)
+      .def("is_data_task_virtual", &RuntimeTaskInfo::is_data_task_virtual);
 }

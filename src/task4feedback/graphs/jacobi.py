@@ -410,7 +410,6 @@ class JacobiGraph(ComputeDataGraph):
             partitions.append(partition)
 
         self.partitions = partitions
-        print("Partitions: ", partitions)
         return partitions
 
     def align_partitions(self):

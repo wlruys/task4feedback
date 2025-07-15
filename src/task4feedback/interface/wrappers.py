@@ -100,6 +100,12 @@ class TaskGraph:
     def __len__(self):
         return self.graph.size()
 
+    def get_task_dependencies(self, task_id: int) -> list[int]:
+        """
+        Return the list of dependency task IDs for the given task.
+        """
+        return self.graph.get_task_dependencies(task_id)
+
     def __len__(self):
         return self.graph.size()
 
@@ -147,6 +153,8 @@ class TaskGraph:
     def finalize(self):
         self.graph.finalize()
         self.static_graph = StaticTaskInfo(self.graph)
+        for task_id, v in self.tasks.items():
+            v.dependencies = self.get_task_dependencies(task_id)
 
     @staticmethod
     def create_from_legacy_graph(graph, datamap):
