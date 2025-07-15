@@ -177,3 +177,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Editor and OS-specific files
+.clangd
+.DS_Store
+
+# Test scripts
+test/run_tests.sh

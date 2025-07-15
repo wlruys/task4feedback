@@ -85,8 +85,8 @@ taskid_t Scheduler::map_task(taskid_t compute_task_id, Action &action) {
   s.mapped_but_not_reserved_tasks.insert(compute_task_id);
 
   // Notify dependents and enqueue newly mappable tasks
-  task_runtime.compute_notify_mapped(
-      compute_task_id, chosen_device, rp, lp, current_time, static_graph, compute_task_buffer);
+  task_runtime.compute_notify_mapped(compute_task_id, chosen_device, rp, lp, current_time,
+                                     static_graph, compute_task_buffer);
   s.update_mapped_cost(compute_task_id, chosen_device);
   success_count += 1;
   breakpoints.decrement_steps();
@@ -120,19 +120,20 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
   auto top_k_tasks = mappable.get_top_k();
 
   python_mapper_buffer.clear();
-  
 
   if (!action_list.empty()) {
     for (auto &action : action_list) {
       const auto task_id = top_k_tasks[action.pos];
-      map_task( task_id, action);
+      map_task(task_id, action);
 
       python_mapper_buffer.reserve(python_mapper_buffer.size() + compute_task_buffer.size());
-      std::copy(compute_task_buffer.begin(), compute_task_buffer.end(), std::back_inserter(python_mapper_buffer));
+      std::copy(compute_task_buffer.begin(), compute_task_buffer.end(),
+                std::back_inserter(python_mapper_buffer));
     }
 
     remove_mapped_tasks(action_list);
-    SPDLOG_DEBUG("Time:{} Newly mappable tasks: {}", state.global_time, python_mapper_buffer.size());
+    SPDLOG_DEBUG("Time:{} Newly mappable tasks: {}", state.global_time,
+                 python_mapper_buffer.size());
     push_mappable(python_mapper_buffer);
   }
 
@@ -198,7 +199,6 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
     map_task(task_id, action);
 
     push_mappable(compute_task_buffer);
-
   }
 
   if (break_flag) {
@@ -233,8 +233,7 @@ void Scheduler::enqueue_data_tasks(taskid_t compute_task_id) {
   }
 }
 
-bool Scheduler::reserve_task(taskid_t compute_task_id,
-                                    devid_t device_id) {
+bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
   ZoneScoped;
   auto &s = this->state;
   auto &task_runtime = s.task_runtime;
@@ -278,8 +277,8 @@ bool Scheduler::reserve_task(taskid_t compute_task_id,
   // erase task_id from s.mapped_but_not_reserved_tasks
   mapped.erase(mapped.find(compute_task_id));
 
-  task_runtime.compute_notify_reserved(
-      compute_task_id, device_id, current_time, static_graph, compute_task_buffer);
+  task_runtime.compute_notify_reserved(compute_task_id, device_id, current_time, static_graph,
+                                       compute_task_buffer);
 
   success_count += 1;
   enqueue_data_tasks(compute_task_id);
@@ -361,6 +360,9 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
                    tasks_requesting_eviction.size());
       this->eviction_state = EvictionState::WAITING_FOR_COMPLETION; // This should be set to false
                                                                     // after the eviction is over
+      // Create an event to start the eviction process
+      event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
+      return;
     } else {
       SPDLOG_DEBUG("Time:{} Eviction will start after launching {} tasks", current_time,
                    s.counts.n_unlaunched_reserved());
@@ -638,6 +640,15 @@ bool Scheduler::launch_eviction_tasks(EventManager &event_manager) {
   SPDLOG_DEBUG("Time:{} Eviction Launchable Queue Size: {}", current_time,
                queues.eviction_launchable.total_active_size());
 
+  // if (this->eviction_state == EvictionState::WAITING_FOR_COMPLETION &&
+  //     queues.eviction_launchable.total_active_size() == 0) {
+  //   // If the scheduler is waiting for eviction completion and there are no active eviction
+  //   tasks,
+  //   // it means that evictor has not been launched yet.
+  //   // We need to launch the evictor to start the eviction process.
+  //   event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
+  // }
+
   bool break_flag = false;
 
   while (queues.has_active_eviction_launchable() &&
@@ -717,7 +728,9 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
   auto current_time = s.global_time;
 
   if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
-    if (s.counts.n_reserved() + s.counts.n_data_reserved() > 0) {
+    if (s.counts.n_reserved() + s.counts.n_data_reserved() + s.counts.n_launched() +
+            s.counts.n_data_launched() >
+        0) {
       SPDLOG_DEBUG("Time:{} Evictor waiting for all {} compute and {} data task to finish",
                    current_time, s.counts.n_reserved(), s.counts.n_reserved());
       event_manager.create_event(EventType::LAUNCHER, current_time);
@@ -872,7 +885,8 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
         }
       }
 
-      SPDLOG_DEBUG("Time:{} Evictor launched {} eviction tasks", current_time, eviction_count);
+      SPDLOG_DEBUG("Time:{} Evictor pushed {} eviction tasks to launch queue", current_time,
+                   eviction_count);
       eviction_state = EvictionState::RUNNING;
     }
   }
@@ -915,10 +929,28 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
     }
     scheduler_event_count += 1;
   }
+
+  auto &device_manager = s.get_device_manager();
+  auto &lru_manager = s.get_data_manager().get_lru_manager();
+  // check memory state, whether it is consistent for debugging purpose
+  bool flag = false;
+  for (devid_t i = 0; i < device_manager.n_devices; i++) {
+    mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i);
+    mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i);
+    mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i);
+    mem_t lru_mem = lru_manager.get_mem(i);
+    SPDLOG_DEBUG("Device {}: launched {}, lru {}, reserved {}, mapped {}", i, launched_mem, lru_mem,
+                 reserved_mem, mapped_mem);
+    if (i > 0 && mapped_mem < launched_mem)
+      flag = true;
+    assert(launched_mem == lru_mem);
+  }
+  if (flag) {
+    SPDLOG_DEBUG("Memory state is inconsistent");
+  }
 }
 
-void Scheduler::complete_compute_task(ComputeCompleterEvent &event,
-                                          EventManager &event_manager) {
+void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
   auto &static_graph = s.get_tasks();
@@ -945,18 +977,17 @@ void Scheduler::complete_compute_task(ComputeCompleterEvent &event,
 
   // Notify dependents that the task has completed (uses task static info, dependents, and task
   // runtime info of dependents)
-  task_runtime.compute_notify_completed(
-      compute_task_id, current_time, static_graph, compute_task_buffer);
+  task_runtime.compute_notify_completed(compute_task_id, current_time, static_graph,
+                                        compute_task_buffer);
 
   SPDLOG_DEBUG("Time:{} Newly launchable compute tasks: {}", current_time,
                compute_task_buffer.size());
   push_launchable(compute_task_buffer);
 
-  task_runtime.compute_notify_data_completed(
-      compute_task_id, current_time, static_graph, data_task_buffer);
+  task_runtime.compute_notify_data_completed(compute_task_id, current_time, static_graph,
+                                             data_task_buffer);
 
-  SPDLOG_DEBUG("Time:{} Newly launchable data tasks: {}", current_time,
-               data_task_buffer.size());
+  SPDLOG_DEBUG("Time:{} Newly launchable data tasks: {}", current_time, data_task_buffer.size());
 
   push_launchable_data(data_task_buffer);
 
@@ -991,9 +1022,7 @@ void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &even
 
   // Notify dependents that the data task has completed
   // (uses task static info, dependents, and task runtime info of dependents)
-  task_runtime.data_notify_completed(
-      data_task_id, current_time, static_graph,
-      compute_task_buffer);
+  task_runtime.data_notify_completed(data_task_id, current_time, static_graph, compute_task_buffer);
 
   SPDLOG_DEBUG("Time:{} Newly launchable compute tasks: {}", current_time,
                compute_task_buffer.size());

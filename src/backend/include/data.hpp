@@ -179,11 +179,10 @@ protected:
   bool record{false};
 
 public:
-
   LocationManager() = default;
 
   LocationManager(dataid_t num_data, devid_t num_devices)
-      : num_devices(num_devices), num_data(num_data), locations(num_data, 0){
+      : num_devices(num_devices), num_data(num_data), locations(num_data, 0) {
 
 #ifdef SIM_RECORD
     constexpr size_t buffer_initial_size = 100;
@@ -212,7 +211,7 @@ public:
     auto old_status = locations[data_id] & mask;
 
 #ifdef SIM_RECORD
-    if (record){
+    if (record) {
       if (old_status) {
         // start new interval
         valid_intervals[data_id * num_devices + device_id].starts.push_back(current_time);
@@ -305,8 +304,8 @@ public:
   }
 
   void finalize(timecount_t current_time) {
-    // tie off any open/hanging interval at the end of the simulation
-    #ifdef SIM_RECORD
+// tie off any open/hanging interval at the end of the simulation
+#ifdef SIM_RECORD
     for (dataid_t i = 0; i < num_data; i++) {
       for (uint8_t j = 0; j < num_devices; j++) {
         if (is_valid(i, j)) {
@@ -314,7 +313,7 @@ public:
         }
       }
     }
-    #endif
+#endif
   }
 
   ValidEventArray &get_valid_intervals(dataid_t data_id, devid_t device_id) {
@@ -391,7 +390,6 @@ private:
   mutable DataIDList id_buffer;
 
 public:
-
   LRU_manager() = default;
 
   // Constructor: initialize for n_devices [0 .. n_devices-1]
@@ -507,12 +505,12 @@ public:
 
 class DataManager {
 protected:
-    LocationManager mapped_locations;
-    LocationManager reserved_locations;
-    LocationManager launched_locations;
-    MovementManager movement_manager;
-    LRU_manager lru_manager;
-    bool initialized = false;
+  LocationManager mapped_locations;
+  LocationManager reserved_locations;
+  LocationManager launched_locations;
+  MovementManager movement_manager;
+  LRU_manager lru_manager;
+  bool initialized = false;
 
   static bool check_valid(size_t data_id, const LocationManager &locations, devid_t device_id) {
     return locations.is_valid(data_id, device_id);
@@ -584,16 +582,30 @@ public:
     initialized = true;
     for (dataid_t i = 0; i < data.size(); i++) {
       auto initial_location = data.get_location(i);
-      if (initial_location > -1) {
+      const auto data_size = data.get_size(i);
+
+      if (initial_location > -1 && (lru_manager.get_mem(initial_location) + data_size) <=
+                                       devices.get_max_resources(initial_location).mem) {
         mapped_locations.set_valid(i, initial_location, 0);
         reserved_locations.set_valid(i, initial_location, 0);
         launched_locations.set_valid(i, initial_location, 0);
-        const auto size = data.get_size(i);
-        device_manager.add_mem<TaskState::MAPPED>(initial_location, size, 0);
-        device_manager.add_mem<TaskState::RESERVED>(initial_location, size, 0);
-        device_manager.add_mem<TaskState::LAUNCHED>(initial_location, size, 0);
-        lru_manager.read(initial_location, i, size);
+        device_manager.add_mem<TaskState::MAPPED>(initial_location, data_size, 0);
+        device_manager.add_mem<TaskState::RESERVED>(initial_location, data_size, 0);
+        device_manager.add_mem<TaskState::LAUNCHED>(initial_location, data_size, 0);
+        lru_manager.read(initial_location, i, data_size);
+      } else {
+        mapped_locations.set_valid(i, 0, 0);
+        reserved_locations.set_valid(i, 0, 0);
+        launched_locations.set_valid(i, 0, 0);
+        device_manager.add_mem<TaskState::MAPPED>(0, data_size, 0);
+        device_manager.add_mem<TaskState::RESERVED>(0, data_size, 0);
+        device_manager.add_mem<TaskState::LAUNCHED>(0, data_size, 0);
+        lru_manager.read(0, i, data_size);
       }
+    }
+    for (devid_t i = 0; i < devices.size(); i++) {
+      SPDLOG_DEBUG("DataManager: Device {} initialized with {}/{} memory", devices.get_name(i),
+                   lru_manager.get_mem(i), devices.get_max_resources(i).mem);
     }
     valid_location_buffer.reserve(devices.size());
   }
