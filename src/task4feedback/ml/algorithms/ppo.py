@@ -327,16 +327,6 @@ def run_ppo(
     if ppo_config.compile_update:
         update = compile_with_warmup(update, mode="reduce-overhead", warmup=8)
 
-    global _interrupt_requested
-    _interrupt_requested = False
-
-    def signal_handler(sig, frame):
-        global _interrupt_requested
-        _interrupt_requested = True
-        training.info(
-            "\nInterrupt received, will save checkpoint and exit after current iteration..."
-        )
-
     states_per_collection = min(
         ppo_config.states_per_collection, max_states_per_collection
     )
@@ -356,9 +346,7 @@ def run_ppo(
         f"{ppo_config.workers} workers."
     )
 
-    # Initial evaluation 
-    print(logging_config)
-    if should_log(0, logging_config):
+    if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
         run_evaluation(collector.policy, env_constructors, eval_config, 0)
 
