@@ -1,7 +1,7 @@
-# conf/config.yaml
 defaults:
+  - _self_
   - graph: static_jacobi
-  - reward: dieft
+  - reward: ieft
   - system: uniform
   - feature: candidate_coordinate
   - network: vector_baseline
@@ -11,6 +11,7 @@ defaults:
   - logging: default
   - lr_scheduler: none 
   - optimizer: adamw
+  - eval: default
 
 hydra:
   callbacks:

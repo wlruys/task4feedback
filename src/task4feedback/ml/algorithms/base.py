@@ -6,9 +6,7 @@ from torch.nn import Module
 class LoggingConfig:
     stats_interval: int = 1000
     save_interval: int = 100
-    eval_interval: int = 100
-    dpi: int = 100
-    bitrate: int = 50
+    checkpoint_interval: int = 100
 
 
 @dataclass

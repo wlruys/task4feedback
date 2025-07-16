@@ -2036,7 +2036,6 @@ class SimulatorFactory:
         self,
         seed: Optional[int] = None,
         priority_seed: Optional[int] = None,
-        comm_seed: Optional[int] = None,
     ):
         """
         Set the seed for the simulator.
@@ -2045,8 +2044,6 @@ class SimulatorFactory:
             self.seed = seed
         if priority_seed is not None:
             self.pseed = priority_seed
-        if comm_seed is not None:
-            self.cseed = comm_seed
 
 
 def uniform_connected_devices(n_devices: int, mem: int, latency: int, bandwidth: int):

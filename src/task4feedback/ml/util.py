@@ -1,5 +1,18 @@
 from tensordict import TensorDict
 import torch
+from typing import Callable, Optional
+from torchrl.envs import set_exploration_type, ExplorationType
+from tensordict import TensorDict
+from task4feedback.graphs.mesh.plot import animate_mesh_graph
+from dataclasses import dataclass, field 
+import wandb
+from pathlib import Path
+import time
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
+from task4feedback.logging import training 
+import os 
+import git 
 
 def compute_advantage(td: TensorDict):
     with torch.no_grad():
@@ -80,59 +93,6 @@ def redistribute_rewards_uniform(td: TensorDict) -> TensorDict:
         td.set(("next", "reward"), new_rewards)
 
     return td
-
-# def compute_gae(tensordict_data, gamma=1, lam=0.99):
-#     with torch.no_grad():
-#         value = tensordict_data["state_value"].view(-1)
-#         reward = tensordict_data["next", "reward"].view(-1)
-#         done = tensordict_data["next", "done"].view(-1)
-#         traj_ids = tensordict_data["collector", "traj_ids"].view(-1)
-
-#         advantage = torch.zeros_like(value)
-#         value_target = torch.zeros_like(value)
-
-#         for traj_id in traj_ids.unique():
-#             mask = traj_ids == traj_id
-#             traj_value = value[mask]
-#             traj_reward = reward[mask]
-#             traj_done = done[mask]
-#             traj_advantage = torch.zeros_like(traj_value)
-#             traj_value_target = torch.zeros_like(traj_value)
-
-#             gae = 0.0
-#             T = len(traj_value)
-
-#             # Compute next values for TD error calculation
-#             next_values = torch.zeros_like(traj_value)
-#             for t in range(T - 1):
-#                 if not traj_done[
-#                     t
-#                 ]:  # If not done, next value is the next state's value
-#                     next_values[t] = traj_value[t + 1]
-#                 # If done, next value remains 0 (already initialized)
-#             # Last step's next value is 0 (episode ends)
-
-#             # Compute GAE backwards through the trajectory
-#             for t in reversed(range(T)):
-#                 if traj_done[t]:
-#                     # Episode terminates, next value is 0
-#                     delta = traj_reward[t] - traj_value[t]
-#                     gae = delta
-#                 else:
-#                     # Normal step
-#                     delta = traj_reward[t] + gamma * next_values[t] - traj_value[t]
-#                     gae = delta + gamma * lam * gae
-
-#                 traj_advantage[t] = gae
-#                 traj_value_target[t] = gae + traj_value[t]
-
-#             advantage[mask] = traj_advantage
-#             value_target[mask] = traj_value_target
-
-#         tensordict_data["advantage"] = advantage.unsqueeze(1)
-#         tensordict_data["value_target"] = value_target.unsqueeze(1)
-
-#         return tensordict_data
 
 
 def compute_gae(tensordict_data, gamma: float = 0.99, lam: float = 0.95):
@@ -219,6 +179,26 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
+class Timer:
+    def __init__(self, verbose: bool = True, name: Optional[str] = None):
+        self.verbose = verbose
+        self.name = name
+
+    def __enter__(self):
+        self.start = time.perf_counter()
+        return self
+
+    def __exit__(self, *args):
+        self.end = time.perf_counter()
+        self.interval = self.end - self.start
+        if self.verbose:
+            name_str = f" {self.name}" if self.name else ""
+            print(f"Timer{name_str}: {self.interval:.4f} seconds")
+
+    def get_elapsed(self) -> float:
+        """Returns the elapsed time in seconds."""
+        return self.interval
+
 def log_parameter_and_gradient_norms(model):
     """Log parameter and gradient norms to wandb"""
     param_norms = {}
@@ -249,95 +229,204 @@ def log_parameter_and_gradient_norms(model):
     }
 
 
-# def evaluate_policy(
-#     policy,
-#     eval_env_fn: Callable,
-#     max_steps: int = 10000,
-#     num_episodes: int = 1,
-#     step=0,
-# ) -> Dict[str, float]:
-#     episode_rewards = []
-#     completion_times = []
-#     episode_returns = []
-#     std_rewards = []
 
-#     for i in range(num_episodes):
-#         env = eval_env_fn()
-#         with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-#             tensordict = env.rollout(
-#                 max_steps=max_steps,
-#                 policy=policy,
-#             )
 
-#         if "next" in tensordict and "reward" in tensordict["next"]:
-#             rewards = tensordict["next", "reward"]
-#             avg_reward = rewards.mean().item()
-#             std_reward = rewards.std().item()
-#             returns = tensordict["next", "reward"].sum().item()
-#         else:
-#             returns = 0.0
-#             avg_non_zero_reward = 0.0
-#             std_rewards = 0.0
+@dataclass 
+class EvaluationConfig:
+    eval_interval: int = 100
+    animation_interval: int = 1000
+    max_frames: int = 100
+    fig_size: tuple[int, int] = (4, 4)
+    dpi: int = 50
+    bitrate: int = 50
+    exploration_types: list[str] = field(default_factory=lambda: ["RANDOM", "DETERMINISTIC"])
+    samples: int = 10
+    seeds: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])
 
-#         episode_returns.append(returns)
-#         episode_rewards.append(avg_reward)
-#         std_rewards.append(std_reward)
 
-#         if hasattr(env, "simulator") and hasattr(env.simulator, "time"):
-#             completion_time = env.simulator.time
-#             completion_times.append(completion_time)
 
-#             if i == 0 and completion_time > 0:
-#                 max_frames = 400
-#                 time_interval = int(completion_time / max_frames)
+def eval_env(policy, env, exploration_type: ExplorationType, samples: int = 1, seed: int = 0):
+    env_rewards = []
+    env_times = []
+    metrics = {}
+    last_env = None
 
-#                 title = f"network_eval_{step}_{i}"
-#                 print(title)
-#                 animate_mesh_graph(
-#                     env,
-#                     time_interval=time_interval,
-#                     show=False,
-#                     title=title,
-#                     figsize=(4, 4),
-#                     dpi=50,
-#                     bitrate=50,
-#                 )
+    for _ in range(samples):
+        env.reset_for_evaluation(seed=seed)
+        with set_exploration_type(exploration_type), torch.no_grad():
+            tensordict = env.rollout(
+                policy=policy,
+                max_steps=10000,
+            )
 
-#                 if wandb.run.dir is None:
-#                     path = "."
-#                 else:
-#                     path = wandb.run.dir
+        if "next" in tensordict and "reward" in tensordict["next"]:
+            rewards = tensordict["next", "reward"]
+            avg_reward = rewards.mean().item()
+            env_rewards.append(avg_reward)
 
-#                 video_path = os.path.join(path, title + ".mp4")
+        if hasattr(env, "simulator") and hasattr(env.simulator, "time"):
+            completion_time = env.simulator.time
+            env_times.append(completion_time)
 
-#                 wandb.log(
-#                     {
-#                         "eval/animation": wandb.Video(
-#                             video_path,
-#                             caption=title,
-#                             format="mp4",
-#                         )
-#                     }
-#                 )
+    if samples > 1:
+        mean_reward = sum(env_rewards) / len(env_rewards)
+        mean_time = sum(env_times) / len(env_times) if env_times else 0
+        std_reward = torch.std(torch.tensor(env_rewards, dtype=torch.float64)).item() if env_rewards else 0.0
+        std_time = torch.std(torch.tensor(env_times, dtype=torch.float64)).item() if env_times else 0.0
+        metrics["std_time"] = std_time
+        metrics["std_reward"] = std_reward
+    else:
+        mean_reward = env_rewards[0] if env_rewards else 0.0
+        mean_time = env_times[0] if env_times else 0.0
+        std_reward = 0.0
+        std_time = 0.0
+            
+    metrics["mean_reward"] = mean_reward
+    metrics["mean_time"] = mean_time
 
-#     # Create metrics dictionary
-#     metrics = {
-#         "eval/mean_return": sum(episode_rewards) / max(len(episode_rewards), 1),
-#         # "eval/std_return": np.std(episode_rewards) if len(episode_rewards) > 1 else 0,
-#         "eval/mean_reward": sum(episode_rewards) / max(len(episode_rewards), 1),
-#         # "eval/std_mean_reward": np.std(episode_rewards)
-#         # if len(episode_rewards) > 1
-#         # else 0,
-#         # "eval/std_std_reward": np.std(std_rewards) if len(std_rewards) > 1 else 0,
-#         "eval/mean_std_reward": sum(std_rewards) / max(len(std_rewards), 1),
-#     }
+    training.info(
+        f"Evaluation results: mean_reward={mean_reward}, std_reward={std_reward}, "
+        f"mean_time={mean_time}"
+    )
 
-#     # Add completion time metrics if available
-#     if completion_times:
-#         metrics["eval/mean_completion_time"] = sum(completion_times) / len(
-#             completion_times
-#         )
-#         # metrics["eval/min_completion_time"] = min(completion_times)
-#         # metrics["eval/max_completion_time"] = max(completion_times)
+    last_env = env
 
-#     return metrics
+    return metrics, last_env 
+
+
+def evaluate_policy(
+        policy, 
+        eval_envs: list[Callable],
+        config: EvaluationConfig,
+) -> dict[str, float]:
+    
+    metrics = {}
+
+    viz_envs = {}
+    viz_envs[ExplorationType.DETERMINISTIC] = None 
+    viz_envs[ExplorationType.RANDOM] = None
+    
+    for exploration_type in config.exploration_types:
+        metrics[f"eval/{str(exploration_type)}"] = {}
+
+        for i, eval_env_fn in enumerate(eval_envs):
+            env = eval_env_fn()
+            for seed in config.seeds:
+                metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = {}
+                if exploration_type == "RANDOM":
+                    exploration_type_enum = ExplorationType.RANDOM
+                elif exploration_type == "DETERMINISTIC":
+                    exploration_type_enum = ExplorationType.DETERMINISTIC
+                else:
+                    raise ValueError(f"Unknown exploration type: {exploration_type}")
+                
+                training.info(f"Evaluating environment {i, seed} with {str(exploration_type)} policy")
+                env_eval_metrics, output_env = eval_env(
+                    policy,
+                    env,
+                    exploration_type_enum,
+                    samples=config.samples if exploration_type == "RANDOM" else 1,
+                    seed=seed
+                )
+
+                metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = env_eval_metrics
+
+        if env is not None:
+            viz_envs[exploration_type] = output_env
+
+    return metrics, viz_envs
+
+
+def visualize_envs(idx: int, viz_envs: dict, config: EvaluationConfig):
+    d = {}
+    for key, env in viz_envs.items():
+        d[key] = {}
+        if env is not None:
+            training.info(f"Visualizing environment {key} at n_updates={idx}")
+            title = f"network_eval_{key}_{idx}"
+            animate_mesh_graph(
+                env,
+                time_interval=int(env.simulator.time / config.max_frames),
+                show=False,
+                title=title,
+                figsize=config.fig_size,
+                dpi=config.dpi,
+                bitrate=config.bitrate,
+            )
+
+            if wandb is None or wandb.run is None or wandb.run.dir is None:
+                path = "."
+            else:
+                path = wandb.run.dir
+
+            video_path = Path(path) / f"{title}.mp4"
+            d[key]["video"] = {}
+            d[key]["video"][str(key)] = None
+            d[key]["video"][str(key)] = wandb.Video(
+                str(video_path),
+                caption=title,
+                format="mp4",
+            )
+
+    return d
+
+def run_evaluation(
+    policy,
+    eval_envs: list[Callable],
+    config: EvaluationConfig,
+    n_updates: int = 0,
+):
+    metrics, viz_envs = evaluate_policy(policy, eval_envs, config)
+
+    if n_updates % config.animation_interval == 0:
+        video_log = visualize_envs(n_updates, viz_envs, config)
+    else:
+        video_log = {}
+
+    wandb.log(
+        {
+            **metrics,
+            **video_log,
+            "batch/n_updates": n_updates,
+        }
+    )
+
+    return metrics
+
+
+def save_checkpoint(
+    step, policy_module, value_module, optimizer, lr_scheduler=None, extras: Optional[Dict[str, Any]] = None
+):
+    try:
+        state = dict(
+            step=step,
+            policy_module=policy_module.state_dict(),
+            value_module=value_module.state_dict(),
+            optimizer=optimizer.state_dict(),
+            rng_torch=torch.get_rng_state(),
+            rng_cuda=torch.cuda.get_rng_state_all()
+            if torch.cuda.is_available()
+            else None,
+            extras=extras or {},
+            commit_hash=git.Repo(search_parent_directories=True).head.object.hexsha,
+            commit_dirty=git.Repo(search_parent_directories=True).is_dirty(),
+        )
+        if lr_scheduler is not None:
+            state["lr_scheduler"] = lr_scheduler.state_dict()
+
+        if wandb is not None and wandb.run is not None and wandb.run.dir is not None:
+            checkpoint_dir = Path(wandb.run.dir)
+        else:
+            checkpoint_dir = Path(os.environ.get("HYDRA_RUNTIME_OUTPUT_DIR", "."))
+
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        checkpoint_file = checkpoint_dir / f"checkpoint_{step}.pt"
+        torch.save(state, checkpoint_file)
+        training.info(f"Checkpoint saved to {checkpoint_file}")
+
+        return checkpoint_file
+
+    except Exception as e:
+        training.error(f"Failed to save checkpoint at step {step}: {e}")
+        raise
