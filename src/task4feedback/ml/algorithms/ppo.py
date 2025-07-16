@@ -1,3 +1,4 @@
+from pathlib import Path
 from ..models import *
 from ..util import *
 from dataclasses import dataclass
@@ -148,6 +149,41 @@ def log_training_metrics(
             )
 
         wandb.log(log_payload)
+
+
+def checkpoint(
+    step, model, optimizer, lr_scheduler=None, extras: Optional[Dict[str, Any]] = None
+):
+    try:
+        state = dict(
+            step=step,
+            model=model.state_dict(),
+            optimizer=optimizer.state_dict(),
+            rng_torch=torch.get_rng_state(),
+            rng_cuda=torch.cuda.get_rng_state_all()
+            if torch.cuda.is_available()
+            else None,
+            extras=extras or {},
+        )
+        if lr_scheduler is not None:
+            state["lr_scheduler"] = lr_scheduler.state_dict()
+
+        if wandb is not None and wandb.run is not None and wandb.run.dir is not None:
+            checkpoint_dir = Path(wandb.run.dir)
+        else:
+            checkpoint_dir = Path(os.environ.get("HYDRA_RUNTIME_OUTPUT_DIR", "."))
+
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        checkpoint_file = checkpoint_dir / f"checkpoint_{step}.pt"
+        torch.save(state, checkpoint_file)
+        training.info(f"Checkpoint saved to {checkpoint_file}")
+
+        return checkpoint_file
+
+    except Exception as e:
+        training.error(f"Failed to save checkpoint at step {step}: {e}")
+        raise
 
 def run_ppo(
     actor_critic_module: ActorCriticModule,

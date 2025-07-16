@@ -873,6 +873,7 @@ public:
       add_write(task.id, as_vector(task.write));
       add_retire(task.id, as_vector(task.retire));
       add_unique(task.id, task.unique);
+      add_depth(task.id, task.depth);
 
       for (int i = 0; i < task.arch.size(); ++i) {
         const auto arch = static_cast<DeviceType>(task.arch[i]);
@@ -1161,6 +1162,10 @@ public:
 
   [[nodiscard]] const int32_t get_depth(taskid_t id) const {
     return compute_task_static_info[id].depth;
+  }
+
+  void add_depth(taskid_t id, int32_t depth) {
+    compute_task_static_info[id].depth = depth;
   }
 
   [[nodiscard]] std::span<const taskid_t> get_most_recent_writers(taskid_t id) const {

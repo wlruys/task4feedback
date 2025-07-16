@@ -73,7 +73,7 @@ public:
                    pseed);
 
       generate_duration(static_graph);
-      // generate_priority(static_graph);
+      generate_priority(static_graph);
 
     } catch (const std::bad_alloc &e) {
       throw std::runtime_error("Memory allocation failed in TaskNoise constructor");
@@ -167,7 +167,7 @@ public:
 
   void generate(StaticTaskInfo &task_info) {
     generate_duration(task_info);
-    // generate_priority(task_info);
+    generate_priority(task_info);
   }
 
   // void dump_to_binary(const std::string &filename) const {

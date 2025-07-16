@@ -1,7 +1,5 @@
 from tensordict import TensorDict
 import torch
-from torchrl.envs.transforms import Transform
-
 
 def compute_advantage(td: TensorDict):
     with torch.no_grad():
