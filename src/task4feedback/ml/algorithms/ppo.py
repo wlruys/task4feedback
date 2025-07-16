@@ -1,11 +1,9 @@
-from pathlib import Path
 from ..models import *
 from ..util import *
 from dataclasses import dataclass
-from typing import Callable, Optional, List, Dict, Any, Tuple
+from typing import Callable, Optional, List, Dict
 from torchrl.collectors import MultiSyncDataCollector, SyncDataCollector
 from torchrl.data.replay_buffers import (
-    ReplayBuffer,
     SliceSampler,
     TensorDictReplayBuffer,
 )
@@ -13,22 +11,16 @@ from torchrl.data.replay_buffers.storages import LazyTensorStorage, TensorStorag
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE, VTrace
-from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
 from torchrl.objectives.utils import ValueEstimators
-from torchrl.envs import TransformedEnv
-import copy
 from tensordict import TensorDict
 import wandb
-import os
 import torch
 from torchrl._utils import compile_with_warmup
 from .base import AlgorithmConfig, LoggingConfig
 from ..base import ActorCriticModule
-from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 from task4feedback.logging import training
 import time
-from torchrl.envs import ParallelEnv
 from torchrl.collectors.utils import split_trajectories
 from task4feedback.ml.util import log_parameter_and_gradient_norms
 
@@ -196,6 +188,8 @@ def run_ppo(
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
 
+    
+
     max_tasks = max([make_env().size() for make_env in env_constructors])
 
     if ppo_config.rollout_steps > 0:
@@ -333,6 +327,16 @@ def run_ppo(
     if ppo_config.compile_update:
         update = compile_with_warmup(update, mode="reduce-overhead", warmup=8)
 
+    global _interrupt_requested
+    _interrupt_requested = False
+
+    def signal_handler(sig, frame):
+        global _interrupt_requested
+        _interrupt_requested = True
+        training.info(
+            "\nInterrupt received, will save checkpoint and exit after current iteration..."
+        )
+
     states_per_collection = min(
         ppo_config.states_per_collection, max_states_per_collection
     )
@@ -362,7 +366,6 @@ def run_ppo(
     training.info("Starting PPO training loop")
 
     start_t = time.perf_counter()
-
     n_updates = 0
     n_samples = 0
 
@@ -454,7 +457,6 @@ def run_ppo(
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
         run_evaluation(collector.policy, env_constructors, eval_config, n_updates)
-
 
 def run_ppo_lstm(
     actor_critic_module: ActorCriticModule,
