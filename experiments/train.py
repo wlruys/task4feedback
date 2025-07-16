@@ -63,11 +63,11 @@ def configure_training(cfg: DictConfig):
     
     optimizer = create_optimizer(cfg)
     lr_scheduler = create_lr_scheduler(cfg)
+    logging_config = instantiate(cfg.logging)
 
-    if cfg.wandb.enabled:
-        logging_config = instantiate(cfg.logging)
-    else:
-        logging_config = None
+    eval_config = instantiate(cfg.eval)
+
+    print(eval_config)
 
     if lstm is not None:
         run_ppo_lstm(
@@ -75,6 +75,7 @@ def configure_training(cfg: DictConfig):
             env_constructors=[env_fn],
             logging_config=logging_config,
             ppo_config=alg_config,
+            eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
         )
@@ -84,6 +85,7 @@ def configure_training(cfg: DictConfig):
             env_constructors=[env_fn],
             logging_config=logging_config,
             ppo_config=alg_config,
+            eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
         )
