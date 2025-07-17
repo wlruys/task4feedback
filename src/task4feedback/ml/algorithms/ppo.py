@@ -114,7 +114,11 @@ def log_training_metrics(
             avg_improvement = valid_improvements.mean().item()
             max_improvement = valid_improvements.max().item()
             min_improvement = valid_improvements.min().item()
-            std_improvement = valid_improvements.std().item()
+
+            if valid_improvements.numel() > 1:
+                std_improvement = valid_improvements.std().item()
+            else:
+                std_improvement = None
 
         # Calculate reward metrics
         if rewards.numel() > 0:
@@ -167,7 +171,7 @@ def log_training_metrics(
                     "batch/min_improvement": min_improvement,
                 }
             )
-            if valid_improvements.numel() > 1:
+            if std_improvement is not None:
                 log_payload["batch/std_improvement"] = std_improvement
         
 
