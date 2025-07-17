@@ -59,6 +59,7 @@ class PPOConfig(AlgorithmConfig):
     rollout_steps: int = 250
     advantage_type: str = "gae"  # "gae" or "vtrace"
     bagged_policy: str = "uniform"
+    timeout: int = 60 * 60 * 24 # 1 day
 
 def should_log(
     n_updates: int,
@@ -446,18 +447,30 @@ def run_ppo(
             )
 
         if should_checkpoint(n_collections, logging_config):
-            training.info(f"Checkpointing at update {n_updates}")
+            training.info(f"Checkpointing at collection {n_collections}")
             save_checkpoint(
-                n_updates,
+                n_collections,
                 policy_module=collector.policy,
                 value_module=loss_module.critic_network,
                 optimizer=optimizer,
                 lr_scheduler=lr_scheduler,
             )
 
+        current_t = time.perf_counter()
+        elapsed_time = current_t - start_t
+        if elapsed_time > ppo_config.timeout:
+            training.warning(
+                f"Timeout reached after {elapsed_time:.2f} seconds. Stopping training."
+            )
+            break
+
+        
+
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
         run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+
+    save_checkpoint(n_collections, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
     collector.shutdown()
 
@@ -747,6 +760,9 @@ def run_ppo_lstm(
         update_elapsed_time = update_end_t - update_start_t
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
 
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+
         if should_eval(n_collections, eval_config=eval_config):
             run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
 
@@ -754,11 +770,25 @@ def run_ppo_lstm(
             training.info(f"Checkpointing at update: {n_updates}") 
             save_checkpoint(n_updates, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
-        if lr_scheduler is not None:
-            lr_scheduler.step()
+
+        current_t = time.perf_counter()
+        elapsed_time = current_t - start_t
+        if elapsed_time > ppo_config.timeout:
+            training.warning(
+                f"Timeout reached after {elapsed_time:.2f} seconds. Stopping training."
+            )
+            break
 
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
         run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+
+    save_checkpoint(
+        n_collections,
+        policy_module=collector.policy,
+        value_module=loss_module.critic_network,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+    )
 
     collector.shutdown()

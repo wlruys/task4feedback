@@ -132,12 +132,10 @@ class BatchWrapper(nn.Module):
     def forward(self, obs: TensorDict):
         is_batch = self._is_batch(obs)
 
-        with record_function("CONVERT_DATA"):
-            with torch.no_grad():
-                data = self._convert_to_heterodata(obs, is_batch)
+        with torch.no_grad():
+            data = self._convert_to_heterodata(obs, is_batch)
 
-        with record_function("FORWARD_PASS"):
-            out = self.network(data)
+        out = self.network(data)
         return out
 
 
@@ -228,14 +226,12 @@ class HeteroDataWrapper(nn.Module):
     def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
 
-        with record_function("CONVERT_DATA"):
-            with torch.no_grad():
-                data, task_count, data_count = self._convert_to_heterodata(
-                    obs, is_batch, actions=actions
-                )
+        with torch.no_grad():
+            data, task_count, data_count = self._convert_to_heterodata(
+                obs, is_batch, actions=actions
+            )
 
-        with record_function("FORWARD_PASS"):
-            out = self.network(data, (task_count, data_count))
+        out = self.network(data, (task_count, data_count))
         return out
 
 
@@ -1725,68 +1721,67 @@ class HeteroConvStateNet(nn.Module):
     def forward(self, data: HeteroData | Batch, counts=None):
         # print("HeteroConvStateNet")
 
-        with record_function("HeteroConvStateNet"):
-            features = self.hetero_conv(data)
-            task_batch = data["tasks"].batch if isinstance(data, Batch) else None
-            data_batch = data["data"].batch if isinstance(data, Batch) else None
-            device_batch = data["devices"].batch if isinstance(data, Batch) else None
+        features = self.hetero_conv(data)
+        task_batch = data["tasks"].batch if isinstance(data, Batch) else None
+        data_batch = data["data"].batch if isinstance(data, Batch) else None
+        device_batch = data["devices"].batch if isinstance(data, Batch) else None
 
-            time = data["time"].x
-            with torch.no_grad():
-                time = time / 100000
-            if task_batch is None:
-                time = time.squeeze(0)
-            else:
-                time.reshape(-1, 1)
+        time = data["time"].x
+        with torch.no_grad():
+            time = time / 100000
+        if task_batch is None:
+            time = time.squeeze(0)
+        else:
+            time.reshape(-1, 1)
 
-            task_features = features["tasks"]
-            data_features = features["data"]
-            device_features = features["devices"]
+        task_features = features["tasks"]
+        data_features = features["data"]
+        device_features = features["devices"]
 
-            # print("task_features", task_features.shape)
-            # print("data_features", data_features.shape)
-            # print("device_features", device_features.shape)
-            # print("time", time.shape)
+        # print("task_features", task_features.shape)
+        # print("data_features", data_features.shape)
+        # print("device_features", device_features.shape)
+        # print("time", time.shape)
 
-            if task_batch is not None:
-                candidate_features = task_features[data["tasks"].ptr[:-1]]
-            else:
-                candidate_features = task_features[0]
+        if task_batch is not None:
+            candidate_features = task_features[data["tasks"].ptr[:-1]]
+        else:
+            candidate_features = task_features[0]
 
-            task_counts = torch.clip(data["tasks_count"].x.unsqueeze(1), min=1)
-            # data_counts = torch.clip(counts[1], min=1)
+        task_counts = torch.clip(data["tasks_count"].x.unsqueeze(1), min=1)
+        # data_counts = torch.clip(counts[1], min=1)
 
-            # print("task_counts", task_counts.shape)
+        # print("task_counts", task_counts.shape)
 
-            # print("task_features", task_features.shape)
-            task_features = global_add_pool(task_features, task_batch)
-            # print("task_features", task_features.shape)
+        # print("task_features", task_features.shape)
+        task_features = global_add_pool(task_features, task_batch)
+        # print("task_features", task_features.shape)
 
-            task_pooling = torch.div(task_features, task_counts)
+        task_pooling = torch.div(task_features, task_counts)
 
-            # print("task_pooling", task_pooling.shape)
+        # print("task_pooling", task_pooling.shape)
 
-            # data_pooling = torch.div(
-            #     global_add_pool(data_features, data_batch), data_counts
-            # )
+        # data_pooling = torch.div(
+        #     global_add_pool(data_features, data_batch), data_counts
+        # )
 
-            device_pooling = global_mean_pool(device_features, device_batch)
+        device_pooling = global_mean_pool(device_features, device_batch)
 
-            # print("task_pooling", task_pooling.shape)
-            # print("data_pooling", data_pooling.shape)
-            # print("device_pooling", device_pooling.shape)
+        # print("task_pooling", task_pooling.shape)
+        # print("data_pooling", data_pooling.shape)
+        # print("device_pooling", device_pooling.shape)
 
-            task_pooling = task_pooling.squeeze(0)
-            # data_pooling = data_pooling.squeeze(0)
-            device_pooling = device_pooling.squeeze(0)
+        task_pooling = task_pooling.squeeze(0)
+        # data_pooling = data_pooling.squeeze(0)
+        device_pooling = device_pooling.squeeze(0)
 
-            pool_all = task_pooling + device_pooling
-            # pool_all = pool_all.squeeze(0)
+        pool_all = task_pooling + device_pooling
+        # pool_all = pool_all.squeeze(0)
 
-            # print("pool_all", pool_all.shape)
-            # print("candidate_features", candidate_features.shape)
+        # print("pool_all", pool_all.shape)
+        # print("candidate_features", candidate_features.shape)
 
-            state_features = torch.cat([candidate_features, pool_all], dim=-1)
+        state_features = torch.cat([candidate_features, pool_all], dim=-1)
 
         return state_features
 
@@ -1997,10 +1992,9 @@ class HeteroConvPolicyNet(nn.Module):
 
     def forward(self, data: HeteroData | Batch, counts=None):
         # print("HeteroConvPolicyNet")
-        with record_function("hetero_conv"):
-            state_features = self.heteroconv_state_net(data, counts)
-            # print("state_features", state_features.shape)
-            d_logits = self.output_head(state_features)
+        state_features = self.heteroconv_state_net(data, counts)
+        # print("state_features", state_features.shape)
+        d_logits = self.output_head(state_features)
             # print("d_logits", d_logits.shape)
         return d_logits
 
