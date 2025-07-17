@@ -1,0 +1,15 @@
+program: train.py
+name: delay_sweep
+method: grid
+metric:
+  name: batch/mean_improvement
+  goal: maximize
+parameters:
+  reward.delay:
+    values: [1, 11, 21, 31, 51]
+    
+command:
+  - ${env}
+  - python 
+  - ${program}
+  - ${args_no_hyphens}
