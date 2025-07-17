@@ -119,7 +119,11 @@ def log_training_metrics(
         # Calculate reward metrics
         if rewards.numel() > 0:
             avg_reward = rewards.mean().item()
-            std_reward = rewards.std().item()
+
+            if rewards.numel() > 1:
+                std_reward = rewards.std().item()
+            else:
+                std_reward = None 
 
         # Calculate advantage and value target metrics
         advantage_mean = tensordict_data["advantage"].mean().item()
@@ -136,7 +140,6 @@ def log_training_metrics(
             "batch/n_updates": n_updates,
             "batch/n_collections": i + 1,
             "batch/avg_reward": avg_reward,
-            "batch/std_reward": std_reward,
             "batch/n_samples": n_samples,
             "batch/policy_loss": loss["loss_objective"].item(),
             "batch/critic_loss": loss["loss_critic"].item(),
@@ -152,16 +155,21 @@ def log_training_metrics(
             "batch/lr": optimizer.param_groups[0]["lr"],
         }
 
+        if std_reward is not None:
+            log_payload["batch/std_reward"] = std_reward
+
         # Add improvement metrics if available
         if valid_improvements.numel() > 0:
             log_payload.update(
                 {
                     "batch/mean_improvement": avg_improvement,
-                    "batch/std_improvement": std_improvement,
                     "batch/max_improvement": max_improvement,
                     "batch/min_improvement": min_improvement,
                 }
             )
+            if valid_improvements.numel() > 1:
+                log_payload["batch/std_improvement"] = std_improvement
+        
 
         wandb.log(log_payload)
 
