@@ -6,8 +6,8 @@ config:
   boundary_interior_ratio: 1
   randomness: 1
   L: 1
-  n: 8
-  steps: 30
+  n: 4
+  steps: 5
   permute_idx: 0
 init:
   partitioner: metis

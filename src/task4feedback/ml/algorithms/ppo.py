@@ -459,6 +459,8 @@ def run_ppo(
         training.info("Running final evaluation after training")
         run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
 
+    collector.shutdown()
+
 def run_ppo_lstm(
     actor_critic_module: ActorCriticModule,
     env_constructors: List[Callable[[], EnvBase]],
@@ -758,3 +760,5 @@ def run_ppo_lstm(
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
         run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+
+    collector.shutdown()

@@ -110,7 +110,6 @@ class RuntimeEnv(EnvBase):
             done=done_spec,
         )
 
-        # self.observations = observation_spec.expand(min(1, max_samples_per_iter)).zero()
         self.observations = []
         for _ in range(max(1, max_samples_per_iter)):
             obs = observation_spec.zero()
@@ -418,6 +417,7 @@ class DelayIncrementalEFT(IncrementalEFT):
     ):
         super().__init__(*args, **kwargs)
         self.delay = delay
+        self.offset = 1
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
@@ -427,7 +427,7 @@ class DelayIncrementalEFT(IncrementalEFT):
             self.eft_time = self.EFT_baseline
 
         
-        flag = (self.step_count + 1) % self.delay
+        flag = (self.step_count + self.offset) % self.delay
         
         self.step_count += 1
 
@@ -467,6 +467,10 @@ class DelayIncrementalEFT(IncrementalEFT):
         )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
+    
+    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+        self.offset = random.randint(1, self.delay)
+        return super()._reset(td)
 
 
 class BaselineImprovementEFT(RuntimeEnv):

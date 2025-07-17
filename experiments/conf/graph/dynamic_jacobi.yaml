@@ -9,7 +9,7 @@ config:
   randomness: 1
   L: 1
   n: 4
-  steps: 10
+  steps: 5
   permute_idx: 0
   workload_args:
     max_angle: 1

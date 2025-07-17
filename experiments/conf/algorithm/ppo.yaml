@@ -15,7 +15,7 @@ clip_eps: 0.2
 clip_vloss: false
 value_norm: "l2"
 val_coef: 0.5
-normalize_advantage: false
+normalize_advantage: true
 max_grad_norm: 0.5
 compile_policy: false
 compile_advantage: false

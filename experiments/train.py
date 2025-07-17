@@ -96,8 +96,8 @@ def main(cfg: DictConfig):
         wandb.init(
             project=cfg.wandb.project,
             config=OmegaConf.to_container(cfg, resolve=True),
-            #name=make_run_name(cfg),
-            name=f"{cfg.wandb.name}",
+            name=make_run_name(cfg),
+            #name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
         )
         

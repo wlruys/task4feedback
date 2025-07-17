@@ -1,6 +1,6 @@
 _target_: task4feedback.ml.util.EvaluationConfig
-eval_interval: 10 
-animation_interval: 200
+eval_interval: 100 
+animation_interval: 400
 max_frames: 400
 fig_size: [4, 4]
 dpi: 50
