@@ -3553,86 +3553,206 @@ class BatchNetBase(nn.Module):
         return d_logits, v
 
 
+# class UNetEncoder(nn.Module):
+#     def __init__(self, in_channels, base_filters=32, width=8):
+#         super().__init__()
+#         self.width = width
+#         self.in_channels = in_channels
+#         # encoder blocks
+#         self.enc1 = nn.Sequential(
+#             nn.Conv2d(in_channels, base_filters, 3, padding=1),
+#             nn.ReLU(inplace=True),
+#         )
+#         self.enc2 = nn.Sequential(
+#             nn.Conv2d(base_filters, base_filters * 2, 3, padding=1),
+#             nn.ReLU(inplace=True),
+#         )
+#         self.enc3 = nn.Sequential(
+#             nn.Conv2d(base_filters * 2, base_filters * 4, 3, padding=1),
+#             nn.ReLU(inplace=True),
+#         )
+#         self.pool = nn.MaxPool2d(2, 2)
+
+#         self.bottleneck = nn.Sequential(
+#             nn.Conv2d(base_filters * 4, base_filters * 4, 3, padding=1),
+#             nn.ReLU(inplace=True),
+#         )
+
+#         # bottleneck
+
+#     def forward(self, obs):
+#         single = obs.batch_size == torch.Size([])
+#         x = obs["tasks"]
+#         if single:
+#             # if td is a single sample, add batch dimension
+#             # Input of shape (N*N, C) → (1, N*N, C)
+#             x = x.unsqueeze(0)
+#         bsz = x.size(0)
+#         x = x.view(bsz, self.width, self.width, self.in_channels).permute(0, 3, 1, 2)
+#         # Now x is (B, C, H, W) where B=bsz, C=in_channels, H=W=width
+#         # -- first conv block
+#         e1 = self.enc1(x)  # (B,   f, H, W)
+#         p1 = self.pool(e1)  # (B,   f, H/2, W/2)
+#         # -- second conv block
+#         e2 = self.enc2(p1)  # (B, 2f, H/2, W/2)
+#         p2 = self.pool(e2)  # (B, 2f, H/4, W/4)
+#         # -- third conv block
+#         e3 = self.enc3(p2)  # (B, 4f, H/4, W/4)
+#         p3 = self.pool(e3)  # (B, 4f, H/8, W/8)
+#         # -- bottleneck
+#         b = self.bottleneck(p3)  # (B, 4f, H/8, W/8)
+
+#         # flatten b
+#         b = b.flatten(start_dim=1)  # (B, 4f * H/8 * W/8)
+#         if single:
+#             b = b.squeeze(0)  # remove artificial batch dim
+#         # pack into new TensorDict
+#         return e1, e2, e3, b
+
+
+# class UNetDecoder(nn.Module):
+#     def __init__(self, base_filters=32, width=8, num_workers=4):
+#         super().__init__()
+#         # up‐sampling
+#         self.width = width
+#         self.num_workers = num_workers
+#         self.base_filters = base_filters
+#         self.up3 = nn.ConvTranspose2d(base_filters * 4, base_filters * 4, 2, 2)
+#         self.dec3 = nn.Sequential(
+#             nn.Conv2d(base_filters * 8, base_filters * 4, 3, padding=1),
+#             nn.ReLU(inplace=True),
+#         )
+#         self.up2 = nn.ConvTranspose2d(base_filters * 4, base_filters * 2, 2, 2)
+#         self.dec2 = nn.Sequential(
+#             nn.Conv2d(base_filters * 4, base_filters * 2, 3, padding=1),
+#             nn.ReLU(inplace=True),
+#         )
+#         self.up1 = nn.ConvTranspose2d(base_filters * 2, base_filters, 2, 2)
+#         self.dec1 = nn.Sequential(
+#             nn.Conv2d(base_filters * 2, base_filters, 3, padding=1),
+#             nn.ReLU(inplace=True),
+#         )
+#         self.out_conv = nn.Conv2d(base_filters, num_workers, 1)
+
+#     def _align_and_concat(self, up_feat, enc_feat):
+#         uh, uw = up_feat.shape[-2:]
+#         eh, ew = enc_feat.shape[-2:]
+#         dh, dw = eh - uh, ew - uw
+#         if dh > 0 or dw > 0:
+#             pad = [dw // 2, dw - dw // 2, dh // 2, dh - dh // 2]
+#             up_feat = F.pad(up_feat, pad)
+#         elif dh < 0 or dw < 0:
+#             top, left = (-dh) // 2, (-dw) // 2
+#             up_feat = up_feat[..., top : top + eh, left : left + ew]
+#         return torch.cat([up_feat, enc_feat], dim=1)
+
+#     def forward(self, obs, e1, e2, e3, b):
+#         single = obs.batch_size == torch.Size([])
+#         if single:
+#             b = b.unsqueeze(0)
+#         b = b.view(b.size(0), self.base_filters * 4, self.width // 8, self.width // 8)
+#         # Stage 1: b → match e3
+#         u3 = self.up3(b)  # (B, 4f, H/4, W/4)
+#         d3 = self.dec3(self._align_and_concat(u3, e3))  # (B, 4f, H/4, W/4)
+
+#         # Stage 2: d3 → match e2
+#         u2 = self.up2(d3)  # (B, 2f, H/2, W/2)
+#         d2 = self.dec2(self._align_and_concat(u2, e2))  # (B, 2f, H/2, W/2)
+
+#         # Stage 3: d2 → match e1
+#         u1 = self.up1(d2)  # (B, f,   H,   W)
+#         d1 = self.dec1(self._align_and_concat(u1, e1))  # (B, f,   H,   W)
+#         # final logits
+#         logits = self.out_conv(d1)  # (B, P, H, W)
+
+#         # 1) permute to (B, H, W, P) then flatten H×W into one dim:
+#         logits = logits.permute(0, 2, 3, 1).flatten(1, 2)
+#         if single:
+#             # if td is a single sample, add batch dimension
+#             # Input of shape (N*N, C) → (1, N*N, C)
+#             logits = logits.squeeze(0)
+#         return logits
+
+
 class UNetEncoder(nn.Module):
     def __init__(self, in_channels, base_filters=32, width=8):
         super().__init__()
         self.width = width
         self.in_channels = in_channels
-        # encoder blocks
-        self.enc1 = nn.Sequential(
-            nn.Conv2d(in_channels, base_filters, 3, padding=1),
-            nn.ReLU(inplace=True),
-        )
-        self.enc2 = nn.Sequential(
-            nn.Conv2d(base_filters, base_filters * 2, 3, padding=1),
-            nn.ReLU(inplace=True),
-        )
-        self.enc3 = nn.Sequential(
-            nn.Conv2d(base_filters * 2, base_filters * 4, 3, padding=1),
-            nn.ReLU(inplace=True),
-        )
+        self.base_filters = base_filters
+        # Determine number of downsampling layers based on width
+        self.num_layers = int(math.floor(math.log2(width)))
+        # Create encoder conv blocks dynamically
+        self.enc_blocks = nn.ModuleList()
+        channels = in_channels
+        for i in range(self.num_layers):
+            out_channels = base_filters * (2**i)
+            block = nn.Sequential(
+                nn.Conv2d(channels, out_channels, kernel_size=3, padding=1),
+                nn.LeakyReLU(
+                    inplace=True,
+                    negative_slope=0.01,
+                ),
+            )
+            self.enc_blocks.append(block)
+            channels = out_channels
         self.pool = nn.MaxPool2d(2, 2)
-
+        # Bottleneck
         self.bottleneck = nn.Sequential(
-            nn.Conv2d(base_filters * 4, base_filters * 4, 3, padding=1),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(channels, channels, kernel_size=1, padding=0),
+            nn.LeakyReLU(
+                inplace=True,
+                negative_slope=0.01,
+            ),
         )
-
-        # bottleneck
+        self.output_dim = channels
 
     def forward(self, obs):
         single = obs.batch_size == torch.Size([])
         x = obs["tasks"]
         if single:
-            # if td is a single sample, add batch dimension
-            # Input of shape (N*N, C) → (1, N*N, C)
             x = x.unsqueeze(0)
         bsz = x.size(0)
         x = x.view(bsz, self.width, self.width, self.in_channels).permute(0, 3, 1, 2)
-        # Now x is (B, C, H, W) where B=bsz, C=in_channels, H=W=width
-        # -- first conv block
-        e1 = self.enc1(x)  # (B,   f, H, W)
-        p1 = self.pool(e1)  # (B,   f, H/2, W/2)
-        # -- second conv block
-        e2 = self.enc2(p1)  # (B, 2f, H/2, W/2)
-        p2 = self.pool(e2)  # (B, 2f, H/4, W/4)
-        # -- third conv block
-        e3 = self.enc3(p2)  # (B, 4f, H/4, W/4)
-        p3 = self.pool(e3)  # (B, 4f, H/8, W/8)
-        # -- bottleneck
-        b = self.bottleneck(p3)  # (B, 4f, H/8, W/8)
-
-        # flatten b
-        b = b.flatten(start_dim=1)  # (B, 4f * H/8 * W/8)
+        enc_feats = []
+        for block in self.enc_blocks:
+            x = block(x)
+            enc_feats.append(x)
+            x = self.pool(x)
+        b = self.bottleneck(x)
+        b = b.flatten(start_dim=1)
         if single:
-            b = b.squeeze(0)  # remove artificial batch dim
-        # pack into new TensorDict
-        return e1, e2, e3, b
+            b = b.squeeze(0)
+        return (*enc_feats, b)
 
 
 class UNetDecoder(nn.Module):
     def __init__(self, base_filters=32, width=8, num_workers=4):
         super().__init__()
-        # up‐sampling
         self.width = width
-        self.num_workers = num_workers
         self.base_filters = base_filters
-        self.up3 = nn.ConvTranspose2d(base_filters * 4, base_filters * 4, 2, 2)
-        self.dec3 = nn.Sequential(
-            nn.Conv2d(base_filters * 8, base_filters * 4, 3, padding=1),
-            nn.ReLU(inplace=True),
-        )
-        self.up2 = nn.ConvTranspose2d(base_filters * 4, base_filters * 2, 2, 2)
-        self.dec2 = nn.Sequential(
-            nn.Conv2d(base_filters * 4, base_filters * 2, 3, padding=1),
-            nn.ReLU(inplace=True),
-        )
-        self.up1 = nn.ConvTranspose2d(base_filters * 2, base_filters, 2, 2)
-        self.dec1 = nn.Sequential(
-            nn.Conv2d(base_filters * 2, base_filters, 3, padding=1),
-            nn.ReLU(inplace=True),
-        )
-        self.out_conv = nn.Conv2d(base_filters, num_workers, 1)
+        self.num_workers = num_workers
+        self.num_layers = int(math.floor(math.log2(width)))
+        # Create upsampling and decoder blocks dynamically
+        self.up_blocks = nn.ModuleList()
+        self.dec_blocks = nn.ModuleList()
+        for i in reversed(range(self.num_layers)):
+            in_ch = (
+                base_filters * (2 ** (i + 1))
+                if i < self.num_layers - 1
+                else base_filters * (2**i)
+            )
+            out_ch = base_filters * (2**i)
+            self.up_blocks.append(
+                nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
+            )
+            self.dec_blocks.append(
+                nn.Sequential(
+                    nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1),
+                    nn.ReLU(inplace=True),
+                )
+            )
+        self.out_conv = nn.Conv2d(base_filters, num_workers, kernel_size=1)
 
     def _align_and_concat(self, up_feat, enc_feat):
         uh, uw = up_feat.shape[-2:]
@@ -3646,29 +3766,25 @@ class UNetDecoder(nn.Module):
             up_feat = up_feat[..., top : top + eh, left : left + ew]
         return torch.cat([up_feat, enc_feat], dim=1)
 
-    def forward(self, obs, e1, e2, e3, b):
+    def forward(self, obs, *features):
         single = obs.batch_size == torch.Size([])
+        enc_feats = features[:-1]
+        b = features[-1]
         if single:
             b = b.unsqueeze(0)
-        b = b.view(b.size(0), self.base_filters * 4, self.width // 8, self.width // 8)
-        # Stage 1: b → match e3
-        u3 = self.up3(b)  # (B, 4f, H/4, W/4)
-        d3 = self.dec3(self._align_and_concat(u3, e3))  # (B, 4f, H/4, W/4)
-
-        # Stage 2: d3 → match e2
-        u2 = self.up2(d3)  # (B, 2f, H/2, W/2)
-        d2 = self.dec2(self._align_and_concat(u2, e2))  # (B, 2f, H/2, W/2)
-
-        # Stage 3: d2 → match e1
-        u1 = self.up1(d2)  # (B, f,   H,   W)
-        d1 = self.dec1(self._align_and_concat(u1, e1))  # (B, f,   H,   W)
-        # final logits
-        logits = self.out_conv(d1)  # (B, P, H, W)
-
-        # 1) permute to (B, H, W, P) then flatten H×W into one dim:
+        b = b.view(
+            b.size(0),
+            self.base_filters * (2 ** (self.num_layers - 1)),
+            self.width // (2**self.num_layers),
+            self.width // (2**self.num_layers),
+        )
+        x = b
+        for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(enc_feats)):
+            x = up(x)
+            x = self._align_and_concat(x, enc)
+            x = dec(x)
+        logits = self.out_conv(x)
         logits = logits.permute(0, 2, 3, 1).flatten(1, 2)
         if single:
-            # if td is a single sample, add batch dimension
-            # Input of shape (N*N, C) → (1, N*N, C)
             logits = logits.squeeze(0)
         return logits

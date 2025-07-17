@@ -1565,14 +1565,15 @@ struct ReadDataLocationFeature : public StateFeature<ReadDataLocationFeature> {
     const auto &data_manager = state.get_data_manager();
     const auto &data = data_manager.get_data();
     const auto &devices = state.get_device_manager().get_devices();
-    double max_size = static_cast<double>(state.stats.total_read_stats.max);
+    double avg_size = static_cast<double>(state.stats.total_read_stats.mean);
+    double std_dev = static_cast<double>(state.stats.total_read_stats.stddev);
     double total_read = static_cast<double>(data.get_total_size(task.get_read()));
     for (devid_t i = 1; i < devices.size(); i++) {
-      // output[i - 1] = -guarded_divide(total_read, max_size);
+      // output[i - 1] = -guarded_divide(total_read, avg_size);
       for (auto data_id : task.get_read()) {
         if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_id), i)) {
           auto data_size = static_cast<double>(data.get_size(data_id));
-          output[i - 1] += guarded_divide(data_size, max_size);
+          output[i - 1] += guarded_divide(data_size - avg_size, std_dev);
         }
       }
     }
@@ -1603,6 +1604,8 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
     // double max_size = static_cast<double>(state.stats.total_read_stats.max);
     double max_size =
         static_cast<double>(state.stats.total_read_stats.max - state.stats.total_read_stats.min);
+    double avg_size = static_cast<double>(state.stats.total_read_stats.mean);
+    double std_dev = static_cast<double>(state.stats.total_read_stats.stddev);
     auto n_devices = state.get_device_manager().get_devices().size() - 1;
     auto future_read = static_cast<double>(data.get_total_size(
         (state.get_task_manager().get_tasks().get_compute_task(task_id).get_read())));
@@ -1613,12 +1616,11 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
       const ComputeTask &task = state.get_task_manager().get_tasks().get_compute_task(task_id);
       double total_read = static_cast<double>(data.get_total_size(task.get_read()));
       auto mapped_loc = (state.get_mapping(task_id) - 1);
-      if (dim_device)
-        output[i * n_devices + mapped_loc] = guarded_divide(total_read, max_size);
-      else
-        output[i] = guarded_divide(future_read - total_read, max_size);
+      for (int j = 0; j < n_devices; j++) {
+        output[i * n_devices + j] = -1;
+      }
+      output[i * n_devices + mapped_loc] = guarded_divide(total_read - avg_size, std_dev);
       task_id -= stride;
-      future_read = total_read;
       i++;
     }
   }

@@ -644,7 +644,7 @@ def run_ppo_torchrl(
 
         # Training loop
         for j in range(config.num_epochs_per_collection):
-            n_batches = config.states_per_collection // config.minibatch_size
+            n_batches = 8
 
             for k in range(n_batches):
                 subdata = replay_buffer.sample(config.minibatch_size)
@@ -1268,8 +1268,8 @@ def run_ppo_torchrl_batch(
         RNNModule = GRUModule
 
     rnn = RNNModule(
-        input_size=layer_config.cnn_hidden_channels * 4,
-        hidden_size=layer_config.cnn_hidden_channels * 4,
+        input_size=_encoder.output_dim,
+        hidden_size=_encoder.output_dim,
         in_key="b",
         out_key="b",
     )
@@ -1286,13 +1286,19 @@ def run_ppo_torchrl_batch(
         fc_dim=layer_config.hidden_channels,
     )
 
+    # dynamically generate encoder out_keys based on UNetEncoder layers
+    num_layers = _encoder.num_layers
+    encoder_out_keys = [f"e{i+1}" for i in range(num_layers)] + ["b"]
     encoder = TensorDictModule(
-        _encoder, in_keys=["observation"], out_keys=["e1", "e2", "e3", "b"]
+        _encoder,
+        in_keys=["observation"],
+        out_keys=encoder_out_keys,
     )
 
+    decoder_in_keys = ["observation"] + encoder_out_keys
     decoder = TensorDictModule(
         _decoder,
-        in_keys=["observation", "e1", "e2", "e3", "b"],
+        in_keys=decoder_in_keys,
         out_keys=["logits"],
     )
 

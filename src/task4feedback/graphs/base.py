@@ -717,7 +717,7 @@ class TrajectoryWorkload(DynamicWorkload):
         num_levels: int,
         start_step: int = 0,
         number_of_trajectories: int = 1,
-        lower_bound: float = 500,
+        lower_bound: float = 1000,
         upper_bound: float = 3000,
         scale: float = 0.05,
         max_angle: float = 0.5,
@@ -736,7 +736,7 @@ class TrajectoryWorkload(DynamicWorkload):
             gaussian_workload = (
                 gaussian_pdf(centroids, trajectory[j], scale) * upper_bound
             )
-            self.level_workload[j] = gaussian_workload
+            self.level_workload[j] += gaussian_workload
 
             self.level_workload[j] = np.clip(
                 self.level_workload[j], min=lower_bound, max=upper_bound

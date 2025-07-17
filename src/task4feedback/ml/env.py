@@ -1495,7 +1495,7 @@ class PBRS(RuntimeEnv):
 
         # spearman = self.spearman_flat(self.prev_loc, td["action"])
         # self.prev_loc = td["action"].clone()
-        morans_i = self.morans_i(td["action"])
+        # morans_i = self.morans_i(td["action"])
         # weights = self.graph.get_weighted_cell_graph(
         #     DeviceType.GPU,
         #     bandwidth=self.simulator_factory.input.system.bandwidth,
@@ -1513,11 +1513,11 @@ class PBRS(RuntimeEnv):
         #     f"Step: {self.step_count} Spearman: {spearman.item()}, Moran's I: {morans_i.item()}, Overall Work Balance: {overall_work_balance.item()}"
         # )
         # print(spearman + morans_i)
-        self.potential[self.step_count + 1] += morans_i  # + morans_i
+        # self.potential[self.step_count + 1] += morans_i  # + morans_i
         # self.potential[self.step_count + 1] += overall_work_balance
 
         # print(self.potential[self.step_count + 1], self.potential[self.step_count])
-        reward[0] = 4 * (
+        reward[0] = 8 * (
             self.potential[self.step_count + 1] - self.potential[self.step_count]
         )
 
