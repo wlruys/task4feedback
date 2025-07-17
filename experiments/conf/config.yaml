@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  - graph: static_jacobi
-  - reward: ieft
+  - graph: dynamic_jacobi
+  - reward: dieft
   - system: uniform
   - feature: candidate_coordinate
   - network: vector_baseline

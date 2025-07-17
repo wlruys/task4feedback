@@ -3,12 +3,12 @@ implementation: torchrl
 workers: 4
 graphs_per_collection: 4
 states_per_collection: 10000
-num_collections: 20000
+num_collections: 1000
 collect_device: cpu
 update_device: cpu
 storing_device: cpu
 threads_per_worker: 1
-ent_coef: 0.005
+ent_coef: 1
 lmbda: 0.98
 gamma: 0.999
 clip_eps: 0.2
@@ -28,5 +28,5 @@ epochs_per_collection: 4
 slice_len: 32
 #number of samples per minibatch (episodes per minibatch if sample_slices = false and using ppo LSTM)
 minibatch_size: 64
-rollout_steps: 0
+rollout_steps: 80
 

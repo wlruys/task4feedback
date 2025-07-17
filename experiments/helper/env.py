@@ -4,6 +4,7 @@ from typing import Callable
 from .graph import GraphBuilder
 import hydra
 from omegaconf import DictConfig, OmegaConf
+from task4feedback.ml.env import RuntimeEnv
 
 from torchrl.envs import (
     TransformedEnv,
@@ -48,6 +49,7 @@ def make_env(
     cfg: DictConfig,
     lstm: Optional[LSTMModule] = None,
     normalization: Optional[NormalizationDetails] = None,
+    eval=False,
 ):
     gmsh.initialize()
 
@@ -58,7 +60,10 @@ def make_env(
     m = graph
 
     transition_conditions = create_conditions(cfg)
-    runtime_env_t = create_runtime_reward(cfg)
+    if not eval:
+        runtime_env_t = create_runtime_reward(cfg)
+    else:
+        runtime_env_t = RuntimeEnv
     observer_factory, graph_spec = create_observer_factory(cfg)
     input = SimulatorInput(m, d, s, transition_conditions=transition_conditions)
 

@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional
 from task4feedback.logging import training 
 import os 
 import git 
+from task4feedback.ml.env import RuntimeEnv
 
 def compute_advantage(td: TensorDict):
     with torch.no_grad():
@@ -228,13 +229,16 @@ def log_parameter_and_gradient_norms(model):
         "grad_norm/total": total_grad_norm,
     }
 
-
+def make_eval_envs(
+    eval_env_fn: list[Callable],
+):
+    return [eval_env_fn(eval=True) for eval_env_fn in eval_env_fn]
 
 
 @dataclass 
 class EvaluationConfig:
     eval_interval: int = 100
-    animation_interval: int = 1000
+    animation_interval: int = 100
     max_frames: int = 100
     fig_size: tuple[int, int] = (4, 4)
     dpi: int = 50
@@ -256,7 +260,7 @@ def eval_env(policy, env, exploration_type: ExplorationType, samples: int = 1, s
         with set_exploration_type(exploration_type), torch.no_grad():
             tensordict = env.rollout(
                 policy=policy,
-                max_steps=10000,
+                max_steps=100000,
             )
 
         if "next" in tensordict and "reward" in tensordict["next"]:
@@ -269,24 +273,17 @@ def eval_env(policy, env, exploration_type: ExplorationType, samples: int = 1, s
             env_times.append(completion_time)
 
     if samples > 1:
-        mean_reward = sum(env_rewards) / len(env_rewards)
         mean_time = sum(env_times) / len(env_times) if env_times else 0
-        std_reward = torch.std(torch.tensor(env_rewards, dtype=torch.float64)).item() if env_rewards else 0.0
         std_time = torch.std(torch.tensor(env_times, dtype=torch.float64)).item() if env_times else 0.0
         metrics["std_time"] = std_time
-        metrics["std_reward"] = std_reward
     else:
-        mean_reward = env_rewards[0] if env_rewards else 0.0
         mean_time = env_times[0] if env_times else 0.0
-        std_reward = 0.0
         std_time = 0.0
             
-    metrics["mean_reward"] = mean_reward
     metrics["mean_time"] = mean_time
 
     training.info(
-        f"Evaluation results: mean_reward={mean_reward}, std_reward={std_reward}, "
-        f"mean_time={mean_time}"
+        f"Evaluation results: mean_time={mean_time}"
     )
 
     last_env = env
@@ -296,7 +293,7 @@ def eval_env(policy, env, exploration_type: ExplorationType, samples: int = 1, s
 
 def evaluate_policy(
         policy, 
-        eval_envs: list[Callable],
+        eval_envs: list[RuntimeEnv],
         config: EvaluationConfig,
 ) -> dict[str, float]:
     
@@ -305,12 +302,12 @@ def evaluate_policy(
     viz_envs = {}
     viz_envs[ExplorationType.DETERMINISTIC] = None 
     viz_envs[ExplorationType.RANDOM] = None
+    env = None 
     
     for exploration_type in config.exploration_types:
         metrics[f"eval/{str(exploration_type)}"] = {}
 
-        for i, eval_env_fn in enumerate(eval_envs):
-            env = eval_env_fn()
+        for i, env in enumerate(eval_envs):
             for seed in config.seeds:
                 metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = {}
                 if exploration_type == "RANDOM":
@@ -337,13 +334,12 @@ def evaluate_policy(
     return metrics, viz_envs
 
 
-def visualize_envs(idx: int, viz_envs: dict, config: EvaluationConfig):
+def visualize_envs(n_collections: int, viz_envs: dict, config: EvaluationConfig):
     d = {}
     for key, env in viz_envs.items():
-        d[key] = {}
         if env is not None:
-            training.info(f"Visualizing environment {key} at n_updates={idx}")
-            title = f"network_eval_{key}_{idx}"
+            training.info(f"Visualizing environment {key} at n_updates={n_collections}")
+            title = f"network_eval_{key}_{n_collections}"
             animate_mesh_graph(
                 env,
                 time_interval=int(env.simulator.time / config.max_frames),
@@ -360,11 +356,10 @@ def visualize_envs(idx: int, viz_envs: dict, config: EvaluationConfig):
                 path = wandb.run.dir
 
             video_path = Path(path) / f"{title}.mp4"
-            d[key]["video"] = {}
-            d[key]["video"][str(key)] = None
-            d[key]["video"][str(key)] = wandb.Video(
-                str(video_path),
-                caption=title,
+            d[f"eval/video/{key}"] = wandb.Video(
+                video_path,
+                caption=f"{key} evaluation at n_collections={n_collections}",
+                fps=config.max_frames,
                 format="mp4",
             )
 
@@ -374,12 +369,14 @@ def run_evaluation(
     policy,
     eval_envs: list[Callable],
     config: EvaluationConfig,
+    n_collections: int = 0,
     n_updates: int = 0,
+    n_samples: int = 0,
 ):
     metrics, viz_envs = evaluate_policy(policy, eval_envs, config)
 
-    if n_updates % config.animation_interval == 0:
-        video_log = visualize_envs(n_updates, viz_envs, config)
+    if (config.animation_interval > 0) and (n_collections % config.animation_interval == 0):
+        video_log = visualize_envs(n_collections, viz_envs, config)
     else:
         video_log = {}
 
@@ -388,6 +385,8 @@ def run_evaluation(
             **metrics,
             **video_log,
             "batch/n_updates": n_updates,
+            "batch/n_collections": n_collections,
+            "batch/n_samples": n_samples,
         }
     )
 

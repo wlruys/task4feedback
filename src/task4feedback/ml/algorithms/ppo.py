@@ -188,9 +188,8 @@ def run_ppo(
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
 
-    
-
-    max_tasks = max([make_env().size() for make_env in env_constructors])
+    eval_envs = make_eval_envs(env_constructors)
+    max_tasks = max([env.size() for env in eval_envs])
 
     if ppo_config.rollout_steps > 0:
         max_tasks = ppo_config.rollout_steps
@@ -348,7 +347,7 @@ def run_ppo(
 
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
-        run_evaluation(collector.policy, env_constructors, eval_config, 0)
+        run_evaluation(collector.policy, eval_envs, eval_config, 0)
 
 
     training.info("Starting PPO training loop")
@@ -356,8 +355,10 @@ def run_ppo(
     start_t = time.perf_counter()
     n_updates = 0
     n_samples = 0
+    n_collections = 0
 
     for i, tensordict_data in enumerate(collector):
+        n_collections += 1
         replay_buffer.empty()
 
         if i >= ppo_config.num_collections:
@@ -427,12 +428,12 @@ def run_ppo(
         if lr_scheduler is not None:
             lr_scheduler.step()
 
-        if should_eval(i, eval_config=eval_config):
+        if should_eval(n_collections, eval_config=eval_config):
             run_evaluation(
-                collector.policy, env_constructors, eval_config, n_updates
+                collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples
             )
 
-        if should_checkpoint(i, logging_config):
+        if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at update {n_updates}")
             save_checkpoint(
                 n_updates,
@@ -444,7 +445,7 @@ def run_ppo(
 
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
-        run_evaluation(collector.policy, env_constructors, eval_config, n_updates)
+        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
 
 def run_ppo_lstm(
     actor_critic_module: ActorCriticModule,
@@ -468,7 +469,8 @@ def run_ppo_lstm(
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
 
-    max_tasks = max([make_env().size() for make_env in env_constructors])
+    eval_envs = make_eval_envs(env_constructors)
+    max_tasks = max([env.size() for env in eval_envs])
     print(f"Max tasks in env constructors: {max_tasks}")
 
     if ppo_config.rollout_steps > 0:
@@ -656,13 +658,15 @@ def run_ppo_lstm(
     # Initial evaluation
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
-        run_evaluation(collector.policy, env_constructors, eval_config, 0)
+        run_evaluation(collector.policy, eval_envs, eval_config, 0, 0, 0)
 
     start_t = time.perf_counter()
 
     n_updates = 0
     n_samples = 0
+    n_collections = 0
     for i, tensordict_data in enumerate(collector):
+        n_collections += 1
         replay_buffer.empty()
 
         if i >= ppo_config.num_collections:
@@ -729,16 +733,16 @@ def run_ppo_lstm(
         update_elapsed_time = update_end_t - update_start_t
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
 
-        if should_eval(i, eval_config=eval_config):
-            run_evaluation(collector.policy, env_constructors, eval_config, n_updates)
+        if should_eval(n_collections, eval_config=eval_config):
+            run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
 
-        if should_checkpoint(i, logging_config):
-            training.info(f"Checkpointing at update {n_updates}") 
+        if should_checkpoint(n_collections, logging_config):
+            training.info(f"Checkpointing at update: {n_updates}") 
             save_checkpoint(n_updates, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
         if lr_scheduler is not None:
             lr_scheduler.step()
 
-        if eval_config is not None and eval_config.eval_interval > 0:
-            training.info("Running final evaluation after training")
-            run_evaluation(collector.policy, env_constructors, eval_config, n_updates)
+    if eval_config is not None and eval_config.eval_interval > 0:
+        training.info("Running final evaluation after training")
+        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)

@@ -21,7 +21,7 @@ from pathlib import Path
 import git
 import os 
 from hydra.core.hydra_config import HydraConfig
-
+from helper.run_name import make_run_name, cfg_hash
 
 class GitInfo(Callback):
     def on_job_start(self, config: DictConfig, **kwargs) -> None:
@@ -54,9 +54,9 @@ def configure_training(cfg: DictConfig):
     feature_config = FeatureDimConfig.from_observer(observer)
     model, lstm = create_td_actor_critic_models(cfg, feature_config)
 
-    def env_fn():
+    def env_fn(eval: bool = False):
         return make_env(
-            graph_builder=graph_builder, cfg=cfg, lstm=lstm, normalization=normalization
+            graph_builder=graph_builder, cfg=cfg, lstm=lstm, normalization=normalization, eval=eval
         )
 
     alg_config = instantiate(cfg.algorithm)
@@ -66,8 +66,6 @@ def configure_training(cfg: DictConfig):
     logging_config = instantiate(cfg.logging)
 
     eval_config = instantiate(cfg.eval)
-
-    print(eval_config)
 
     if lstm is not None:
         run_ppo_lstm(
@@ -98,7 +96,8 @@ def main(cfg: DictConfig):
         wandb.init(
             project=cfg.wandb.project,
             config=OmegaConf.to_container(cfg, resolve=True),
-            name=cfg.wandb.name,
+            #name=make_run_name(cfg),
+            name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
         )
         
