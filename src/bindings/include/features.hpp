@@ -394,11 +394,6 @@ public:
     }
   }
 
-  // size_t get_k_hop_dependencies(TorchInt64Arr1D &initial_tasks, int k, TorchInt64Arr1D &output) {
-  //   visited.clear();
-  //   return get_k_hop_task_dependencies(visited, initial_tasks, k, output);
-  // }
-
   size_t get_k_hop_task_neighborhood(TaskSet &visited, TorchInt64Arr1D &initial_tasks, int k,
                                      TorchInt64Arr1D &output) {
     auto v = output.view();
@@ -458,7 +453,7 @@ public:
   }
 
   size_t get_task_task_edges(TorchInt64Arr1D &sources, TorchInt64Arr2D &output,
-                             TorchInt64Arr2D &global_output) {
+                             TorchInt64Arr2D &global_output, int offset) {
 
     // Check first dimension is 2
     if (output.shape(0) != 2) {
@@ -491,8 +486,8 @@ public:
       for (const auto &dep_id : dependencies) {
         auto it = task_index_map.find(dep_id);
         if (it != task_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(source_idx);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
+          v(0, edge_count) = static_cast<int64_t>(source_idx) + offset;
+          v(1, edge_count) = static_cast<int64_t>(it->second) + offset;
           gv(0, edge_count) = static_cast<int64_t>(source_id);
           gv(1, edge_count) = static_cast<int64_t>(dep_id);
           edge_count++;
@@ -611,8 +606,6 @@ public:
     }
 
     size_t count = min(output.size(), data_visited.size());
-
-    // std::cout << "Unique data count: " << count << std::endl;
     size_t i = 0;
     for (auto data_id : data_visited) {
       if (i >= count) {
@@ -642,9 +635,6 @@ public:
     for (const auto &task_id_64_bit : task_ids_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       const auto read = static_graph.get_read(task_id);
-
-      // std::cout << "Task ID: " << task_id << " Read size: " << read.size() << std::endl;
-
       for (int i = 0; i < read.size(); i++) {
 
         auto data_id = read[i];
@@ -667,8 +657,6 @@ public:
     }
 
     size_t count = min(output.size(), data_visited.size());
-
-    // std::cout << "Unique data count: " << count << std::endl;
     size_t i = 0;
     for (auto data_id : data_visited) {
       if (i >= count) {
@@ -698,9 +686,6 @@ public:
     for (const auto &task_id_64_bit : task_ids_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       const auto write = static_graph.get_write(task_id);
-
-      // std::cout << "Task ID: " << task_id << " Read size: " << read.size() << std::endl;
-
       for (int i = 0; i < write.size(); i++) {
 
         auto data_id = write[i];
@@ -741,7 +726,7 @@ public:
   }
 
   size_t get_task_data_edges_all(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
-                                 TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+                                 TorchInt64Arr2D &output, TorchInt64Arr2D &global_output, int offset) {
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
@@ -769,8 +754,8 @@ public:
       for (auto data_id : static_graph.get_unique(task_id)) {
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(i);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
+          v(0, edge_count) = static_cast<int64_t>(i) + offset;
+          v(1, edge_count) = static_cast<int64_t>(it->second) + offset;
           gv(0, edge_count) = static_cast<int64_t>(task_id);
           gv(1, edge_count) = static_cast<int64_t>(data_id);
           edge_count++;
@@ -795,7 +780,7 @@ public:
   }
 
   size_t get_task_data_edges_read(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
-                                  TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+                                  TorchInt64Arr2D &output, TorchInt64Arr2D &global_output, int offset) {
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
@@ -815,9 +800,6 @@ public:
 
     std::size_t edge_count = 0;
     for (int64_t i = 0; i < data_ids_span.size(); i++) {
-      // if (data_index_map.find(static_cast<dataid_t>(data_ids_span[i])) == data_index_map.end()) {
-      //   data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
-      // }
       data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
     }
 
@@ -826,8 +808,8 @@ public:
       for (auto data_id : static_graph.get_read(task_id)) {
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(i);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
+          v(0, edge_count) = static_cast<int64_t>(i) + offset;
+          v(1, edge_count) = static_cast<int64_t>(it->second) + offset;
           gv(0, edge_count) = static_cast<int64_t>(task_id);
           gv(1, edge_count) = static_cast<int64_t>(data_id);
           edge_count++;
@@ -852,7 +834,7 @@ public:
   }
 
   size_t get_task_data_edges_write(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
-                                   TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+                                   TorchInt64Arr2D &output, TorchInt64Arr2D &global_output, int offset) {
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
@@ -872,9 +854,6 @@ public:
 
     std::size_t edge_count = 0;
     for (int64_t i = 0; i < data_ids_span.size(); i++) {
-      // if (data_index_map.find(static_cast<dataid_t>(data_ids_span[i])) == data_index_map.end()) {
-      //   data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
-      // }
       data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
     }
 
@@ -883,8 +862,8 @@ public:
       for (auto data_id : static_graph.get_write(task_id)) {
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(i);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
+          v(0, edge_count) = static_cast<int64_t>(i) + offset;
+          v(1, edge_count) = static_cast<int64_t>(it->second) + offset;
           gv(0, edge_count) = static_cast<int64_t>(task_id);
           gv(1, edge_count) = static_cast<int64_t>(data_id);
           edge_count++;
@@ -909,10 +888,9 @@ public:
   }
 
   size_t get_task_data_edges_read_mapped(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &data_ids,
-                                         TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
-    if (output.shape(0) != 2) {
-      throw std::runtime_error("Edge output shape must be 2 x N");
-    }
+                                         TorchInt64Arr2D &output, TorchInt64Arr2D &global_output, int offset) {
+    assert(output.shape(0) == 2);
+    assert(global_output.shape(0) == 2);
 
     std::span<int64_t> task_ids_span(task_ids.data(), task_ids.size());
     std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
@@ -927,10 +905,6 @@ public:
 
     const auto &static_graph = state.get().get_tasks();
     const auto &task_runtime = state.get().get_task_runtime();
-
-    // // The candidate task id is always the first task id in the list
-    // int64_t candidate_task_id = task_ids_span[0];
-    // std::cout << "Candidate Task ID: " << candidate_task_id << std::endl;
 
     std::size_t edge_count = 0;
     for (int64_t i = 0; i < data_ids_span.size(); i++) {
@@ -947,18 +921,17 @@ public:
         taskid_t recent_writer_id = recent_writers[j];
 
         if (recent_writer_id != -1) {
-          // We are not the first writer, check to see if it is mapped w.r.t us
+          // We are not the first writer, check to see if its location is usable w.r.t current time
           const bool is_mapped = task_runtime.is_compute_mapped(recent_writer_id);
           if (!is_mapped) {
             continue;
           }
-          // TODO(wlr): This needs to support retire
         }
 
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(i);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
+          v(0, edge_count) = static_cast<int64_t>(i) + offset;
+          v(1, edge_count) = static_cast<int64_t>(it->second) + offset;
           gv(0, edge_count) = static_cast<int64_t>(task_id);
           gv(1, edge_count) = static_cast<int64_t>(data_id);
           edge_count++;
@@ -982,8 +955,64 @@ public:
     return edge_count;
   }
 
+  size_t filter_read_edges_mapped(
+      TorchInt64Arr2D &unfiltered_local_edges, TorchInt64Arr2D &unfiltered_global_edges,
+      TorchInt64Arr2D &output, TorchInt64Arr2D &global_output, TorchInt64Arr1D &filtered_lids, int offset) {
+
+    assert(unfiltered_local_edges.shape(0) == 2);
+    assert(unfiltered_global_edges.shape(0) == 2);
+    assert(output.shape(0) == 2);
+    assert(global_output.shape(0) == 2);
+    assert(filtered_lids.shape(0) == 1);
+
+    auto v = output.view();
+    auto gv = global_output.view();
+    auto unfiltered_view = unfiltered_global_edges.view();
+    auto unfiltered_lids_view = unfiltered_local_edges.view();
+    auto filtered_lids_view = filtered_lids.view();
+
+    static bool has_warned = false;
+    const auto max_edges = output.shape(1);
+    const auto &task_runtime = state.get().get_task_runtime();
+    const auto &static_graph = state.get().get_tasks();
+
+    std::size_t edge_count = 0;
+    std::size_t filtered_data_count = 0;
+
+    data_index_map.clear();
+    data_index_map.reserve(200);
+
+    for (int64_t i = 0; i < unfiltered_view.shape(1); i++) {
+      const auto &task_id = static_cast<taskid_t>(unfiltered_view(0, i));
+      const auto &data_id = static_cast<devid_t>(unfiltered_view(1, i));
+
+      const auto recent_writers = static_graph.get_most_recent_writers(task_id);
+      const auto read_data = static_graph.get_read(task_id);
+
+      auto it = std::find(read_data.begin(), read_data.end(), data_id);
+      const taskid_t recent_writer_id = recent_writers[std::distance(read_data.begin(), it)];
+      const bool is_mapped = (recent_writer_id == -1) || task_runtime.is_compute_mapped(recent_writer_id);
+
+      if (is_mapped) {
+
+        if (data_index_map.find(data_id) == data_index_map.end()) {
+          data_index_map[data_id] = edge_count;
+        }else{
+          filtered_lids_view(filtered_data_count) = unfiltered_lids_view(1, i);
+          filtered_data_count++;
+        }
+        v(0, edge_count) = unfiltered_lids_view(0, i);
+        v(1, edge_count) = unfiltered_lids_view(1, i);
+        gv(0, edge_count) = unfiltered_view(0, i);
+        gv(1, edge_count) = unfiltered_view(1, i);
+        edge_count++;
+      }
+    }
+    return edge_count;
+  }
+
   size_t get_task_device_edges(TorchInt64Arr1D &task_ids, TorchInt64Arr2D &output,
-                               TorchInt64Arr2D &global_output) {
+                               TorchInt64Arr2D &global_output, int offset) {
     if (output.shape(0) != 2) {
       throw std::runtime_error("Edge output shape must be 2 x N");
     }
@@ -1006,8 +1035,8 @@ public:
       devid_t mapped_device = task_runtime.get_compute_task_mapped_device(task_id);
 
       if (mapped_device != -1) {
-        v(0, edge_count) = static_cast<int64_t>(i);
-        v(1, edge_count) = static_cast<int64_t>(mapped_device);
+        v(0, edge_count) = static_cast<int64_t>(i) + offset;
+        v(1, edge_count) = static_cast<int64_t>(mapped_device) + offset;
         gv(0, edge_count) = static_cast<int64_t>(task_id);
         gv(1, edge_count) = static_cast<int64_t>(mapped_device);
         edge_count++;
@@ -1024,16 +1053,12 @@ public:
     return edge_count;
   }
 
-  size_t get_data_device_edges_filtered(TorchInt64Arr1D &filtered_ids, TorchInt64Arr1D &data_ids,
-                                        TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+  size_t get_data_device_edges(TorchInt64Arr1D &data_ids,
+                                        TorchInt64Arr2D &output, TorchInt64Arr2D &global_output, int offset) {
 
-    if (output.shape(0) != 2) {
-      throw std::runtime_error("Edge output shape must be 2 x N");
-    }
-
-    std::span<int64_t> filtered_ids_span(filtered_ids.data(), filtered_ids.size());
-    ankerl::unordered_dense::set<int64_t> filtered_ids_set(filtered_ids_span.begin(),
-                                                           filtered_ids_span.end());
+    assert(output.shape(0) == 2);
+    assert(global_output.shape(0) == 2);
+    assert(data_ids.shape(0) == 1);
 
     auto v = output.view();
     auto gv = global_output.view();
@@ -1042,22 +1067,20 @@ public:
     std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
     const auto max_edges = output.shape(1);
-
     const auto &devices = state.get().get_devices();
     const auto &data_manager = state.get().get_data_manager();
 
     std::size_t edge_count = 0;
     for (int64_t i = 0; i < data_ids_span.size(); i++) {
 
-      if (filtered_ids_set.find(data_ids_span[i]) == filtered_ids_set.end()) {
-        continue;
-      }
+      const dataid_t data_id = static_cast<dataid_t>(data_ids_span[i]);
+      const uint8_t valid_flags = data_manager.get_mapped_location_flags(data_id);
 
       for (int64_t j = 0; j < devices.size(); j++) {
 
-        if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
-          v(0, i) = static_cast<int64_t>(i);
-          v(1, i) = static_cast<int64_t>(j);
+        if ((valid_flags & (1 << j)) == 1) {
+          v(0, i) = static_cast<int64_t>(i) + offset;
+          v(1, i) = static_cast<int64_t>(j) + offset;
           gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
           gv(1, i) = static_cast<int64_t>(j);
           edge_count++;
@@ -1081,17 +1104,20 @@ public:
     return edge_count;
   }
 
-  size_t get_data_device_edges(TorchInt64Arr1D &data_ids, TorchInt64Arr2D &output,
-                               TorchInt64Arr2D &global_output) {
+  size_t get_data_device_edges_filtered(TorchInt64Arr1D &filtered_lids, TorchInt64Arr1D &data_ids,
+                                        TorchInt64Arr2D &output, TorchInt64Arr2D &global_output, int offset) {
 
-    if (output.shape(0) != 2) {
-      throw std::runtime_error("Edge output shape must be 2 x N");
-    }
+    assert(output.shape(0) == 2);
+    assert(global_output.shape(0) == 2);
+    assert(filtered_lids.shape(0) == 1);
+    assert(data_ids.shape(0) == 1);
+
+    std::span<int64_t> filtered_ids_span(filtered_lids.data(), filtered_lids.size());
 
     auto v = output.view();
-
     auto gv = global_output.view();
     static bool has_warned = false;
+
     std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
     const auto max_edges = output.shape(1);
@@ -1099,12 +1125,17 @@ public:
     const auto &data_manager = state.get().get_data_manager();
 
     std::size_t edge_count = 0;
-    for (int64_t i = 0; i < data_ids_span.size(); i++) {
+    for (int64_t i = 0; i < filtered_ids_span.size(); i++) {
+
+      const int64_t lid = filtered_ids_span[i];
+      const dataid_t data_id = static_cast<dataid_t>(data_ids_span[lid]);
+      const uint8_t valid_flags = data_manager.get_mapped_location_flags(data_id);
+
       for (int64_t j = 0; j < devices.size(); j++) {
 
-        if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
-          v(0, i) = static_cast<int64_t>(i);
-          v(1, i) = static_cast<int64_t>(j);
+        if ((valid_flags & (1 << j)) == 1) {
+          v(0, i) = static_cast<int64_t>(lid);
+          v(1, i) = static_cast<int64_t>(j) + offset;
           gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
           gv(1, i) = static_cast<int64_t>(j);
           edge_count++;
@@ -1126,6 +1157,30 @@ public:
       }
     }
     return edge_count;
+  }
+
+
+  void get_mapped_device_time(TorchFloatArr1D &output){
+    assert(output.shape(0) == 1);
+    const auto& s = state.get();
+    const auto &devices = s.get_devices();
+
+    auto v = output.view();
+
+    for (int i = 0; i < devices.size(); i++) {
+      auto mapped_time = static_cast<double>(s.costs.get_mapped_time(i));
+      v(i) = static_cast<f_t>(mapped_time);
+    }
+
+    double sum = 0.0;
+    for (int i = 0; i < devices.size(); i++) {
+      sum += v(i);
+    }
+    if (sum > 0.0) {
+      for (int i = 0; i < devices.size(); i++) {
+        v(i) /= sum;
+      }
+    }
   }
 };
 
@@ -1178,8 +1233,6 @@ template <typename Derived> struct EdgeFeature {
 // Compile-time FeatureExtractor using variadic templates
 template <typename... Features> class FeatureExtractor {
   std::tuple<Features...> features;
-
-  // Helper to compute total feature dimension at compile-time
   template <size_t... Is> size_t computeFeatureDim(std::index_sequence<Is...>) const {
     return (std::get<Is>(features).getFeatureDim() + ...);
   }
@@ -1211,7 +1264,6 @@ public:
 template <typename... Features> class EdgeFeatureExtractor {
   std::tuple<Features...> features;
 
-  // Helper to compute total feature dimension at compile-time
   template <size_t... Is> size_t computeFeatureDim(std::index_sequence<Is...>) const {
     return (std::get<Is>(features).getFeatureDim() + ...);
   }

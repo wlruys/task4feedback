@@ -1520,22 +1520,6 @@ class HeteroConvkLayer(nn.Module):
                         layer_config.hidden_channels,
                         aggr="add",
                     ),
-                    # ("data", "writes", "tasks"): GraphConv(
-                    #     (
-                    #         feature_config.data_feature_dim,
-                    #         feature_config.task_feature_dim,
-                    #     ),
-                    #     layer_config.hidden_channels,
-                    #     aggr="add",
-                    # ),
-                    # ("tasks", "writes", "data"): GraphConv(
-                    #     (
-                    #         feature_config.task_feature_dim,
-                    #         feature_config.data_feature_dim,
-                    #     ),
-                    #     layer_config.hidden_channels,
-                    #     aggr="add",
-                    # ),
                     ("tasks", "to", "devices"): GraphConv(
                         (
                             feature_config.task_feature_dim,
@@ -1548,22 +1532,6 @@ class HeteroConvkLayer(nn.Module):
                         (
                             feature_config.device_feature_dim,
                             feature_config.task_feature_dim,
-                        ),
-                        layer_config.hidden_channels,
-                        aggr="add",
-                    ),
-                    ("data", "to", "devices"): GraphConv(
-                        (
-                            feature_config.data_feature_dim,
-                            feature_config.device_feature_dim,
-                        ),
-                        layer_config.hidden_channels,
-                        aggr="add",
-                    ),
-                    ("devices", "to", "data"): GraphConv(
-                        (
-                            feature_config.device_feature_dim,
-                            feature_config.data_feature_dim,
                         ),
                         layer_config.hidden_channels,
                         aggr="add",
@@ -1593,7 +1561,7 @@ class HeteroConvkLayer(nn.Module):
             self.hetero_convs.append(
                 HeteroConv(
                     {
-                        ("data", "mapped", "tasks"): GraphConv(
+                        ("data", "to", "tasks"): GraphConv(
                             (
                                 layer_config.hidden_channels,
                                 layer_config.hidden_channels,
@@ -1601,7 +1569,7 @@ class HeteroConvkLayer(nn.Module):
                             layer_config.hidden_channels,
                             aggr="add",
                         ),
-                        ("tasks", "mapped", "data"): GraphConv(
+                        ("tasks", "to", "data"): GraphConv(
                             (
                                 layer_config.hidden_channels,
                                 layer_config.hidden_channels,
@@ -1618,22 +1586,6 @@ class HeteroConvkLayer(nn.Module):
                             aggr="add",
                         ),
                         ("devices", "to", "tasks"): GraphConv(
-                            (
-                                layer_config.hidden_channels,
-                                layer_config.hidden_channels,
-                            ),
-                            layer_config.hidden_channels,
-                            aggr="add",
-                        ),
-                        ("data", "to", "devices"): GraphConv(
-                            (
-                                layer_config.hidden_channels,
-                                layer_config.hidden_channels,
-                            ),
-                            layer_config.hidden_channels,
-                            aggr="add",
-                        ),
-                        ("devices", "to", "data"): GraphConv(
                             (
                                 layer_config.hidden_channels,
                                 layer_config.hidden_channels,
@@ -1672,14 +1624,21 @@ class HeteroConvkLayer(nn.Module):
 
         self.activation = nn.LeakyReLU(negative_slope=0.01)
 
+        self.tasks_output_linear = nn.Linear(
+            layer_config.hidden_channels, layer_config.hidden_channels
+        )
+        self.data_output_linear = nn.Linear(
+            layer_config.hidden_channels, layer_config.hidden_channels
+        )
+        self.device_output_linear = nn.Linear(
+            layer_config.hidden_channels, layer_config.hidden_channels
+        )
+
         self.output_dim = layer_config.hidden_channels
 
     def forward(self, data: HeteroData | Batch):
         x_dict = data.x_dict
         edge_index_dict = data.edge_index_dict
-        # print("HeteroConvkLayer")
-        # print("data", data)
-        # print("hetero_convs", self.hetero_convs)
 
         for k in range(self.k):
             x_dict = self.hetero_convs[k](x_dict, edge_index_dict)
@@ -1694,8 +1653,14 @@ class HeteroConvkLayer(nn.Module):
                 elif node_type == "devices":
                     x_dict[node_type] = self.device_layer_norm[k](x_dict[node_type])
                     x_dict[node_type] = self.activation(x_dict[node_type])
-
-        # print("data_out", x_dict)
+        
+        for node_type in x_dict.keys():
+            if node_type == "tasks":
+                x_dict[node_type] = self.tasks_output_linear(x_dict[node_type])
+            elif node_type == "data":
+                x_dict[node_type] = self.data_output_linear(x_dict[node_type])
+            elif node_type == "devices":
+                x_dict[node_type] = self.device_output_linear(x_dict[node_type])
 
         return x_dict
 
@@ -1707,6 +1672,7 @@ class HeteroConvStateNet(nn.Module):
         layer_config: LayerConfig,
         n_devices: int,
         k: int = 1,
+        add_progress: bool = False 
     ):
         super(HeteroConvStateNet, self).__init__()
         self.feature_config = feature_config
@@ -1719,29 +1685,14 @@ class HeteroConvStateNet(nn.Module):
         self.output_dim = layer_config.hidden_channels * 2
 
     def forward(self, data: HeteroData | Batch, counts=None):
-        # print("HeteroConvStateNet")
-
         features = self.hetero_conv(data)
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
         data_batch = data["data"].batch if isinstance(data, Batch) else None
         device_batch = data["devices"].batch if isinstance(data, Batch) else None
 
-        time = data["time"].x
-        with torch.no_grad():
-            time = time / 100000
-        if task_batch is None:
-            time = time.squeeze(0)
-        else:
-            time.reshape(-1, 1)
-
         task_features = features["tasks"]
         data_features = features["data"]
         device_features = features["devices"]
-
-        # print("task_features", task_features.shape)
-        # print("data_features", data_features.shape)
-        # print("device_features", device_features.shape)
-        # print("time", time.shape)
 
         if task_batch is not None:
             candidate_features = task_features[data["tasks"].ptr[:-1]]
@@ -1749,30 +1700,12 @@ class HeteroConvStateNet(nn.Module):
             candidate_features = task_features[0]
 
         task_counts = torch.clip(data["tasks_count"].x.unsqueeze(1), min=1)
-        # data_counts = torch.clip(counts[1], min=1)
-
-        # print("task_counts", task_counts.shape)
-
-        # print("task_features", task_features.shape)
         task_features = global_add_pool(task_features, task_batch)
-        # print("task_features", task_features.shape)
-
         task_pooling = torch.div(task_features, task_counts)
-
-        # print("task_pooling", task_pooling.shape)
-
-        # data_pooling = torch.div(
-        #     global_add_pool(data_features, data_batch), data_counts
-        # )
 
         device_pooling = global_mean_pool(device_features, device_batch)
 
-        # print("task_pooling", task_pooling.shape)
-        # print("data_pooling", data_pooling.shape)
-        # print("device_pooling", device_pooling.shape)
-
         task_pooling = task_pooling.squeeze(0)
-        # data_pooling = data_pooling.squeeze(0)
         device_pooling = device_pooling.squeeze(0)
 
         pool_all = task_pooling + device_pooling
@@ -2547,7 +2480,6 @@ class VectorStateNet(nn.Module):
     def forward(self, tensordict: TensorDict):
         task_features = tensordict["nodes", "tasks", "attr"]
         task_features = torch.squeeze(task_features)
-        # print("TF SHAPE", task_features.shape)
 
         if self.add_progress:
             time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
@@ -2580,11 +2512,9 @@ class VectorPolicyNet(nn.Module):
         )
 
     def forward(self, td):
-        task_features = td["nodes"]["tasks"]["attr"]
-        # print("task_features", task_features.shape)
+        task_features = td["nodes", "tasks", "attr"]
         state_features = self.vector_state_net(task_features)
         d_logits = self.actor_head(state_features)
-        # print("d_logits", d_logits.shape)
         return d_logits
 
 
@@ -2600,36 +2530,16 @@ class VectorValueNet(nn.Module):
         self.vector_state_net = VectorStateNet(feature_config, layer_config, k=k)
 
         self.critic_head = OutputHead(
-            self.vector_state_net.output_dim + 2,
+            self.vector_state_net.output_dim,
             layer_config.hidden_channels,
             1,
             logits=False,
         )
 
     def forward(self, td):
-        task_features = td["nodes"]["tasks"]["attr"]
-        # print("task_features", task_features.shape)
+        task_features = td["nodes", "tasks", "attr"]
         state_features = self.vector_state_net(task_features)
-
-        time_feature = td["aux"]["time"] / td["aux"]["baseline"]
-
-        # print(
-        #     f"time: {td['aux']['time']}, baseline: {td['aux']['baseline']}, time_feature: {time_feature}"
-        # )
-        progress_feature = td["aux"]["progress"]
-        state_features = state_features.squeeze(1)
-
-        # print(f"time_feature: {time_feature}, progress_feature: {progress_feature}")
-        # print(f"state_features: {state_features}")
-        # state_features = state_features.squeeze(1)
-
-        state_features = torch.cat(
-            [state_features, time_feature, progress_feature], dim=-1
-        )
-
         v = self.critic_head(state_features)
-        # v = v.squeeze(1)
-        # print("v", v.shape)
         return v
 
 

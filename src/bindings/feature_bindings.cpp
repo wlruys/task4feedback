@@ -435,5 +435,6 @@ void init_feature_ext(nb::module_ &m) {
       .def("get_task_data_edges_read_mapped", &GraphExtractor::get_task_data_edges_read_mapped)
       .def("get_task_device_edges", &GraphExtractor::get_task_device_edges)
       .def("get_data_device_edges", &GraphExtractor::get_data_device_edges)
+      .def("get_mapped_device_time", &GraphExtractor::get_mapped_device_time)
       .def("get_unique_data", &GraphExtractor::get_unique_data);
 }
