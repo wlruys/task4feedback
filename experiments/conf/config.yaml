@@ -17,3 +17,5 @@ hydra:
   callbacks:
     git_info:
       _target_: train.GitInfo
+seed: 532
+deterministic_torch: true

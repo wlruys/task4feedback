@@ -2,3 +2,6 @@ project: delayed_feedback
 name: default
 enabled: true
 dir: ~/workspace/scheduling/logs
+tags:
+  - ppo
+  - default

@@ -1,11 +1,9 @@
 from task4feedback.interface import SimulatorFactory, SimulatorInput, create_graph_spec 
-import gmsh 
 from typing import Callable
 from .graph import GraphBuilder
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from task4feedback.ml.env import RuntimeEnv
-
 from torchrl.envs import (
     TransformedEnv,
     Compose,
@@ -51,6 +49,7 @@ def make_env(
     normalization: Optional[NormalizationDetails] = None,
     eval=False,
 ):
+    from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
     gmsh.initialize()
 
     s = create_system(cfg)

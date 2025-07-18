@@ -22,7 +22,6 @@ from task4feedback.graphs.mesh.plot import *
 from task4feedback.legacy_graphs import *
 from task4feedback.graphs.jacobi import JacobiGraph
 from torch_geometric.data import HeteroData
-from torch.profiler import record_function
 from torchrl.data import Categorical
 from task4feedback.logging import training
 from time import perf_counter

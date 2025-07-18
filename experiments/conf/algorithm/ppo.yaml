@@ -23,9 +23,9 @@ compile_update: false
 collector: "multi_sync"
 advantage_type: "gae"
 bagged_policy: "none"
-sample_slices: false
 epochs_per_collection: 4
 slice_len: 32
+sample_slices: false
 #number of samples per minibatch (episodes per minibatch if sample_slices = false and using ppo LSTM)
 minibatch_size: 64
 rollout_steps: 80

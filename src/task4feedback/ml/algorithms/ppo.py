@@ -50,7 +50,6 @@ class PPOConfig(AlgorithmConfig):
     compile_policy: bool = False
     compile_update: bool = False
     compile_advantage: bool = False
-    seed: int = 0
     collector: str = "multi_sync"  # "sync" or "multi_sync"
     sample_slices: bool = (
         True  # if using lstm, whether slices are used instead of episodes
@@ -174,7 +173,8 @@ def log_training_metrics(
             )
             if std_improvement is not None:
                 log_payload["batch/std_improvement"] = std_improvement
-        
+
+            training.info("Average training improvement: ", str(avg_improvement))
 
         wandb.log(log_payload)
 
@@ -186,7 +186,8 @@ def run_ppo(
     logging_config: Optional[LoggingConfig],
     eval_config: Optional[EvaluationConfig] = None,
     optimizer: Optional[torch.optim.Optimizer] = None,
-    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None, 
+    seed: int = 0 
 ):
     if logging_config is not None and (
         logging_frequency := logging_config.stats_interval
@@ -280,15 +281,15 @@ def run_ppo(
             "Use 'sync' or 'multi_sync'."
         )
 
-    collector.set_seed(ppo_config.seed)
+    collector.set_seed(seed)
 
     loss_module = ClipPPOLoss(
         actor_network=actor_critic_module.actor,
         critic_network=actor_critic_module.critic,
         clip_epsilon=ppo_config.clip_eps,
         entropy_bonus=True,
-        entropy_coef=ppo_config.ent_coef,
-        critic_coef=ppo_config.val_coef,
+        entropy_coeff=ppo_config.ent_coef,
+        critic_coeff=ppo_config.val_coef,
         loss_critic_type=ppo_config.value_norm,
         clip_value=ppo_config.clip_vloss,
         normalize_advantage=ppo_config.normalize_advantage,
@@ -481,7 +482,8 @@ def run_ppo_lstm(
     logging_config: Optional[LoggingConfig],
     eval_config: Optional[EvaluationConfig] = None,
     optimizer: Optional[torch.optim.Optimizer] = None,
-    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None, 
+    seed: int = 0
 ):
     if logging_config is not None and (
         logging_frequency := logging_config.stats_interval
@@ -592,15 +594,15 @@ def run_ppo_lstm(
             "Use 'sync' or 'multi_sync'."
         )
 
-    collector.set_seed(ppo_config.seed)
+    collector.set_seed(seed)
 
     loss_module = ClipPPOLoss(
         actor_network=actor_critic_module.actor,
         critic_network=actor_critic_module.critic,
         clip_epsilon=ppo_config.clip_eps,
         entropy_bonus=True,
-        entropy_coef=ppo_config.ent_coef,
-        critic_coef=ppo_config.val_coef,
+        entropy_coeff=ppo_config.ent_coef,
+        critic_coeff=ppo_config.val_coef,
         loss_critic_type=ppo_config.value_norm,
         clip_value=ppo_config.clip_vloss,
         normalize_advantage=ppo_config.normalize_advantage,

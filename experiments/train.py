@@ -23,6 +23,10 @@ import os
 from hydra.core.hydra_config import HydraConfig
 from helper.run_name import make_run_name, cfg_hash
 
+import torch 
+import numpy 
+import random 
+
 class GitInfo(Callback):
     def on_job_start(self, config: DictConfig, **kwargs) -> None:
         try:
@@ -76,6 +80,7 @@ def configure_training(cfg: DictConfig):
             eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
+            seed=cfg.seed,
         )
     else:
         run_ppo(
@@ -86,6 +91,7 @@ def configure_training(cfg: DictConfig):
             eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
+            seed=cfg.seed,
         )
     
 
@@ -99,6 +105,7 @@ def main(cfg: DictConfig):
             name=make_run_name(cfg),
             #name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
+            tags=cfg.wandb.tags,
         )
         
         hydra_output_dir = Path(HydraConfig.get().runtime.output_dir)
@@ -108,6 +115,11 @@ def main(cfg: DictConfig):
                 git_file = hydra_output_dir / fname
                 if git_file.exists():
                     wandb.save(str(git_file))
+
+    torch.manual_seed(cfg.seed)
+    numpy.random.seed(cfg.seed)
+    random.seed(cfg.seed)
+    torch.use_deterministic_algorithms(cfg.deterministic_torch)
 
     configure_training(cfg)
 
