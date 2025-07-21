@@ -1,5 +1,5 @@
-# conf/config.yaml
 defaults:
+  - _self_
   - graph: static_jacobi
   - reward: dieft
   - system: uniform
@@ -11,8 +11,11 @@ defaults:
   - logging: default
   - lr_scheduler: none 
   - optimizer: adamw
+  - eval: default
 
 hydra:
   callbacks:
     git_info:
       _target_: train.GitInfo
+seed: 532
+deterministic_torch: true

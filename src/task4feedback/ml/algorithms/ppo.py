@@ -2,10 +2,9 @@ from pathlib import Path
 from ..models import *
 from ..util import *
 from dataclasses import dataclass
-from typing import Callable, Optional, List, Dict, Any, Tuple
+from typing import Callable, Optional, List, Dict
 from torchrl.collectors import MultiSyncDataCollector, SyncDataCollector
 from torchrl.data.replay_buffers import (
-    ReplayBuffer,
     SliceSampler,
     TensorDictReplayBuffer,
 )
@@ -13,22 +12,16 @@ from torchrl.data.replay_buffers.storages import LazyTensorStorage, TensorStorag
 from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
 from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE, VTrace
-from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
 from torchrl.objectives.utils import ValueEstimators
-from torchrl.envs import TransformedEnv
-import copy
 from tensordict import TensorDict
 import wandb
-import os
 import torch
 from torchrl._utils import compile_with_warmup
 from .base import AlgorithmConfig, LoggingConfig
 from ..base import ActorCriticModule
-from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 from task4feedback.logging import training
 import time
-from torchrl.envs import ParallelEnv
 from torchrl.collectors.utils import split_trajectories
 from task4feedback.ml.util import log_parameter_and_gradient_norms
 
@@ -58,7 +51,6 @@ class PPOConfig(AlgorithmConfig):
     compile_policy: bool = False
     compile_update: bool = False
     compile_advantage: bool = False
-    seed: int = 0
     collector: str = "multi_sync"  # "sync" or "multi_sync"
     sample_slices: bool = (
         True  # if using lstm, whether slices are used instead of episodes
@@ -67,6 +59,7 @@ class PPOConfig(AlgorithmConfig):
     rollout_steps: int = 250
     advantage_type: str = "gae"  # "gae" or "vtrace"
     bagged_policy: str = "uniform"
+    timeout: int = 60 * 60 * 24 # 1 day
 
 
 def should_log(
@@ -78,6 +71,27 @@ def should_log(
         return False
     return n_updates % logging_config.stats_interval == 0
 
+def should_eval(
+    n_updates: int,
+    eval_config: Optional[EvaluationConfig],
+) -> bool:
+    """Check if we should evaluate based on the current update count and logging configuration."""
+    if eval_config is None:
+        return False
+    return (
+        eval_config.eval_interval > 0
+        and n_updates % eval_config.eval_interval == 0
+    )
+
+
+def should_checkpoint(
+    n_updates: int,
+    logging_config: Optional[LoggingConfig],
+) -> bool:
+    """Check if we should checkpoint based on the current update count and logging configuration."""
+    if logging_config is None:
+        return False
+    return n_updates % logging_config.checkpoint_interval == 0
 
 def log_training_metrics(
     flattened_data: TensorDict,
@@ -101,12 +115,20 @@ def log_training_metrics(
             avg_improvement = valid_improvements.mean().item()
             max_improvement = valid_improvements.max().item()
             min_improvement = valid_improvements.min().item()
-            std_improvement = valid_improvements.std().item()
+
+            if valid_improvements.numel() > 1:
+                std_improvement = valid_improvements.std().item()
+            else:
+                std_improvement = None
 
         # Calculate reward metrics
         if rewards.numel() > 0:
             avg_reward = rewards.mean().item()
-            std_reward = rewards.std().item()
+
+            if rewards.numel() > 1:
+                std_reward = rewards.std().item()
+            else:
+                std_reward = None 
 
         # Calculate advantage and value target metrics
         advantage_mean = tensordict_data["advantage"].mean().item()
@@ -123,7 +145,6 @@ def log_training_metrics(
             "batch/n_updates": n_updates,
             "batch/n_collections": i + 1,
             "batch/avg_reward": avg_reward,
-            "batch/std_reward": std_reward,
             "batch/n_samples": n_samples,
             "batch/policy_loss": loss["loss_objective"].item(),
             "batch/critic_loss": loss["loss_critic"].item(),
@@ -139,53 +160,24 @@ def log_training_metrics(
             "batch/lr": optimizer.param_groups[0]["lr"],
         }
 
+        if std_reward is not None:
+            log_payload["batch/std_reward"] = std_reward
+
         # Add improvement metrics if available
         if valid_improvements.numel() > 0:
             log_payload.update(
                 {
                     "batch/mean_improvement": avg_improvement,
-                    "batch/std_improvement": std_improvement,
                     "batch/max_improvement": max_improvement,
                     "batch/min_improvement": min_improvement,
                 }
             )
+            if std_improvement is not None:
+                log_payload["batch/std_improvement"] = std_improvement
+
+            training.info("Average training improvement: ", str(avg_improvement))
 
         wandb.log(log_payload)
-
-
-def checkpoint(
-    step, model, optimizer, lr_scheduler=None, extras: Optional[Dict[str, Any]] = None
-):
-    try:
-        state = dict(
-            step=step,
-            model=model.state_dict(),
-            optimizer=optimizer.state_dict(),
-            rng_torch=torch.get_rng_state(),
-            rng_cuda=(
-                torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-            ),
-            extras=extras or {},
-        )
-        if lr_scheduler is not None:
-            state["lr_scheduler"] = lr_scheduler.state_dict()
-
-        if wandb is not None and wandb.run is not None and wandb.run.dir is not None:
-            checkpoint_dir = Path(wandb.run.dir)
-        else:
-            checkpoint_dir = Path(os.environ.get("HYDRA_RUNTIME_OUTPUT_DIR", "."))
-
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-        checkpoint_file = checkpoint_dir / f"checkpoint_{step}.pt"
-        torch.save(state, checkpoint_file)
-        training.info(f"Checkpoint saved to {checkpoint_file}")
-
-        return checkpoint_file
-
-    except Exception as e:
-        training.error(f"Failed to save checkpoint at step {step}: {e}")
-        raise
 
 
 def run_ppo(
@@ -193,8 +185,10 @@ def run_ppo(
     env_constructors: List[Callable[[], EnvBase]],
     ppo_config: PPOConfig,
     logging_config: Optional[LoggingConfig],
+    eval_config: Optional[EvaluationConfig] = None,
     optimizer: Optional[torch.optim.Optimizer] = None,
-    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None, 
+    seed: int = 0 
 ):
     if logging_config is not None and (
         logging_frequency := logging_config.stats_interval
@@ -205,14 +199,16 @@ def run_ppo(
         wandb.define_metric("batch/*", step_metric="batch/n_updates")
         wandb.define_metric("grad_norm/*", step_metric="batch/n_updates")
         wandb.define_metric("param_norm/*", step_metric="batch/n_updates")
-        wandb.define_metric("eval/*", step_metric="eval/n_updates")
+        wandb.define_metric("eval/*", step_metric="batch/n_updates")
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
-    envs = [make_env() for make_env in env_constructors]
-    max_tasks = max([env.size() for env in envs])
+
+    eval_envs = make_eval_envs(env_constructors)
+    max_tasks = max([env.size() for env in eval_envs])
     max_candidates = max(
-        [env.simulator_factory.graph_spec.max_candidates for env in envs]
+        [env.simulator_factory.graph_spec.max_candidates for env in eval_envs]
     )
+
     if ppo_config.rollout_steps > 0:
         max_tasks = ppo_config.rollout_steps
 
@@ -288,15 +284,15 @@ def run_ppo(
             "Use 'sync' or 'multi_sync'."
         )
 
-    collector.set_seed(ppo_config.seed)
+    collector.set_seed(seed)
 
     loss_module = ClipPPOLoss(
         actor_network=actor_critic_module.actor,
         critic_network=actor_critic_module.critic,
         clip_epsilon=ppo_config.clip_eps,
         entropy_bonus=True,
-        entropy_coef=ppo_config.ent_coef,
-        critic_coef=ppo_config.val_coef,
+        entropy_coeff=ppo_config.ent_coef,
+        critic_coeff=ppo_config.val_coef,
         loss_critic_type=ppo_config.value_norm,
         clip_value=ppo_config.clip_vloss,
         normalize_advantage=ppo_config.normalize_advantage,
@@ -357,7 +353,7 @@ def run_ppo(
         )
 
     training.info(
-        f"Starting PPO training with {ppo_config.num_collections} collections, "
+        f"Running PPO training with {ppo_config.num_collections} collections, "
         f"{max_states_per_collection} states saved per collection, "
         f"{states_per_collection} states used per collection, "
         f"{ppo_config.minibatch_size} minibatch size, "
@@ -366,12 +362,20 @@ def run_ppo(
         f"{ppo_config.workers} workers."
     )
 
-    start_t = time.perf_counter()
+    if should_eval(0, eval_config):
+        training.info("Running initial evaluation before training")
+        run_evaluation(collector.policy, eval_envs, eval_config, 0)
 
+
+    training.info("Starting PPO training loop")
+
+    start_t = time.perf_counter()
     n_updates = 0
     n_samples = 0
+    n_collections = 0
 
     for i, tensordict_data in enumerate(collector):
+        n_collections += 1
         replay_buffer.empty()
 
         if i >= ppo_config.num_collections:
@@ -417,6 +421,7 @@ def run_ppo(
         update_start_t = time.perf_counter()
         for j in range(ppo_config.epochs_per_collection):
             for k in range(n_batch):
+                n_updates += 1
                 batch = replay_buffer.sample(ppo_config.minibatch_size)
                 batch.to(ppo_config.update_device, non_blocking=True)
                 loss = update(batch, loss_module, optimizer, ppo_config)
@@ -433,13 +438,11 @@ def run_ppo(
                         n_samples,
                     )
 
-                n_updates += 1
-
-            collector.update_policy_weights_(
-                TensorDict.from_module(loss_module.actor_network).to(
-                    ppo_config.collect_device
-                )
+        collector.update_policy_weights_(
+            TensorDict.from_module(loss_module.actor_network).to(
+                ppo_config.collect_device
             )
+        )
         update_end_t = time.perf_counter()
         update_elapsed_time = update_end_t - update_start_t
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
@@ -447,14 +450,48 @@ def run_ppo(
         if lr_scheduler is not None:
             lr_scheduler.step()
 
+        if should_eval(n_collections, eval_config=eval_config):
+            run_evaluation(
+                collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples
+            )
+
+        if should_checkpoint(n_collections, logging_config):
+            training.info(f"Checkpointing at collection {n_collections}")
+            save_checkpoint(
+                n_collections,
+                policy_module=collector.policy,
+                value_module=loss_module.critic_network,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+            )
+
+        current_t = time.perf_counter()
+        elapsed_time = current_t - start_t
+        if elapsed_time > ppo_config.timeout:
+            training.warning(
+                f"Timeout reached after {elapsed_time:.2f} seconds. Stopping training."
+            )
+            break
+
+        
+
+    if eval_config is not None and eval_config.eval_interval > 0:
+        training.info("Running final evaluation after training")
+        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+
+    save_checkpoint(n_collections, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
+
+    collector.shutdown()
 
 def run_ppo_lstm(
     actor_critic_module: ActorCriticModule,
     env_constructors: List[Callable[[], EnvBase]],
     ppo_config: PPOConfig,
     logging_config: Optional[LoggingConfig],
-    opt_cfg: Optional[DictConfig] = None,
-    lr_cfg: Optional[DictConfig] = None,
+    eval_config: Optional[EvaluationConfig] = None,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None, 
+    seed: int = 0
 ):
     if logging_config is not None and (
         logging_frequency := logging_config.stats_interval
@@ -465,14 +502,16 @@ def run_ppo_lstm(
         wandb.define_metric("batch/*", step_metric="batch/n_updates")
         wandb.define_metric("grad_norm/*", step_metric="batch/n_updates")
         wandb.define_metric("param_norm/*", step_metric="batch/n_updates")
-        wandb.define_metric("eval/*", step_metric="eval/n_updates")
+        wandb.define_metric("eval/*", step_metric="batch/n_updates")
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
-    envs = [make_env() for make_env in env_constructors]
-    max_tasks = max([env.size() for env in envs])
+
+    eval_envs = make_eval_envs(env_constructors)
+    max_tasks = max([env.size() for env in eval_envs])
     max_candidates = max(
-        [env.simulator_factory.graph_spec.max_candidates for env in envs]
+        [env.simulator_factory.graph_spec.max_candidates for env in eval_envs]
     )
+
     print(f"Max tasks in env constructors: {max_tasks}")
 
     if ppo_config.rollout_steps > 0:
@@ -567,15 +606,15 @@ def run_ppo_lstm(
             "Use 'sync' or 'multi_sync'."
         )
 
-    collector.set_seed(ppo_config.seed)
+    collector.set_seed(seed)
 
     loss_module = ClipPPOLoss(
         actor_network=actor_critic_module.actor,
         critic_network=actor_critic_module.critic,
         clip_epsilon=ppo_config.clip_eps,
         entropy_bonus=True,
-        entropy_coef=ppo_config.ent_coef,
-        critic_coef=ppo_config.val_coef,
+        entropy_coeff=ppo_config.ent_coef,
+        critic_coeff=ppo_config.val_coef,
         loss_critic_type=ppo_config.value_norm,
         clip_value=ppo_config.clip_vloss,
         normalize_advantage=ppo_config.normalize_advantage,
@@ -586,24 +625,23 @@ def run_ppo_lstm(
     elif ppo_config.advantage_type == "vtrace":
         loss_module.make_value_estimator(ValueEstimators.VTrace)
 
-    # optimizer = instantiate(opt_cfg, params=loss_module.parameters())
-    # optimizer = torch.optim.AdamW(
-    #     loss_module.parameters(),
-    #     lr=opt_cfg.lr if opt_cfg is not None else 3e-4,
-    #     eps=opt_cfg.eps if opt_cfg is not None else 1e-5,
-    # )
-
-    optimizer = optimizer(loss_module.parameters())
+    if optimizer is None:
+        optimizer = torch.optim.AdamW(
+            loss_module.parameters(),
+            lr=3e-4,
+            eps=1e-5,
+        )
+    else:
+        optimizer = optimizer(loss_module.parameters())
 
     print(f"Using optimizer: {optimizer}")
 
     loss_module = loss_module.to(ppo_config.update_device)
     advantage_module = advantage_module.to(ppo_config.update_device)
 
-    if lr_cfg is not None:
-        lr_scheduler = instantiate(lr_cfg, optimizer=optimizer)
-    else:
-        lr_scheduler = None
+    if lr_scheduler is not None:
+        lr_scheduler = lr_scheduler(optimizer)
+        print(f"Using learning rate scheduler: {lr_scheduler}")
 
     def update(batch, i, j, k):
         if ppo_config.sample_slices:
@@ -625,9 +663,6 @@ def run_ppo_lstm(
         )
 
         optimizer.step()
-
-        if lr_scheduler is not None:
-            lr_scheduler.step()
 
         return loss_vals
 
@@ -659,11 +694,18 @@ def run_ppo_lstm(
         f"{ppo_config.workers} workers.",
     )
 
+    # Initial evaluation
+    if should_eval(0, eval_config):
+        training.info("Running initial evaluation before training")
+        run_evaluation(collector.policy, eval_envs, eval_config, 0, 0, 0)
+
     start_t = time.perf_counter()
 
     n_updates = 0
     n_samples = 0
+    n_collections = 0
     for i, tensordict_data in enumerate(collector):
+        n_collections += 1
         replay_buffer.empty()
 
         if i >= ppo_config.num_collections:
@@ -684,7 +726,6 @@ def run_ppo_lstm(
 
         adv_start_t = time.perf_counter()
         with torch.no_grad():
-            # Compute advantages
             advantage_module(tensordict_data)
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
@@ -714,6 +755,7 @@ def run_ppo_lstm(
         update_start_t = time.perf_counter()
         for j in range(ppo_config.epochs_per_collection):
             for k in range(n_batch):
+                n_updates += 1
                 batch, info = replay_buffer.sample(
                     ppo_config.minibatch_size, return_info=True
                 )
@@ -721,346 +763,56 @@ def run_ppo_lstm(
                 batch.to(ppo_config.update_device, non_blocking=True)
                 loss = update(batch, i, j, k)
 
-                if (
-                    n_updates % logging_config.stats_interval == 0
-                    and logging_config is not None
-                ):
-                    with torch.no_grad():
-                        non_zero_rewards = flattened_data["next", "reward"]
-                        improvements = flattened_data[
-                            "next", "observation", "aux", "improvement"
-                        ]
-                        mask = improvements > -100
-                        filtered_improvements = improvements[mask]
+                if should_log(n_updates, logging_config):
+                    log_training_metrics(
+                        flattened_data,
+                        tensordict_data,
+                        loss,
+                        loss_module,
+                        optimizer,
+                        n_updates,
+                        i,
+                        n_samples,
+                    )
 
-                        if filtered_improvements.numel() > 0:
-                            avg_improvement = filtered_improvements.mean()
-                        else:
-                            avg_improvement = torch.tensor(0.0, dtype=torch.float32)
-
-                        print(f"Average improvement: {avg_improvement.item()}")
-
-                        if len(non_zero_rewards) > 0:
-                            avg_non_zero_reward = non_zero_rewards.mean().item()
-                            std_rewards = non_zero_rewards.std().item()
-                        else:
-                            avg_non_zero_reward = 0.0
-                            std_rewards = 0.0
-
-                        post_clip_norms = log_parameter_and_gradient_norms(loss_module)
-                        wandb.log(
-                            {
-                                **post_clip_norms,
-                                "batch/n_updates": n_updates,
-                                "batch/n_collections": i + 1,
-                                "batch/mean_reward": avg_non_zero_reward,
-                                "batch/std_reward": std_rewards,
-                                "batch/improvement": avg_improvement.item(),
-                                "batch/n_samples": n_samples,
-                                "batch/policy_loss": loss["loss_objective"].item(),
-                                "batch/critic_loss": loss["loss_critic"].item(),
-                                "batch/entropy_loss": loss["loss_entropy"].item(),
-                                "batch/entropy": loss["entropy"].item(),
-                                "batch/kl_approx": loss["kl_approx"].item(),
-                                "batch/clip_fraction": loss["clip_fraction"].item(),
-                                "batch/ESS": loss["ESS"].item(),
-                                "batch/advantage_mean": tensordict_data["advantage"]
-                                .mean()
-                                .item(),
-                                "batch/advantage_std": tensordict_data["advantage"]
-                                .std()
-                                .item(),
-                                "batch/mean_return": tensordict_data["value_target"]
-                                .mean()
-                                .item(),
-                                "batch/std_return": tensordict_data["value_target"]
-                                .std()
-                                .item(),
-                                "batch/mean_improvement": filtered_improvements.mean().item(),
-                                "batch/std_improvement": filtered_improvements.std().item(),
-                            },
-                        )
-
-                n_updates += 1
-
-            collector.update_policy_weights_(
-                TensorDict.from_module(loss_module.actor_network).to(
-                    ppo_config.collect_device
-                )
+        collector.update_policy_weights_(
+            TensorDict.from_module(loss_module.actor_network).to(
+                ppo_config.collect_device
             )
+        )
         update_end_t = time.perf_counter()
         update_elapsed_time = update_end_t - update_start_t
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
 
+        if lr_scheduler is not None:
+            lr_scheduler.step()
 
-# def run_ppo_torchrl(
-#     actor_model: ProbabilisticActor,
-#     critic_model: ValueOperator,
-#     make_env: Callable[[], EnvBase],
-# ):
-#     wandb.define_metric("batch_loss/step")
-#     wandb.define_metric("collect_loss/step")
-#     wandb.define_metric("batch_loss/*", step_metric="batch_loss/step")
-#     wandb.define_metric("grad_norm/*", step_metric="batch_loss/step")
-#     wandb.define_metric("param_norm/*", step_metric="batch_loss/step")
-#     wandb.define_metric("collect_loss/*", step_metric="collect_loss/step")
-#     wandb.define_metric("eval/*", step_metric="eval/step")
+        if should_eval(n_collections, eval_config=eval_config):
+            run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
 
-#     # _actor_td = HeteroDataWrapper(actor_critic_base.actor)
-#     # _critic_td = HeteroDataWrapper(actor_critic_base.critic)
+        if should_checkpoint(n_collections, logging_config):
+            training.info(f"Checkpointing at update: {n_updates}") 
+            save_checkpoint(n_updates, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
-#     _actor_td = actor_critic_base.actor
-#     _critic_td = actor_critic_base.critic
 
-#     module_action = TensorDictModule(
-#         _actor_td,
-#         in_keys=["observation"],
-#         out_keys=["logits"],
-#     )
+        current_t = time.perf_counter()
+        elapsed_time = current_t - start_t
+        if elapsed_time > ppo_config.timeout:
+            training.warning(
+                f"Timeout reached after {elapsed_time:.2f} seconds. Stopping training."
+            )
+            break
 
-#     td_module_action = ProbabilisticActor(
-#         module_action,
-#         in_keys=["logits"],
-#         out_keys=["action"],
-#         distribution_class=torch.distributions.Categorical,
-#         cache_dist=False,
-#         return_log_prob=True,
-#     )
+    if eval_config is not None and eval_config.eval_interval > 0:
+        training.info("Running final evaluation after training")
+        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
 
-#     td_critic_module = ValueOperator(
-#         module=_critic_td,
-#         in_keys=["observation"],
-#     )
+    save_checkpoint(
+        n_collections,
+        policy_module=collector.policy,
+        value_module=loss_module.critic_network,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+    )
 
-#     td_module_action = td_module_action.to(config.collect_device)
-#     td_critic_module = td_critic_module.to(config.collect_device)
-#     train_actor_network = copy.deepcopy(td_module_action).to(config.update_device)
-#     train_critic_network = copy.deepcopy(td_critic_module).to(config.update_device)
-#     model = torch.nn.ModuleList([train_actor_network, train_critic_network])
-
-#     # Create evaluation environment if not provided
-#     if eval_env_fn is None:
-#         eval_env_fn = make_env
-
-#     if model_path:
-#         model.load_state_dict(torch.load(model_path))
-#         print("Loaded model from path:", model_path)
-
-#     if do_rollout:
-
-#         def rollout_env():
-#             env = make_env()
-#             env.set_policy(model[0])
-#             return env
-
-#         _make_env = rollout_env
-#     else:
-#         _make_env = make_env
-
-#     collector = MultiSyncDataCollector(
-#         [_make_env for _ in range(config.workers)],
-#         model[0],
-#         frames_per_batch=config.states_per_collection,
-#         reset_at_each_iter=True,
-#         cat_results=0,
-#         device=config.collect_device,
-#         env_device="cpu",
-#     )
-#     out_seed = collector.set_seed(config.seed)
-
-#     replay_buffer = ReplayBuffer(
-#         storage=LazyTensorStorage(
-#             max_size=config.states_per_collection, device=config.update_device
-#         ),
-#         sampler=SamplerWithoutReplacement(),
-#         pin_memory=torch.cuda.is_available(),
-#         prefetch=4,
-#         batch_size=config.minibatch_size,
-#     )
-
-#     advantage_module = GAE(
-#         gamma=config.gae_gamma,
-#         lmbda=config.gae_lmbda,
-#         value_network=model[1],
-#         average_gae=False,
-#         device=config.update_device,
-#         vectorized=False,
-#     )
-
-#     loss_module = ClipPPOLoss(
-#         actor_network=model[0],
-#         critic_network=model[1],
-#         clip_epsilon=config.clip_eps,
-#         entropy_bonus=True,
-#         entropy_coef=config.ent_coef,
-#         critic_coef=config.val_coef,
-#         loss_critic_type=config.value_norm,
-#         clip_value=config.clip_vloss,
-#         normalize_advantage=config.normalize_advantage,
-#     )
-
-#     optimizer = torch.optim.Adam(loss_module.parameters(), lr=config.lr)
-
-#     def update(subdata, i, j, k):
-#         loss_vals = loss_module(subdata)
-#         loss_value = (
-#             loss_vals["loss_objective"]
-#             + loss_vals["loss_critic"]
-#             + loss_vals["loss_entropy"]
-#         )
-
-#         optimizer.zero_grad()
-#         loss_value.backward()
-
-#         # Log pre-clipping gradient norms
-#         pre_clip_norms = log_parameter_and_gradient_norms(loss_module)
-
-#         grad_norm = torch.nn.utils.clip_grad_norm_(
-#             loss_module.parameters(), max_norm=config.max_grad_norm
-#         )
-
-#         # Log post-clipping gradient norms
-#         post_clip_norms = log_parameter_and_gradient_norms(loss_module)
-#         post_clip_norms = {
-#             f"post_clip_{k}": v for k, v in post_clip_norms.items() if "grad_norm" in k
-#         }
-
-#         optimizer.step()
-
-#         # Log norms for this batch
-#         step = i * config.num_epochs_per_collection * n_batches + j * n_batches + k
-#         wandb.log(
-#             {
-#                 **pre_clip_norms,
-#                 **post_clip_norms,
-#                 "batch_loss/step": step,
-#                 "batch_loss/objective": loss_vals["loss_objective"].item(),
-#                 "batch_loss/critic": loss_vals["loss_critic"].item(),
-#                 "batch_loss/entropy": loss_vals["entropy"].item(),
-#                 "batch_loss/total": loss_value.item(),
-#                 "batch_loss/kl_approx": loss_vals["kl_approx"].item(),
-#                 "batch_loss/clip_fraction": loss_vals["clip_fraction"].item(),
-#                 # "batch_loss/value_clip_fraction": loss_vals[
-#                 #    "value_clip_fraction"
-#                 # ].item(),
-#                 "batch_loss/ESS": loss_vals["ESS"].item(),
-#             },
-#         )
-
-#     # advantage_module = torch.compile(advantage_module)
-#     # update = torch.compile(update, mode="reduce-overhead")
-
-#     # Run initial evaluation
-#     if config.eval_interval > 0:
-#         eval_metrics = evaluate_policy(
-#             policy=model[0],
-#             eval_env_fn=eval_env_fn,
-#             num_episodes=config.eval_episodes,
-#             step=0,
-#         )
-#         eval_metrics["eval/step"] = 0
-#         wandb.log(eval_metrics)
-
-#     for i, tensordict_data in enumerate(collector):
-#         replay_buffer.empty()
-
-#         if (i + 1) % 20 == 0:
-#             if wandb.run.dir is None:
-#                 path = "."
-#             else:
-#                 path = wandb.run.dir
-#             torch.save(
-#                 model.state_dict(),
-#                 os.path.join(path, model_name + f"_{i + 1}.pth"),
-#             )
-
-#         # Run evaluation at specified intervals
-#         if config.eval_interval > 0 and (i + 1) % config.eval_interval == 0:
-#             eval_metrics = evaluate_policy(
-#                 policy=model[0],
-#                 eval_env_fn=eval_env_fn,
-#                 num_episodes=config.eval_episodes,
-#                 step=i + 1,
-#             )
-#             eval_metrics["eval/step"] = i + 1
-#             wandb.log(eval_metrics)
-
-#         if i >= config.num_collections:
-#             break
-
-#         print(f"Collection: {i}")
-#         tensordict_data = tensordict_data.to(config.update_device, non_blocking=True)
-
-#         with torch.no_grad():
-#             # print(f"Computing advantages for collection {i}")
-#             # print("tensordict_data keys:", tensordict_data.keys(True))
-
-#             advantage_module(tensordict_data)
-
-#             non_zero_rewards = tensordict_data["next", "reward"]
-#             improvements = tensordict_data["next", "observation", "aux", "improvement"]
-#             mask = improvements > -1.5
-#             filtered_improvements = improvements[mask]
-#             if filtered_improvements.numel() > 0:
-#                 avg_improvement = filtered_improvements.mean()
-
-#             if len(non_zero_rewards) > 0:
-#                 avg_non_zero_reward = non_zero_rewards.mean().item()
-#                 std_rewards = non_zero_rewards.std().item()
-#                 print(f"Average reward: {avg_non_zero_reward}")
-#                 print(f"Average improvement: {avg_improvement}")
-
-#         replay_buffer.extend(tensordict_data.reshape(-1))
-
-#         # Training loop
-#         for j in range(config.num_epochs_per_collection):
-#             # n_batches = config.states_per_collection // config.minibatch_size
-#             n_batches = (80 * 8) // config.minibatch_size
-
-#             for k in range(n_batches):
-#                 subdata = replay_buffer.sample(config.minibatch_size)
-#                 subdata.to(config.update_device, non_blocking=True)
-
-#                 update(subdata, i, j, k)
-
-#         # Update the policy
-#         collector.policy.load_state_dict(loss_module.actor_network.state_dict())
-#         collector.update_policy_weights_(TensorDict.from_module(collector.policy))
-#         wandb.log(
-#             {
-#                 "collect_loss/step": i,
-#                 "collect_loss/mean_nonzero_reward": avg_non_zero_reward,
-#                 "collect_loss/std_nonzero_reward": std_rewards,
-#                 "collect_loss/average_improvement": avg_improvement.item(),
-#                 "collect_loss/std_improvement": filtered_improvements.std().item(),
-#                 "collect_loss/std_return": tensordict_data["value_target"].std().item(),
-#                 "collect_loss/mean_return": tensordict_data["value_target"]
-#                 .mean()
-#                 .item(),
-#                 "collect_loss/advantage_mean": tensordict_data["advantage"]
-#                 .mean()
-#                 .item(),
-#                 "collect_loss/advantage_std": tensordict_data["advantage"].std().item(),
-#             },
-#         )
-
-#     # Final evaluation
-#     if config.eval_interval > 0:
-#         eval_metrics = evaluate_policy(
-#             policy=td_module_action,
-#             eval_env_fn=eval_env_fn,
-#             num_episodes=config.eval_episodes,
-#             step=config.num_collections,
-#         )
-#         eval_metrics["eval/step"] = config.num_collections
-#         wandb.log(eval_metrics)
-
-#     # save final network
-#     if wandb.run.dir is None:
-#         path = "."
-#     else:
-#         path = wandb.run.dir
-#     torch.save(
-#         model.state_dict(),
-#         os.path.join(path, model_name + f"_{config.num_collections}.pth"),
-#     )
+    collector.shutdown()

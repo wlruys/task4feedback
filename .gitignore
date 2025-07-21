@@ -11,6 +11,9 @@ logs/
 log/
 .wandb/
 multirun
+*.out 
+*.err 
+
 # C extensions
 *.so
 

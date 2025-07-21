@@ -169,7 +169,6 @@ def initialize_gmsh():
         gmsh.initialize()
     GMSH_INITIALIZED = True
 
-
 def finalize_gmsh():
     global GMSH_INITIALIZED
     if GMSH_INITIALIZED:

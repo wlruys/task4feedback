@@ -159,7 +159,6 @@ public:
   }
 
   virtual void generate_priority(StaticTaskInfo &task_info) {
-    // std::cout << "Generating task priorities for " << n_tasks << " tasks." << std::endl;
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
       set_priority(task_id, sample_priority(task_id));
     }

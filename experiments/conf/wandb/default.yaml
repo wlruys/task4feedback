@@ -1,4 +1,7 @@
-project: dynamic_jac_lstm
+project: delayed_feedback
 name: default
 enabled: true
-dir: /home/wlruys/ws/scheduling/logs
+dir: ~/workspace/scheduling/logs
+tags:
+  - ppo
+  - default

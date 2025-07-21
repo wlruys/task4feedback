@@ -728,9 +728,6 @@ class TrajectoryWorkload(DynamicWorkload):
         scale: float = 0.05,
         max_angle: float = 0.5,
     ):
-        print(
-            num_levels, start_step, lower_bound, upper_bound, radius, scale, max_angle
-        )
         trajectory = make_circle_trajectory(
             self.geom, num_steps=num_levels, radius=radius, max_angle=max_angle
         )

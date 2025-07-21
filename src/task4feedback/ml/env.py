@@ -22,7 +22,6 @@ from task4feedback.graphs.mesh.plot import *
 from task4feedback.legacy_graphs import *
 from task4feedback.graphs.jacobi import JacobiGraph
 from torch_geometric.data import HeteroData
-from torch.profiler import record_function
 from torchrl.data import Categorical
 from task4feedback.logging import training
 from time import perf_counter
@@ -44,10 +43,13 @@ class RuntimeEnv(EnvBase):
         location_randomness=1,
         location_list: Optional[List[int]] = None,
         max_samples_per_iter: int = 0,
-        random_start: bool = False,
+        random_start: bool = False, 
+        verbose: bool = False,
+        colorized: bool = False,
     ):
         super().__init__(device=device)
         # print("Initializing environment")
+        self.verbose=verbose
         self.max_samples_per_iter = max_samples_per_iter
         self.change_priority = change_priority
         self.change_duration = change_duration
@@ -107,7 +109,6 @@ class RuntimeEnv(EnvBase):
             done=done_spec,
         )
 
-        # self.observations = observation_spec.expand(min(1, max_samples_per_iter)).zero()
         self.observations = []
         for _ in range(max(1, max_samples_per_iter)):
             obs = observation_spec.zero()
@@ -212,6 +213,18 @@ class RuntimeEnv(EnvBase):
     def _get_new_observation_buffer(self) -> TensorDict:
         obs = self.simulator.observer.new_observation_buffer()
         return obs
+    
+    def _handle_done(self, obs):
+        time = obs[self.time_key].item()
+        improvement = (self.EFT_baseline - time) / self.EFT_baseline
+        obs.set_at_(self.improvement_key, improvement, 0)
+        reward = improvement
+        if self.verbose:
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
+            )
+
+        return obs, reward, time, improvement
 
     def map_tasks(self, actions: torch.Tensor):
         candidate_workspace = self.candidate_workspace
@@ -263,13 +276,7 @@ class RuntimeEnv(EnvBase):
         # print(global_task_id, obs[("nodes", "tasks", "attr")])
 
         if done:
-            time = obs[self.time_key].item()
-            improvement = (self.EFT_baseline - time) / self.EFT_baseline
-            obs.set_at_(self.improvement_key, improvement, 0)
-            reward = improvement
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
-            )
+            obs, reward, time, improvement = self._handle_done(obs)
 
         buf = td.empty()
         obs = obs if self.max_samples_per_iter > 0 else obs.clone()
@@ -366,9 +373,28 @@ class RuntimeEnv(EnvBase):
         if self.change_priority:
             self.simulator_factory.set_seed(priority_seed=seed)
         if self.change_duration:
-            self.simulator_factory.set_seed(duration_seed=seed)
+            self.simulator_factory.set_seed(seed=seed)
         if self.change_locations:
             self.location_seed = seed
+
+    def reset_for_evaluation(self, seed: int = 0):
+        #save seeds from curret state
+        self.saved_seeds = {
+            "torch": torch.get_rng_state(),
+            "numpy": np.random.get_state(),
+            "random": random.getstate(),
+        }
+        self.change_priority = False 
+        self.change_duration = True 
+        self._set_seed(seed)
+        self.random_start = False 
+        self.resets = 0
+        self._reset()
+
+        #Restore seeds
+        torch.set_rng_state(self.saved_seeds["torch"])
+        np.random.set_state(self.saved_seeds["numpy"])
+        random.setstate(self.saved_seeds["random"])
 
 
 class IncrementalEFT(RuntimeEnv):
@@ -408,12 +434,7 @@ class IncrementalEFT(RuntimeEnv):
 
         obs = self._get_observation()
         if done:
-            time = obs[self.time_key][0].item()
-            improvement = (self.EFT_baseline - time) / self.EFT_baseline
-            obs.set_at_(self.improvement_key, improvement, 0)
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
-            )
+            obs, reward, time, improvement = self._handle_done(obs)
 
         buf = td.empty()
         buf.set(
@@ -436,6 +457,7 @@ class DelayIncrementalEFT(IncrementalEFT):
     ):
         super().__init__(*args, **kwargs)
         self.delay = delay
+        self.offset = 1
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
@@ -444,7 +466,7 @@ class DelayIncrementalEFT(IncrementalEFT):
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
 
-        flag = (self.step_count + 1) % self.delay
+        flag = (self.step_count + self.offset) % self.delay
 
         self.step_count += 1
 
@@ -465,12 +487,7 @@ class DelayIncrementalEFT(IncrementalEFT):
 
         obs = self._get_observation()
         if done:
-            time = obs[self.time_key][0].item()
-            improvement = (self.EFT_baseline - time) / self.EFT_baseline
-            obs.set_at_(self.improvement_key, improvement, 0)
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
-            )
+            obs, reward, time, improvement = self._handle_done(obs)
 
         buf = td.empty()
         buf.set(
@@ -481,6 +498,10 @@ class DelayIncrementalEFT(IncrementalEFT):
         )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
+    
+    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+        self.offset = random.randint(1, self.delay)
+        return super()._reset(td)
 
 
 class BaselineImprovementEFT(RuntimeEnv):
@@ -514,12 +535,7 @@ class BaselineImprovementEFT(RuntimeEnv):
 
         obs = self._get_observation()
         if done:
-            time = obs[self.time_key][0].item()
-            improvement = (self.EFT_baseline - time) / self.EFT_baseline
-            obs.set_at_(self.improvement_key, improvement, 0)
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
-            )
+            obs, reward, time, improvement = self._handle_done(obs)
 
         buf = td.empty()
         buf.set(
@@ -600,10 +616,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
         obs = self._get_observation()
         time = obs["aux"]["time"].item()
         if done:
-            obs["aux"]["improvement"][0] = self.EFT_baseline / time - 1
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['aux']['improvement'][0]:.2f}"
-            )
+            obs, reward, time, improvement = self._handle_done(obs)
 
         out = obs
         # print("Reward: ", reward)
@@ -650,10 +663,7 @@ class SanityCheckEnv(RuntimeEnv):
         obs = self._get_observation()
         time = obs["aux"]["time"].item()
         if done:
-            obs["aux"]["improvement"][0] = self.EFT_baseline / time - 1
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
-            )
+            obs, reward, time, improvement = self._handle_done(obs)
 
         out = obs
         out.set("reward", reward)
@@ -1412,11 +1422,9 @@ class IncrementalMappingEnv(EnvBase):
 
         obs = self._get_observation()
         time = obs["observation"]["aux"]["time"].item()
+
         if done:
-            obs["observation"]["aux"]["improvement"][0] = self.EFT_baseline / time - 1
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {obs['observation']['aux']['improvement'][0]:.2f}"
-            )
+            obs, reward, time, improvement = self._handle_done(obs)
             self.last_time = 0
 
         out = obs

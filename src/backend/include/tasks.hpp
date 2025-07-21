@@ -767,9 +767,9 @@ public:
     compute_task_names.resize(num_compute_tasks);
     data_task_names.resize(num_data_tasks);
 
-    std::cout << "Creating static graph..." << std::endl;
-    std::cout << "Number of compute tasks: " << num_compute_tasks << std::endl;
-    std::cout << "Number of data tasks: " << num_data_tasks << std::endl;
+    // std::cout << "Creating static graph..." << std::endl;
+    // std::cout << "Number of compute tasks: " << num_compute_tasks << std::endl;
+    // std::cout << "Number of data tasks: " << num_data_tasks << std::endl;
 
     auto &tasks = graph.tasks;
     auto &data_tasks = graph.data_tasks;

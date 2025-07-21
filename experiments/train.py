@@ -21,7 +21,11 @@ from pathlib import Path
 import git
 import os 
 from hydra.core.hydra_config import HydraConfig
+from helper.run_name import make_run_name, cfg_hash
 
+import torch 
+import numpy 
+import random
 
 class GitInfo(Callback):
     def on_job_start(self, config: DictConfig, **kwargs) -> None:
@@ -54,20 +58,18 @@ def configure_training(cfg: DictConfig):
     feature_config = FeatureDimConfig.from_observer(observer)
     model, lstm = create_td_actor_critic_models(cfg, feature_config)
 
-    def env_fn():
+    def env_fn(eval: bool = False):
         return make_env(
-            graph_builder=graph_builder, cfg=cfg, lstm=lstm, normalization=normalization
+            graph_builder=graph_builder, cfg=cfg, lstm=lstm, normalization=normalization, eval=eval
         )
 
     alg_config = instantiate(cfg.algorithm)
     
     optimizer = create_optimizer(cfg)
     lr_scheduler = create_lr_scheduler(cfg)
+    logging_config = instantiate(cfg.logging)
 
-    if cfg.wandb.enabled:
-        logging_config = instantiate(cfg.logging)
-    else:
-        logging_config = None
+    eval_config = instantiate(cfg.eval)
 
     if lstm is not None:
         run_ppo_lstm(
@@ -75,8 +77,10 @@ def configure_training(cfg: DictConfig):
             env_constructors=[env_fn],
             logging_config=logging_config,
             ppo_config=alg_config,
+            eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
+            seed=cfg.seed,
         )
     else:
         run_ppo(
@@ -84,8 +88,10 @@ def configure_training(cfg: DictConfig):
             env_constructors=[env_fn],
             logging_config=logging_config,
             ppo_config=alg_config,
+            eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
+            seed=cfg.seed,
         )
     
 
@@ -96,8 +102,10 @@ def main(cfg: DictConfig):
         wandb.init(
             project=cfg.wandb.project,
             config=OmegaConf.to_container(cfg, resolve=True),
-            name=cfg.wandb.name,
+            name=make_run_name(cfg),
+            #name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
+            tags=cfg.wandb.tags,
         )
         
         hydra_output_dir = Path(HydraConfig.get().runtime.output_dir)
@@ -107,6 +115,11 @@ def main(cfg: DictConfig):
                 git_file = hydra_output_dir / fname
                 if git_file.exists():
                     wandb.save(str(git_file))
+                    
+    torch.manual_seed(cfg.seed)
+    numpy.random.seed(cfg.seed)
+    random.seed(cfg.seed)
+    torch.use_deterministic_algorithms(cfg.deterministic_torch)
 
     configure_training(cfg)
 

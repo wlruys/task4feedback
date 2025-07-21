@@ -1,10 +1,13 @@
 _target_: task4feedback.ml.util.EvaluationConfig
 eval_interval: 100 
-max_frames: 100
+animation_interval: 400
+max_frames: 400
 fig_size: [4, 4]
 dpi: 50
+bitrate: 50
 exploration_types:
     - RANDOM
     - DETERMINISTIC
 samples: 10
-seeds: [0, 1, 2, 3, 4]
+seeds: [0]
+

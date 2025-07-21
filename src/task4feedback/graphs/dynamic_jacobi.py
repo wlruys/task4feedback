@@ -89,7 +89,6 @@ class DynamicJacobiData(JacobiData):
             "boundary_maximum": max(boundary_data),
             "average_step_data": sum(step_data_sum) / len(step_data_sum),
         }
-        print(self.data_stat)
 
 
 class DynamicJacobiGraph(JacobiGraph):
