@@ -1418,6 +1418,13 @@ class ExternalObserver:
 
         return output
 
+    def reset(self):
+        """
+        Reset the observer state.
+        This method can be overridden by subclasses to implement specific reset logic.
+        """
+        pass
+
 
 @dataclass
 class HeterogeneousExternalObserver(ExternalObserver):
@@ -1678,6 +1685,183 @@ class CandidateObserver(ExternalObserver):
         return output
 
 
+class CnnSingleTaskObserver(ExternalObserver):
+    """
+    Observer that collects 2d flattened grid of task features.
+    """
+
+    def reset(self):
+        graph = self.simulator.input.graph
+        assert (
+            self.graph_spec.max_candidates == 1
+        ), "CnnSingleTaskObserver only supports 1 candidate"
+
+        self.task_ids = torch.Tensor([-1 for _ in range(graph.config.n**2)])
+        for task in graph.level_to_task[0]:
+            self.task_ids[graph.xy_from_id(task)] = task
+        if -1 in self.task_ids:
+            raise ValueError(
+                "Not all task ids were set during reset. Check the graph initialization."
+            )
+        self.prev_candidate = -1
+
+    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
+        if spec is None:
+            spec = self.graph_spec
+        graph = self.simulator.input.graph
+
+        aux_tensor = TensorDict(
+            {
+                "candidates": _make_index_tensor(spec.max_candidates),
+                "time": torch.zeros((1), dtype=torch.int64),
+                "improvement": torch.zeros((1), dtype=torch.float32),
+                "progress": torch.zeros((1), dtype=torch.float32),
+                "baseline": torch.ones((1), dtype=torch.float32),
+            }
+        )
+
+        obs_tensor = TensorDict(
+            {
+                "nodes": TensorDict(
+                    {
+                        "tasks": TensorDict(
+                            {
+                                "attr": torch.zeros(
+                                    (graph.config.n**2, self.task_features.feature_dim),
+                                    dtype=torch.float32,
+                                )
+                            }
+                        )
+                    }
+                ),
+                "aux": aux_tensor,
+            }
+        )
+
+        return obs_tensor
+
+    def get_observation(self, output: Optional[TensorDict] = None):
+        graph = self.simulator.input.graph
+        if output is None:
+            output = self.new_observation_buffer(self.graph_spec)
+            raise Warning("Allocating new observation buffer, this is not efficient!")
+
+        # Get mappable candidates
+        self.candidate_observation(output)
+        current_candidate = output["aux", "candidates", "idx"][0].item()
+        idx = graph.xy_from_id(current_candidate)
+        output.set_at_(("nodes", "tasks", "attr"), 1, (idx, -1))
+
+        if current_candidate != self.prev_candidate and self.prev_candidate != -1:
+            current_level = graph.task_to_level[self.prev_candidate]
+            if current_level < (graph.config.steps - 1):
+                for next_id in graph.level_to_task[current_level + 1]:
+                    if (
+                        graph.task_to_cell[next_id]
+                        == graph.task_to_cell[self.prev_candidate]
+                    ):
+                        self.task_ids[graph.xy_from_id(self.prev_candidate)] = next_id
+                        break
+        self.prev_candidate = current_candidate
+
+        # output.set_(("nodes", "tasks", "glb"), output["aux", "candidates", "idx"])
+        # output.set_at_(("nodes", "tasks", "count"), 1, 0)
+        self.get_task_features(self.task_ids, output["nodes", "tasks", "attr"])
+
+        # Calibrate depth
+        candidate_depth = output["nodes", "tasks", "attr"][idx][-2]
+        output["nodes", "tasks", "attr"][:][-2] -= candidate_depth
+
+        # for i in range(graph.config.n):
+        #     for j in range(graph.config.n):
+        #         idx = int(i * graph.config.n + j)
+        #         print(
+        #             f"{output['nodes', 'tasks', 'attr'][idx][-1].tolist()}({int(self.task_ids[idx])})",
+        #             end=" ",
+        #         )
+        #     print()
+        # print("\n\n")
+
+        # Auxiliary observations
+        output.set_at_(("aux", "progress"), -2.0, 0)
+        output.set_at_(("aux", "time"), self.simulator.time, 0)
+        output.set_at_(("aux", "improvement"), -100.0, 0)
+
+        return output
+
+
+class CnnBatchTaskObserver(ExternalObserver):
+    """
+    Observer that collects 2d flattened grid of task features.
+    """
+
+    task_ids = None
+
+    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
+        if spec is None:
+            spec = self.graph_spec
+        graph = self.simulator.input.graph
+
+        aux_tensor = TensorDict(
+            {
+                "candidates": _make_index_tensor(spec.max_candidates),
+                "time": torch.zeros((1), dtype=torch.int64),
+                "improvement": torch.zeros((1), dtype=torch.float32),
+                "progress": torch.zeros((1), dtype=torch.float32),
+                "baseline": torch.ones((1), dtype=torch.float32),
+            }
+        )
+
+        obs_tensor = TensorDict(
+            {
+                "nodes": TensorDict(
+                    {
+                        "tasks": TensorDict(
+                            {
+                                "attr": torch.zeros(
+                                    (graph.config.n**2, self.task_features.feature_dim),
+                                    dtype=torch.float32,
+                                )
+                            }
+                        )
+                    }
+                ),
+                "aux": aux_tensor,
+            }
+        )
+
+        return obs_tensor
+
+    def get_observation(self, output: Optional[TensorDict] = None):
+        graph = self.simulator.input.graph
+        if output is None:
+            output = self.new_observation_buffer(self.graph_spec)
+            raise Warning("Allocating new observation buffer, this is not efficient!")
+        if self.task_ids is None:
+            self.task_ids = torch.Tensor([-1 for _ in range(graph.config.n**2)])
+
+        # Get mappable candidates
+        self.candidate_observation(output)
+        assert (
+            output["aux", "candidates", "count"][0] == graph.config.n**2
+            or output["aux", "candidates", "count"][0] == 0
+        ), "CnnBatchTaskObserver expects {} candidates but got {}.".format(
+            graph.config.n**2, output["aux", "candidates", "count"][0].item()
+        )
+        for task_id in output["aux", "candidates", "idx"]:
+            idx = graph.xy_from_id(task_id.item())
+            self.task_ids[idx] = task_id.item()
+
+        self.get_task_features(self.task_ids, output["nodes", "tasks", "attr"])
+
+        # Auxiliary observations
+        output.set_at_(("aux", "progress"), -2.0, 0)
+        output.set_at_(("aux", "time"), self.simulator.time, 0)
+        output.set_at_(("aux", "improvement"), -100.0, 0)
+
+        return output
+
+
 @dataclass
 class SimulatorDriver:
     input: SimulatorInput
@@ -1856,6 +2040,13 @@ class SimulatorDriver:
         Returns the current time (in microseconds) of the simulator state.
         """
         return self.simulator.get_current_time()
+
+    @property
+    def max_mem_usage(self) -> int:
+        """
+        Returns the maximum memory usage (in bytes) of the simulator state.
+        """
+        return self.simulator.get_max_memory_usage()
 
     def task_finish_time(self, task_id: int) -> int:
         """

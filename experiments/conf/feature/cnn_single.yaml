@@ -1,6 +1,6 @@
 # conf/feature/cnn_single.yaml
 observer:
-  _target_: task4feedback.graphs.jacobi.CnnSingleTaskObserverFactory
+  _target_: task4feedback.graphs.jacobi.CnnTaskObserverFactory
   spec:
     _target_: task4feedback.interface.create_graph_spec
     max_tasks: 1
@@ -13,3 +13,4 @@ observer:
     max_candidates: 1
   width: NoNeedToChange
   prev_frames: 1
+  batched: false

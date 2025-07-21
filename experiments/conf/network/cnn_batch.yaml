@@ -1,0 +1,17 @@
+defaults:
+  - architecture/unet_enc@layers.state
+  - architecture/unet_dec@layers.actor
+  - architecture/output_head@layers.critic
+  # - architecture/lstm@layers.lstm
+layers:
+  # lstm:
+  #   hidden_size: 32
+  state:
+    hidden_channels: 16
+  actor:
+    hidden_channels: 16
+  critic:
+    hidden_channels: 128
+
+critic:
+  add_progress: true

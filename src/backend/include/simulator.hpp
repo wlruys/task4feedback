@@ -9,12 +9,14 @@
 #include "spdlog/fmt/ostr.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
+#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <sstream>
 #include <tracy/Tracy.hpp>
 #include <unistd.h>
+#include <vector>
 
 void init_simulator_logger() {
   try {
@@ -339,6 +341,19 @@ public:
 
   [[nodiscard]] mem_t get_evicted_memory_size() const {
     return scheduler.get_state().get_data_manager().get_lru_manager().get_evicted_memory_size();
+  }
+
+  [[nodiscard]] mem_t get_max_memory_usage() const {
+    const auto &dm = scheduler.get_state().get_device_manager();
+    mem_t overall_max = 0;
+    for (devid_t i = 1; i < dm.n_devices; ++i) {
+      const auto &tracker = dm.launched.mem_tracker[i];
+      if (!tracker.empty()) {
+        mem_t device_max = *std::max_element(tracker.resources.begin(), tracker.resources.end());
+        overall_max = std::max(overall_max, device_max);
+      }
+    }
+    return overall_max;
   }
 
   void add_task_breakpoint(EventType type, taskid_t task) {

@@ -146,7 +146,7 @@ public:
   }
 
   virtual void generate_duration(StaticTaskInfo &task_info) {
-    //std::cout << "Generating task durations for " << n_tasks << " tasks." << std::endl;
+    // std::cout << "Generating task durations for " << n_tasks << " tasks." << std::endl;
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
       for (int8_t i = 0; i < num_device_types; i++) {
         auto arch = static_cast<DeviceType>(1 << i);
@@ -159,7 +159,7 @@ public:
   }
 
   virtual void generate_priority(StaticTaskInfo &task_info) {
-    std::cout << "Generating task priorities for " << n_tasks << " tasks." << std::endl;
+    // std::cout << "Generating task priorities for " << n_tasks << " tasks." << std::endl;
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
       set_priority(task_id, sample_priority(task_id));
     }
