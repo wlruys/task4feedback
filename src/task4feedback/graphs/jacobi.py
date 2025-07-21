@@ -183,6 +183,23 @@ class JacobiData(DataGeometry):
 
 
 class JacobiGraph(ComputeDataGraph):
+
+    def xy_from_id(self, taskid: int) -> int:
+        """
+        Convert a task ID to its (x, y) coordinates in the Jacobi grid.
+        And returns row-major order index.
+        """
+        cell_id = self.task_to_cell[taskid]
+        centroid = self.data.geometry.cell_points[
+            self.data.geometry.cells[cell_id]
+        ].mean(axis=0)
+        n = self.config.n
+        centroid = np.floor(centroid * n)
+
+        x = int(centroid[0])
+        y = int(centroid[1])
+        return int(x * self.config.n + y)
+
     def _build_graph(self, retire_data: bool = False):
         self.task_to_cell = {}
         self.task_to_level = {}
@@ -245,6 +262,7 @@ class JacobiGraph(ComputeDataGraph):
         self.data = JacobiData.from_mesh(geometry, config)
         self.config = config
         self._build_graph()
+        self.dynamic = False
         if variant is not None:
             self.apply_variant(variant)
         else:
@@ -974,3 +992,107 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
             task_device_feature_factory,
             data_device_feature_factory,
         )
+
+
+@dataclass(kw_only=True)
+class CnnTaskObserverFactory(ExternalObserverFactory):
+
+    def __init__(
+        self,
+        spec: fastsim.GraphSpec,
+        width: int,
+        prev_frames: int,
+        batched: bool = False,
+    ):
+        self.batched = batched
+        assert (not batched and spec.max_candidates == 1) or (
+            spec.max_candidates == width**2
+        ), f"Batched {self.batched} CNN observer requires max_candidates to be {width**2 if self.batched else 1}, but got {spec.max_candidates}"
+
+        task_feature_factory = FeatureExtractorFactory()
+        task_feature_factory.add(fastsim.ReadDataLocationFeature)
+        if prev_frames > 0:
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, False, prev_frames
+            )
+        if not batched:
+            # Difference in depth doesn't exist in batched
+            task_feature_factory.add(fastsim.DepthTaskFeature)
+            # Tag candidate only when it is not batched
+            task_feature_factory.add(fastsim.EmptyTaskFeature, 1)
+
+        data_feature_factory = FeatureExtractorFactory()
+        data_feature_factory.add(fastsim.EmptyDataFeature, 1)
+
+        device_feature_factory = FeatureExtractorFactory()
+        device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
+
+        task_task_feature_factory = EdgeFeatureExtractorFactory()
+        task_task_feature_factory.add(fastsim.EmptyTaskTaskFeature, 1)
+
+        task_data_feature_factory = EdgeFeatureExtractorFactory()
+        task_data_feature_factory.add(fastsim.EmptyTaskDataFeature, 1)
+
+        task_device_feature_factory = EdgeFeatureExtractorFactory()
+        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
+        data_device_feature_factory = EdgeFeatureExtractorFactory()
+        data_device_feature_factory.add(fastsim.DataDeviceDefaultEdgeFeature)
+
+        super().__init__(
+            spec,
+            fastsim.GraphExtractor,
+            task_feature_factory,
+            data_feature_factory,
+            device_feature_factory,
+            task_task_feature_factory,
+            task_data_feature_factory,
+            task_device_feature_factory,
+            data_device_feature_factory,
+        )
+
+    def create(self, simulator: SimulatorDriver):
+        state = simulator.get_state()
+        graph_spec = self.graph_spec
+        graph_extractor = self.graph_extractor_t(state)
+        task_feature_extractor = self.task_feature_factory.create(state)
+        data_feature_extractor = self.data_feature_factory.create(state)
+        device_feature_extractor = self.device_feature_factory.create(state)
+        task_task_feature_extractor = self.task_task_feature_factory.create(state)
+        task_data_feature_extractor = self.task_data_feature_factory.create(state)
+        task_device_feature_extractor = (
+            self.task_device_feature_factory.create(state)
+            if self.task_device_feature_factory is not None
+            else None
+        )
+        data_device_feature_extractor = (
+            self.data_device_feature_factory.create(state)
+            if self.data_device_feature_factory is not None
+            else None
+        )
+        if self.batched:
+            return CnnBatchTaskObserver(
+                simulator,
+                graph_spec,
+                graph_extractor,
+                task_feature_extractor,
+                data_feature_extractor,
+                device_feature_extractor,
+                task_task_feature_extractor,
+                task_data_feature_extractor,
+                task_device_feature_extractor,
+                data_device_feature_extractor,
+            )
+        else:
+            return CnnSingleTaskObserver(
+                simulator,
+                graph_spec,
+                graph_extractor,
+                task_feature_extractor,
+                data_feature_extractor,
+                device_feature_extractor,
+                task_task_feature_extractor,
+                task_data_feature_extractor,
+                task_device_feature_extractor,
+                data_device_feature_extractor,
+            )

@@ -29,6 +29,8 @@ from torch_geometric.nn import (
 )
 import numpy as np
 import time
+import torch.nn.functional as F
+import math
 from hydra.utils import instantiate, call
 from omegaconf import DictConfig, OmegaConf
 
@@ -2561,3 +2563,335 @@ class VectorSeparateNet(nn.Module):
         d_logits = self.actor(td)
         v = self.critic(td)
         return d_logits, v
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_ch, hidden_ch, kernel_size):
+        super().__init__()
+        pad = kernel_size // 2
+        self.conv1 = nn.Conv2d(in_ch, hidden_ch, kernel_size, padding=pad)
+        self.act1 = nn.LeakyReLU(inplace=True, negative_slope=0.01)
+        self.conv2 = nn.Conv2d(hidden_ch, hidden_ch, kernel_size, padding=pad)
+        self.act2 = nn.LeakyReLU(inplace=True, negative_slope=0.01)
+
+    def forward(self, x):
+        residual = x
+        out = self.conv1(x)
+        out = self.act1(out)
+        out = self.conv2(out)
+        out = self.act2(out)
+        return out + residual
+
+
+class CNNSingleStateNet(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        hidden_channels: int,
+        add_progress: bool = False,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+        width: int = 4,
+    ):
+        super().__init__()
+        self.in_channels = feature_config.task_feature_dim
+        self.add_progress = add_progress
+        kernel_size = 3
+        hidden_ch = hidden_channels
+        n_layers = width - 1
+        self.width = width
+
+        blocks = []
+        ch = self.in_channels
+
+        pad = kernel_size // 2
+        blocks += [
+            nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
+            nn.LeakyReLU(inplace=True, negative_slope=0.01),
+        ]
+        ch = hidden_ch
+
+        # build floor(n_layers/2) residual blocks
+        for _ in range((n_layers - 2) // 2):
+            blocks.append(ResidualBlock(ch, hidden_ch, kernel_size))
+            ch = hidden_ch
+
+        # if odd number of layers, tack on a final conv+ReLU
+        if n_layers % 2 == 1:
+            blocks += [
+                nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
+                nn.LeakyReLU(inplace=True, negative_slope=0.01),
+            ]
+            ch = hidden_ch
+        # final conv layer
+        blocks.append(nn.Conv2d(ch, 1, kernel_size, padding=pad))
+        blocks.append(nn.LeakyReLU(inplace=True, negative_slope=0.01))
+        ch = 1
+
+        self.net = nn.Sequential(*blocks)
+        self.output_dim = (
+            ((self.width**2) * ch + 1) if self.add_progress else ((self.width**2) * ch)
+        )
+        # Initialize CNN weights
+        for m in self.net.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(
+                    m.weight, mode="fan_in", nonlinearity="leaky_relu"
+                )
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        # x is a TensorDict; x.batch_size might be [], [N], [N,M], etc.
+        width = self.width
+        batch_size = x.batch_size
+
+        # Pull out the tasks tensor: shape = (*batch_size, tasks, in_channels)
+        x_tasks = x["nodes", "tasks", "attr"]
+        # Split off the leading batch dims vs. the last two dims (tasks, channels)
+        *batch_shape, tasks, in_channels = x_tasks.shape
+
+        # Flatten all leading batch dims into one:
+        flat_bs = 1
+        for d in batch_shape:
+            flat_bs *= d
+
+        # Now we have a 3-D tensor (flat_bs, tasks, in_channels)
+        x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
+
+        # Convert the 'tasks' dim back into (width, width) spatial dims
+        x_flat = x_flat.view(
+            flat_bs, width, width, in_channels
+        ).permute(  # (flat_bs, W, W, C_in)
+            0, 3, 1, 2
+        )  # (flat_bs, C_in, W, W)
+
+        # Run through your convolutional net
+        x_flat = self.net(x_flat)
+
+        # Collapse spatial/channel dims into a single feature vector
+        x_flat = x_flat.contiguous().view(flat_bs, -1)
+
+        # Finally, reshape back to the original batch dimensions:
+        if batch_shape:
+            # e.g. for batch_shape=[N,M], gives (N, M, features)
+            x_out = x_flat.view(*batch_shape, -1)
+        else:
+            # single sample: drop the artificial batch axis → (features,)
+            x_out = x_flat.squeeze(0)
+
+        if self.add_progress:
+            # Add time and progress features
+            progress_feature = x["aux", "progress"]
+            x_out = torch.cat([x_out, progress_feature], dim=-1)
+        return x_out
+
+
+class UNetEncoder(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        hidden_channels: int,
+        width: int,
+        add_progress: bool = False,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+    ):
+        super().__init__()
+        self.output_keys = []
+        self.width = width
+        self.in_channels = feature_config.task_feature_dim
+        self.hidden_channels = hidden_channels
+        self.add_progress = add_progress
+        # Determine number of downsampling layers based on width
+        self.num_layers = int(math.floor(math.log2(width)))
+        # Create encoder conv blocks dynamically
+        self.enc_blocks = nn.ModuleList()
+
+        channels = self.in_channels
+        for i in range(self.num_layers):
+            out_channels = hidden_channels * (2**i)
+            block = nn.Sequential(
+                nn.Conv2d(channels, out_channels, kernel_size=3, padding=1),
+                nn.LeakyReLU(
+                    inplace=True,
+                    negative_slope=0.01,
+                ),
+            )
+            self.enc_blocks.append(block)
+            channels = out_channels
+            self.output_keys.append(f"enc_{i}")
+        self.pool = nn.MaxPool2d(2, 2)
+        # Bottleneck
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=1, padding=0),
+            nn.LeakyReLU(
+                inplace=True,
+                negative_slope=0.01,
+            ),
+        )
+        self.output_dim = channels + (1 if add_progress else 0)
+        self.output_keys.append("embed")
+
+    # def forward(self, obs):
+    #     single = obs.batch_size == torch.Size([])
+    #     x = obs["nodes", "tasks", "attr"]
+    #     if single:
+    #         x = x.unsqueeze(0)
+    #     bsz = x.size(0)
+    #     x = x.view(bsz, self.width, self.width, self.in_channels).permute(0, 3, 1, 2)
+    #     enc_feats = []
+    #     for block in self.enc_blocks:
+    #         x = block(x)
+    #         enc_feats.append(x)
+    #         x = self.pool(x)
+    #     b = self.bottleneck(x)
+    #     b = b.flatten(start_dim=1)
+    #     if single:
+    #         b = b.squeeze(0)
+
+    #     if self.add_progress:
+    #         # Add time and progress features
+    #         progress_feature = obs["aux", "progress"]
+    #         b = torch.cat([b, progress_feature], dim=-1)
+    #     return (*enc_feats, b)
+
+    def forward(self, x):
+        # x is a TensorDict; x.batch_size might be [], [N], [N,M], etc.
+        single = x.batch_size == torch.Size([])
+        width = self.width
+
+        # 1) Pull out the tasks tensor: shape = (*batch_shape, tasks, in_channels)
+        x_tasks = x["nodes", "tasks", "attr"]
+        if single:
+            # If single sample, add a batch dimension
+            x_tasks = x_tasks.unsqueeze(0)
+
+        *batch_shape, tasks, in_channels = x_tasks.shape
+
+        # 2) Flatten all leading batch dims into one:
+        flat_bs = 1
+        for d in batch_shape:
+            flat_bs *= d
+
+        # 3) Reshape into (flat_bs, tasks, in_channels)
+        x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
+
+        # 4) Convert 'tasks' → spatial dims (width × width), then to (flat_bs, C_in, W, W)
+        x_flat = x_flat.view(
+            flat_bs, width, width, in_channels
+        ).permute(  # (flat_bs, W, W, C_in)
+            0, 3, 1, 2
+        )  # (flat_bs, C_in, W, W)
+
+        # 5) Run through encoder blocks + pooling, collecting intermediate feats
+        enc_feats_flat = []
+        x_enc = x_flat
+        for block in self.enc_blocks:
+            x_enc = block(x_enc)
+            enc_feats_flat.append(x_enc)
+            x_enc = self.pool(x_enc)
+
+        # 6) Bottleneck + flatten spatial → (flat_bs, feat_dim)
+        b_flat = self.bottleneck(x_enc).flatten(start_dim=1)
+
+        # 7) Un-flatten back to original batch_shape:
+        #    a) intermediate feature maps
+        enc_feats = []
+        for feat in enc_feats_flat:
+            # feat is (flat_bs, C, H, W) → reshape to (*batch_shape, C, H, W)
+            enc_feats.append(feat.view(*batch_shape, *feat.shape[1:]))
+
+        #    b) bottleneck vector
+        if single:
+            b = b_flat.squeeze(0)
+        else:
+            b = b_flat.view(*batch_shape, -1)
+
+        # 8) Optionally concat progress feature
+        if self.add_progress:
+            prog = x["aux", "progress"]
+            b = torch.cat([b, prog], dim=-1)
+
+        return (*enc_feats, b)
+
+
+class UNetDecoder(nn.Module):
+    input_keys = ["observation"]
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_channels: int,
+        width: int,
+        output_dim: int,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+        layer_norm: bool = False,
+    ):
+        super().__init__()
+        self.width = width
+        self.hidden_channels = hidden_channels
+        self.output_dim = output_dim
+        self.num_layers = int(math.floor(math.log2(width)))
+        # Create upsampling and decoder blocks dynamically
+        self.up_blocks = nn.ModuleList()
+        self.dec_blocks = nn.ModuleList()
+        for i in reversed(range(self.num_layers)):
+            in_ch = (
+                hidden_channels * (2 ** (i + 1))
+                if i < self.num_layers - 1
+                else hidden_channels * (2**i)
+            )
+            out_ch = hidden_channels * (2**i)
+            self.up_blocks.append(
+                nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
+            )
+            self.dec_blocks.append(
+                nn.Sequential(
+                    nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1),
+                    nn.ReLU(inplace=True),
+                )
+            )
+        for i in range(self.num_layers):
+            self.input_keys.append(f"enc_{i}")
+        self.input_keys.append("embed")
+        self.out_conv = nn.Conv2d(hidden_channels, output_dim, kernel_size=1)
+        assert (
+            input_dim == self.up_blocks[0].in_channels
+        ), f"Input dimension mismatch: expected {self.up_blocks[0].in_channels}, got {input_dim}"
+
+    def _align_and_concat(self, up_feat, enc_feat):
+        uh, uw = up_feat.shape[-2:]
+        eh, ew = enc_feat.shape[-2:]
+        dh, dw = eh - uh, ew - uw
+        if dh > 0 or dw > 0:
+            pad = [dw // 2, dw - dw // 2, dh // 2, dh - dh // 2]
+            up_feat = F.pad(up_feat, pad)
+        elif dh < 0 or dw < 0:
+            top, left = (-dh) // 2, (-dw) // 2
+            up_feat = up_feat[..., top : top + eh, left : left + ew]
+        return torch.cat([up_feat, enc_feat], dim=1)
+
+    def forward(self, obs, *features):
+        single = obs.batch_size == torch.Size([])
+        enc_feats = features[:-1]
+        b = features[-1]
+        if single:
+            b = b.unsqueeze(0)
+        b = b.view(
+            b.size(0),
+            self.hidden_channels * (2 ** (self.num_layers - 1)),
+            self.width // (2**self.num_layers),
+            self.width // (2**self.num_layers),
+        )
+        x = b
+        for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(enc_feats)):
+            x = up(x)
+            x = self._align_and_concat(x, enc)
+            x = dec(x)
+        logits = self.out_conv(x)
+        logits = logits.permute(0, 2, 3, 1).flatten(1, 2)
+        if single:
+            logits = logits.squeeze(0)
+        return logits

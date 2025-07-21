@@ -1367,8 +1367,8 @@ struct DepthTaskFeature : public StateFeature<DepthTaskFeature> {
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
-    const auto &static_graph = state.get_tasks();
-    output[0] = static_cast<f_t>(static_graph.get_depth(task_id));
+    const auto &tasks = state.get_graph().tasks;
+    output[0] = static_cast<f_t>(tasks[task_id].depth);
   }
 };
 
@@ -1401,6 +1401,63 @@ struct InputOutputTaskFeature : public StateFeature<InputOutputTaskFeature> {
     const auto &data = state.get_data();
     output[0] = static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
     output[1] = static_cast<f_t>(data.get_total_size(static_graph.get_write(task_id)));
+  }
+};
+struct ReadDataLocationFeature : public StateFeature<ReadDataLocationFeature> {
+  ReadDataLocationFeature(const SchedulerState &state)
+      : StateFeature<ReadDataLocationFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_devices();
+    return devices.size() - 1; // Exclude CPU
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = state.get_data();
+    auto n_devices = state.get_devices().size();
+    for (devid_t i = 1; i < n_devices; i++) {
+      for (auto data_id : static_graph.get_read(task_id)) {
+        if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_id), i)) {
+          output[i - 1] += data.get_size(data_id);
+        }
+      }
+    }
+  }
+};
+struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
+  const int stride;
+  const int frames;
+  const bool add_current;
+  PrevReadSizeFeature(const SchedulerState &state, int width, bool add_current, int frames)
+      : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK), stride(width * width),
+        add_current(add_current), frames(frames) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_devices();
+    return frames * (devices.size() - 1);
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &data = state.get_data();
+    const auto &task_runtime = state.get_task_runtime();
+    auto n_devices = this->state.get_devices().size() - 1; // Exclude CPU
+    if (!add_current) {
+      task_id -= stride;
+    }
+    int i = 0;
+    while (task_id >= 0 && i < frames) {
+      auto mapped_device = task_runtime.get_compute_task_mapped_device(task_id);
+      assert(mapped_device > 0);
+      output[i * n_devices + (mapped_device - 1)] =
+          static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
+      task_id -= stride;
+      ++i;
+    }
   }
 };
 

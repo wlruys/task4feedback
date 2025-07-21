@@ -16,6 +16,7 @@ from torchrl.modules import LSTMModule
 from typing import Optional
 from dataclasses import dataclass
 
+
 def create_system(cfg: DictConfig):
     system = hydra.utils.instantiate(cfg.system)
     return system
@@ -33,7 +34,22 @@ def create_runtime_reward(cfg: DictConfig):
 
 def create_observer_factory(cfg: DictConfig):
     graph_spec = hydra.utils.instantiate(cfg.feature.observer.spec)
-    observer_factory = hydra.utils.instantiate(cfg.feature.observer)
+    if (
+        hasattr(cfg.feature.observer, "width")
+        and hasattr(cfg.feature.observer, "prev_frames")
+        and hasattr(cfg.feature.observer, "batched")
+    ):
+        if cfg.feature.observer.batched:
+            graph_spec.max_candidates = cfg.graph.config.n**2
+        observer_factory = hydra.utils.instantiate(
+            cfg.feature.observer,
+            spec=graph_spec,
+            width=cfg.graph.config.n,
+            prev_frames=cfg.feature.observer.prev_frames,
+            batched=cfg.feature.observer.batched,
+        )
+    else:
+        observer_factory = hydra.utils.instantiate(cfg.feature.observer)
     return observer_factory, graph_spec
 
 
@@ -72,14 +88,16 @@ def make_env(
         change_priority=cfg.graph.env.change_priority,
         change_locations=cfg.graph.env.change_locations,
         seed=cfg.graph.env.seed,
-        max_samples_per_iter=len(graph)+1
-        if cfg.algorithm.rollout_steps == 0
-        else cfg.algorithm.rollout_steps+1,
+        max_samples_per_iter=(
+            len(graph) + 1
+            if cfg.algorithm.rollout_steps == 0
+            else cfg.algorithm.rollout_steps + 1
+        ),
     )
     env = TransformedEnv(env, StepCounter())
     env.append_transform(TrajCounter())
     env.append_transform(InitTracker())
-        
+
     if lstm is not None:
         print("Adding LSTM module to environment", flush=True)
         env.append_transform(lstm.make_tensordict_primer())
@@ -95,7 +113,8 @@ def make_env(
             for transform in env.transform:
                 if isinstance(transform, ObservationNorm) and not transform.initialized:
                     transform.init_stats(
-                        num_iter=1000, key=("observation", "nodes", "tasks", "attr")
+                        num_iter=env.size() * 10,
+                        key=("observation", "nodes", "tasks", "attr"),
                     )
         new_norm = NormalizationDetails(task_norm=task_norm_transform.state_dict())
     else:

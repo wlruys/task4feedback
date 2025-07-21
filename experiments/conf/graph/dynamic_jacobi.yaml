@@ -8,13 +8,13 @@ config:
   boundary_interior_ratio: 1
   randomness: 1
   L: 1
-  n: 4
-  steps: 5
+  n: 6
+  steps: 60
   permute_idx: 0
   workload_args:
     max_angle: 1
     lower_bound: 1000
-    upper_bound: 3000
+    upper_bound: 5000
     radius: 0.25
     scale: 0.05
 init:
@@ -23,6 +23,6 @@ init:
   gpu_only: True
   randomize: True
 env:
-  change_priority: False
-  change_locations: False
+  change_priority: True
+  change_locations: True
   seed: 1
