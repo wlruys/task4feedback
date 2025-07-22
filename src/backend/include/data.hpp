@@ -376,6 +376,7 @@ struct MovementStatus {
 class LRU_manager {
 private:
   mem_t evicted_size = 0;
+  mem_t max_usage = 0;
   uint32_t n_devices_{0};
   // For each device:
   //  - a list maintaining LRU (front) → MRU (back)
@@ -420,6 +421,9 @@ public:
       lst.erase(it->second);
     } else {
       size += mem_size;
+      if (size > max_usage && device_id > 0) {
+        max_usage = size;
+      }
       if (size > max_size) {
         SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
                      data_id, mem_size);
@@ -436,7 +440,7 @@ public:
   LRU_manager(const LRU_manager &other)
       : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
         position_maps_(other.n_devices_), size_maps_(other.size_maps_), sizes_(other.sizes_),
-        max_sizes_(other.max_sizes_), evicted_size(other.evicted_size) {
+        max_sizes_(other.max_sizes_), evicted_size(other.evicted_size), max_usage(other.max_usage) {
     ZoneScoped;
     // Rebuild position_maps_
     for (devid_t dev = 0; dev < n_devices_; ++dev) {
@@ -500,6 +504,10 @@ public:
 
   mem_t get_evicted_memory_size() const {
     return evicted_size;
+  }
+
+  mem_t get_max_memory_usage() const {
+    return sizes_[0] + sizes_[1] + sizes_[2] + sizes_[3];
   }
 };
 

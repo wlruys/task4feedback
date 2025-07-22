@@ -65,19 +65,31 @@ def create_td_actor_critic_models(
     state_layer = layers.state
     actor_layer = layers.actor
     critic_layer = layers.critic
-
     actor_layers = []
+    if hasattr(state_layer, "width"):
+        policy_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            _recursive_=False,
+            width=cfg.graph.config.n,
+        )
+    else:
+        policy_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            _recursive_=False,
+        )
 
-    policy_state_module = instantiate(
-        state_layer,
-        feature_config=feature_cfg,
-        _recursive_=False,
-    )
+    if hasattr(policy_state_module, "output_keys"):
+        state_output_keys = policy_state_module.output_keys
+        print(f"State output keys: {state_output_keys}")
+    else:
+        state_output_keys = ["embed"]
 
     _td_policy_state = td_nn.TensorDictModule(
         policy_state_module,
         in_keys=["observation"],
-        out_keys=["embed"],
+        out_keys=state_output_keys,
     )
     actor_layers.append(_td_policy_state)
     output_dim = policy_state_module.output_dim
@@ -90,17 +102,31 @@ def create_td_actor_critic_models(
         output_dim = layers.lstm.hidden_size
         actor_layers.append(actor_lstm_layer)
         lstm_mod = actor_lstm_layer
+    if hasattr(actor_layer, "width"):
+        policy_output_module = instantiate(
+            actor_layer,
+            input_dim=output_dim,
+            output_dim=cfg.system.n_devices - 1,
+            _recursive_=False,
+            width=cfg.graph.config.n,
+        )
+    else:
+        policy_output_module = instantiate(
+            actor_layer,
+            input_dim=output_dim,
+            output_dim=cfg.system.n_devices - 1,
+            _recursive_=False,
+        )
 
-    policy_output_module = instantiate(
-        actor_layer,
-        input_dim=output_dim,
-        output_dim=cfg.system.n_devices - 1,
-        _recursive_=False,
-    )
+    if hasattr(policy_output_module, "input_keys"):
+        actor_input_keys = policy_output_module.input_keys
+        print(f"Actor input keys: {actor_input_keys}")
+    else:
+        actor_input_keys = ["embed"]
 
     _td_policy_output = td_nn.TensorDictModule(
         policy_output_module,
-        in_keys=["embed"],
+        in_keys=actor_input_keys,
         out_keys=["logits"],
     )
     actor_layers.append(_td_policy_output)
@@ -115,18 +141,26 @@ def create_td_actor_critic_models(
     )
 
     critic_layers = []
-
-    critic_state_module = instantiate(
-        state_layer,
-        feature_config=feature_cfg,
-        add_progress=cfg.network.critic.add_progress,
-        _recursive_=False,
-    )
+    if hasattr(state_layer, "width"):
+        critic_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_progress=cfg.network.critic.add_progress,
+            _recursive_=False,
+            width=cfg.graph.config.n,
+        )
+    else:
+        critic_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_progress=cfg.network.critic.add_progress,
+            _recursive_=False,
+        )
 
     _td_critic_state = td_nn.TensorDictModule(
         critic_state_module,
         in_keys=["observation"],
-        out_keys=["embed"],
+        out_keys=state_output_keys,
     )
     output_dim = critic_state_module.output_dim
     critic_layers.append(_td_critic_state)

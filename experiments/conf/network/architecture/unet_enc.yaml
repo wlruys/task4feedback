@@ -1,0 +1,8 @@
+defaults:
+  - activation/leaky_relu@activation
+  - initialization/orthogonal@initialization
+
+
+_target_: task4feedback.ml.models.UNetEncoder
+hidden_channels: 16
+width: NoNeedToChange

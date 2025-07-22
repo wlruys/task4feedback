@@ -253,6 +253,28 @@ void bind_feature_extractor(nb::module_ &m, const char *class_name) {
       .def("get_features_batch", &get_features_batch<FEType>);
 }
 
+template <typename FEType> void bind_frame_feature(nb::module_ &m, const char *class_name) {
+  nb::class_<FEType>(m, class_name)
+      .def(nb::init<SchedulerState &, int, bool, int>(), nb::arg("state"), nb::arg("width"),
+           nb::arg("add_current") = false, nb::arg("frames") = 3)
+      .def_prop_ro("feature_dim", &FEType::getFeatureDim)
+      .def("extract_feature",
+           [](const FEType &self, int32_t task_id,
+              nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
+             float *data = arr.data();
+             std::span<float> sp(data, self.getFeatureDim());
+             self.extractFeature(task_id, sp);
+           })
+      .def_static(
+          "create",
+          [](SchedulerState &state, int width, bool add_current,
+             int frames) -> std::shared_ptr<IFeature> {
+            return std::make_shared<FeatureAdapter<FEType>>(
+                FEType(state, width, add_current, frames));
+          },
+          nb::rv_policy::take_ownership);
+}
+
 template <typename... Features>
 void bind_edge_feature_extractor(nb::module_ &m, const char *class_name) {
   using FEType = EdgeFeatureExtractor<Features...>;
@@ -288,6 +310,8 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_feature<TaskDataMappedSize>(m, "TaskDataMappedSizeFeature");
   bind_state_feature<TaskDataMappedCoordinates>(m, "TaskDataMappedCoordinatesFeature");
   bind_state_feature<CandidateVector>(m, "CandidateVectorFeature");
+  bind_frame_feature<PrevReadSizeFeature>(m, "PrevReadSizeFeature");
+  bind_state_feature<ReadDataLocationFeature>(m, "ReadDataLocationFeature");
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");

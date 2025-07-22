@@ -1,3 +1,4 @@
+from pathlib import Path
 from ..models import *
 from ..util import *
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ class PPOConfig(AlgorithmConfig):
     bagged_policy: str = "uniform"
     timeout: int = 60 * 60 * 24 # 1 day
 
+
 def should_log(
     n_updates: int,
     logging_config: Optional[LoggingConfig],
@@ -68,7 +70,6 @@ def should_log(
     if logging_config is None:
         return False
     return n_updates % logging_config.stats_interval == 0
-
 
 def should_eval(
     n_updates: int,
@@ -204,13 +205,15 @@ def run_ppo(
 
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
+    max_candidates = max(
+        [env.simulator_factory.graph_spec.max_candidates for env in eval_envs]
+    )
 
     if ppo_config.rollout_steps > 0:
         max_tasks = ppo_config.rollout_steps
 
     max_states_per_collection = ppo_config.graphs_per_collection * max_tasks
-    
-    
+
     if ppo_config.advantage_type == "gae":
         training.info("Using GAE for advantage estimation")
         advantage_module = GAE(
@@ -257,9 +260,9 @@ def run_ppo(
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            compile_policy={"mode": "reduce-overhead"}
-            if ppo_config.compile_policy
-            else None,
+            compile_policy=(
+                {"mode": "reduce-overhead"} if ppo_config.compile_policy else None
+            ),
         )
     elif ppo_config.collector == "sync":
         collector = SyncDataCollector(
@@ -271,9 +274,9 @@ def run_ppo(
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            compile_policy={"mode": "reduce-overhead"}
-            if ppo_config.compile_policy
-            else None,
+            compile_policy=(
+                {"mode": "reduce-overhead"} if ppo_config.compile_policy else None
+            ),
         )
     else:
         raise ValueError(
@@ -313,7 +316,7 @@ def run_ppo(
     loss_module = loss_module.to(ppo_config.update_device)
     advantage_module = advantage_module.to(ppo_config.update_device)
 
-    def update(batch, loss_module, optimizer,ppo_config):
+    def update(batch, loss_module, optimizer, ppo_config):
         loss_vals = loss_module(batch)
         loss_value = (
             loss_vals["loss_objective"]
@@ -329,7 +332,7 @@ def run_ppo(
         )
 
         optimizer.step()
-    
+
         return loss_vals
 
     if ppo_config.compile_advantage:
@@ -408,6 +411,11 @@ def run_ppo(
         samples_in_collection = flattened_data.shape[0]
         n_samples += samples_in_collection
 
+        if max_candidates > 1:
+            flattened_data["advantage"] = flattened_data["advantage"].expand(
+                -1, max_candidates
+            )
+            flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
         replay_buffer.extend(flattened_data)
 
         update_start_t = time.perf_counter()
@@ -500,13 +508,17 @@ def run_ppo_lstm(
 
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
+    max_candidates = max(
+        [env.simulator_factory.graph_spec.max_candidates for env in eval_envs]
+    )
+
     print(f"Max tasks in env constructors: {max_tasks}")
 
     if ppo_config.rollout_steps > 0:
         max_tasks = ppo_config.rollout_steps
 
     max_states_per_collection = ppo_config.graphs_per_collection * max_tasks
-    
+
     if ppo_config.advantage_type == "gae":
         training.info("Using GAE for advantage estimation")
         advantage_module = GAE(
@@ -525,9 +537,9 @@ def run_ppo_lstm(
             lmbda=ppo_config.lmbda,
             value_network=actor_critic_module.critic,
             actor_network=actor_critic_module.actor,
-        device=ppo_config.update_device,
-        deactivate_vmap=True,
-    )
+            device=ppo_config.update_device,
+            deactivate_vmap=True,
+        )
 
     if ppo_config.sample_slices:
         replay_buffer = TensorDictReplayBuffer(
@@ -573,9 +585,9 @@ def run_ppo_lstm(
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            compile_policy={"mode": "reduce-overhead"}
-            if ppo_config.compile_policy
-            else None,
+            compile_policy=(
+                {"mode": "reduce-overhead"} if ppo_config.compile_policy else None
+            ),
         )
     elif ppo_config.collector == "sync":
         collector = SyncDataCollector(
@@ -607,7 +619,7 @@ def run_ppo_lstm(
         clip_value=ppo_config.clip_vloss,
         normalize_advantage=ppo_config.normalize_advantage,
     )
-    
+
     if ppo_config.advantage_type == "gae":
         loss_module.make_value_estimator(ValueEstimators.GAE)
     elif ppo_config.advantage_type == "vtrace":
@@ -622,8 +634,6 @@ def run_ppo_lstm(
     else:
         optimizer = optimizer(loss_module.parameters())
 
-    
-    
     print(f"Using optimizer: {optimizer}")
 
     loss_module = loss_module.to(ppo_config.update_device)
@@ -724,8 +734,20 @@ def run_ppo_lstm(
         flattened_data = tensordict_data.reshape(-1)
 
         if ppo_config.sample_slices:
+            if max_candidates > 1:
+                flattened_data["advantage"] = flattened_data["advantage"].expand(
+                    -1, max_candidates
+                )
+                flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
             replay_buffer.extend(flattened_data)
         else:
+            if max_candidates > 1:
+                tensordict_data["advantage"] = tensordict_data["advantage"].expand(
+                    -1, max_candidates
+                )
+                tensordict_data["advantage"] = tensordict_data["advantage"].unsqueeze(
+                    -1
+                )
             replay_buffer.extend(tensordict_data)
 
         n_samples += flattened_data.shape[0]

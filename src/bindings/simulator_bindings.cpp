@@ -61,6 +61,8 @@ void init_simulator_ext(nb::module_ &m) {
            nb::rv_policy::reference_internal)
       .def("run", &Simulator::run)
       .def("get_current_time", &Simulator::get_current_time)
+      .def("get_evicted_memory_size", &Simulator::get_evicted_memory_size)
+      .def("get_max_memory_usage", &Simulator::get_max_memory_usage)
       .def("get_mappable_candidates",
            [](Simulator &s, TorchInt64Arr1D &arr) {
              std::span<int64_t> span(arr.data(), arr.size());

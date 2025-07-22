@@ -485,13 +485,12 @@ public:
     for (auto &task : tasks) {
       task.depth = 0; // Reset depth
     }
-
     for (const auto &task_id : sorted) {
       auto &task = tasks[task_id];
       for (const auto &dependency_id : task.dependencies) {
         auto &dependency_task = tasks[dependency_id];
-        if (dependency_task.depth < task.depth + 1) {
-          dependency_task.depth = task.depth + 1;
+        if (dependency_task.depth + 1 > task.depth) {
+          task.depth = dependency_task.depth + 1;
         }
       }
     }
@@ -588,9 +587,9 @@ public:
     populate_dependencies_from_dataflow();
     populate_unique_data();
     populate_dependents();
-    populate_depth();
     populate_initial_tasks();
     bfs();
+    populate_depth();
     populate_data_dependencies(ensure_dependencies, create_data_tasks);
     // populate_data_dependents();
   }

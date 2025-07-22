@@ -25,7 +25,7 @@ from helper.run_name import make_run_name, cfg_hash
 
 import torch 
 import numpy 
-import random 
+import random
 
 class GitInfo(Callback):
     def on_job_start(self, config: DictConfig, **kwargs) -> None:
@@ -115,7 +115,7 @@ def main(cfg: DictConfig):
                 git_file = hydra_output_dir / fname
                 if git_file.exists():
                     wandb.save(str(git_file))
-
+                    
     torch.manual_seed(cfg.seed)
     numpy.random.seed(cfg.seed)
     random.seed(cfg.seed)
