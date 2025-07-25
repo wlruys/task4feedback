@@ -17,10 +17,9 @@ from typing import Optional
 from itertools import permutations
 from collections import defaultdict
 import torch
-from typing import Self
+from typing import Self, List, Optional
 from task4feedback import fastsim2 as fastsim
 from ..interface.wrappers import *
-import re
 from scipy.optimize import linear_sum_assignment
 
 
@@ -45,7 +44,8 @@ class JacobiConfig(GraphConfig):
     randomness: float = 0
     permute_idx: int = 0
     interior_size: int = 1000000
-    boundary_interior_ratio: float = 1.0
+    interior_boundary_ratio: float = 1.0
+    comm_compute_ratio: int = 1
 
 
 class JacobiData(DataGeometry):
@@ -55,7 +55,7 @@ class JacobiData(DataGeometry):
 
     def _create_blocks(self):
         interior_size = self.config.interior_size
-        boundary_size = int(self.config.boundary_interior_ratio * interior_size)
+        boundary_size = int(interior_size / self.config.interior_boundary_ratio)
 
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
@@ -409,31 +409,126 @@ class JacobiGraph(ComputeDataGraph):
         bandwidth: int = 1000,
         level_chunks: int = 1,
         n_parts: int = 4,
-        offset: int = 0,  # 1 to ignore cpu
+        offset: int = 1,  # 1 to ignore cpu
+        mode: str = "oracle",
     ):
-        partitions = []
-        for i in range(level_chunks):
-            levels = list(self.level_to_task.keys())
+        # Oracle mode takes in level chunks and returns partitions based on the full knowledge of the workload
+        partitions = {}
+        levels = list(self.level_to_task.keys())
+        levels = sorted(levels)
+        if mode == "oracle":
             level_size = len(levels) // level_chunks
-            start = i * level_size
-            end = (i + 1) * level_size
-            if i == level_chunks - 1:
-                end = len(levels)
-            levels = levels[start:end]
+            for i in range(level_chunks):
+                start = i * level_size
+                end = (i + 1) * level_size
+                if i == level_chunks - 1:
+                    end = len(levels)
+                levels_to_compute = levels[start:end]
+                cell_graph = self.get_weighted_cell_graph(
+                    arch, bandwidth=bandwidth, levels=levels_to_compute
+                )
+                edge_cut, partition = weighted_cell_partition(
+                    cell_graph, nparts=n_parts
+                )
+                partition = [x + offset for x in partition]
+                partitions[(start, end)] = partition
+        # Dynamic mode changes the partitions based on the current workload if certain thresholds are met
+        elif mode == "dynamic":
             cell_graph = self.get_weighted_cell_graph(
-                arch, bandwidth=bandwidth, levels=levels
+                arch, bandwidth=bandwidth, levels=[0]
             )
-            edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
-            partition = [x + offset for x in partition]
-            partitions.append(partition)
+            edge_cut, current_partition = weighted_cell_partition(
+                cell_graph, nparts=n_parts
+            )
+            prev_level = 0
+            for level in levels[1:]:
+                # Check load imbalance of current partition
+                load_per_part = [0 for _ in range(n_parts)]
+                for task_id in self.level_to_task[level]:
+                    cell_id = self.task_to_cell[task_id]
+                    part = current_partition[cell_id]
+                    load_per_part[part] += self.get_compute_cost(task_id, arch)
+                # Check if the load imbalance is above a threshold
+                if max(load_per_part) / min(load_per_part) > 1.25:
+                    # Recompute the partition
+                    current_partition = [x + offset for x in current_partition]
+                    partitions[(prev_level, level)] = current_partition
+                    prev_level = level
+                    cell_graph = self.get_weighted_cell_graph(
+                        arch, bandwidth=bandwidth, levels=[level]
+                    )
+                    edge_cut, current_partition = weighted_cell_partition(
+                        cell_graph, nparts=n_parts
+                    )
+            current_partition = [x + offset for x in current_partition]
+            partitions[(prev_level, levels[-1] + 1)] = current_partition
+        elif mode == "predict":
+            cell_graph = self.get_weighted_cell_graph(
+                arch, bandwidth=bandwidth, levels=[0]
+            )
+            edge_cut, current_partition = weighted_cell_partition(
+                cell_graph, nparts=n_parts
+            )
+            prev_level = 0
 
+            level_size = len(levels) // level_chunks
+
+            predictor = PredictWorkload(
+                cells=len(self.data.geometry.cells),
+                window_size=level_size,
+            )
+
+            cell_workload = [0 for _ in range(len(self.data.geometry.cells))]
+            for i in levels:
+                tasks = self.level_to_task[levels[i]]
+                workload = [self.get_compute_cost(task_id, arch) for task_id in tasks]
+                for j, task_id in enumerate(tasks):
+                    cell_id = self.task_to_cell[task_id]
+                    cell_workload[cell_id] += workload[j]
+                predictor.submit_workload(cell_workload)
+
+                # load_per_part = [0 for _ in range(n_parts)]
+                # for task_id in self.level_to_task[i]:
+                #     cell_id = self.task_to_cell[task_id]
+                #     part = current_partition[cell_id]
+                #     load_per_part[part] += self.get_compute_cost(task_id, arch)
+
+                # # Check if the load imbalance is above a threshold
+                # if max(load_per_part) / min(load_per_part) > 1.25:
+                if i > 0 and i % level_size == 0:
+                    current_partition = [x + offset for x in current_partition]
+                    partitions[(prev_level, i)] = current_partition
+                    prev_level = i
+                    forecast = predictor.predict_workload(k=level_size)
+                    for cell in cell_graph.cells:
+                        scale = (
+                            forecast[cell] / cell_graph.vweights[cell]
+                            if cell_graph.vweights[cell] > 0
+                            else 1
+                        )
+                        # print(f"Scale for cell {cell}: {scale}")
+                        cell_graph.vweights[cell] = forecast[cell]
+                        start = cell_graph.xadj[cell]
+                        end = cell_graph.xadj[cell + 1]
+                        for j in range(start, end):
+                            cell_graph.eweights[j] = int(cell_graph.eweights[j] * scale)
+                    edge_cut, current_partition = weighted_cell_partition(
+                        cell_graph, nparts=n_parts
+                    )
+
+            current_partition = [x + offset for x in current_partition]
+            partitions[(prev_level, levels[-1] + 1)] = current_partition
+
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
         self.partitions = partitions
+        self.align_partitions()
         return partitions
 
     def align_partitions(self):
-        memberships = self.partitions
         # Convert to numpy and check shapes
-        aligned = [np.asarray(v, dtype=int) for v in memberships]
+        sorted_keys = sorted(self.partitions.keys())
+        aligned = [np.asarray(self.partitions[v], dtype=int) for v in sorted_keys]
         n = aligned[0].shape[0]
         if any(v.shape[0] != n for v in aligned):
             raise ValueError("All membership vectors must have the same length")
@@ -466,7 +561,9 @@ class JacobiGraph(ComputeDataGraph):
             # Count flips = how many disagreed with previous
             flips[i] = int((aligned[i] != prev).sum())
 
-        self.partitions = aligned
+        # self.partitions = aligned
+        for i, k in enumerate(sorted_keys):
+            self.partitions[k] = aligned[i]
 
         return aligned, perms, flips
 
@@ -484,6 +581,77 @@ class JacobiVariant(VariantBuilder):
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
         else:
             return None
+
+
+from collections import deque
+
+
+class PredictWorkload:
+    def __init__(
+        self,
+        cells: int,
+        window_size: Optional[int] = None,
+        alpha: float = 0.3,
+    ):
+        """
+        cells        : number of parallel series (cells)
+        window_size  : max number of past datapoints to keep per cell (for fallback, not needed for EMA)
+        alpha        : smoothing factor for EMA (0 < alpha <= 1)
+        """
+        self.cells = cells
+        self.window_size = window_size
+        self.alpha = alpha
+
+        # Buffers retained if you still want to keep history; otherwise you can drop this.
+        if window_size is not None:
+            self.buffers: List[deque[float]] = [
+                deque(maxlen=window_size) for _ in range(cells)
+            ]
+        else:
+            self.buffers: List[List[float]] = [[] for _ in range(cells)]
+
+        # Initialize EMA values to None (will be set on first submit)
+        self.ema_values: List[Optional[float]] = [None] * cells
+
+    def submit_workload(self, workloads: List[float]):
+        """
+        Append the new workloads and update EMA for each cell.
+        """
+        if len(workloads) != self.cells:
+            raise ValueError(f"Expected {self.cells} workloads, got {len(workloads)}")
+
+        for i, w in enumerate(workloads):
+            # keep history if desired
+            self.buffers[i].append(w)
+
+            # update EMA
+            if self.ema_values[i] is None:
+                # first data point: seed EMA
+                self.ema_values[i] = w
+            else:
+                # EMA update rule
+                self.ema_values[i] = (
+                    self.alpha * w + (1.0 - self.alpha) * self.ema_values[i]
+                )
+
+    def compute_next_k(self, i: int, k: int) -> List[float]:
+        """
+        Forecast k steps for cell i by projecting the current EMA forward.
+        """
+        ema = self.ema_values[i]
+        assert ema is not None, f"No EMA for cell {i}, cannot predict."
+        return [ema] * k
+
+    def predict_workload(self, k: int) -> List[int]:
+        """
+        For each cell i, forecast the next k steps (using EMA) and
+        return the integer total (sum over k).
+        """
+        preds: List[int] = []
+        for i in range(self.cells):
+            next_vals = self.compute_next_k(i, k)
+            preds.append(int(sum(next_vals)))
+        return preds
 
 
 class PartitionMapper:
@@ -536,7 +704,9 @@ class PartitionMapper:
 
 class LevelPartitionMapper:
     def __init__(
-        self, mapper: Optional[Self] = None, level_cell_mapping: Optional[dict] = None
+        self,
+        mapper: Optional[Self] = None,
+        level_cell_mapping: dict[tuple[int, int] : list[int]] = None,
     ):
         if mapper is not None:
             self.level_cell_mapping = mapper.level_cell_mapping
@@ -562,14 +732,16 @@ class LevelPartitionMapper:
             global_task_id = candidates[i].item()
             level = graph.task_to_level[global_task_id]
             cell_id = graph.task_to_cell[global_task_id]
-            total_levels = graph.config.steps
-            if len(self.level_cell_mapping) != total_levels:
-                chunk = level // (total_levels // len(self.level_cell_mapping))
-                if chunk >= len(self.level_cell_mapping):
-                    chunk = len(self.level_cell_mapping) - 1
-                device = self.level_cell_mapping[chunk][cell_id]
-            else:
-                device = self.level_cell_mapping[level][cell_id]
+            device = -1
+            for k, v in self.level_cell_mapping.items():
+                if k[0] <= level < k[1]:
+                    device = v[cell_id]
+                    break
+            if device == -1:
+                print(self.level_cell_mapping)
+            assert (
+                device != -1
+            ), f"Device not found for task {global_task_id} at level {level}"
             mapping_priority = simulator.simulator.get_state().get_mapping_priority(
                 global_task_id
             )
@@ -1010,6 +1182,7 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         ), f"Batched {self.batched} CNN observer requires max_candidates to be {width**2 if self.batched else 1}, but got {spec.max_candidates}"
 
         task_feature_factory = FeatureExtractorFactory()
+        task_feature_factory.add(fastsim.TaskMeanDurationFeature)
         task_feature_factory.add(fastsim.ReadDataLocationFeature)
         if prev_frames > 0:
             task_feature_factory.add(

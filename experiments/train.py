@@ -11,6 +11,7 @@ from helper.algorithm import create_optimizer, create_lr_scheduler
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
 from task4feedback.ml.models import *
+
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -19,13 +20,14 @@ from hydra.core.utils import JobReturn
 from omegaconf import DictConfig, open_dict
 from pathlib import Path
 import git
-import os 
+import os
 from hydra.core.hydra_config import HydraConfig
 from helper.run_name import make_run_name, cfg_hash
 
-import torch 
-import numpy 
+import torch
+import numpy
 import random
+
 
 class GitInfo(Callback):
     def on_job_start(self, config: DictConfig, **kwargs) -> None:
@@ -50,7 +52,7 @@ class GitInfo(Callback):
 
 
 def configure_training(cfg: DictConfig):
-    start_logger()
+    # start_logger()
     graph_builder = make_graph_builder(cfg)
     env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
 
@@ -60,11 +62,15 @@ def configure_training(cfg: DictConfig):
 
     def env_fn(eval: bool = False):
         return make_env(
-            graph_builder=graph_builder, cfg=cfg, lstm=lstm, normalization=normalization, eval=eval
+            graph_builder=graph_builder,
+            cfg=cfg,
+            lstm=lstm,
+            normalization=normalization,
+            eval=eval,
         )
 
     alg_config = instantiate(cfg.algorithm)
-    
+
     optimizer = create_optimizer(cfg)
     lr_scheduler = create_lr_scheduler(cfg)
     logging_config = instantiate(cfg.logging)
@@ -93,21 +99,20 @@ def configure_training(cfg: DictConfig):
             lr_scheduler=lr_scheduler,
             seed=cfg.seed,
         )
-    
 
 
-@hydra.main(config_path="conf", config_name="config", version_base=None)
+@hydra.main(config_path="conf", config_name="dynamic_batch", version_base=None)
 def main(cfg: DictConfig):
     if cfg.wandb.enabled:
         wandb.init(
             project=cfg.wandb.project,
             config=OmegaConf.to_container(cfg, resolve=True),
             name=make_run_name(cfg),
-            #name=f"{cfg.wandb.name}",
+            # name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
             tags=cfg.wandb.tags,
         )
-        
+
         hydra_output_dir = Path(HydraConfig.get().runtime.output_dir)
 
         with open_dict(cfg):
@@ -115,7 +120,7 @@ def main(cfg: DictConfig):
                 git_file = hydra_output_dir / fname
                 if git_file.exists():
                     wandb.save(str(git_file))
-                    
+
     torch.manual_seed(cfg.seed)
     numpy.random.seed(cfg.seed)
     random.seed(cfg.seed)

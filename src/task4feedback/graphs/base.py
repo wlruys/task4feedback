@@ -144,6 +144,7 @@ class GeometryIDMap:
         self.block_to_key[block_id] = key
 
     def get_block(self, key: DataKey):
+        """Get the block ID for a given key."""
         return self.key_to_block[key]
 
     def get_object(self, block_id: int):
@@ -703,6 +704,85 @@ def make_circle_trajectory(
     return trajectory
 
 
+def make_drifting_circle_trajectory(
+    geom: Geometry,
+    num_steps: int,
+    radius: float = 0.5,
+    speed: float = 0.01,
+    direction_std: float = 0.1,
+    center=None,
+    initial_angle: Optional[float] = None,
+    seed: int = 0,
+):
+    """
+    Generate a drifting circular trajectory that changes direction gradually.
+    This is meant to simulate quasi-periodic behavior with smooth directional noise.
+
+    Parameters:
+    -----------
+    geom : Geometry
+        Geometry object used to define boundaries and centroids.
+    num_steps : int
+        Number of time steps in the trajectory.
+    radius : float
+        Radius of the local circle (as fraction of domain size).
+    speed : float
+        Drift speed per time step.
+    direction_std : float
+        Standard deviation of direction change per step (in radians).
+    center : np.ndarray
+        Initial center position. If None, randomly chosen.
+    initial_angle : float
+        Initial drift angle. If None, random in [0, 2π].
+
+    Returns:
+    --------
+    np.ndarray
+        (num_steps, 2) array of 2D coordinates.
+    """
+    width = geom.get_max_coordinate(0) - geom.get_min_coordinate(0)
+    height = geom.get_max_coordinate(1) - geom.get_min_coordinate(1)
+    domain_size = min(width, height)
+    circle_radius = radius * domain_size
+    drift_speed = speed * domain_size
+
+    rng = np.random.RandomState(seed)
+
+    if center is None:
+        start_idx = rng.randint(0, len(geom.cells))
+        center = geom.get_centroid(start_idx)
+
+    angle = (
+        rng.uniform(-2 * np.pi, 2 * np.pi) if initial_angle is None else initial_angle
+    )
+    phase = 0.0
+    traj = np.zeros((num_steps, 2))
+
+    for i in range(num_steps):
+        # 1) store point
+        traj[i] = center + circle_radius * np.array([np.cos(phase), np.sin(phase)])
+
+        # 2) update local phase and global heading
+        phase += 2 * np.pi / 50.0
+        angle += rng.normal(0.0, direction_std)
+        center += drift_speed * np.array([np.cos(angle), np.sin(angle)])
+
+        # 3) reflect if *edge* crosses a wall
+        for d in (0, 1):
+            lo, hi = geom.get_min_coordinate(d), geom.get_max_coordinate(d)
+            if center[d] - circle_radius < lo:
+                center[d] = lo + (lo - (center[d] - 2 * circle_radius))
+                angle = np.pi - angle if d == 0 else -angle
+            elif center[d] + circle_radius > hi:
+                center[d] = hi - ((center[d] + 2 * circle_radius) - hi)
+                angle = np.pi - angle if d == 0 else -angle
+
+        # 4) keep angle bounded
+        angle %= 2 * np.pi
+
+    return traj
+
+
 def gaussian_pdf(x, mean, std):
     grid = np.asarray(x)
 
@@ -718,19 +798,33 @@ def gaussian_pdf(x, mean, std):
 
 
 class TrajectoryWorkload(DynamicWorkload):
+
     def generate_workload(
         self,
         num_levels: int,
+        traj_type: str = "circle",
         start_step: int = 0,
         lower_bound: float = 0,
         upper_bound: float = 3000,
-        radius: float = 0.25,
-        scale: float = 0.05,
-        max_angle: float = 0.5,
+        scale: float = 0.01,
+        seed: int = 0,
+        traj_specifics: Optional[dict] = None,
     ):
-        trajectory = make_circle_trajectory(
-            self.geom, num_steps=num_levels, radius=radius, max_angle=max_angle
-        )
+        if traj_type == "circle":
+            trajectory = make_circle_trajectory(
+                self.geom, num_steps=num_levels, **traj_specifics
+            )
+            self.random = False
+        elif traj_type == "drift":
+            trajectory = make_drifting_circle_trajectory(
+                self.geom,
+                num_steps=num_levels,
+                **traj_specifics,
+                seed=seed,
+            )
+            self.random = True
+        else:
+            raise ValueError(f"Unknown trajectory type: {traj_type}")
 
         centroids = np.zeros((self.num_cells, 2))
         for i, cell in enumerate(self.geom.cells):

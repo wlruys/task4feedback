@@ -1375,6 +1375,25 @@ struct ReadDataLocationFeature : public StateFeature<ReadDataLocationFeature> {
     }
   }
 };
+
+struct TaskMeanDurationFeature : public StateFeature<TaskMeanDurationFeature> {
+  TaskMeanDurationFeature(const SchedulerState &state)
+      : StateFeature<TaskMeanDurationFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = state.get_data();
+    auto n_devices = state.get_devices().size();
+    output[0] = static_graph.get_mean_duration(task_id, DeviceType::GPU);
+  }
+};
+
 struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
   const int stride;
   const int frames;

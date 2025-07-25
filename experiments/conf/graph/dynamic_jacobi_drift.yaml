@@ -1,0 +1,32 @@
+mesh:
+  _target_: task4feedback.graphs.mesh.generate_quad_mesh
+config:
+  _target_: task4feedback.graphs.dynamic_jacobi.DynamicJacobiConfig
+  interior_size: 1000
+  start_workload: 1000
+  level_chunks: 1
+  interior_boundary_ratio: 1
+  comm_compute_ratio: 1
+  randomness: 1
+  L: 1
+  n: 8
+  steps: 60
+  permute_idx: 0
+  workload_args:
+    traj_type: drift
+    lower_bound: 1000
+    upper_bound: 5000
+    scale: 0.01
+    traj_specifics:
+      speed: 0.005
+      direction_std: 0.1
+      radius: 0.3
+init:
+  partitioner: metis
+  nparts: 4
+  gpu_only: True
+  randomize: True
+env:
+  change_priority: True
+  change_locations: True
+  seed: 1

@@ -12,7 +12,8 @@ log/
 .wandb/
 multirun
 *.out 
-*.err 
+*.err
+sandbox/
 
 # C extensions
 *.so

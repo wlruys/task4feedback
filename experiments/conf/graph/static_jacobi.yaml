@@ -3,7 +3,7 @@ mesh:
 config:
   _target_: task4feedback.graphs.jacobi.JacobiConfig
   interior_size: 1000
-  boundary_interior_ratio: 1
+  interior_boundary_ratio: 1
   randomness: 1
   L: 1
   n: 4
