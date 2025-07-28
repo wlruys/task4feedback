@@ -1,0 +1,81 @@
+defaults:
+  - graph: dynamic_jacobi_circle
+  - reward: gieft
+  - system: uniform
+  - feature: cnn_batch
+  - network: cnn_batch_lstm
+  - algorithm: ppo
+  - runtime: batch
+  - wandb: default
+  - logging: default
+  - lr_scheduler: none 
+  - optimizer: adamw
+  - eval: default
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: train.GitInfo
+seed: 532
+deterministic_torch: true
+
+reward:
+  verbose: true
+  random_start: false
+
+graph:
+  config:
+      n: 8
+      steps: 60
+      comm_compute_ratio: 20
+      interior_boundary_ratio: 1000
+      workload_args:
+        lower_bound: 1000
+        upper_bound: 5000
+        scale: 0.01
+  env:
+    change_priority: True
+    change_locations: True
+    seed: 1
+
+algorithm:
+  rollout_steps: 60
+  workers: 4
+  ent_coef: 0.001
+  sample_slices: True
+  slice_len: 16
+
+optimizer:
+  lr: 2.5e-4
+
+system:
+  mem: 136000
+
+feature:
+  observer:
+    prev_frames: 0
+    batched: true
+
+network:
+  layers:
+    lstm:
+      hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
+    state:
+      hidden_channels: 16
+    actor:
+      hidden_channels: 16
+    critic:
+      hidden_channels: 128
+
+runtime:
+  batch_size: 5
+  queue_threshold: 5
+  max_in_flight: 64
+
+wandb:
+  enabled: true
+
+eval:
+  eval_interval: 0
+

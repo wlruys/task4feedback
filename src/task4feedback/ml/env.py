@@ -21,6 +21,7 @@ import random
 from task4feedback.graphs.mesh.plot import *
 from task4feedback.legacy_graphs import *
 from task4feedback.graphs.jacobi import JacobiGraph
+from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from torch_geometric.data import HeteroData
 from torchrl.data import Categorical
 from task4feedback.logging import training
@@ -43,13 +44,13 @@ class RuntimeEnv(EnvBase):
         location_randomness=1,
         location_list: Optional[List[int]] = None,
         max_samples_per_iter: int = 0,
-        random_start: bool = False, 
+        random_start: bool = False,
         verbose: bool = False,
         colorized: bool = False,
     ):
         super().__init__(device=device)
         # print("Initializing environment")
-        self.verbose=verbose
+        self.verbose = verbose
         self.max_samples_per_iter = max_samples_per_iter
         self.change_priority = change_priority
         self.change_duration = change_duration
@@ -213,7 +214,7 @@ class RuntimeEnv(EnvBase):
     def _get_new_observation_buffer(self) -> TensorDict:
         obs = self.simulator.observer.new_observation_buffer()
         return obs
-    
+
     def _handle_done(self, obs):
         time = obs[self.time_key].item()
         improvement = (self.EFT_baseline - time) / self.EFT_baseline
@@ -221,7 +222,8 @@ class RuntimeEnv(EnvBase):
         reward = improvement
         if self.verbose:
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}"
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
+                flush=True,
             )
 
         return obs, reward, time, improvement
@@ -308,8 +310,9 @@ class RuntimeEnv(EnvBase):
                 ), "Graph does not have randomize_locations method."
 
                 if isinstance(graph, JacobiGraph):
-                    if graph.dynamic:
+                    if isinstance(graph, DynamicJacobiGraph):
                         graph.set_cell_locations([-1 for _ in range(graph.config.n**2)])
+                        graph.randomize_workload(seed=new_location_seed)
                     graph.randomize_locations(
                         self.location_randomness,
                         self.location_list,
@@ -337,10 +340,9 @@ class RuntimeEnv(EnvBase):
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
         self.simulator.observer.reset()
-
         if self.resets < 10 and self.random_start:
             # Run the simulator for a random number of steps
-            n_steps = random.randint(1, len(self.simulator_factory.input.graph) - 1)
+            n_steps = random.randint(1, self.size() - 1)
             self.simulator.disable_external_mapper()
             self.simulator.set_steps(n_steps)
             self.simulator.run()
@@ -378,20 +380,20 @@ class RuntimeEnv(EnvBase):
             self.location_seed = seed
 
     def reset_for_evaluation(self, seed: int = 0):
-        #save seeds from curret state
+        # save seeds from curret state
         self.saved_seeds = {
             "torch": torch.get_rng_state(),
             "numpy": np.random.get_state(),
             "random": random.getstate(),
         }
-        self.change_priority = False 
-        self.change_duration = True 
+        self.change_priority = False
+        self.change_duration = True
         self._set_seed(seed)
-        self.random_start = False 
+        self.random_start = False
         self.resets = 0
         self._reset()
 
-        #Restore seeds
+        # Restore seeds
         torch.set_rng_state(self.saved_seeds["torch"])
         np.random.set_state(self.saved_seeds["numpy"])
         random.setstate(self.saved_seeds["random"])
@@ -427,7 +429,7 @@ class IncrementalEFT(RuntimeEnv):
 
         ml_time = sim_ml.time
 
-        reward = (self.eft_time - self.gamma * ml_time) / self.size()
+        reward = 8 * (self.eft_time - self.gamma * ml_time) / self.size()
         self.eft_time = ml_time
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
@@ -498,7 +500,7 @@ class DelayIncrementalEFT(IncrementalEFT):
         )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
-    
+
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.offset = random.randint(1, self.delay)
         return super()._reset(td)
@@ -576,9 +578,6 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_log[self.step_count] = self.EFT_baseline
 
-        done = torch.tensor((1,), device=self.device, dtype=torch.bool)
-        reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
-
         self.map_tasks(td[self.action_n])
 
         sim_ml = self.simulator.copy()
@@ -608,22 +607,25 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
         if self.clip_total:
             reward_sum = min(reward_sum, 0)
 
-        reward[0] = reward_sum / self.EFT_baseline
+        reward = reward_sum / self.EFT_baseline
 
         simulator_status = self.simulator.run_until_external_mapping()
-        done[0] = simulator_status == fastsim.ExecutionState.COMPLETE
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
         time = obs["aux"]["time"].item()
         if done:
-            obs, reward, time, improvement = self._handle_done(obs)
+            obs, _, time, improvement = self._handle_done(obs)
 
-        out = obs
-        # print("Reward: ", reward)
-        out.set("reward", reward)
-        out.set("done", done)
-        self.step_count += 1
-        return out
+        buf = td.empty()
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
+        buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
+        return buf
 
 
 class SanityCheckEnv(RuntimeEnv):

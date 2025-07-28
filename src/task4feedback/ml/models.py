@@ -1930,7 +1930,7 @@ class HeteroConvPolicyNet(nn.Module):
         state_features = self.heteroconv_state_net(data, counts)
         # print("state_features", state_features.shape)
         d_logits = self.output_head(state_features)
-            # print("d_logits", d_logits.shape)
+        # print("d_logits", d_logits.shape)
         return d_logits
 
 
@@ -2833,6 +2833,7 @@ class UNetDecoder(nn.Module):
         self.width = width
         self.hidden_channels = hidden_channels
         self.output_dim = output_dim
+        self.input_dim = input_dim
         self.num_layers = int(math.floor(math.log2(width)))
         # Create upsampling and decoder blocks dynamically
         self.up_blocks = nn.ModuleList()
@@ -2877,21 +2878,39 @@ class UNetDecoder(nn.Module):
         single = obs.batch_size == torch.Size([])
         enc_feats = features[:-1]
         b = features[-1]
-        if single:
+
+        if not single:
+            *batch_shape, embed_dim = b.shape
+            flat_bs = 1
+            for d in batch_shape:
+                flat_bs *= d
+
+            b = b.reshape(flat_bs, embed_dim, 1, 1)
+            b = b.view(
+                flat_bs,
+                self.hidden_channels * (2 ** (self.num_layers - 1)),
+                self.width // (2**self.num_layers),
+                self.width // (2**self.num_layers),
+            )
+        else:
             b = b.unsqueeze(0)
-        b = b.view(
-            b.size(0),
-            self.hidden_channels * (2 ** (self.num_layers - 1)),
-            self.width // (2**self.num_layers),
-            self.width // (2**self.num_layers),
-        )
-        x = b
+            b = b.view(
+                1,
+                self.hidden_channels * (2 ** (self.num_layers - 1)),
+                self.width // (2**self.num_layers),
+                self.width // (2**self.num_layers),
+            )
+
         for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(enc_feats)):
-            x = up(x)
-            x = self._align_and_concat(x, enc)
-            x = dec(x)
-        logits = self.out_conv(x)
+            b = up(b)
+            if not single:
+                enc = enc.view(flat_bs, *enc.shape[len(batch_shape) :])
+            b = self._align_and_concat(b, enc)
+            b = dec(b)
+        logits = self.out_conv(b)
         logits = logits.permute(0, 2, 3, 1).flatten(1, 2)
         if single:
             logits = logits.squeeze(0)
+        else:
+            logits = logits.view(*batch_shape, self.width * self.width, -1)
         return logits

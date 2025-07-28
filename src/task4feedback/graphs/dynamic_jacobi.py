@@ -11,7 +11,6 @@ from .base import register_graph
 class DynamicJacobiConfig(JacobiConfig):
     workload_args: dict = field(default_factory=dict)
     workload_class: Type = TrajectoryWorkload
-    data_compute_relation: Callable[[int], int] = lambda x: x
     start_workload: int = 1000
     level_chunks: int = 1
 
@@ -38,9 +37,6 @@ class DynamicJacobiData(JacobiData):
         return step
 
     def _create_blocks(self):
-        interior_size = self.config.interior_size
-        boundary_size = int(self.config.boundary_interior_ratio * interior_size)
-        base_workload = self.config.start_workload
         interior_data = []
         boundary_data = []
         step_data_sum = [0 for _ in range(self.config.steps)]
@@ -49,9 +45,7 @@ class DynamicJacobiData(JacobiData):
             # Create 2 data blocks per cell
             for i in range(self.config.steps + 1):
                 workload = self.workload.get_workload(i)[cell]
-                workload_ratio = workload / base_workload
-                new_data_ratio = self.config.data_compute_relation(workload_ratio)
-                new_data_size = int(interior_size * new_data_ratio)
+                new_data_size = int(workload)
 
                 self.add_block(DataKey(Cell(cell), i), size=new_data_size, location=0)
                 assert (
@@ -65,15 +59,67 @@ class DynamicJacobiData(JacobiData):
             for edge in self.geometry.cell_edges[cell]:
                 for i in range(self.config.steps + 1):
                     workload = self.workload.get_workload(i)[cell]
-                    workload_ratio = workload / base_workload
-                    new_data_ratio = self.config.data_compute_relation(workload_ratio)
-                    new_data_size = int(boundary_size * new_data_ratio)
+                    new_data_size = int(workload / self.config.interior_boundary_ratio)
 
                     self.add_block(
                         DataKey(Edge(edge), (Cell(cell), i)),
                         size=new_data_size,
                         location=0,
                     )
+                    assert (
+                        new_data_size > 0 or i == self.config.steps
+                    ), "Boundary data size must be positive"
+                    if new_data_size > 0:
+                        boundary_data.append(new_data_size)
+                        step_data_sum[i] += new_data_size
+        self.data_stat = {
+            "interior_average": sum(interior_data) / len(interior_data),
+            "interior_minimum": min(interior_data),
+            "interior_maximum": max(interior_data),
+            "boundary_average": sum(boundary_data) / len(boundary_data),
+            "boundary_minimum": min(boundary_data),
+            "boundary_maximum": max(boundary_data),
+            "average_step_data": sum(step_data_sum) / len(step_data_sum),
+        }
+
+    def reset_data_size(self):
+        """
+        Reset the data size of all blocks to a new trajectory.
+        """
+        interior_data = []
+        boundary_data = []
+        step_data_sum = [0 for _ in range(self.config.steps)]
+        # Loop over cells
+        for cell in range(len(self.geometry.cells)):
+            # Create 2 data blocks per cell
+            for i in range(self.config.steps + 1):
+                workload = self.workload.get_workload(i)[cell]
+                new_data_size = int(workload)
+
+                self.blocks.set_size(
+                    self.map.get_block(DataKey(Cell(cell), i)), new_data_size
+                )
+                assert (
+                    new_data_size > 0 or i == self.config.steps
+                ), "Interior data size must be positive "
+                if new_data_size > 0:
+                    interior_data.append(new_data_size)
+                    step_data_sum[i] += new_data_size
+
+            # Create 8 data blocks per edge
+            for edge in self.geometry.cell_edges[cell]:
+                for i in range(self.config.steps + 1):
+                    workload = self.workload.get_workload(i)[cell]
+                    new_data_size = int(workload / self.config.interior_boundary_ratio)
+
+                    if workload > 0:
+                        new_data_size = max(new_data_size, 1)
+
+                    self.blocks.set_size(
+                        self.map.get_block(DataKey(Edge(edge), (Cell(cell), i))),
+                        new_data_size,
+                    )
+
                     assert (
                         new_data_size > 0 or i == self.config.steps
                     ), "Boundary data size must be positive"
@@ -103,10 +149,13 @@ class DynamicJacobiGraph(JacobiGraph):
         self.workload.generate_initial_mass(
             distribution=lambda x: 1.0, average_workload=config.start_workload
         )
+        print(config.workload_args)
         self.workload.generate_workload(config.steps, **config.workload_args)
         super(JacobiGraph, self).__init__()
         self.config = config
-        self.data = DynamicJacobiData.from_mesh(geometry, config, self.workload)
+        self.data: DynamicJacobiData = DynamicJacobiData.from_mesh(
+            geometry, config, self.workload
+        )
         self._build_graph(retire_data=True)
         self._apply_workload_variant()
         self.finalize()
@@ -126,7 +175,7 @@ class DynamicJacobiGraph(JacobiGraph):
                 cell = task_to_cell[task.id]
 
                 workload = self.workload.get_workload(level)[cell]
-                workload = int(workload)
+                workload = max(int(workload / self.config.comm_compute_ratio), 1)
 
                 if arch == DeviceType.GPU:
                     return VariantTuple(arch, memory_usage, vcu_usage, workload)
@@ -134,6 +183,16 @@ class DynamicJacobiGraph(JacobiGraph):
                     return None
 
         self.apply_variant(DynamicJacobiVariant)
+
+    def randomize_workload(self, seed: int = 0):
+        if self.workload.random:
+            self.workload.generate_workload(
+                self.config.steps, seed=seed, **self.config.workload_args
+            )
+            self.data.workload = self.workload
+            self.data.reset_data_size()
+        else:
+            return
 
 
 register_graph(DynamicJacobiGraph, DynamicJacobiConfig)
