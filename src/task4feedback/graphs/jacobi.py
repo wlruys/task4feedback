@@ -410,13 +410,13 @@ class JacobiGraph(ComputeDataGraph):
         level_chunks: int = 1,
         n_parts: int = 4,
         offset: int = 1,  # 1 to ignore cpu
-        mode: str = "oracle",
+        mode: str = "dynamic_metis",
     ):
         # Oracle mode takes in level chunks and returns partitions based on the full knowledge of the workload
         partitions = {}
         levels = list(self.level_to_task.keys())
         levels = sorted(levels)
-        if mode == "oracle":
+        if mode == "dynamic_metis":
             level_size = len(levels) // level_chunks
             for i in range(level_chunks):
                 start = i * level_size
@@ -449,7 +449,7 @@ class JacobiGraph(ComputeDataGraph):
                     part = current_partition[cell_id]
                     load_per_part[part] += self.get_compute_cost(task_id, arch)
                 # Check if the load imbalance is above a threshold
-                if max(load_per_part) / min(load_per_part) > 1.25:
+                if max(load_per_part) / min(load_per_part) > 1.35:
                     # Recompute the partition
                     current_partition = [x + offset for x in current_partition]
                     partitions[(prev_level, level)] = current_partition
@@ -742,6 +742,35 @@ class LevelPartitionMapper:
             assert (
                 device != -1
             ), f"Device not found for task {global_task_id} at level {level}"
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(i, device, mapping_priority, mapping_priority)
+            )
+        return mapping_result
+
+
+class JacobiRoundRobinMapper:
+    def __init__(
+        self,
+        n_devices: int,
+        offset: int = 0,
+    ):
+        self.n_devices = n_devices
+        self.offset = offset
+
+    def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        graph: JacobiGraph = simulator.input.graph
+        assert isinstance(graph, JacobiGraph)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item() + self.offset
+            device = global_task_id % self.n_devices
             mapping_priority = simulator.simulator.get_state().get_mapping_priority(
                 global_task_id
             )

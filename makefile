@@ -14,20 +14,20 @@ setup-dev: install-build-deps install-dev
 build-dev: install-build-deps
 	SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG CMAKE_BUILD_TYPE=Debug $(PIP) install -e .[dev] -v --no-build-isolation
 build-release: install-build-deps
-	CMAKE_BUILD_TYPE=Release $(PIP) install -e .[dev] -v --no-build-isolation
+	CMAKE_BUILD_TYPE=Release $(PIP) install -e .[dev] -v --no-build-isolation -Ceditable.rebuild=true
 build-deb: install-build-deps
-	SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG CMAKE_BUILD_TYPE=RelWithDebInfo $(PIP) install -e .[dev] -v --no-build-isolation
+	SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG CMAKE_BUILD_TYPE=RelWithDebInfo $(PIP) install -e .[dev] -v --no-build-isolation -Ceditable.rebuild=true
 # Force rebuild (clean first)
 rebuild-dev: clean build-dev
 rebuild-release: clean build-release
 clean:
 	rm -rf build/
-	rm -rf dist/
-	rm -rf *.egg-info/
-	find . -name "*.so" -delete
-	find . -name "*.pyc" -delete
-	find . -name "__pycache__" -type d -exec rm -rf {} +
-	find . -name ".pytest_cache" -type d -exec rm -rf {} +
+# 	rm -rf dist/
+# 	rm -rf *.egg-info/
+# 	find . -name "*.so" -delete
+# 	find . -name "*.pyc" -delete
+# 	find . -name "__pycache__" -type d -exec rm -rf {} +
+# 	find . -name ".pytest_cache" -type d -exec rm -rf {} +
 test:
 	pytest test/ -v
 test-cov:

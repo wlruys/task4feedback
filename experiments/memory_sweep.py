@@ -16,8 +16,13 @@ from helper.env import make_env
 from helper.model import *
 
 from task4feedback.interface import uniform_connected_devices
-from task4feedback.graphs.jacobi import JacobiGraph, LevelPartitionMapper
+from task4feedback.graphs.jacobi import (
+    JacobiGraph,
+    LevelPartitionMapper,
+    JacobiRoundRobinMapper,
+)
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
+import matplotlib.pyplot as plt
 
 
 class GitInfo(Callback):
@@ -130,6 +135,7 @@ def test(cfg: DictConfig):
     )  # ensure import is present
 
     def naive_mapper(graph):
+        assert isinstance(graph, DynamicJacobiGraph)
         graph.mincut_per_levels(
             bandwidth=cfg.system.d2d_bw,
             mode="dynamic",
@@ -139,29 +145,67 @@ def test(cfg: DictConfig):
         graph.align_partitions()
         return LevelPartitionMapper(level_cell_mapping=graph.partitions)
 
+    def rr_mapper(graph):
+        return JacobiRoundRobinMapper(
+            n_devices=cfg.system.n_devices - 1,
+        )
+
+    def global_min_cut_mapper(graph):
+        assert isinstance(graph, DynamicJacobiGraph)
+        graph.mincut_per_levels(
+            bandwidth=cfg.system.d2d_bw,
+            mode="dynamic_metis",
+            offset=1,
+            level_chunks=1,  # Global min-cut
+        )
+        graph.align_partitions()
+        return LevelPartitionMapper(level_cell_mapping=graph.partitions)
+
+    def dynamic_metis_mapper(graph, level_chunks=14):
+        assert isinstance(graph, DynamicJacobiGraph)
+        graph.mincut_per_levels(
+            bandwidth=cfg.system.d2d_bw,
+            mode="dynamic_metis",
+            offset=1,
+            level_chunks=level_chunks,
+        )
+        graph.align_partitions()
+        return LevelPartitionMapper(level_cell_mapping=graph.partitions)
+
     # Map experiment names to mapper functions (None means no mapping)
     experiment_mappers = {
-        "eft": None,
+        "EFT": None,
         "naive": naive_mapper,
+        "RoundRobin": rr_mapper,
+        "GlobalMinCut": global_min_cut_mapper,
+        "Oracle": dynamic_metis_mapper,
     }
-
-    res = {"oracle": [], "oracle_f": []}
-    mem_usage = {"global": [], "oracle": []}
+    colors = {}
+    dynamic_metis_mapper_k_results = []
+    res = {}
+    mem_usage = {}
     for k, v in experiment_mappers.items():
         res[k] = []
         mem_usage[k] = []
+        # Automatically assign colors to each mapper
+    for i, k in enumerate(experiment_mappers.keys()):
+        colors[k] = plt.cm.tab10(i)
+
     # Factorize cfg.graph.steps
     f = []
-    for i in range(cfg.graph.config.steps // 3):
+    for i in range(
+        int("GlobalMinCut" in experiment_mappers.keys()),
+        cfg.graph.config.steps // 3,
+    ):
         # for i in [0, cfg.graph.config.steps // 5 - 1]:
         if cfg.graph.config.steps % (i + 1) == 0:
             f.append(i + 1)
-            res[str(i + 1)] = []
     print(f"Factors of {cfg.graph.config.steps}: {f}")
 
+    # Initialize memory size and problem size
     assert isinstance(env.simulator_factory.input.graph, DynamicJacobiGraph)
     data_stat = env.simulator_factory.input.graph.data.data_stat
-    mem_size = data_stat["average_step_data"] // 4
+    # mem_size = data_stat["average_step_data"] // 4
     # level_total_mem = data_stat["average_step_data"] * 3
     c = 1
     with_retire = (cfg.graph.config.n**2) * (
@@ -189,16 +233,28 @@ def test(cfg: DictConfig):
     print(f"without Retire Memory Size: {without_retire}")
     # problem_size = without_retire
     # problem_size = 3.2 * data_stat["average_step_data"]
-    problem_size = 1.125 * with_retire
+    problem_size = 0.9 * with_retire
+    mem_size = int(data_stat["average_step_data"] // 4)
     mem_size = int((mem_size // 10000 + 1) * 10000)
     # mem_size = 480000
-    step_size = (0.5 * problem_size - mem_size) / 20
-    step_size = int((step_size // 1000 + 1) * 1000)
+    step_size = (problem_size // 4 - mem_size) / 10
+    step_size = int((step_size // 10000 + 1) * 10000)
     graph: JacobiGraph = env.simulator_factory.input.graph
-    num_samples = 10
-    print(f"Memory,EFT,{str.join(',',[str(m) for m in f])},oracle,oracle_f", flush=True)
-    while True:
-        mem.append(4 * mem_size / problem_size)
+    num_samples = 1
+
+    sweep_list = []
+    while 4 * mem_size / problem_size < 1.5:
+        sweep_list.append(mem_size)
+        mem_size += step_size
+    sweep_list.append(int(problem_size // 4))
+    sweep_list = sorted(sweep_list)
+    print(f"Sweep List: {sweep_list}")
+    print(
+        f"Memory,{str.join(',',[str(m) for m in res.keys()])}",
+        flush=True,
+    )
+    for mem_size in sweep_list:
+        mem.append(4 * mem_size)
         s = uniform_connected_devices(
             n_devices=cfg.system.n_devices,
             h2d_bw=cfg.system.h2d_bw,
@@ -207,14 +263,14 @@ def test(cfg: DictConfig):
             mem=mem_size,
         )
         env.simulator_factory.input.system = s
-        for k, v in res.items():
-            if k not in ["oracle", "oracle_f"]:
-                v.append(0)
-        # initialize memory usage accumulators
-        for k, v in mem_usage.items():
-            v.append(0)
-        # temp storage to accumulate per-factor memory usage for Oracle
-        factor_mem_usage = {i: 0 for i in f}
+        for k in res.keys():
+            res[k].append(0)
+            mem_usage[k].append(0)
+        dynamic_metis_mapper_time_results = {}
+        dynamic_metis_mapper_mem_results = {}
+        for level_chunks in f:
+            dynamic_metis_mapper_time_results[level_chunks] = 0
+            dynamic_metis_mapper_mem_results[level_chunks] = 0
         for i in range(num_samples):
             for name, mapper_fn in experiment_mappers.items():
                 # reset environment and get graph
@@ -222,79 +278,65 @@ def test(cfg: DictConfig):
                 graph = env.simulator_factory.input.graph
                 sim = env.simulator_factory.create()
                 # apply mapping if provided
-                if mapper_fn is None:
+                if mapper_fn is None:  # EFT
                     sim.disable_external_mapper()
+                    sim.run()
+                    res[name][-1] += sim.time
+                    mem_usage[name][-1] += sim.max_mem_usage
+                elif mapper_fn == dynamic_metis_mapper:  # Oracle
+                    for level_chunks in f:
+                        sim = env.simulator_factory.create()
+                        mapper = mapper_fn(graph, level_chunks=level_chunks)
+                        sim.external_mapper = mapper
+                        sim.enable_external_mapper()
+                        # run and record
+                        sim.run()
+                        dynamic_metis_mapper_time_results[level_chunks] += sim.time
+                        dynamic_metis_mapper_mem_results[
+                            level_chunks
+                        ] += sim.max_mem_usage
                 else:
                     mapper = mapper_fn(graph)
                     sim.external_mapper = mapper
                     sim.enable_external_mapper()
-                # run and record
-                sim.run()
-                res[name][-1] += sim.time
-                mem_usage[name][-1] += sim.max_mem_usage
+                    sim.run()
+                    res[name][-1] += sim.time
+                    mem_usage[name][-1] += sim.max_mem_usage
 
-            graph.mincut_per_levels(
-                bandwidth=cfg.system.d2d_bw,
-                mode="predict",
-                offset=1,
-                level_chunks=cfg.graph.config.steps // 5,
-            )
-            mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
-            sim = env.simulator_factory.create()
-            sim.external_mapper = mapper
-            sim.enable_external_mapper()
-            sim.run()
-            res["naive"][-1] += sim.time
-
-            for i in f:
-                graph.mincut_per_levels(
-                    bandwidth=cfg.system.d2d_bw,
-                    level_chunks=i,
-                    offset=1,
-                )
-                graph.align_partitions()
-                mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
-                sim = env.simulator_factory.create()
-                sim.external_mapper = mapper
-                sim.enable_external_mapper()
-                sim.run()
-                res[str(i)][-1] += sim.time
-                factor_mem_usage[i] += sim.max_mem_usage
-                # global min-cut corresponds to factor f[0] (usually 1)
-                if i == f[0]:
-                    mem_usage["global"][-1] += sim.max_mem_usage
+        if "Oracle" in experiment_mappers.keys():
+            if 1 not in f:
+                min_time = res["GlobalMinCut"][-1]
+                min_mem = mem_usage["GlobalMinCut"][-1]
+                min_k = 1
+            else:
+                min_time = dynamic_metis_mapper_time_results[1]
+                min_mem = dynamic_metis_mapper_mem_results[1]
+                min_k = 1
+            for level_chunks in f:
+                if level_chunks > 1:
+                    if dynamic_metis_mapper_time_results[level_chunks] < min_time:
+                        min_time = dynamic_metis_mapper_time_results[level_chunks]
+                        min_mem = dynamic_metis_mapper_mem_results[level_chunks]
+                        min_k = level_chunks
+            res["Oracle"][-1] = min_time
+            mem_usage["Oracle"][-1] = min_mem
+            dynamic_metis_mapper_k_results.append(min_k)
+        # for level_chunks in f:
+        #     print(
+        #         f"{level_chunks}: {dynamic_metis_mapper_time_results[level_chunks] / num_samples}"
+        #     )
+        print(f"{mem_size},", end="")
         # average memory usage over samples
-        mem_usage["eft"][-1] /= num_samples
-        mem_usage["global"][-1] /= num_samples
-        # compute Oracle memory usage based on oracle factor
-        res["oracle"].append(res["eft"][-1])
-        res["oracle_f"].append("-1")
-        for k, v in res.items():
-            if k in ["oracle", "oracle_f"]:
-                continue
-            v[-1] = int(v[-1] / num_samples)
-            if k not in ["eft", "naive"] and v[-1] < res["oracle"][-1]:
-                res["oracle"][-1] = v[-1]
-                res["oracle_f"][-1] = k
-        oracle_factor = int(res["oracle_f"][-1])
-        mem_usage["oracle"][-1] = factor_mem_usage[oracle_factor] / num_samples
-
-        print(f"{mem_size},{res['eft'][-1]}", end=" ")
-        for i in f:
-            print(f"{res[str(i)][-1]}", end=",")
-        print(f"{res['oracle'][-1]},{res['oracle_f'][-1]}")
-        mem_size += step_size
-        if 4 * mem_size / problem_size > 2:
-            break
-
-    import matplotlib.pyplot as plt
-
-    # Compute relative speedup vs EFT
-    speedup = []
-    for idx in range(len(res["eft"])):
-        # find the fastest factor run at this memory size
-        oracle_time = min(res[str(i)][idx] for i in f)
-        speedup.append(res["eft"][idx] / oracle_time)
+        for k in res.keys():
+            res[k][-1] /= num_samples
+            mem_usage[k][-1] /= num_samples
+            if k == "Oracle":
+                print(
+                    f"{int(res[k][-1])}({dynamic_metis_mapper_k_results[-1]})", end=","
+                )
+            else:
+                print(int(res[k][-1]), end=",")
+        print("")
 
     # ml_speedups = [
     #     0.926,
@@ -323,27 +365,51 @@ def test(cfg: DictConfig):
     #     ml_times.append(res["1"][i] / ml_speedups[i])
     # for idx in range(len(res["eft"])):
     #     ml_speedups[idx] = res["eft"][idx] / ml_times[idx]
+    speedup_keys = ["RoundRobin", "GlobalMinCut", "Oracle"]
+    speedup = {}
+    for k in speedup_keys:
+        speedup[k] = []
+        for idx in range(len(res["EFT"])):
+            if res["EFT"][idx] > 0:
+                speedup[k].append(res["EFT"][idx] / res[k][idx])
+            else:
+                speedup[k].append(0)
+    # get maximum speedup idx for the Oracle
+    if "Oracle" in res.keys():
+        max_speedup_idx = np.argmax(speedup["Oracle"])
+        print(
+            f"Maximum Oracle Speedup: {speedup['Oracle'][max_speedup_idx]} at Problem Size: {mem[max_speedup_idx]}"
+        )
+        problem_size = mem[max_speedup_idx]
 
+    mem_x_axis = [m / problem_size for m in mem]
     # Plot execution times and relative speedup
     fig, ax1 = plt.subplots(figsize=(10, 6))
     # Primary axis: execution times
-    ax1.plot(mem, res["eft"], label="EFT", linestyle="dotted", color="black")
-    ax1.plot(mem, res["oracle"], label="Oracle", linestyle="dotted", color="green")
-    ax1.plot(mem, res["1"], label="Global Min-Cut", linestyle="dotted", color="orange")
-    ax1.plot(mem, res["naive"], label="Naive", linestyle="dotted", color="blue")
+    for k in res.keys():
+        ax1.plot(
+            mem_x_axis,
+            res[k],
+            label=k,
+            linestyle="dotted",
+            color=colors[k],
+        )
     # ax1.plot(mem, ml_times, label="RL", linestyle="dotted", color="purple")
     ax1.set_xlabel("Total GPUs Memory Size / Problem Size")
     ax1.set_ylabel("Execution Time (s)")
+    ax1.set_yscale("log")
     ax1.legend(loc="upper left")
 
     # Secondary axis: speedup vs EFT
     ax2 = ax1.twinx()
-    ax2.plot(
-        mem,
-        speedup,
-        label="Oracle's Speedup",
-        color="red",
-    )
+    for k in speedup_keys:
+        ax2.plot(
+            mem_x_axis,
+            speedup[k],
+            label=f"{k}'s Speedup",
+            color=colors[k],
+            linestyle="-",
+        )
     # ax2.plot(
     #     mem,
     #     ml_speedups,
@@ -361,46 +427,54 @@ def test(cfg: DictConfig):
 
     # Separate figure for max memory usage
     fig2, ax2 = plt.subplots(figsize=(10, 6))
-    ax2.plot(mem, mem_usage["eft"], label="EFT", marker="o")
-    ax2.plot(
-        mem,
-        mem_usage["global"],
-        label="Global Min-Cut",
-        linestyle="dashed",
-        color="orange",
-    )
-    ax2.plot(mem, mem_usage["oracle"], label="Oracle", marker="x", color="green")
+
+    for k in res.keys():
+        ax2.plot(
+            mem_x_axis,
+            mem_usage[k],
+            label=k,
+        )
+
     ax2.set_xlabel("Total GPUs Memory Size / Problem Size")
     ax2.set_ylabel("Max Memory Usage")
     ax2.legend(loc="upper right")
     ax2.set_title("Max Memory Usage vs Memory Size")
     ax2.grid()
     # Save plots to a file
-    fig.savefig(
-        f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{cfg.graph.config.workload_args.max_angle}Cir_{cfg.graph.config.workload_args.scale}_{cfg.graph.config.workload_args.upper_bound/cfg.graph.config.workload_args.lower_bound}_ibr{cfg.graph.config.interior_boundary_ratio}_ccr{cfg.graph.config.comm_compute_ratio}_vs_memory.png"
-    )
-    fig2.savefig(
-        f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{cfg.graph.config.workload_args.max_angle}Cir_{cfg.graph.config.workload_args.scale}_{cfg.graph.config.workload_args.upper_bound/cfg.graph.config.workload_args.lower_bound}_ibr{cfg.graph.config.interior_boundary_ratio}_ccr{cfg.graph.config.comm_compute_ratio}_usage.png"
-    )
+    file_name = f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}"
+    file_name += f"_{cfg.graph.config.workload_args.scale}"
+    file_name += f"_{cfg.graph.config.workload_args.upper_bound/cfg.graph.config.workload_args.lower_bound}"
+    file_name += f"_ibr{cfg.graph.config.interior_boundary_ratio}_ccr{cfg.graph.config.comm_compute_ratio}"
+    file_name += f"_{cfg.graph.config.workload_args.traj_type}"
+    for k, v in cfg.graph.config.workload_args.traj_specifics.items():
+        file_name += f"_{k}{v}"
+
+    fig.savefig(f"outputs/time_{file_name}.png")
+    fig2.savefig(f"outputs/mem_{file_name}.png")
 
     # Save results to a file
     with open(
-        f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{cfg.graph.config.workload_args.max_angle}Cir_{cfg.graph.config.workload_args.scale}_{cfg.graph.config.workload_args.upper_bound/cfg.graph.config.workload_args.lower_bound}_ibr{cfg.graph.config.interior_boundary_ratio}_ccr{cfg.graph.config.comm_compute_ratio}_results.txt",
+        f"outputs/result_{file_name}.txt",
         "w",
     ) as text_file:
+        text_file.write(OmegaConf.to_yaml(cfg.graph))
         text_file.write(
             f"Problem Size: {problem_size/data_stat['average_step_data']}xAvgStep\n"
         )
         text_file.write(f"with Retire Memory Size: {with_retire}\n")
         text_file.write(f"without Retire Memory Size: {without_retire}\n")
-        text_file.write(
-            "Memory,EFT," + ",".join([str(i) for i in f]) + ",oracle,oracle_f\n"
-        )
-        for idx in range(len(res["eft"])):
-            line = f"{int(mem[idx]*problem_size/4)},{res['eft'][idx]}"
-            for i in f:
-                line += f",{res[str(i)][idx]}"
-            line += f",{res['oracle'][idx]},{res['oracle_f'][idx]}\n"
+        # text_file.write(
+        #     "Memory,EFT," + ",".join([str(i) for i in f]) + ",oracle,oracle_best_f\n"
+        # )
+        text_file.write("Memory," + ",".join([str(i) for i in res.keys()]) + "\n")
+        for idx in range(len(res["EFT"])):
+            line = f"{int(mem[idx]*problem_size/4)}"
+            for k in res.keys():
+                if k == "Oracle":
+                    line += f",{res[k][idx]}({dynamic_metis_mapper_k_results[idx]})"
+                else:
+                    line += f",{res[k][idx]}"
+            line += "\n"
             text_file.write(line)
 
 

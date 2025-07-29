@@ -328,11 +328,13 @@ class RuntimeEnv(EnvBase):
 
         if self.change_priority:
             new_priority_seed = int(current_priority_seed + self.resets)
+            self.simulator_factory.pseed = new_priority_seed
         else:
             new_priority_seed = int(current_priority_seed)
 
         if self.change_duration:
             new_duration_seed = int(current_duration_seed + self.resets)
+            self.simulator_factory.seed = new_duration_seed
         else:
             new_duration_seed = int(current_duration_seed)
 
