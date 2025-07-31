@@ -26,6 +26,7 @@ from .wrappers import (
     RangeTransitionConditions,
     DefaultTransitionConditions,
     uniform_connected_devices,
+    numa_devices,
     start_logger,
     SchedulerState,
     create_graph_spec,

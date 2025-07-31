@@ -1,0 +1,9 @@
+# conf/system/uniform.yaml
+_target_: task4feedback.interface.numa_devices
+n_devices: 5
+mem: 10000000000000
+latency: 1
+h2d_uni_bw: 6
+d2d_uni_bw: 15
+h2d_uni_links: 1 # Number of uniform connections from CPU to each device
+d2d_uni_links: 1 # Number of uniform connections between each device

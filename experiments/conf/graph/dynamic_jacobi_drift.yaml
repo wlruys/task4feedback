@@ -5,8 +5,8 @@ config:
   interior_size: 1000
   start_workload: 1000
   level_chunks: 1
-  interior_boundary_ratio: 1
-  comm_compute_ratio: 1
+  boundary_compute_ratio: 1
+  interior_compute_ratio: 1
   randomness: 1
   L: 1
   n: 8

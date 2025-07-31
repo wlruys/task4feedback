@@ -2053,6 +2053,12 @@ class SimulatorDriver:
         """
         return self.simulator.get_max_memory_usage()
 
+    def total_data_movement(self):
+        return self.simulator.get_total_data_movement()
+
+    def total_eviction_movement(self):
+        return self.simulator.get_eviction_data_movement()
+
     def task_finish_time(self, task_id: int) -> int:
         """
         Returns the finish time (in microseconds) of a task.
@@ -2278,5 +2284,58 @@ def uniform_connected_devices(
                 continue
             s.add_connection(i + 1, j + 1, d2d_bw, latency)
             s.add_connection(j + 1, i + 1, d2d_bw, latency)
+
+    return s
+
+
+def numa_devices(
+    n_devices: int,
+    mem: int,
+    latency: int,
+    h2d_uni_bw: int,
+    d2d_uni_bw: int,
+    h2d_uni_links: int = 1,
+    d2d_uni_links: int = 3,
+) -> System:
+    """
+        Creates a system with NUMA devices, where each device has a uniform connection to the CPU and other devices.
+        Parameters:
+        n_devices (int): Total number of devices including one CPU and multiple GPUs. Must be greater than 1.
+        mem (int): Memory allocated to each GPUs. CPU is set to infinite.
+        latency (int): Latency of the connections between devices.
+        h2d_bw (int): Host to device bandwidth.
+        d2d_bw (int): Device to device bandwidth.
+        h2d_uni_links (int): Number of unidirectional links from host to each device.
+        d2d_uni_links (int): Number of unidirectional links between devices.
+    Returns:
+        System: A system object with the specified devices and connections.
+        Raises:
+        AssertionError: If n_devices is not greater than 1.
+    """
+    assert n_devices > 1
+
+    s = System()
+    n_gpus = n_devices - 1
+
+    s.create_device("CPU:0", DeviceType.CPU, 0, 2**60)
+    for i in range(n_gpus):
+        s.create_device(f"GPU:{i}", DeviceType.GPU, 0, mem)
+
+    s.finalize_devices()
+
+    for i in range(n_gpus):
+        s.add_connection(0, i + 1, h2d_uni_bw, latency, max_connections=h2d_uni_links)
+        s.add_connection(i + 1, 0, h2d_uni_bw, latency, max_connections=h2d_uni_links)
+
+    for i in range(n_gpus):
+        for j in range(n_gpus):
+            if i == j:
+                continue
+            s.add_connection(
+                i + 1, j + 1, d2d_uni_bw, latency, max_connections=d2d_uni_links
+            )
+            s.add_connection(
+                j + 1, i + 1, d2d_uni_bw, latency, max_connections=d2d_uni_links
+            )
 
     return s

@@ -1,7 +1,7 @@
 defaults:
-  - graph: dynamic_jacobi_circle
+  - graph: dynamic_jacobi_drift
   - reward: gieft
-  - system: uniform
+  - system: numa
   - feature: cnn_batch
   - network: cnn_batch_lstm
   - algorithm: ppo
@@ -28,8 +28,8 @@ graph:
   config:
       n: 8
       steps: 60
-      comm_compute_ratio: 1
-      interior_boundary_ratio: 1
+      interior_compute_ratio: 1
+      boundary_compute_ratio: 1
       workload_args:
         lower_bound: 1000
         upper_bound: 5000

@@ -75,6 +75,8 @@ def make_graph_function(
 
 def make_graph_builder(cfg: DictConfig) -> GraphBuilder:
     graph_info = cfg.graph
-    graph_config = instantiate(graph_info.config)
+    graph_config = instantiate(
+        graph_info.config, d2d_bw=cfg.system.d2d_uni_links * cfg.system.d2d_uni_bw
+    )
     graph_function = make_graph_function(graph_config, graph_info)
     return GraphBuilder(config=graph_config, function=graph_function)

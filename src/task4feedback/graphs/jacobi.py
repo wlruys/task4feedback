@@ -35,6 +35,8 @@ class JacobiConfig(GraphConfig):
         n_part (int): Number of partitions.
         randomness (float): Percentage (0 ~ 1) of cells to randomize.
         permute_idx (int): Permutation index for reproducibility.
+        interior_size (int): Size of the interior data blocks.
+        d2d_bw (int): Bandwidth for device-to-device communication. Calculated as `d2d_bw = d2d_uni_links * d2d_uni_bw`.
     """
 
     L: int = 4
@@ -44,8 +46,9 @@ class JacobiConfig(GraphConfig):
     randomness: float = 0
     permute_idx: int = 0
     interior_size: int = 1000000
-    interior_boundary_ratio: float = 1.0
-    comm_compute_ratio: int = 1
+    boundary_compute_ratio: float = 1.0
+    interior_compute_ratio: float = 1
+    d2d_bw: int = 50
 
 
 class JacobiData(DataGeometry):
@@ -55,7 +58,7 @@ class JacobiData(DataGeometry):
 
     def _create_blocks(self):
         interior_size = self.config.interior_size
-        boundary_size = int(interior_size / self.config.interior_boundary_ratio)
+        boundary_size = int(interior_size / self.config.boundary_compute_ratio)
 
         # Loop over cells
         for cell in range(len(self.geometry.cells)):

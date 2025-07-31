@@ -159,7 +159,6 @@ class CommunicationManager {
   }
 
 public:
-
   CommunicationManager() = default;
 
   CommunicationManager(const Topology &topology_, const Devices &devices_)

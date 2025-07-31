@@ -45,7 +45,9 @@ class DynamicJacobiData(JacobiData):
             # Create 2 data blocks per cell
             for i in range(self.config.steps + 1):
                 workload = self.workload.get_workload(i)[cell]
-                new_data_size = int(workload)
+                new_data_size = int(
+                    workload * self.config.interior_compute_ratio * self.config.d2d_bw
+                )
 
                 self.add_block(DataKey(Cell(cell), i), size=new_data_size, location=0)
                 assert (
@@ -59,7 +61,11 @@ class DynamicJacobiData(JacobiData):
             for edge in self.geometry.cell_edges[cell]:
                 for i in range(self.config.steps + 1):
                     workload = self.workload.get_workload(i)[cell]
-                    new_data_size = int(workload / self.config.interior_boundary_ratio)
+                    new_data_size = int(
+                        workload
+                        * self.config.d2d_bw
+                        * self.config.boundary_compute_ratio
+                    )
 
                     self.add_block(
                         DataKey(Edge(edge), (Cell(cell), i)),
@@ -94,7 +100,9 @@ class DynamicJacobiData(JacobiData):
             # Create 2 data blocks per cell
             for i in range(self.config.steps + 1):
                 workload = self.workload.get_workload(i)[cell]
-                new_data_size = int(workload)
+                new_data_size = int(
+                    workload * self.config.interior_compute_ratio * self.config.d2d_bw
+                )
 
                 self.blocks.set_size(
                     self.map.get_block(DataKey(Cell(cell), i)), new_data_size
@@ -110,7 +118,11 @@ class DynamicJacobiData(JacobiData):
             for edge in self.geometry.cell_edges[cell]:
                 for i in range(self.config.steps + 1):
                     workload = self.workload.get_workload(i)[cell]
-                    new_data_size = int(workload / self.config.interior_boundary_ratio)
+                    new_data_size = int(
+                        workload
+                        * self.config.d2d_bw
+                        * self.config.boundary_compute_ratio
+                    )
 
                     if workload > 0:
                         new_data_size = max(new_data_size, 1)
@@ -174,8 +186,7 @@ class DynamicJacobiGraph(JacobiGraph):
                 level = task_to_level[task.id]
                 cell = task_to_cell[task.id]
 
-                workload = self.workload.get_workload(level)[cell]
-                workload = max(int(workload / self.config.comm_compute_ratio), 1)
+                workload = int(self.workload.get_workload(level)[cell])
 
                 if arch == DeviceType.GPU:
                     return VariantTuple(arch, memory_usage, vcu_usage, workload)
