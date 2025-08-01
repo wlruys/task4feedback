@@ -121,11 +121,6 @@ class RuntimeEnv(EnvBase):
         )
         self.baseline_time = baseline_time
 
-        if change_locations:
-            graph.randomize_locations(
-                self.location_randomness, self.location_list, verbose=False
-            )
-
         self.batch_size = torch.Size([])
 
         self.progress_key = ("aux", "progress")
@@ -430,8 +425,11 @@ class IncrementalEFT(RuntimeEnv):
         # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
 
         ml_time = sim_ml.time
-
-        reward = 8 * (self.eft_time - self.gamma * ml_time) / self.size()
+        reward = (
+            4
+            * (self.eft_time - self.gamma * ml_time)
+            / self.simulator_factory.input.graph.data.data_stat["average_step_data"]
+        )
         self.eft_time = ml_time
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE

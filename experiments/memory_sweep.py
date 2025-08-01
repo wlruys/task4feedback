@@ -132,7 +132,7 @@ def test(cfg: DictConfig):
     torch.backends.cudnn.benchmark = False
     graph_builder = make_graph_builder(cfg)
     env = make_env(graph_builder=graph_builder, cfg=cfg)
-    mem = []
+    total_mem_list = []
 
     # Define mapper functions for experiments
     from task4feedback.graphs.dynamic_jacobi import (
@@ -222,7 +222,7 @@ def test(cfg: DictConfig):
     # Initialize memory size and problem size
     assert isinstance(env.simulator_factory.input.graph, DynamicJacobiGraph)
     data_stat = env.simulator_factory.input.graph.data.data_stat
-    # mem_size = data_stat["average_step_data"] // 4
+    # single_gpu_mem_size = data_stat["average_step_data"] // 4
     # level_total_mem = data_stat["average_step_data"] * 3
     c = 1
     with_retire = (cfg.graph.config.n**2) * (
@@ -252,18 +252,18 @@ def test(cfg: DictConfig):
     # problem_size = without_retire
     # problem_size = 3.2 * data_stat["average_step_data"]
     problem_size = 0.9 * with_retire
-    mem_size = int(data_stat["average_step_data"] // 12)
-    mem_size = int((mem_size // 10000 + 1) * 10000)
-    # mem_size = 480000
-    step_size = (problem_size - mem_size) / 20
+    single_gpu_mem_size = int(data_stat["average_step_data"] // 12)
+    single_gpu_mem_size = int((single_gpu_mem_size // 10000 + 1) * 10000)
+    # single_gpu_mem_size = 480000
+    step_size = (problem_size - single_gpu_mem_size) / 20
     step_size = int((step_size // 10000 + 1) * 10000)
     graph: JacobiGraph = env.simulator_factory.input.graph
     num_samples = 1
 
     sweep_list = []
-    while 4 * mem_size / problem_size < 3:
-        sweep_list.append(mem_size)
-        mem_size += step_size
+    while 4 * single_gpu_mem_size / problem_size < 3:
+        sweep_list.append(single_gpu_mem_size)
+        single_gpu_mem_size += step_size
     sweep_list.append(int(problem_size // 4))
     sweep_list = sorted(sweep_list)
     print(f"Sweep List: {sweep_list}")
@@ -272,8 +272,8 @@ def test(cfg: DictConfig):
         flush=True,
     )
 
-    for mem_size in sweep_list:
-        mem.append(4 * mem_size)
+    for single_gpu_mem_size in sweep_list:
+        total_mem_list.append(4 * single_gpu_mem_size)
         s = numa_devices(
             n_devices=cfg.system.n_devices,
             latency=cfg.system.latency,
@@ -281,7 +281,7 @@ def test(cfg: DictConfig):
             h2d_uni_links=cfg.system.h2d_uni_links,
             d2d_uni_bw=cfg.system.d2d_uni_bw,
             d2d_uni_links=cfg.system.d2d_uni_links,
-            mem=mem_size,
+            mem=single_gpu_mem_size,
         )
         env.simulator_factory.input.system = s
         metis_metrics = {name: {key: [] for key in metric_keys} for name in f}
@@ -343,7 +343,7 @@ def test(cfg: DictConfig):
         #     print(
         #         f"{level_chunks}: {dynamic_metis_mapper_time_results[level_chunks] / num_samples}"
         #     )
-        print(f"{mem_size},", end="")
+        print(f"{single_gpu_mem_size},", end="")
         # average memory usage over samples
         for name in metrics:
             for key in metric_keys:
@@ -397,10 +397,10 @@ def test(cfg: DictConfig):
     # if "Oracle" in res.keys():
     #     max_speedup_idx = np.argmax(speedup["Oracle"])
     #     print(
-    #         f"Maximum Oracle Speedup: {speedup['Oracle'][max_speedup_idx]} at Problem Size: {mem[max_speedup_idx]}"
+    #         f"Maximum Oracle Speedup: {speedup['Oracle'][max_speedup_idx]} at Problem Size: {total_mem_list[max_speedup_idx]}"
     #     )
-    #     problem_size = mem[max_speedup_idx]
-    for i in range(len(mem)):
+    #     problem_size = total_mem_list[max_speedup_idx]
+    for i in range(len(total_mem_list)):
         min_val = 2**60
         max_val = 1
         for name in metrics:
@@ -409,13 +409,13 @@ def test(cfg: DictConfig):
             if metrics[name]["mem_usage"][i] > max_val:
                 max_val = metrics[name]["mem_usage"][i]
         print(
-            f"Memory Usage at {mem[i]}: min={min_val}, max={max_val}, diff={(max_val - min_val)/min_val:.3f}"
+            f"Memory Usage at {total_mem_list[i]}: min={min_val}, max={max_val}, diff={(max_val - min_val)/min_val:.3f}"
         )
         if (max_val - min_val) >= 0.001 * min_val:
-            problem_size = mem[i]
+            problem_size = total_mem_list[i]
             break
 
-    mem_x_axis = [m / problem_size for m in mem]
+    mem_x_axis = [m / problem_size for m in total_mem_list]
     # Plot execution times and relative speedup
     fig0, ax0 = plt.subplots(figsize=(6, 6))
     # Primary axis: execution times
@@ -427,7 +427,7 @@ def test(cfg: DictConfig):
             linestyle="-",
             color=colors[k],
         )
-    # ax0.plot(mem, ml_times, label="RL", linestyle="dotted", color="purple")
+    # ax0.plot(total_mem_list, ml_times, label="RL", linestyle="dotted", color="purple")
     ax0.set_xlabel("Total GPUs Memory Size / Problem Size")
     ax0.set_ylabel("Execution Time (s)")
     ax0.set_yscale("log")
@@ -443,7 +443,7 @@ def test(cfg: DictConfig):
             color=colors[k],
         )
     # ax2.plot(
-    #     mem,
+    #     total_mem_list,
     #     ml_speedups,
     #     label="RL's Speedup",
     #     color="black",
@@ -458,7 +458,7 @@ def test(cfg: DictConfig):
     # Separate figure for max memory usage
     fig2, ax2 = plt.subplots(figsize=(6, 6))
 
-    for i, m in enumerate(mem):
+    for i, m in enumerate(total_mem_list):
         for k in metrics.keys():
             metrics[k]["mem_usage"][i] = metrics[k]["mem_usage"][i] / (m / 4) * 80
 
@@ -478,7 +478,7 @@ def test(cfg: DictConfig):
 
     fig3, ax3 = plt.subplots(figsize=(6, 6))
 
-    for i, m in enumerate(mem):
+    for i, m in enumerate(total_mem_list):
         for k in metrics.keys():
             metrics[k]["total_mem_movement"][i] = (
                 metrics[k]["total_mem_movement"][i] / (m / 4) * 80
@@ -546,8 +546,8 @@ def test(cfg: DictConfig):
     axes[1].legend(loc="upper right")
     axes[1].grid()
     axes[1].set_xlabel("(b)", fontsize=mpl.rcParams["font.size"] / font_scale * 2.25)
-
     # 3) Max Memory Usage
+    speedup_keys = ["EFT", "Cyclic", "GlobalMinCut", "Oracle"]
     for k in speedup_keys:
         axes[2].plot(mem_x_axis, metrics[k]["mem_usage"], label=k, color=colors[k])
     axes[2].legend(loc="upper right")
@@ -578,7 +578,7 @@ def test(cfg: DictConfig):
     axes[3].legend(
         handles=style_handles,
         labels=style_labels,
-        loc="center right",
+        loc="lower left",
     )
     axes[3].set_ylabel("GB")
     axes[3].set_xlabel("(d)", fontsize=mpl.rcParams["font.size"] / font_scale * 2.25)
@@ -625,19 +625,26 @@ def test(cfg: DictConfig):
         text_file.write(
             f"Problem Size: {problem_size/data_stat['average_step_data']}xAvgStep\n"
         )
+        text_file.write(f"Problem Size: {problem_size}\n")
         text_file.write(f"with Retire Memory Size: {with_retire}\n")
         text_file.write(f"without Retire Memory Size: {without_retire}\n")
         # text_file.write(
         #     "Memory,EFT," + ",".join([str(i) for i in f]) + ",oracle,oracle_best_f\n"
         # )
-        text_file.write("Memory," + ",".join([str(i) for i in metrics.keys()]) + "\n")
+        text_file.write(
+            "PerGPUMemory,TotalMem/ProblemSize,"
+            + ",".join([str(i) for i in metrics.keys()])
+            + "\n"
+        )
         for idx in range(len(metrics["EFT"]["time"])):
-            line = f"{int(mem[idx]*problem_size/4)}"
+            line = (
+                f"{int(total_mem_list[idx]/4)},{total_mem_list[idx]/problem_size:.2f}"
+            )
             for k in metrics.keys():
                 if k == "Oracle":
-                    line += f",{metrics[k]['time'][idx]}({dynamic_metis_mapper_k_results[idx]})"
+                    line += f",{int(metrics[k]['time'][idx])}({dynamic_metis_mapper_k_results[idx]})"
                 else:
-                    line += f",{metrics[k]['time'][idx]}"
+                    line += f",{int(metrics[k]['time'][idx])}"
             line += "\n"
             text_file.write(line)
 

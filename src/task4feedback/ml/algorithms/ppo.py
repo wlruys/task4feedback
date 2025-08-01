@@ -59,7 +59,7 @@ class PPOConfig(AlgorithmConfig):
     rollout_steps: int = 250
     advantage_type: str = "gae"  # "gae" or "vtrace"
     bagged_policy: str = "uniform"
-    timeout: int = 60 * 60 * 24 # 1 day
+    timeout: int = 60 * 60 * 24  # 1 day
 
 
 def should_log(
@@ -71,6 +71,7 @@ def should_log(
         return False
     return n_updates % logging_config.stats_interval == 0
 
+
 def should_eval(
     n_updates: int,
     eval_config: Optional[EvaluationConfig],
@@ -78,10 +79,7 @@ def should_eval(
     """Check if we should evaluate based on the current update count and logging configuration."""
     if eval_config is None:
         return False
-    return (
-        eval_config.eval_interval > 0
-        and n_updates % eval_config.eval_interval == 0
-    )
+    return eval_config.eval_interval > 0 and n_updates % eval_config.eval_interval == 0
 
 
 def should_checkpoint(
@@ -92,6 +90,7 @@ def should_checkpoint(
     if logging_config is None:
         return False
     return n_updates % logging_config.checkpoint_interval == 0
+
 
 def log_training_metrics(
     flattened_data: TensorDict,
@@ -128,7 +127,7 @@ def log_training_metrics(
             if rewards.numel() > 1:
                 std_reward = rewards.std().item()
             else:
-                std_reward = None 
+                std_reward = None
 
         # Calculate advantage and value target metrics
         advantage_mean = tensordict_data["advantage"].mean().item()
@@ -175,7 +174,7 @@ def log_training_metrics(
             if std_improvement is not None:
                 log_payload["batch/std_improvement"] = std_improvement
 
-            training.info("Average training improvement: ", str(avg_improvement))
+            training.info(f"Average training improvement: {avg_improvement:.2f}")
 
         wandb.log(log_payload)
 
@@ -187,8 +186,8 @@ def run_ppo(
     logging_config: Optional[LoggingConfig],
     eval_config: Optional[EvaluationConfig] = None,
     optimizer: Optional[torch.optim.Optimizer] = None,
-    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None, 
-    seed: int = 0 
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
+    seed: int = 0,
 ):
     if logging_config is not None and (
         logging_frequency := logging_config.stats_interval
@@ -366,7 +365,6 @@ def run_ppo(
         training.info("Running initial evaluation before training")
         run_evaluation(collector.policy, eval_envs, eval_config, 0)
 
-
     training.info("Starting PPO training loop")
 
     start_t = time.perf_counter()
@@ -452,7 +450,12 @@ def run_ppo(
 
         if should_eval(n_collections, eval_config=eval_config):
             run_evaluation(
-                collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples
+                collector.policy,
+                eval_envs,
+                eval_config,
+                n_collections,
+                n_updates,
+                n_samples,
             )
 
         if should_checkpoint(n_collections, logging_config):
@@ -473,15 +476,27 @@ def run_ppo(
             )
             break
 
-        
-
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
-        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+        run_evaluation(
+            collector.policy,
+            eval_envs,
+            eval_config,
+            n_collections,
+            n_updates,
+            n_samples,
+        )
 
-    save_checkpoint(n_collections, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
+    save_checkpoint(
+        n_collections,
+        policy_module=collector.policy,
+        value_module=loss_module.critic_network,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+    )
 
     collector.shutdown()
+
 
 def run_ppo_lstm(
     actor_critic_module: ActorCriticModule,
@@ -490,8 +505,8 @@ def run_ppo_lstm(
     logging_config: Optional[LoggingConfig],
     eval_config: Optional[EvaluationConfig] = None,
     optimizer: Optional[torch.optim.Optimizer] = None,
-    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None, 
-    seed: int = 0
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
+    seed: int = 0,
 ):
     if logging_config is not None and (
         logging_frequency := logging_config.stats_interval
@@ -788,12 +803,24 @@ def run_ppo_lstm(
             lr_scheduler.step()
 
         if should_eval(n_collections, eval_config=eval_config):
-            run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+            run_evaluation(
+                collector.policy,
+                eval_envs,
+                eval_config,
+                n_collections,
+                n_updates,
+                n_samples,
+            )
 
         if should_checkpoint(n_collections, logging_config):
-            training.info(f"Checkpointing at update: {n_updates}") 
-            save_checkpoint(n_updates, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
-
+            training.info(f"Checkpointing at update: {n_updates}")
+            save_checkpoint(
+                n_updates,
+                policy_module=collector.policy,
+                value_module=loss_module.critic_network,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+            )
 
         current_t = time.perf_counter()
         elapsed_time = current_t - start_t
@@ -805,7 +832,14 @@ def run_ppo_lstm(
 
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
-        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+        run_evaluation(
+            collector.policy,
+            eval_envs,
+            eval_config,
+            n_collections,
+            n_updates,
+            n_samples,
+        )
 
     save_checkpoint(
         n_collections,

@@ -607,7 +607,8 @@ public:
         movement_counter(devices.size()) {
   }
 
-  DataManager(const DataManager &o_) : lru_manager(o_.lru_manager) {
+  DataManager(const DataManager &o_)
+      : lru_manager(o_.lru_manager), movement_counter(o_.movement_counter) {
     ZoneScopedN("Copy DataManager");
     {
       ZoneScopedN("Copy Mapped Locations");

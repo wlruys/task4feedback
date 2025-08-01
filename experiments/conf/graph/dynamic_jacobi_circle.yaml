@@ -25,8 +25,8 @@ init:
   partitioner: metis
   nparts: 4
   gpu_only: True
-  randomize: True
+  randomize: False
 env:
-  change_priority: True
-  change_locations: True
+  change_priority: True # Whether to randomize at every collection
+  change_locations: False # Whether to randomize at every collection
   seed: 1
