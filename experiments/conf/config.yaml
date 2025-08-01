@@ -7,7 +7,7 @@ defaults:
   - network: vector_baseline
   - algorithm: ppo
   - runtime: batch
-  - noise: lognormal 
+  - noise: static_lognormal 
   - wandb: default
   - logging: default
   - lr_scheduler: none 

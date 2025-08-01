@@ -28,7 +28,13 @@ void init_task_noise_ext(nb::module_ &m) {
       .def("randomize_duration", &TaskNoise::generate_duration)
       .def("randomize_priority", &TaskNoise::generate_priority);
 
-  nb::class_<LognormalTaskNoise>(m, "LognormalTaskNoise")
-      .def(nb::init<StaticTaskInfo &, unsigned int, unsigned int>(), "tasks"_a, "seed"_a = 0,
-           "pseed"_a = 0, nb::keep_alive<1, 2>());
+
+     nb::class_<LognormalTaskNoise, TaskNoise>(m, "LognormalTaskNoise")
+         .def(nb::init<StaticTaskInfo &, unsigned int, unsigned int, double>(), "tasks"_a,
+              "seed"_a = 0, "pseed"_a = 1000, "scale"_a = 0.5, nb::keep_alive<1, 2>());
+
+
+     nb::class_<StaticLognormalTaskNoise, TaskNoise>(m, "StaticLognormalTaskNoise")
+         .def(nb::init<StaticTaskInfo &, unsigned int, unsigned int, double>(), "tasks"_a, "seed"_a = 0,
+              "pseed"_a = 0, "stddev"_a = 500, nb::keep_alive<1, 2>());
 }

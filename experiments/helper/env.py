@@ -1,4 +1,5 @@
 from task4feedback.interface import SimulatorFactory, SimulatorInput, create_graph_spec 
+from task4feedback.interface import TaskNoise 
 from typing import Callable
 from .graph import GraphBuilder
 import hydra
@@ -54,10 +55,16 @@ def create_observer_factory(cfg: DictConfig):
 
 
 def create_task_noise(cfg: DictConfig, static_graph):
-    task_noise = hydra.utils.instantiate(cfg.noise, static_graph=static_graph)
+    task_noise = hydra.utils.instantiate(cfg.noise)
+
+    print("Task noise configuration:", OmegaConf.to_yaml(cfg.noise))
 
     if task_noise is None:
-        task_noise = hydra.utils.instantiate("fastsim2.TaskNoise", static_graph=static_graph)
+        task_noise = TaskNoise(tasks=static_graph)
+    else:
+        task_noise = task_noise(tasks=static_graph)
+
+    return task_noise
 
 @dataclass
 class NormalizationDetails:
@@ -92,7 +99,7 @@ def make_env(
 
     print("NOISE")
     print(task_noise)
-
+    
     input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise)
 
 

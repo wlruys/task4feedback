@@ -275,18 +275,19 @@ public:
 // };
 
 class LognormalTaskNoise : public TaskNoise {
-
 protected:
+  double scale;
+
   [[nodiscard]] double get_stddev(taskid_t task_id, DeviceType arch) const {
     MONUnusedParameter(task_id);
     MONUnusedParameter(arch);
-    const double stddev = 2;
+    const double stddev = scale;
     return stddev;
   }
 
   [[nodiscard]] timecount_t sample_duration(timecount_t mean_time) const override {
     const double mean = static_cast<double>(mean_time);
-    const double stddev = 0.5 * mean;
+    const double stddev = scale * mean;
 
     if (mean == 0) {
       return 0;
@@ -299,13 +300,51 @@ protected:
     const noise_t duration = dist(gen);
     assert(duration >= 0);
 
-    std::cout << "LognormalTaskNoise: mean=" << mean << ", stddev=" << stddev
-              << ", sampled duration=" << duration << std::endl;
+    // std::cout << "LognormalTaskNoise: mean=" << mean << ", stddev=" << stddev
+    //           << ", sampled duration=" << duration << std::endl;
     return static_cast<timecount_t>(duration);
   }
 
 public:
-  LognormalTaskNoise(StaticTaskInfo &tasks_, unsigned int seed_ = 0, unsigned int pseed_ = 1000)
-      : TaskNoise(tasks_, seed_, pseed_) {
+  LognormalTaskNoise(StaticTaskInfo &tasks_, unsigned int seed_ = 0,
+                     unsigned int pseed_ = 1000, double scale = 500)
+      : TaskNoise(tasks_, seed_, pseed_), scale(scale) {
+  }
+};
+
+class StaticLognormalTaskNoise : public TaskNoise {
+protected:
+  double stddev;
+
+  [[nodiscard]] double get_stddev(taskid_t task_id, DeviceType arch) const {
+    MONUnusedParameter(task_id);
+    MONUnusedParameter(arch);
+    const double stddev = this->stddev;
+    return stddev;
+  }
+
+  [[nodiscard]] timecount_t sample_duration(timecount_t mean_time) const override {
+    const double mean = static_cast<double>(mean_time);
+
+    if (mean == 0) {
+      return 0;
+    }
+
+    const double u = std::log((mean * mean) / std::sqrt(mean * mean + stddev * stddev));
+    const double s = std::log(1 + ((stddev * stddev) / (mean * mean)));
+
+    std::lognormal_distribution<noise_t> dist(u, s);
+    const noise_t duration = dist(gen);
+    assert(duration >= 0);
+
+    // std::cout << "LognormalTaskNoise: mean=" << mean << ", stddev=" << stddev
+    //           << ", sampled duration=" << duration << std::endl;
+    return static_cast<timecount_t>(duration);
+  }
+
+public:
+  StaticLognormalTaskNoise(StaticTaskInfo &tasks_, unsigned int seed_ = 0,
+                           unsigned int pseed_ = 1000, double stddev = 500)
+      : TaskNoise(tasks_, seed_, pseed_), stddev(stddev) {
   }
 };
