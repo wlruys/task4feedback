@@ -206,7 +206,7 @@ def run_ppo(
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
     max_candidates = max(
-        [env.simulator_factory.graph_spec.max_candidates for env in eval_envs]
+        [env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs]
     )
 
     if ppo_config.rollout_steps > 0:

@@ -107,8 +107,9 @@ def make_env(
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),
         device="cpu",
-        change_priority=cfg.graph.env.change_priority,
-        change_locations=cfg.graph.env.change_locations,
+        change_priority=cfg.graph.env.change_priority if hasattr(cfg.graph.env, "change_priority") else False,
+        change_location=cfg.graph.env.change_location if hasattr(cfg.graph.env, "change_location") else False,
+        change_duration=cfg.graph.env.change_duration if hasattr(cfg.graph.env, "change_duration") else False,
         seed=cfg.graph.env.seed,
         max_samples_per_iter=(
             len(graph) + 1
