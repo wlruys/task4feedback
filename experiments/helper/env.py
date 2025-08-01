@@ -53,6 +53,12 @@ def create_observer_factory(cfg: DictConfig):
     return observer_factory, graph_spec
 
 
+def create_task_noise(cfg: DictConfig, static_graph):
+    task_noise = hydra.utils.instantiate(cfg.noise, static_graph=static_graph)
+
+    if task_noise is None:
+        task_noise = hydra.utils.instantiate("fastsim2.TaskNoise", static_graph=static_graph)
+
 @dataclass
 class NormalizationDetails:
     task_norm: dict
@@ -80,7 +86,16 @@ def make_env(
     else:
         runtime_env_t = RuntimeEnv
     observer_factory, graph_spec = create_observer_factory(cfg)
-    input = SimulatorInput(m, d, s, transition_conditions=transition_conditions)
+
+    print("CONFIG", cfg)
+    task_noise = create_task_noise(cfg, graph.static_graph)
+
+    print("NOISE")
+    print(task_noise)
+
+    input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise)
+
+
 
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),

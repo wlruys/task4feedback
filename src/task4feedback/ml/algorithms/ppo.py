@@ -175,7 +175,7 @@ def log_training_metrics(
             if std_improvement is not None:
                 log_payload["batch/std_improvement"] = std_improvement
 
-            training.info("Average training improvement: ", str(avg_improvement))
+            training.info(f"Average training improvement: {avg_improvement}")
 
         wandb.log(log_payload)
 
