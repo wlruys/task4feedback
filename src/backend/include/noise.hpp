@@ -337,7 +337,7 @@ protected:
     const noise_t duration = dist(gen);
     assert(duration >= 0);
 
-    // std::cout << "LognormalTaskNoise: mean=" << mean << ", stddev=" << stddev
+    // std::cout << "StaticLognormalTaskNoise: mean=" << mean << ", stddev=" << stddev
     //           << ", sampled duration=" << duration << std::endl;
     return static_cast<timecount_t>(duration);
   }

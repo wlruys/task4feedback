@@ -28,5 +28,5 @@ init:
   randomize: True
 env:
   change_priority: True
-  change_locations: True
+  change_location: True
   seed: 1

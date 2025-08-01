@@ -2234,7 +2234,7 @@ class SimulatorFactory:
             external_mapper=self.external_mapper,
         )
         self.input.task_noise.randomize_duration(self.input.graph.static_graph)
-        # self.input.noise.task_noise.randomize_priority(self.input.graph.static_graph)
+        self.input.task_noise.randomize_priority(self.input.graph.static_graph)
 
         simulator.initialize()
         simulator.initialize_data()
