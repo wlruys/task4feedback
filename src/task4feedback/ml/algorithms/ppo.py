@@ -175,7 +175,7 @@ def log_training_metrics(
             if std_improvement is not None:
                 log_payload["batch/std_improvement"] = std_improvement
 
-            training.info("Average training improvement: ", str(avg_improvement))
+            training.info(f"Average training improvement: {avg_improvement}")
 
         wandb.log(log_payload)
 
@@ -206,7 +206,7 @@ def run_ppo(
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
     max_candidates = max(
-        [env.simulator_factory.graph_spec.max_candidates for env in eval_envs]
+        [env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs]
     )
 
     if ppo_config.rollout_steps > 0:

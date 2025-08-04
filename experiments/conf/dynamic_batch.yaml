@@ -9,6 +9,7 @@ defaults:
   - wandb: default
   - logging: default
   - lr_scheduler: none 
+  - noise: none
   - optimizer: adamw
   - eval: default
   - _self_

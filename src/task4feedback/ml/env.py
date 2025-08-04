@@ -31,13 +31,13 @@ from time import perf_counter
 class RuntimeEnv(EnvBase):
     def __init__(
         self,
-        simulator_factory: SimulatorFactory,
+        simulator_factory: SimulatorFactory | list[SimulatorFactory],
         seed: int = 0,
         device="cpu",
         baseline_time=4000 * 5,
         change_priority=False,
         change_duration=False,
-        change_locations=False,
+        change_location=False,
         only_gpu=True,
         location_seed=0,
         priority_seed=0,
@@ -54,7 +54,7 @@ class RuntimeEnv(EnvBase):
         self.max_samples_per_iter = max_samples_per_iter
         self.change_priority = change_priority
         self.change_duration = change_duration
-        self.change_locations = change_locations
+        self.change_location = change_location
         self.location_seed = location_seed
         self.location_randomness = location_randomness
         self.random_start = random_start
@@ -66,8 +66,13 @@ class RuntimeEnv(EnvBase):
         self.only_gpu = only_gpu
         self.n_devices = len(self.location_list)
 
+        if not isinstance(simulator_factory, list):
+            simulator_factory = [simulator_factory]
+
         self.simulator_factory = simulator_factory
-        self.simulator: SimulatorDriver = simulator_factory.create(
+        self.active_idx = 0 # Index of the active simulator factory in case of multiple factories
+
+        self.simulator: SimulatorDriver = simulator_factory[self.active_idx].create(
             seed, priority_seed=priority_seed
         )
 
@@ -75,8 +80,8 @@ class RuntimeEnv(EnvBase):
         self.resets = 0
         self.EFT_baseline = 1
 
-        if self.change_locations:
-            graph = simulator_factory.input.graph
+        if self.change_location:
+            graph = simulator_factory[self.active_idx].input.graph
             if self.only_gpu and (0 in self.location_list):
                 print(
                     "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
@@ -117,11 +122,11 @@ class RuntimeEnv(EnvBase):
 
         self._buf = spec.zeros()
         self.candidate_workspace = torch.zeros(
-            self.simulator_factory.graph_spec.max_candidates, dtype=torch.int64
+            self.simulator_factory[self.active_idx].graph_spec.max_candidates, dtype=torch.int64
         )
         self.baseline_time = baseline_time
 
-        if change_locations:
+        if change_location:
             graph.randomize_locations(
                 self.location_randomness, self.location_list, verbose=False
             )
@@ -143,8 +148,8 @@ class RuntimeEnv(EnvBase):
         This is the number of tasks in the graph.
         """
         return int(
-            len(self.simulator_factory.input.graph)
-            // self.simulator_factory.graph_spec.max_candidates
+            len(self.simulator_factory[self.active_idx].input.graph)
+            // self.simulator_factory[self.active_idx].graph_spec.max_candidates
         )
 
     def __len__(self):
@@ -181,7 +186,7 @@ class RuntimeEnv(EnvBase):
     def _create_action_spec(self, n_devices: int = 5) -> TensorSpec:
         out = Categorical(
             n=n_devices,
-            shape=[self.simulator_factory.graph_spec.max_candidates],
+            shape=[self.simulator_factory[self.active_idx].graph_spec.max_candidates],
             device=self.device,
             dtype=torch.int64,
         )
@@ -204,7 +209,7 @@ class RuntimeEnv(EnvBase):
         obs.zero_()
 
         self.simulator.observer.get_observation(obs)
-        n_tasks = len(self.simulator_factory.input.graph)
+        n_tasks = len(self.simulator_factory[self.active_idx].input.graph)
         progress = step_count / n_tasks
         baseline = max(1.0, self.EFT_baseline)
         obs.set_at_(self.progress_key, progress, 0)
@@ -231,7 +236,7 @@ class RuntimeEnv(EnvBase):
     def map_tasks(self, actions: torch.Tensor):
         candidate_workspace = self.candidate_workspace
         num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
-        graph = self.simulator_factory.input.graph
+        graph = self.simulator_factory[self.active_idx].input.graph
         if num_candidates > 1:
             mapping_result = []
             assert isinstance(
@@ -293,15 +298,15 @@ class RuntimeEnv(EnvBase):
         # start_t = perf_counter()
         self.resets += 1
         self.step_count = 0
-        current_priority_seed = self.simulator_factory.pseed
-        current_duration_seed = self.simulator_factory.seed
+        current_priority_seed = self.simulator_factory[self.active_idx].pseed
+        current_duration_seed = self.simulator_factory[self.active_idx].seed
 
-        if self.change_locations:
+        if self.change_location:
             new_location_seed = self.location_seed + self.resets
-            graph = self.simulator_factory.input.graph
+            graph = self.simulator_factory[self.active_idx].input.graph
             random.seed(new_location_seed)
             if self.legacy_graph:
-                data = self.simulator_factory.input.data.data
+                data = self.simulator_factory[self.active_idx].input.data.data
                 for i in range(data.size()):
                     data.set_location(i, random.choice(self.location_list))
             else:
@@ -336,7 +341,9 @@ class RuntimeEnv(EnvBase):
         else:
             new_duration_seed = int(current_duration_seed)
 
-        self.simulator = self.simulator_factory.create(
+        #print("New seeds - Priority: {}, Duration: {}".format(new_priority_seed, new_duration_seed))
+
+        self.simulator = self.simulator_factory[self.active_idx].create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
         self.simulator.observer.reset()
@@ -373,10 +380,10 @@ class RuntimeEnv(EnvBase):
         np.random.seed(seed)
         random.seed(seed)
         if self.change_priority:
-            self.simulator_factory.set_seed(priority_seed=seed)
+            self.simulator_factory[self.active_idx].set_seed(priority_seed=seed)
         if self.change_duration:
-            self.simulator_factory.set_seed(seed=seed)
-        if self.change_locations:
+            self.simulator_factory[self.active_idx].set_seed(seed=seed)
+        if self.change_location:
             self.location_seed = seed
 
     def reset_for_evaluation(self, seed: int = 0):
@@ -386,10 +393,13 @@ class RuntimeEnv(EnvBase):
             "numpy": np.random.get_state(),
             "random": random.getstate(),
         }
-        self.change_priority = False
-        self.change_duration = True
+        old_pseed = self.simulator_factory[self.active_idx].pseed
+        old_seed = self.simulator_factory[self.active_idx].seed
+
+        self.change_priority = False # Do not change priority in evaluation
+        self.change_duration = False # Do not change duration in evaluation
         self._set_seed(seed)
-        self.random_start = False
+        self.random_start = False # Do not random start in evaluation
         self.resets = 0
         self._reset()
 
@@ -564,7 +574,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.flip = flip
-        n_tasks = len(self.simulator_factory.input.graph)
+        n_tasks = len(self.simulator_factory[self.active_idx].input.graph)
         self.eft_log = torch.zeros(n_tasks + 1, dtype=torch.int64)
         self.max_steps = n_tasks
         self.clip_total = clip_total
@@ -632,11 +642,11 @@ class SanityCheckEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(use_eft=True)
-            self.graph: JacobiGraph = self.simulator_factory.input.graph
+            self.graph: JacobiGraph = self.simulator_factory[self.active_idx].input.graph
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
         candidate_workspace = torch.zeros(
-            self.simulator_factory.graph_spec.max_candidates,
+            self.simulator_factory[self.active_idx].graph_spec.max_candidates,
             dtype=torch.int64,
         )
 
@@ -1018,7 +1028,7 @@ class MapperRuntimeEnv(RuntimeEnv):
 
     def _step(self, td: TensorDict) -> TensorDict:
         candidate_workspace = torch.zeros(
-            self.simulator_factory.graph_spec.max_candidates,
+            self.simulator_factory[self.active_idx].graph_spec.max_candidates,
             dtype=torch.int64,
         )
         self.simulator.get_mappable_candidates(candidate_workspace)
@@ -1061,7 +1071,7 @@ class MapperRuntimeEnv(RuntimeEnv):
         else:
             seed = seed + 1e7
 
-        self.simulator_factory.set_seed(priority_seed=seed)
+        self.simulator_factory[self.active_idx].set_seed(priority_seed=seed)
         return seed
 
 
@@ -1109,7 +1119,7 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
         use_external_mapper: bool = False,
         change_priority=True,
         change_duration=False,
-        change_locations=False,
+        change_location=False,
         location_seed=0,
         location_randomness=1,
         location_list=[1, 2, 3, 4],
@@ -1123,10 +1133,10 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
             change_priority=change_priority,
             change_duration=change_duration,
         )
-        self.change_locations = change_locations
+        self.change_location = change_location
         self.location_seed = 0
 
-        graph = simulator_factory.input.graph
+        graph = simulator_factory[self.active_idx].input.graph
         assert hasattr(graph, "get_cell_locations")
         assert hasattr(graph, "set_cell_locations")
         assert hasattr(graph, "randomize_locations")
@@ -1136,20 +1146,20 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
 
         random.seed(self.location_seed)
 
-        if change_locations:
+        if change_location:
             graph.randomize_locations(
                 self.location_randomness, self.location_list, verbose=False
             )
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.resets += 1
-        current_priority_seed = self.simulator_factory.pseed
-        current_duration_seed = self.simulator_factory.seed
+        current_priority_seed = self.simulator_factory[self.active_idx].pseed
+        current_duration_seed = self.simulator_factory[self.active_idx].seed
 
-        if self.change_locations:
+        if self.change_location:
             new_location_seed = self.location_seed + self.resets
             # Load initial location list
-            graph = self.simulator_factory.input.graph
+            graph = self.simulator_factory[self.active_idx].input.graph
             graph.set_cell_locations(self.initial_location_list)
 
             random.seed(new_location_seed)
@@ -1170,7 +1180,7 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
         new_priority_seed = int(new_priority_seed)
         new_duration_seed = int(new_duration_seed)
 
-        self.simulator = self.simulator_factory.create(
+        self.simulator = self.simulator_factory[self.active_idx].create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
 
@@ -1198,7 +1208,7 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
         baseline_time=56000,
         change_priority=True,
         change_duration=False,
-        change_locations=False,
+        change_location=False,
         location_seed=0,
         location_randomness=1,
         location_list=[1, 2, 3, 4],
@@ -1211,10 +1221,10 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
             change_priority=change_priority,
             change_duration=change_duration,
         )
-        self.change_locations = change_locations
+        self.change_location = change_location
         self.location_seed = 0
 
-        graph = simulator_factory.input.graph
+        graph = simulator_factory[self.active_idx].input.graph
         assert hasattr(graph, "get_cell_locations")
         assert hasattr(graph, "set_cell_locations")
         assert hasattr(graph, "randomize_locations")
@@ -1224,20 +1234,20 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
 
         random.seed(self.location_seed)
 
-        if change_locations:
+        if change_location:
             graph.randomize_locations(
                 self.location_randomness, self.location_list, verbose=False
             )
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.resets += 1
-        current_priority_seed = self.simulator_factory.pseed
-        current_duration_seed = self.simulator_factory.seed
+        current_priority_seed = self.simulator_factory[self.active_idx].pseed
+        current_duration_seed = self.simulator_factory[self.active_idx].seed
 
-        if self.change_locations:
+        if self.change_location:
             new_location_seed = self.location_seed + self.resets
             # Load initial location list
-            graph = self.simulator_factory.input.graph
+            graph = self.simulator_factory[self.active_idx].input.graph
             graph.set_cell_locations(self.initial_location_list)
 
             random.seed(new_location_seed)
@@ -1258,7 +1268,7 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
         new_priority_seed = int(new_priority_seed)
         new_duration_seed = int(new_duration_seed)
 
-        self.simulator = self.simulator_factory.create(
+        self.simulator = self.simulator_factory[self.active_idx].create(
             priority_seed=new_priority_seed, duration_seed=new_duration_seed
         )
 
@@ -1286,7 +1296,7 @@ class IncrementalMappingEnv(EnvBase):
         baseline_time=56000,
         change_priority=False,
         change_duration=False,
-        change_locations=False,
+        change_location=False,
         only_gpu=True,
         location_list=[1, 2, 3, 4],
         path=".",
@@ -1295,13 +1305,13 @@ class IncrementalMappingEnv(EnvBase):
 
         self.change_priority = change_priority
         self.change_duration = change_duration
-        self.change_locations = change_locations
+        self.change_location = change_location
         self.path = path
         self.only_gpu = only_gpu
         self.location_list = location_list
 
         self.simulator_factory = simulator_factory
-        self.simulator: SimulatorDriver = simulator_factory.create(seed)
+        self.simulator: SimulatorDriver = simulator_factory[self.active_idx].create(seed)
         self.graph_extractor: GraphExtractor = GraphExtractor(
             self.simulator.get_state()
         )
@@ -1338,7 +1348,7 @@ class IncrementalMappingEnv(EnvBase):
         return comp
 
     def _create_action_spec(self, ndevices: int = 5) -> TensorSpec:
-        n_devices = self.simulator_factory.graph_spec.max_devices
+        n_devices = self.simulator_factory[self.active_idx].graph_spec.max_devices
         if self.only_gpu:
             n_devices -= 1
         out = Bounded(
@@ -1437,8 +1447,8 @@ class IncrementalMappingEnv(EnvBase):
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.resets += 1
 
-        current_priority_seed = self.simulator_factory.pseed
-        current_duration_seed = self.simulator_factory.seed
+        current_priority_seed = self.simulator_factory[self.active_idx].pseed
+        current_duration_seed = self.simulator_factory[self.active_idx].seed
 
         self.last_time = 0
 
@@ -1456,7 +1466,7 @@ class IncrementalMappingEnv(EnvBase):
         new_duration_seed = int(new_duration_seed)
 
         self.taskid_history = []
-        if self.change_locations and isinstance(
+        if self.change_location and isinstance(
             self.simulator_factory.input.graph, JacobiGraph
         ):
             self.simulator_factory.input.graph.randomize_locations(

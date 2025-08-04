@@ -1,4 +1,5 @@
 from task4feedback.interface import SimulatorFactory, SimulatorInput, create_graph_spec 
+from task4feedback.interface import TaskNoise 
 from typing import Callable
 from .graph import GraphBuilder
 import hydra
@@ -53,6 +54,18 @@ def create_observer_factory(cfg: DictConfig):
     return observer_factory, graph_spec
 
 
+def create_task_noise(cfg: DictConfig, static_graph):
+    task_noise = hydra.utils.instantiate(cfg.noise)
+
+    print("Task noise configuration:", OmegaConf.to_yaml(cfg.noise))
+
+    if task_noise is None:
+        task_noise = TaskNoise(tasks=static_graph)
+    else:
+        task_noise = task_noise(tasks=static_graph)
+
+    return task_noise
+
 @dataclass
 class NormalizationDetails:
     task_norm: dict
@@ -80,13 +93,23 @@ def make_env(
     else:
         runtime_env_t = RuntimeEnv
     observer_factory, graph_spec = create_observer_factory(cfg)
-    input = SimulatorInput(m, d, s, transition_conditions=transition_conditions)
+
+    print("CONFIG", cfg)
+    task_noise = create_task_noise(cfg, graph.static_graph)
+
+    print("NOISE")
+    print(task_noise)
+    
+    input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise)
+
+
 
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),
         device="cpu",
-        change_priority=cfg.graph.env.change_priority,
-        change_locations=cfg.graph.env.change_locations,
+        change_priority=cfg.graph.env.change_priority if hasattr(cfg.graph.env, "change_priority") else False,
+        change_location=cfg.graph.env.change_location if hasattr(cfg.graph.env, "change_location") else False,
+        change_duration=cfg.graph.env.change_duration if hasattr(cfg.graph.env, "change_duration") else False,
         seed=cfg.graph.env.seed,
         max_samples_per_iter=(
             len(graph) + 1

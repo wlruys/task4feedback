@@ -101,7 +101,7 @@ def configure_training(cfg: DictConfig):
         )
 
 
-@hydra.main(config_path="conf", config_name="dynamic_batch", version_base=None)
+@hydra.main(config_path="conf", config_name="config.yaml", version_base=None)
 def main(cfg: DictConfig):
     if cfg.wandb.enabled:
         wandb.init(

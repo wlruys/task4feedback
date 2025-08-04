@@ -21,7 +21,6 @@ from .wrappers import (
     ExecutionState,
     ExternalMapper,
     ExternalObserver,
-    NoiseConfig,
     TaskNoise,
     RangeTransitionConditions,
     DefaultTransitionConditions,

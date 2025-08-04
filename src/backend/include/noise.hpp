@@ -33,21 +33,6 @@ protected:
     return mean_time;
   };
 
-  // template <typename T> static uint64_t calculate_checksum(const std::vector<T> &data) {
-  //   const uint64_t prime = 0x100000001B3ull; // FNV prime
-  //   uint64_t hash = 0xcbf29ce484222325ull;   // FNV offset basis
-
-  //   const char *byte_data = reinterpret_cast<const char *>(data.data());
-  //   size_t byte_count = data.size() * sizeof(T);
-
-  //   for (size_t i = 0; i < byte_count; ++i) {
-  //     hash ^= static_cast<uint64_t>(byte_data[i]);
-  //     hash *= prime;
-  //   }
-
-  //   return hash;
-  // }
-
 public:
   static constexpr uint32_t FILE_VERSION = 1;
   static constexpr size_t BUFFER_SIZE = 8192;
@@ -146,7 +131,6 @@ public:
   }
 
   virtual void generate_duration(StaticTaskInfo &task_info) {
-    // std::cout << "Generating task durations for " << n_tasks << " tasks." << std::endl;
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
       for (int8_t i = 0; i < num_device_types; i++) {
         auto arch = static_cast<DeviceType>(1 << i);
@@ -169,186 +153,103 @@ public:
     generate_priority(task_info);
   }
 
-  // void dump_to_binary(const std::string &filename) const {
-  //   std::ofstream file(filename, std::ios::binary);
-  //   if (!file) {
-  //     throw std::runtime_error("Unable to open file for writing: " + filename);
-  //   }
+  // Binary dump/load for durations
+  void dump_to_binary(const std::string &filename) const {
+    std::ofstream file(filename, std::ios::binary);
+    if (!file) throw std::runtime_error("Unable to open file for writing: " + filename);
 
-  //   // Set up buffering
-  //   std::array<char, BUFFER_SIZE> buffer;
-  //   file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+    std::array<char, BUFFER_SIZE> buffer;
+    file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
 
-  //   // Write header
-  //   file.write("TASK", 4);
-  //   file.write(reinterpret_cast<const char *>(&FILE_VERSION), sizeof(FILE_VERSION));
+    file.write("TASK", 4);
+    file.write(reinterpret_cast<const char *>(&FILE_VERSION), sizeof(FILE_VERSION));
 
-  //   // Write data size
-  //   uint64_t data_size = task_durations.size();
-  //   file.write(reinterpret_cast<const char *>(&data_size), sizeof(data_size));
+    const uint64_t data_size = static_cast<uint64_t>(task_durations.size());
+    file.write(reinterpret_cast<const char *>(&data_size), sizeof(data_size));
 
-  //   // Write data
-  //   const char *data_ptr = reinterpret_cast<const char *>(task_durations.data());
-  //   size_t remaining = task_durations.size() * sizeof(timecount_t);
-  //   while (remaining > 0) {
-  //     size_t chunk_size = std::min(remaining, BUFFER_SIZE);
-  //     file.write(data_ptr, static_cast<std::streamsize>(chunk_size));
-  //     data_ptr += chunk_size;
-  //     remaining -= chunk_size;
-  //   }
+    file.write(reinterpret_cast<const char *>(task_durations.data()), data_size * sizeof(timecount_t));
 
-  //   // Write checksum
-  //   uint64_t checksum = calculate_checksum(task_durations);
-  //   file.write(reinterpret_cast<const char *>(&checksum), sizeof(checksum));
+    // Optionally add checksum here if needed for integrity
+    if (file.fail()) throw std::runtime_error("Error writing to file: " + filename);
+  }
 
-  //   if (file.fail()) {
-  //     throw std::runtime_error("Error writing to file: " + filename);
-  //   }
-  // }
+  void load_from_binary(const std::string &filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) throw std::runtime_error("Unable to open file for reading: " + filename);
 
-  // void load_from_binary(const std::string &filename) {
-  //   std::ifstream file(filename, std::ios::binary);
-  //   if (!file) {
-  //     throw std::runtime_error("Unable to open file for reading: " + filename);
-  //   }
+    std::array<char, BUFFER_SIZE> buffer;
+    file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
 
-  //   // Set up buffering
-  //   std::array<char, BUFFER_SIZE> buffer;
-  //   file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+    char header[4];
+    file.read(header, 4);
+    if (std::string(header, 4) != "TASK") throw std::runtime_error("Invalid file format");
 
-  //   // Read and verify header
-  //   std::array<char, 4> header;
-  //   file.read(header.data(), header.size());
-  //   if (std::string(header.data(), header.size()) != "TASK") {
-  //     throw std::runtime_error("Invalid file format");
-  //   }
+    uint32_t version;
+    file.read(reinterpret_cast<char *>(&version), sizeof(version));
+    if (version != FILE_VERSION) throw std::runtime_error("Unsupported file version");
 
-  //   uint32_t version;
-  //   file.read(reinterpret_cast<char *>(&version), sizeof(version));
-  //   if (version != FILE_VERSION) {
-  //     throw std::runtime_error("Unsupported file version");
-  //   }
+    uint64_t data_size;
+    file.read(reinterpret_cast<char *>(&data_size), sizeof(data_size));
 
-  //   // Read data size
-  //   uint64_t data_size;
-  //   file.read(reinterpret_cast<char *>(&data_size), sizeof(data_size));
+    task_durations.resize(data_size);
+    file.read(reinterpret_cast<char *>(task_durations.data()), data_size * sizeof(timecount_t));
 
-  //   // Read data
-  //   task_durations.resize(data_size);
-  //   char *data_ptr = reinterpret_cast<char *>(task_durations.data());
-  //   size_t remaining = data_size * sizeof(timecount_t);
-  //   while (remaining > 0) {
-  //     size_t chunk_size = std::min(remaining, BUFFER_SIZE);
-  //     file.read(data_ptr, static_cast<std::streamsize>(chunk_size));
-  //     data_ptr += chunk_size;
-  //     remaining -= chunk_size;
-  //   }
+    if (file.fail()) throw std::runtime_error("Error reading from file: " + filename);
+    generated = true;
+  }
 
-  //   // Read and verify checksum
-  //   uint64_t stored_checksum;
-  //   uint64_t calculated_checksum;
-  //   file.read(reinterpret_cast<char *>(&stored_checksum), sizeof(stored_checksum));
-  //   calculated_checksum = calculate_checksum(task_durations);
+  // Binary dump/load for priorities
+  void dump_priorities_to_binary(const std::string &filename) const {
+    std::ofstream file(filename, std::ios::binary);
+    if (!file) throw std::runtime_error("Unable to open file for writing: " + filename);
 
-  //   if (stored_checksum != calculated_checksum) {
-  //     throw std::runtime_error("Checksum mismatch - file may be corrupted");
-  //   }
+    std::array<char, BUFFER_SIZE> buffer;
+    file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
 
-  //   if (file.fail()) {
-  //     throw std::runtime_error("Error reading from file: " + filename);
-  //   }
-  //   generated = true;
-  // }
+    file.write("TASK", 4);
+    file.write(reinterpret_cast<const char *>(&FILE_VERSION), sizeof(FILE_VERSION));
 
-  // void dump_priorities_to_binary(const std::string &filename) const {
-  //   std::ofstream file(filename, std::ios::binary);
-  //   if (!file) {
-  //     throw std::runtime_error("Unable to open file for writing: " + filename);
-  //   }
+    const uint64_t data_size = static_cast<uint64_t>(mapping_priority.size());
+    file.write(reinterpret_cast<const char *>(&data_size), sizeof(data_size));
 
-  //   // Set up buffering
-  //   std::array<char, BUFFER_SIZE> buffer;
-  //   file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+    file.write(reinterpret_cast<const char *>(mapping_priority.data()), data_size * sizeof(priority_t));
 
-  //   // Write header
-  //   file.write("TASK", 4);
-  //   file.write(reinterpret_cast<const char *>(&FILE_VERSION), sizeof(FILE_VERSION));
+    if (file.fail()) throw std::runtime_error("Error writing to file: " + filename);
+  }
 
-  //   // Write data size
-  //   uint64_t data_size = mapping_priority.size();
-  //   file.write(reinterpret_cast<const char *>(&data_size), sizeof(data_size));
+  void load_priorities_from_binary(const std::string &filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) throw std::runtime_error("Unable to open file for reading: " + filename);
 
-  //   // Write data
-  //   const char *data_ptr = reinterpret_cast<const char *>(mapping_priority.data());
-  //   size_t remaining = mapping_priority.size() * sizeof(priority_t);
-  //   while (remaining > 0) {
-  //     size_t chunk_size = std::min(remaining, BUFFER_SIZE);
-  //     file.write(data_ptr, static_cast<std::streamsize>(chunk_size));
-  //     data_ptr += chunk_size;
-  //     remaining -= chunk_size;
-  //   }
+    std::array<char, BUFFER_SIZE> buffer;
+    file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
 
-  //   // Write checksum
-  //   uint64_t checksum = calculate_checksum(mapping_priority);
-  //   file.write(reinterpret_cast<const char *>(&checksum), sizeof(checksum));
+    char header[4];
+    file.read(header, 4);
+    if (std::string(header, 4) != "TASK") throw std::runtime_error("Invalid file format");
 
-  //   if (file.fail()) {
-  //     throw std::runtime_error("Error writing to file: " + filename);
-  //   }
-  // }
+    uint32_t version;
+    file.read(reinterpret_cast<char *>(&version), sizeof(version));
+    if (version != FILE_VERSION) throw std::runtime_error("Unsupported file version");
 
-  // void load_priorities_from_binary(const std::string &filename) {
-  //   std::ifstream file(filename, std::ios::binary);
-  //   if (!file) {
-  //     throw std::runtime_error("Unable to open file for reading: " + filename);
-  //   }
+    uint64_t data_size;
+    file.read(reinterpret_cast<char *>(&data_size), sizeof(data_size));
 
-  //   // Set up buffering
-  //   std::array<char, BUFFER_SIZE> buffer;
-  //   file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
+    mapping_priority.resize(data_size);
+    file.read(reinterpret_cast<char *>(mapping_priority.data()), data_size * sizeof(priority_t));
 
-  //   // Read and verify header
-  //   std::array<char, 4> header;
-  //   file.read(header.data(), header.size());
-  //   if (std::string(header.data(), header.size()) != "TASK") {
-  //     throw std::runtime_error("Invalid file format");
-  //   }
+    if (file.fail()) throw std::runtime_error("Error reading from file: " + filename);
+  }
 
-  //   uint32_t version;
-  //   file.read(reinterpret_cast<char *>(&version), sizeof(version));
-  //   if (version != FILE_VERSION) {
-  //     throw std::runtime_error("Unsupported file version");
-  //   }
+  void save(const std::string &filename) const {
+    dump_to_binary(filename + ".duration");
+    dump_priorities_to_binary(filename + ".priority");
+  }
 
-  //   // Read data size
-  //   uint64_t data_size;
-  //   file.read(reinterpret_cast<char *>(&data_size), sizeof(data_size));
-
-  //   // Read data
-  //   mapping_priority.resize(data_size);
-  //   char *data_ptr = reinterpret_cast<char *>(mapping_priority.data());
-  //   size_t remaining = data_size * sizeof(priority_t);
-  //   while (remaining > 0) {
-  //     size_t chunk_size = std::min(remaining, BUFFER_SIZE);
-  //     file.read(data_ptr, static_cast<std::streamsize>(chunk_size));
-  //     data_ptr += chunk_size;
-  //     remaining -= chunk_size;
-  //   }
-
-  //   // Read and verify checksum
-  //   uint64_t stored_checksum;
-  //   uint64_t calculated_checksum;
-  //   file.read(reinterpret_cast<char *>(&stored_checksum), sizeof(stored_checksum));
-  //   calculated_checksum = calculate_checksum(mapping_priority);
-
-  //   if (stored_checksum != calculated_checksum) {
-  //     throw std::runtime_error("Checksum mismatch - file may be corrupted");
-  //   }
-
-  //   if (file.fail()) {
-  //     throw std::runtime_error("Error reading from file: " + filename);
-  //   }
-  // }
+  void load(const std::string &filename) {
+    load_from_binary(filename + ".duration");
+    load_priorities_from_binary(filename + ".priority");
+  }
 };
 
 // using esf_t = double (*)(uint64_t, uint64_t);
@@ -373,36 +274,77 @@ public:
 //   }
 // };
 
-// class LognormalTaskNoise : public TaskNoise {
+class LognormalTaskNoise : public TaskNoise {
+protected:
+  double scale;
 
-// protected:
-//   [[nodiscard]] double get_stddev(taskid_t task_id, DeviceType arch) const {
-//     MONUnusedParameter(task_id);
-//     MONUnusedParameter(arch);
-//     const double stddev = 2;
-//     return stddev;
-//   }
+  [[nodiscard]] double get_stddev(taskid_t task_id, DeviceType arch) const {
+    MONUnusedParameter(task_id);
+    MONUnusedParameter(arch);
+    const double stddev = scale;
+    return stddev;
+  }
 
-//   [[nodiscard]] timecount_t sample_duration(taskid_t task_id, DeviceType arch) const override {
-//     const auto mean =
-//         static_cast<double>(tasks.get().get_variant(task_id, arch).get_observed_time());
-//     const double stddev = 0.5 * mean;
+  [[nodiscard]] timecount_t sample_duration(timecount_t mean_time) const override {
+    const double mean = static_cast<double>(mean_time);
+    const double stddev = scale * mean;
 
-//     if (mean == 0) {
-//       return 0;
-//     }
+    if (mean == 0) {
+      return 0;
+    }
 
-//     const double u = std::log((mean * mean) / std::sqrt(mean * mean + stddev * stddev));
-//     const double s = std::log(1 + ((stddev * stddev) / (mean * mean)));
+    const double u = std::log((mean * mean) / std::sqrt(mean * mean + stddev * stddev));
+    const double s = std::log(1 + ((stddev * stddev) / (mean * mean)));
 
-//     std::lognormal_distribution<noise_t> dist(u, s);
-//     const noise_t duration = dist(gen);
-//     assert(duration >= 0);
-//     return static_cast<timecount_t>(duration);
-//   }
+    std::lognormal_distribution<noise_t> dist(u, s);
+    const noise_t duration = dist(gen);
+    assert(duration >= 0);
 
-// public:
-//   LognormalTaskNoise(Tasks &tasks_, unsigned int seed_ = 0, unsigned int pseed_ = 1000)
-//       : TaskNoise(tasks_, seed_, pseed_) {
-//   }
-// };
+    // std::cout << "LognormalTaskNoise: mean=" << mean << ", stddev=" << stddev
+    //           << ", sampled duration=" << duration << std::endl;
+    return static_cast<timecount_t>(duration);
+  }
+
+public:
+  LognormalTaskNoise(StaticTaskInfo &tasks_, unsigned int seed_ = 0,
+                     unsigned int pseed_ = 1000, double scale = 500)
+      : TaskNoise(tasks_, seed_, pseed_), scale(scale) {
+  }
+};
+
+class StaticLognormalTaskNoise : public TaskNoise {
+protected:
+  double stddev;
+
+  [[nodiscard]] double get_stddev(taskid_t task_id, DeviceType arch) const {
+    MONUnusedParameter(task_id);
+    MONUnusedParameter(arch);
+    const double stddev = this->stddev;
+    return stddev;
+  }
+
+  [[nodiscard]] timecount_t sample_duration(timecount_t mean_time) const override {
+    const double mean = static_cast<double>(mean_time);
+
+    if (mean == 0) {
+      return 0;
+    }
+
+    const double u = std::log((mean * mean) / std::sqrt(mean * mean + stddev * stddev));
+    const double s = std::log(1 + ((stddev * stddev) / (mean * mean)));
+
+    std::lognormal_distribution<noise_t> dist(u, s);
+    const noise_t duration = dist(gen);
+    assert(duration >= 0);
+
+    // std::cout << "StaticLognormalTaskNoise: mean=" << mean << ", stddev=" << stddev
+    //           << ", sampled duration=" << duration << std::endl;
+    return static_cast<timecount_t>(duration);
+  }
+
+public:
+  StaticLognormalTaskNoise(StaticTaskInfo &tasks_, unsigned int seed_ = 0,
+                           unsigned int pseed_ = 1000, double stddev = 500)
+      : TaskNoise(tasks_, seed_, pseed_), stddev(stddev) {
+  }
+};

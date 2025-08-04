@@ -19,6 +19,7 @@ from task4feedback.fastsim2 import (
     Topology,
     Graph,
     TaskNoise,
+    LognormalTaskNoise,
     StaticTaskInfo,
     RuntimeTaskInfo,
     Data,
@@ -499,17 +500,30 @@ class System:
         return "\n".join(result)
 
 
-@dataclass
-class NoiseConfig:
-    task_noise: TaskNoise
+# @dataclass
+# class NoiseConfig:
+#     task_noise: TaskNoise
 
-    def __init__(
-        self,
-        graph: TaskGraph,
-        duration_seed: int = 0,
-        priority_seed: int = 0,
-    ):
-        self.task_noise = TaskNoise(graph.static_graph, duration_seed, priority_seed)
+#     def __init__(
+#         self,
+#         graph: TaskGraph,
+#         duration_seed: int = 0,
+#         priority_seed: int = 0,
+#     ):
+#         self.task_noise = TaskNoise(graph.static_graph, duration_seed, priority_seed)
+
+
+# @dataclass 
+# class LognormalNoiseConfig(NoiseConfig):
+
+#     def __init__(
+#         self,
+#         graph: TaskGraph,
+#         duration_seed: int = 0,
+#         priority_seed: int = 0,
+#     ):
+#         super().__init__(graph, duration_seed, priority_seed)
+#         self.task_noise = LognormalTaskNoise(graph.static_graph, duration_seed, priority_seed)
 
 
 class ExternalMapper:
@@ -559,7 +573,7 @@ class SimulatorInput:
     graph: TaskGraph
     data: DataBlocks
     system: System
-    noise: NoiseConfig
+    task_noise: TaskNoise
     transition_conditions: fastsim.TransitionConditions
 
     def __init__(
@@ -567,14 +581,16 @@ class SimulatorInput:
         graph: TaskGraph,
         data: DataBlocks,
         system: System,
-        noise: Optional[NoiseConfig] = None,
+        task_noise: Optional[TaskNoise] = None,
         transition_conditions: Optional[fastsim.TransitionConditions] = None,
     ):
         if transition_conditions is None:
             transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
-        if noise is None:
-            noise = NoiseConfig(graph)
-        self.noise = noise
+            
+        if task_noise is None:
+            task_noise = TaskNoise(graph.static_graph)
+
+        self.task_noise = task_noise
         self.graph = graph
         self.data = data
         self.system = system
@@ -587,7 +603,7 @@ class SimulatorInput:
             self.data.data,
             self.system.devices,
             self.system.topology,
-            self.noise.task_noise,
+            self.task_noise,
             self.transition_conditions,
         )
 
@@ -2174,8 +2190,8 @@ class SimulatorFactory:
         if comm_seed is None:
             comm_seed = self.cseed
 
-        self.input.noise.task_noise.set_seed(duration_seed)
-        self.input.noise.task_noise.set_pseed(priority_seed)
+        self.input.task_noise.set_seed(duration_seed)
+        self.input.task_noise.set_pseed(priority_seed)
 
         simulator = SimulatorDriver(
             self.input,
@@ -2183,10 +2199,12 @@ class SimulatorFactory:
             internal_mapper=self.internal_mapper,
             external_mapper=self.external_mapper,
         )
-        self.input.noise.task_noise.randomize_duration(self.input.graph.static_graph)
-        # self.input.noise.task_noise.randomize_priority(self.input.graph.static_graph)
+        self.input.task_noise.randomize_duration(self.input.graph.static_graph)
+        self.input.task_noise.randomize_priority(self.input.graph.static_graph)
+
         simulator.initialize()
         simulator.initialize_data()
+
         if use_external_mapper:
             simulator.enable_external_mapper()
         else:

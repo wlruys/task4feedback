@@ -10,7 +10,7 @@ using namespace nb::literals;
 void init_task_noise_ext(nb::module_ &m) {
   nb::class_<TaskNoise>(m, "TaskNoise")
       .def(nb::init<StaticTaskInfo &, unsigned int, unsigned int>(), "tasks"_a, "seed"_a = 0,
-           "pseed"_a = 0, nb::keep_alive<1, 2>()) // Keep tasks alive as long as noise object exists
+           "pseed"_a = 0, nb::keep_alive<1, 2>()) // Keep tasks object alive as long as noise object exists
       .def("set_seed", &TaskNoise::set_seed, "seed"_a)
       .def("set_pseed", &TaskNoise::set_pseed, "pseed"_a)
       .def("get", &TaskNoise::get, "task_id"_a, "arch"_a)
@@ -28,8 +28,13 @@ void init_task_noise_ext(nb::module_ &m) {
       .def("randomize_duration", &TaskNoise::generate_duration)
       .def("randomize_priority", &TaskNoise::generate_priority);
 
-  //   nb::class_<LognormalTaskNoise>(m, "LognormalTaskNoise")
-  //       .def(nb::init<Tasks &, unsigned int, unsigned int>(), "tasks"_a, "seed"_a = 0, "pseed"_a
-  //       = 0,
-  //            nb::keep_alive<1, 2>()); // Keep tasks alive as long as noise object exists
+
+     nb::class_<LognormalTaskNoise, TaskNoise>(m, "LognormalTaskNoise")
+         .def(nb::init<StaticTaskInfo &, unsigned int, unsigned int, double>(), "tasks"_a,
+              "seed"_a = 0, "pseed"_a = 1000, "scale"_a = 0.5, nb::keep_alive<1, 2>());
+
+
+     nb::class_<StaticLognormalTaskNoise, TaskNoise>(m, "StaticLognormalTaskNoise")
+         .def(nb::init<StaticTaskInfo &, unsigned int, unsigned int, double>(), "tasks"_a, "seed"_a = 0,
+              "pseed"_a = 0, "stddev"_a = 500, nb::keep_alive<1, 2>());
 }
