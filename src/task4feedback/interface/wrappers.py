@@ -2059,18 +2059,6 @@ class SimulatorDriver:
     def total_eviction_movement(self):
         return self.simulator.get_eviction_data_movement()
 
-    def task_finish_time(self, task_id: int) -> int:
-        """
-        Returns the finish time (in microseconds) of a task.
-        """
-        return self.simulator.get_task_finish_time(task_id)
-
-    def task_finish_time(self, task_id: int) -> int:
-        """
-        Returns the finish time (in microseconds) of a task.
-        """
-        return self.simulator.get_task_finish_time(task_id)
-
     def set_task_breakpoint(self, event: EventType, task_id: int) -> int:
         self.simulator.add_task_breakpoint(event, task_id)
 
