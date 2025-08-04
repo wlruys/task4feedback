@@ -245,6 +245,8 @@ class FeatureDimConfig:
     task_data_edge_dim: int = 3
     task_device_edge_dim: int = 2
     task_task_edge_dim: int = 1
+    data_device_edge_dim: int = 1
+    n_devices: int = 5
 
     @staticmethod
     def from_observer(observer: ExternalObserver):
@@ -262,6 +264,8 @@ class FeatureDimConfig:
             task_data_edge_dim=observer.task_data_edge_dim,
             task_device_edge_dim=observer.task_device_edge_dim,
             task_task_edge_dim=observer.task_task_edge_dim,
+            data_device_edge_dim=observer.data_device_edge_dim,
+            n_devices= observer.graph_spec.max_devices,
         )
 
     @staticmethod
@@ -2422,6 +2426,164 @@ class HeteroConvSeparateNet(nn.Module):
         d_logits = self.actor(data, counts)
         v = self.critic(data, counts)
         return d_logits, v
+
+
+class GNNStateNet(nn.Module):
+    """
+    Simple network that takes in data from default graph observer to test with GNNs.
+    """
+
+    def __init__(
+            self, 
+            feature_config: FeatureDimConfig,
+            hidden_channels: list[int],
+            add_progress: bool = False,
+            activation: DictConfig = None,
+            initialization: DictConfig = None,
+            layer_norm: bool = True,
+    ):
+        
+        super(GNNStateNet, self).__init__()
+        self.feature_config = feature_config
+        self.hidden_channels = hidden_channels
+        self.k = len(self.hidden_channels)
+
+        def make_activation(activation_config):
+            return (
+                instantiate(activation)
+                if activation
+                else nn.LeakyReLU(negative_slope=0.01)
+            )
+        
+        layer_init = call(initialization if initialization else kaiming_init)
+        
+        #Test with a simple MLP for now 
+        self.task_linear = nn.Sequential(
+            # layer_init(nn.Linear(feature_config.task_feature_dim, hidden_channels[0])),
+            # nn.LayerNorm(hidden_channels[0]) if layer_norm else nn.Identity(),
+            # make_activation(activation),
+            nn.Identity(),
+        )
+
+        self.data_linear = nn.Sequential(
+            layer_init(nn.Linear(feature_config.data_feature_dim, hidden_channels[0])),
+            nn.LayerNorm(hidden_channels[0]) if layer_norm else nn.Identity(),
+            make_activation(activation),
+        )
+
+        self.device_linear = nn.Sequential(
+            layer_init(nn.Linear(feature_config.device_feature_dim, hidden_channels[0])),
+        )
+
+        global_features_input_dim = feature_config.n_devices
+        if add_progress:
+            global_features_input_dim += 2
+
+        self.global_mlp = nn.Sequential(
+            layer_init(nn.Linear(global_features_input_dim, hidden_channels[0])),
+            nn.LayerNorm(hidden_channels[0]) if layer_norm else nn.Identity(),
+            make_activation(activation),
+        )
+
+        self.add_progress = add_progress
+        self.output_dim = feature_config.task_feature_dim
+
+
+    def _is_batch(self, obs: TensorDict) -> bool:
+        if not obs.batch_size:
+            return False
+        return True 
+    
+
+    
+    def get_heterodata(self, obs: TensorDict) -> HeteroData | Batch:
+        hdata = obs["hetero_data"]
+        #print(type(obs), obs.shape)
+        if isinstance(hdata, HeteroData):
+            return hdata
+        else:
+            if isinstance(hdata[0], HeteroData):
+                #print("hetero batch length:", len(hdata))
+                return Batch.from_data_list(hdata)
+            else:
+                flattened = [item for sublist in hdata for item in sublist]
+                #print("Flattened hetero batch length:", len(flattened))
+                return Batch.from_data_list(flattened)
+
+    def forward(self, tensordict: TensorDict):
+        with torch.no_grad():
+            hetero_data = self.get_heterodata(tensordict)
+
+        task_batch = hetero_data["tasks"].batch if isinstance(hetero_data, Batch) else None
+        # data_batch = hetero_data["data"].batch if isinstance(hetero_data, Batch) else None
+        # device_batch = hetero_data["devices"].batch if isinstance(hetero_data, Batch) else None
+
+        task_features = hetero_data["tasks"].x
+        # data_features = hetero_data["data"].x
+        # device_features = hetero_data["devices"].x
+
+        #print("Task features shape:", task_features)
+        # print("Data features shape:", data_features.shape)
+        # print("Device features shape:", device_features.shape)
+
+        # task_features = torch.squeeze(task_features)
+        # print("candidate", tensordict["aux", "candidates", "idx"])
+        # print("task_features", task_features, tensordict["nodes", "tasks", "glb"])
+        # print("data_features", tensordict["nodes", "data", "attr"], tensordict["nodes", "data", "glb"])
+        # print("device_features", tensordict["nodes", "devices", "attr"])
+
+        # print("task_task_edges", hetero_data["tasks", "to", "tasks"].edge_index)
+        # print("task_data_edges", hetero_data["tasks", "to", "data"].edge_index)
+        # print("data_device_edges", hetero_data["data", "to", "devices"].edge_index)
+
+
+        #print("task_batch", task_batch)
+        #task_features = tensordict["nodes", "tasks", "attr"]
+        task_activations = self.task_linear(task_features)
+        #data_activations = self.data_linear(data_features)
+        # device_activations = self.device_linear(device_features)
+
+        if task_batch is not None:
+            task_activations = task_activations[hetero_data["tasks"].ptr[:-1]+1]
+        else:
+            task_activations = task_activations[1]
+
+        # task_activations = global_mean_pool(task_activations)
+        #task_count = torch.clip(tensordict["nodes", "tasks", "count"], min=1)
+        #task_count = task_count.reshape(-1, 1)
+        #task_activations = torch.div(task_activations, task_count)
+
+        # data_activations = global_add_pool(data_activations, data_batch)
+        # data_count = torch.clip(tensordict["nodes", "data", "count"], min=1)
+        # data_count = data_count.reshape(-1, 1)
+        # data_activations = torch.div(data_activations, data_count)
+
+
+        # device_usage_feature = tensordict["aux", "device_usage"]
+
+        # if self.add_progress:
+        #     time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+        #     progress_feature = tensordict["aux", "progress"]
+        #     device_usage_feature = torch.cat(
+        #         [device_usage_feature, time_feature, progress_feature], dim=-1
+        #     )
+
+
+        #global_activations = self.global_mlp(device_usage_feature)
+        #global_activations = global_activations.reshape(-1, self.hidden_channels[0])
+
+        
+        output = task_activations
+
+        print(task_activations)
+
+        if self._is_batch(tensordict):
+            batch_size = tensordict.batch_size 
+            output = output.reshape(*batch_size, self.output_dim)
+
+
+        #print("Output shape:", output.shape)
+        return output
 
 
 class VectorStateNet(nn.Module):

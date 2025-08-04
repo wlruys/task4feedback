@@ -26,6 +26,7 @@ from torch_geometric.data import HeteroData
 from torchrl.data import Categorical
 from task4feedback.logging import training
 from time import perf_counter
+import sys 
 
 
 class RuntimeEnv(EnvBase):
@@ -184,9 +185,11 @@ class RuntimeEnv(EnvBase):
         return Unbounded(shape=[1], device=self.device, dtype=torch.float32)
 
     def _create_action_spec(self, n_devices: int = 5) -> TensorSpec:
+        n_candidates = self.simulator_factory[self.active_idx].graph_spec.max_candidates
+        #print(f"Creating action spec with {n_devices} devices and {n_candidates} candidates", flush=True)
         out = Categorical(
             n=n_devices,
-            shape=[self.simulator_factory[self.active_idx].graph_spec.max_candidates],
+            shape=[n_candidates],
             device=self.device,
             dtype=torch.int64,
         )
@@ -271,7 +274,7 @@ class RuntimeEnv(EnvBase):
             self.EFT_baseline = self._get_baseline(use_eft=True)
 
         self.step_count += 1
-
+        #print(f"Action", td[self.action_n], flush=True)
         self.map_tasks(td[self.action_n])
 
         reward = 0

@@ -8,7 +8,7 @@ collect_device: cpu
 update_device: cpu
 storing_device: cpu
 threads_per_worker: 1
-ent_coef: 1
+ent_coef: 0
 lmbda: 0.98
 gamma: 0.999
 clip_eps: 0.2

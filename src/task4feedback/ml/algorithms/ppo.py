@@ -223,6 +223,8 @@ def run_ppo(
             average_gae=False,
             device=ppo_config.update_device,
             vectorized=(False if ppo_config.compile_advantage else True),
+            deactivate_vmap=True,
+
         )
     elif ppo_config.advantage_type == "vtrace":
         training.info("Using VTrace for advantage estimation")
@@ -231,6 +233,7 @@ def run_ppo(
             value_network=actor_critic_module.critic,
             actor_network=actor_critic_module.actor,
             device=ppo_config.update_device,
+            deactivate_vmap=True,
         )
 
     replay_buffer = TensorDictReplayBuffer(
@@ -395,6 +398,7 @@ def run_ppo(
         tensordict_data = tensordict_data.to(
             ppo_config.update_device, non_blocking=True
         )
+        #tensordict_data = tensordict_data.reshape(-1)
 
         adv_start_t = time.perf_counter()
         with torch.no_grad():

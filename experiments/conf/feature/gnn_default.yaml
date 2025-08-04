@@ -1,0 +1,13 @@
+# conf/feature/candidate_coordinate.yaml
+observer:
+  _target_: task4feedback.interface.wrappers.DefaultObserverFactory
+  spec:
+    _target_: task4feedback.interface.create_graph_spec
+    max_tasks: 2
+    max_data: 2
+    max_devices: 6
+    max_edges_tasks_tasks: 2
+    max_edges_tasks_data: 2
+    max_edges_data_devices: 2
+    max_edges_tasks_devices: 2
+    max_candidates: 1

@@ -88,6 +88,24 @@ class Geometry:
             return centroid
         else:
             raise ValueError("get_centroid:: Invalid use")
+        
+
+    def get_edge_center(self, edge, round_out=None):
+        """
+        Get the center point of the edge.
+        """
+        v1, v2 = self.edges[edge]
+        x1, y1 = self.cell_points[int(v1)]
+        x2, y2 = self.cell_points[int(v2)]
+
+        center_x = (x1 + x2) / 2.0
+        center_y = (y1 + y2) / 2.0
+
+        if round_out is not None:
+            center_x = np.round(center_x, round_out)
+            center_y = np.round(center_y, round_out)
+
+        return np.array([center_x, center_y], dtype=np.float64)
 
     def get_max_coordinate(self, direction=0):
         """

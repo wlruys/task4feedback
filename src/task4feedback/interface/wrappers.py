@@ -35,7 +35,7 @@ from task4feedback.fastsim2 import ExecutionState, start_logger, EventType
 import torch
 from tensordict.tensordict import TensorDict
 from torch_geometric.data import HeteroData, Batch
-
+from tensordict import NonTensorData
 
 def _make_node_tensor(nodes, dim, single=False, offset:int =0):
     if single:
@@ -43,12 +43,12 @@ def _make_node_tensor(nodes, dim, single=False, offset:int =0):
         attr_shape = dim
     else:
         glb_shape = (nodes,)
-        attr_shape = (nodes, dim)
+        attr_shape = (nodes+offset, dim)
 
     return TensorDict(
         {
             "glb": torch.zeros(glb_shape, dtype=torch.int64),
-            "attr": torch.zeros(attr_shape+offset, dtype=torch.float32),
+            "attr": torch.zeros(attr_shape, dtype=torch.float32),
             "count": torch.zeros((1), dtype=torch.int64),
             # "count": torch.tensor([0], dtype=torch.int64),
         }
@@ -675,6 +675,7 @@ class ExternalObserverFactory:
     task_data_feature_factory: EdgeFeatureExtractorFactory
     task_device_feature_factory: Optional[EdgeFeatureExtractorFactory]
     data_device_feature_factory: Optional[EdgeFeatureExtractorFactory]
+    offset: int = 0
 
     def create(self, simulator: Simulator):
         state = simulator.get_state()
@@ -707,6 +708,7 @@ class ExternalObserverFactory:
             task_data_feature_extractor,
             task_device_feature_extractor,
             data_device_feature_extractor,
+            offset=self.offset,
         )
 
 
@@ -773,33 +775,29 @@ class DefaultObserverFactory(ExternalObserverFactory):
     def __init__(self, spec: fastsim.GraphSpec):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-        # task_feature_factory.add(fastsim.TaskStateFeature)
-        task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
-        task_feature_factory.add(fastsim.EmptyTaskFeature, 1)
+        #task_feature_factory.add(fastsim.TaskStateFeature)
+        task_feature_factory.add(fastsim.CandidateVectorFeature)
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.DataSizeFeature)
-        data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+        data_feature_factory.add(fastsim.DataXYPosFeature)
 
         device_feature_factory = FeatureExtractorFactory()
-        device_feature_factory.add(fastsim.DeviceArchitectureFeature)
         device_feature_factory.add(fastsim.DeviceIDFeature)
-        # device_feature_factory.add(fastsim.DeviceMemoryFeature)
-        # device_feature_factory.add(fastsim.DeviceTimeFeature)
 
         task_task_feature_factory = EdgeFeatureExtractorFactory()
-        task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
+        task_task_feature_factory.add(fastsim.TaskTaskDefaultEdgeFeature)
 
         task_data_feature_factory = EdgeFeatureExtractorFactory()
-        task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
-        # task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
+        task_data_feature_factory.add(fastsim.TaskDataDefaultEdgeFeature)
 
         task_device_feature_factory = EdgeFeatureExtractorFactory()
         task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
 
-        data_device_feature_factory = None
+        data_device_feature_factory = EdgeFeatureExtractorFactory()
+        data_device_feature_factory.add(fastsim.DataDeviceDefaultEdgeFeature)
+
+        offset = 1
 
         super().__init__(
             spec,
@@ -811,6 +809,7 @@ class DefaultObserverFactory(ExternalObserverFactory):
             task_data_feature_factory,
             task_device_feature_factory,
             data_device_feature_factory,
+            offset=offset,
         )
 
 
@@ -878,7 +877,7 @@ def observation_to_heterodata(
 ) -> HeteroData:
     hetero_data = HeteroData()
 
-    hetero_data["time"].x = observation["aux"]["time"].unsqueeze(0)
+    hetero_data["time"].x = observation["aux", "time"].unsqueeze(0)
 
     if actions is not None:
         hetero_data["actions"].x = actions
@@ -1020,6 +1019,12 @@ class ExternalObserver:
         if self.task_task_features is None:
             return 0
         return self.task_task_features.feature_dim
+    
+    @property
+    def data_device_edge_dim(self):
+        if self.data_device_features is None:
+            return 0
+        return self.data_device_features.feature_dim
 
     def get_task_features(self, task_ids, workspace):
         length = self.task_features.get_features_batch(task_ids, workspace)
@@ -1174,6 +1179,16 @@ class ExternalObserver:
         if self.truncate:
             workspace = workspace[:, :length]
         return workspace, length
+    
+    def get_data_device_edges(self, data_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_data_device_edges(
+            data_ids, workspace, global_workspace, self.offset
+        )
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+
+        return workspace, length
 
     def _local_to_global(self, global_ids, local_ids, workspace=None):
         if workspace is not None:
@@ -1201,7 +1216,7 @@ class ExternalObserver:
         else:
             return g1[l]
 
-    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
+    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None) -> TensorDict:
         if spec is None:
             spec = self.graph_spec
 
@@ -1242,6 +1257,7 @@ class ExternalObserver:
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
+                "baseline": torch.zeros((1), dtype=torch.float32),
                 "device_usage": torch.zeros(spec.max_devices, dtype=torch.float32)
             }
         )
@@ -1251,6 +1267,7 @@ class ExternalObserver:
                 "nodes": node_tensor,
                 "edges": edge_tensor,
                 "aux": aux_tensor,
+                "hetero_data": HeteroData(),
             }
         )
 
@@ -1289,7 +1306,7 @@ class ExternalObserver:
             raise ValueError(
                 f"Invalid neighborhood type operation for task observation: {neighborhood_type}"
             )
-        output._set_at(("nodes", "tasks", "count"), count, 0)
+        output.set_at_(("nodes", "tasks", "count"), count, 0)
         self.get_task_features(
             output["nodes", "tasks", "glb"][:count], output["nodes", "tasks", "attr"][self.offset:]
         )
@@ -1299,14 +1316,14 @@ class ExternalObserver:
         _, count = self.get_unique_data(
             output["nodes", "tasks", "glb"][:ntasks], output["nodes", "data", "glb"]
         )
-        output._set_at(("nodes", "data", "count"), count, 0)
+        output.set_at_(("nodes", "data", "count"), count, 0)
         self.get_data_features(
             output["nodes", "data", "glb"][:count], output["nodes", "data", "attr"][self.offset:]
         )
 
     def device_observation(self, output: TensorDict):
         count = output["nodes", "devices", "glb"].shape[0]
-        output._set_at(("nodes", "devices", "count"), count, 0)
+        output.set_at_(("nodes", "devices", "count"), count, 0)
         output["nodes", "devices", "glb"][:count] = torch.arange(
             count, dtype=torch.int64
         )
@@ -1370,6 +1387,25 @@ class ExternalObserver:
             output["edges", "tasks_devices", "attr"],
         )
 
+    def data_device_observation(self, output: TensorDict):
+        # print("Data-Device observation")
+        ndata = output["nodes"]["data"]["count"][0]
+        ndevices = output["nodes"]["devices"]["count"][0]
+        ntasks = output["nodes"]["tasks"]["count"][0]
+
+        _, count = self.get_data_device_edges(
+            output["nodes", "data", "glb"][:ndata],
+            output["edges", "data_devices", "idx"],
+            output["edges", "data_devices", "glb"],
+        )
+
+        output.set_at_(("edges", "data_devices", "count"), count, 0)
+
+        self.get_data_device_features(
+            output["edges", "data_devices", "glb"][:, :count],
+            output["edges", "data_devices", "attr"],
+        )
+
     def candidate_observation(self, output: TensorDict):
         count = self.simulator.simulator.get_mappable_candidates(
             output["aux", "candidates", "idx"]
@@ -1378,17 +1414,20 @@ class ExternalObserver:
 
     def get_device_usage(self, output: TensorDict):
         self.graph_extractor.get_mapped_device_time(output["aux", "device_usage"])
+        #print("Device usage", output["aux", "device_usage"])
 
 
     def get_observation(self, output: Optional[TensorDict] = None):
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
 
+        assert(output is not None)
+
         # Get mappable candidates
         self.candidate_observation(output)
 
         # Node observations (all nodes must be processed before edges)
-        self.task_observation(output)
+        self.task_observation(output, k=0)
         self.data_observation(output)
         self.device_observation(output)
 
@@ -1400,19 +1439,22 @@ class ExternalObserver:
         self.task_task_observation(output)
         self.task_data_observation(output)
         self.task_device_observation(output)
+        self.data_device_observation(output)
 
         # Auxiliary observations
-        output._set_at_(("aux", "progress"), -2.0, 0)
-        output._set_at_(("aux", "time"), self.simulator.time, 0)
-        output._set_at_(("aux", "improvement"), -100.0, 0)
+        output.set_at_(("aux", "progress"), -2.0, 0)
+        output.set_at_(("aux", "time"), self.simulator.time, 0)
+        output.set_at_(("aux", "improvement"), -100.0, 0)
         self.get_device_usage(output)
-        
+
+        output["hetero_data"] = NonTensorData(observation_to_heterodata(output))
+
         return output
 
     def reset(self):
         """
         Reset the observer state.
-        This method can be overridden by subclasses to implement specific reset logic.
+        Overridden by subclasses to implement specific reset logic.
         """
         pass
 

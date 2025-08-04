@@ -121,6 +121,7 @@ public:
     const auto &static_graph = s.get_tasks();
 
     local_visited.clear();
+    static bool has_warned = false;
 
     std::queue<taskid_t> q;
     q.push(task_id);
@@ -138,7 +139,6 @@ public:
         for (const auto &dep_id : static_graph.get_compute_task_dependents(current_task_id)) {
           if (local_visited.insert(dep_id).second) {
             if (visited.size() >= max_tasks) {
-              spdlog::warn("Task count exceeded max tasks: {}", visited.size());
               return;
             }
             q.push(dep_id);
@@ -1076,9 +1076,8 @@ public:
       const dataid_t data_id = static_cast<dataid_t>(data_ids_span[i]);
       const uint8_t valid_flags = data_manager.get_mapped_location_flags(data_id);
 
-      for (int64_t j = 0; j < devices.size(); j++) {
-
-        if ((valid_flags & (1 << j)) == 1) {
+      for (uint8_t j = 0; j < devices.size(); j++) {
+        if (valid_flags & (1 << j)) {
           v(0, i) = static_cast<int64_t>(i) + offset;
           v(1, i) = static_cast<int64_t>(j) + offset;
           gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
@@ -1131,9 +1130,9 @@ public:
       const dataid_t data_id = static_cast<dataid_t>(data_ids_span[lid]);
       const uint8_t valid_flags = data_manager.get_mapped_location_flags(data_id);
 
-      for (int64_t j = 0; j < devices.size(); j++) {
+      for (uint8_t j = 0; j < devices.size(); j++) {
 
-        if ((valid_flags & (1 << j)) == 1) {
+        if (valid_flags & (1 << j)) {
           v(0, i) = static_cast<int64_t>(lid);
           v(1, i) = static_cast<int64_t>(j) + offset;
           gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
@@ -1161,9 +1160,9 @@ public:
 
 
   void get_mapped_device_time(TorchFloatArr1D &output){
-    assert(output.shape(0) == 1);
     const auto& s = state.get();
     const auto &devices = s.get_devices();
+    assert(output.shape(0) == devices.size());
 
     auto v = output.view();
 
@@ -1766,6 +1765,22 @@ struct DataSizeFeature : public StateFeature<DataSizeFeature> {
   template <typename ID, typename Span> void extractFeatureImpl(ID data_id, Span output) const {
     const auto &data = state.get_data();
     output[0] = static_cast<f_t>(data.get_size(data_id));
+  }
+};
+
+struct DataXYPosFeature : public StateFeature<DataXYPosFeature> {
+  DataXYPosFeature(const SchedulerState &state)
+      : StateFeature<DataXYPosFeature>(state, NodeType::DATA_BLOCK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 2;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID data_id, Span output) const {
+    const auto &data = state.get_data();
+    output[0] = static_cast<f_t>(data.get_x_pos(data_id));
+    output[1] = static_cast<f_t>(data.get_y_pos(data_id));
   }
 };
 

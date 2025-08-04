@@ -138,11 +138,13 @@ def make_env(
                     transform.init_stats(
                         num_iter=env.size() * 10,
                         key=("observation", "nodes", "tasks", "attr"),
+                        #key=("observation", "aux", "device_usage"),
                     )
         new_norm = NormalizationDetails(task_norm=task_norm_transform.state_dict())
     else:
         task_norm_transform = ObservationNorm(
             in_keys=[("observation", "nodes", "tasks", "attr")],
+            #in_keys=[("observation", "aux", "device_usage")],
             eps=1e-4,
             standard_normal=True,
             loc=normalization.task_norm["loc"],

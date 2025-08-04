@@ -320,6 +320,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_feature<DataReservedLocations>(m, "DataReservedLocationsFeature");
   bind_state_feature<DataLaunchedLocations>(m, "DataLaunchedLocationsFeature");
   bind_state_feature<DataSizeFeature>(m, "DataSizeFeature");
+  bind_state_feature<DataXYPosFeature>(m, "DataXYPosFeature");
 
   // Device Features
   bind_int_feature<EmptyDeviceFeature>(m, "EmptyDeviceFeature");
