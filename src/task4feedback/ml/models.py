@@ -2499,6 +2499,7 @@ class GNNStateNet(nn.Module):
     def get_heterodata(self, obs: TensorDict) -> HeteroData | Batch:
         hdata = obs["hetero_data"]
         #print(type(obs), obs.shape)
+        obs = obs.reshape(-1)
         if isinstance(hdata, HeteroData):
             return hdata
         else:
