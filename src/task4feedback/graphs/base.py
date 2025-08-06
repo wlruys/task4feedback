@@ -388,7 +388,10 @@ class EnvironmentState:
 
 
 class DynamicWorkload:
-    def __init__(self, geom: Geometry):
+    def __init__(self):
+        pass 
+
+    def set_geometry(self, geom: Geometry):
         self.geom = geom
         n_cells = len(geom.cells)
         self.level_workload = defaultdict(lambda: np.zeros(n_cells))
@@ -729,7 +732,7 @@ def make_drifting_circle_trajectory(
 
     if center is None:
         start_idx = rng.randint(0, len(geom.cells))
-        center = geom.get_centroid(start_idx)
+        center = np.copy(geom.get_centroid(start_idx))
 
     angle = (
         rng.uniform(-2 * np.pi, 2 * np.pi) if initial_angle is None else initial_angle
@@ -787,6 +790,65 @@ def gaussian_pdf(x, mean, std):
     return norm_const * np.exp(-sq_dist / (2 * var))
 
 
+def gaussian_bump(x, mean, std, scale=1.0):
+    return scale * gaussian_pdf(x, mean, std)
+
+def linear_growth_decay(start, end, num_steps, step):
+    half = num_steps // 2
+    if step < half:
+        return start + (end - start) * (step / half)
+    else:
+        return end - (end - start) * ((step - half) / (num_steps - half))
+
+def reverse_linear_growth_decay(start, end, num_steps, step):
+    half = num_steps // 2
+    if step < half:
+        return end - (end - start) * (step / half)
+    else:
+        return start + (end - start) * ((step - half) / (num_steps - half))
+
+
+def gaussian_bump_at_t(x, mean, min_std=0.1, max_std=0.2, min_scale=0.1, max_scale=0.5, t=0, num_steps=10):
+    std = reverse_linear_growth_decay(min_std, max_std, num_steps, t)
+    scale = linear_growth_decay(min_scale, max_scale, num_steps, t)
+    return gaussian_bump(x, mean, std, scale)
+    
+@dataclass 
+class GaussianBump:
+    center: np.ndarray
+    min_std: float = 0.1
+    max_std: float = 0.2
+    min_scale: float = 0.1
+    max_scale: float = 0.5
+    t: int = 0
+    num_steps: int = 10
+
+    def workload(self, x, t):
+        return gaussian_bump_at_t(
+            x, 
+            self.center, 
+            self.min_std, 
+            self.max_std, 
+            self.min_scale, 
+            self.max_scale, 
+            t, 
+            self.num_steps
+        )
+    
+    def get_workload_and_advance(self, x):
+        w =  self.workload(x, self.t)
+        self.t += 1
+        return w 
+    
+    def is_alive(self):
+        return self.t < self.num_steps
+
+def create_bump_random_center(min_std = 0.1, max_std: float = 0.3, min_scale: float = 0.05, max_scale: float  = 0.5, min_life = 25, max_life = 50):
+    x = np.random.uniform(0, 1, size=2)
+    life = np.random.randint(min_life, max_life)
+
+    return GaussianBump(x, min_std, max_std, min_scale, max_scale, t=0, num_steps=life)
+
 class TrajectoryWorkload(DynamicWorkload):
 
     def generate_workload(
@@ -818,7 +880,7 @@ class TrajectoryWorkload(DynamicWorkload):
 
         centroids = np.zeros((self.num_cells, 2))
         for i, cell in enumerate(self.geom.cells):
-            centroids[i] = self.geom.get_centroid(i)
+            centroids[i] = np.copy(self.geom.get_centroid(i))
 
         #Normalize starting step workload
         total_workload = np.sum(self.level_workload[start_step])
@@ -842,7 +904,53 @@ class TrajectoryWorkload(DynamicWorkload):
             assert( total_workload > 0), f"Total workload at level {j} is zero, cannot normalize."
             self.level_workload[j] /= total_workload
 
+
+class BumpWorkload(DynamicWorkload):
+
+    def generate_workload(
+            self, 
+            num_levels: int, 
+            start_step: int = 0,
+            lower_bound: float = 0.05,
+            upper_bound: float = 3,
+            **kwargs
+    ):
+        self.random = False
+
+        centroids = np.zeros((self.num_cells, 2))
+        for i, cell in enumerate(self.geom.cells):
+            centroids[i] = self.geom.get_centroid(i)
+
+        total_workload = np.sum(self.level_workload[start_step])
+        assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
+
+        bumps = [] 
+        bumps.append(create_bump_random_center())
+
+        for j in range(start_step + 1, num_levels):
+            self.level_workload[j] = np.copy(self.level_workload[0])
+
+            for bump in bumps:
+                workload = bump.get_workload_and_advance(centroids)
+                self.level_workload[j] += workload
             
+            bumps = [b for b in bumps if b.is_alive()]
+                
+            #Create a new bump with probability 0.1
+            if np.random.rand() < 0.1:
+                bumps.append(create_bump_random_center())
+
+            self.level_workload[j] = np.clip(
+                a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound
+            )
+
+            # Keep total workload constant
+            total_workload = np.sum(self.level_workload[j])
+            assert( total_workload > 0), f"Total workload at level {j} is zero, cannot normalize."
+            self.level_workload[j] /= total_workload
+
+
+        
 
             
 
@@ -880,7 +988,6 @@ class GraphRegistry:
             return graph_builder(geometry, config, system=system)
         else:
             raise ValueError(f"Graph type '{config}' is not registered.")
-
 
 def register_graph(cls, cfg):
     GraphRegistry.register(cls, cfg)

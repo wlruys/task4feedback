@@ -57,11 +57,10 @@ def make_graph_function(
     graph_function = make_graph
     return graph_function
 
-    return graph_function
-
 
 def make_graph_builder(cfg: DictConfig) -> GraphBuilder:
     graph_info = cfg.graph
+    print(f"Graph info: {OmegaConf.to_yaml(graph_info.config)}")
     graph_config = instantiate(graph_info.config)
     graph_function = make_graph_function(graph_config, graph_info)
     return GraphBuilder(config=graph_config, function=graph_function)

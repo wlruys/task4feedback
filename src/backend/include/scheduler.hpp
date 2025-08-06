@@ -32,7 +32,7 @@
 #define INITIAL_DEVICE_BUFFER_SIZE 10
 #define INITIAL_EVENT_BUFFER_SIZE 5000
 
-using TaskQueue3 = ContainerQueue<taskid_t, TopKQueueHelper<1>::queue_type>;
+using TaskQueue3 = ContainerQueue<taskid_t, TopKQueueHelper<36>::queue_type>;
 using TaskQueue = ContainerQueue<taskid_t, std::priority_queue>;
 using DeviceQueue = ActiveQueueIterator<TaskQueue>;
 

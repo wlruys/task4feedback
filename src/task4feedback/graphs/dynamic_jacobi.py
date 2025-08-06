@@ -6,12 +6,17 @@ from collections import defaultdict
 from .jacobi import *
 from .base import register_graph
 from ..interface.types import _bytes_to_readable
+from dataclasses import dataclass, field
+
 
 @dataclass
 class DynamicJacobiConfig(JacobiConfig):
-    workload_args: dict = field(default_factory=dict)
-    workload_class: Type = TrajectoryWorkload
-    start_workload: int = 1000
+    workload: DynamicWorkload = TrajectoryWorkload()
+    workload_args: dict = field(
+        default_factory=lambda: {},
+        metadata={"description": "Arguments for the workload generation."},
+    )
+    steps: int = 10
     level_chunks: int = 1
 
 
@@ -81,7 +86,6 @@ class DynamicJacobiData(JacobiData):
         print("Communication time for reference boundary size: ", boundary_size / system.fastest_bandwidth, _bytes_to_readable(boundary_size))
         print("Compute time for reference interior: ", interior_elem ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6) )
         print("Memory time for reference interior: ", (interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6))
-
 
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
@@ -198,13 +202,13 @@ class DynamicJacobiData(JacobiData):
                         self.map.get_block(DataKey(Edge(edge), (Cell(cell), i))),
                         boundary_size,
                     )
-
                     assert (
                         boundary_size > 0 or i == self.config.steps
                     ), "Boundary data size must be positive"
                     if boundary_size > 0:
                         boundary_data.append(boundary_size)
                         step_data_sum[i] += boundary_size
+
         self.data_stat = {
             "interior_average": sum(interior_data) / len(interior_data),
             "interior_minimum": min(interior_data),
@@ -224,11 +228,9 @@ class DynamicJacobiGraph(JacobiGraph):
         system: Optional[System] = None,
         variant: Optional[VariantBuilder] = None,
     ):
-        workload_class = config.workload_class
-        self.workload = workload_class(geometry)
+        self.workload = config.workload 
+        self.workload.set_geometry(geometry)
         self.workload.generate_initial_mass(distribution=lambda x: 1.0)
-
-        print(config.workload_args)
         self.workload.generate_workload(config.steps, **config.workload_args)
         super(JacobiGraph, self).__init__() #Call base ComputeDataGraph constructor (not JacobiGraph constructor)
         self.config = config

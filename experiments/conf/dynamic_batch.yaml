@@ -27,10 +27,8 @@ reward:
 
 graph:
   config:
-      n: 8
+      n: 6
       steps: 60
-      comm_compute_ratio: 20
-      interior_boundary_ratio: 1000
       workload_args:
         lower_bound: 1000
         upper_bound: 5000

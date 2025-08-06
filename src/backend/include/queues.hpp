@@ -209,6 +209,7 @@ public:
 static_assert(QueueConcept<ContainerQueue<int, std::priority_queue>>,
               "Queue must satisfy QueueConcept");
 
+
 template <typename T, int k = 3, typename Container = std::vector<T>,
           typename Compare = std::less<T>>
 class TopKQueue {
@@ -269,6 +270,72 @@ public:
 };
 
 static_assert(QueueConcept<TopKQueue<int, 3>>, "Queue must satisfy QueueConcept");
+
+
+// template <typename T, typename Container = std::vector<T>,
+//           typename Compare = std::less<T>>
+// class DynamicTopKQueue {
+// private:
+//   // ResizeableArray<T, k> top_k;
+//   std::vector<T> top_k;
+//   std::priority_queue<T, Container, Compare> remaining_min_heap;
+//   Compare cmp;
+//   std::function<bool(const T &, const T &)> r_cmp;
+
+//   void insert_top_k(const T &val);
+//   void push_front(const T &val) {
+//     top_k.insert(top_k.begin(), val);
+//   }
+//   void pop_front() {
+//     top_k.erase(top_k.begin());
+//   }
+
+// public:
+//   using value_type = T;
+//   using value_compare = Compare;
+//   int K = 1;
+
+//   TopKQueue() : r_cmp([this](const T &a, const T &b) { return !cmp(a, b); }) {
+//   }
+
+//   [[nodiscard]] value_compare value_comp() const {
+//     return Compare{};
+//   }
+//   void push(const T &val);
+//   void pop();
+//   [[nodiscard]] const T &top() const;
+//   T &top() {
+//     return const_cast<T &>(std::as_const(*this).top());
+//   }
+//   T &at(std::size_t i);
+//   void remove_at(std::size_t i);
+//   [[nodiscard]] bool empty() const {
+//     return top_k.empty();
+//   }
+//   [[nodiscard]] std::size_t size() const {
+//     return top_k.size() + remaining_min_heap.size();
+//   }
+//   auto &get_top_k() {
+//     return top_k;
+//   }
+//   std::size_t topk_size() {
+//     return top_k.size();
+//   }
+
+//   int get_k() {
+//     return K;
+//   }
+
+//   static consteval bool is_top_k() {
+//     return true;
+//   }
+
+//   void set_k(int k){
+//     K = k;
+//   }
+//   void remove(std::vector<std::size_t> &indices);
+// };
+
 
 template <int k> struct TopKQueueHelper {
   template <typename T, typename Container = std::vector<T>, typename Compare = std::less<T>>

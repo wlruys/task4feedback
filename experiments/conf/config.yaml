@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - graph: static_jacobi
+  - graph: dynamic_jacobi_bump
   - reward: dieft
   - system: uniform
   - feature: candidate_coordinate
@@ -18,5 +18,5 @@ hydra:
   callbacks:
     git_info:
       _target_: train.GitInfo
-seed: 532
+seed: 101
 deterministic_torch: true
