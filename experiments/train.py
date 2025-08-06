@@ -52,7 +52,7 @@ class GitInfo(Callback):
 
 
 def configure_training(cfg: DictConfig):
-    # start_logger()
+    start_logger()
     graph_builder = make_graph_builder(cfg)
     env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
 

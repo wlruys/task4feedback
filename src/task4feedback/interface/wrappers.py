@@ -400,9 +400,16 @@ class System:
     def __init__(self):
         self.devices = Devices()
         self.topology = None
+        self.slowest_bandwidth = float("inf")
+        self.fastest_bandwidth = 0
+        self.arch_to_flops = {
+            DeviceType.CPU: 0,  # 0 GFLOPS for CPU (assume it cannot do work, this affects variant generation)
+            DeviceType.GPU: 10e9,  # 10 GFLOPS for GPU
+        }
 
-    def create_device(self, name, arch, copy, memory):
+    def create_device(self, name, arch, copy, memory, flops: Optional[int] = None):
         id = self.devices.append_device(name, arch, copy, memory)
+        self.arch_to_flops[arch] = flops if flops is not None else self.arch_to_flops.get(arch, 1e9)
         return DeviceTuple(name, id, self.devices.get_local_id(id), arch, memory)
 
     def finalize_devices(self):
@@ -433,6 +440,13 @@ class System:
 
     def get_type(self, global_id: int):
         return self.devices.get_type(global_id)
+    
+    def get_flops(self, architecture: DeviceType):
+        return int(self.arch_to_flops.get(architecture, 1e9))  # Default to 1 GFLOPS if not set
+    
+    def get_flop_ms(self, architecture: DeviceType):
+        flops = self.get_flops(architecture)
+        return flops / 1e6
 
     def get_device(self, global_id: int):
         local_id = self.get_local_id(global_id)
@@ -441,7 +455,8 @@ class System:
         dev = self.devices.get_device(global_id)
         vcu = dev.get_vcu()
         memory = dev.get_mem()
-        return DeviceTuple(name, global_id, local_id, arch, memory, vcu)
+        flops = self.arch_to_flops.get(arch, 1e9)
+        return DeviceTuple(name, global_id, local_id, arch, memory, vcu, int(flops))
 
     def add_connection(self, s_gid, d_gid, bandwidth, latency, max_connections=2):
         if self.topology is None:
@@ -449,8 +464,11 @@ class System:
             raise Warning(
                 "Devices must be finalized before adding connections. Calling finalize_devices() first."
             )
-
-        self.topology.set_bandwidth(s_gid, d_gid, bandwidth)
+        
+        bandwidth = bandwidth / 1e6  # Convert to per microsecond
+        self.slowest_bandwidth = min(self.slowest_bandwidth, bandwidth)
+        self.fastest_bandwidth = max(self.fastest_bandwidth, bandwidth)
+        self.topology.set_bandwidth(s_gid, d_gid, int(bandwidth))
         self.topology.set_latency(s_gid, d_gid, latency)
         self.topology.set_max_connections(s_gid, d_gid, max_connections)
 
@@ -2280,7 +2298,7 @@ def uniform_connected_devices(
     s = System()
     n_gpus = n_devices - 1
 
-    s.create_device("CPU:0", DeviceType.CPU, 2, 1000000000)
+    s.create_device("CPU:0", DeviceType.CPU, 2, 10000000000000)
     for i in range(n_gpus):
         s.create_device(f"GPU:{i}", DeviceType.GPU, 4, mem)
 

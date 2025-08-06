@@ -11,6 +11,7 @@ from task4feedback.fastsim2 import DeviceType
 import pymetis
 import inspect
 from typing import Type
+from task4feedback.interface import System, VariantBuilder
 
 
 def spring_layout(G):
@@ -849,12 +850,12 @@ class GraphConfig:
 
 
 class GraphRegistry:
-    _registry: dict[Type, Callable[[Geometry, GraphConfig], TaskGraph]] = {}
+    _registry: dict[Type, Callable[[Geometry, GraphConfig, System], TaskGraph]] = {}
 
     @classmethod
     def register(
         cls,
-        func: Callable[[Geometry, GraphConfig], TaskGraph],
+        func: Callable[[Geometry, GraphConfig, System], TaskGraph],
         config: Type[GraphConfig],
     ):
         cls._registry[config] = func
@@ -863,17 +864,17 @@ class GraphRegistry:
     @classmethod
     def get(
         cls, config: Type[GraphConfig]
-    ) -> Optional[Callable[[Geometry, GraphConfig], TaskGraph]]:
+    ) -> Optional[Callable[[Geometry, GraphConfig, System], TaskGraph]]:
         return cls._registry.get(config)
 
     @classmethod
-    def build(cls, geometry: Geometry, config: GraphConfig) -> Optional[TaskGraph]:
+    def build(cls, geometry: Geometry, config: GraphConfig, variant: Optional[type[VariantBuilder]] = None, system: Optional[System] = None) -> Optional[TaskGraph]:
         """
         Build a graph of the specified type using the provided geometry and configuration.
         """
         graph_builder = cls.get(type(config))
         if graph_builder is not None:
-            return graph_builder(geometry, config)
+            return graph_builder(geometry, config, system=system)
         else:
             raise ValueError(f"Graph type '{config}' is not registered.")
 
@@ -882,5 +883,8 @@ def register_graph(cls, cfg):
     GraphRegistry.register(cls, cfg)
 
 
-def build_graph(geometry: Geometry, config: GraphConfig):
-    return GraphRegistry.build(geometry, config)
+def build_graph(geometry: Geometry, config: GraphConfig, system: Optional[System] = None):
+    print("Building graph with geometry:", geometry)
+    print("Configuration:", config)
+    print("System:", system)
+    return GraphRegistry.build(geometry, config, system=system)

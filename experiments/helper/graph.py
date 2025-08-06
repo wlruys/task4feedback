@@ -16,24 +16,11 @@ class GraphBuilder:
     config: GraphConfig
     function: Callable[[GraphConfig, DictConfig], Graph]
 
-
-def graph_to_variant(graph_class):
-    """
-    Returns the variant class for a given graph class.
-    """
-    if graph_class == "JacobiGraph":
-        return JacobiVariant
-    elif graph_class == "DynamicJacobiGraph":
-        return DynamicJacobiVariant
-    else:
-        raise NotImplementedError(f"Graph class {graph_class} is not implemented.")
-
-
 def make_graph_function(
     graph_cfg: GraphConfig, cfg: DictConfig
 ) -> Callable[[GraphConfig, DictConfig], Graph]:
-    def make_graph():
-        mesh = instantiate(cfg.mesh, L=graph_cfg.L, n=graph_cfg.n)
+    def make_graph(system: System):
+        mesh = instantiate(cfg.mesh, L=1, n=graph_cfg.n)
 
         if cfg.init.partitioner == "metis":
             partitioner = metis_geometry_partition
@@ -43,7 +30,7 @@ def make_graph_function(
             )
 
         geom = build_geometry(mesh)
-        graph = build_graph(geom, graph_cfg)
+        graph = build_graph(geom, graph_cfg, system=system)
         partition = partitioner(geom, nparts=cfg.init.nparts)
 
         if cfg.init.gpu_only:

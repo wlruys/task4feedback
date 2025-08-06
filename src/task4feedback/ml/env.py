@@ -10,6 +10,7 @@ from task4feedback.interface.wrappers import (
     SimulatorFactory,
     create_graph_spec,
     observation_to_heterodata,
+    System,
 )
 from task4feedback.fastsim2 import GraphExtractor, SchedulerState
 from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded

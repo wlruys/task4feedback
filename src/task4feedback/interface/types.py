@@ -11,6 +11,7 @@ class DeviceTuple:
     arch: DeviceType = DeviceType.CPU
     memory: int = 0
     vcu: int = 0
+    flops: int = 0
 
 
 @dataclass
@@ -39,7 +40,7 @@ class DataBlockTuple:
 class VariantTuple:
     arch: DeviceType
     memory_usage: int
-    vcu_usage: int
+    vcu_usage: float
     expected_time: int
 
 
