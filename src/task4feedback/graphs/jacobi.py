@@ -21,8 +21,8 @@ from typing import Self, List, Optional
 from task4feedback import fastsim2 as fastsim
 from ..interface.wrappers import *
 from scipy.optimize import linear_sum_assignment
-import sympy 
-from ..interface .types import _bytes_to_readable
+import sympy
+from ..interface.types import _bytes_to_readable
 
 from collections import deque
 

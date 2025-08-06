@@ -122,7 +122,12 @@ class DynamicJacobiData(JacobiData):
                 for i in range(self.config.steps + 1):
                     workload = self.workload.get_scaled_cell_workload(i, cell)
                     cell_interior_elem = int(interior_elem * workload)
-                    cell_boundary_elem = int(cell_interior_elem**(self.config.boundary_complexity) * self.config.boundary_width * workload)
+
+                    if self.config.boundary_time is None:
+                        cell_boundary_elem = int(cell_interior_elem**(self.config.boundary_complexity) * self.config.boundary_width * workload)
+                    else:
+                        cell_boundary_elem = int(boundary_elem * workload)
+
                     interior_size = cell_interior_elem * self.config.bytes_per_element
                     boundary_size = cell_boundary_elem * self.config.bytes_per_element
 
@@ -172,6 +177,7 @@ class DynamicJacobiData(JacobiData):
                 interior_size = cell_interior_elem * self.config.bytes_per_element
                 interior_size = int(interior_size)
 
+
                 self.blocks.set_size(
                     self.map.get_block(DataKey(Cell(cell), i)), interior_size
                 )
@@ -187,11 +193,16 @@ class DynamicJacobiData(JacobiData):
                 for i in range(self.config.steps + 1):
                     workload = self.workload.get_scaled_cell_workload(i, cell)
                     cell_interior_elem = int(self.interior_elem * workload)
-                    cell_boundary_elem = int(
-                        cell_interior_elem**(self.config.boundary_complexity)
-                        * self.config.boundary_width
-                        * workload
-                    )
+
+                    if self.config.boundary_time is None:
+                        cell_boundary_elem = int(
+                            cell_interior_elem**(self.config.boundary_complexity)
+                            * self.config.boundary_width
+                            * workload
+                        )
+                    else:
+                        cell_boundary_elem = int(self.boundary_elem * workload)
+
                     boundary_size = cell_boundary_elem * self.config.bytes_per_element
                     boundary_size = int(boundary_size)
 

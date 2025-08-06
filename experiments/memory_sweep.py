@@ -86,7 +86,7 @@ def make_env(
     gmsh.initialize()
 
     s = create_system(cfg)
-    graph = graph_builder.function()
+    graph = graph_builder.function(s)
 
     d = graph.get_blocks()
     m = graph
