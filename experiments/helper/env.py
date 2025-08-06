@@ -117,8 +117,8 @@ def make_env(
     if lstm is not None:
         print("Adding LSTM module to environment", flush=True)
         env.append_transform(lstm.make_tensordict_primer())
-
-    if normalization is None:
+    new_norm = None
+    if normalization is None and normalization is not False:
         task_norm_transform = ObservationNorm(
             in_keys=[("observation", "nodes", "tasks", "attr")],
             eps=1e-4,
@@ -133,7 +133,7 @@ def make_env(
                         key=("observation", "nodes", "tasks", "attr"),
                     )
         new_norm = NormalizationDetails(task_norm=task_norm_transform.state_dict())
-    else:
+    elif isinstance(normalization, NormalizationDetails):
         task_norm_transform = ObservationNorm(
             in_keys=[("observation", "nodes", "tasks", "attr")],
             eps=1e-4,

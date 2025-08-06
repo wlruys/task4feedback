@@ -22,7 +22,7 @@ from task4feedback import fastsim2 as fastsim
 from ..interface.wrappers import *
 from scipy.optimize import linear_sum_assignment
 import sympy 
-from ..interface .types import _bytes_to_readable
+from ..interface.types import _bytes_to_readable
 
 from collections import deque
 
@@ -223,7 +223,6 @@ class JacobiData(DataGeometry):
 
 
 class JacobiGraph(ComputeDataGraph):
-
     def xy_from_id(self, taskid: int) -> int:
         """
         Convert a task ID to its (x, y) coordinates in the Jacobi grid.
@@ -488,13 +487,13 @@ class JacobiGraph(ComputeDataGraph):
         level_chunks: int = 1,
         n_parts: int = 4,
         offset: int = 1,  # 1 to ignore cpu
-        mode: str = "oracle",
+        mode: str = "metis",
     ):
         # Oracle mode takes in level chunks and returns partitions based on the full knowledge of the workload
         partitions = {}
         levels = list(self.level_to_task.keys())
         levels = sorted(levels)
-        if mode == "oracle":
+        if mode == "metis":
             level_size = len(levels) // level_chunks
             for i in range(level_chunks):
                 start = i * level_size
@@ -826,6 +825,33 @@ class LevelPartitionMapper:
             )
         return mapping_result
 
+class JacobiRoundRobinMapper:
+    def __init__(
+        self,
+        n_devices: int,
+        offset: int = 0,
+    ):
+        self.n_devices = n_devices
+        self.offset = offset
+
+    def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        graph: JacobiGraph = simulator.input.graph
+        assert isinstance(graph, JacobiGraph)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item() + self.offset
+            device = global_task_id % self.n_devices
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(i, device, mapping_priority, mapping_priority)
+            )
+        return mapping_result
 
 class JacobiVariantGPUOnly(VariantBuilder):
     @staticmethod
