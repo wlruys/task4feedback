@@ -25,29 +25,6 @@ import sympy
 
 from collections import deque
 
-# @dataclass
-# class JacobiConfig(GraphConfig):
-#     """
-#     Configuration settings for Jacobi mesh generation.
-
-#     Attributes:
-#         L (int): Length of the domain side.
-#         n (int): Number of elements per side.
-#         steps (int): Number of simulation steps.
-#         n_part (int): Number of partitions.
-#         randomness (float): Percentage (0 ~ 1) of cells to randomize.
-#         permute_idx (int): Permutation index for reproducibility.
-#     """
-#     L: int = 4
-#     n: int = 4
-#     steps: int = 1
-#     n_part: int = 4
-#     randomness: float = 0
-#     permute_idx: int = 0
-#     interior_size: int = 1000000
-#     interior_boundary_ratio: float = 1.0
-#     comm_compute_ratio: int = 1
-
 
 @dataclass 
 class JacobiConfig(GraphConfig):
@@ -67,11 +44,6 @@ class JacobiConfig(GraphConfig):
     task_internal_memory: int = 0 
     bytes_per_element: int = 4 # Assuming float32 data type
 
-
-
-    
-
-
 class JacobiData(DataGeometry):
     @staticmethod
     def from_mesh(geometry: Geometry, config: JacobiConfig, system: Optional[System] = None):
@@ -83,7 +55,8 @@ class JacobiData(DataGeometry):
         edges_per_level = self.geometry.get_num_edges()
 
         y =  sympy.symbols('y', real=True, positive=True)
-        #equation = interiors_per_level * y # + self.config.boundary_width * edges_per_level * (y)**self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
+        equation = interiors_per_level * y - self.config.level_memory / self.config.bytes_per_element 
+        #equation = interiors_per_level * y + self.config.boundary_width * edges_per_level * (y)**self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
         solution = sympy.solve(equation, y)
         y_value = solution[0].evalf()
         interior_elem = int(y_value)
@@ -361,7 +334,7 @@ class JacobiGraph(ComputeDataGraph):
                     print("Interior size:", self.data.interior_size)
                     print("Num elements:", num_elements)
                     print("Expected work for task", task.id, "is", expected_work)
-                    expected_time = expected_work / system.get_flops(arch)
+                    expected_time = expected_work / system.get_flop_ms(arch)
                     expected_time = int(min(expected_time, 1))
                 print("Expected time for task", task.id, "on architecture", arch, "is", expected_time)
                 return VariantTuple(arch, memory_usage=memory_usage, vcu_usage=vcu_usage, expected_time=expected_time)

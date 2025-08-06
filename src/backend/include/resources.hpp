@@ -12,7 +12,7 @@ enum class ResourceType : int8_t {
 };
 constexpr std::size_t num_resource_types = 3;
 
-constexpr mem_t BYTES_IN_POWER = 1024;
+constexpr mem_t BYTES_IN_POWER = 1000;
 
 constexpr vcu_t MAX_VCUS = 1000;
 constexpr mem_t MAX_MEM = std::numeric_limits<mem_t>::max();

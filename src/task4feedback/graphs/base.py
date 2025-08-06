@@ -22,27 +22,6 @@ def spring_layout(G):
         node["y"] = y
 
 
-# def draw(G, filename="graph.html"):
-#     # spring_layout(G)
-#     fig = gv.d3(
-#         G,
-#         layout_algorithm_active=True,
-#         graph_height=1000,
-#         use_edge_size_normalization=True,
-#         use_node_size_normalization=True,
-#         node_size_normalization_max=30,
-#     )
-#     if os.path.exists(filename):
-#         os.remove(filename)
-
-#     if filename.endswith(".html"):
-#         fig.export_html(filename)
-#     elif filename.endswith(".png"):
-#         fig.export_png(filename)
-#     elif filename.endswith(".jpg"):
-#         fig.export_jpg(filename)
-
-
 @dataclass(frozen=True, eq=True, order=True, slots=True)
 class DataKey:
     object: Cell | Edge
@@ -503,6 +482,8 @@ class DynamicWorkload:
     @property
     def levels(self) -> list:
         return sorted(self.level_workload.keys())
+    
+
 
     def animate_workload(
         self,
@@ -781,18 +762,29 @@ def make_drifting_circle_trajectory(
     return traj
 
 
+
 def gaussian_pdf(x, mean, std):
-    grid = np.asarray(x)
-
-    u = np.asarray(mean)
-    s = np.asarray(std)
-    d = grid.shape[1]
-
-    sq_dist = np.sum((grid - u) ** 2, axis=1)
-    norm_const = (2 * np.pi * s) ** (-0.5 * d)
-
-    pdf_vals = norm_const * np.exp(-sq_dist / (2 * s))
-    return pdf_vals
+    """
+    Isotropic d-variate Gaussian PDF.
+    
+    x     : array-like, shape (N, d) or (d,)
+    mean  : array-like, shape (d,)
+    std   : float or array-like (must be positive) — the standard deviation(s).
+    """
+    x    = np.atleast_2d(x)             # ensure shape (N, d)
+    mu   = np.asarray(mean)
+    sigma = np.asarray(std)
+    if np.any(sigma <= 0):
+        raise ValueError("`std` must be positive")
+    
+    d    = x.shape[1]
+    var  = sigma**2                     # variance
+    sq_dist = np.sum((x - mu)**2, axis=1)
+    
+    # normalization: (2πσ²)^(-d/2) = (2π)^{-d/2} · σ^{-d}
+    norm_const = (2 * np.pi * var) ** (-0.5 * d)
+    
+    return norm_const * np.exp(-sq_dist / (2 * var))
 
 
 class TrajectoryWorkload(DynamicWorkload):
@@ -802,9 +794,9 @@ class TrajectoryWorkload(DynamicWorkload):
         num_levels: int,
         traj_type: str = "circle",
         start_step: int = 0,
-        lower_bound: float = 0.5,
+        lower_bound: float = 0.05,
         upper_bound: float = 3,
-        scale: float = 0.01,
+        scale: float = 2,
         seed: int = 0,
         traj_specifics: Optional[dict] = None,
     ):
@@ -839,8 +831,7 @@ class TrajectoryWorkload(DynamicWorkload):
                 gaussian_pdf(centroids, trajectory[j], scale) * upper_bound
             )
 
-            #TODO(wlr): Addition here seems weird to me, revise the workload generation logic
-            self.level_workload[j] += gaussian_workload
+            self.level_workload[j] = gaussian_workload
 
             self.level_workload[j] = np.clip(
                 a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound
@@ -896,7 +887,4 @@ def register_graph(cls, cfg):
 
 
 def build_graph(geometry: Geometry, config: GraphConfig, system: Optional[System] = None):
-    print("Building graph with geometry:", geometry)
-    print("Configuration:", config)
-    print("System:", system)
     return GraphRegistry.build(geometry, config, system=system)

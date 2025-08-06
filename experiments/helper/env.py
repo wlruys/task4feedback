@@ -56,9 +56,6 @@ def create_observer_factory(cfg: DictConfig):
 
 def create_task_noise(cfg: DictConfig, static_graph):
     task_noise = hydra.utils.instantiate(cfg.noise)
-
-    print("Task noise configuration:", OmegaConf.to_yaml(cfg.noise))
-
     if task_noise is None:
         task_noise = TaskNoise(tasks=static_graph)
     else:

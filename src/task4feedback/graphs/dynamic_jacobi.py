@@ -5,7 +5,7 @@ from typing import Callable, Optional, Self
 from collections import defaultdict
 from .jacobi import *
 from .base import register_graph
-
+from ..interface.types import _bytes_to_readable
 
 @dataclass
 class DynamicJacobiConfig(JacobiConfig):
@@ -31,11 +31,15 @@ class DynamicJacobiData(JacobiData):
         system: Optional[System] = None,
     ):
         self.workload = workload
+        self.cell_to_interior_elems = {}
         super().__init__(geometry, config, system=system)
         self.config: DynamicJacobiConfig
 
     def idx_at_step(self, step: int) -> int:
         return step
+    
+    def get_workload(self):
+        return self.workload 
 
     def _create_blocks(self, system: System):
         interior_data = []
@@ -51,17 +55,42 @@ class DynamicJacobiData(JacobiData):
         solution = sympy.solve(equation, y)
         y_value = solution[0].evalf()
         interior_elem = int(y_value)
+        #print("ERROR: ", interior_elem * interiors_per_level * self.config.bytes_per_element - self.config.level_memory)
         boundary_elem = interior_elem**(self.config.boundary_complexity) * self.config.boundary_width
         interior_size = interior_elem * self.config.bytes_per_element
         boundary_size = boundary_elem * self.config.bytes_per_element
+
+        if self.config.interior_time is not None:
+            assert(system is not None)
+            interior_size = system.fastest_bandwidth * self.config.interior_time
+            interior_elem = int(interior_size / self.config.bytes_per_element)
+
+        if self.config.boundary_time is not None:
+            assert(system is not None)
+            boundary_size = system.fastest_bandwidth * self.config.boundary_time
+            boundary_elem = int(boundary_size / self.config.bytes_per_element)
+
+        interior_size = int(interior_size)
+        boundary_size = int(boundary_size)
+
+        print("Communication time for reference interior size: ", interior_size / system.fastest_bandwidth, _bytes_to_readable(interior_size))
+        print("Communication time for reference boundary size: ", boundary_size / system.fastest_bandwidth, _bytes_to_readable(boundary_size))
+
 
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
             # Create data blocks per cell for each level
             for i in range(self.config.steps + 1):
                 workload = self.workload.get_scaled_cell_workload(i, cell)
+
                 cell_interior_elem = int(interior_elem * workload)
-                cell_boundary_elem = int(cell_interior_elem**(self.config.boundary_complexity) * self.config.boundary_width * workload)
+
+                if self.config.boundary_time is None:
+                    cell_boundary_elem = int(cell_interior_elem**(self.config.boundary_complexity) * self.config.boundary_width * workload)
+                else:
+                    cell_boundary_elem = int(boundary_elem * workload)
+
+                self.cell_to_interior_elems[(cell, i)] = cell_interior_elem
                 interior_size = cell_interior_elem * self.config.bytes_per_element
                 boundary_size = cell_boundary_elem * self.config.bytes_per_element
 
@@ -179,9 +208,7 @@ class DynamicJacobiGraph(JacobiGraph):
     ):
         workload_class = config.workload_class
         self.workload = workload_class(geometry)
-        self.workload.generate_initial_mass(
-            distribution=lambda x: 1.0, average_workload=config.start_workload
-        )
+        self.workload.generate_initial_mass(distribution=lambda x: 1.0)
 
         print(config.workload_args)
         self.workload.generate_workload(config.steps, **config.workload_args)
@@ -223,10 +250,15 @@ class DynamicJacobiGraph(JacobiGraph):
                     expected_time = workload * self.config.task_time
                     expected_time = int(expected_time)
                 else:
-                    num_elements = 
+                    interior_elem = self.data.cell_to_interior_elems[(cell, level)]
+                    expected_work = interior_elem ** self.config.arithmetic_complexity * self.config.arithmetic_intensity
+                    print("Details for task", task.id, ":", expected_work, interior_elem, self.config.arithmetic_complexity, self.config.arithmetic_intensity)
+                    expected_time = int(expected_work / system.get_flop_ms(arch))
+                    print("Expected time for task", task.id, ":", expected_time, workload)
+
 
                 if arch == DeviceType.GPU:
-                    return VariantTuple(arch, memory_usage, vcu_usage, workload)
+                    return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
                 else:
                     return None
 
@@ -239,8 +271,9 @@ class DynamicJacobiGraph(JacobiGraph):
             )
             self.data.workload = self.workload
             self.data.reset_data_size()
-        else:
-            return
+        
+    def get_workload(self) -> DynamicWorkload:
+        return self.workload
 
 
 register_graph(DynamicJacobiGraph, DynamicJacobiConfig)

@@ -55,7 +55,7 @@ def configure_training(cfg: DictConfig):
     #start_logger()
     graph_builder = make_graph_builder(cfg)
     env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
-    
+
     def env_fn(eval: bool = False):
         return make_env(
             graph_builder=graph_builder,
@@ -67,7 +67,8 @@ def configure_training(cfg: DictConfig):
 
     graph = env.get_graph()
     if hasattr(graph, 'workload'):
-        print("Graph workload:", graph.workload)
+        workload = graph.get_workload()
+        workload.animate_workload(show=True)
 
 
 @hydra.main(config_path="conf", config_name="config.yaml", version_base=None)
