@@ -4,16 +4,14 @@ config:
   _target_: task4feedback.graphs.jacobi.JacobiConfig
   steps: 1 
   n: 4 
-  arithmetic_intensity: 1.0 
+  arithmetic_intensity: 10.0 
   arithmetic_complexity: 1.0
+  memory_intensity: 7.0
   boundary_width: 1.0
   boundary_complexity: 1.0
   level_memory: 4e9
   randomness: 0.0
   permute_idx: 0 
-  task_time: 1000
-  interior_time: 1000 
-  boundary_time: 1000
   vcu_usage: 1.0
   task_internal_memory: 0
 init:

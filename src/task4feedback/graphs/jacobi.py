@@ -22,6 +22,7 @@ from task4feedback import fastsim2 as fastsim
 from ..interface.wrappers import *
 from scipy.optimize import linear_sum_assignment
 import sympy 
+from ..interface .types import _bytes_to_readable
 
 from collections import deque
 
@@ -32,6 +33,7 @@ class JacobiConfig(GraphConfig):
     n: int = 4 #(sqrt(n_a * n_devices)
     arithmetic_intensity: float = 1.0 
     arithmetic_complexity: float = 1.0
+    memory_intensity: float = 1.0 
     boundary_width: float = 5.0
     boundary_complexity: float = 0.5 
     level_memory: int = 1000000
@@ -62,7 +64,8 @@ class JacobiData(DataGeometry):
         interior_elem = int(y_value)
 
         interior_size = interior_elem * self.config.bytes_per_element
-        boundary_size = interior_elem**(self.config.boundary_complexity) * self.config.boundary_width 
+        boundary_elem = interior_elem**(self.config.boundary_complexity) * self.config.boundary_width 
+        boundary_size = boundary_elem * self.config.bytes_per_element
 
         if self.config.interior_time is not None:
             assert(system is not None)
@@ -78,10 +81,13 @@ class JacobiData(DataGeometry):
         self.interior_size = interior_size
         self.boundary_size = boundary_size
 
-        print("ERROR", interior_size * interiors_per_level + boundary_size * edges_per_level - self.config.level_memory)
+        assert(system is not None)
+        print("Total (per-level) Interior Size", _bytes_to_readable(interior_size * interiors_per_level))
+        print("Communication time for reference interior size: ", interior_size / system.fastest_bandwidth, _bytes_to_readable(interior_size), interior_elem)
+        print("Communication time for reference boundary size: ", boundary_size / system.fastest_bandwidth, _bytes_to_readable(boundary_size))
+        print("Compute time for reference interior: ", interior_elem ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6) )
+        print("Memory time for reference interior: ", (interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6))
 
-        print("Interior size: ", interior_size)
-        print("Boundary size: ", boundary_size)
 
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
@@ -314,7 +320,7 @@ class JacobiGraph(ComputeDataGraph):
 
     def _apply_workload_variant(self, system: System):
 
-        print("Building custom variant for system", system)
+        #print("Building custom variant for system", system)
 
         class JacobiVariant(VariantBuilder):
             @staticmethod 
@@ -331,12 +337,12 @@ class JacobiGraph(ComputeDataGraph):
                 else:
                     num_elements = self.data.interior_size // self.config.bytes_per_element
                     expected_work = num_elements** self.config.arithmetic_complexity * self.config.arithmetic_intensity
-                    print("Interior size:", self.data.interior_size)
-                    print("Num elements:", num_elements)
-                    print("Expected work for task", task.id, "is", expected_work)
                     expected_time = expected_work / system.get_flop_ms(arch)
-                    expected_time = int(min(expected_time, 1))
-                print("Expected time for task", task.id, "on architecture", arch, "is", expected_time)
+
+                    expected_memory = self.data.interior_size * self.config.memory_intensity
+                    expected_time = max(expected_time, expected_memory / system.get_gmbw_ms(arch))
+                    expected_time = int(max(expected_time, 1))
+
                 return VariantTuple(arch, memory_usage=memory_usage, vcu_usage=vcu_usage, expected_time=expected_time)
 
         self.apply_variant(JacobiVariant)

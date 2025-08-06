@@ -76,8 +76,11 @@ class DynamicJacobiData(JacobiData):
         interior_size = int(interior_size)
         boundary_size = int(boundary_size)
 
-        print("Communication time for reference interior size: ", interior_size / system.fastest_bandwidth, _bytes_to_readable(interior_size))
+        print("Total (per-level) Interior Size", _bytes_to_readable(interior_size * interiors_per_level))
+        print("Communication time for reference interior size: ", interior_size / system.fastest_bandwidth, _bytes_to_readable(interior_size), interior_elem, "elements")
         print("Communication time for reference boundary size: ", boundary_size / system.fastest_bandwidth, _bytes_to_readable(boundary_size))
+        print("Compute time for reference interior: ", interior_elem ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6) )
+        print("Memory time for reference interior: ", (interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6))
 
 
         # Loop over cells
@@ -242,7 +245,7 @@ class DynamicJacobiGraph(JacobiGraph):
         task_to_level = self.task_to_level
         task_to_cell = self.task_to_cell
 
-        print("Building custom variant for system", system)
+       #print("Building custom variant for system", system)
 
 
         class DynamicJacobiVariant(JacobiVariant):
@@ -267,9 +270,11 @@ class DynamicJacobiGraph(JacobiGraph):
                 else:
                     interior_elem = self.data.cell_to_interior_elems[(cell, level)]
                     expected_work = interior_elem ** self.config.arithmetic_complexity * self.config.arithmetic_intensity
-                    print("Details for task", task.id, ":", expected_work, interior_elem, self.config.arithmetic_complexity, self.config.arithmetic_intensity)
                     expected_time = int(expected_work / system.get_flop_ms(arch))
-                    print("Expected time for task", task.id, ":", expected_time, workload)
+                    expected_memory = interior_elem * self.config.bytes_per_element * self.config.memory_intensity
+                    expected_time = max(expected_time, expected_memory / system.get_gmbw_ms(arch))
+                    expected_time = int(max(expected_time, 1))
+                    # print("Expected time for task ", task.id, "on arch", arch, ":", expected_time, "ms")
 
 
                 if arch == DeviceType.GPU:

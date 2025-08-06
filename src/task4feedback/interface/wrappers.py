@@ -398,18 +398,32 @@ class DataBlocks:
 
 class System:
     def __init__(self):
+        #Default specs are based on (the old) RTX5000s (Frontera). 
         self.devices = Devices()
         self.topology = None
         self.slowest_bandwidth = float("inf")
         self.fastest_bandwidth = 0
+        self.fastest_flops = 11e12 
+        self.slowest_flops = 11e12
         self.arch_to_flops = {
             DeviceType.CPU: 0,  # 0 GFLOPS for CPU (assume it cannot do work, this affects variant generation)
-            DeviceType.GPU: 10e9,  # 10 GFLOPS for GPU
+            DeviceType.GPU: 11e12,  # 11 TFLOPS
         }
+        self.arch_to_gmbw = {
+            DeviceType.CPU: 0,
+            DeviceType.GPU: 443e9,  # 443 GB/s
+        }
+        self.fastest_gmbw = 443e9 
+        self.slowest_gmbw = 443e9
 
-    def create_device(self, name, arch, copy, memory, flops: Optional[int] = None):
+
+    def create_device(self, name, arch, copy, memory, flops: Optional[int] = None, gmbw: Optional[int] = None):
         id = self.devices.append_device(name, arch, copy, memory)
-        self.arch_to_flops[arch] = flops if flops is not None else self.arch_to_flops.get(arch, 1e9)
+        if flops is not None:
+            self.fastest_flops = max(self.fastest_flops, flops)
+            self.slowest_flops = min(self.slowest_flops, flops)
+        self.arch_to_flops[arch] = flops if flops is not None else self.arch_to_flops.get(arch, 11e12) # Default to 11 TFLOPs if not set
+        self.arch_to_gmbw[arch] = gmbw if gmbw is not None else 443e9  # Default to 443 GB/s if not set
         return DeviceTuple(name, id, self.devices.get_local_id(id), arch, memory)
 
     def finalize_devices(self):
@@ -447,6 +461,13 @@ class System:
     def get_flop_ms(self, architecture: DeviceType):
         flops = self.get_flops(architecture)
         return flops / 1e6
+    
+    def get_gmbw(self, architecture: DeviceType):
+        return int(self.arch_to_gmbw.get(architecture, 1e9))
+    
+    def get_gmbw_ms(self, architecture: DeviceType):
+        gmbw = self.get_gmbw(architecture)
+        return gmbw / 1e6
 
     def get_device(self, global_id: int):
         local_id = self.get_local_id(global_id)
