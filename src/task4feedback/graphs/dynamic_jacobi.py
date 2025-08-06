@@ -60,6 +60,9 @@ class DynamicJacobiData(JacobiData):
         interior_size = interior_elem * self.config.bytes_per_element
         boundary_size = boundary_elem * self.config.bytes_per_element
 
+        self.interior_elem = interior_elem
+        self.boundary_elem = boundary_elem
+
         if self.config.interior_time is not None:
             assert(system is not None)
             interior_size = system.fastest_bandwidth * self.config.interior_time
@@ -116,6 +119,9 @@ class DynamicJacobiData(JacobiData):
                     interior_size = cell_interior_elem * self.config.bytes_per_element
                     boundary_size = cell_boundary_elem * self.config.bytes_per_element
 
+                    if workload > 0:
+                        boundary_size = max(boundary_size, 1)
+
                     edge_center = self.geometry.get_edge_center(edge)
                     edge_x = edge_center[0]
                     edge_y = edge_center[1]
@@ -154,39 +160,48 @@ class DynamicJacobiData(JacobiData):
         for cell in range(len(self.geometry.cells)):
             # Create 2 data blocks per cell
             for i in range(self.config.steps + 1):
-                workload = self.workload.get_workload(i)[cell]
-                new_data_size = int(workload)
+                workload = self.workload.get_scaled_cell_workload(i, cell)
+                cell_interior_elem = int(self.interior_elem * workload)
+                interior_size = cell_interior_elem * self.config.bytes_per_element
+                interior_size = int(interior_size)
 
                 self.blocks.set_size(
-                    self.map.get_block(DataKey(Cell(cell), i)), new_data_size
+                    self.map.get_block(DataKey(Cell(cell), i)), interior_size
                 )
                 assert (
-                    new_data_size > 0 or i == self.config.steps
+                    interior_size > 0 or i == self.config.steps
                 ), "Interior data size must be positive "
-                if new_data_size > 0:
-                    interior_data.append(new_data_size)
-                    step_data_sum[i] += new_data_size
+                if interior_size > 0:
+                    interior_data.append(interior_size)
+                    step_data_sum[i] += interior_size
 
             # Create 8 data blocks per edge
             for edge in self.geometry.cell_edges[cell]:
                 for i in range(self.config.steps + 1):
-                    workload = self.workload.get_workload(i)[cell]
-                    new_data_size = int(workload / self.config.interior_boundary_ratio)
+                    workload = self.workload.get_scaled_cell_workload(i, cell)
+                    cell_interior_elem = int(self.interior_elem * workload)
+                    cell_boundary_elem = int(
+                        cell_interior_elem**(self.config.boundary_complexity)
+                        * self.config.boundary_width
+                        * workload
+                    )
+                    boundary_size = cell_boundary_elem * self.config.bytes_per_element
+                    boundary_size = int(boundary_size)
 
                     if workload > 0:
-                        new_data_size = max(new_data_size, 1)
+                        boundary_size = max(boundary_size, 1)
 
                     self.blocks.set_size(
                         self.map.get_block(DataKey(Edge(edge), (Cell(cell), i))),
-                        new_data_size,
+                        boundary_size,
                     )
 
                     assert (
-                        new_data_size > 0 or i == self.config.steps
+                        boundary_size > 0 or i == self.config.steps
                     ), "Boundary data size must be positive"
-                    if new_data_size > 0:
-                        boundary_data.append(new_data_size)
-                        step_data_sum[i] += new_data_size
+                    if boundary_size > 0:
+                        boundary_data.append(boundary_size)
+                        step_data_sum[i] += boundary_size
         self.data_stat = {
             "interior_average": sum(interior_data) / len(interior_data),
             "interior_minimum": min(interior_data),
