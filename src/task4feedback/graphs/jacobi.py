@@ -83,7 +83,7 @@ class JacobiData(DataGeometry):
         edges_per_level = self.geometry.get_num_edges()
 
         y =  sympy.symbols('y', real=True, positive=True)
-        equation = interiors_per_level * y + self.config.boundary_width * edges_per_level * (y)**self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
+        #equation = interiors_per_level * y # + self.config.boundary_width * edges_per_level * (y)**self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
         solution = sympy.solve(equation, y)
         y_value = solution[0].evalf()
         interior_elem = int(y_value)

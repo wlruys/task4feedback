@@ -18,9 +18,9 @@ class DynamicJacobiConfig(JacobiConfig):
 class DynamicJacobiData(JacobiData):
     @staticmethod
     def from_mesh(
-        geometry: Geometry, config: DynamicJacobiConfig, workload: DynamicWorkload
+        geometry: Geometry, config: DynamicJacobiConfig, workload: DynamicWorkload, system: Optional[System] = None
     ) -> Self:
-        data = DynamicJacobiData(geometry, config, workload)
+        data = DynamicJacobiData(geometry, config, workload, system=system)
         return data
 
     def __init__(
@@ -28,50 +28,82 @@ class DynamicJacobiData(JacobiData):
         geometry: Geometry,
         config: DynamicJacobiConfig = DynamicJacobiConfig(),
         workload: DynamicWorkload = None,
+        system: Optional[System] = None,
     ):
         self.workload = workload
-        super().__init__(geometry, config)
+        super().__init__(geometry, config, system=system)
         self.config: DynamicJacobiConfig
 
     def idx_at_step(self, step: int) -> int:
         return step
 
-    def _create_blocks(self):
+    def _create_blocks(self, system: System):
         interior_data = []
         boundary_data = []
         step_data_sum = [0 for _ in range(self.config.steps)]
+
+        interiors_per_level = self.geometry.get_num_cells()
+        edges_per_level = self.geometry.get_num_edges()
+
+        y = sympy.symbols("y", real=True, positive=True)
+        equation = interiors_per_level * y - self.config.level_memory / self.config.bytes_per_element 
+        #equation = interiors_per_level * y + self.config.boundary_width * edges_per_level * (y)**self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
+        solution = sympy.solve(equation, y)
+        y_value = solution[0].evalf()
+        interior_elem = int(y_value)
+        boundary_elem = interior_elem**(self.config.boundary_complexity) * self.config.boundary_width
+        interior_size = interior_elem * self.config.bytes_per_element
+        boundary_size = boundary_elem * self.config.bytes_per_element
+
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
-            # Create 2 data blocks per cell
+            # Create data blocks per cell for each level
             for i in range(self.config.steps + 1):
-                workload = self.workload.get_workload(i)[cell]
-                new_data_size = int(workload)
+                workload = self.workload.get_scaled_cell_workload(i, cell)
+                cell_interior_elem = int(interior_elem * workload)
+                cell_boundary_elem = int(cell_interior_elem**(self.config.boundary_complexity) * self.config.boundary_width * workload)
+                interior_size = cell_interior_elem * self.config.bytes_per_element
+                boundary_size = cell_boundary_elem * self.config.bytes_per_element
 
-                self.add_block(DataKey(Cell(cell), i), size=new_data_size, location=0)
+                centroid = self.geometry.get_centroid(cell)
+                centroid_x = centroid[0]
+                centroid_y = centroid[1]
+
+                self.add_block(DataKey(Cell(cell), i), size=interior_size, location=0, x=centroid_x, y=centroid_y)
+
                 assert (
-                    new_data_size > 0 or i == self.config.steps
+                    interior_size > 0 or i == self.config.steps
                 ), "Interior data size must be positive "
-                if new_data_size > 0:
-                    interior_data.append(new_data_size)
-                    step_data_sum[i] += new_data_size
+                if interior_size > 0:
+                    interior_data.append(interior_size)
+                    step_data_sum[i] += interior_size
 
-            # Create 8 data blocks per edge
+            # Create data blocks per edge for each level
             for edge in self.geometry.cell_edges[cell]:
                 for i in range(self.config.steps + 1):
-                    workload = self.workload.get_workload(i)[cell]
-                    new_data_size = int(workload / self.config.interior_boundary_ratio)
+                    workload = self.workload.get_scaled_cell_workload(i, cell)
+                    cell_interior_elem = int(interior_elem * workload)
+                    cell_boundary_elem = int(cell_interior_elem**(self.config.boundary_complexity) * self.config.boundary_width * workload)
+                    interior_size = cell_interior_elem * self.config.bytes_per_element
+                    boundary_size = cell_boundary_elem * self.config.bytes_per_element
+
+                    edge_center = self.geometry.get_edge_center(edge)
+                    edge_x = edge_center[0]
+                    edge_y = edge_center[1]
 
                     self.add_block(
                         DataKey(Edge(edge), (Cell(cell), i)),
-                        size=new_data_size,
+                        size=boundary_size,
                         location=0,
+                        x=edge_x,
+                        y=edge_y,
                     )
                     assert (
-                        new_data_size > 0 or i == self.config.steps
+                        boundary_size > 0 or i == self.config.steps
                     ), "Boundary data size must be positive"
-                    if new_data_size > 0:
-                        boundary_data.append(new_data_size)
-                        step_data_sum[i] += new_data_size
+                    if boundary_size > 0:
+                        boundary_data.append(boundary_size)
+                        step_data_sum[i] += boundary_size
         self.data_stat = {
             "interior_average": sum(interior_data) / len(interior_data),
             "interior_minimum": min(interior_data),
@@ -142,6 +174,7 @@ class DynamicJacobiGraph(JacobiGraph):
         self,
         geometry: Geometry,
         config: DynamicJacobiConfig,
+        system: Optional[System] = None,
         variant: Optional[VariantBuilder] = None,
     ):
         workload_class = config.workload_class
@@ -149,33 +182,48 @@ class DynamicJacobiGraph(JacobiGraph):
         self.workload.generate_initial_mass(
             distribution=lambda x: 1.0, average_workload=config.start_workload
         )
+
         print(config.workload_args)
         self.workload.generate_workload(config.steps, **config.workload_args)
-        super(JacobiGraph, self).__init__()
+        super(JacobiGraph, self).__init__() #Call base ComputeDataGraph constructor (not JacobiGraph constructor)
         self.config = config
         self.data: DynamicJacobiData = DynamicJacobiData.from_mesh(
-            geometry, config, self.workload
+            geometry, config, self.workload, system=system
         )
+
+        assert(system is not None), "System must be provided for DynamicJacobiGraph"
         self._build_graph(retire_data=True)
-        self._apply_workload_variant()
+        self._apply_workload_variant(system)
         self.finalize()
 
-    def _apply_workload_variant(self):
+    def _apply_workload_variant(self, system: System):
         task_to_level = self.task_to_level
         task_to_cell = self.task_to_cell
+
+        print("Building custom variant for system", system)
+
 
         class DynamicJacobiVariant(JacobiVariant):
             @staticmethod
             def build_variant(
                 arch: DeviceType, task: TaskTuple
             ) -> Optional[VariantTuple]:
-                memory_usage = 0
-                vcu_usage = 1
+                memory_usage = self.config.task_internal_memory
+                vcu_usage = self.config.vcu_usage 
+
                 level = task_to_level[task.id]
                 cell = task_to_cell[task.id]
 
-                workload = self.workload.get_workload(level)[cell]
-                workload = max(int(workload / self.config.comm_compute_ratio), 1)
+                if system.get_flops(arch) == 0:
+                    return None 
+
+                workload = self.workload.get_scaled_cell_workload(level, cell)
+                
+                if self.config.task_time is not None:
+                    expected_time = workload * self.config.task_time
+                    expected_time = int(expected_time)
+                else:
+                    num_elements = 
 
                 if arch == DeviceType.GPU:
                     return VariantTuple(arch, memory_usage, vcu_usage, workload)

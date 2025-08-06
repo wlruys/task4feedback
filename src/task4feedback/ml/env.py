@@ -180,6 +180,11 @@ class RuntimeEnv(EnvBase):
     def _create_observation_spec(self, td) -> TensorSpec:
         comp = make_composite_from_td(td, unsqueeze_null_shapes=False)
         return comp
+    
+    def get_graph(self, active_idx: Optional[int] = None):
+        if active_idx is None:
+            active_idx = self.active_idx
+        return self.simulator_factory[active_idx].input.graph
 
     def _create_state_value_spec(self) -> TensorSpec:
         return Unbounded(shape=[1], device=self.device, dtype=torch.float32)

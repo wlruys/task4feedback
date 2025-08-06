@@ -428,25 +428,23 @@ class DynamicWorkload:
         return self.level_workload[0]
 
     def generate_initial_mass(
-        self, distribution: Callable[[int], float] = None, average_workload: int = 1000
+        self, distribution: Optional[Callable[[int], float]] = None
     ):
         if distribution is None:
-
+            # Default distribution is uniform
             def distribution(x):
                 return 1.0
 
         cell_weights = [distribution(i) for i in range(self.num_cells)]
-
         weight_sum = sum(cell_weights)
         normalized_weights = [weight / weight_sum for weight in cell_weights]
-
-        total_average_workload = average_workload * self.num_cells
-        weights = [weight * total_average_workload for weight in normalized_weights]
-
-        self.set_inital_mass(weights)
+        self.set_inital_mass(normalized_weights)
 
     def get_workload(self, level: int) -> list:
         return self.level_workload[level]
+    
+    def get_scaled_cell_workload(self, level: int, cell: int) -> float:
+        return self.level_workload[level][cell] * self.num_cells
 
     def generate_workload(
         self,
@@ -585,7 +583,6 @@ class DynamicWorkload:
             cmap = plt.get_cmap(colormap)
 
             for i, cell in enumerate(self.geom.cells):
-                # Get cell centroid
                 centroid = self.geom.get_centroid(i)
 
                 radius = (
@@ -805,8 +802,8 @@ class TrajectoryWorkload(DynamicWorkload):
         num_levels: int,
         traj_type: str = "circle",
         start_step: int = 0,
-        lower_bound: float = 0,
-        upper_bound: float = 3000,
+        lower_bound: float = 0.5,
+        upper_bound: float = 3,
         scale: float = 0.01,
         seed: int = 0,
         traj_specifics: Optional[dict] = None,
@@ -831,17 +828,32 @@ class TrajectoryWorkload(DynamicWorkload):
         for i, cell in enumerate(self.geom.cells):
             centroids[i] = self.geom.get_centroid(i)
 
+        #Normalize starting step workload
+        total_workload = np.sum(self.level_workload[start_step])
+        assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
+
         for j in range(start_step + 1, num_levels):
             self.level_workload[j] = np.copy(self.level_workload[0])
 
             gaussian_workload = (
                 gaussian_pdf(centroids, trajectory[j], scale) * upper_bound
             )
+
+            #TODO(wlr): Addition here seems weird to me, revise the workload generation logic
             self.level_workload[j] += gaussian_workload
 
             self.level_workload[j] = np.clip(
                 a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound
             )
+
+            # Keep total workload constant
+            total_workload = np.sum(self.level_workload[j])
+            assert( total_workload > 0), f"Total workload at level {j} is zero, cannot normalize."
+            self.level_workload[j] /= total_workload
+
+            
+
+            
 
 
 @dataclass
