@@ -1966,8 +1966,7 @@ public:
     my_time_record.launched_time = time;
   }
 
-  void eviction_notify_completed(taskid_t eviction_task_id, timecount_t time,
-                                 const StaticTaskInfo &static_info) {
+  void eviction_notify_completed(taskid_t eviction_task_id, timecount_t time) {
     auto &my_time_record = eviction_task_time_records[eviction_task_id];
     auto &my_info = eviction_task_runtime_info[eviction_task_id];
     my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);

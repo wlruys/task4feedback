@@ -52,26 +52,17 @@ class GitInfo(Callback):
 
 
 def configure_training(cfg: DictConfig):
-    #start_logger()
+    # start_logger()
     graph_builder = make_graph_builder(cfg)
-    env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
-
-    def env_fn(eval: bool = False):
-        return make_env(
-            graph_builder=graph_builder,
-            cfg=cfg,
-            lstm=lstm,
-            normalization=normalization,
-            eval=eval,
-        )
+    env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
 
     graph = env.get_graph()
-    if hasattr(graph, 'workload'):
+    if hasattr(graph, "workload"):
         workload = graph.get_workload()
         workload.animate_workload(show=True)
 
 
-@hydra.main(config_path="conf", config_name="config.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
     if cfg.wandb.enabled:
         wandb.init(

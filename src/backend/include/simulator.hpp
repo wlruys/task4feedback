@@ -356,6 +356,20 @@ public:
     return overall_max;
   }
 
+  [[nodiscard]] const std::vector<mem_t> &get_eviction_data_movement() const {
+    return scheduler.get_state()
+        .get_data_manager()
+        .get_movement_counter()
+        .get_eviction_data_movement();
+  }
+
+  [[nodiscard]] const std::vector<mem_t> &get_total_data_movement() const {
+    return scheduler.get_state()
+        .get_data_manager()
+        .get_movement_counter()
+        .get_total_data_movement();
+  }
+
   void add_task_breakpoint(EventType type, taskid_t task) {
     scheduler.breakpoints.add_breakpoint(type, task);
   }

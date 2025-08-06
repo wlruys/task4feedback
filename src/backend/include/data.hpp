@@ -510,6 +510,52 @@ public:
     return sizes_[0] + sizes_[1] + sizes_[2] + sizes_[3];
   }
 };
+class MovementCounter {
+private:
+  std::vector<mem_t> total_data_movement;
+  std::vector<mem_t> eviction_data_movement;
+
+public:
+  MovementCounter() = default;
+
+  MovementCounter(devid_t n_devices)
+      : total_data_movement(n_devices, 0), eviction_data_movement(n_devices, 0) {
+  }
+
+  void add_total_movement(devid_t src, devid_t dest, mem_t size) {
+    assert(src < total_data_movement.size());
+    assert(dest < total_data_movement.size());
+    total_data_movement[src] += size;
+    total_data_movement[dest] += size;
+    if (src == 0 || dest == 0) {
+      eviction_data_movement[src] += size;
+      eviction_data_movement[dest] += size;
+    }
+  }
+
+  void add_eviction_movement(devid_t device_id, mem_t size) {
+    assert(device_id < eviction_data_movement.size());
+    eviction_data_movement[device_id] += size;
+  }
+
+  const std::vector<mem_t> &get_total_data_movement() const {
+    return total_data_movement;
+  }
+
+  const mem_t get_total_data_movement(devid_t device_id) const {
+    assert(device_id < total_data_movement.size());
+    return total_data_movement[device_id];
+  }
+
+  const std::vector<mem_t> &get_eviction_data_movement() const {
+    return eviction_data_movement;
+  }
+
+  const mem_t get_eviction_data_movement(devid_t device_id) const {
+    assert(device_id < eviction_data_movement.size());
+    return eviction_data_movement[device_id];
+  }
+};
 
 class DataManager {
 protected:
@@ -518,6 +564,7 @@ protected:
   LocationManager launched_locations;
   MovementManager movement_manager;
   LRU_manager lru_manager;
+  MovementCounter movement_counter;
   bool initialized = false;
 
   static bool check_valid(size_t data_id, const LocationManager &locations, devid_t device_id) {
@@ -555,10 +602,12 @@ public:
   DataManager(const Data &data, const Devices &devices)
       : mapped_locations(data.size(), devices.size()),
         reserved_locations(data.size(), devices.size()),
-        launched_locations(data.size(), devices.size()), lru_manager(devices) {
+        launched_locations(data.size(), devices.size()), lru_manager(devices),
+        movement_counter(devices.size()) {
   }
 
-  DataManager(const DataManager &o_) : lru_manager(o_.lru_manager) {
+  DataManager(const DataManager &o_)
+      : lru_manager(o_.lru_manager), movement_counter(o_.movement_counter) {
     ZoneScopedN("Copy DataManager");
     {
       ZoneScopedN("Copy Mapped Locations");
@@ -620,6 +669,10 @@ public:
 
   [[nodiscard]] const LRU_manager &get_lru_manager() const {
     return lru_manager;
+  }
+
+  [[nodiscard]] const MovementCounter &get_movement_counter() const {
+    return movement_counter;
   }
 
   [[nodiscard]] const LocationManager &get_mapped_locations() const {
@@ -916,6 +969,8 @@ public:
     movement_manager.set_completion(data_id, destination, current_time + duration);
 
     comm_manager.reserve_connection(source, destination);
+
+    movement_counter.add_total_movement(source, destination, size);
 
     return {.is_virtual = false, .duration = duration};
   }
