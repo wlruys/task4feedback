@@ -18,6 +18,7 @@ extern void init_scheduler_ext(nb::module_ &);
 extern void init_mapper_ext(nb::module_ &);
 extern void init_feature_ext(nb::module_ &);
 extern void init_simulator_ext(nb::module_ &);
+extern void init_parmetis_ext(nb::module_ &);
 
 NB_MODULE(fastsim2, m) {
   // nb::set_leak_warnings(false);
@@ -39,4 +40,5 @@ NB_MODULE(fastsim2, m) {
   init_mapper_ext(m);
   init_feature_ext(m);
   init_simulator_ext(m);
+  init_parmetis_ext(m);
 }
