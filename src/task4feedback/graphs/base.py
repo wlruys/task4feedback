@@ -223,6 +223,7 @@ class ComputeDataGraph(TaskGraph):
                     continue
                 data_cost = self.get_shared_data(task_id, dep_task_id)
                 data_cost /= bandwidth
+                data_cost = max(data_cost, 1)
                 eweights.append(data_cost)
                 adjacency_list.append(dep_task_id)
                 # print(
