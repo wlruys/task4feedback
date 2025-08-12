@@ -1,0 +1,32 @@
+_target_: task4feedback.ml.algorithms.PPOConfig
+implementation: torchrl
+workers: 4
+graphs_per_collection: 4
+states_per_collection: 10000 # min(ppo_config.states_per_collection, graphs_per_collection * max([env.size() for env in eval_envs]))
+num_collections: 10000
+collect_device: cpu
+update_device: cpu
+storing_device: cpu
+threads_per_worker: 1
+ent_coef: 1
+lmbda: 0.98
+gamma: 0.999
+clip_eps: 0.2
+clip_vloss: false
+value_norm: "l2"
+val_coef: 0.5
+normalize_advantage: true
+max_grad_norm: 0.5
+compile_policy: false
+compile_advantage: false
+compile_update: false
+collector: "multi_sync"
+advantage_type: "gae"
+bagged_policy: "none"
+epochs_per_collection: 4
+slice_len: 32
+sample_slices: true
+#number of samples per minibatch (episodes per minibatch if sample_slices = false and using ppo LSTM)
+minibatch_size: 64
+rollout_steps: 80
+

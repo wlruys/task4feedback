@@ -2297,7 +2297,7 @@ class SimulatorFactory:
 
 
 def uniform_connected_devices(
-    n_devices: int, mem: int, latency: int, h2d_bw: int, d2d_bw: int
+    n_devices: int, mem: int, latency: int, h2d_bw: int, d2d_bw: int, h2d_links: int = 2, d2d_links: int = 2, cpu_copyengines: int = 2, device_copyengines: int=4
 ) -> System:
     """
     Creates a system with a uniform connection of devices including one CPU and multiple GPUs.
@@ -2316,21 +2316,21 @@ def uniform_connected_devices(
     s = System()
     n_gpus = n_devices - 1
 
-    s.create_device("CPU:0", DeviceType.CPU, 2, 10000000000000)
+    s.create_device("CPU:0", DeviceType.CPU, cpu_copyengines, 10000000000000)
     for i in range(n_gpus):
-        s.create_device(f"GPU:{i}", DeviceType.GPU, 4, mem)
+        s.create_device(f"GPU:{i}", DeviceType.GPU, device_copyengines, mem)
 
     s.finalize_devices()
 
     for i in range(n_gpus):
-        s.add_connection(0, i + 1, h2d_bw, latency)
-        s.add_connection(i + 1, 0, h2d_bw, latency)
+        s.add_connection(0, i + 1, h2d_bw, latency, max_connections=h2d_links)
+        s.add_connection(i + 1, 0, h2d_bw, latency, max_connections=h2d_links)
 
     for i in range(n_gpus):
         for j in range(n_gpus):
             if i == j:
                 continue
-            s.add_connection(i + 1, j + 1, d2d_bw, latency)
-            s.add_connection(j + 1, i + 1, d2d_bw, latency)
+            s.add_connection(i + 1, j + 1, d2d_bw, latency, max_connections=d2d_links)
+            s.add_connection(j + 1, i + 1, d2d_bw, latency, max_connections=d2d_links)
 
     return s

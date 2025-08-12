@@ -66,11 +66,24 @@ class RuntimeEnv(EnvBase):
         self.location_list = location_list
         self.only_gpu = only_gpu
         self.n_devices = len(self.location_list)
+        
+#         print(f"""
+# RuntimeEnv initialized with:
+# - Random Start: {self.random_start}
+# - Change Priority: {self.change_priority}
+# - Change Duration: {self.change_duration}
+# - Change Location: {self.change_location}
+# - Only GPU: {self.only_gpu}
+# - n Devices: {self.n_devices}
+# - Location Randomness: {self.location_randomness}
+# - Location List: {self.location_list}
+# - Max Samples per Iteration: {self.max_samples_per_iter}
+#               """)
 
         if not isinstance(simulator_factory, list):
             simulator_factory = [simulator_factory]
 
-        self.simulator_factory = simulator_factory
+        self.simulator_factory: list[SimulatorFactory] = simulator_factory
         self.active_idx = 0 # Index of the active simulator factory in case of multiple factories
 
         self.simulator: SimulatorDriver = simulator_factory[self.active_idx].create(
@@ -432,28 +445,31 @@ class IncrementalEFT(RuntimeEnv):
 
         self.map_tasks(td[self.action_n])
 
-        start_time = perf_counter()
+        # start_time = perf_counter()
         sim_ml = self.simulator.copy()
         sim_ml.disable_external_mapper()
-        end_time = perf_counter()
+        # end_time = perf_counter()
         # print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
         # print(f"Current sim time {sim_ml.time}", flush=True)
-        start_time = perf_counter()
+        # start_time = perf_counter()
         sim_ml.run()
-        end_time = perf_counter()
+        # end_time = perf_counter()
         # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
 
         ml_time = sim_ml.time
-
-        reward = 8 * (self.eft_time - self.gamma * ml_time) / self.size()
+        
+        reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / self.size()) / 10
+        
         self.eft_time = ml_time
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
+        _reward = 0
         if done:
-            obs, reward, time, improvement = self._handle_done(obs)
-
+            obs, _reward, time, improvement = self._handle_done(obs)
+        reward += _reward
+        # print(reward, _reward)
         buf = td.empty()
         buf.set(
             self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()

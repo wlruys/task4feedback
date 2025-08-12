@@ -160,6 +160,7 @@ class DynamicJacobiData(JacobiData):
             "boundary_maximum": max(boundary_data),
             "average_step_data": sum(step_data_sum) / len(step_data_sum),
         }
+        print(f"Average step data: {int(self.data_stat['average_step_data']):,}")
 
     def reset_data_size(self):
         """

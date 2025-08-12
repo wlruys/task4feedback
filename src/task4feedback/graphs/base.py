@@ -922,9 +922,9 @@ class GaussianBump:
     def is_alive(self):
         return self.t < self.num_steps
 
-def create_bump_random_center(min_std = 0.1, max_std: float = 0.3, min_scale: float = 0.05, max_scale: float  = 0.5, min_life = 25, max_life = 50):
-    x = np.random.uniform(0, 1, size=2)
-    life = np.random.randint(min_life, max_life)
+def create_bump_random_center(rng: np.random.RandomState, min_std = 0.1, max_std: float = 0.3, min_scale: float = 0.05, max_scale: float  = 0.5, min_life = 25, max_life = 50):
+    x = rng.uniform(0, 1, size=2)
+    life = rng.randint(min_life, max_life)
 
     return GaussianBump(x, min_std, max_std, min_scale, max_scale, t=0, num_steps=life)
 
@@ -992,10 +992,11 @@ class BumpWorkload(DynamicWorkload):
             start_step: int = 0,
             lower_bound: float = 0.05,
             upper_bound: float = 3,
+            seed: int = 0,
             **kwargs
     ):
-        self.random = False
-
+        self.random = True
+        rng = np.random.RandomState(seed)
         centroids = np.zeros((self.num_cells, 2))
         for i, cell in enumerate(self.geom.cells):
             centroids[i] = self.geom.get_centroid(i)
@@ -1004,7 +1005,7 @@ class BumpWorkload(DynamicWorkload):
         assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
 
         bumps = [] 
-        bumps.append(create_bump_random_center())
+        bumps.append(create_bump_random_center(rng=rng))
 
         for j in range(start_step + 1, num_levels):
             self.level_workload[j] = np.copy(self.level_workload[0])
@@ -1016,8 +1017,8 @@ class BumpWorkload(DynamicWorkload):
             bumps = [b for b in bumps if b.is_alive()]
                 
             #Create a new bump with probability 0.1
-            if np.random.rand() < 0.1:
-                bumps.append(create_bump_random_center())
+            if rng.rand() < 0.1:
+                bumps.append(create_bump_random_center(rng=rng))
 
             self.level_workload[j] = np.clip(
                 a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound
