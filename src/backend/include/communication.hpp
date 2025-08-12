@@ -275,55 +275,10 @@ public:
     auto time = latency + static_cast<timecount_t>(s * bw_r);
 
     SPDLOG_DEBUG("Calculating ideal time to transfer {} bytes from device {} "
-                 "to device {} with bandwidth {} and latency {}",
-                 size, src, dst, bw_r, latency);
+                 "to device {} with bandwidth {} and latency {}: {}",
+                 size, src, dst, bw_r, latency, time);
     return time;
   }
-
-  // TODO(wlr): Test something like this that is "branchless" but computes for all devices
-  //  [[nodiscard]] SourceRequest
-  //  get_best_available_source(const Topology &topology, devid_t dst,
-  //                            std::span<const int8_t> possible_source_flags) const {
-  //    // Early return for local data
-  //    if (possible_source_flags[dst] != 0) {
-  //      return {true, dst};
-  //    }
-
-  //   const auto *bandwidth_data = topology.bandwidths.data();
-  //   const auto *active_links_data = active_links.data();
-  //   const auto *max_links_data = topology.links.data();
-
-  //   devid_t best_source = 0;
-  //   mem_t best_bandwidth = 0;
-  //   bool found = false;
-
-  //   const auto size = static_cast<devid_t>(possible_source_flags.size());
-  //   for (devid_t src = 0; src < size; ++src) {
-  //     const std::size_t index = src * num_devices + dst;
-
-  //     // Check all conditions without branching
-  //     const bool has_source = possible_source_flags[src] != 0;
-  //     const bool links_available = active_links_data[index] <= max_links_data[index];
-  //     const bool src_available = (incoming[src] + outgoing[src]) <= max_total_copies[src];
-  //     const bool dst_available = (incoming[dst] + outgoing[dst]) <= max_total_copies[dst];
-
-  //     // All conditions must be true for this source to be valid
-  //     const bool is_valid = has_source & links_available & src_available & dst_available;
-
-  //     // Get bandwidth (safe to access even if invalid since we mask it out)
-  //     const auto bandwidth = bandwidth_data[index];
-
-  //     // Only consider this bandwidth if source is valid AND better than current best
-  //     const bool is_better = is_valid & (bandwidth > best_bandwidth);
-
-  //     // Update best values using conditional expressions
-  //     best_bandwidth = is_better ? bandwidth : best_bandwidth;
-  //     best_source = is_better ? src : best_source;
-  //     found = found | is_better;
-  //   }
-
-  //   return {found, best_source};
-  // }
 
   [[nodiscard]] inline SourceRequest
   get_best_available_source(const Topology &topology, devid_t dst,

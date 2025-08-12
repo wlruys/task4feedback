@@ -418,7 +418,11 @@ bool Scheduler::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
   s.update_launched_cost(compute_task_id, device_id);
 
   // Create completion event
-  timecount_t completion_time = s.global_time + s.get_execution_time(compute_task_id);
+  timecount_t execution_time = s.get_execution_time(compute_task_id);
+  SPDLOG_DEBUG("Time:{} Launching compute task {}:{} with execution time {}", current_time,
+               static_graph.get_compute_task_name(compute_task_id), compute_task_id,
+               execution_time);
+  timecount_t completion_time = s.global_time + execution_time;
   event_manager.create_event(EventType::COMPUTE_COMPLETER, completion_time, compute_task_id,
                              device_id);
 
