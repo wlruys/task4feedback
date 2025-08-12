@@ -2313,9 +2313,9 @@ def uniform_connected_devices(
     s = System()
     n_gpus = n_devices - 1
 
-    s.create_device("CPU:0", DeviceType.CPU, 2, 10000000000000)
+    s.create_device("CPU:0", DeviceType.CPU, 4, 10000000000000)
     for i in range(n_gpus):
-        s.create_device(f"GPU:{i}", DeviceType.GPU, 4, mem)
+        s.create_device(f"GPU:{i}", DeviceType.GPU, 2, mem)
 
     s.finalize_devices()
 

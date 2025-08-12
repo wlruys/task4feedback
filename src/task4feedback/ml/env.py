@@ -46,8 +46,7 @@ class RuntimeEnv(EnvBase):
         location_list: Optional[List[int]] = None,
         max_samples_per_iter: int = 0,
         random_start: bool = False,
-        verbose: bool = False,
-        colorized: bool = False,
+        verbose: bool = True,
     ):
         super().__init__(device=device)
         # print("Initializing environment")
@@ -236,6 +235,7 @@ class RuntimeEnv(EnvBase):
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
                 flush=True,
             )
+        
 
         return obs, reward, time, improvement
 

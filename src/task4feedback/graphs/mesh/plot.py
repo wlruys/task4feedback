@@ -443,7 +443,16 @@ def animate_state_list(graph, state_list, figsize=(8, 8)):
                 cell_id = graph.task_to_cell[task]
 
                 if cell_id < len(graph.data.geometry.cells):
-                    if state_type == fastsim.TaskState.LAUNCHED:
+
+                    if state_type == fastsim.TaskState.COMPLETED:
+                        label = graph.task_to_level[task]
+                        mapped_device = state.compute_task_mapping_dict[task]
+                        if hasattr(graph, "task_to_direction"):
+                            direction = graph.task_to_direction[task]
+                            label = f"{label} ({direction})"
+                        last_level_label[cell_id] = label
+                        last_partition[cell_id] = mapped_device
+                    elif state_type == fastsim.TaskState.LAUNCHED:
                         mapped_device = state.compute_task_mapping_dict[task]
                         cell_highlights[device_to_color[mapped_device]].append(cell_id)
 
@@ -454,6 +463,7 @@ def animate_state_list(graph, state_list, figsize=(8, 8)):
 
                         last_level_label[cell_id] = label
                         last_partition[cell_id] = mapped_device
+
 
         edge_highlights = defaultdict(lambda: list())
         boundary_highlights = defaultdict(lambda: dict())

@@ -1,3 +1,2 @@
-_target_: task4feedback.fastsim2.LognormalTaskNoise
+_target_: task4feedback.fastsim2.TaskNoise
 _partial_: true
-scale: 1

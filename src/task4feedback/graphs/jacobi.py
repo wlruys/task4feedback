@@ -45,11 +45,11 @@ class JacobiConfig(GraphConfig):
     vcu_usage: float = 1.0
     task_internal_memory: int = 0 
     bytes_per_element: int = 4 # Assuming float32 data type
+    verbose: bool = True 
 
 class JacobiData(DataGeometry):
     @staticmethod
     def from_mesh(geometry: Geometry, config: JacobiConfig, system: Optional[System] = None):
-        print("SYSTEM", system)
         return JacobiData(geometry, config, system)
 
     def _create_blocks(self, system: Optional[System] = None):
@@ -57,8 +57,8 @@ class JacobiData(DataGeometry):
         edges_per_level = self.geometry.get_num_edges()
 
         y =  sympy.symbols('y', real=True, positive=True)
-        equation = interiors_per_level * y - self.config.level_memory / self.config.bytes_per_element 
-        #equation = interiors_per_level * y + self.config.boundary_width * edges_per_level * (y)**self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
+        #equation = interiors_per_level * y - self.config.level_memory / self.config.bytes_per_element 
+        equation = interiors_per_level * y + self.config.boundary_width * edges_per_level * (y)**self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
         solution = sympy.solve(equation, y)
         y_value = solution[0].evalf()
         interior_elem = int(y_value)
@@ -82,11 +82,12 @@ class JacobiData(DataGeometry):
         self.boundary_size = boundary_size
 
         assert(system is not None)
-        print("Total (per-level) Interior Size", _bytes_to_readable(interior_size * interiors_per_level))
-        print("Communication time for reference interior size: ", interior_size / system.fastest_bandwidth, _bytes_to_readable(interior_size), interior_elem, "elements")
-        print("Communication time for reference boundary size: ", boundary_size / system.fastest_bandwidth, _bytes_to_readable(boundary_size))
-        print("Compute time for reference interior: ", interior_elem ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6) )
-        print("Memory time for reference interior: ", (interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6))
+        if self.config.verbose: 
+            print("Total (per-level) Interior Size", _bytes_to_readable(interior_size * interiors_per_level))
+            print("Communication time for reference interior size: ", interior_size / system.fastest_bandwidth, _bytes_to_readable(interior_size), interior_elem, "elements")
+            print("Communication time for reference boundary size: ", boundary_size / system.fastest_bandwidth, _bytes_to_readable(boundary_size))
+            print("Compute time for reference interior: ", interior_elem ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6) )
+            print("Memory time for reference interior: ", (interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6))
 
 
         # Loop over cells
