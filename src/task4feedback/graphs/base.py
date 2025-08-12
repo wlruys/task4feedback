@@ -198,6 +198,16 @@ class ComputeDataGraph(TaskGraph):
             total_size += size
         return total_size
 
+    def get_read_data(self, task_id: int):
+        # Get all data blocks that this task reads
+        read_self = self.tasks[task_id].read
+        total_size = 0
+        for block_id in read_self:
+            block = self.data.blocks.get_block(block_id)
+            size = block.size
+            total_size += size
+        return total_size
+
     def get_weighted_graph(
         self, arch: DeviceType, bandwidth: int = 1000, task_ids: Optional[list] = None
     ):
@@ -223,6 +233,7 @@ class ComputeDataGraph(TaskGraph):
                     continue
                 data_cost = self.get_shared_data(task_id, dep_task_id)
                 data_cost /= bandwidth
+                data_cost = max(data_cost, 1)
                 eweights.append(data_cost)
                 adjacency_list.append(dep_task_id)
                 # print(
@@ -237,6 +248,74 @@ class ComputeDataGraph(TaskGraph):
         eweights = np.array(eweights)
 
         return task_to_local, adjacency_list, adj_starts, vweights, eweights
+
+    def get_distributed_weighted_graph(
+        self,
+        bandwidth: int,
+        task_ids: list[int],
+        partition: list[int],
+        arch: DeviceType = DeviceType.GPU,
+        future_levels: int = 0,
+    ):
+        """
+        Get a weighted graph representation of the compute data graph for distributed partitioning.
+        """
+        # Build distributed CSR for each process
+        future_levels = min(future_levels, (self.graph.size() - max(task_ids)) // 64)
+
+        assert len(partition) == len(task_ids), (
+            f"Sum of partition lengths {sum(len(p) for p in partition)} "
+            f"does not match number of tasks {len(task_ids)}"
+        )
+        assert min(partition) == 0, f"Partition must start from 0, got {min(partition)}"
+    
+        xadj = [[0] for _ in range(len(set(partition)))]  # xadj for each partition
+        adjncy = [[] for _ in range(len(set(partition)))]
+        vwgt = [[] for _ in range(len(set(partition)))]  # Compute time
+        adjwgt = [[] for _ in range(len(set(partition)))]  # Data transfer time
+        vsize = [[] for _ in range(len(set(partition)))]  # Stores internal data size
+        vtxdist = [0]
+        task_to_local = {}
+        partitioned_tasks = [[] for _ in range(len(set(partition)))]
+        pairs = zip(task_ids, partition)
+        pairs = sorted(pairs, key=lambda x: x[1])
+        for i, (task_id, part) in enumerate(pairs):
+            task_to_local[task_id] = i
+        for i, (task_id, part) in enumerate(pairs):
+            partitioned_tasks[part].append(task_id)
+            compute_cost = 0
+            repartition_cost = 0
+            for fl in range(future_levels + 1):
+                compute_cost += self.get_compute_cost(task_id + fl * 64, arch)
+                repartition_cost += self.get_read_data(task_id + fl * 64) // bandwidth
+            vwgt[part].append(compute_cost // (future_levels + 1))
+            vsize[part].append(max(repartition_cost // (future_levels + 1),1))
+            for dep_task_id in self.tasks[task_id].dependencies:
+                if dep_task_id % 64 == task_id % 64:
+                    continue
+                boundary_cost = 0
+                for fl in range(future_levels + 1):
+                    boundary_cost += (
+                        self.get_shared_data(task_id + fl * 64, dep_task_id + fl * 64)
+                    ) // bandwidth
+                adjwgt[part].append(max(boundary_cost // (future_levels + 1), 1))
+                adjncy[part].append(task_to_local[dep_task_id + 64])
+            xadj[part].append(len(adjncy[part]))
+            if i > 0 and pairs[i - 1][1] != part:
+                vtxdist.append(i)
+        vtxdist.append(len(task_ids))
+
+        assert (
+            len(vtxdist) == len(set(partition)) + 1
+        ), f"vtxdist length {len(vtxdist)} does not match partition length {len(set(partition)) + 1}"
+
+        xadj = [np.array(x, dtype=np.int32) for x in xadj]
+        adjncy = [np.array(x, dtype=np.int32) for x in adjncy]
+        vwgt = [np.array(x, dtype=np.int32) for x in vwgt]
+        adjwgt = [np.array(x, dtype=np.int32) for x in adjwgt]
+        vsize = [np.array(x, dtype=np.int32) for x in vsize]
+        vtxdist = np.array(vtxdist, dtype=np.int32)
+        return partitioned_tasks, vtxdist, xadj, adjncy, vwgt, adjwgt, vsize
 
 
 @dataclass

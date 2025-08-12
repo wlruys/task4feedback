@@ -27,6 +27,7 @@ target_sources(backend
         include/simulator.hpp
         include/stats.hpp
         include/tasks.hpp
+        include/parmetis_wrapper.hpp
 )
 
                                          
@@ -79,6 +80,10 @@ endif()
 if(ENABLE_TRACY)
     target_link_libraries(backend PUBLIC TracyClient)
     target_compile_definitions(backend PUBLIC ENABLE_TRACY TRACY_ENABLE TRACY_ON_DEMAND)
+endif()
+
+if(ENABLE_PARMETIS)
+  target_compile_definitions(backend PUBLIC ENABLE_PARMETIS)
 endif()
 
 target_include_directories(backend

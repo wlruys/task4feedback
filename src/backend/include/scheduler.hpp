@@ -545,51 +545,44 @@ public:
         costs(input.devices.get().size()) {
   }
 
-  SchedulerState(const SchedulerState &other) : global_time(other.global_time),
-                                                task_runtime(other.task_runtime),
-                                                device_manager(other.device_manager),
-                                                communication_manager(other.communication_manager),
-                                                data_manager(other.data_manager),
-                                                mapped_but_not_reserved_tasks(
-                                                    other.mapped_but_not_reserved_tasks),
-                                                graph(other.graph), tasks(other.tasks),
-                                                data(other.data), devices(other.devices),
-                                                topology(other.topology),
-                                                task_noise(other.task_noise), 
-                                                counts(other.counts),
-                                                costs(other.costs), 
-                                                flags(other.flags) {
-                                                  // ZoneScoped;
-                                                  // {
-                                                  //   ZoneScopedN("copy_task_runtime");
-                                                  //   task_runtime = other.task_runtime;
-                                                  // }
+  SchedulerState(const SchedulerState &other)
+      : global_time(other.global_time), task_runtime(other.task_runtime),
+        device_manager(other.device_manager), communication_manager(other.communication_manager),
+        data_manager(other.data_manager),
+        mapped_but_not_reserved_tasks(other.mapped_but_not_reserved_tasks), graph(other.graph),
+        tasks(other.tasks), data(other.data), devices(other.devices), topology(other.topology),
+        task_noise(other.task_noise), counts(other.counts), costs(other.costs), flags(other.flags) {
+    // ZoneScoped;
+    // {
+    //   ZoneScopedN("copy_task_runtime");
+    //   task_runtime = other.task_runtime;
+    // }
 
-                                                  // {
-                                                  //   ZoneScopedN("copy_device_manager");
-                                                  //   device_manager = other.device_manager;
-                                                  // }
+    // {
+    //   ZoneScopedN("copy_device_manager");
+    //   device_manager = other.device_manager;
+    // }
 
-                                                  // {
-                                                  //   ZoneScopedN("copy_communication_manager");
-                                                  //   communication_manager =
-                                                  //       other.communication_manager;
-                                                  // }
+    // {
+    //   ZoneScopedN("copy_communication_manager");
+    //   communication_manager =
+    //       other.communication_manager;
+    // }
 
-                                                  // {
-                                                  //   ZoneScopedN("copy_data_manager");
-                                                  //   data_manager = other.data_manager;
-                                                  // }
+    // {
+    //   ZoneScopedN("copy_data_manager");
+    //   data_manager = other.data_manager;
+    // }
 
-                                                  // {
-                                                  //   ZoneScopedN("copy_counts");
-                                                  //   counts = other.counts;
-                                                  // }
+    // {
+    //   ZoneScopedN("copy_counts");
+    //   counts = other.counts;
+    // }
 
-                                                  // {
-                                                  //   ZoneScopedN("copy_costs");
-                                                  //   costs = other.costs;
-                                                  // }
+    // {
+    //   ZoneScopedN("copy_costs");
+    //   costs = other.costs;
+    // }
   }
 
   void start_drain() {
@@ -1110,8 +1103,7 @@ public:
 
   void evict(EvictorEvent &eviction_event, EventManager &event_manager);
 
-  void complete_compute_task(ComputeCompleterEvent &complete_event,
-                                 EventManager &event_manager);
+  void complete_compute_task(ComputeCompleterEvent &complete_event, EventManager &event_manager);
   void complete_data_task(DataCompleterEvent &complete_event, EventManager &event_manager);
   void complete_eviction_task(EvictorCompleterEvent &complete_event, EventManager &event_manager);
   void complete_task_postmatter(EventManager &event_manager);
