@@ -49,7 +49,7 @@ optimizer:
   lr: 2.5e-4
 
 system:
-  mem: 136000
+  mem: 20000000000
 
 feature:
   observer:
@@ -59,7 +59,7 @@ feature:
 network:
   layers:
     lstm:
-      hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
+      hidden_size: 32 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
     state:
       hidden_channels: 16
     actor:

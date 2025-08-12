@@ -232,6 +232,7 @@ public:
   void remove(std::vector<std::size_t> &indices);
   auto get_top_k_elements();
   std::vector<T> get_top_k();
+  void set_k(int k);
 };
 
 static_assert(QueueConcept<ContainerQueue<int, std::priority_queue>>,
@@ -421,6 +422,8 @@ static_assert(TopKLike<TopKQueueHelper<3>::queue_type<int>>);
 
 static_assert(QueueConcept<ContainerQueue<int, TopKQueueHelper<3>::queue_type>>,
               "ContainerQueue of TopKQueue must satisfy QueueConcept");
+static_assert(QueueConcept<ContainerQueue<int, DynamicTopKQueue>>,
+              "ContainerQueue of DynamicTopKQueue must satisfy QueueConcept");
 
 using Top3Queue = TopKQueue<int, 3>;
 using Top10Queue = TopKQueue<int, 10>;
@@ -667,4 +670,14 @@ template <WrappedQueueConcept Q> std::vector<typename Q::element_type> as_vector
     q.push(element);
   }
   return elements;
+}
+
+template <typename T, template <typename...> class Queue, typename Compare>
+void ContainerQueue<T, Queue, Compare>::set_k(int k) {
+  if constexpr (HasDynamicK<QueueType>) {
+    pq.set_k(k);
+  } else {
+    // No-op for non-dynamic queues
+    (void)k;
+  }
 }

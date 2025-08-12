@@ -24,6 +24,12 @@ size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
 
+  std::cout << "Top-k mappable tasks: ";
+  for (const auto &task : top_k_tasks) {
+    std::cout << task << " ";
+  }
+  std::cout << std::endl;
+
   const auto copy_size = std::min(v.size(), top_k_tasks.size());
 
   for (size_t i = 0; i < copy_size; i++) {

@@ -32,7 +32,8 @@
 #define INITIAL_DEVICE_BUFFER_SIZE 10
 #define INITIAL_EVENT_BUFFER_SIZE 5000
 
-using TaskQueue3 = ContainerQueue<taskid_t, TopKQueueHelper<1>::queue_type>;
+//using TaskQueue3 = ContainerQueue<taskid_t, TopKQueueHelper<1>::queue_type>;
+using MappableTaskQueue = ContainerQueue<taskid_t, DynamicTopKQueue>;
 using TaskQueue = ContainerQueue<taskid_t, std::priority_queue>;
 using DeviceQueue = ActiveQueueIterator<TaskQueue>;
 
@@ -84,7 +85,7 @@ inline std::ostream &operator<<(std::ostream &os, const ExecutionState &state) {
 
 class SchedulerQueues {
 protected:
-  TaskQueue3 mappable;
+  MappableTaskQueue mappable;
   DeviceQueue reservable;
   DeviceQueue launchable;
   DeviceQueue data_launchable;
@@ -421,11 +422,13 @@ struct SchedulerInput {
   std::reference_wrapper<Topology> topology;
   std::reference_wrapper<TaskNoise> task_noise;
   std::reference_wrapper<TransitionConditions> conditions;
+  int32_t top_k_candidates = 0;
 
   SchedulerInput(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
-                 Topology &topology, TaskNoise &task_noise, TransitionConditions &conditions)
+                 Topology &topology, TaskNoise &task_noise, TransitionConditions &conditions,
+                 int32_t top_k_candidates = 1)
       : graph(graph), tasks(tasks), data(data), devices(devices), topology(topology),
-        task_noise(task_noise), conditions(conditions) {
+        task_noise(task_noise), conditions(conditions), top_k_candidates(top_k_candidates) {
   }
 
   SchedulerInput(const SchedulerInput &other) = default;
@@ -435,7 +438,8 @@ struct SchedulerInput {
   // Shallow copy constructor
   SchedulerInput(SchedulerInput &&other) noexcept
       : graph(other.graph), tasks(other.tasks), data(other.data), devices(other.devices),
-        topology(other.topology), task_noise(other.task_noise), conditions(other.conditions) {
+        topology(other.topology), task_noise(other.task_noise), conditions(other.conditions),
+        top_k_candidates(other.top_k_candidates) {
   }
 
   SchedulerInput &operator=(SchedulerInput &&other) noexcept {
@@ -447,6 +451,7 @@ struct SchedulerInput {
       topology = other.topology;
       task_noise = other.task_noise;
       conditions = other.conditions;
+      top_k_candidates = other.top_k_candidates;
     }
     return *this;
   }
@@ -1039,9 +1044,16 @@ public:
   Scheduler(SchedulerInput &input)
       : state(input), queues(input.devices), conditions(input.conditions) {
     const auto &static_graph = state.get_tasks();
-    compute_task_buffer.reserve(TASK_BUFFER_SIZE);
-    data_task_buffer.reserve(TASK_BUFFER_SIZE);
-    tasks_requesting_eviction.reserve(TASK_BUFFER_SIZE);
+    compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
+    data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
+    tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
+    std::cout << "Scheduler initialized with " << input.devices.get().size()
+              << " devices." << std::endl;
+    if (input.top_k_candidates > 0) {
+      queues.mappable.set_k(static_cast<int>(input.top_k_candidates));
+      std::cout << "Setting top-k candidates to " << input.top_k_candidates
+                << " for mappable queue." << std::endl;
+    }
   }
 
   Scheduler(const Scheduler &other) = default;

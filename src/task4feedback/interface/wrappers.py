@@ -629,6 +629,7 @@ class SimulatorInput:
     system: System
     task_noise: TaskNoise
     transition_conditions: fastsim.TransitionConditions
+    top_k_candidates: int = 1
 
     def __init__(
         self,
@@ -637,6 +638,7 @@ class SimulatorInput:
         system: System,
         task_noise: Optional[TaskNoise] = None,
         transition_conditions: Optional[fastsim.TransitionConditions] = None,
+        top_k_candidates: int = 1,
     ):
         if transition_conditions is None:
             transition_conditions = fastsim.RangeTransitionConditions(5, 5, 16)
@@ -649,6 +651,7 @@ class SimulatorInput:
         self.data = data
         self.system = system
         self.transition_conditions = transition_conditions
+        self.top_k_candidates = top_k_candidates
 
     def to_input(self):
         return SchedulerInput(
@@ -659,6 +662,7 @@ class SimulatorInput:
             self.system.topology,
             self.task_noise,
             self.transition_conditions,
+            self.top_k_candidates,
         )
 
 
@@ -781,7 +785,7 @@ class CompiledDefaultObserverFactory:
         graph_spec = self.spec
         graph_extractor = self.graph_extractor_t(state)
         task_feature_extractor = self.task_feature_factory(
-            fastsim.InDegreeTaskFeature(state),
+            fastsim.InDegreeTaskFeature,
             # fastsim.OutDegreeTaskFeature(state),
             # fastsim.OneHotMappedDeviceTaskFeature(state),
         )
@@ -1531,16 +1535,6 @@ class HeterogeneousExternalObserver(ExternalObserver):
     def get_task_device_edges(self, task_ids, workspace, global_workspace):
         length = self.graph_extractor.get_task_device_edges_mapped(
             task_ids, workspace, global_workspace
-        )
-
-        if self.truncate:
-            workspace = workspace[:, :length]
-
-        return workspace, length
-
-    def get_data_device_edges(self, data_ids, workspace, global_workspace):
-        length = self.graph_extractor.get_data_device_edges(
-            data_ids, workspace, global_workspace
         )
 
         if self.truncate:

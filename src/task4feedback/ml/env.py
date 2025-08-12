@@ -242,6 +242,8 @@ class RuntimeEnv(EnvBase):
     def map_tasks(self, actions: torch.Tensor):
         candidate_workspace = self.candidate_workspace
         num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
+        print(f"Mapping {num_candidates} candidates", flush=True)
+        print("Candidates:", candidate_workspace[:num_candidates].tolist(), flush=True)
         graph = self.simulator_factory[self.active_idx].input.graph
         if num_candidates > 1:
             mapping_result = []
@@ -471,11 +473,14 @@ class DelayIncrementalEFT(IncrementalEFT):
         self,
         *args,
         delay: int = 10,
+        random_offset: bool = True,
+        offset: int = 1,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.delay = delay
-        self.offset = 1
+        self.offset = offset
+        self.random_offset = random_offset
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
@@ -518,7 +523,8 @@ class DelayIncrementalEFT(IncrementalEFT):
         return buf
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        self.offset = random.randint(1, self.delay)
+        if self.random_offset:
+            self.offset = random.randint(1, self.delay)
         return super()._reset(td)
 
 
