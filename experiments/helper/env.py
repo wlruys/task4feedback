@@ -16,7 +16,8 @@ from torchrl.envs import (
 from torchrl.modules import LSTMModule
 from typing import Optional
 from dataclasses import dataclass
-
+import torch
+from pathlib import Path
 
 def create_system(cfg: DictConfig):
     system = hydra.utils.instantiate(cfg.system)
@@ -74,7 +75,7 @@ def make_env(
     lstm: Optional[LSTMModule] = None,
     normalization: Optional[NormalizationDetails] = None,
     eval=False,
-)-> RuntimeEnv:
+):
     from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
     gmsh.initialize()
 
@@ -148,6 +149,60 @@ def make_env(
 
     if new_norm is not None:
         return env, new_norm
-
     else:
         return env
+
+
+def load_policy_from_checkpoint(model: torch.nn.Module, ckpt_path: Path) -> bool:
+    """Load a policy module state_dict from `ckpt_path` into `model`.
+
+    The checkpoint may be either a full training checkpoint with a `policy_module`
+    key (as saved by `save_checkpoint`) or a raw state_dict for the policy itself.
+    Returns True if parameters were loaded; False otherwise.
+    """
+    # We trust local checkpoints produced by our code; allow full unpickling.
+    # If you are loading an untrusted checkpoint, you may wish to set weights_only=True for safety.
+    try:
+        # We trust local checkpoints produced by our code; allow full unpickling.
+        obj = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    except Exception as e:
+        print(f"Failed to load checkpoint {ckpt_path}: {e}")
+        return False
+
+    # Determine which state_dict to use
+    state_dict = None
+    if isinstance(obj, dict) and "policy_module" in obj and isinstance(obj["policy_module"], dict):
+        state_dict = obj["policy_module"]
+    elif isinstance(obj, dict):
+        # Heuristic: treat as a raw state_dict if values are tensors
+        if any(isinstance(v, torch.Tensor) for v in obj.values()):
+            state_dict = obj
+
+    if state_dict is None:
+        print(f"Checkpoint at {ckpt_path} does not contain a recognizable policy state_dict.")
+        return False
+
+    # Common attribute names for the policy head/module
+    candidate_attrs = ["policy_module", "policy", "actor", "pi", "actor_net"]
+    target_module = None
+    for attr in candidate_attrs:
+        if hasattr(model, attr):
+            m = getattr(model, attr)
+            if isinstance(m, torch.nn.Module):
+                target_module = m
+                break
+
+    # Fallback: try loading into the model itself
+    if target_module is None:
+        target_module = model
+
+    try:
+        missing, unexpected = target_module.load_state_dict(state_dict, strict=False)
+        print(
+            f"Loaded policy weights from {ckpt_path} into "
+            f"{target_module.__class__.__name__} (missing={len(missing)}, unexpected={len(unexpected)})."
+        )
+        return True
+    except Exception as e:
+        print(f"Failed to load policy weights into target module: {e}")
+        return False
