@@ -1047,12 +1047,8 @@ public:
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
-    std::cout << "Scheduler initialized with " << input.devices.get().size()
-              << " devices." << std::endl;
     if (input.top_k_candidates > 0) {
       queues.mappable.set_k(static_cast<int>(input.top_k_candidates));
-      std::cout << "Setting top-k candidates to " << input.top_k_candidates
-                << " for mappable queue." << std::endl;
     }
   }
 

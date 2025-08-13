@@ -242,8 +242,6 @@ class RuntimeEnv(EnvBase):
     def map_tasks(self, actions: torch.Tensor):
         candidate_workspace = self.candidate_workspace
         num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
-        print(f"Mapping {num_candidates} candidates", flush=True)
-        print("Candidates:", candidate_workspace[:num_candidates].tolist(), flush=True)
         graph = self.simulator_factory[self.active_idx].input.graph
         if num_candidates > 1:
             mapping_result = []
@@ -447,7 +445,7 @@ class IncrementalEFT(RuntimeEnv):
 
         ml_time = sim_ml.time
 
-        reward = 8 * (self.eft_time - self.gamma * ml_time) / self.size()
+        reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / self.size())
         self.eft_time = ml_time
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
