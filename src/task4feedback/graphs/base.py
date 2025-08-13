@@ -12,7 +12,12 @@ import pymetis
 import inspect
 from typing import Type
 from task4feedback.interface import System, VariantBuilder
-
+from matplotlib import pyplot as plt
+import matplotlib.animation as animation
+from matplotlib.collections import PatchCollection
+from matplotlib.patches import Circle
+import wandb
+import os
 
 def spring_layout(G):
     pos = nx.spring_layout(G, seed=5, scale=600)
@@ -569,42 +574,30 @@ class DynamicWorkload:
 
     def animate_workload(
         self,
-        filename="workload_animation.mp4",
-        interval=200,
+        title="workload_animation.mp4",
+        folder=None,
+        interval=None,
         colormap="viridis",
         normalize=True,
         show=True,
         max_radius=0.1,
+        figsize=(8, 8),
+        video_seconds=15,
+        bitrate=300,
+        dpi=300,
     ):
-        """
-        Animate the workload across different levels.
-
-        Parameters:
-        -----------
-        filename : str
-            Name of the output file for the animation
-        interval : int
-            Time interval between frames in milliseconds
-        colormap : str
-            Matplotlib colormap to use for coloring the circles
-        normalize : bool
-            Whether to normalize the radii across all levels
-        show : bool
-            Whether to display the animation
-        max_radius : float
-            Maximum radius for the circles as a fraction of the domain size
-
-        Returns:
-        --------
-        Animation object
-        """
-        from matplotlib import pyplot as plt
-        import matplotlib.animation as animation
-        from matplotlib.collections import PatchCollection
-        from matplotlib.patches import Circle
         from .mesh.plot import create_mesh_plot
+        if folder is None:
+            if wandb is None or wandb.run is None or wandb.run.dir is None:
+                folder = "."
+            else:
+                folder = wandb.run.dir
 
-        fig, ax = create_mesh_plot(self.geom, title="Workload Animation")
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        filename = os.path.join(folder, title)
+
+        fig, ax = create_mesh_plot(self.geom, title=title)
 
         # Get domain size for scaling
         domain_width = self.geom.get_max_coordinate(0) - self.geom.get_min_coordinate(0)
@@ -666,6 +659,9 @@ class DynamicWorkload:
             ax.add_collection(patches_collection)
 
             return [patches_collection]
+        
+        if interval is None:
+            interval = int(video_seconds * 1000 / len(self.levels))
 
         ani = animation.FuncAnimation(
             fig,
@@ -673,12 +669,12 @@ class DynamicWorkload:
             frames=len(self.levels),
             interval=interval,
             blit=True,
-            repeat=True,
+            repeat=False,
         )
 
         if filename:
             try:
-                ani.save(filename, writer="ffmpeg", fps=1000 / interval)
+                ani.save(filename, writer="ffmpeg", dpi=dpi, bitrate=bitrate)
             except Exception as e:
                 print(f"Error saving animation: {e}")
 
