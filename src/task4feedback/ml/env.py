@@ -21,7 +21,7 @@ from task4feedback.graphs.base import TaskGraph, DataBlocks, ComputeDataGraph
 import random
 from task4feedback.graphs.mesh.plot import *
 from task4feedback.legacy_graphs import *
-from task4feedback.graphs.jacobi import JacobiGraph
+from task4feedback.graphs.jacobi import JacobiGraph, JacobiRoundRobinMapper
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from torch_geometric.data import HeteroData
 from torchrl.data import Categorical
@@ -336,7 +336,7 @@ class RuntimeEnv(EnvBase):
                 if isinstance(graph, JacobiGraph):
                     if isinstance(graph, DynamicJacobiGraph):
                         graph.set_cell_locations([-1 for _ in range(graph.config.n**2)])
-                        graph.randomize_workload(seed=new_location_seed)
+                        graph.randomize_workload(seed=new_location_seed, system=self.simulator_factory[0].input.system)
                     graph.randomize_locations(
                         self.location_randomness,
                         self.location_list,
@@ -447,7 +447,10 @@ class IncrementalEFT(RuntimeEnv):
 
         # start_time = perf_counter()
         sim_ml = self.simulator.copy()
-        sim_ml.disable_external_mapper()
+        sim_ml.external_mapper = JacobiRoundRobinMapper(
+            n_devices=4,
+            offset=1,
+        )
         # end_time = perf_counter()
         # print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
         # print(f"Current sim time {sim_ml.time}", flush=True)

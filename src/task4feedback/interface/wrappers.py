@@ -400,24 +400,28 @@ class DataBlocks:
 
 
 class System:
-    def __init__(self):
+    def __init__(self, fastest_flops=11e12, slowest_flops=11e12, gpu_flop=11e12, fastest_gmbw=443e9, slowest_gmbw=443e9):
         #Default specs are based on (the old) RTX5000s (Frontera). 
         self.devices = Devices()
         self.topology = None
         self.slowest_bandwidth = float("inf")
         self.fastest_bandwidth = 0
-        self.fastest_flops = 11e12 
-        self.slowest_flops = 11e12
+        self.fastest_flops = fastest_flops 
+        self.slowest_flops = slowest_flops
         self.arch_to_flops = {
             DeviceType.CPU: 0,  # 0 GFLOPS for CPU (assume it cannot do work, this affects variant generation)
-            DeviceType.GPU: 11e12,  # 11 TFLOPS
+            DeviceType.GPU: gpu_flop,  # 11 TFLOPS
         }
         self.arch_to_gmbw = {
             DeviceType.CPU: 0,
-            DeviceType.GPU: 443e9,  # 443 GB/s
+            DeviceType.GPU: fastest_gmbw,  # 443 GB/s
         }
-        self.fastest_gmbw = 443e9 
-        self.slowest_gmbw = 443e9
+        self.fastest_gmbw = fastest_gmbw
+        self.slowest_gmbw = slowest_gmbw
+        self.arch_to_maxmem = {
+            DeviceType.CPU: 0,
+            DeviceType.GPU: 0
+        }
 
 
     def create_device(self, name, arch, copy, memory, flops: Optional[int] = None, gmbw: Optional[int] = None):
@@ -426,7 +430,8 @@ class System:
             self.fastest_flops = max(self.fastest_flops, flops)
             self.slowest_flops = min(self.slowest_flops, flops)
         self.arch_to_flops[arch] = flops if flops is not None else self.arch_to_flops.get(arch, 11e12) # Default to 11 TFLOPs if not set
-        self.arch_to_gmbw[arch] = gmbw if gmbw is not None else 443e9  # Default to 443 GB/s if not set
+        self.arch_to_gmbw[arch] = gmbw if gmbw is not None else self.arch_to_gmbw.get(arch, 443e9)  # Default to 443 GB/s if not set
+        self.arch_to_maxmem[arch] = max(self.arch_to_maxmem.get(arch, 0), memory)
         return DeviceTuple(name, id, self.devices.get_local_id(id), arch, memory)
 
     def finalize_devices(self):
@@ -2297,7 +2302,7 @@ class SimulatorFactory:
 
 
 def uniform_connected_devices(
-    n_devices: int, mem: int, latency: int, h2d_bw: int, d2d_bw: int, h2d_links: int = 2, d2d_links: int = 2, cpu_copyengines: int = 2, device_copyengines: int=4
+    n_devices: int, mem: int, latency: int, h2d_bw: int, d2d_bw: int, h2d_links: int = 2, d2d_links: int = 2, cpu_copyengines: int = 2, device_copyengines: int=4, system_specs: dict = None
 ) -> System:
     """
     Creates a system with a uniform connection of devices including one CPU and multiple GPUs.
@@ -2312,8 +2317,10 @@ def uniform_connected_devices(
     AssertionError: If n_devices is not greater than 1.
     """
     assert n_devices > 1
-
-    s = System()
+    if system_specs is None:
+        s = System()
+    else:
+        s = System(**system_specs)
     n_gpus = n_devices - 1
 
     s.create_device("CPU:0", DeviceType.CPU, cpu_copyengines, 10000000000000)
