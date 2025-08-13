@@ -175,8 +175,8 @@ class RuntimeEnv(EnvBase):
         """
         return self.size()
 
-    def _get_baseline(self, use_eft=False):
-        if use_eft:
+    def _get_baseline(self, policy="EFT"):
+        if policy == "EFT":
             # print("Calculating EFT baseline...")
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
@@ -187,6 +187,18 @@ class RuntimeEnv(EnvBase):
                 final_state == fastsim.ExecutionState.COMPLETE
             ), f"Baseline returned unexpected final state: {final_state}"
             # cprint("EFT baseline calculated.")
+            return simulator_copy.time
+        elif policy == "Cyclic":
+            simulator_copy = self.simulator.copy()
+            simulator_copy.initialize()
+            simulator_copy.initialize_data()
+            simulator_copy.enable_external_mapper()
+            simulator_copy.external_mapper = JacobiRoundRobinMapper(
+                n_devices= 4, offset=1)
+            final_state = simulator_copy.run()
+            assert (
+                final_state == fastsim.ExecutionState.COMPLETE
+            ), f"Baseline returned unexpected final state: {final_state}"
             return simulator_copy.time
         return self.baseline_time
 
@@ -287,7 +299,7 @@ class RuntimeEnv(EnvBase):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.EFT_baseline = self._get_baseline(policy="EFT")
 
         self.step_count += 1
 
@@ -430,13 +442,14 @@ class RuntimeEnv(EnvBase):
 
 class IncrementalEFT(RuntimeEnv):
 
-    def __init__(self, *args, gamma: float = 1.0, **kwargs):
+    def __init__(self, *args, gamma: float = 1.0, baseline_policy: str = "EFT", **kwargs):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
+        self.baseline_policy = baseline_policy
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.EFT_baseline = self._get_baseline(policy=self.baseline_policy)
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
@@ -498,7 +511,7 @@ class DelayIncrementalEFT(IncrementalEFT):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.EFT_baseline = self._get_baseline(policy="EFT")
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
@@ -548,7 +561,7 @@ class BaselineImprovementEFT(RuntimeEnv):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.EFT_baseline = self._get_baseline(policy="EFT")
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
 
@@ -608,7 +621,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.EFT_baseline = self._get_baseline(policy="EFT")
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_log[self.step_count] = self.EFT_baseline
@@ -666,7 +679,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
 class SanityCheckEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.EFT_baseline = self._get_baseline(policy="EFT")
             self.graph: JacobiGraph = self.simulator_factory[self.active_idx].input.graph
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
@@ -712,7 +725,7 @@ class SanityCheckEnv(RuntimeEnv):
 # class kHopEFTIncrementalEnv(RuntimeEnv):
 #     def _step(self, td: TensorDict) -> TensorDict:
 #         if self.step_count == 0:
-#             self.EFT_baseline = self._get_baseline(use_eft=True)
+#             self.EFT_baseline = self._get_baseline(policy="EFT")
 #             self.prev_makespan = self.EFT_baseline
 #             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
 #         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
@@ -773,7 +786,7 @@ class SanityCheckEnv(RuntimeEnv):
 
 #     def _step(self, td: TensorDict) -> TensorDict:
 #         if self.step_count == 0:
-#             self.EFT_baseline = self._get_baseline(use_eft=True)
+#             self.EFT_baseline = self._get_baseline(policy="EFT")
 #             self.prev_makespan = self.EFT_baseline
 #             self.action_candidates = range(
 #                 int(self.only_gpu), self.simulator_factory.graph_spec.max_devices
@@ -842,7 +855,7 @@ class SanityCheckEnv(RuntimeEnv):
 
 #     def _step(self, td: TensorDict) -> TensorDict:
 #         if self.step_count == 0:
-#             self.EFT_baseline = self._get_baseline(use_eft=True)
+#             self.EFT_baseline = self._get_baseline(policy="EFT")
 #             self.prev_makespan = self.EFT_baseline
 #             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
 #         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
@@ -927,7 +940,7 @@ class SanityCheckEnv(RuntimeEnv):
 
 #     def _step(self, td: TensorDict) -> TensorDict:
 #         if self.step_count == 0:
-#             self.EFT_baseline = self._get_baseline(use_eft=True)
+#             self.EFT_baseline = self._get_baseline(policy="EFT")
 #             self.prev_makespan = self.EFT_baseline
 #             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
 #         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
@@ -1353,7 +1366,7 @@ class IncrementalMappingEnv(EnvBase):
         self.workspace = self._prealloc_step_buffers(100)
         self.baseline_time = baseline_time
 
-    def _get_baseline(self, use_eft=True):
+    def _get_baseline(self, policy="EFT"):
         if use_eft:
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
@@ -1503,7 +1516,7 @@ class IncrementalMappingEnv(EnvBase):
         self.graph_extractor: GraphExtractor = GraphExtractor(
             self.simulator.get_state()
         )
-        self.EFT_baseline = self._get_baseline(use_eft=True)
+        self.EFT_baseline = self._get_baseline(policy="EFT")
 
         simulator_status = self.simulator.run_until_external_mapping()
         assert (

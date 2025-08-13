@@ -1,3 +1,4 @@
 _target_: task4feedback.ml.env.IncrementalEFT
 _partial_: true
 random_start: true
+baseline_policy: Cyclic
