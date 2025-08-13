@@ -165,7 +165,7 @@ class DynamicJacobiData(JacobiData):
             "boundary_average_comm": sum(boundary_data) / len(boundary_data) / system.fastest_bandwidth,
             "compute_average":  sum(compute_time) / len(compute_time),
         }
-        print(f"Average Step Size: {int(self.data_stat["average_step_data"]/1e9):,}GB")
+        #print(f"Average Step Size: {int(self.data_stat["average_step_data"]/1e9):,}GB")
 
     def reset_data_size(self, system: System):
         """

@@ -1304,11 +1304,11 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         ), f"Batched {self.batched} CNN observer requires max_candidates to be {width**2 if self.batched else 1}, but got {spec.max_candidates}"
 
         task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.TaskMeanDurationFeature)
-        task_feature_factory.add(fastsim.ReadDataLocationFeature)
+        #task_feature_factory.add(fastsim.TaskMeanDurationFeature)
+        #task_feature_factory.add(fastsim.ReadDataLocationFeature)
         if prev_frames > 0:
             task_feature_factory.add(
-                fastsim.PrevReadSizeFeature, width, False, prev_frames
+                fastsim.PrevReadSizeFeature, width, True, prev_frames
             )
         if not batched:
             # Difference in depth doesn't exist in batched
