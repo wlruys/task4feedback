@@ -11,6 +11,7 @@ from helper.algorithm import create_optimizer, create_lr_scheduler
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
 from task4feedback.ml.models import *
+from task4feedback.graphs.jacobi import JacobiRoundRobinMapper
 
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
@@ -23,7 +24,6 @@ import git
 import os
 from hydra.core.hydra_config import HydraConfig
 from helper.run_name import make_run_name, cfg_hash
-
 import torch
 import numpy
 import random
@@ -64,23 +64,6 @@ def configure_training(cfg: DictConfig):
 
 @hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
-    if cfg.wandb.enabled:
-        wandb.init(
-            project=cfg.wandb.project,
-            config=OmegaConf.to_container(cfg, resolve=True),
-            name=make_run_name(cfg),
-            # name=f"{cfg.wandb.name}",
-            dir=cfg.wandb.dir,
-            tags=cfg.wandb.tags,
-        )
-
-        hydra_output_dir = Path(HydraConfig.get().runtime.output_dir)
-
-        with open_dict(cfg):
-            for fname in ["git_sha.txt", "git_diff.patch", "git_dirty.txt"]:
-                git_file = hydra_output_dir / fname
-                if git_file.exists():
-                    wandb.save(str(git_file))
 
     torch.manual_seed(cfg.seed)
     numpy.random.seed(cfg.seed)
@@ -88,9 +71,6 @@ def main(cfg: DictConfig):
     torch.use_deterministic_algorithms(cfg.deterministic_torch)
 
     configure_training(cfg)
-
-    if cfg.wandb.enabled:
-        wandb.finish()
 
 
 if __name__ == "__main__":

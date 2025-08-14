@@ -125,19 +125,22 @@ def mapper_registry(cfg: DictConfig, d2d_bandwidth: int) -> Dict[str, Optional[M
     def row_mapper(_: DynamicJacobiGraph) -> LevelPartitionMapper:
         return JacobiRoundRobinMapper(
             n_devices=cfg.system.n_devices - 1,
-            offset=0,
+            setting=1,
+            offset=1
         )
     
     def cyclic_mapper(_: DynamicJacobiGraph) -> LevelPartitionMapper:
         return JacobiRoundRobinMapper(
             n_devices=cfg.system.n_devices - 1,
-            offset=1,
+            setting=0,
+            offset=1
         )
 
     def quadrant_mapper(graph: DynamicJacobiGraph) -> LevelPartitionMapper:
         return JacobiQuadrantMapper(
             n_devices=cfg.system.n_devices - 1,
-            graph=graph
+            graph=graph,
+            offset=1
         )
 
     def global_min_cut_mapper(graph: DynamicJacobiGraph) -> LevelPartitionMapper:
@@ -555,7 +558,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         saved_lines = (
             f"# {cfg.graph.config.workload_args.traj_type} Trajectory\n"
             f"# Averaged over {NUM_SAMPLES} runs\n"
-            f"all_keys={experiment_names}\n"
+            f"experiment_names={experiment_names}\n"
             f"speedup_keys={speedup_keys}\n"
             f"mem_keys={mem_keys}\n"
             f"sweep_list={sweep_list}\n"

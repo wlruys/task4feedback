@@ -64,20 +64,20 @@ class RuntimeEnv(EnvBase):
             ]
         self.location_list = location_list
         self.only_gpu = only_gpu
-        self.n_devices = len(self.location_list)
-        
-#         print(f"""
-# RuntimeEnv initialized with:
-# - Random Start: {self.random_start}
-# - Change Priority: {self.change_priority}
-# - Change Duration: {self.change_duration}
-# - Change Location: {self.change_location}
-# - Only GPU: {self.only_gpu}
-# - n Devices: {self.n_devices}
-# - Location Randomness: {self.location_randomness}
-# - Location List: {self.location_list}
-# - Max Samples per Iteration: {self.max_samples_per_iter}
-#               """)
+        self.n_compute_devices = len(simulator_factory.input.system) - int(only_gpu)
+        if verbose:
+            print(f"""
+    RuntimeEnv initialized with:
+    - Random Start: {self.random_start}
+    - Change Priority: {self.change_priority}
+    - Change Duration: {self.change_duration}
+    - Change Location: {self.change_location}
+    - Only GPU: {self.only_gpu}
+    - num Compute Devices: {self.n_compute_devices}
+    - Location Randomness: {self.location_randomness}
+    - Location List: {self.location_list}
+    - Max Samples per Iteration: {self.max_samples_per_iter}
+                """)
 
         if not isinstance(simulator_factory, list):
             simulator_factory = [simulator_factory]
@@ -114,7 +114,7 @@ class RuntimeEnv(EnvBase):
         self.observation = self._get_new_observation_buffer()
         observation_spec = self._create_observation_spec(self.observation)
 
-        action_spec = self._create_action_spec(n_devices=len(self.location_list))
+        action_spec = self._create_action_spec(n_devices=self.n_compute_devices)
         reward_spec = self._create_reward_spec()
         done_spec = self._create_done_spec()
 
@@ -193,7 +193,7 @@ class RuntimeEnv(EnvBase):
             simulator_copy.initialize_data()
             simulator_copy.enable_external_mapper()
             simulator_copy.external_mapper = JacobiRoundRobinMapper(
-                n_devices= 4, offset=1)
+                n_devices=self.n_compute_devices, setting=0, offset=int(self.only_gpu))
             final_state = simulator_copy.run()
             assert (
                 final_state == fastsim.ExecutionState.COMPLETE

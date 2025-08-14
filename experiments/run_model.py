@@ -4,15 +4,16 @@ import wandb
 from hydra.utils import instantiate
 
 from helper.graph import make_graph_builder
-from helper.env import make_env, load_policy_from_checkpoint
-from helper.model import create_td_actor_critic_models
+from helper.env import make_env
+from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
 from helper.algorithm import create_optimizer, create_lr_scheduler
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
 from task4feedback.ml.models import *
-from task4feedback.graphs.jacobi import JacobiRoundRobinMapper
-
+from task4feedback.ml.util import *
+from task4feedback.graphs.jacobi import JacobiRoundRobinMapper, LevelPartitionMapper
+from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -76,13 +77,24 @@ def configure_training(cfg: DictConfig):
             normalization=norm,
             eval=True,
         )
+    def rr_mapper() -> LevelPartitionMapper:
+        return JacobiRoundRobinMapper(
+            n_devices=4,
+            setting=0,
+        )
     model.eval()
+    config = EvaluationConfig
+    initloc: list[dict] = []
     with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-        for i in range(10):
+        for i in range(20):
             obs = eval_env.reset()
-            td = eval_env.rollout(policy=model.actor, max_steps=130, auto_reset=False, tensordict=obs)
+            cyclic=eval_env._get_baseline("Cyclic")
             
-            print(eval_env.EFT_baseline, eval_env.EFT_baseline/td['observation','aux','time'][-1].item())
+            td = eval_env.rollout(policy=model.actor, max_steps=10000, auto_reset=False, tensordict=obs)
+            
+            print(eval_env.EFT_baseline, cyclic, eval_env.EFT_baseline/td['observation','aux','time'][-1].item(), cyclic/td['observation','aux','time'][-1].item())
+
+    
 
 
 @hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)

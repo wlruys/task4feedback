@@ -849,10 +849,17 @@ class LevelPartitionMapper:
 class JacobiRoundRobinMapper:
     def __init__(
         self,
-        n_devices: int,
-        offset: int = 0,
+        n_devices: int = 4,
+        setting: int = 0,
+        offset: int = 1
     ):
+        """
+        Initialize the JacobiRoundRobinMapper.
+        setting == 1 : Row cyclic
+        setting == 0 : Checker board
+        """
         self.n_devices = n_devices
+        self.setting = setting
         self.offset = offset
 
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
@@ -863,14 +870,35 @@ class JacobiRoundRobinMapper:
         )
         num_candidates = simulator.simulator.get_mappable_candidates(candidates)
         mapping_result = []
+        stride = graph.config.n ** 2
+        n = graph.config.n
+        
         for i in range(num_candidates):
-            global_task_id = candidates[i].item() + self.offset
-            device = global_task_id % self.n_devices + 1
+            global_task_id = candidates[i].item()
+            idx = global_task_id % stride
+            row = idx // n
+            col = idx % n
+            if self.setting == 0:
+                # Checkerboard-style mapping
+                if self.n_devices == 2:
+                    # Classic 2-color checkerboard
+                    device = ((row + col) & 1)
+                elif self.n_devices == 4:
+                    # 2x2 tiled checkerboard: devices 1..4 repeat like
+                    # 1 2
+                    # 3 4
+                    device = ((row & 1) * 2 + (col & 1))
+                else:
+                    # General fallback: diagonal stripes that still alternate locally
+                    device = ((row + col) % self.n_devices)
+            else:
+                # Previous round-robin behavior (row-major)
+                device = ((row * n + col) % self.n_devices)
             mapping_priority = simulator.simulator.get_state().get_mapping_priority(
                 global_task_id
             )
             mapping_result.append(
-                fastsim.Action(i, device, mapping_priority, mapping_priority)
+                fastsim.Action(i, device+self.offset, mapping_priority, mapping_priority)
             )
         return mapping_result
     
@@ -879,11 +907,13 @@ class JacobiQuadrantMapper:
         self,
         n_devices: int,
         graph: JacobiGraph,
+        offset: int = 1
     ):
         self.n_devices = n_devices
         self.width = graph.config.n
         self.n_tasks = self.width * self.width
         self.graph = graph
+        self.offset = offset
 
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
         graph: JacobiGraph = simulator.input.graph
@@ -897,7 +927,7 @@ class JacobiQuadrantMapper:
             global_task_id = candidates[i].item()
             x = global_task_id % self.n_tasks // self.width // (self.width // 2)
             y = global_task_id % self.n_tasks % self.width // (self.width // 2)
-            device = x * 2 + y + 1
+            device = x * 2 + y + self.offset
             mapping_priority = simulator.simulator.get_state().get_mapping_priority(
                 global_task_id
             )
