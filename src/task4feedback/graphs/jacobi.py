@@ -873,6 +873,38 @@ class JacobiRoundRobinMapper:
                 fastsim.Action(i, device, mapping_priority, mapping_priority)
             )
         return mapping_result
+    
+class JacobiQuadrantMapper:
+    def __init__(
+        self,
+        n_devices: int,
+        graph: JacobiGraph,
+    ):
+        self.n_devices = n_devices
+        self.width = graph.config.n
+        self.n_tasks = self.width * self.width
+        self.graph = graph
+
+    def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        graph: JacobiGraph = simulator.input.graph
+        assert isinstance(graph, JacobiGraph)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item()
+            x = global_task_id % self.n_tasks // self.width // (self.width // 2)
+            y = global_task_id % self.n_tasks % self.width // (self.width // 2)
+            device = x * 2 + y + 1
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(i, device, mapping_priority, mapping_priority)
+            )
+        return mapping_result
 
 class JacobiVariantGPUOnly(VariantBuilder):
     @staticmethod
