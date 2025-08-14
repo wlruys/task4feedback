@@ -196,7 +196,7 @@ class DynamicJacobiData(JacobiData):
                     step_data_sum[i] += interior_size
                     compute_time.append(max((interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6),int(interior_size / self.config.bytes_per_element) ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6) ))
 
-            # Create 8 data blocks per edge
+            # Create 2 data blocks per edge
             for edge in self.geometry.cell_edges[cell]:
                 for i in range(self.config.steps + 1):
                     workload = self.workload.get_scaled_cell_workload(i, cell)
@@ -221,6 +221,7 @@ class DynamicJacobiData(JacobiData):
                         self.map.get_block(DataKey(Edge(edge), (Cell(cell), i))),
                         boundary_size,
                     )
+                    
                     assert (
                         boundary_size > 0 or i == self.config.steps
                     ), "Boundary data size must be positive"

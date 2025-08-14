@@ -93,8 +93,13 @@ def make_env(
     observer_factory, graph_spec = create_observer_factory(cfg)
 
     task_noise = create_task_noise(cfg, graph.static_graph)
-    
-    input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise)
+
+    if cfg.feature.observer.batched:
+        top_k_candidates = cfg.graph.config.n**2
+    else:
+        top_k_candidates = 1
+
+    input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise, top_k_candidates=top_k_candidates)
 
 
 

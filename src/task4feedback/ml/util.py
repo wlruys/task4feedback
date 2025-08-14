@@ -246,10 +246,10 @@ class EvaluationConfig:
     exploration_types: list[str] = field(default_factory=lambda: ["RANDOM", "DETERMINISTIC"])
     samples: int = 10
     seeds: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])
+    video_seconds: int = 15
 
 
-
-def eval_env(policy, env, exploration_type: ExplorationType, samples: int = 1, seed: int = 0):
+def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType, samples: int = 1, seed: int = 0):
     env_rewards = []
     env_times = []
     metrics = {}
@@ -292,78 +292,101 @@ def eval_env(policy, env, exploration_type: ExplorationType, samples: int = 1, s
 
 
 def evaluate_policy(
+        n_collections: int,
         policy, 
         eval_envs: list[RuntimeEnv],
         config: EvaluationConfig,
-) -> dict[str, float]:
+        exploration_type: str,
+        metrics: dict
+) -> list[RuntimeEnv]:
     
-    metrics = {}
-
-    viz_envs = {}
-    viz_envs[ExplorationType.DETERMINISTIC] = None 
-    viz_envs[ExplorationType.RANDOM] = None
     env = None 
-    
-    for exploration_type in config.exploration_types:
-        metrics[f"eval/{str(exploration_type)}"] = {}
+    metrics[f"eval/{str(exploration_type)}"] = {}
 
-        for i, env in enumerate(eval_envs):
-            for seed in config.seeds:
-                metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = {}
-                if exploration_type == "RANDOM":
-                    exploration_type_enum = ExplorationType.RANDOM
-                elif exploration_type == "DETERMINISTIC":
-                    exploration_type_enum = ExplorationType.DETERMINISTIC
-                else:
-                    raise ValueError(f"Unknown exploration type: {exploration_type}")
-                
-                training.info(f"Evaluating environment {i, seed} with {str(exploration_type)} policy")
-                env_eval_metrics, output_env = eval_env(
-                    policy,
-                    env,
-                    exploration_type_enum,
-                    samples=config.samples if exploration_type == "RANDOM" else 1,
-                    seed=seed
-                )
+    for i, env in enumerate(eval_envs):
 
-                metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = env_eval_metrics
+        if env is None:
+            training.warning(f"Environment {i} is None, skipping evaluation.")
+            continue
 
-        if env is not None:
-            viz_envs[exploration_type] = output_env
+        if not hasattr(env, "reset_for_evaluation"):
+            training.warning(f"Environment {i} does not have reset_for_evaluation method, skipping evaluation.")
+            continue
 
-    return metrics, viz_envs
-
-
-def visualize_envs(n_collections: int, viz_envs: dict, config: EvaluationConfig):
-    d = {}
-    for key, env in viz_envs.items():
-        if env is not None:
-            training.info(f"Visualizing environment {key} at n_updates={n_collections}")
-            title = f"network_eval_{key}_{n_collections}"
-            animate_mesh_graph(
-                env,
-                time_interval=int(env.simulator.time / config.max_frames),
-                show=False,
-                title=title,
-                figsize=config.fig_size,
-                dpi=config.dpi,
-                bitrate=config.bitrate,
-            )
-
+        if n_collections == 0 and hasattr(env, "get_graph") and hasattr(env.get_graph(), "get_workload"):
+            training.info("Generating initial workload plot for environment {i}")
+            env.reset_for_evaluation(seed=config.seeds[0])
+            title = f"workload_env_{i}.mp4"
+            workload = env.get_graph().get_workload()
+            workload.animate_workload(title=title, show=False, bitrate=config.bitrate, video_seconds=config.video_seconds,
+                                      figsize=config.fig_size, dpi=config.dpi)
+            
             if wandb is None or wandb.run is None or wandb.run.dir is None:
                 path = "."
             else:
                 path = wandb.run.dir
 
-            video_path = Path(path) / f"{title}.mp4"
-            d[f"eval/video/{key}"] = wandb.Video(
-                video_path,
-                caption=f"{key} evaluation at n_collections={n_collections}",
-                fps=config.max_frames,
-                format="mp4",
+            video_path = Path(path) / f"{title}"
+            metrics[f"eval/env_{i}_workload"] = wandb.Video(
+            video_path,
+            caption=f"Env {i} Workload",
+            fps=len(workload.levels) / (config.max_frames/30),
+            format="mp4",
             )
 
-    return d
+
+        for seed in config.seeds:
+            metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = {}
+            if exploration_type == "RANDOM":
+                exploration_type_enum = ExplorationType.RANDOM
+            elif exploration_type == "DETERMINISTIC":
+                exploration_type_enum = ExplorationType.DETERMINISTIC
+            else:
+                raise ValueError(f"Unknown exploration type: {exploration_type}")
+            
+            training.info(f"Evaluating environment {i, seed} with {str(exploration_type)} policy")
+            env_eval_metrics, output_env = eval_env(
+                n_collections,
+                policy,
+                env,
+                exploration_type_enum,
+                samples=config.samples if exploration_type == "RANDOM" else 1,
+                seed=seed
+            )
+
+            metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = env_eval_metrics
+
+    return [output_env]
+
+
+def visualize_envs(n_collections: int, viz_envs: list[RuntimeEnv], config: EvaluationConfig, exploration_type: str, video_log: dict):
+    for i, env in enumerate(viz_envs):
+        assert(env is not None)
+        training.info(f"Visualizing environment {i} with policy {exploration_type} at n_updates={n_collections}")
+        title = f"network_eval_{exploration_type}_{n_collections}"
+        animate_mesh_graph(
+            env,
+            time_interval=int(env.simulator.time / config.max_frames),
+            show=False,
+            title=title,
+            figsize=config.fig_size,
+            dpi=config.dpi,
+            bitrate=config.bitrate,
+            video_seconds=config.video_seconds,
+        )
+
+        if wandb is None or wandb.run is None or wandb.run.dir is None:
+            path = "."
+        else:
+            path = wandb.run.dir
+
+        video_path = Path(path) / f"{title}.mp4"
+        video_log[f"eval/video/{i}/{exploration_type}"] = wandb.Video(
+            video_path,
+            caption=f"Env {i}, {exploration_type} evaluation at n_collections={n_collections}",
+            fps=config.max_frames,
+            format="mp4",
+        )
 
 def run_evaluation(
     policy,
@@ -373,12 +396,15 @@ def run_evaluation(
     n_updates: int = 0,
     n_samples: int = 0,
 ):
-    metrics, viz_envs = evaluate_policy(policy, eval_envs, config)
+    metrics = {}
+    video_log = {}
+    
 
-    if (config.animation_interval > 0) and (n_collections % config.animation_interval == 0):
-        video_log = visualize_envs(n_collections, viz_envs, config)
-    else:
-        video_log = {}
+    for exploration_type in config.exploration_types:
+        viz_envs = evaluate_policy(n_collections, policy, eval_envs, config, exploration_type, metrics)
+
+        if (config.animation_interval > 0) and (n_collections % config.animation_interval == 0):
+            visualize_envs(n_collections, viz_envs, config, exploration_type, video_log)
 
     wandb.log(
         {

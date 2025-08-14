@@ -46,8 +46,7 @@ class RuntimeEnv(EnvBase):
         location_list: Optional[List[int]] = None,
         max_samples_per_iter: int = 0,
         random_start: bool = False,
-        verbose: bool = False,
-        colorized: bool = False,
+        verbose: bool = True,
     ):
         super().__init__(device=device)
         # print("Initializing environment")
@@ -261,6 +260,7 @@ class RuntimeEnv(EnvBase):
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
                 flush=True,
             )
+        
 
         return obs, reward, time, improvement
 
@@ -473,9 +473,9 @@ class IncrementalEFT(RuntimeEnv):
         # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
 
         ml_time = sim_ml.time
-        
-        reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / self.size()) / 10
-        
+
+        reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / self.size())
+
         self.eft_time = ml_time
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
@@ -503,11 +503,14 @@ class DelayIncrementalEFT(IncrementalEFT):
         self,
         *args,
         delay: int = 10,
+        random_offset: bool = True,
+        offset: int = 1,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.delay = delay
-        self.offset = 1
+        self.offset = offset
+        self.random_offset = random_offset
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
@@ -550,7 +553,8 @@ class DelayIncrementalEFT(IncrementalEFT):
         return buf
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        self.offset = random.randint(1, self.delay)
+        if self.random_offset:
+            self.offset = random.randint(1, self.delay)
         return super()._reset(td)
 
 

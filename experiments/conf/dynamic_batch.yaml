@@ -18,7 +18,7 @@ hydra:
   callbacks:
     git_info:
       _target_: train.GitInfo
-seed: 532
+seed: 256
 deterministic_torch: true
 
 reward:
@@ -30,8 +30,9 @@ graph:
       n: 8
       steps: 60
       workload_args:
-        lower_bound: 1
-        upper_bound: 5
+        lower_bound: 1000
+        upper_bound: 5000
+        scale: 0.01
   env:
     change_priority: True
     change_locations: True
@@ -44,14 +45,12 @@ algorithm:
   ent_coef: 0.001
   sample_slices: True
   slice_len: 16
-  lmbda: 0.98
-  gamma: 0.999
 
 optimizer:
   lr: 2.5e-4
 
 system:
-  mem: 80000000000
+  mem: 136000
 
 feature:
   observer:
@@ -61,7 +60,7 @@ feature:
 network:
   layers:
     lstm:
-      hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
+      hidden_size: 32 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
     state:
       hidden_channels: 16
     actor:
@@ -78,5 +77,5 @@ wandb:
   enabled: true
 
 eval:
-  eval_interval: 0
+  eval_interval: 10
 

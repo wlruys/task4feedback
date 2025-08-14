@@ -364,10 +364,10 @@ def animate_highlights(
     ax,
     geom,
     highlight_sequence,
-    interval=500,
-    repeat=False,
+    interval=None,
     z_order=8,
     device_to_color=None,
+    video_seconds=15,
 ):
     highlight_artists = []
 
@@ -414,6 +414,9 @@ def animate_highlights(
         highlight_artists.extend(new_artists_2)
         # highlight_artists.extend(new_artists_3)
         return highlight_artists
+    
+    if interval is None:
+        interval = int(video_seconds * 1000 / len(highlight_sequence))
 
     ani = animation.FuncAnimation(
         fig,
@@ -427,7 +430,7 @@ def animate_highlights(
     return ani
 
 
-def animate_state_list(graph, state_list, figsize=(8, 8)):
+def animate_state_list(graph, state_list, figsize=(8, 8), video_seconds=15):
     geom = graph.data.geometry
     fig, ax = create_mesh_plot(geom, figsize=figsize)
     highlight_sequence = []
@@ -443,7 +446,16 @@ def animate_state_list(graph, state_list, figsize=(8, 8)):
                 cell_id = graph.task_to_cell[task]
 
                 if cell_id < len(graph.data.geometry.cells):
-                    if state_type == fastsim.TaskState.LAUNCHED:
+
+                    if state_type == fastsim.TaskState.COMPLETED:
+                        label = graph.task_to_level[task]
+                        mapped_device = state.compute_task_mapping_dict[task]
+                        if hasattr(graph, "task_to_direction"):
+                            direction = graph.task_to_direction[task]
+                            label = f"{label} ({direction})"
+                        last_level_label[cell_id] = label
+                        last_partition[cell_id] = mapped_device
+                    elif state_type == fastsim.TaskState.LAUNCHED:
                         mapped_device = state.compute_task_mapping_dict[task]
                         cell_highlights[device_to_color[mapped_device]].append(cell_id)
 
@@ -454,6 +466,7 @@ def animate_state_list(graph, state_list, figsize=(8, 8)):
 
                         last_level_label[cell_id] = label
                         last_partition[cell_id] = mapped_device
+
 
         edge_highlights = defaultdict(lambda: list())
         boundary_highlights = defaultdict(lambda: dict())
@@ -499,7 +512,7 @@ def animate_state_list(graph, state_list, figsize=(8, 8)):
 
     update_title.frame = 0
     ani = animate_highlights(
-        fig, ax, geom, highlight_sequence, device_to_color=device_to_color
+        fig, ax, geom, highlight_sequence, device_to_color=device_to_color, video_seconds=video_seconds
     )
     ani.event_source.add_callback(update_title)
     return ani
@@ -514,6 +527,7 @@ def make_mesh_graph_animation(
     folder=None,
     dpi=None,
     bitrate=None,
+    video_seconds=15,
 ):
     if folder is None:
         if wandb is None or wandb.run is None or wandb.run.dir is None:
@@ -526,9 +540,9 @@ def make_mesh_graph_animation(
     title = os.path.join(folder, title)
 
     title = f"{title}.mp4"
-    ani = animate_state_list(graph, state_list, figsize=figsize)
+    ani = animate_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
     try:
-        ani.save(title, writer="ffmpeg", fps=30, dpi=dpi, bitrate=bitrate)
+        ani.save(title, writer="ffmpeg", dpi=dpi, bitrate=bitrate)
     except Exception as e:
         print(f"Error saving animation: {e}")
     if show:
@@ -545,6 +559,7 @@ def animate_mesh_graph(
     figsize=(8, 8),
     dpi=300,
     bitrate=300,
+    video_seconds=15,
 ):
     current_time = env.simulator.time
     state_list = []
@@ -561,4 +576,5 @@ def animate_mesh_graph(
         figsize=figsize,
         dpi=dpi,
         bitrate=bitrate,
+        video_seconds=video_seconds,
     )
