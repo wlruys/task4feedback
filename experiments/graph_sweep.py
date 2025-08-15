@@ -31,6 +31,7 @@ from task4feedback.graphs.base import weighted_cell_partition
 
 from helper.graph import make_graph_builder, GraphBuilder
 from helper.env import make_env
+from helper.parmetis import run_parmetis
 
 font_scale = 1.75
 mpl.rcParams["font.size"] = mpl.rcParams["font.size"] * font_scale
@@ -41,41 +42,19 @@ size = comm.Get_size()
 
 ParMETIS = ParMETIS_wrapper()
 
-NUM_SAMPLES = 1
+NUM_SAMPLES = 4
 
 MetricKeys = ("time", "mem_usage", "total_mem_movement", "eviction_movement", "time_history")
 # experiment_names = ["EFT", "ColWise", "ParMETIS", "GlobalMinCut", "Cyclic", "Oracle"]
 # experiment_names = ["EFT", "ColWise", "GlobalMinCut", "Cyclic"]
 # experiment_names = ["EFT", "ColWise", "RL"]
-experiment_names = ["EFT", "Oracle", "GlobalMinCut"]
-# experiment_names = ["EFT", "ParMETIS"]
+# experiment_names = ["EFT", "Oracle", "GlobalMinCut"]
+experiment_names = ["EFT", "ParMETIS"]
 mem_keys = experiment_names.copy()
 speedup_keys = experiment_names.copy()
 speedup_keys.remove("EFT")
 
-sweep_list = list(range(int(80e9), int(120e9), int(5e9)))
-
-class GitInfo(Callback):
-    """Hydra callback to snapshot Git state into the Hydra run directory."""
-    def on_job_start(self, config: DictConfig, **kwargs) -> None:
-        try:
-            repo = git.Repo(search_parent_directories=True)
-            outdir = Path(config.hydra.runtime.output_dir)
-            outdir.mkdir(parents=True, exist_ok=True)
-            (outdir / "git_sha.txt").write_text(repo.head.commit.hexsha)
-            (outdir / "git_dirty.txt").write_text(str(repo.is_dirty()))
-            diff = repo.git.diff(None)
-            (outdir / "git_diff.patch").write_text(diff)
-
-            print(
-                "Git SHA:",
-                repo.head.commit.hexsha,
-                " (dirty)" if repo.is_dirty() else " (clean)",
-                flush=True,
-            )
-        except Exception as e:
-            print(f"GitInfo callback failed: {e}")
-
+sweep_list = list(range(int(40e9), int(60e9), int(5e9)))
 
 def seed_everything(seed: int = 0) -> None:
     random.seed(seed)
@@ -217,22 +196,11 @@ def run_parmetis_distributed(
     cfg: DictConfig,
     sweep_list: List[int],
     num_samples: int,
-    d2d_bandwidth: int,
     metrics: Dict[str, Dict[str, List[float]]],
 ) -> None:
     """
     Executes the ParMETIS portion with MPI, accumulating results in `metrics["ParMETIS"]`.
     """
-    # Only rank 0 needs an env
-    partitioned_tasks, vtxdist, xadj, adjncy, vwgt, adjwgt, vsize = (
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-    )
     for sweep_idx, sweep_entry in enumerate(sweep_list):
         if rank == 0:
             cfg.graph.config.level_memory = sweep_entry
@@ -240,138 +208,16 @@ def run_parmetis_distributed(
             env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
 
         for _ in range(NUM_SAMPLES):
-            done = False
             if rank == 0:
                 env._reset()
-                sim: SimulatorDriver = env.simulator.copy()
-                eft_sim = sim.copy()
+                eft_sim = env.simulator.copy()
                 eft_sim.disable_external_mapper()
                 eft_sim.run()
-                graph = sim.input.graph
 
-                # initial partition
-                cell_graph = graph.get_weighted_cell_graph(
-                    DeviceType.GPU,
-                    bandwidth=d2d_bandwidth,
-                    levels=[0, 1],
-                )
-                edge_cut, partition = weighted_cell_partition(
-                    cell_graph, nparts=(cfg.system.n_devices - 1)
-                )
-                cell_loc = [x + 1 for x in partition]
-
-                partition = [-1 for _ in range(sim.observer.graph_spec.max_candidates)]
-                sim.enable_external_mapper()
-                done = (sim.run_until_external_mapping() == fastsim.ExecutionState.COMPLETE)
-
-                candidates = torch.zeros(
-                    (sim.observer.graph_spec.max_candidates), dtype=torch.int64
-                )
-                sim.get_mappable_candidates(candidates)
-                actions = []
-                for i, id in enumerate(candidates):
-                    mapping_priority = sim.get_mapping_priority(id)
-                    actions.append(
-                        fastsim.Action(
-                            i,
-                            cell_loc[graph.task_to_cell[id.item()]],
-                            mapping_priority,
-                            mapping_priority,
-                        )
-                    )
-                sim.simulator.map_tasks(actions)
-                done = (sim.run_until_external_mapping() == fastsim.ExecutionState.COMPLETE)
-
-            while True:
-                if rank == 0 and not done:
-                    sim.get_mappable_candidates(candidates)
-                    # partition candidates according to current cell_loc
-                    for i, id in enumerate(candidates):
-                        partition[i] = cell_loc[graph.task_to_cell[id.item()]] - 1  # offset by CPU=0
-
-                    (
-                        partitioned_tasks,
-                        vtxdist,
-                        xadj,
-                        adjncy,
-                        vwgt,
-                        adjwgt,
-                        vsize,
-                    ) = graph.get_distributed_weighted_graph(
-                        bandwidth=d2d_bandwidth,
-                        task_ids=candidates.tolist(),
-                        partition=partition,
-                        future_levels=0,
-                    )
-
-                done = comm.bcast(done, root=0)
-                if done:
-                    break
-
-                # distribute graph pieces
-                vtxdist = comm.bcast(vtxdist, root=0)
-                xadj = comm.bcast(xadj, root=0)
-                adjncy = comm.bcast(adjncy, root=0)
-                vwgt = comm.bcast(vwgt, root=0)
-                adjwgt = comm.bcast(adjwgt, root=0)
-                vsize = comm.bcast(vsize, root=0)
-
-                xadj_local = xadj[rank]
-                adjncy_local = adjncy[rank]
-                vwgt_local = vwgt[rank]
-                adjwgt_local = adjwgt[rank]
-                vsize_local = vsize[rank]
-
-                wgtflag = 3
-                numflag = 0
-                ncon = 1
-                tpwgts = np.array([0.25, 0.25, 0.25, 0.25], dtype=np.float32)
-                ubvec = np.array([1.225], dtype=np.float32)
-                itr = 1000.0
-                part = np.array([-1 for _ in range(64)], dtype=np.int32)
-
-                comm.Barrier()
-                ParMETIS.callParMETIS(
-                    vtxdist,
-                    xadj_local,
-                    adjncy_local,
-                    vwgt_local,
-                    vsize_local,
-                    adjwgt_local,
-                    wgtflag,
-                    numflag,
-                    ncon,
-                    tpwgts,
-                    ubvec,
-                    itr,
-                    part,
-                )
-                parts = comm.gather(part, root=0)
-
-                if rank == 0:
-                    for i_p, p in enumerate(parts):
-                        for j, dev in enumerate(p):
-                            if dev == -1:
-                                break
-                            task_id = partitioned_tasks[i_p][j]
-                            cell_loc[graph.task_to_cell[task_id]] = int(dev) + 1  # GPU devices are 1..4
-
-                    actions = []
-                    for i, id in enumerate(candidates):
-                        mapping_priority = sim.get_mapping_priority(id)
-                        actions.append(
-                            fastsim.Action(
-                                i,
-                                cell_loc[graph.task_to_cell[id.item()]],
-                                mapping_priority,
-                                mapping_priority,
-                            )
-                        )
-                    sim.simulator.map_tasks(actions)
-                    done = (sim.run_until_external_mapping() == fastsim.ExecutionState.COMPLETE)
-
+            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg)
+            
             if rank == 0:
-                add_metric_row(metrics, "ParMETIS", sim, sweep_idx)
+                add_metric_row(metrics, "ParMETIS", env.simulator, sweep_idx)
                 assert metrics["EFT"]["time_history"][sweep_idx][len(metrics["ParMETIS"]["time_history"][sweep_idx])-1] == eft_sim.time, "Mismatch in EFT time history"
 
     if rank == 0:
@@ -547,14 +393,11 @@ def run_host_experiments_and_plot(cfg: DictConfig):
             cfg=cfg,
             sweep_list=sweep_list,
             num_samples=NUM_SAMPLES,
-            d2d_bandwidth=cfg.system.d2d_bw,
             metrics=metrics if rank == 0 else None,
         )
 
     # ---- Post-processing, plots, and saving (rank 0 only)
     if rank == 0:
-        # Compute speedup curves
-        
         saved_lines = (
             f"# {cfg.graph.config.workload_args.traj_type} Trajectory\n"
             f"# Averaged over {NUM_SAMPLES} runs\n"
@@ -645,9 +488,6 @@ def run_host_experiments_and_plot(cfg: DictConfig):
             axes[1].plot(
                 sweep_list[xslice], speedup[k][xslice], label=k, color=colors[k], linewidth=4
             )
-            # axes[1].plot(
-            #     sweep_list[xslice], metrics[k]['vsEFT'][xslice], label=k, color=colors[k], linewidth=4
-            # )
         axes[1].set_title("Relative Speedup vs EFT", fontsize=20)
         axes[1].legend(loc="upper right", fontsize=16)
         axes[1].grid()

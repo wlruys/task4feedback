@@ -13,11 +13,10 @@ from .base import (
 from dataclasses import dataclass
 from ..interface.lambdas import VariantBuilder
 import random
-from typing import Optional
 from itertools import permutations
 from collections import defaultdict
 import torch
-from typing import Self, List, Optional
+from typing import Self, List, Optional, Tuple, Dict
 from task4feedback import fastsim2 as fastsim
 from ..interface.wrappers import *
 from scipy.optimize import linear_sum_assignment
@@ -501,6 +500,166 @@ class JacobiGraph(ComputeDataGraph):
 
         return WeightedCellGraph(cells, adj_list, adj_starts, vweights, eweights)
 
+    def get_distributed_weighted_graph(
+        self,
+        bandwidth: int,
+        task_ids: List[int],
+        partition: List[int],
+        arch: DeviceType = DeviceType.GPU,
+        future_levels: int = 0,
+        width: int = 8,
+    ) -> Tuple[
+        List[List[int]],        # partitioned_tasks
+        np.ndarray,             # vtxdist
+        List[np.ndarray],       # xadj
+        List[np.ndarray],       # adjncy
+        List[np.ndarray],       # vwgt
+        List[np.ndarray],       # adjwgt
+        List[np.ndarray],       # vsize
+    ]:
+        """
+        Build a weighted graph (CSR per partition) for distributed partitioning.
+
+        Returns:
+            partitioned_tasks: list of tasks for each partition (by partition index)
+            vtxdist:           METIS-style vertex distribution array (prefix sums of per-part sizes)
+            xadj:              CSR row pointer per partition
+            adjncy:            CSR adjacency indices per partition (indices are global-local mapping per code logic)
+            vwgt:              vertex weights (compute cost) per partition
+            adjwgt:            edge weights (data transfer cost) per partition
+            vsize:             vertex sizes (internal data size used for balancing) per partition
+        Notes:
+            - Uses integer division for bandwidth-normalized costs.
+            - Keeps original semantics: adjncy indices reference the *global-local* index (over the
+            sorted list of (task,part) pairs), not the position within a single partition.
+        """
+
+        # ---------- Basic checks & setup ----------
+        num_tasks = len(task_ids)
+        assert len(partition) == num_tasks, (
+            f"Length of 'partition' ({len(partition)}) must match number of tasks ({num_tasks})."
+        )
+
+        min_part = min(partition)
+        assert min_part == 0, f"Partition must start from 0, got {min_part}"
+
+        parts = sorted(set(partition))
+        num_parts = len(parts)
+
+        # stride bounds how far "future levels" can look
+        stride = width ** 2
+        max_task_id = max(task_ids) if task_ids else 0
+        future_levels = min(future_levels, (self.graph.size() - max_task_id) // stride)
+
+        # ---------- Data structures per partition ----------
+        # CSR components and weights per partition
+        xadj:  List[List[int]] = [[0] for _ in range(num_parts)]
+        adjncy: List[List[int]] = [[] for _ in range(num_parts)]
+        vwgt:  List[List[int]] = [[] for _ in range(num_parts)]  # compute time
+        adjwgt: List[List[int]] = [[] for _ in range(num_parts)] # data transfer time
+        vsize: List[List[int]] = [[] for _ in range(num_parts)]  # internal data size proxy
+
+        vtxdist: List[int] = [0]  # prefix of vertex counts (will accumulate when partition changes)
+        partitioned_tasks: List[List[int]] = [[] for _ in range(num_parts)]
+
+        # Pair tasks with their partition and sort by partition to make vtxdist/xadj simpler.
+        pairs: List[Tuple[int, int]] = sorted(zip(task_ids, partition), key=lambda x: x[1])
+
+        # Map task_id -> "global-local" index (i.e., index into the sorted 'pairs' list).
+        task_to_local: Dict[int, int] = {task_id: i for i, (task_id, _) in enumerate(pairs)}
+
+        # ---------- Helpers ----------
+        def avg_over_future(value: int) -> int:
+            """Average a cumulative cost over (future_levels + 1), floor to >= 1."""
+            return value // (future_levels + 1)
+
+        # ---------- Main construction ----------
+        for i, (task_id, part) in enumerate(pairs):
+            partitioned_tasks[part].append(task_id)
+
+            # --- Vertex weights (compute + internal data size proxy) ---
+            compute_cost = 0
+            repartition_cost = 0
+
+            current_level = self.task_to_level[task_id]
+
+            # Base task contribution
+            compute_cost += self.get_compute_cost(task_id, arch)
+            repartition_cost += self.get_read_data(task_id) // bandwidth
+
+            # Look-ahead into future levels within the *same cell*
+            for fl in range(future_levels):
+                level = current_level + fl
+                for parent in self.level_to_task[level]:
+                    if self.task_to_cell[parent] == self.task_to_cell[task_id]:
+                        compute_cost     += self.get_compute_cost(parent, arch)
+                        repartition_cost += self.get_read_data(parent) // bandwidth
+                    # original code broke after the first same-cell match
+                    break
+
+            vwgt[part].append(avg_over_future(compute_cost))
+            vsize_val = max(avg_over_future(repartition_cost), 1)
+            vsize[part].append(vsize_val)
+
+            # --- Edges to dependencies that cross cells (boundary edges) ---
+            for dep_task_id in self.tasks[task_id].dependencies:
+                # Skip if dependency is in the same cell; only boundary costs matter here
+                if self.task_to_cell[dep_task_id] == self.task_to_cell[task_id]:
+                    continue
+
+                # Base boundary data transfer
+                boundary_cost = self.get_shared_data(task_id, dep_task_id) // bandwidth
+
+                dep_level = self.task_to_level[dep_task_id]
+
+                # Add look-ahead boundary costs between future "matching" tasks in same cells
+                for fl in range(future_levels):
+                    # Find a future dep task within dep cell at dep_level + fl
+                    future_dep_task_id = 0
+                    for ft_dep in self.level_to_task[dep_level + fl]:
+                        if self.task_to_cell[ft_dep] == self.task_to_cell[dep_task_id]:
+                            future_dep_task_id = ft_dep
+                            break
+
+                    # Find a future current task within current cell at current_level + fl
+                    for ft_cur in self.level_to_task[current_level + fl]:
+                        if self.task_to_cell[ft_cur] == self.task_to_cell[task_id]:
+                            boundary_cost += self.get_shared_data(future_dep_task_id, ft_cur) // bandwidth
+                            break
+
+                adjwgt[part].append(max(avg_over_future(boundary_cost), 1))
+
+                # adjncy uses the first task on current_level that lives in the *dependency's* cell
+                for t in self.level_to_task[current_level]:
+                    if self.task_to_cell[t] == self.task_to_cell[dep_task_id]:
+                        adjncy[part].append(task_to_local[t])
+                        break
+
+            # Close the CSR row for this vertex
+            xadj[part].append(len(adjncy[part]))
+
+            # Update vtxdist when partition changes in the globally sorted order
+            if i > 0 and pairs[i - 1][1] != part:
+                vtxdist.append(i)
+
+        # Final vertex count
+        vtxdist.append(num_tasks)
+
+        # ---------- Final checks ----------
+        assert len(vtxdist) == num_parts + 1, (
+            f"vtxdist length {len(vtxdist)} does not match number of partitions + 1 ({num_parts + 1})."
+        )
+
+        # ---------- Convert to numpy-friendly outputs ----------
+        xadj_np   = [np.asarray(x, dtype=np.int32) for x in xadj]
+        adjncy_np = [np.asarray(x, dtype=np.int32) for x in adjncy]
+        vwgt_np   = [np.asarray(x, dtype=np.int32) for x in vwgt]
+        adjwgt_np = [np.asarray(x, dtype=np.int32) for x in adjwgt]
+        vsize_np  = [np.asarray(x, dtype=np.int32) for x in vsize]
+        vtxdist_np = np.asarray(vtxdist, dtype=np.int32)
+
+        return partitioned_tasks, vtxdist_np, xadj_np, adjncy_np, vwgt_np, adjwgt_np, vsize_np
+    
     def mincut_per_levels(
         self,
         arch: DeviceType = DeviceType.GPU,

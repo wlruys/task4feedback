@@ -75,7 +75,7 @@ def make_env(
     lstm: Optional[LSTMModule] = None,
     normalization: Optional[NormalizationDetails] = None,
     eval=False,
-):
+)->RuntimeEnv | tuple[RuntimeEnv, NormalizationDetails]:
     from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
     gmsh.initialize()
 
