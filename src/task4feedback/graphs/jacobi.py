@@ -240,7 +240,7 @@ class JacobiGraph(ComputeDataGraph):
         y = int(centroid[1])
         return int(x * n + y)
 
-    def _build_graph(self, retire_data: bool = False):
+    def _build_graph(self, retire_data: bool = False, system: System = None):
         self.task_to_cell = {}
         self.task_to_level = {}
         self.level_to_task = defaultdict(list)
@@ -271,6 +271,7 @@ class JacobiGraph(ComputeDataGraph):
                 interior_block = self.data.get_block_at_step(Cell(cell), i)
                 interior_edges = []
                 exterior_edges = []
+                data_req = 0
                 for edge in edges:
                     cell_dict = self.data.get_block(Edge(edge))
                     for neighbor, v in cell_dict.items():
@@ -291,6 +292,25 @@ class JacobiGraph(ComputeDataGraph):
                 prev_interiors[(cell, i)] = interior_edges + [interior_block]
                 self.add_read_data(task_id, read_blocks)
                 self.add_write_data(task_id, write_blocks)
+                
+                for data_id in read_blocks:
+                    data_req += self.data.blocks.data.get_size(data_id)
+                for data_id in write_blocks:
+                    if data_id not in read_blocks:
+                        data_req += self.data.blocks.data.get_size(data_id)
+                
+                assert system is None or data_req < system.arch_to_maxmem[DeviceType.GPU], f"Task {task_id} requires {data_req/1e9:.2f} GB of data, which exceeds the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU]/1e9:.1f} GB"
+                # Raise a warning if data_req exceeds half of maxmem
+                if system is not None and data_req > system.arch_to_maxmem[DeviceType.GPU] / 2:
+                    print(f"Warning: Task {task_id} requires {data_req/1e9:.2f} GB of data, which exceeds half of the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU]/1e9:.1f} GB")
+                # if data_req > 80e9:
+                #     print(f"Task {task_id} requires {data_req/1e9} GB of data")
+                #     print(f"Interior size: {self.data.blocks.data.get_size(interior_block)/1e9}")
+                #     print(f"Interior edges size: {[self.data.blocks.data.get_size(e)/1e9 for e in interior_edges]} = {sum([self.data.blocks.data.get_size(e)/1e9 for e in interior_edges])}")
+                #     print(f"Exterior edges size: {[self.data.blocks.data.get_size(e)/1e9 for e in exterior_edges]} = {sum([self.data.blocks.data.get_size(e)/1e9 for e in exterior_edges])}")
+                #     print(f"Next interior size: {self.data.blocks.data.get_size(next_interior_block)/1e9}")
+                #     print(f"Next interior edges size: {[self.data.blocks.data.get_size(e)/1e9 for e in next_interior_edges]} = {sum([self.data.blocks.data.get_size(e)/1e9 for e in next_interior_edges])}")
+
                 if i > 0 and retire_data:
                     self.add_retire_data(task_id, prev_interiors[(cell, i - 1)])
 
@@ -829,10 +849,70 @@ class LevelPartitionMapper:
 class JacobiRoundRobinMapper:
     def __init__(
         self,
+        n_devices: int = 4,
+        setting: int = 0,
+        offset: int = 1
+    ):
+        """
+        Initialize the JacobiRoundRobinMapper.
+        setting == 1 : Row cyclic
+        setting == 0 : Checker board
+        """
+        self.n_devices = n_devices
+        self.setting = setting
+        self.offset = offset
+
+    def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        graph: JacobiGraph = simulator.input.graph
+        assert isinstance(graph, JacobiGraph)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        stride = graph.config.n ** 2
+        n = graph.config.n
+        
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item()
+            idx = global_task_id % stride
+            row = idx // n
+            col = idx % n
+            if self.setting == 0:
+                # Checkerboard-style mapping
+                if self.n_devices == 2:
+                    # Classic 2-color checkerboard
+                    device = ((row + col) & 1)
+                elif self.n_devices == 4:
+                    # 2x2 tiled checkerboard: devices 1..4 repeat like
+                    # 1 2
+                    # 3 4
+                    device = ((row & 1) * 2 + (col & 1))
+                else:
+                    # General fallback: diagonal stripes that still alternate locally
+                    device = ((row + col) % self.n_devices)
+            else:
+                # Previous round-robin behavior (row-major)
+                device = ((row * n + col) % self.n_devices)
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(i, device+self.offset, mapping_priority, mapping_priority)
+            )
+        return mapping_result
+    
+class JacobiQuadrantMapper:
+    def __init__(
+        self,
         n_devices: int,
-        offset: int = 0,
+        graph: JacobiGraph,
+        offset: int = 1
     ):
         self.n_devices = n_devices
+        self.width = graph.config.n
+        self.n_tasks = self.width * self.width
+        self.graph = graph
         self.offset = offset
 
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
@@ -844,8 +924,10 @@ class JacobiRoundRobinMapper:
         num_candidates = simulator.simulator.get_mappable_candidates(candidates)
         mapping_result = []
         for i in range(num_candidates):
-            global_task_id = candidates[i].item() + self.offset
-            device = global_task_id % self.n_devices
+            global_task_id = candidates[i].item()
+            x = global_task_id % self.n_tasks // self.width // (self.width // 2)
+            y = global_task_id % self.n_tasks % self.width // (self.width // 2)
+            device = x * 2 + y + self.offset
             mapping_priority = simulator.simulator.get_state().get_mapping_priority(
                 global_task_id
             )
@@ -1285,11 +1367,11 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         ), f"Batched {self.batched} CNN observer requires max_candidates to be {width**2 if self.batched else 1}, but got {spec.max_candidates}"
 
         task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.TaskMeanDurationFeature)
-        task_feature_factory.add(fastsim.ReadDataLocationFeature)
+        #task_feature_factory.add(fastsim.TaskMeanDurationFeature)
+        #task_feature_factory.add(fastsim.ReadDataLocationFeature)
         if prev_frames > 0:
             task_feature_factory.add(
-                fastsim.PrevReadSizeFeature, width, False, prev_frames
+                fastsim.PrevReadSizeFeature, width, True, prev_frames
             )
         if not batched:
             # Difference in depth doesn't exist in batched

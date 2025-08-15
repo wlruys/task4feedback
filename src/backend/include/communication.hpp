@@ -159,7 +159,6 @@ class CommunicationManager {
   }
 
 public:
-
   CommunicationManager() = default;
 
   CommunicationManager(const Topology &topology_, const Devices &devices_)
@@ -230,13 +229,13 @@ public:
   [[nodiscard]] inline bool is_device_available(devid_t device_id) const {
     const auto used = get_total_usage(device_id);
     const auto available = device_usage[device_id].max;
-    return used <= available;
+    return used < available;
   }
 
   [[nodiscard]] inline bool is_link_available(devid_t src, devid_t dst) const {
     const auto used = get_active(src, dst);
     const auto available = link_usage[src * num_devices + dst].max;
-    return used <= available;
+    return used < available;
   }
 
   [[nodiscard]] inline bool check_connection(devid_t src, devid_t dst) const {

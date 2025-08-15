@@ -16,7 +16,8 @@ from torchrl.envs import (
 from torchrl.modules import LSTMModule
 from typing import Optional
 from dataclasses import dataclass
-
+import torch
+from pathlib import Path
 
 def create_system(cfg: DictConfig):
     system = hydra.utils.instantiate(cfg.system)
@@ -110,9 +111,11 @@ def make_env(
         change_duration=cfg.graph.env.change_duration if hasattr(cfg.graph.env, "change_duration") else False,
         seed=cfg.graph.env.seed,
         max_samples_per_iter=(
-            len(graph) + 1
-            if cfg.algorithm.rollout_steps == 0
-            else cfg.algorithm.rollout_steps + 1
+            (len(graph)//(cfg.graph.config.n**2) + 1
+            if cfg.algorithm.rollout_steps == 0 
+            else cfg.algorithm.rollout_steps + 1) if cfg.feature.observer.batched else (len(graph) + 1
+            if cfg.algorithm.rollout_steps == 0 
+            else cfg.algorithm.rollout_steps + 1)
         ),
     )
     env = TransformedEnv(env, StepCounter())
@@ -153,6 +156,5 @@ def make_env(
 
     if new_norm is not None:
         return env, new_norm
-
     else:
         return env
