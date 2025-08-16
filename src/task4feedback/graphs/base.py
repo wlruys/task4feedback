@@ -187,16 +187,18 @@ class ComputeDataGraph(TaskGraph):
 
     def get_shared_data(self, task_self: int, task_other: int):
         # Total size of all shared data blocks from task_other to task_self
-        # For example, if task_self depends on task_other it is the size of the data that task_self needs to read from task_other
-        read_self = self.tasks[task_self].read
 
+        read_self = self.tasks[task_self].read
         read_other = self.tasks[task_other].read
+
+        write_self = self.tasks[task_self].write
         write_other = self.tasks[task_other].write
 
-        shared = set(read_self) & (set(read_other) | set(write_other))
+        shared_reads = set(read_other) & (set(read_self))
+        shared_write_reads = set(write_other) & (set(read_self))
+        shared = shared_reads.union(shared_write_reads)
 
         total_size = 0
-
         for block_id in shared:
             block = self.data.blocks.get_block(block_id)
             size = block.size
@@ -221,6 +223,7 @@ class ComputeDataGraph(TaskGraph):
         vweights = []
         eweights = []
         task_to_local = {}
+        bandwidth = bandwidth / (1e6)
 
         if task_ids is None:
             task_ids = range(len(self))
@@ -239,6 +242,7 @@ class ComputeDataGraph(TaskGraph):
                 data_cost = self.get_shared_data(task_id, dep_task_id)
                 data_cost /= bandwidth
                 data_cost = max(data_cost, 1)
+
                 eweights.append(data_cost)
                 adjacency_list.append(dep_task_id)
                 # print(

@@ -460,6 +460,7 @@ class JacobiGraph(ComputeDataGraph):
 
         cell_vertex_cost = defaultdict(int)
         cell_neighbors_cost = defaultdict(lambda: defaultdict(int))
+
         for task_id in tasks_in_levels:
             local_task_id = task_to_local[task_id]
             cell = self.task_to_cell[task_id]
@@ -545,6 +546,7 @@ class JacobiGraph(ComputeDataGraph):
 
         parts = sorted(set(partition))
         num_parts = len(parts)
+        bandwidth = bandwidth / (1e6)
 
         # stride bounds how far "future levels" can look
         stride = width ** 2
@@ -665,6 +667,7 @@ class JacobiGraph(ComputeDataGraph):
         arch: DeviceType = DeviceType.GPU,
         bandwidth: int = 1000,
         level_chunks: int = 1,
+        levels_per_chunk: int | None = None, #override number of levels per chunk 
         n_parts: int = 4,
         offset: int = 1,  # 1 to ignore cpu
         mode: str = "metis",
@@ -673,17 +676,25 @@ class JacobiGraph(ComputeDataGraph):
         partitions = {}
         levels = list(self.level_to_task.keys())
         levels = sorted(levels)
+
         if mode == "metis":
             level_size = len(levels) // level_chunks
+
+            if levels_per_chunk is not None:
+                level_size = levels_per_chunk
+
             for i in range(level_chunks):
                 start = i * level_size
                 end = (i + 1) * level_size
+
                 if i == level_chunks - 1:
                     end = len(levels)
+
                 levels_to_compute = levels[start:end]
                 cell_graph = self.get_weighted_cell_graph(
                     arch, bandwidth=bandwidth, levels=levels_to_compute
                 )
+
                 edge_cut, partition = weighted_cell_partition(
                     cell_graph, nparts=n_parts
                 )
