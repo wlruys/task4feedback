@@ -595,7 +595,7 @@ class JacobiGraph(ComputeDataGraph):
                 for parent in self.level_to_task[level]:
                     if self.task_to_cell[parent] == self.task_to_cell[task_id]:
                         compute_cost     += self.get_compute_cost(parent, arch)
-                        repartition_cost += self.get_read_data(parent) // bandwidth
+                        repartition_cost += self.get_write_data(parent) // bandwidth
                     # original code broke after the first same-cell match
                     break
 
