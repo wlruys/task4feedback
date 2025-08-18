@@ -576,6 +576,7 @@ class JacobiGraph(ComputeDataGraph):
         arch: DeviceType = DeviceType.GPU,
         future_levels: int = 0,
         width: int = 8,
+        n_compute_devices: int = 4
     ) -> Tuple[
         List[List[int]],  # partitioned_tasks
         np.ndarray,  # vtxdist
@@ -609,10 +610,8 @@ class JacobiGraph(ComputeDataGraph):
         )
 
         min_part = min(partition)
-        assert min_part == 0, f"Partition must start from 0, got {min_part}"
+        # assert min_part == 0, f"Partition must start from 0, got {min_part}"
 
-        parts = sorted(set(partition))
-        num_parts = len(parts)
         bandwidth = bandwidth / (1e6)
 
         # stride bounds how far "future levels" can look
@@ -622,18 +621,14 @@ class JacobiGraph(ComputeDataGraph):
 
         # ---------- Data structures per partition ----------
         # CSR components and weights per partition
-        xadj: List[List[int]] = [[0] for _ in range(num_parts)]
-        adjncy: List[List[int]] = [[] for _ in range(num_parts)]
-        vwgt: List[List[int]] = [[] for _ in range(num_parts)]  # compute time
-        adjwgt: List[List[int]] = [[] for _ in range(num_parts)]  # data transfer time
-        vsize: List[List[int]] = [
-            [] for _ in range(num_parts)
-        ]  # internal data size proxy
+        xadj:  List[List[int]] = [[0] for _ in range(n_compute_devices)]
+        adjncy: List[List[int]] = [[] for _ in range(n_compute_devices)]
+        vwgt:  List[List[int]] = [[] for _ in range(n_compute_devices)]  # compute time
+        adjwgt: List[List[int]] = [[] for _ in range(n_compute_devices)] # data transfer time
+        vsize: List[List[int]] = [[] for _ in range(n_compute_devices)]  # internal data size proxy
 
-        vtxdist: List[int] = [
-            0
-        ]  # prefix of vertex counts (will accumulate when partition changes)
-        partitioned_tasks: List[List[int]] = [[] for _ in range(num_parts)]
+        vtxdist: List[int] = [0]  # prefix of vertex counts (will accumulate when partition changes)
+        partitioned_tasks: List[List[int]] = [[] for _ in range(n_compute_devices)]
 
         # Pair tasks with their partition and sort by partition to make vtxdist/xadj simpler.
         pairs: List[Tuple[int, int]] = sorted(
@@ -651,6 +646,7 @@ class JacobiGraph(ComputeDataGraph):
             return value // (future_levels + 1)
 
         # ---------- Main construction ----------
+        partition_count = 0
         for i, (task_id, part) in enumerate(pairs):
             partitioned_tasks[part].append(task_id)
 
@@ -721,13 +717,19 @@ class JacobiGraph(ComputeDataGraph):
             # Update vtxdist when partition changes in the globally sorted order
             if i > 0 and pairs[i - 1][1] != part:
                 vtxdist.append(i)
-
+                partition_count += 1
+            while partition_count != part:
+                partition_count += 1
+                vtxdist.append(i)
+                
         # Final vertex count
-        vtxdist.append(num_tasks)
-
+        while partition_count < n_compute_devices:
+            vtxdist.append(num_tasks)
+            partition_count += 1
+        
         # ---------- Final checks ----------
-        assert len(vtxdist) == num_parts + 1, (
-            f"vtxdist length {len(vtxdist)} does not match number of partitions + 1 ({num_parts + 1})."
+        assert len(vtxdist) == n_compute_devices + 1, (
+            f"vtxdist length {len(vtxdist)} does not match number of partitions + 1 ({n_compute_devices + 1})."
         )
 
         # ---------- Convert to numpy-friendly outputs ----------

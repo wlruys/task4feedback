@@ -15,7 +15,8 @@ def run_parmetis(sim: SimulatorDriver,
                  future_levels=0,
                  itr: float = 1000,
                  unbalance: float = 1.225,
-                 target_loads: list[float] = [0.25, 0.25, 0.25, 0.25]) -> int:
+                 target_loads: list[float] = [0.25, 0.25, 0.25, 0.25],
+                 n_compute_devices: int = 4) -> int:
     d2d_bandwidth = cfg.system.d2d_bw
     width = cfg.graph.config.n
     comm = MPI.COMM_WORLD
@@ -90,7 +91,8 @@ def run_parmetis(sim: SimulatorDriver,
                     task_ids=candidates.tolist(),
                     partition=partition,
                     future_levels=future_levels,
-                    width=width
+                    width=width,
+                    n_compute_devices=n_compute_devices,
                 )
             )
         vtxdist = comm.bcast(vtxdist, root=0)

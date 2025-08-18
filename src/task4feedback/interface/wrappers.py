@@ -2297,7 +2297,7 @@ class SimulatorFactory:
 
 
 def uniform_connected_devices(
-    n_devices: int, mem: int, latency: int, h2d_bw: int, d2d_bw: int, h2d_links: int = 2, d2d_links: int = 2, cpu_copyengines: int = 2, device_copyengines: int=4, system_specs: dict = None
+    n_devices: int, mem: int | float, latency: int, h2d_bw: int, d2d_bw: int, h2d_links: int = 2, d2d_links: int = 2, cpu_copyengines: int = 2, device_copyengines: int=4, system_specs: dict = None
 ) -> System:
     """
     Creates a system with a uniform connection of devices including one CPU and multiple GPUs.
@@ -2320,7 +2320,7 @@ def uniform_connected_devices(
 
     s.create_device("CPU:0", DeviceType.CPU, cpu_copyengines, int(2**62))
     for i in range(n_gpus):
-        s.create_device(f"GPU:{i}", DeviceType.GPU, device_copyengines, mem)
+        s.create_device(f"GPU:{i}", DeviceType.GPU, device_copyengines, int(mem) if mem != float("inf") else int(2**62))
 
     s.finalize_devices()
 
