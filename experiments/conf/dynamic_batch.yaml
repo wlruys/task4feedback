@@ -59,7 +59,7 @@ feature:
 network:
   layers:
     lstm:
-      hidden_size: 32 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
+      hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
     state:
       hidden_channels: 16
     actor:
