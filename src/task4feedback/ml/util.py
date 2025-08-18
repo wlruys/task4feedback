@@ -257,6 +257,7 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
 
     for _ in range(samples):
         env.reset_for_evaluation(seed=seed)
+        env.disable_reward()
         with set_exploration_type(exploration_type), torch.no_grad():
             tensordict = env.rollout(
                 policy=policy,
@@ -271,6 +272,7 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
         if hasattr(env, "simulator") and hasattr(env.simulator, "time"):
             completion_time = env.simulator.time
             env_times.append(completion_time)
+        env.enable_reward()
 
     if samples > 1:
         mean_time = sum(env_times) / len(env_times) if env_times else 0

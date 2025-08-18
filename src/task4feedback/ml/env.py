@@ -141,6 +141,7 @@ class RuntimeEnv(EnvBase):
         self.reward_n = "reward"
         self.done_n = "done"
         self.observation_n = "observation"
+        self.disable_reward_flag = False
 
     def size(self):
         """
@@ -160,6 +161,12 @@ class RuntimeEnv(EnvBase):
         Note: May not be available in a TransformedEnv.
         """
         return self.size()
+    
+    def disable_reward(self):
+        self.disable_reward_flag = True
+
+    def enable_reward(self):
+        self.disable_reward_flag = False
 
     def _get_baseline(self, use_eft=False):
         if use_eft:
@@ -432,21 +439,25 @@ class IncrementalEFT(RuntimeEnv):
 
         self.map_tasks(td[self.action_n])
 
-        start_time = perf_counter()
-        sim_ml = self.simulator.copy()
-        sim_ml.disable_external_mapper()
-        end_time = perf_counter()
-        # print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
-        # print(f"Current sim time {sim_ml.time}", flush=True)
-        start_time = perf_counter()
-        sim_ml.run()
-        end_time = perf_counter()
-        # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
+        if not self.disable_reward_flag:
+            start_time = perf_counter()
+            sim_ml = self.simulator.copy()
+            sim_ml.disable_external_mapper()
+            end_time = perf_counter()
+            # print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
+            # print(f"Current sim time {sim_ml.time}", flush=True)
+            start_time = perf_counter()
+            sim_ml.run()
+            end_time = perf_counter()
+            # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
 
-        ml_time = sim_ml.time
+            ml_time = sim_ml.time
 
-        reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / self.size())
-        self.eft_time = ml_time
+            reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / self.size())
+            self.eft_time = ml_time
+        else:
+            reward = 0.0
+
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
 
@@ -464,6 +475,67 @@ class IncrementalEFT(RuntimeEnv):
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
+
+
+class KStepIncrementalEFT(RuntimeEnv):
+
+    def __init__(self, *args, gamma: float = 1.0, k: int = 5, drain: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gamma = gamma
+        self.k = k 
+        self.drain = drain
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+            self.eft_time = self.EFT_baseline
+
+        self.step_count += 1
+
+        self.map_tasks(td[self.action_n])
+
+        if not self.disable_reward_flag:
+            start_time = perf_counter()
+            sim_ml = self.simulator.copy()
+            sim_ml.disable_external_mapper()
+            sim_ml.set_steps(self.k)
+            sim_ml.run()
+            if self.drain:
+                sim_ml.start_drain()
+            end_time = perf_counter()
+            # print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
+            # print(f"Current sim time {sim_ml.time}", flush=True)
+            start_time = perf_counter()
+            sim_ml.run()
+            end_time = perf_counter()
+            # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
+
+            ml_time = sim_ml.time
+
+            reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / (self.size()))
+            self.eft_time = ml_time
+        else:
+            reward = 0.0
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        if done:
+            obs, r, time, improvement = self._handle_done(obs)
+            reward = reward + r 
+
+        buf = td.empty()
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
+        buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
+        return buf
 
 class DelayIncrementalEFT(IncrementalEFT):
 
