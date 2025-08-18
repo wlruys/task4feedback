@@ -42,19 +42,7 @@ size = comm.Get_size()
 
 ParMETIS = ParMETIS_wrapper()
 
-NUM_SAMPLES = 4
-
 MetricKeys = ("time", "mem_usage", "total_mem_movement", "eviction_movement", "time_history")
-# experiment_names = ["EFT", "ColWise", "ParMETIS", "GlobalMinCut", "Cyclic", "Oracle"]
-# experiment_names = ["EFT", "ColWise", "GlobalMinCut", "Cyclic"]
-# experiment_names = ["EFT", "ColWise", "RL"]
-# experiment_names = ["EFT", "Oracle", "GlobalMinCut"]
-experiment_names = ["EFT", "ParMETIS"]
-mem_keys = experiment_names.copy()
-speedup_keys = experiment_names.copy()
-speedup_keys.remove("EFT")
-
-sweep_list = list(range(int(40e9), int(60e9), int(5e9)))
 
 def seed_everything(seed: int = 0) -> None:
     random.seed(seed)
@@ -201,21 +189,23 @@ def run_parmetis_distributed(
     """
     Executes the ParMETIS portion with MPI, accumulating results in `metrics["ParMETIS"]`.
     """
+    sweep_list = list(range(int(cfg.sweep.start), int(cfg.sweep.stop), int(cfg.sweep.step)))
+    
     for sweep_idx, sweep_entry in enumerate(sweep_list):
         if rank == 0:
             cfg.graph.config.level_memory = sweep_entry
             graph_builder = make_graph_builder(cfg, verbose=False)
             env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
 
-        for _ in range(NUM_SAMPLES):
+        for _ in range(cfg.sweep.n_samples):
             if rank == 0:
                 env._reset()
                 eft_sim = env.simulator.copy()
                 eft_sim.disable_external_mapper()
                 eft_sim.run()
 
-            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg)
-            
+            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, unbalance=cfg.parmetis.unbalance, itr=cfg.parmetis.itr)
+
             if rank == 0:
                 add_metric_row(metrics, "ParMETIS", env.simulator, sweep_idx)
                 assert metrics["EFT"]["time_history"][sweep_idx][len(metrics["ParMETIS"]["time_history"][sweep_idx])-1] == eft_sim.time, "Mismatch in EFT time history"
@@ -230,16 +220,16 @@ def run_parmetis_distributed(
 
 def run_host_experiments_and_plot(cfg: DictConfig):
     d2d_bandwidth = cfg.system.d2d_bw
-    global sweep_list
-    if size < 4:
-        if rank == 0:
-            print("ParMETIS requires at least 4 ranks. Removing it from experiments.")
-        if "ParMETIS" in experiment_names:
-            experiment_names.remove("ParMETIS")
-        if "ParMETIS" in speedup_keys:
-            speedup_keys.remove("ParMETIS")
-        if "ParMETIS" in mem_keys:
-            mem_keys.remove("ParMETIS")
+    sweep_list = list(range(int(cfg.sweep.start), int(cfg.sweep.stop), int(cfg.sweep.step)))
+
+    experiment_names = cfg.sweep.exps
+    mem_keys = experiment_names.copy()
+    speedup_keys = experiment_names.copy()
+    speedup_keys.remove("EFT")
+
+    if size < 4 and "ParMETIS" in experiment_names:
+        print("ParMETIS is in experiment lists and it requires at least 4 ranks. Stopping...")
+        exit()
     if rank == 0:
         seed_everything(cfg.seed)
         
@@ -302,7 +292,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
             if "Oracle" in experiment_names:
                 append_zero_row(metis_metrics, f, MetricKeys)
 
-            for _ in range(NUM_SAMPLES):
+            for _ in range(cfg.sweep.n_samples):
                 obs = env._reset()
 
                 # baseline graph and simulator
@@ -347,9 +337,9 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                     
 
             # --- Average over samples
-            average_last(metrics, experiment_names, MetricKeys, NUM_SAMPLES)
+            average_last(metrics, experiment_names, MetricKeys, cfg.sweep.n_samples)
             if "Oracle" in experiment_names:
-                average_last(metis_metrics, f, MetricKeys, NUM_SAMPLES)
+                average_last(metis_metrics, f, MetricKeys, cfg.sweep.n_samples)
 
             if "Oracle" in experiment_names:
                 # --- Pick best k for Oracle at this memory
@@ -392,7 +382,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         run_parmetis_distributed(
             cfg=cfg,
             sweep_list=sweep_list,
-            num_samples=NUM_SAMPLES,
+            num_samples=cfg.sweep.n_samples,
             metrics=metrics if rank == 0 else None,
         )
 
@@ -400,7 +390,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
     if rank == 0:
         saved_lines = (
             f"# {cfg.graph.config.workload_args.traj_type} Trajectory\n"
-            f"# Averaged over {NUM_SAMPLES} runs\n"
+            f"# Averaged over {cfg.sweep.n_samples} runs\n"
             f"experiment_names={experiment_names}\n"
             f"speedup_keys={speedup_keys}\n"
             f"mem_keys={mem_keys}\n"
@@ -512,7 +502,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         
         fig.savefig(base / fig_file)
 
-@hydra.main(config_path="conf", config_name="dynamic_batch", version_base=None)
+@hydra.main(config_path="conf", config_name="graph_sweep", version_base=None)
 def main(cfg: DictConfig):
     run_host_experiments_and_plot(cfg)
 
