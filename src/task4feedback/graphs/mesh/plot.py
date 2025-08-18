@@ -1,4 +1,5 @@
 from .base import Geometry
+from matplotlib import colors as mcolors
 from matplotlib.collections import PolyCollection, LineCollection
 from matplotlib.patches import Polygon
 import matplotlib.animation as animation
@@ -369,21 +370,91 @@ def animate_highlights(
     device_to_color=None,
     video_seconds=15,
 ):
-    highlight_artists = []
-
     points, cells, unique_edges = geom.cell_points, geom.cells, geom.edges
 
+    polys = points[cells]
+    n_cells = len(cells)
+
+    if device_to_color is None:
+        cmap = plt.get_cmap("tab10")
+        device_rgba = [cmap(i / max(1, 9)) for i in range(10)]
+    elif isinstance(device_to_color, list):
+        device_rgba = [mcolors.to_rgba(c) for c in device_to_color]
+    else:  
+        cmap = device_to_color
+        device_rgba = [cmap(i / max(1, 9)) for i in range(10)]
+
+    shade_collection = PolyCollection(
+        polys,
+        facecolors=[(0, 0, 0, 0)] * n_cells,  # updated per frame
+        edgecolors="none",
+        alpha=0.5,
+        zorder=z_order - 1,
+    )
+    ax.add_collection(shade_collection)
+
+    active_outlines = []
+    for i in range(n_cells):
+        patch = Polygon(
+            polys[i],
+            closed=True,
+            fill=False,
+            edgecolor="none",
+            linewidth=6,
+            alpha=0.8,
+            zorder=z_order,
+        )
+        patch.set_visible(False)
+        ax.add_patch(patch)
+        active_outlines.append(patch)
+
+    pair_indices = {}
+    verts_list = []
+    colors_list = []
+
+    h = 0.2
+    for eid, cell_list in geom.edge_cell_dict.items():
+        v1_idx, v2_idx = unique_edges[eid]
+        v1 = points[int(v1_idx)]
+        v2 = points[int(v2_idx)]
+        mid = (v1 + v2) / 2.0
+        for cid in cell_list:
+            centroid = polys[cid].mean(axis=0)
+            diff = (centroid - mid) * h
+            p1 = v1 + diff
+            p2 = v2 + diff
+            verts_list.append(np.array([v1, p1, p2, v2]))
+            colors_list.append((0, 0, 0, 0))
+            pair_indices[(eid, cid)] = len(verts_list) - 1
+
+    if verts_list:
+        boundary_collection = PolyCollection(
+            np.array(verts_list),
+            facecolors=colors_list,
+            alpha=0.8, 
+            zorder=z_order + 6,
+        )
+        ax.add_collection(boundary_collection)
+    else:
+        boundary_collection = None
+
+    text_objects = []
+    for i in range(n_cells):
+        centroid = polys[i].mean(axis=0)
+        txt = ax.text(
+            centroid[0],
+            centroid[1],
+            "",
+            fontsize=25,
+            ha="center",
+            va="center",
+            color="black",
+            zorder=z_order,
+        )
+        txt.set_visible(False)
+        text_objects.append(txt)
+
     def update(frame):
-        nonlocal highlight_artists
-        
-        for text in ax.texts:
-            text.set_visible(False)
-
-        for art in highlight_artists:
-            art.remove()
-        highlight_artists.clear()
-
-        # Cycle through highlight_sets
         (
             cell_highlights,
             edge_highlights,
@@ -392,29 +463,44 @@ def animate_highlights(
             partition,
         ) = highlight_sequence[frame % len(highlight_sequence)]
 
-        new_artists = highlight_cells_edges(
-            ax, points, cells, unique_edges, cell_highlights, edge_highlights, z_order
-        )
-        new_artists_2 = highlight_boundary(
-            ax, geom, boundary_highlights, zorder=z_order + 6
-        )
-        new_artists_3 = label_cells(ax, points, cells, cell_labels, z_order=z_order)
-        shade_collection = shade_partitioning(
-            ax,
-            points,
-            cells,
-            partition,
-            cmap=device_to_color,
-            edgecolor="black",
-            alpha=0.5,
-            z_order=z_order - 1,
-        )
-        highlight_artists.append(shade_collection)
-        highlight_artists.extend(new_artists)
-        highlight_artists.extend(new_artists_2)
-        # highlight_artists.extend(new_artists_3)
-        return highlight_artists
-    
+        # 1) Update shaded partition colors (device of last task that used cell)
+        shade_colors = [device_rgba[partition[i]] for i in range(n_cells)]
+        shade_collection.set_facecolors(shade_colors)
+
+        for patch in active_outlines:
+            patch.set_visible(False)
+        for color, cell_ids in cell_highlights.items():
+            for cid in cell_ids:
+                if 0 <= cid < n_cells:
+                    patch = active_outlines[cid]
+                    patch.set_edgecolor(color)
+                    patch.set_visible(True)
+
+        #Update boundary transfer highlights as colored slanted quads
+        if boundary_collection is not None:
+            fc = boundary_collection.get_facecolors()
+            # set all to transparent
+            if len(fc) > 0:
+                fc[:] = (0, 0, 0, 0)
+            for eid, celldict in boundary_highlights.items():
+                for cid, color in celldict.items():
+                    idx = pair_indices.get((eid, cid))
+                    if idx is not None and 0 <= idx < len(fc):
+                        fc[idx] = mcolors.to_rgba(color)
+            boundary_collection.set_facecolors(fc)
+
+        #Update labels to show the label of the last task that used the cell
+        for txt in text_objects:
+            txt.set_visible(False)
+        for label, cell_ids in cell_labels.items():
+            for cid in cell_ids:
+                if 0 <= cid < n_cells:
+                    t = text_objects[cid]
+                    t.set_text(f"{label}")
+                    t.set_visible(True)
+
+        return [] 
+
     if interval is None:
         interval = int(video_seconds * 1000 / len(highlight_sequence))
 

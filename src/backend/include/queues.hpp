@@ -403,7 +403,8 @@ class DynamicTopKQueue {
   std::size_t topk_size() { return top_k.size(); }
 
   int get_k() const { return K_; }
-  void set_k(int k) { K_ = std::max(1, k); rebalance(); }
+  void set_k(int k) { 
+    K_ = std::max(1, k); rebalance(); }
 };
 
 
@@ -555,7 +556,6 @@ std::vector<T> ContainerQueue<T, Queue, Compare>::get_top_k() {
   if constexpr (TopKLike<QueueType>) {
     auto &top_k = pq.get_top_k();
     for (auto it = top_k.begin(); it != top_k.end(); ++it) {
-      // Support both Element<T> and T in the underlying window
       if constexpr (std::is_same_v<std::remove_cvref_t<decltype(*it)>, Element<T>>) {
         top_k_values.push_back(it->value);
       } else {
