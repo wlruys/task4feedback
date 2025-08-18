@@ -16,7 +16,9 @@ from task4feedback.graphs.jacobi import (
     JacobiGraph,
     LevelPartitionMapper,
     JacobiRoundRobinMapper,
-    JacobiQuadrantMapper
+    JacobiQuadrantMapper,
+    BlockCyclicMapper,
+    GraphMETISMapper,
 )
 
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
@@ -46,7 +48,7 @@ size = comm.Get_size()
 def configure_training(cfg: DictConfig):
     # start_logger()
     
-    option = "ParMETIS"
+    option = "GraphMETISMapper"
     if rank == 0:
         graph_builder = make_graph_builder(cfg)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
@@ -70,6 +72,16 @@ def configure_training(cfg: DictConfig):
         graph.align_partitions()
         env.simulator.enable_external_mapper()
         env.simulator.external_mapper=LevelPartitionMapper(level_cell_mapping=graph.partitions)
+    elif option == "BlockCyclic":
+        env.simulator.enable_external_mapper()
+        env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices-1, block_size=1, offset=1, bandwidth=cfg.system.d2d_bw)
+    elif option == "GraphMETISMapper":
+        env.simulator.enable_external_mapper()
+        env.simulator.external_mapper = GraphMETISMapper(graph=graph, n_devices=cfg.system.n_devices-1, offset=1)
+    
+    elif option== "Cyclic":
+        env.simulator.enable_external_mapper()
+        env.simulator.external_mapper = JacobiRoundRobinMapper(n_devices=cfg.system.n_devices-1, offset=1, setting=0)
     elif option == "ParMETIS": 
         run_parmetis(sim=env.simulator if rank == 0 else None,
                      cfg=cfg)
@@ -79,16 +91,16 @@ def configure_training(cfg: DictConfig):
     if rank==0:
         config = EvaluationConfig()
         env.simulator.run()
-        print(env.simulator.time, env._get_baseline("EFT"))
-        # animate_mesh_graph(
-        #     env,
-        #     time_interval=int(env.simulator.time / config.max_frames),
-        #     show=False,
-        #     title="outputs/partition_result",
-        #     figsize=config.fig_size,
-        #     dpi=config.dpi,
-        #     bitrate=config.bitrate,
-        # )
+        # print(env.simulator.time, env._get_baseline("EFT"))
+        animate_mesh_graph(
+            env,
+            time_interval=int(env.simulator.time / config.max_frames),
+            show=False,
+            title="outputs/partition_result",
+            figsize=config.fig_size,
+            dpi=config.dpi,
+            bitrate=config.bitrate,
+        )
     
 
 

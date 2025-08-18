@@ -97,7 +97,7 @@ def configure_training(cfg: DictConfig):
             eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
-            seed=cfg.seed,
+            seed=cfg.seed   ,
         )
 
 

@@ -13,9 +13,6 @@ config:
   permute_idx: 0
   vcu_usage: 1.0
   task_internal_memory: 0 
-  task_time: 1000 
-  interior_time: 1000 
-  boundary_time: 1000
   workload:
     _target_: task4feedback.graphs.base.TrajectoryWorkload
   workload_args:

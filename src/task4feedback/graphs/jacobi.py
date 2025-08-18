@@ -1,4 +1,5 @@
 from .mesh.base import Geometry, Cell, Edge
+from .mesh.partition import block_cyclic
 from ..interface import DataBlocks, DeviceType, TaskTuple, VariantTuple
 from .base import (
     DataGeometry,
@@ -8,10 +9,12 @@ from .base import (
     WeightedCellGraph,
     GraphConfig,
     weighted_cell_partition,
+    weighted_partition,
     register_graph,
 )
 from dataclasses import dataclass
 from ..interface.lambdas import VariantBuilder
+from ..interface.wrappers import StaticExternalMapper
 import random
 from itertools import permutations
 from collections import defaultdict
@@ -24,6 +27,7 @@ import sympy
 from ..interface.types import _bytes_to_readable
 
 from collections import deque
+import math
 
 
 @dataclass
@@ -1001,6 +1005,27 @@ class PredictWorkload:
         return preds
 
 
+class GraphMETISMapper(StaticExternalMapper):
+
+    def __init__(self, mapper: Optional[Self] = None, n_devices: int = 4, offset: int = 1, graph: Optional[ComputeDataGraph] = None, arch: DeviceType =DeviceType.GPU, bandwidth: int = 100e9):
+        self.n_devices = n_devices
+        self.offset = offset
+        if mapper is not None:
+            assert isinstance(mapper, GraphMETISMapper), (
+                "Mapper must be of type GraphMETISMapper, is " + str(type(mapper))
+            )
+            self.mapping_dict = mapper.mapping_dict
+        elif graph is not None:
+            task_to_local, adjacency_list, adj_starts, vweights, eweights = graph.get_weighted_graph(
+                arch=arch, bandwidth=bandwidth, task_ids=None, symmetric=True
+            )
+            a, b =weighted_partition(
+                n_devices, adjacency_list, adj_starts, vweights, eweights
+            )
+            self.mapping_dict = {i : device + self.offset for i, device in enumerate(b)}
+        else:
+            raise ValueError("Either mapper or graph must be provided for GraphMETISMapper")
+
 class PartitionMapper:
     def __init__(
         self,
@@ -1047,6 +1072,30 @@ class PartitionMapper:
                 fastsim.Action(local_id, device, mapping_priority, mapping_priority)
             )
         return mapping_result
+
+
+class BlockCyclicMapper(PartitionMapper):
+    def __init__(self, mapper: Optional[Self] = None,
+        geometry: Optional[Geometry] = None,
+        n_devices: int = 4,
+        block_size: int = 2, offset: int = 1):
+        self.level_start = 0
+        self.offset = offset
+        if mapper is not None:
+            assert isinstance(mapper, BlockCyclicMapper), (
+                "Mapper must be of type BlockCyclicMapper, is " + str(type(mapper))
+            )
+            self.cell_to_mapping = mapper.cell_to_mapping
+        elif geometry is not None:
+            x_dev = n_devices // 2 
+            y_dev = n_devices // 2
+            if x_dev + y_dev != n_devices:
+                x_dev+= 1
+            n_cells = len(geometry.cells)
+            partition = block_cyclic(geometry, n_row_parts=x_dev, n_col_parts=y_dev, parts_per_column=block_size, parts_per_row=block_size)
+            self.cell_to_mapping = {cell: device+self.offset for cell, device in enumerate(partition)}
+        else:
+            raise ValueError("Either mapper or geometry must be provided for BlockCyclicMapper")
 
 
 class LevelPartitionMapper:
@@ -1099,7 +1148,7 @@ class LevelPartitionMapper:
 
 
 class JacobiRoundRobinMapper:
-    def __init__(self, n_devices: int = 4, setting: int = 0, offset: int = 1):
+    def __init__(self,  n_devices: int = 4, setting: int = 0, offset: int = 1, mapper: Optional[Self] = None):
         """
         Initialize the JacobiRoundRobinMapper.
         setting == 1 : Row cyclic
@@ -1153,7 +1202,7 @@ class JacobiRoundRobinMapper:
 
 
 class JacobiQuadrantMapper:
-    def __init__(self, n_devices: int, graph: JacobiGraph, offset: int = 1):
+    def __init__(self,  n_devices: int, graph: JacobiGraph, offset: int = 1, mapper: Optional[Self] = None, ):
         self.n_devices = n_devices
         self.width = graph.config.n
         self.n_tasks = self.width * self.width

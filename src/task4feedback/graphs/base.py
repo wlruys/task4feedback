@@ -186,7 +186,9 @@ class ComputeDataGraph(TaskGraph):
         return time
 
     def get_shared_data(self, task_self: int, task_other: int):
-        # Total size of all shared data blocks from task_other to task_self
+        """
+         Total size of all shared data blocks from task_other to task_self
+        """
 
         read_self = self.tasks[task_self].read
         read_other = self.tasks[task_other].read
@@ -226,7 +228,7 @@ class ComputeDataGraph(TaskGraph):
         return total_size
 
     def get_weighted_graph(
-        self, arch: DeviceType, bandwidth: int = 1000, task_ids: Optional[list] = None
+        self, arch: DeviceType, bandwidth: int = 1000, task_ids: Optional[list] = None, symmetric: bool = False 
     ):
         adjacency_list = []
         adj_starts = []
@@ -238,29 +240,63 @@ class ComputeDataGraph(TaskGraph):
         if task_ids is None:
             task_ids = range(len(self))
 
+        task_ids = list(task_ids)
+
         for i, task_id in enumerate(task_ids):
             task_to_local[task_id] = i
 
-        for i, task_id in enumerate(task_ids):
-            adj_starts.append(len(adjacency_list))
+        for _, task_id in enumerate(task_ids):
             compute_cost = self.get_compute_cost(task_id, arch)
             vweights.append(compute_cost)
 
-            for dep_task_id in self.tasks[task_id].dependencies:
-                if dep_task_id not in task_ids:
+        if not symmetric:
+            for _, task_id in enumerate(task_ids):
+                adj_starts.append(len(adjacency_list))
+                for dep_task_id in self.tasks[task_id].dependencies:
+                    if dep_task_id not in task_to_local:
+                        continue
+                    data_cost = self.get_shared_data(task_id, dep_task_id)
+                    data_cost /= bandwidth
+                    data_cost = max(data_cost, 1)
+
+                    eweights.append(data_cost)
+                    adjacency_list.append(dep_task_id)
+            adj_starts.append(len(adjacency_list))
+        else:
+            edges_dir = {}
+            for _, u in enumerate(task_ids):
+                for v in self.tasks[u].dependencies:
+                    if v not in task_to_local:
+                        continue
+                    w = self.get_shared_data(u, v) / bandwidth
+                    w = max(w, 1)
+                    edges_dir[(u, v)] = w
+
+            undirected_max = {}
+            for (u, v), w in edges_dir.items():
+                if u == v:
                     continue
-                data_cost = self.get_shared_data(task_id, dep_task_id)
-                data_cost /= bandwidth
-                data_cost = max(data_cost, 1)
+                a, b = (u, v) if u < v else (v, u)
+                prev = undirected_max.get((a, b))
+                if prev is None or w > prev:
+                    undirected_max[(a, b)] = w
 
-                eweights.append(data_cost)
-                adjacency_list.append(dep_task_id)
-                # print(
-                #     f"task_id: {task_id}, dep_task_id: {dep_task_id}, data_cost: {data_cost}"
-                # )
+            neighbor_map = {tid: [] for tid in task_ids}
+            weight_map = {tid: [] for tid in task_ids}
 
-        adj_starts.append(len(adjacency_list))
+            for (a, b), w in undirected_max.items():
+                neighbor_map[a].append(b); weight_map[a].append(w)
+                neighbor_map[b].append(a); weight_map[b].append(w)
 
+            for u in task_ids:
+                adj_starts.append(len(adjacency_list))
+                if neighbor_map[u]:
+                    pairs = sorted(zip(neighbor_map[u], weight_map[u]), key=lambda p: p[0])
+                    for v, w in pairs:
+                        adjacency_list.append(v)
+                        eweights.append(w)
+            adj_starts.append(len(adjacency_list))
+        
         adjacency_list = np.array(adjacency_list)
         adj_starts = np.array(adj_starts)
         vweights = np.array(vweights)
@@ -288,38 +324,6 @@ def weighted_partition(
     adj_starts = adj_starts.astype(np.int32)
     vweights = vweights.astype(np.int32)
     eweights = eweights.astype(np.int32)
-    
-    # # --- SYMMETRY FIX: average weights on mismatched edges ---
-    # nverts = vweights.shape[0]
-    # for u in range(nverts):
-    #     start_u = adj_starts[u]
-    #     end_u = adj_starts[u + 1]
-    #     for idx in range(start_u, end_u):
-    #         v = int(adjacency_list[idx])
-    #         w_uv = int(eweights[idx])
-
-    #         # find reverse edge v -> u
-    #         start_v = adj_starts[v]
-    #         end_v = adj_starts[v + 1]
-    #         rev_idx = None
-    #         for j in range(start_v, end_v):
-    #             if int(adjacency_list[j]) == u:
-    #                 rev_idx = j
-    #                 break
-
-    #         if rev_idx is not None:
-    #             w_vu = int(eweights[rev_idx])
-    #             if w_uv != w_vu:
-    #                 avg = (w_uv + w_vu) // 2
-    #                 eweights[idx] = avg
-    #                 eweights[rev_idx] = avg
-    #                 # print(
-    #                 #     f"Fixed mismatch: set both edges ({u}->{v}) and ({v}->{u}) to weight {avg}"
-    #                 # )
-    #         # else:
-    #         # optionally handle missing reverse edges
-    #         # print(f"Warning: no reverse edge for {u}->{v}, weight={w_uv}")
-    # # ---------------------------------------------------------
 
     return pymetis.part_graph(
         nparts=nparts,

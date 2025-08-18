@@ -22,12 +22,15 @@ from task4feedback.graphs.jacobi import (
     JacobiGraph,
     LevelPartitionMapper,
     JacobiRoundRobinMapper,
-    JacobiQuadrantMapper
+    JacobiQuadrantMapper, 
+    BlockCyclicMapper, 
+    GraphMETISMapper
 )
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from task4feedback.fastsim2 import ParMETIS_wrapper
 from task4feedback.graphs.mesh.partition import * 
 from task4feedback.graphs.base import weighted_cell_partition
+from task4feedback.graphs.mesh.plot import animate_mesh_graph
 
 from helper.graph import make_graph_builder, GraphBuilder
 from helper.env import make_env
@@ -49,12 +52,12 @@ MetricKeys = ("time", "mem_usage", "total_mem_movement", "eviction_movement", "t
 # experiment_names = ["EFT", "ColWise", "GlobalMinCut", "Cyclic"]
 # experiment_names = ["EFT", "ColWise", "RL"]
 # experiment_names = ["EFT", "Oracle", "GlobalMinCut"]
-experiment_names = ["EFT", "ParMETIS"]
+experiment_names = ["EFT", "ParMETIS", "BlockCyclic", "Cyclic", "GraphMETISMapper"]
 mem_keys = experiment_names.copy()
 speedup_keys = experiment_names.copy()
 speedup_keys.remove("EFT")
 
-sweep_list = list(range(int(40e9), int(60e9), int(5e9)))
+sweep_list = list(range(int(40e9), int(150e9), int(5e9)))
 
 def seed_everything(seed: int = 0) -> None:
     random.seed(seed)
@@ -141,16 +144,35 @@ def mapper_registry(cfg: DictConfig, d2d_bandwidth: int) -> Dict[str, Optional[M
         )
         graph.align_partitions()
         return LevelPartitionMapper(level_cell_mapping=graph.partitions)
+    
+
+    def block_cyclic_mapper(graph: DynamicJacobiGraph, block_size=1) -> BlockCyclicMapper:
+        return BlockCyclicMapper(
+            geometry=graph.data.geometry,
+            n_devices=cfg.system.n_devices - 1,
+            block_size=block_size,
+            offset=1
+        )
+    
+    def global_metis_cut(graph: DynamicJacobiGraph) -> GraphMETISMapper:
+        return GraphMETISMapper(
+            graph=graph,
+            n_devices=cfg.system.n_devices - 1,
+            offset=1,
+            bandwidth= d2d_bandwidth,
+        )
 
     return {
         "EFT": None,                    # baseline (no external mapper)
-        "Naïve": naive_mapper,          # dynamic mode with chunks
+        "Naive": naive_mapper,          # dynamic mode with chunks
         "ColWise": row_mapper,            # round-robin
         "Cyclic": cyclic_mapper,             # cyclic
         "Quad": quadrant_mapper,        # quadrant
         "GlobalMinCut": global_min_cut_mapper,
+        "BlockCyclic": block_cyclic_mapper,  # BlockCyclicMapper
         "Oracle": None,                 # handled separately (dynamic k sweep using dynamic_metis_mapper)
         "ParMETIS": None,               # handled by distributed loop
+        "GraphMETISMapper": global_metis_cut,  # GraphMETISMapper
         # Expose dynamic_metis factory for the Oracle path:
         "_dynamic_metis_factory": dynamic_metis_mapper,
     }
@@ -317,7 +339,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                 eft_time = sim.time
 
                 # ---- Naïve / ColWise / GlobalMinCut
-                for name in ["Naïve", "ColWise", "GlobalMinCut", "Quad", "Cyclic"]:
+                for name in ["Naive", "ColWise", "GlobalMinCut", "Quad", "Cyclic", "BlockCyclic", "GraphMETISMapper"]:
                     if name in experiment_names:
                         mapper_fn = experiment_mappers[name]
                         assert mapper_fn is not None
@@ -466,6 +488,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         speedup = {}
         for k in speedup_keys:
             speedup[k] = []
+            print(f"Speedup for {k}:", metrics[k])
             for i in range(len(sweep_list)):
                 speedup[k].append(metrics["EFT"]["time"][i]/metrics[k]["time"][i])
         for k in experiment_names:
