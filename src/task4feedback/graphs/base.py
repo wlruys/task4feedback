@@ -187,16 +187,18 @@ class ComputeDataGraph(TaskGraph):
 
     def get_shared_data(self, task_self: int, task_other: int):
         # Total size of all shared data blocks from task_other to task_self
-        # For example, if task_self depends on task_other it is the size of the data that task_self needs to read from task_other
-        read_self = self.tasks[task_self].read
 
+        read_self = self.tasks[task_self].read
         read_other = self.tasks[task_other].read
+
+        write_self = self.tasks[task_self].write
         write_other = self.tasks[task_other].write
 
-        shared = set(read_self) & (set(read_other) | set(write_other))
+        shared_reads = set(read_other) & (set(read_self))
+        shared_write_reads = set(write_other) & (set(read_self))
+        shared = shared_reads.union(shared_write_reads)
 
         total_size = 0
-
         for block_id in shared:
             block = self.data.blocks.get_block(block_id)
             size = block.size
@@ -204,10 +206,20 @@ class ComputeDataGraph(TaskGraph):
         return total_size
 
     def get_read_data(self, task_id: int):
-        # Get all data blocks that this task reads
-        read_self = self.tasks[task_id].read
+        # Get size of all data blocks that this task reads
+            read_self = self.tasks[task_id].read
+            total_size = 0
+            for block_id in read_self:
+                block = self.data.blocks.get_block(block_id)
+                size = block.size
+                total_size += size
+            return total_size
+    
+    def get_write_data(self, task_id: int):
+        # Get size of all data blocks that this task writes
+        write_self = self.tasks[task_id].write
         total_size = 0
-        for block_id in read_self:
+        for block_id in write_self:
             block = self.data.blocks.get_block(block_id)
             size = block.size
             total_size += size
@@ -221,6 +233,7 @@ class ComputeDataGraph(TaskGraph):
         vweights = []
         eweights = []
         task_to_local = {}
+        bandwidth = bandwidth / (1e6)
 
         if task_ids is None:
             task_ids = range(len(self))
@@ -239,6 +252,7 @@ class ComputeDataGraph(TaskGraph):
                 data_cost = self.get_shared_data(task_id, dep_task_id)
                 data_cost /= bandwidth
                 data_cost = max(data_cost, 1)
+
                 eweights.append(data_cost)
                 adjacency_list.append(dep_task_id)
                 # print(
@@ -253,75 +267,6 @@ class ComputeDataGraph(TaskGraph):
         eweights = np.array(eweights)
 
         return task_to_local, adjacency_list, adj_starts, vweights, eweights
-
-    def get_distributed_weighted_graph(
-        self,
-        bandwidth: int,
-        task_ids: list[int],
-        partition: list[int],
-        arch: DeviceType = DeviceType.GPU,
-        future_levels: int = 0,
-    ):
-        """
-        Get a weighted graph representation of the compute data graph for distributed partitioning.
-        """
-        # Build distributed CSR for each process
-        future_levels = min(future_levels, (self.graph.size() - max(task_ids)) // 64)
-
-        assert len(partition) == len(task_ids), (
-            f"Sum of partition lengths {sum(len(p) for p in partition)} "
-            f"does not match number of tasks {len(task_ids)}"
-        )
-        assert min(partition) == 0, f"Partition must start from 0, got {min(partition)}"
-    
-        xadj = [[0] for _ in range(len(set(partition)))]  # xadj for each partition
-        adjncy = [[] for _ in range(len(set(partition)))]
-        vwgt = [[] for _ in range(len(set(partition)))]  # Compute time
-        adjwgt = [[] for _ in range(len(set(partition)))]  # Data transfer time
-        vsize = [[] for _ in range(len(set(partition)))]  # Stores internal data size
-        vtxdist = [0]
-        task_to_local = {}
-        partitioned_tasks = [[] for _ in range(len(set(partition)))]
-        pairs = zip(task_ids, partition)
-        pairs = sorted(pairs, key=lambda x: x[1])
-        for i, (task_id, part) in enumerate(pairs):
-            task_to_local[task_id] = i
-        for i, (task_id, part) in enumerate(pairs):
-            partitioned_tasks[part].append(task_id)
-            compute_cost = 0
-            repartition_cost = 0
-            for fl in range(future_levels + 1):
-                compute_cost += self.get_compute_cost(task_id + fl * 64, arch)
-                repartition_cost += self.get_read_data(task_id + fl * 64) // bandwidth
-            vwgt[part].append(compute_cost // (future_levels + 1))
-            vsize[part].append(max(repartition_cost // (future_levels + 1),1))
-            for dep_task_id in self.tasks[task_id].dependencies:
-                if dep_task_id % 64 == task_id % 64:
-                    continue
-                boundary_cost = 0
-                for fl in range(future_levels + 1):
-                    boundary_cost += (
-                        self.get_shared_data(task_id + fl * 64, dep_task_id + fl * 64)
-                    ) // bandwidth
-                adjwgt[part].append(max(boundary_cost // (future_levels + 1), 1))
-                adjncy[part].append(task_to_local[dep_task_id + 64])
-            xadj[part].append(len(adjncy[part]))
-            if i > 0 and pairs[i - 1][1] != part:
-                vtxdist.append(i)
-        vtxdist.append(len(task_ids))
-
-        assert (
-            len(vtxdist) == len(set(partition)) + 1
-        ), f"vtxdist length {len(vtxdist)} does not match partition length {len(set(partition)) + 1}"
-
-        xadj = [np.array(x, dtype=np.int32) for x in xadj]
-        adjncy = [np.array(x, dtype=np.int32) for x in adjncy]
-        vwgt = [np.array(x, dtype=np.int32) for x in vwgt]
-        adjwgt = [np.array(x, dtype=np.int32) for x in adjwgt]
-        vsize = [np.array(x, dtype=np.int32) for x in vsize]
-        vtxdist = np.array(vtxdist, dtype=np.int32)
-        return partitioned_tasks, vtxdist, xadj, adjncy, vwgt, adjwgt, vsize
-
 
 @dataclass
 class WeightedCellGraph:
@@ -343,38 +288,39 @@ def weighted_partition(
     adj_starts = adj_starts.astype(np.int32)
     vweights = vweights.astype(np.int32)
     eweights = eweights.astype(np.int32)
+    
+    # # --- SYMMETRY FIX: average weights on mismatched edges ---
+    # nverts = vweights.shape[0]
+    # for u in range(nverts):
+    #     start_u = adj_starts[u]
+    #     end_u = adj_starts[u + 1]
+    #     for idx in range(start_u, end_u):
+    #         v = int(adjacency_list[idx])
+    #         w_uv = int(eweights[idx])
 
-    # --- SYMMETRY FIX: average weights on mismatched edges ---
-    nverts = vweights.shape[0]
-    for u in range(nverts):
-        start_u = adj_starts[u]
-        end_u = adj_starts[u + 1]
-        for idx in range(start_u, end_u):
-            v = int(adjacency_list[idx])
-            w_uv = int(eweights[idx])
+    #         # find reverse edge v -> u
+    #         start_v = adj_starts[v]
+    #         end_v = adj_starts[v + 1]
+    #         rev_idx = None
+    #         for j in range(start_v, end_v):
+    #             if int(adjacency_list[j]) == u:
+    #                 rev_idx = j
+    #                 break
 
-            # find reverse edge v -> u
-            start_v = adj_starts[v]
-            end_v = adj_starts[v + 1]
-            rev_idx = None
-            for j in range(start_v, end_v):
-                if int(adjacency_list[j]) == u:
-                    rev_idx = j
-                    break
+    #         if rev_idx is not None:
+    #             w_vu = int(eweights[rev_idx])
+    #             if w_uv != w_vu:
+    #                 avg = (w_uv + w_vu) // 2
+    #                 eweights[idx] = avg
+    #                 eweights[rev_idx] = avg
+    #                 # print(
+    #                 #     f"Fixed mismatch: set both edges ({u}->{v}) and ({v}->{u}) to weight {avg}"
+    #                 # )
+    #         # else:
+    #         # optionally handle missing reverse edges
+    #         # print(f"Warning: no reverse edge for {u}->{v}, weight={w_uv}")
+    # # ---------------------------------------------------------
 
-            if rev_idx is not None:
-                w_vu = int(eweights[rev_idx])
-                if w_uv != w_vu:
-                    avg = (w_uv + w_vu) // 2
-                    eweights[idx] = avg
-                    eweights[rev_idx] = avg
-                    # print(
-                    #     f"Fixed mismatch: set both edges ({u}->{v}) and ({v}->{u}) to weight {avg}"
-                    # )
-            # else:
-            # optionally handle missing reverse edges
-            # print(f"Warning: no reverse edge for {u}->{v}, weight={w_uv}")
-    # ---------------------------------------------------------
     return pymetis.part_graph(
         nparts=nparts,
         adjncy=adjacency_list,
@@ -918,9 +864,9 @@ class GaussianBump:
     def is_alive(self):
         return self.t < self.num_steps
 
-def create_bump_random_center(min_std = 0.1, max_std: float = 0.3, min_scale: float = 0.05, max_scale: float  = 0.5, min_life = 25, max_life = 50):
-    x = np.random.uniform(0, 1, size=2)
-    life = np.random.randint(min_life, max_life)
+def create_bump_random_center(rng: np.random.RandomState, min_std = 0.1, max_std: float = 0.3, min_scale: float = 0.05, max_scale: float  = 0.5, min_life = 25, max_life = 50):
+    x = rng.uniform(0, 1, size=2)
+    life = rng.randint(min_life, max_life)
 
     return GaussianBump(x, min_std, max_std, min_scale, max_scale, t=0, num_steps=life)
 
@@ -988,10 +934,11 @@ class BumpWorkload(DynamicWorkload):
             start_step: int = 0,
             lower_bound: float = 0.05,
             upper_bound: float = 3,
+            seed: int = 0,
             **kwargs
     ):
-        self.random = False
-
+        self.random = True
+        rng = np.random.RandomState(seed)
         centroids = np.zeros((self.num_cells, 2))
         for i, cell in enumerate(self.geom.cells):
             centroids[i] = self.geom.get_centroid(i)
@@ -1000,7 +947,7 @@ class BumpWorkload(DynamicWorkload):
         assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
 
         bumps = [] 
-        bumps.append(create_bump_random_center())
+        bumps.append(create_bump_random_center(rng=rng))
 
         for j in range(start_step + 1, num_levels):
             self.level_workload[j] = np.copy(self.level_workload[0])
@@ -1012,8 +959,8 @@ class BumpWorkload(DynamicWorkload):
             bumps = [b for b in bumps if b.is_alive()]
                 
             #Create a new bump with probability 0.1
-            if np.random.rand() < 0.1:
-                bumps.append(create_bump_random_center())
+            if rng.rand() < 0.1:
+                bumps.append(create_bump_random_center(rng=rng))
 
             self.level_workload[j] = np.clip(
                 a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound

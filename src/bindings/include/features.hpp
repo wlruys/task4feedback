@@ -1405,7 +1405,7 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
 
   size_t getFeatureDimImpl() const {
     const auto &devices = this->state.get_devices();
-    return frames * (devices.size() - 1);
+    return frames;
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
@@ -1418,10 +1418,7 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
     }
     int i = 0;
     while (task_id >= 0 && i < frames) {
-      auto mapped_device = task_runtime.get_compute_task_mapped_device(task_id);
-      assert(mapped_device > 0);
-      output[i * n_devices + (mapped_device - 1)] =
-          static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
+      output[i] =static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
       task_id -= stride;
       ++i;
     }
