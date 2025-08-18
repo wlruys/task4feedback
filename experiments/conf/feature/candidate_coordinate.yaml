@@ -11,3 +11,4 @@ observer:
     max_edges_data_devices: 1
     max_edges_tasks_devices: 1
     max_candidates: 1
+  batched: false

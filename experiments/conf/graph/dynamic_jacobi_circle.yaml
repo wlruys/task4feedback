@@ -3,7 +3,7 @@ mesh:
 config:
   _target_: task4feedback.graphs.dynamic_jacobi.DynamicJacobiConfig
   steps: 50
-  n: 4
+  n: 8
   arithmetic_intensity: 1.0
   arithmetic_complexity: 1.0
   boundary_width: 5.0
@@ -30,9 +30,9 @@ init:
   partitioner: metis
   nparts: 4
   gpu_only: True
-  randomize: True
+  randomize: False
 env:
-  change_priority: True
-  change_location: True
-  change_duration: True
+  change_priority: False
+  change_location: False
+  change_duration: False
   seed: 1

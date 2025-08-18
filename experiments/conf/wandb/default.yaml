@@ -1,4 +1,4 @@
-project: delayed_feedback
+project: animation_test
 name: default
 enabled: true
 dir: ~/workspace/scheduling/logs

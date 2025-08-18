@@ -30,9 +30,8 @@ graph:
       n: 8
       steps: 60
       workload_args:
-        lower_bound: 1000
-        upper_bound: 5000
-        scale: 0.01
+        lower_bound: 1
+        upper_bound: 5
   env:
     change_priority: True
     change_locations: True
@@ -50,7 +49,7 @@ optimizer:
   lr: 2.5e-4
 
 system:
-  mem: 136000
+  mem: 200000000000
 
 feature:
   observer:
