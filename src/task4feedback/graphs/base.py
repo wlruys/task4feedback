@@ -206,10 +206,20 @@ class ComputeDataGraph(TaskGraph):
         return total_size
 
     def get_read_data(self, task_id: int):
-        # Get all data blocks that this task reads
-        read_self = self.tasks[task_id].read
+        # Get size of all data blocks that this task reads
+            read_self = self.tasks[task_id].read
+            total_size = 0
+            for block_id in read_self:
+                block = self.data.blocks.get_block(block_id)
+                size = block.size
+                total_size += size
+            return total_size
+    
+    def get_write_data(self, task_id: int):
+        # Get size of all data blocks that this task writes
+        write_self = self.tasks[task_id].write
         total_size = 0
-        for block_id in read_self:
+        for block_id in write_self:
             block = self.data.blocks.get_block(block_id)
             size = block.size
             total_size += size

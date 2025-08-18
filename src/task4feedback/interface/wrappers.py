@@ -157,6 +157,7 @@ class TaskGraph:
     def finalize(self):
         self.graph.finalize()
         self.static_graph = StaticTaskInfo(self.graph)
+
         for task_id, v in self.tasks.items():
             v.dependencies = self.get_task_dependencies(task_id)
 
