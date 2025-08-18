@@ -133,10 +133,12 @@ def make_env(
         if isinstance(env.transform, Compose):
             for transform in env.transform:
                 if isinstance(transform, ObservationNorm) and not transform.initialized:
+                    env.disable_reward()
                     transform.init_stats(
                         num_iter=env.size() * 10,
                         key=("observation", "nodes", "tasks", "attr"),
                     )
+                    env.enable_reward()
         new_norm = NormalizationDetails(task_norm=task_norm_transform.state_dict())
     elif isinstance(normalization, NormalizationDetails):
         task_norm_transform = ObservationNorm(
