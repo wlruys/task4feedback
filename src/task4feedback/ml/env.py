@@ -615,7 +615,7 @@ class SparseLookbackKStep(RuntimeEnv):
             sim_k_step.start_drain()
             sim_k_step.run()
             self.kstep_record[self.step_count] = sim_k_step.time
-            print("Recording", self.step_count, "Looking at", self.step_count + self.reference_steps)
+            #print("Recording", self.step_count, "Looking at", self.step_count + self.reference_steps)
 
         self.map_tasks(td[self.action_n])
 
@@ -629,7 +629,7 @@ class SparseLookbackKStep(RuntimeEnv):
             sim_current.start_drain() 
             sim_current.run()
             self.current_record[self.step_count] = sim_current.time
-            print("Checking", self.step_count, "Looking at", self.step_count + self.look_ahead)
+            #print("Checking", self.step_count, "Looking at", self.step_count + self.look_ahead)
 
             reward = (self.kstep_record[self.step_count-self.delay] - self.current_record[self.step_count]) / (self.EFT_baseline / self.size())
         else:
@@ -677,8 +677,6 @@ class LookaheadKStep(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(policy="EFT")
-            #self.current_record[self.step_count] = self.EFT_baseline
-            #self.kstep_record[self.step_count] = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
 
         self.step_count += 1
@@ -735,10 +733,10 @@ class LookaheadKStep(RuntimeEnv):
 
 class KStepIncrementalEFT(RuntimeEnv):
     """ 
-    I made too many mistakes when implementing this, compared to intended. 
+    I made sooo many mistakes when implementing this, compared to what was intended. 
     1. Wrong baseline (should be 0)
-    2. Looks at unequal schedule lengths
-    Yet, it is still a 
+    2. Compares unequal schedule lengths
+    Yet, it is still rather performant... so I am keeping it as a record. 
     """
 
     def __init__(self, *args, gamma: float = 1.0, k: int = 5, drain: bool = False, **kwargs):
@@ -759,23 +757,15 @@ class KStepIncrementalEFT(RuntimeEnv):
         self.map_tasks(td[self.action_n])
 
         if not self.disable_reward_flag:
-            start_time = perf_counter()
             sim_ml = self.simulator.copy()
             sim_ml.disable_external_mapper()
+
             sim_ml.set_steps((self.k)*self.simulator_factory[self.active_idx].graph_spec.max_candidates)
             sim_ml.run()
             if self.drain:
                 sim_ml.start_drain()
-            end_time = perf_counter()
-            # print(f"sim_ml.copy() took {(end_time - start_time) * 1000:.2f}ms")
-            # print(f"Current sim time {sim_ml.time}", flush=True)
-            start_time = perf_counter()
             sim_ml.run()
-            end_time = perf_counter()
-            # print(f"sim_ml.run() took {(end_time - start_time) * 1000:.2f}ms")
-
             ml_time = sim_ml.time
-
             reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / (self.size()))
             self.eft_time = ml_time
         else:
