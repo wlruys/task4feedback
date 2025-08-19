@@ -1,0 +1,5 @@
+_target_: task4feedback.ml.env.LookaheadKStep
+_partial_: true
+k: 5
+random_start: False
+terminal_reward: False

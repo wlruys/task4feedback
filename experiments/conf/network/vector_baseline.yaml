@@ -5,11 +5,11 @@ defaults:
 
 layers:
   state:
-    hidden_channels: []
+    hidden_channels: [64, 32, 16, 32]
   actor:
-    hidden_channels: 128
+    hidden_channels: 32
   critic:
-    hidden_channels: 128
+    hidden_channels: 32
 
 critic:
   add_progress: true

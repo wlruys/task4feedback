@@ -270,6 +270,10 @@ class RuntimeEnv(EnvBase):
         
 
         return obs, reward, time, improvement
+    
+    def max_length(self) -> int:
+        return max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
+
 
     def map_tasks(self, actions: torch.Tensor):
         candidate_workspace = self.candidate_workspace
@@ -502,9 +506,240 @@ class IncrementalEFT(RuntimeEnv):
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
+class LookbackKStep(RuntimeEnv):
+    
+    def __init__(self, *args, gamma: float = 1.0, k: int = 5, terminal_reward: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gamma = gamma
+        self.k = k
+        self.step_count = 0
+        max_length = max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
+        self.kstep_record = torch.zeros(max_length+2, dtype=torch.int64)
+        self.current_record = torch.zeros(max_length+2, dtype=torch.int64)
+        self.terminal_reward = terminal_reward  
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(policy="EFT")
+            #self.current_record[self.step_count] = self.EFT_baseline
+            #self.kstep_record[self.step_count] = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+
+        self.step_count += 1
+
+
+        if not self.disable_reward_flag:
+            sim_k_step = self.simulator.copy()
+            sim_k_step.disable_external_mapper()
+            if self.k > 0:
+                sim_k_step.set_steps(self.k * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_k_step.run()
+            sim_k_step.start_drain()
+            sim_k_step.run()
+            self.kstep_record[self.step_count] = sim_k_step.time
+
+        self.map_tasks(td[self.action_n])
+
+        if not self.disable_reward_flag:
+
+            sim_current = self.simulator.copy()
+            sim_current.start_drain()
+            sim_current.disable_external_mapper()
+            sim_current.run()
+            self.current_record[self.step_count] = sim_current.time
+
+            if self.step_count < self.k:
+                reward = 0.0
+            else:
+                predicted_time = self.kstep_record[self.step_count - self.k]
+                agent_time = self.current_record[self.step_count]
+                reward = (predicted_time - self.gamma * agent_time) / (self.EFT_baseline / self.size())
+        else:
+            reward = 0.0
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        if done:
+            obs, r, time, improvement = self._handle_done(obs)
+            if self.terminal_reward:
+                reward = reward + r 
+
+        buf = td.empty()
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
+        buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
+        return buf
+
+
+class SparseLookbackKStep(RuntimeEnv):
+    
+    def __init__(self, *args, gamma: float = 1.0, k: int = 5, delay: int = 5, terminal_reward: bool = False, random_offset: bool = False, offset: int = 1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gamma = gamma
+        self.k = k
+        self.step_count = 0
+        max_length = max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
+        self.kstep_record = torch.zeros(max_length+2, dtype=torch.int64)
+        self.current_record = torch.zeros(max_length+2, dtype=torch.int64)
+        self.terminal_reward = terminal_reward
+        self.random_offset = random_offset
+        self.offset = offset
+        self.delay = min(delay, k)  # Ensure delay is not greater than k
+        self.look_ahead = max(0, k - self.delay)  # Lookahead steps after the delay
+        self.reference_steps = self.delay + self.look_ahead 
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(policy="EFT")
+            #self.current_record[self.step_count] = self.EFT_baseline
+            #self.kstep_record[self.step_count] = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+
+        self.step_count += 1
+
+        flag_predict = (self.step_count + self.offset) % self.delay == 0
+        flag_check = (self.step_count > self.delay) and ((self.step_count - self.delay + self.offset) % self.delay == 0)
+
+        if not self.disable_reward_flag and flag_predict:
+            sim_k_step = self.simulator.copy()
+            sim_k_step.disable_external_mapper()
+            if self.k > 0:
+                sim_k_step.set_steps(self.reference_steps * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_k_step.run()
+            sim_k_step.start_drain()
+            sim_k_step.run()
+            self.kstep_record[self.step_count] = sim_k_step.time
+            print("Recording", self.step_count, "Looking at", self.step_count + self.reference_steps)
+
+        self.map_tasks(td[self.action_n])
+
+        if not self.disable_reward_flag and flag_check:
+
+            sim_current = self.simulator.copy()
+            sim_current.disable_external_mapper()
+            if self.look_ahead > 0:
+                sim_current.set_steps((self.look_ahead) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_current.run()
+            sim_current.start_drain() 
+            sim_current.run()
+            self.current_record[self.step_count] = sim_current.time
+            print("Checking", self.step_count, "Looking at", self.step_count + self.look_ahead)
+
+            reward = (self.kstep_record[self.step_count-self.delay] - self.current_record[self.step_count]) / (self.EFT_baseline / self.size())
+        else:
+            reward = 0.0
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        if done:
+            obs, r, time, improvement = self._handle_done(obs)
+
+            if self.terminal_reward:
+                reward = reward + r 
+
+        buf = td.empty()
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
+        buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
+        return buf
+    
+    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+        if self.random_offset:
+            self.offset = random.randint(1, self.k)
+        return super()._reset(td)
+
+
+class LookaheadKStep(RuntimeEnv):
+    
+    def __init__(self, *args, gamma: float = 1.0, k: int = 5, terminal_reward: bool = False, chance: float = 1.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gamma = gamma
+        self.k = k
+        self.step_count = 0
+        max_length = max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
+        self.kstep_record = torch.zeros(max_length+2, dtype=torch.int64)
+        self.current_record = torch.zeros(max_length+2, dtype=torch.int64)
+        self.terminal_reward = terminal_reward
+        self.chance = chance
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(policy="EFT")
+            #self.current_record[self.step_count] = self.EFT_baseline
+            #self.kstep_record[self.step_count] = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+
+        self.step_count += 1
+
+        check_s = random.random() <= self.chance
+
+        if not self.disable_reward_flag and check_s:
+            sim_k_step = self.simulator.copy()
+            sim_k_step.disable_external_mapper()
+            if self.k > 0:
+                sim_k_step.set_steps(self.k * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_k_step.run()
+            sim_k_step.start_drain()
+            sim_k_step.run()
+            self.kstep_record[self.step_count] = sim_k_step.time
+
+        self.map_tasks(td[self.action_n])
+
+        if not self.disable_reward_flag and check_s:
+
+            sim_current = self.simulator.copy()
+            sim_current.disable_external_mapper()
+            if self.k > 0:
+                sim_current.set_steps((self.k-1)*self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_current.run()
+            sim_current.start_drain() 
+            sim_current.run()
+            self.current_record[self.step_count] = sim_current.time
+
+            reward = (self.kstep_record[self.step_count] - self.current_record[self.step_count]) / (self.EFT_baseline / self.size())
+        else:
+            reward = 0.0
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        if done:
+            obs, r, time, improvement = self._handle_done(obs)
+
+            if self.terminal_reward:
+                reward = reward + r 
+
+        buf = td.empty()
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
+        buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
+        return buf
 
 
 class KStepIncrementalEFT(RuntimeEnv):
+    """ 
+    I made too many mistakes when implementing this, compared to intended. 
+    1. Wrong baseline (should be 0)
+    2. Looks at unequal schedule lengths
+    Yet, it is still a 
+    """
 
     def __init__(self, *args, gamma: float = 1.0, k: int = 5, drain: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
@@ -514,7 +749,7 @@ class KStepIncrementalEFT(RuntimeEnv):
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(use_eft=True)
+            self.EFT_baseline = self._get_baseline(policy="EFT")
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
@@ -527,7 +762,7 @@ class KStepIncrementalEFT(RuntimeEnv):
             start_time = perf_counter()
             sim_ml = self.simulator.copy()
             sim_ml.disable_external_mapper()
-            sim_ml.set_steps(self.k)
+            sim_ml.set_steps((self.k)*self.simulator_factory[self.active_idx].graph_spec.max_candidates)
             sim_ml.run()
             if self.drain:
                 sim_ml.start_drain()
@@ -553,6 +788,67 @@ class KStepIncrementalEFT(RuntimeEnv):
         if done:
             obs, r, time, improvement = self._handle_done(obs)
             reward = reward + r 
+
+        buf = td.empty()
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
+        buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
+        return buf
+
+
+class IncrementalSchedule(RuntimeEnv):
+
+    def __init__(self, *args, gamma: float = 1.0, k: int = 5, terminal_reward: bool = False, chance: float = 1.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gamma = gamma
+        self.k = k 
+        self.chance = chance
+        self.terminal_reward = terminal_reward
+
+    def _step(self, td: TensorDict) -> TensorDict:
+        if self.step_count == 0:
+            self.EFT_baseline = self._get_baseline(policy="EFT")
+            self.prev_makespan = self.EFT_baseline
+            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
+            self.eft_time = self.EFT_baseline
+            self.previous_length = 0.0 
+
+        self.step_count += 1
+
+        self.map_tasks(td[self.action_n])
+
+        check_s = random.random() <= self.chance
+
+        if not self.disable_reward_flag and check_s:
+            sim_current = self.simulator.copy()
+            sim_current.disable_external_mapper()
+
+            if self.k > 0:
+                sim_current.set_steps((self.k)*self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_current.run()
+            sim_current.start_drain()
+            sim_current.run()
+
+            current_length = sim_current.time
+
+            #Normalized in per-task time observed in global baseline. 
+            reward = (self.previous_length - current_length) / (self.EFT_baseline / (self.size()))
+            self.previous_length = current_length
+        else:
+            reward = 0.0
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
+
+        obs = self._get_observation()
+        if done:
+            obs, r, time, improvement = self._handle_done(obs)
+            if self.terminal_reward:
+                reward = reward + r 
 
         buf = td.empty()
         buf.set(
@@ -597,7 +893,7 @@ class DelayIncrementalEFT(IncrementalEFT):
             sim_ml.disable_external_mapper()
             sim_ml.run()
             ml_time = sim_ml.time
-            reward = (self.eft_time - self.gamma**self.delay * ml_time) / self.size()
+            reward = (self.eft_time - self.gamma**self.delay * ml_time) / (self.EFT_baseline / self.size())
             self.eft_time = ml_time
         else:
             reward = 0.0
@@ -1438,7 +1734,7 @@ class IncrementalMappingEnv(EnvBase):
         self.baseline_time = baseline_time
 
     def _get_baseline(self, policy="EFT"):
-        if use_eft:
+        if policy == "EFT":
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()

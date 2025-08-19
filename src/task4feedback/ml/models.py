@@ -2554,7 +2554,6 @@ class VectorStateNet(nn.Module):
         if self.add_progress:
             time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
             progress_feature = tensordict["aux", "progress"]
-
             task_features = torch.cat(
                 [task_features, time_feature, progress_feature], dim=-1
             )

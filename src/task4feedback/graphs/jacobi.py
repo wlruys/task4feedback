@@ -1021,10 +1021,16 @@ class GraphMETISMapper(StaticExternalMapper):
             task_to_local, adjacency_list, adj_starts, vweights, eweights = graph.get_weighted_graph(
                 arch=arch, bandwidth=bandwidth, task_ids=None, symmetric=True
             )
-            a, b =weighted_partition(
+            cut_counts, part =weighted_partition(
                 n_devices, adjacency_list, adj_starts, vweights, eweights
             )
-            self.mapping_dict = {i : device + self.offset for i, device in enumerate(b)}
+            print(f"GraphMETISMapper: cut counts {cut_counts}")
+            for i in range(n_devices):
+                print(f"GraphMETISMapper: partition {i} has {part.count(i)} tasks")
+                #Get vertex sum per partition 
+                print(f"GraphMETISMapper: partition {i} vertex sum {sum(vweights[j] for j in range(len(part)) if part[j] == i)}")
+            print(f"GraphMETISMapper: total tasks {len(task_to_local)}")
+            self.mapping_dict = {i : device + self.offset for i, device in enumerate(part)}
         else:
             raise ValueError("Either mapper or graph must be provided for GraphMETISMapper")
 
