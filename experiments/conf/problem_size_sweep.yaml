@@ -1,9 +1,9 @@
 defaults:
-  - graph: dynamic_jacobi_circle
-  - reward: ieft
+  - graph: dynamic_jacobi_bump
+  - reward: default
   - system: h100
   - feature: cnn_batch
-  - network: cnn_batch_lstm
+  - network: cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -13,6 +13,18 @@ defaults:
   - optimizer: adamw
   - eval: default
   - _self_
+
+
+sweep:
+  n_samples: 10
+  start: 70e9
+  stop: 130e9
+  step: 5e9
+  exps: ["EFT", "ColWise", "ParMETIS", "GlbAvg", "Cyclic", "Oracle"]
+
+parmetis:
+  itr: 10000
+  unbalance: 1.40
 
 hydra:
   callbacks:
@@ -29,7 +41,6 @@ graph:
   config:
       n: 8
       steps: 60
-      boundary_width: 1000
       workload_args:
         lower_bound: 1
         upper_bound: 5
@@ -62,8 +73,8 @@ feature:
 
 network:
   layers:
-    lstm:
-      hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
+    # lstm:
+    #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
     state:
       hidden_channels: 16
     actor:

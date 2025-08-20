@@ -59,8 +59,7 @@ def seed_everything(seed: int = 0) -> None:
 
 def factorize(steps: int, include_one: bool) -> List[int]:
     f: List[int] = []
-    start = 1 if include_one else 0
-    for i in range(start, steps // 3):
+    for i in range(max(1 if include_one else 2, steps // 30), steps // 5):
         if steps % (i + 1) == 0:
             f.append(i + 1)
     return f
@@ -211,13 +210,31 @@ def run_parmetis_distributed(
     """
     Executes the ParMETIS portion with MPI, accumulating results in `metrics["ParMETIS"]`.
     """
-    sweep_list = list(range(int(cfg.sweep.start), int(cfg.sweep.stop), int(cfg.sweep.step)))
+    sweep_list = [int(x) for x in list(np.linspace(int(cfg.sweep.start), int(cfg.sweep.stop), int(cfg.sweep.step)))]
     
     for sweep_idx, sweep_entry in enumerate(sweep_list):
+        best_cfg = (cfg.parmetis.unbalance,cfg.parmetis.itr)
         if rank == 0:
-            cfg.graph.config.level_memory = sweep_entry
+            cfg.graph.config.boundary_width = sweep_entry
             graph_builder = make_graph_builder(cfg, verbose=False)
             env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
+            records = {}
+        # Find the best configuration
+        for i in range(1):
+            for ub in np.linspace(1.1, 1.5, 5):
+                for itr in [10**x for x in np.linspace(-3, 4, 8)]:
+                    if rank == 0:
+                        temp = env.simulator.copy()
+                    run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, itr=itr, unbalance=ub)
+                    if rank == 0:
+                        print(temp.time, ub, itr, flush=True)
+                        records[(ub, itr)] = records.get((ub, itr), 0) + temp.time
+        if rank == 0:
+            best_cfg = min(records, key=records.get)
+            print(f"Best ParMETIS config for {sweep_entry} is ub of {best_cfg[0]} and itr of {best_cfg[1]}")
+        comm.barrier()
+        best_cfg = comm.bcast(best_cfg, root=0)
+        comm.barrier()
 
         for _ in range(cfg.sweep.n_samples):
             if rank == 0:
@@ -226,7 +243,7 @@ def run_parmetis_distributed(
                 eft_sim.disable_external_mapper()
                 eft_sim.run()
 
-            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, unbalance=cfg.parmetis.unbalance, itr=cfg.parmetis.itr)
+            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, unbalance=best_cfg[0], itr=best_cfg[1])
 
             if rank == 0:
                 add_metric_row(metrics, "ParMETIS", env.simulator, sweep_idx)
@@ -242,7 +259,7 @@ def run_parmetis_distributed(
 
 def run_host_experiments_and_plot(cfg: DictConfig):
     d2d_bandwidth = cfg.system.d2d_bw
-    sweep_list = list(range(int(cfg.sweep.start), int(cfg.sweep.stop), int(cfg.sweep.step)))
+    sweep_list = [int(x) for x in list(np.linspace(int(cfg.sweep.start), int(cfg.sweep.stop), int(cfg.sweep.step)))]
 
     experiment_names = cfg.sweep.exps
     mem_keys = experiment_names.copy()
@@ -288,6 +305,8 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         # --- Metrics
         metrics = init_metrics(experiment_names, MetricKeys)
         dynamic_metis_k_best: List[int] = []
+        interior_compute_ratio = []
+        boundary_compute_ratio = []
 
         print(
             f"Memory,{str.join(',', [str(m) for m in experiment_names])}",
@@ -297,14 +316,18 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         # ---- Sweep host-side (everything but ParMETIS)
         for sweep_entry in sweep_list:
             # system config for this memory size
-            cfg.graph.config.level_memory = sweep_entry
+            cfg.graph.config.boundary_width = sweep_entry
             graph_builder = make_graph_builder(cfg, verbose=False)
             if "RL" in experiment_names:
                 env, norm = make_env(graph_builder=graph_builder, cfg=cfg, normalization=None, eval=True)
                 env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
             else:
                 env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False, eval=True)
-
+                
+            # log interior-boundary compute ratios
+            interior_compute_ratio.append(env.get_graph().data.data_stat["interior_average_comm"] / env.get_graph().data.data_stat["compute_average"])
+            boundary_compute_ratio.append(env.get_graph().data.data_stat["boundary_average_comm"] / env.get_graph().data.data_stat["compute_average"])
+            
             # per-k Oracle metrics
             if "Oracle" in experiment_names:
                 metis_metrics = init_metrics(f, MetricKeys)
@@ -327,6 +350,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                 sim.run()
                 add_metric_row(metrics, "EFT", sim)
                 eft_time = sim.time
+                print(f"EFT {eft_time}")
 
                 # ---- Naïve / ColWise / GlbAvg
                 for name in ["Naive", "ColWise", "GlbAvg", "Quad", "Cyclic", "BlockCyclic", "GraphMETISMapper"]:
@@ -338,6 +362,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                         sim.external_mapper = mapper
                         sim.enable_external_mapper()
                         sim.run()
+                        print(f"{name} time={sim.time}")
                         add_metric_row(metrics, name, sim)
 
                 # ---- Oracle (dynamic METIS over factors)
@@ -350,6 +375,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                         sim.external_mapper = mapper
                         sim.enable_external_mapper()
                         sim.run()
+                        print(f"Oracle k={k}, time={sim.time}")
                         add_metric_row(metis_metrics, k, sim)
                 
                 if "RL" in experiment_names:
@@ -365,12 +391,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
 
             if "Oracle" in experiment_names:
                 # --- Pick best k for Oracle at this memory
-                if 1 not in f:
-                    min_time = metrics["GlbAvg"]["time"][-1]
-                    best_k = 1
-                else:
-                    min_time = metis_metrics[1]["time"][-1]
-                    best_k = 1
+                min_time = 2 ** 62
                 for k in f:
                     if k > 1 and metis_metrics[k]["time"][-1] < min_time:
                         min_time = metis_metrics[k]["time"][-1]
@@ -422,7 +443,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         )
         
         # -------- Save Figures & Logs
-        file_name = f"GraphSweep_{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}"
+        file_name = f"BoundaryWidth_{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}"
         try:
             file_name += f"_{cfg.graph.config.workload_args.scale}"
         except AttributeError:
@@ -471,15 +492,15 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         
         offset = 0
         xslice = slice(offset, None)  # Adjust this slice as needed
-        fig, axes = plt.subplots(1, 3, figsize=(19, 6), sharex=True)
-        sweep_list = [m / 1e9 for m in sweep_list]
+        fig, axes = plt.subplots(2, 3, figsize=(19, 12), sharex=True)
+        sweep_list = [m for m in sweep_list]
         speedup = {}
         for k in speedup_keys:
             speedup[k] = []
             for i in range(len(sweep_list)):
                 speedup[k].append(metrics["EFT"]["time"][i]/metrics[k]["time"][i])
         for k in experiment_names:
-            axes[0].plot(
+            axes[0,0].plot(
                 sweep_list[xslice],
                 metrics[k]["time"][xslice],
                 label=k,
@@ -487,42 +508,50 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                 color=colors[k],
                 linewidth=4,
             )
-        axes[0].set_title("Execution Time (s)", fontsize=20)
-        # axes[0].set_yscale("log")
-        axes[0].grid(axis="y", color="gray", linestyle="--", linewidth=0.5)
-        axes[0].legend(loc="upper right", fontsize=16)
-        axes[0].set_xlabel("(a)", fontsize=20)
-        axes[0].tick_params(axis="both", which="major", labelsize=20)
+        axes[0,0].set_title("Execution Time (s)", fontsize=20)
+        # axes[0,0].set_yscale("log")
+        axes[0,0].grid(axis="y", color="gray", linestyle="--", linewidth=0.5)
+        axes[0,0].legend(loc="upper right", fontsize=16)
+        axes[0,0].set_xlabel("(a)", fontsize=20)
+        axes[0,0].tick_params(axis="both", which="major", labelsize=20)
         # 2) Relative Speedup vs EFT
         for k in speedup_keys:
-            axes[1].plot(
+            axes[0,1].plot(
                 sweep_list[xslice], speedup[k][xslice], label=k, color=colors[k], linewidth=4
             )
-        axes[1].set_title("Relative Speedup vs EFT", fontsize=20)
-        axes[1].legend(loc="upper right", fontsize=16)
-        axes[1].grid()
-        axes[1].set_xlabel("(b)", fontsize=20)
-        axes[1].tick_params(axis="both", which="major", labelsize=20)
+        axes[0,1].set_title("Relative Speedup vs EFT", fontsize=20)
+        axes[0,1].legend(loc="upper right", fontsize=16)
+        axes[0,1].grid()
+        axes[0,1].set_xlabel("(b)", fontsize=20)
+        axes[0,1].tick_params(axis="both", which="major", labelsize=20)
         # 3) Max Memory Usage
         for k in mem_keys:
             # Divide every entry by 1e9
-            axes[2].plot(sweep_list[xslice], np.array(metrics[k]["mem_usage"][xslice]) / 1e9, label=k, color=colors[k], linewidth=4)
-            # axes[2].plot(sweep_list[xslice], metrics[k]["mem_usage"][xslice], label=k, color=colors[k], linewidth=4)
-        axes[2].legend(loc="lower left", fontsize=16)
-        axes[2].set_title("Peak Memory Occupation (GB)", fontsize=20)
-        axes[2].grid()
-        axes[2].set_xlabel("(c)", fontsize=20)
-        axes[2].tick_params(axis="both", which="major", labelsize=20)
+            axes[0,2].plot(sweep_list[xslice], np.array(metrics[k]["mem_usage"][xslice]) / 1e9, label=k, color=colors[k], linewidth=4)
+            # axes[0,2].plot(sweep_list[xslice], metrics[k]["mem_usage"][xslice], label=k, color=colors[k], linewidth=4)
+        axes[0,2].legend(loc="lower left", fontsize=16)
+        axes[0,2].set_title("Peak Memory Occupation (GB)", fontsize=20)
+        axes[0,2].grid()
+        axes[0,2].set_xlabel("(c)", fontsize=20)
+        axes[0,2].tick_params(axis="both", which="major", labelsize=20)
+        
+        axes[1,0].set_title("Interior Compute Ratio", fontsize=20)
+        axes[1,0].plot(sweep_list[xslice], interior_compute_ratio[xslice], linewidth=4)
+        axes[1,0].set_xlabel("(d)", fontsize=20)
+        
+        axes[1,1].set_title("Boundary Compute Ratio", fontsize=20)
+        axes[1,1].plot(sweep_list[xslice], boundary_compute_ratio[xslice], linewidth=4)
+        axes[1,1].set_xlabel("(e)", fontsize=20)
 
         # # Shared x-axis label and layout
         fig.supxlabel(
-            "Per Iteration Problem Size (GB)", fontsize=20
+            "Boundary Width", fontsize=20
         )
         fig.tight_layout()  # leave room at the bottom for the xlabel
         
         fig.savefig(base / fig_file)
 
-@hydra.main(config_path="conf", config_name="problem_size_sweep", version_base=None)
+@hydra.main(config_path="conf", config_name="boundary_sweep", version_base=None)
 def main(cfg: DictConfig):
     run_host_experiments_and_plot(cfg)
 

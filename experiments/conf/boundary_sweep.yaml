@@ -17,14 +17,14 @@ defaults:
 
 sweep:
   n_samples: 10
-  start: 70e9
-  stop: 130e9
-  step: 5e9
-  exps: ["EFT", "ColWise", "ParMETIS", "GlobalMinCut", "Cyclic", "Oracle"]
+  start: 100
+  stop: 5000
+  step: 20
+  exps: ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
 
 parmetis:
-  itr: 10000
-  unbalance: 1.40
+  itr: 1000
+  unbalance: 1.225
 
 hydra:
   callbacks:
@@ -39,8 +39,10 @@ reward:
 
 graph:
   config:
+      arithmetic_intensity: 476.56
+      memory_intensity: 0
       n: 8
-      steps: 60
+      steps: 120
       workload_args:
         lower_bound: 1
         upper_bound: 5
@@ -64,7 +66,7 @@ optimizer:
   lr: 2.5e-4
 
 system:
-  mem: 80000000000
+  mem: 999999999999
 
 feature:
   observer:

@@ -324,7 +324,39 @@ def weighted_partition(
     adj_starts = adj_starts.astype(np.int32)
     vweights = vweights.astype(np.int32)
     eweights = eweights.astype(np.int32)
+        
+    # --- SYMMETRY FIX: average weights on mismatched edges ---
+    nverts = vweights.shape[0]
+    for u in range(nverts):
+        start_u = adj_starts[u]
+        end_u = adj_starts[u + 1]
+        for idx in range(start_u, end_u):
+            v = int(adjacency_list[idx])
+            w_uv = int(eweights[idx])
 
+            # find reverse edge v -> u
+            start_v = adj_starts[v]
+            end_v = adj_starts[v + 1]
+            rev_idx = None
+            for j in range(start_v, end_v):
+                if int(adjacency_list[j]) == u:
+                    rev_idx = j
+                    break
+
+            if rev_idx is not None:
+                w_vu = int(eweights[rev_idx])
+                if w_uv != w_vu:
+                    avg = (w_uv + w_vu) // 2
+                    eweights[idx] = avg
+                    eweights[rev_idx] = avg
+                    # print(
+                    #     f"Fixed mismatch: set both edges ({u}->{v}) and ({v}->{u}) to weight {avg}"
+                    # )
+            # else:
+            # optionally handle missing reverse edges
+            # print(f"Warning: no reverse edge for {u}->{v}, weight={w_uv}")
+    # ---------------------------------------------------------
+    
     return pymetis.part_graph(
         nparts=nparts,
         adjncy=adjacency_list,
@@ -951,7 +983,7 @@ class BumpWorkload(DynamicWorkload):
         assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
 
         bumps = [] 
-        bumps.append(create_bump_random_center(rng=rng))
+        bumps.append(create_bump_random_center(rng=rng, **kwargs['traj_specifics']))
 
         for j in range(start_step + 1, num_levels):
             self.level_workload[j] = np.copy(self.level_workload[0])
@@ -963,8 +995,8 @@ class BumpWorkload(DynamicWorkload):
             bumps = [b for b in bumps if b.is_alive()]
                 
             #Create a new bump with probability 0.1
-            if rng.rand() < 0.1:
-                bumps.append(create_bump_random_center(rng=rng))
+            if rng.rand() < kwargs['probability']:
+                bumps.append(create_bump_random_center(rng=rng, **kwargs['traj_specifics']))
 
             self.level_workload[j] = np.clip(
                 a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound
