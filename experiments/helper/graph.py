@@ -31,8 +31,8 @@ def make_graph_function(
 
         geom = build_geometry(mesh)
         graph = build_graph(geom, graph_cfg, system=system)
-        #partition = partitioner(geom, nparts=cfg.init.nparts)
-        partition = block_cyclic(geom)
+        partition = partitioner(geom, nparts=cfg.init.nparts)
+        #partition = block_cyclic(geom)
 
         if cfg.init.gpu_only:
             partition = [x + 1 for x in partition]  # offset by 1 to ignore cpu

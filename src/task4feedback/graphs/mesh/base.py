@@ -140,6 +140,13 @@ class Geometry:
             return np.min(self.cell_points[:, 1])
         else:
             raise ValueError("Direction must be 0 (x) or 1 (y).")
+        
+    def get_cell_polygon(self, cell, round_out=None):
+        vertices = self.cells[cell]
+        polygon = self.cell_points[vertices][:, :2]  # Get the coordinates of the vertices
+        if round_out is not None:
+            polygon = np.round(polygon, round_out)
+        return polygon
 
     def get_normal_to_edge(self, edge, cell, round_in=None, round_out=None):
         """

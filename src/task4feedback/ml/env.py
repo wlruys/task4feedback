@@ -39,6 +39,7 @@ class RuntimeEnv(EnvBase):
         change_priority=False,
         change_duration=False,
         change_location=False,
+        change_workload=False,
         only_gpu=True,
         location_seed=0,
         priority_seed=0,
@@ -55,6 +56,7 @@ class RuntimeEnv(EnvBase):
         self.change_priority = change_priority
         self.change_duration = change_duration
         self.change_location = change_location
+        self.change_workload = change_workload
         self.location_seed = location_seed
         self.location_randomness = location_randomness
         self.random_start = random_start
@@ -72,6 +74,7 @@ class RuntimeEnv(EnvBase):
     - Change Priority: {self.change_priority}
     - Change Duration: {self.change_duration}
     - Change Location: {self.change_location}
+    - Change Workload: {self.change_workload}
     - Only GPU: {self.only_gpu}
     - num Compute Devices: {self.n_compute_devices}
     - Location Randomness: {self.location_randomness}
@@ -359,7 +362,6 @@ class RuntimeEnv(EnvBase):
                 if isinstance(graph, JacobiGraph):
                     if isinstance(graph, DynamicJacobiGraph):
                         graph.set_cell_locations([-1 for _ in range(graph.config.n**2)])
-                        graph.randomize_workload(seed=new_location_seed, system=self.simulator_factory[0].input.system)
                     graph.randomize_locations(
                         self.location_randomness,
                         self.location_list,
@@ -372,6 +374,10 @@ class RuntimeEnv(EnvBase):
                         self.location_list,
                         verbose=False,
                     )
+
+            if self.change_workload:
+                if isinstance(graph, DynamicJacobiGraph):
+                    graph.randomize_workload(seed=new_location_seed, system=self.simulator_factory[0].input.system)
 
         if self.change_priority:
             new_priority_seed = int(current_priority_seed + self.resets)
@@ -442,6 +448,7 @@ class RuntimeEnv(EnvBase):
         self.change_duration = False # Do not change duration in evaluation
         self._set_seed(seed)
         self.random_start = False # Do not random start in evaluation
+        self.change_location = False # Do not change location in evaluation
         self.resets = 0
         self._reset()
 

@@ -2,4 +2,4 @@ _target_: task4feedback.ml.env.KStepIncrementalEFT
 _partial_: true
 k: 5
 drain: True
-random_start: True
+random_start: false

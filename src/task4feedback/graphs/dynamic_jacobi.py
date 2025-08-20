@@ -49,7 +49,7 @@ class DynamicJacobiData(JacobiData):
     def _create_blocks(self, system: System):
         interior_data = []
         boundary_data = []
-        step_data_sum = [0 for _ in range(self.config.steps)]
+        step_data_sum = [0 for _ in range(self.config.steps+1)]
         compute_time = []
 
         interiors_per_level = self.geometry.get_num_cells()
@@ -92,6 +92,7 @@ class DynamicJacobiData(JacobiData):
         for cell in range(len(self.geometry.cells)):
             # Create data blocks per cell for each level
             for i in range(self.config.steps + 1):
+                #print(f"{i}/{self.config.steps} for cell {cell} ({len(self.geometry.cells)})")
                 workload = self.workload.get_scaled_cell_workload(i, cell)
 
                 cell_interior_elem = int(interior_elem * workload)
@@ -108,8 +109,10 @@ class DynamicJacobiData(JacobiData):
                 centroid = self.geometry.get_centroid(cell)
                 centroid_x = centroid[0]
                 centroid_y = centroid[1]
+                interior_size = max(interior_size, 1000)  # Ensure at least 1000 byte for non-empty cells
 
                 self.add_block(DataKey(Cell(cell), i), size=interior_size, location=0, x=centroid_x, y=centroid_y)
+                #print(f"Adding interior data for cell {cell} at step {i}: {_bytes_to_readable(interior_size)}")
 
                 assert (
                     interior_size > 0 or i == self.config.steps
@@ -308,12 +311,14 @@ class DynamicJacobiGraph(JacobiGraph):
         self.apply_variant(DynamicJacobiVariant)
 
     def randomize_workload(self, system, seed: int = 0):
+        print("Randomizing workload with seed", seed)
         if self.workload.random:
             self.workload.generate_workload(
                 self.config.steps, seed=seed, **self.config.workload_args
             )
             self.data.workload = self.workload
             self.data.reset_data_size(system)
+            self._apply_workload_variant(system)
         
     def get_workload(self) -> DynamicWorkload:
         return self.workload

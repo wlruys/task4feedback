@@ -18,6 +18,21 @@ from matplotlib.collections import PatchCollection
 from matplotlib.patches import Circle
 import wandb
 import os
+from matplotlib.path import Path as PolyPath
+import os, json, time, hashlib
+from dataclasses import dataclass
+from typing import Optional, Dict, Any, List, Callable
+import json, hashlib, shutil, time, os, sys, platform
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol, Dict, Any, Callable, Iterable, Optional, Tuple, List
+from pathlib import Path
+from typing import Optional, Callable, Tuple, Dict, Any, Iterable
+import json
+import re 
+import io 
+import zipfile
+import tarfile 
 
 def spring_layout(G):
     pos = nx.spring_layout(G, seed=5, scale=600)
@@ -423,7 +438,7 @@ class EnvironmentState:
 
 class DynamicWorkload:
     def __init__(self):
-        pass 
+        self.random=False
 
     def set_geometry(self, geom: Geometry):
         self.geom = geom
@@ -976,9 +991,217 @@ class BumpWorkload(DynamicWorkload):
             self.level_workload[j] /= total_workload
 
 
-        
 
-            
+class WorkloadInterpolator:
+
+    def __init__(self, geom):
+        self.geom = geom 
+
+    def _get_cell_workload(self, workload, pts, cell_id) -> float:
+        """
+        Get the workload for a specific cell by interpolating from the workload mesh.
+        """
+        cell_polygon = self.geom.get_cell_polygon(cell_id)
+        path = PolyPath(cell_polygon)
+        mask = path.contains_points(pts, radius=1e-5)
+
+        if not np.any(mask):
+            return 0.0
+        workload_values = workload[mask]
+        if workload_values.size == 0:
+            return 0.0
+        return np.mean(workload_values)
+
+    def workload_to_cells(self, workload: np.ndarray) -> np.ndarray:
+        n_cells = self.geom.get_num_cells()
+        level_workload = np.zeros(n_cells, dtype=np.float64)
+
+        nx = workload.shape[0]
+        ny = workload.shape[1]
+
+        workload_mesh = np.meshgrid(
+            np.linspace(0, 1, nx),
+            np.linspace(0, 1, ny),
+        )
+
+        workload = workload.ravel()
+        X, Y = workload_mesh
+        workload_anchors = np.column_stack([X.ravel(), Y.ravel()])
+
+        for cell_id in range(n_cells):
+            level_workload[cell_id] = self._get_cell_workload(
+                workload, workload_anchors, cell_id
+            )
+        return level_workload
+
+def _read_index(bundle_path: str) -> Tuple[Dict[str, Any], str]:
+    """
+    Reads index.json from a bundle directory or archive.
+    Returns (index_dict, storage_kind) where storage_kind in {"dir","zip","tar"}.
+    """
+    p = Path(bundle_path)
+    if p.is_dir():
+        with open(p / "index.json", "r") as f:
+            return json.load(f), "dir"
+    if p.suffix.lower() == ".zip":
+        with zipfile.ZipFile(p, "r") as zf:
+            with zf.open("index.json") as f:
+                return json.loads(f.read().decode("utf-8")), "zip"
+    if p.suffixes[-2:] == [".tar", ".gz"] or p.suffix.lower() == ".tgz":
+        with tarfile.open(p, "r:gz") as tf:
+            member = tf.getmember("index.json")
+            with tf.extractfile(member) as f:
+                return json.loads(f.read().decode("utf-8")), "tar"
+    raise FileNotFoundError(f"Could not find index.json in: {bundle_path}")
+
+def _infer_difficulty(item: Dict[str, Any]) -> Optional[int]:
+    # Tag transform
+    for t in item.get("transforms", []):
+        if t.get("name") == "tag":
+            params = t.get("params", {})
+            if "difficulty" in params:
+                try:
+                    return int(params["difficulty"])
+                except Exception:
+                    pass
+    #  generator_params
+    gp = item.get("generator_params", {})
+    if "difficulty_level" in gp:
+        try:
+            return int(gp["difficulty_level"])
+        except Exception:
+            pass
+    # lvl_XX__ prefix
+    tag = item.get("tag") or ""
+    m = re.match(r"^lvl_(\d+)", tag)
+    if m:
+        return int(m.group(1))
+    return None
+
+def _open_binary(bundle_path: str, rel_path: str, storage_kind: str):
+    """
+    Returns a file-like object (BytesIO) containing the binary content for rel_path.
+    """
+    p = Path(bundle_path)
+    if storage_kind == "dir":
+        return open(p / rel_path, "rb")
+    if storage_kind == "zip":
+        zf = zipfile.ZipFile(p, "r")
+        data = zf.read(rel_path)  # bytes
+        zf.close()
+        return io.BytesIO(data)
+    if storage_kind == "tar":
+        tf = tarfile.open(p, "r:gz")
+        try:
+            member = tf.getmember(rel_path)
+        except KeyError:
+            # Try a fallback search
+            member = next(m for m in tf.getmembers() if m.name.endswith(rel_path))
+        f = tf.extractfile(member)
+        data = f.read()
+        tf.close()
+        return io.BytesIO(data)
+    raise RuntimeError(f"Unknown storage_kind {storage_kind}")
+
+def _read_text(bundle_path: str, rel_path: str, storage_kind: str) -> str:
+    p = Path(bundle_path)
+    if storage_kind == "dir":
+        return (p / rel_path).read_text()
+    bio = _open_binary(bundle_path, rel_path, storage_kind)
+    return bio.read().decode("utf-8")
+
+def load_random_workload_by_difficulty(
+    bundle_path: str,
+    max_difficulty: int,
+    *,
+    rng_seed: Optional[int] = None,
+) -> Tuple[np.ndarray, Dict[str, Any], Dict[str, str]]:
+    """
+    Select a random item with difficulty <= max_difficulty and load its NPZ array 'C'.
+
+    Args:
+      bundle_path: Path to workload folder OR the .zip/.tar.gz archive.
+      max_difficulty: upper bound (inclusive).
+      rng_seed: optional seed for deterministic sampling.
+
+    Returns:
+      C: np.ndarray of shape (T, nx, ny)
+      meta: dict parsed from that item's meta.json
+      paths: dict with keys {'dir','npz','gif','meta'} for that item (relative to bundle root).
+    """
+    idx, storage_kind = _read_index(bundle_path)
+    items: List[Dict[str, Any]] = idx.get("items", [])
+    if not items:
+        raise RuntimeError("Index has no items.")
+
+    # Filter by difficulty
+    eligible = []
+    for it in items:
+        d = _infer_difficulty(it)
+        if d is None:
+            continue
+        if d <= int(max_difficulty):
+            eligible.append(it)
+
+    if not eligible:
+        raise ValueError(f"No items with difficulty <= {max_difficulty} found in bundle: {bundle_path}")
+
+    rng = np.random.default_rng(rng_seed)
+    choice = eligible[int(rng.integers(0, len(eligible)))]
+
+    rel_npz = choice["paths"]["npz"]
+    rel_meta = choice["paths"]["meta"]
+
+    # Load NPZ->C
+    with _open_binary(bundle_path, rel_npz, storage_kind) as fobj:
+        with np.load(fobj) as npz:
+            if "C" not in npz:
+                raise KeyError(f"'C' not found in {rel_npz}")
+            C = np.array(npz["C"], copy=False)
+
+    meta_text = _read_text(bundle_path, rel_meta, storage_kind)
+    meta = json.loads(meta_text)
+
+    if C.ndim != 3:
+        raise ValueError(f"Expected C to be 3D (T,nx,ny), got shape {C.shape}")
+    if not np.issubdtype(C.dtype, np.floating):
+        raise TypeError(f"Expected floating dtype, got {C.dtype}")
+
+    return C, meta, choice["paths"]
+
+class LoadedWorkload(DynamicWorkload):
+
+    def generate_workload(
+            self, 
+            num_levels: int,
+            bundle_path: str,
+            start_step: int = 0,
+            seed: int = 0,
+            difficulty: int = 10,
+            lower_bound: float = 0.5,
+            upper_bound: float = 1.5,
+            **kwargs
+    ):
+        self.random = True
+        interpolator = WorkloadInterpolator(self.geom)
+
+        data, meta, paths = load_random_workload_by_difficulty(
+            bundle_path,
+            difficulty,
+            rng_seed=seed,
+        )
+        assert(data.shape[0] >= start_step + num_levels), f"Loaded workload has {data.shape[0]} levels, but need at least {start_step + num_levels}."
+
+        for j in range(start_step + 1, start_step + num_levels):
+            workload = data[j]
+            self.level_workload[j] = interpolator.workload_to_cells(workload)
+            self.level_workload[j] = np.clip(
+                a = self.level_workload[j], a_min=lower_bound,
+                a_max=upper_bound,
+            )
+            total_workload = np.sum(self.level_workload[j])
+            assert( total_workload > 0), f"Total workload at level {j} is zero, cannot normalize."
+            self.level_workload[j] /= total_workload
 
 
 @dataclass

@@ -138,7 +138,7 @@ def make_env(
                 if isinstance(transform, ObservationNorm) and not transform.initialized:
                     env.disable_reward()
                     transform.init_stats(
-                        num_iter=env.size() * 10,
+                        num_iter=env.size() * cfg.graph.env.warmup,
                         key=("observation", "nodes", "tasks", "attr"),
                     )
                     env.enable_reward()

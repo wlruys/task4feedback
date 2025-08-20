@@ -1,4 +1,4 @@
-project: animation_test
+project: cnn_reward
 name: default
 enabled: true
 dir: ~/workspace/scheduling/logs

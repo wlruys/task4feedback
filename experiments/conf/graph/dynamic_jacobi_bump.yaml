@@ -29,4 +29,6 @@ env:
   change_priority: False
   change_location: False
   change_duration: False
+  change_workload: True
   seed: 1
+  warmup: 10

@@ -63,14 +63,15 @@ class JacobiData(DataGeometry):
         edges_per_level = self.geometry.get_num_edges()
 
         y = sympy.symbols("y", real=True, positive=True)
-        # equation = interiors_per_level * y - self.config.level_memory / self.config.bytes_per_element
-        equation = (
-            interiors_per_level * y
-            + self.config.boundary_width
-            * edges_per_level
-            * (y) ** self.config.boundary_complexity
-            - self.config.level_memory / self.config.bytes_per_element
-        )
+        equation = interiors_per_level * y - self.config.level_memory / self.config.bytes_per_element
+        # equation = (
+        #     interiors_per_level * y
+        #     + self.config.boundary_width
+        #     * edges_per_level
+        #     * (y) ** self.config.boundary_complexity
+        #     - self.config.level_memory / self.config.bytes_per_element
+        # )
+
         solution = sympy.solve(equation, y)
         y_value = solution[0].evalf()
         interior_elem = int(y_value)
@@ -565,6 +566,10 @@ class JacobiGraph(ComputeDataGraph):
         adj_starts = np.asarray(adj_starts, dtype=np.int64)
         vweights = np.asarray(vweights, dtype=np.int64)
         eweights = np.asarray(eweights, dtype=np.int64)
+
+        #Make graph symmetric 
+
+        
 
         return WeightedCellGraph(cells, adj_list, adj_starts, vweights, eweights)
 
