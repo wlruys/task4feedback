@@ -1,4 +1,4 @@
 _target_: task4feedback.ml.env.BaselineImprovementEFT
 _partial_: true
 delay: 10
-random_start: true
+random_start: False

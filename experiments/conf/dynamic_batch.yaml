@@ -22,8 +22,8 @@ seed: 256
 deterministic_torch: true
 
 reward:
-  verbose: true
-  random_start: false
+  verbose: True
+  random_start: False
 
 graph:
   config:
@@ -80,11 +80,5 @@ wandb:
   enabled: true
 
 eval:
-<<<<<<< HEAD
   eval_interval: 100
-||||||| 8027a29
-  eval_interval: 10
-=======
-  eval_interval: 0
->>>>>>> 028f0a586923d1058cb6fdc88a6f890d3746102e
 

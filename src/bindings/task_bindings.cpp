@@ -59,6 +59,8 @@ void init_task_ext(nb::module_ &m) {
       .def("get_n_compute_tasks", &Graph::get_n_compute_tasks)
       .def("get_n_data_tasks", &Graph::get_n_data_tasks)
       .def("get_time", &Graph::get_time, "task_id"_a, "arch"_a)
+      .def("clear_variants", &Graph::clear_variants, "task_id"_a)
+      .def("clear_all_variants", &Graph::clear_all_variants)
       .def("get_task_dependencies", &Graph::get_task_dependencies, "task_id"_a)
       .def("finalize", &Graph::finalize, "ensure_dependencies"_a = false,
            "create_data_tasks"_a = true);
@@ -66,7 +68,8 @@ void init_task_ext(nb::module_ &m) {
   nb::class_<StaticTaskInfo>(m, "StaticTaskInfo")
       .def(nb::init<Graph &>(), "graph"_a, nb::keep_alive<1, 2>())
       .def("get_data_id", &StaticTaskInfo::get_data_id, "task_id"_a)
-      .def("get_compute_task", &StaticTaskInfo::get_compute_task, "task_id"_a);
+      .def("get_compute_task", &StaticTaskInfo::get_compute_task, "task_id"_a)
+      .def("update_variants", &StaticTaskInfo::update_variants, "graph"_a); // This is the only method that modified StaticTaskInfo once created
 
   nb::class_<RuntimeTaskInfo>(m, "RuntimeTaskInfo")
       .def("get_n_compute_tasks", &RuntimeTaskInfo::get_n_compute_tasks)

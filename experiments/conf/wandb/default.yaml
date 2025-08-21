@@ -1,4 +1,4 @@
-project: cnn_reward
+project: task4feedback-experiments
 name: default
 enabled: true
 dir: ~/workspace/scheduling/logs

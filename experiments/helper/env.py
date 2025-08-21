@@ -109,6 +109,7 @@ def make_env(
         change_priority=cfg.graph.env.change_priority if hasattr(cfg.graph.env, "change_priority") else False,
         change_location=cfg.graph.env.change_location if hasattr(cfg.graph.env, "change_location") else False,
         change_duration=cfg.graph.env.change_duration if hasattr(cfg.graph.env, "change_duration") else False,
+        change_workload=cfg.graph.env.change_workload if hasattr(cfg.graph.env, "change_workload") else False,
         seed=cfg.graph.env.seed,
         max_samples_per_iter=(
             (len(graph)//(cfg.graph.config.n**2) + 1

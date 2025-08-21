@@ -42,6 +42,7 @@ class RuntimeEnv(EnvBase):
         change_workload=False,
         only_gpu=True,
         location_seed=0,
+        workload_seed=0,
         priority_seed=0,
         location_randomness=1,
         location_list: Optional[List[int]] = None,
@@ -58,6 +59,7 @@ class RuntimeEnv(EnvBase):
         self.change_location = change_location
         self.change_workload = change_workload
         self.location_seed = location_seed
+        self.workload_seed = workload_seed
         self.location_randomness = location_randomness
         self.random_start = random_start
         if location_list is None:
@@ -341,6 +343,7 @@ class RuntimeEnv(EnvBase):
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         # start_t = perf_counter()
+        training.debug("Resetting environment (reset count: {})".format(self.resets))
         self.resets += 1
         self.step_count = 0
         current_priority_seed = self.simulator_factory[self.active_idx].pseed
@@ -375,9 +378,12 @@ class RuntimeEnv(EnvBase):
                         verbose=False,
                     )
 
-            if self.change_workload:
-                if isinstance(graph, DynamicJacobiGraph):
-                    graph.randomize_workload(seed=new_location_seed, system=self.simulator_factory[0].input.system)
+        if self.change_workload:
+            new_workload_seed = self.workload_seed + self.resets
+            graph = self.simulator_factory[self.active_idx].input.graph
+            random.seed(new_workload_seed)
+            if isinstance(graph, DynamicJacobiGraph):
+                graph.randomize_workload(seed=new_workload_seed, system=self.simulator_factory[self.active_idx].input.system)
 
         if self.change_priority:
             new_priority_seed = int(current_priority_seed + self.resets)
@@ -433,6 +439,8 @@ class RuntimeEnv(EnvBase):
             self.simulator_factory[self.active_idx].set_seed(seed=seed)
         if self.change_location:
             self.location_seed = seed
+        if self.change_workload:
+            self.workload_seed = seed
 
     def reset_for_evaluation(self, seed: int = 0):
         # save seeds from curret state

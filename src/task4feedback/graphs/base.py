@@ -990,6 +990,29 @@ class BumpWorkload(DynamicWorkload):
             self.level_workload[j] /= total_workload
 
 
+class DebugWorkload(DynamicWorkload):
+
+    def generate_workload(
+            self, 
+            num_levels: int, 
+            start_step: int = 0,
+            lower_bound: float = 0.05,
+            upper_bound: float = 3,
+            seed: int = 0,
+            **kwargs
+    ):
+        self.random = True
+        rng = np.random.RandomState(seed)
+
+        total_workload = np.sum(self.level_workload[start_step])
+        assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
+
+        for j in range(start_step + 1, num_levels):
+            self.level_workload[j] = np.copy(self.level_workload[j-1])
+            c = rng.randint(1, 10, 1)
+            self.level_workload[j] *= c
+
+
 
 class WorkloadInterpolator:
 

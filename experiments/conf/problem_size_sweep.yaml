@@ -34,8 +34,8 @@ seed: 256
 deterministic_torch: true
 
 reward:
-  verbose: true
-  random_start: false
+  verbose: True
+  random_start: False
 
 graph:
   config:

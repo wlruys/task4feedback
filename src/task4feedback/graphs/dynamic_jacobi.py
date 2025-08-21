@@ -7,7 +7,7 @@ from .jacobi import *
 from .base import register_graph
 from ..interface.types import _bytes_to_readable
 from dataclasses import dataclass, field
-
+from ..logging import training
 
 @dataclass
 class DynamicJacobiConfig(JacobiConfig):
@@ -178,15 +178,14 @@ class DynamicJacobiData(JacobiData):
         boundary_data = []
         step_data_sum = [0 for _ in range(self.config.steps)]
         compute_time = []
-        # Loop over cells
+
         for cell in range(len(self.geometry.cells)):
-            # Create 2 data blocks per cell
             for i in range(self.config.steps + 1):
                 workload = self.workload.get_scaled_cell_workload(i, cell)
                 cell_interior_elem = int(self.interior_elem * workload)
                 interior_size = cell_interior_elem * self.config.bytes_per_element
                 interior_size = int(interior_size)
-
+                self.cell_to_interior_elems[(cell, i)] = cell_interior_elem
 
                 self.blocks.set_size(
                     self.map.get_block(DataKey(Cell(cell), i)), interior_size
@@ -199,7 +198,6 @@ class DynamicJacobiData(JacobiData):
                     step_data_sum[i] += interior_size
                     compute_time.append(max((interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6),int(interior_size / self.config.bytes_per_element) ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6) ))
 
-            # Create 2 data blocks per edge
             for edge in self.geometry.cell_edges[cell]:
                 for i in range(self.config.steps + 1):
                     workload = self.workload.get_scaled_cell_workload(i, cell)
@@ -303,6 +301,8 @@ class DynamicJacobiGraph(JacobiGraph):
                     expected_time = max(expected_time, expected_memory / system.get_gmbw_ms(arch))
                     expected_time = int(max(expected_time, 1))
 
+                #print(f"Task {task.id} (Cell {cell}, Level {level}): Workload={workload:.2f}, Expected Time={expected_time}ms on {arch.name}")
+
                 if arch == DeviceType.GPU:
                     return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
                 else:
@@ -311,14 +311,18 @@ class DynamicJacobiGraph(JacobiGraph):
         self.apply_variant(DynamicJacobiVariant)
 
     def randomize_workload(self, system, seed: int = 0):
-        print("Randomizing workload with seed", seed)
         if self.workload.random:
+            training.info(f"Randomizing workload with seed {seed}")
             self.workload.generate_workload(
                 self.config.steps, seed=seed, **self.config.workload_args
             )
             self.data.workload = self.workload
             self.data.reset_data_size(system)
             self._apply_workload_variant(system)
+            if self.is_finalized:
+                assert(self.static_graph is not None)
+                self.static_graph.update_variants(self.graph)
+            
         
     def get_workload(self) -> DynamicWorkload:
         return self.workload

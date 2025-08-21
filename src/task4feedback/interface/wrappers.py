@@ -85,6 +85,7 @@ class TaskGraph:
         self.graph = Graph()
         self.static_graph = None
         self.tasks: dict[int, TaskTuple] = {}
+        self.is_finalized = False
 
     def add_task(self, name):
         idx = self.graph.add_task(name)
@@ -137,6 +138,7 @@ class TaskGraph:
         self.graph.add_retire_data(task, dataidlist)
 
     def apply_variant(self, variant_builder: type[VariantBuilder]):
+        self.graph.clear_all_variants()
         for i in range(self.graph.get_n_compute_tasks()):
             task = self.get_task(i)
             for arch in DeviceType:
@@ -155,6 +157,7 @@ class TaskGraph:
                 )
 
     def finalize(self):
+        self.is_finalized = True
         self.graph.finalize()
         self.static_graph = StaticTaskInfo(self.graph)
 

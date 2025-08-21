@@ -1,0 +1,42 @@
+mesh:
+  _target_: task4feedback.graphs.mesh.generate_quad_mesh
+config:
+  _target_: task4feedback.graphs.dynamic_jacobi.DynamicJacobiConfig
+  steps: 60
+  n: 8
+  arithmetic_intensity: 1.0
+  arithmetic_complexity: 1.0
+  boundary_width: 5.0
+  boundary_complexity: 0.5
+  memory_intensity: 1.0
+  level_memory: 10e9
+  randomness: 0.0
+  permute_idx: 0
+  vcu_usage: 1.0
+  task_internal_memory: 0 
+  workload:
+    _target_: task4feedback.graphs.base.DebugWorkload
+  workload_args:
+    traj_type: bump
+    lower_bound: 0.5 
+    upper_bound: 1.5
+    probability: 0.05
+    traj_specifics:
+      min_std: 0.1
+      max_std: 0.2
+      min_scale: 0.1
+      max_scale: 0.4
+      min_life: 80
+      max_life: 100
+init:
+  partitioner: metis
+  nparts: 4
+  gpu_only: True
+  randomize: True
+env:
+  change_priority: False
+  change_location: False
+  change_duration: False
+  change_workload: True
+  seed: 1
+  warmup: 1

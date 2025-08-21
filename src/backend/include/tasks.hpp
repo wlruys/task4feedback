@@ -302,9 +302,31 @@ public:
     tasks[task_id].type = type;
   }
 
+  void clear_variants(taskid_t task_id) {
+    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    auto &task = tasks[task_id];
+    task.arch.clear();
+    task.vcu.clear();
+    task.mem.clear();
+    task.time.clear();
+  }
+
+  void clear_all_variants() {
+    for (auto &task : tasks) {
+      task.arch.clear();
+      task.vcu.clear();
+      task.mem.clear();
+      task.time.clear();
+    }
+  }
+
   void set_variant(taskid_t task_id, DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time) {
     assert(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
+
+    // std::cout << "[Graph] Setting variant for task " << task_id << ": "
+    //           << "Arch=" << to_string(arch) << ", VCU=" << vcu << ", Mem=" << mem
+    //           << ", Time=" << time << std::endl;
 
     task.arch.push_back(static_cast<uint8_t>(arch));
     task.vcu.push_back(vcu);
@@ -911,6 +933,18 @@ public:
     }
   }
 
+  // Update variants
+  void update_variants(Graph& graph) {
+    auto &tasks = graph.tasks;
+
+    for (const auto &task : tasks) {
+      for (int i = 0; i < task.arch.size(); ++i) {
+        const auto arch = static_cast<DeviceType>(task.arch[i]);
+        add_compute_variant(task.id, arch, task.mem[i], task.vcu[i], task.time[i]);
+      }
+    }
+  }
+
   // Creation and Initialization
 
   void set_total_compute_task_dependencies(int32_t num_deps) {
@@ -1075,6 +1109,9 @@ public:
     const auto idx = __builtin_ctz(arch_type);
     assert(idx < info.variants.size() && "Architecture index out of bounds");
     info.variants[idx] = Variant(arch, vcu, mem, time);
+    // std::cout << "[StaticGraph] Added variant for task " << id << ": "
+    //           << "Arch=" << to_string(arch) << ", VCU=" << vcu << ", Mem=" << mem
+    //           << ", Time=" << time << std::endl;
   }
 
   // Getters

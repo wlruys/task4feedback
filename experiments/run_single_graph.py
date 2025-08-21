@@ -48,7 +48,7 @@ size = comm.Get_size()
 def configure_training(cfg: DictConfig):
     # start_logger()
     
-    option = "GraphMETISMapper"
+    option = "EFT"
     if rank == 0:
         graph_builder = make_graph_builder(cfg)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)

@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - graph: dynamic_jacobi_load
+  - graph: dynamic_jacobi_bump
   - reward: incremental_schedule
   - system: uniform
   - feature: candidate_coordinate
