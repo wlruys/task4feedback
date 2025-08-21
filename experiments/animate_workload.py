@@ -17,7 +17,6 @@ from task4feedback.ml.models import *
 
 from hydra.experimental.callbacks import Callback
 from hydra.core.utils import JobReturn
-from omegaconf import DictConfig, open_dict
 from pathlib import Path
 import git
 import os
@@ -28,79 +27,25 @@ import torch
 import numpy
 import random
 
-
-class GitInfo(Callback):
-    def on_job_start(self, config: DictConfig, **kwargs) -> None:
-        try:
-            repo = git.Repo(search_parent_directories=True)
-            outdir = Path(config.hydra.runtime.output_dir)
-            outdir.mkdir(parents=True, exist_ok=True)
-            (outdir / "git_sha.txt").write_text(repo.head.commit.hexsha)
-            (outdir / "git_dirty.txt").write_text(str(repo.is_dirty()))
-            diff = repo.git.diff(None)
-            (outdir / "git_diff.patch").write_text(diff)
-
-            print(
-                "Git SHA:",
-                repo.head.commit.hexsha,
-                " (dirty)" if repo.is_dirty() else " (clean)",
-                flush=True,
-            )
-
-        except Exception as e:
-            print(f"GitInfo callback failed: {e}")
-
-
 def configure_training(cfg: DictConfig):
     #start_logger()
     graph_builder = make_graph_builder(cfg)
-    env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
-
-    def env_fn(eval: bool = False):
-        return make_env(
-            graph_builder=graph_builder,
-            cfg=cfg,
-            lstm=lstm,
-            normalization=normalization,
-            eval=eval,
-        )
+    env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
 
     graph = env.get_graph()
     if hasattr(graph, 'workload'):
         workload = graph.get_workload()
-        workload.animate_workload(show=True)
+        workload.animate_workload(show=False)
 
 
 @hydra.main(config_path="conf", config_name="config.yaml", version_base=None)
 def main(cfg: DictConfig):
-    if cfg.wandb.enabled:
-        wandb.init(
-            project=cfg.wandb.project,
-            config=OmegaConf.to_container(cfg, resolve=True),
-            name=make_run_name(cfg),
-            # name=f"{cfg.wandb.name}",
-            dir=cfg.wandb.dir,
-            tags=cfg.wandb.tags,
-        )
-
-        hydra_output_dir = Path(HydraConfig.get().runtime.output_dir)
-
-        with open_dict(cfg):
-            for fname in ["git_sha.txt", "git_diff.patch", "git_dirty.txt"]:
-                git_file = hydra_output_dir / fname
-                if git_file.exists():
-                    wandb.save(str(git_file))
-
     torch.manual_seed(cfg.seed)
     numpy.random.seed(cfg.seed)
     random.seed(cfg.seed)
     torch.use_deterministic_algorithms(cfg.deterministic_torch)
 
     configure_training(cfg)
-
-    if cfg.wandb.enabled:
-        wandb.finish()
-
 
 if __name__ == "__main__":
     main()

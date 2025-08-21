@@ -339,7 +339,6 @@ def weighted_partition(
     adj_starts = adj_starts.astype(np.int32)
     vweights = vweights.astype(np.int32)
     eweights = eweights.astype(np.int32)
-
     return pymetis.part_graph(
         nparts=nparts,
         adjncy=adjacency_list,
@@ -966,7 +965,7 @@ class BumpWorkload(DynamicWorkload):
         assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
 
         bumps = [] 
-        bumps.append(create_bump_random_center(rng=rng))
+        bumps.append(create_bump_random_center(rng=rng, **kwargs['traj_specifics']))
 
         for j in range(start_step + 1, num_levels):
             self.level_workload[j] = np.copy(self.level_workload[0])
@@ -978,8 +977,8 @@ class BumpWorkload(DynamicWorkload):
             bumps = [b for b in bumps if b.is_alive()]
                 
             #Create a new bump with probability 0.1
-            if rng.rand() < 0.1:
-                bumps.append(create_bump_random_center(rng=rng))
+            if rng.rand() < kwargs['probability']:
+                bumps.append(create_bump_random_center(rng=rng, **kwargs['traj_specifics']))
 
             self.level_workload[j] = np.clip(
                 a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound
