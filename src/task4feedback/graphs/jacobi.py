@@ -739,6 +739,35 @@ class JacobiGraph(ComputeDataGraph):
         adjwgt_np = [np.asarray(x, dtype=np.int32) for x in adjwgt]
         vsize_np = [np.asarray(x, dtype=np.int32) for x in vsize]
         vtxdist_np = np.asarray(vtxdist, dtype=np.int32)
+        
+        # ---------- Symmetry: take max weight for (u,v) and (v,u) ----------
+        # Build max weight per undirected pair using global indices.
+        edge_max = {}  # key: (min(u_gl, v_gl), max(u_gl, v_gl)) -> max_w
+
+        # 1) Collect max weight over all partitions/edges
+        for p in range(n_compute_devices):
+            for u_local in range(len(vwgt[p])):
+                u_gl = int(vtxdist[p]) + u_local
+                start = int(xadj[p][u_local])
+                end   = int(xadj[p][u_local + 1])
+                for eidx in range(start, end):
+                    v_gl = int(adjncy[p][eidx])
+                    w    = int(adjwgt[p][eidx])
+                    a, b = (u_gl, v_gl) if u_gl < v_gl else (v_gl, u_gl)
+                    prev = edge_max.get((a, b))
+                    if prev is None or w > prev:
+                        edge_max[(a, b)] = w
+
+        # 2) Rewrite all edge weights to that max
+        for p in range(n_compute_devices):
+            for u_local in range(len(vwgt[p])):
+                u_gl = int(vtxdist[p]) + u_local
+                start = int(xadj[p][u_local])
+                end   = int(xadj[p][u_local + 1])
+                for eidx in range(start, end):
+                    v_gl = int(adjncy[p][eidx])
+                    a, b = (u_gl, v_gl) if u_gl < v_gl else (v_gl, u_gl)
+                    adjwgt[p][eidx] = int(edge_max[(a, b)])
 
         return (
             partitioned_tasks,
