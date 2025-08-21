@@ -522,7 +522,7 @@ class JacobiGraph(ComputeDataGraph):
             tasks_in_levels += self.level_to_task[level]
 
         task_to_local, adj_list, adj_starts, vweights, eweights = (
-            self.get_weighted_graph(arch, bandwidth=bandwidth, task_ids=tasks_in_levels)
+            self.get_weighted_graph(arch, bandwidth=bandwidth, task_ids=tasks_in_levels, symmetric=True)
         )
 
         cell_vertex_cost = defaultdict(int)
