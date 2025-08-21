@@ -316,6 +316,9 @@ class DynamicJacobiGraph(JacobiGraph):
             self.workload.generate_workload(
                 self.config.steps, seed=seed, **self.config.workload_args
             )
+            self.workload.generate_workload(
+                self.config.steps, seed=seed+1, **self.config.workload_args
+            )
             self.data.workload = self.workload
             self.data.reset_data_size(system)
             self._apply_workload_variant(system)

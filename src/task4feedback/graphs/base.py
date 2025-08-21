@@ -378,9 +378,15 @@ class EnvironmentState:
     data_task_virtual: dict
     data_task_block: dict
 
+    compute_task_durations: dict 
+    data_task_durations: dict
+
     def parse_state(env, time: Optional[int] = None):
+        assert(env.simulator is not None)
+
         if time is None:
             time = env.simulator.time
+        assert(time is not None)
 
         sim = env.simulator
         simulator_state = sim.state
@@ -399,11 +405,15 @@ class EnvironmentState:
         data_task_virtual = {}
         data_task_block = {}
 
+        compute_task_durations = {}
+        data_task_durations = {}
+
         for i in range(n_compute_tasks):
             task_state = task_runtime.get_compute_task_state_at_time(i, time)
             compute_tasks_by_state[task_state].append(i)
             device_id = task_runtime.get_compute_task_mapped_device(i)
             compute_task_mapping_dict[i] = device_id
+            compute_task_durations[i] = task_runtime.get_compute_task_duration(i)
 
         for i in range(n_data_tasks):
             task_state = task_runtime.get_data_task_state_at_time(i, time)
@@ -418,6 +428,7 @@ class EnvironmentState:
             data_task_virtual[i] = is_virtual
             data_task_mapping_dict[i] = device_id
             data_task_block[i] = data_id
+            data_task_durations[i] = task_runtime.get_data_task_duration(i) if not is_virtual else 0
 
         return EnvironmentState(
             time=time,
@@ -428,6 +439,8 @@ class EnvironmentState:
             data_task_source_device=data_task_source_device,
             data_task_virtual=data_task_virtual,
             data_task_block=data_task_block,
+            compute_task_durations=compute_task_durations,
+            data_task_durations=data_task_durations,
         )
 
     @staticmethod
