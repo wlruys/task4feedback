@@ -4,6 +4,7 @@ import pygmsh
 import meshio
 from dataclasses import dataclass
 from typing import Optional
+import math 
 
 GMSH_INITIALIZED = False
 
@@ -213,23 +214,35 @@ def finalize_gmsh():
     GMSH_INITIALIZED = False
 
 
-def generate_quad_mesh(L=1.0, n=4):
-    """
-    Generate a 2D rectangular mesh with quadrilateral elements.
+def generate_quad_mesh(L: float = 1.0,
+                       n: int = 4,
+                       W: float | None = None,
+                       nw: int | None = None,):
+    if W is None:
+        W = L
 
-    Returns:
-    - meshio.Mesh object
-    """
-    nx = L / n
+    if nw is None:
+        nw = n
+
+    hx = L / n
+    hy = W / nw
+
+    nx = max(1, int(math.ceil(L / hx)))
+    ny = max(1, int(math.ceil(W / hy)))
+
     gmsh.option.set_number("Mesh.RecombineAll", 1)
-    gmsh.option.set_number("Mesh.Algorithm", 8)  # 8 = Delaunay
-    with pygmsh.geo.Geometry() as geom:
-        rectangle = geom.add_rectangle(0.0, L, 0.0, L, 0.0, mesh_size=nx)
-        for curve in rectangle.curves:
-            geom.set_transfinite_curve(curve, n + 1, "Progression", 1.0)
-        geom.set_transfinite_surface(rectangle.surface, "Left", tuple(rectangle.curves))
+    gmsh.option.set_number("Mesh.Algorithm", 8)
 
+    with pygmsh.geo.Geometry() as geom:
+        rect = geom.add_rectangle(0.0, L, 0.0, W, 0.0)
+        c0, c1, c2, c3 = rect.curves
+        geom.set_transfinite_curve(c0, nx + 1, "Progression", 1.0)  
+        geom.set_transfinite_curve(c2, nx + 1, "Progression", 1.0)  
+        geom.set_transfinite_curve(c1, ny + 1, "Progression", 1.0) 
+        geom.set_transfinite_curve(c3, ny + 1, "Progression", 1.0)  
+        geom.set_transfinite_surface(rect.surface, "Left", tuple(rect.curves))
         mesh = geom.generate_mesh(dim=2)
+
     return mesh
 
 
