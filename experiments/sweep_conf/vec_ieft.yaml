@@ -1,0 +1,17 @@
+program: vec_train_ieft.py
+name: vector_ieft
+method: grid
+metric:
+  name: eval/DETERMINISTIC.env_0_0.mean_time
+  goal: minimize
+parameters:
+  reward.random_start:
+    values: [false, true]
+  seed:
+    values: [0, 100, 200]
+
+command:
+  - ${env}
+  - python 
+  - ${program}
+  - ${args_no_hyphens}

@@ -9,7 +9,7 @@ config:
   boundary_width: 5.0
   boundary_complexity: 0.5
   memory_intensity: 1.0
-  level_memory: 10e9
+  level_memory: 4e9
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0

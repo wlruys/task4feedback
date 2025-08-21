@@ -1,0 +1,21 @@
+program: vec_train_is.py
+name: vector_is
+method: grid
+metric:
+  name: eval/DETERMINISTIC.env_0_0.mean_time
+  goal: minimize
+parameters:
+  reward.chance:
+    values: [0.05, 0.1, 0.2, 0.4, 0.8]
+  reward.random_start:
+    values: [false, true]
+  reward.terminal_reward:
+    values: [false, true]
+  seed:
+    values: [0, 100, 200]
+
+command:
+  - ${env}
+  - python 
+  - ${program}
+  - ${args_no_hyphens}

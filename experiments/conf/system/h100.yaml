@@ -8,7 +8,7 @@ h2d_links: 1
 d2d_links: 1
 cpu_copyengines: 99
 device_copyengines: 99
-mem: 10000000000000
+mem: 80000000000
 system_specs:
   fastest_flops: 67e12
   slowest_flops: 67e12

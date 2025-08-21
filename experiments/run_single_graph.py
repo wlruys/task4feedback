@@ -48,7 +48,7 @@ size = comm.Get_size()
 def configure_training(cfg: DictConfig):
     # start_logger()
     
-    option = "GraphMETISMapper"
+    option = "ParMETIS"
     if rank == 0:
         graph_builder = make_graph_builder(cfg)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
@@ -74,7 +74,7 @@ def configure_training(cfg: DictConfig):
         env.simulator.external_mapper=LevelPartitionMapper(level_cell_mapping=graph.partitions)
     elif option == "BlockCyclic":
         env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices-1, block_size=1, offset=1, bandwidth=cfg.system.d2d_bw)
+        env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices-1, block_size=1, offset=1)
     elif option == "GraphMETISMapper":
         env.simulator.enable_external_mapper()
         env.simulator.external_mapper = GraphMETISMapper(graph=graph, n_devices=cfg.system.n_devices-1, offset=1)
@@ -91,7 +91,7 @@ def configure_training(cfg: DictConfig):
     if rank==0:
         config = EvaluationConfig()
         env.simulator.run()
-        # print(env.simulator.time, env._get_baseline("EFT"))
+        print(env.simulator.time)
         animate_mesh_graph(
             env,
             time_interval=int(env.simulator.time / config.max_frames),

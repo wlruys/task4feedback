@@ -1,7 +1,7 @@
-project: animation_test
+project: memory_constrained_test
 name: default
 enabled: true
-dir: ~/workspace/scheduling/logs
+dir: /home/wlruys/workspace/scheduling/logs
 tags:
   - ppo
   - default

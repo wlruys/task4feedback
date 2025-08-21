@@ -1,0 +1,21 @@
+program: cnn_train_ieft.py
+name: cnn_ieft
+method: grid
+metric:
+  name: eval/DETERMINISTIC.env_0_0.mean_time
+  goal: minimize
+parameters:
+  reward.random_start:
+    values: [false, true]
+  seed:
+    values: [0, 100, 200]
+  algorithm.gamma:
+    values: [1, 0.999, 0.99]
+  algorithm.lmbda:
+    values: [0.95, 0.9, 0.7]
+
+command:
+  - ${env}
+  - python 
+  - ${program}
+  - ${args_no_hyphens}
