@@ -1,8 +1,8 @@
 #include "tasks.hpp"
 #include "devices.hpp"
 
-uint8_t StaticTaskInfo::get_supported_devices_mask(taskid_t compute_task_id) const {
-  uint8_t mask = 0;
+devicemask_t StaticTaskInfo::get_supported_devices_mask(taskid_t compute_task_id) const {
+  devicemask_t mask = 0;
   const devid_t n_devices = 5;
 
   auto arch_mask = get_supported_architecture_mask(compute_task_id);

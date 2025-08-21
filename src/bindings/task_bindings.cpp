@@ -88,6 +88,8 @@ void init_task_ext(nb::module_ &m) {
       .def("get_compute_task_completed_time", &RuntimeTaskInfo::get_compute_task_completed_time)
       .def("is_data_task_virtual", &RuntimeTaskInfo::is_data_task_virtual)
       .def("is_eviction_task_virtual", &RuntimeTaskInfo::is_eviction_task_virtual)
+      .def("get_compute_task_duration", &RuntimeTaskInfo::get_compute_task_duration)
+      .def("get_data_task_duration", &RuntimeTaskInfo::get_data_task_duration)
       .def("get_eviction_task_source_device", &RuntimeTaskInfo::get_eviction_task_source_device)
       .def("get_eviction_task_launched_time", &RuntimeTaskInfo::get_eviction_task_launched_time)
       .def("get_eviction_task_completed_time", &RuntimeTaskInfo::get_eviction_task_completed_time);

@@ -1258,7 +1258,7 @@ public:
     return (info.mask & arch_type) != 0;
   }
 
-  [[nodiscard]] uint8_t get_supported_devices_mask(taskid_t compute_task_id) const;
+  [[nodiscard]] devicemask_t get_supported_devices_mask(taskid_t compute_task_id) const;
 
   [[nodiscard]] const std::string &get_compute_task_name(taskid_t id) const {
     return compute_task_names[id];
@@ -1784,6 +1784,18 @@ public:
   }
   void record_completed(taskid_t id, timecount_t completed_time) {
     compute_task_time_records[id].completed_time = completed_time;
+  }
+
+  timecount_t get_compute_task_duration(taskid_t id) const {
+    return compute_task_time_records[id].completed_time - compute_task_time_records[id].launched_time;
+  }
+
+  timecount_t get_data_task_duration(taskid_t id) const {
+    return data_task_time_records[id].completed_time - data_task_time_records[id].launched_time;
+  }
+
+  timecount_t get_eviction_task_duration(taskid_t id) const {
+    return eviction_task_time_records[id].completed_time - eviction_task_time_records[id].launched_time;
   }
 
   void record_data_launched(taskid_t id, timecount_t launched_time) {

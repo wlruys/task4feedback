@@ -14,6 +14,9 @@ using dataid_t = int32_t;
 using devid_t = int32_t;
 using depcount_t = int32_t;
 
+// Number of bits must be greater than or equal to the number of devices (including host)
+using devicemask_t = uint16_t;
+
 // using priority_t = int32_t;
 // using taskid_t = int32_t;
 // using dataid_t = int32_t;

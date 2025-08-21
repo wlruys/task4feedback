@@ -1232,7 +1232,7 @@ class Mapper {
 
 protected:
   devid_t n_devices = 0;
-  uint8_t device_flags = 0;
+  devicemask_t device_flags = 0;
   uint8_t arch_flags = 0;
   std::vector<devid_t> device_buffer;
   std::vector<DeviceType> arch_buffer;
@@ -1256,8 +1256,8 @@ protected:
     const auto device_mask = state.get_tasks().get_supported_devices_mask(compute_task_id);
 
     SPDLOG_DEBUG("Filling device targets for task {} with mask {}", compute_task_id, device_mask);
-    for (uint8_t i = 0; i < n_devices; ++i) {
-      const uint8_t device_flag = 1 << i;
+    for (devicemask_t i = 0; i < n_devices; ++i) {
+      const devicemask_t device_flag = 1 << i;
       SPDLOG_DEBUG("Checking device {} with flag {}", i, device_flag);
       if (device_mask & device_flag) {
         SPDLOG_DEBUG("Device {}: supported", i);

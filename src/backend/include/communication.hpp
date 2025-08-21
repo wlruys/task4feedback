@@ -281,9 +281,9 @@ public:
 
   [[nodiscard]] inline SourceRequest
   get_best_available_source(const Topology &topology, devid_t dst,
-                            const uint8_t possible_source_flags) const {
+                            const devicemask_t possible_source_flags) const {
 
-    const uint8_t destination_mask = (1 << dst);
+    const devicemask_t destination_mask = (1 << dst);
 
     // Early return for local data
     if (possible_source_flags & destination_mask) {
@@ -297,7 +297,7 @@ public:
 
     const auto size = topology.num_devices;
     for (devid_t src = 0; src < size; ++src) {
-      const uint8_t src_mask = (1 << src);
+      const devicemask_t src_mask = (1 << src);
 
       const bool is_valid = (possible_source_flags & src_mask) && is_link_available(src, dst) &&
                             is_device_available(src) && is_device_available(dst);
@@ -320,9 +320,9 @@ public:
   }
 
   [[nodiscard]] inline SourceRequest get_best_source(const Topology &topology, devid_t dst,
-                                                     const uint8_t possible_source_flags) const {
+                                                     const devicemask_t possible_source_flags) const {
 
-    const uint8_t destination_mask = (1 << dst);
+    const devicemask_t destination_mask = (1 << dst);
     if (possible_source_flags & destination_mask) {
       return {true, dst}; // Local data is always available
     }
@@ -332,7 +332,7 @@ public:
     bool found = false;
 
     for (devid_t src = 0; src < topology.num_devices; ++src) {
-      const uint8_t src_mask = (1 << src);
+      const devicemask_t src_mask = (1 << src);
       bool is_valid = (possible_source_flags & src_mask);
 
       auto bandwidth = get_available_bandwidth(topology, src, dst);
