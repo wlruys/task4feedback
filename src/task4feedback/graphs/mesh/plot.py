@@ -608,14 +608,12 @@ def animate_state_list(graph, state_list, figsize=(8, 8), video_seconds=15, dura
     )
     ani.event_source.add_callback(update_title)
     return ani
-
 def animate_data_flow_durations_state_list(
     graph,
     state_list,
     figsize=(8, 8),
     video_seconds=15,
     show_labels: bool = False,
-    # colormaps for edge flows and cell aggregate
     inbound_cmap_name: str = "Blues",
     outbound_cmap_name: str = "Oranges",
     aggregate_cmap_name: str = "Greys",
@@ -630,20 +628,33 @@ def animate_data_flow_durations_state_list(
     out_max_us: float | None = None,
     agg_min_us: float | None = None,
     agg_max_us: float | None = None,
+    # diagnostics
+    warn_mismatch: bool = False,
 ):
     """
-    Animate non-virtual data-task durations going INTO and OUT OF each cell.
+    Visualize non-virtual data-task durations flowing INTO and OUT OF each cell.
 
-    For each frame (EnvironmentState snapshot):
-      - Determine the current owner device of each cell from compute tasks.
-      - Classify each COMPLETED, non-virtual data task tied to (edge, cell):
+    Key fixes vs. earlier attempt:
+      - PERSISTENCE: edge highlights persist using the LAST-SEEN COMPLETED duration
+        per (edge_id, cell_id) pair; recolored every frame (no flicker).
+      - VALIDATION: only draw (edge_id, cell_id) pairs that actually exist in
+        geom.edge_cell_dict, ensuring animate_highlights pair indexing matches.
+      - DIRECTION RESOLUTION: if both inbound and outbound exist for a pair at
+        draw time, we render the direction with the larger duration deterministically.
+
+    Semantics per frame:
+      - Cell owner device = last device that has LAUNCHED or COMPLETED a compute task
+        on that cell; initialized from graph.get_cell_locations(as_dict=False).
+      - For each COMPLETED, non-virtual data task bound to a (edge, cell) block:
           inbound  if target_device == owner_device
           outbound if source_device == owner_device and target_device != owner_device
-      - Keep the most recent per-cell inbound/outbound durations (μs).
-      - Cell interior shows aggregate traffic (in+out) via grayscale bins (0..10).
-      - Boundary quads near edges show inbound (Blues) and outbound (Oranges)
-        with intensity scaled by duration.
-      - Optionally label cells with "in: Xμs / out: Yμs".
+      - For each cell, the interior fill encodes aggregate traffic intensity:
+          sum_over_edges( last_in(edge,cell) + last_out(edge,cell) )
+        via a grayscale (0..10 bins; 0 = no data).
+      - Boundary quads near edges encode the *directional* flow with a color:
+          inbound -> Blues, outbound -> Oranges, intensity scaled by duration.
+        If both exist for a pair, draw the larger.
+      - Optional labels show per-cell sums "in: Xμs / out: Yμs".
 
     Returns
     -------
@@ -654,73 +665,41 @@ def animate_data_flow_durations_state_list(
     import matplotlib.colors as _mcolors
     from collections import defaultdict as _dd
 
+    if not state_list:
+        raise ValueError("animate_data_flow_durations_state_list: state_list is empty.")
+
     geom = graph.data.geometry
     fig, ax = create_mesh_plot(geom, figsize=figsize)
 
     n_cells = len(geom.cells)
-    # Owner device per cell (kept up to date per frame)
-    last_partition = graph.get_cell_locations(as_dict=False)
 
-    # Helpers ---------------------------------------------------------------
+    # ---------- Helpers ----------
+
+    # Valid (edge, cell) pairs according to the geometry used by animate_highlights
+    valid_pairs = set()
+    for eid, cell_list in getattr(geom, "edge_cell_dict", {}).items():
+        for cid in cell_list:
+            if 0 <= cid < n_cells:
+                valid_pairs.add((eid, cid))
+
     def _get_edge_cell_from_block(block_id):
-        """Return (edge_id, cell_id) if block_id refers to a DataKey for an Edge, else None."""
+        """
+        Try to recover (edge_id, cell_id) from a data block.
+        Only return pairs that are valid according to geom.edge_cell_dict.
+        """
         obj = graph.data.get_key(block_id)
+        # Match your prior convention: DataKey whose .object is Edge,
+        # and obj.id[0] is the Cell on the receiving side.
         if isinstance(obj, DataKey):
             edge = obj.object
             if isinstance(edge, Edge):
-                cell = obj.id[0]  # convention from your existing code
-                return edge.id, cell.id
+                cell = obj.id[0]
+                # cell may be an object or an int id
+                cid = getattr(cell, "id", cell)
+                eid = getattr(edge, "id", edge)
+                pair = (int(eid), int(cid))
+                return pair if pair in valid_pairs else None
         return None
-
-    # Track most recent durations per cell (μs) over timeline when constructing frames
-    last_in_us = {}   # cell_id -> duration_us
-    last_out_us = {}  # cell_id -> duration_us
-
-    # First pass: gather durations to compute robust scales ------------------
-    all_in_us = []
-    all_out_us = []
-    all_agg_us = []
-
-    # We emulate the per-frame update rules to estimate realistic scales
-    for state in state_list:
-        # Update owner devices from compute tasks (LAUNCHED/COMPLETED)
-        for state_type, tasks in state.compute_tasks_by_state.items():
-            if state_type in (fastsim.TaskState.LAUNCHED, fastsim.TaskState.COMPLETED):
-                for task in tasks:
-                    cid = graph.task_to_cell[task]
-                    if 0 <= cid < n_cells:
-                        last_partition[cid] = state.compute_task_mapping_dict[task]
-
-        # Inspect COMPLETED non-virtual data tasks and classify into/out-of cell
-        for state_type, tasks in state.data_tasks_by_state.items():
-            if state_type != fastsim.TaskState.COMPLETED:
-                continue
-            for dt in tasks:
-                if state.data_task_virtual.get(dt, False):
-                    continue  # ignore virtual transfers
-                pair = _get_edge_cell_from_block(state.data_task_block.get(dt))
-                if pair is None:
-                    continue
-                edge_id, cell_id = pair
-                if not (0 <= cell_id < n_cells):
-                    continue
-                owner = last_partition[cell_id]
-                tgt = state.data_task_mapping_dict.get(dt)
-                src = state.data_task_source_device.get(dt)
-                dur = float(state.data_task_durations.get(dt, 0.0))
-
-                if tgt == owner:
-                    last_in_us[cell_id] = dur
-                    all_in_us.append(dur)
-                elif src == owner and tgt != owner:
-                    last_out_us[cell_id] = dur
-                    all_out_us.append(dur)
-
-        # Aggregate for scale (sum of current last known)
-        for cid in range(n_cells):
-            agg = (last_in_us.get(cid, 0.0) + last_out_us.get(cid, 0.0))
-            if agg > 0:
-                all_agg_us.append(agg)
 
     def _robust_bounds(arr, lo, hi):
         if len(arr) == 0:
@@ -730,20 +709,11 @@ def animate_data_flow_durations_state_list(
             return float(_np.percentile(a, lo)), float(_np.percentile(a, hi))
         return float(_np.min(a)), float(_np.max(a))
 
-    in_lo, in_hi   = _robust_bounds(all_in_us,   robust_low, robust_high) if (in_min_us is None or in_max_us is None) else (float(in_min_us), float(in_max_us))
-    out_lo, out_hi = _robust_bounds(all_out_us,  robust_low, robust_high) if (out_min_us is None or out_max_us is None) else (float(out_min_us), float(out_max_us))
-    agg_lo, agg_hi = _robust_bounds(all_agg_us,  robust_low, robust_high) if (agg_min_us is None or agg_max_us is None) else (float(agg_min_us), float(agg_max_us))
-
-    # Guard bounds
     def _fix(lo, hi):
         if not _np.isfinite(lo): lo = 0.0
         if not _np.isfinite(hi) or hi <= lo: hi = lo + 1.0
         return lo, hi
-    in_lo, in_hi = _fix(in_lo, in_hi)
-    out_lo, out_hi = _fix(out_lo, out_hi)
-    agg_lo, agg_hi = _fix(agg_lo, agg_hi)
 
-    # Binners and color mappers ---------------------------------------------
     def _bin(value, lo, hi, bins=10):
         if value is None:
             return 0
@@ -752,65 +722,165 @@ def animate_data_flow_durations_state_list(
         b = int(round(x * bins))
         return max(1, min(b, bins))
 
-    inbound_cmap  = _plt.get_cmap(inbound_cmap_name)
-    outbound_cmap = _plt.get_cmap(outbound_cmap_name)
-    aggregate_cmap = _plt.get_cmap(aggregate_cmap_name)
+    # ---------- Pass 1: scan to establish scales ----------
 
-    # partition bins -> grayscale colors for aggregate (index 0 = no data)
-    agg_colors = ["#BFBFBF"] + [_mcolors.to_hex(aggregate_cmap(i / 9.0)) for i in range(10)]
+    # Track evolving owner per cell
+    owner = graph.get_cell_locations(as_dict=False).copy()
 
-    # Prepare animation frames ----------------------------------------------
-    highlight_sequence = []
-    # Reset state for actual frame construction
-    last_partition = graph.get_cell_locations(as_dict=False)
-    last_in_us.clear()
-    last_out_us.clear()
+    # Persistent last-seen durations per (edge, cell)
+    last_in_pair = {}   # (eid,cid) -> dur_us
+    last_out_pair = {}  # (eid,cid) -> dur_us
+
+    # For robust scaling across the timeline
+    seen_in, seen_out, seen_agg = [], [], []
+
+    mismatches = 0
 
     for state in state_list:
-        # Update owner devices from compute tasks
-        for state_type, tasks in state.compute_tasks_by_state.items():
-            if state_type in (fastsim.TaskState.LAUNCHED, fastsim.TaskState.COMPLETED):
-                for task in tasks:
-                    cid = graph.task_to_cell[task]
+        # Update owners based on compute events
+        for stype, tasks in state.compute_tasks_by_state.items():
+            if stype in (fastsim.TaskState.LAUNCHED, fastsim.TaskState.COMPLETED):
+                for t in tasks:
+                    cid = graph.task_to_cell[t]
                     if 0 <= cid < n_cells:
-                        last_partition[cid] = state.compute_task_mapping_dict[task]
+                        owner[cid] = state.compute_task_mapping_dict[t]
 
-        # Build edge (boundary) highlights with directional colors
-        boundary_highlights = _dd(dict)
-
-        # Update last seen inbound/outbound durations for cells from COMPLETED, non-virtual data tasks
-        for state_type, tasks in state.data_tasks_by_state.items():
-            if state_type != fastsim.TaskState.COMPLETED:
+        # Update last-seen in/out per pair from COMPLETED, non-virtual data tasks
+        for stype, tasks in state.data_tasks_by_state.items():
+            if stype != fastsim.TaskState.COMPLETED:
                 continue
             for dt in tasks:
                 if state.data_task_virtual.get(dt, False):
                     continue
-                pair = _get_edge_cell_from_block(state.data_task_block.get(dt))
-                if pair is None:
+                pr = _get_edge_cell_from_block(state.data_task_block.get(dt))
+                if pr is None:
+                    mismatches += 1
                     continue
-                edge_id, cell_id = pair
-                if not (0 <= cell_id < n_cells):
-                    continue
-                owner = last_partition[cell_id]
+                eid, cid = pr
+                own = owner[cid]
                 tgt = state.data_task_mapping_dict.get(dt)
                 src = state.data_task_source_device.get(dt)
                 dur = float(state.data_task_durations.get(dt, 0.0))
 
-                if tgt == owner:
-                    last_in_us[cell_id] = dur
-                    # inbound edge color
-                    frac = (min(max(dur, in_lo), in_hi) - in_lo) / (in_hi - in_lo) if in_hi > in_lo else 0.0
-                    boundary_highlights[edge_id][cell_id] = _mcolors.to_hex(inbound_cmap(frac))
-                elif src == owner and tgt != owner:
-                    last_out_us[cell_id] = dur
-                    # outbound edge color
-                    frac = (min(max(dur, out_lo), out_hi) - out_lo) / (out_hi - out_lo) if out_hi > out_lo else 0.0
-                    boundary_highlights[edge_id][cell_id] = _mcolors.to_hex(outbound_cmap(frac))
+                if tgt == own:
+                    last_in_pair[(eid, cid)] = dur
+                    seen_in.append(dur)
+                elif src == own and tgt != own:
+                    last_out_pair[(eid, cid)] = dur
+                    seen_out.append(dur)
+                # else: irrelevant to that cell's current owner
 
-        # Aggregate intensity per cell for interior fill
+        # Aggregate per cell for scale
+        cell_in = _dd(float)
+        cell_out = _dd(float)
+        for (eid, cid), dur in last_in_pair.items():
+            cell_in[cid] += dur
+        for (eid, cid), dur in last_out_pair.items():
+            cell_out[cid] += dur
+        for cid in range(n_cells):
+            agg = cell_in.get(cid, 0.0) + cell_out.get(cid, 0.0)
+            if agg > 0:
+                seen_agg.append(agg)
+
+    if warn_mismatch and mismatches > 0:
+        print(f"[animate_data_flow_durations_state_list] "
+              f"Skipped {mismatches} data blocks not mapping to valid (edge,cell) pairs.")
+
+    # Determine bounds
+    if in_min_us is None or in_max_us is None:
+        in_lo, in_hi = _robust_bounds(seen_in, robust_low, robust_high)
+    else:
+        in_lo, in_hi = float(in_min_us), float(in_max_us)
+
+    if out_min_us is None or out_max_us is None:
+        out_lo, out_hi = _robust_bounds(seen_out, robust_low, robust_high)
+    else:
+        out_lo, out_hi = float(out_min_us), float(out_max_us)
+
+    if agg_min_us is None or agg_max_us is None:
+        agg_lo, agg_hi = _robust_bounds(seen_agg, robust_low, robust_high)
+    else:
+        agg_lo, agg_hi = float(agg_min_us), float(agg_max_us)
+
+    in_lo, in_hi = _fix(in_lo, in_hi)
+    out_lo, out_hi = _fix(out_lo, out_hi)
+    agg_lo, agg_hi = _fix(agg_lo, agg_hi)
+
+    # Colormaps
+    inbound_cmap   = _plt.get_cmap(inbound_cmap_name)
+    outbound_cmap  = _plt.get_cmap(outbound_cmap_name)
+    aggregate_cmap = _plt.get_cmap(aggregate_cmap_name)
+
+    # Partition bins -> grayscale colors for aggregate (index 0 = no data)
+    agg_colors = ["#BFBFBF"] + [_mcolors.to_hex(aggregate_cmap(i / 9.0)) for i in range(10)]
+
+    # ---------- Pass 2: build highlight_sequence with persistence ----------
+
+    highlight_sequence = []
+
+    # Reset owner and pair states to re-simulate deterministically
+    owner = graph.get_cell_locations(as_dict=False).copy()
+    last_in_pair.clear()
+    last_out_pair.clear()
+
+    for state in state_list:
+        # Update owners
+        for stype, tasks in state.compute_tasks_by_state.items():
+            if stype in (fastsim.TaskState.LAUNCHED, fastsim.TaskState.COMPLETED):
+                for t in tasks:
+                    cid = graph.task_to_cell[t]
+                    if 0 <= cid < n_cells:
+                        owner[cid] = state.compute_task_mapping_dict[t]
+
+        # Update last-seen in/out per pair (persistent)
+        for stype, tasks in state.data_tasks_by_state.items():
+            if stype != fastsim.TaskState.COMPLETED:
+                continue
+            for dt in tasks:
+                if state.data_task_virtual.get(dt, False):
+                    continue
+                pr = _get_edge_cell_from_block(state.data_task_block.get(dt))
+                if pr is None:
+                    continue
+                eid, cid = pr
+                own = owner[cid]
+                tgt = state.data_task_mapping_dict.get(dt)
+                src = state.data_task_source_device.get(dt)
+                dur = float(state.data_task_durations.get(dt, 0.0))
+                if tgt == own:
+                    last_in_pair[(eid, cid)] = dur
+                elif src == own and tgt != own:
+                    last_out_pair[(eid, cid)] = dur
+
+        # Boundary highlights for ALL persisted pairs
+        boundary_highlights = _dd(dict)
+        # Choose direction by larger magnitude if both present
+        all_pairs = set(last_in_pair.keys()) | set(last_out_pair.keys())
+        for (eid, cid) in all_pairs:
+            din  = last_in_pair.get((eid, cid))
+            dout = last_out_pair.get((eid, cid))
+            if din is None and dout is None:
+                continue
+            if dout is None or (din is not None and din >= dout):
+                # inbound
+                frac = (min(max(din, in_lo), in_hi) - in_lo) / (in_hi - in_lo) if in_hi > in_lo else 0.0
+                boundary_highlights[eid][cid] = _mcolors.to_hex(inbound_cmap(frac))
+            else:
+                # outbound
+                frac = (min(max(dout, out_lo), out_hi) - out_lo) / (out_hi - out_lo) if out_hi > out_lo else 0.0
+                boundary_highlights[eid][cid] = _mcolors.to_hex(outbound_cmap(frac))
+
+        # Aggregate per cell for interior fill (sum over persisted pairs)
+        cell_in = _dd(float)
+        cell_out = _dd(float)
+        for (eid, cid), dur in last_in_pair.items():
+            cell_in[cid] += dur
+        for (eid, cid), dur in last_out_pair.items():
+            cell_out[cid] += dur
+
         partition_bins = _np.zeros(n_cells, dtype=int)
         for cid in range(n_cells):
-            agg = last_in_us.get(cid, 0.0) + last_out_us.get(cid, 0.0)
+            agg = cell_in.get(cid, 0.0) + cell_out.get(cid, 0.0)
             if agg > 0:
                 partition_bins[cid] = _bin(agg, agg_lo, agg_hi, bins=10)
 
@@ -818,15 +888,15 @@ def animate_data_flow_durations_state_list(
         cell_labels = _dd(list)
         if show_labels:
             for cid in range(n_cells):
-                inv = last_in_us.get(cid, 0.0)
-                outv = last_out_us.get(cid, 0.0)
+                inv = cell_in.get(cid, 0.0)
+                outv = cell_out.get(cid, 0.0)
                 if inv > 0 or outv > 0:
                     lbl = f"in:{inv:.0f}μs\nout:{outv:.0f}μs"
                     cell_labels[lbl].append(cid)
 
-        # We keep compute-task cell outlines subdued (no special cell_highlights)
+        # No extra outlines for cells; we rely on boundary and fill
         cell_highlights = _dd(list)
-        edge_highlights = _dd(list)  # not used; boundary_highlights carries flow info
+        edge_highlights = _dd(list)
 
         highlight_sequence.append(
             (
@@ -834,18 +904,18 @@ def animate_data_flow_durations_state_list(
                 edge_highlights,
                 boundary_highlights,
                 cell_labels,
-                partition_bins.copy(),  # reused by animate_highlights as "partition"
+                partition_bins.copy(),
             )
         )
 
-    # Title updater with scales
+    # Title updater with calibrated scales
     def _update_title():
         if not hasattr(_update_title, "frame"):
             _update_title.frame = 0
         _update_title.frame = (_update_title.frame + 1) % len(state_list)
         t_us = state_list[_update_title.frame].time
         ax.set_title(
-            "Data Flow Durations (non-virtual) — time {}μs\n"
+            "Data Flow Durations (non-virtual, persistent) — time {}μs\n"
             "Inbound scale: [{:.1f},{:.1f}] μs   "
             "Outbound scale: [{:.1f},{:.1f}] μs   "
             "Aggregate (fill) scale: [{:.1f},{:.1f}] μs".format(
@@ -860,7 +930,7 @@ def animate_data_flow_durations_state_list(
         ax,
         geom,
         highlight_sequence,
-        device_to_color=agg_colors,   # interior fill mapping for aggregate bins
+        device_to_color=agg_colors,   # interior fill for aggregate bins
         video_seconds=video_seconds,
     )
     ani.event_source.add_callback(_update_title)
@@ -1083,7 +1153,7 @@ def make_mesh_graph_animation(
     title = f"{title}.mp4"
     ani = animate_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
     #ani = animate_durations_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
-    #ani = animate_data_flow_durations_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
+    ani = animate_data_flow_durations_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
     try:
         ani.save(title, writer="ffmpeg", dpi=dpi, bitrate=bitrate)
     except Exception as e:
