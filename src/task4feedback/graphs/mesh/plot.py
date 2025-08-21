@@ -1153,7 +1153,7 @@ def make_mesh_graph_animation(
     title = f"{title}.mp4"
     ani = animate_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
     #ani = animate_durations_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
-    ani = animate_data_flow_durations_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
+    #ani = animate_data_flow_durations_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
     try:
         ani.save(title, writer="ffmpeg", dpi=dpi, bitrate=bitrate)
     except Exception as e:
