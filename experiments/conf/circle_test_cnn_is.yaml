@@ -14,18 +14,6 @@ defaults:
   - eval: default
   - _self_
 
-
-sweep:
-  n_samples: 2
-  start: 70e9
-  stop: 130e9
-  step: 5e9
-  # exps: ["EFT", "ColWise", "ParMETIS", "GlbAvg", "BlockCyclic", "Oracle", "GraphMETISMapper"]
-  exps: ["EFT", "ParMETIS", "Oracle"]
-parmetis:
-  itr: 1000
-  unbalance: 1.225
-
 hydra:
   callbacks:
     git_info:
@@ -53,11 +41,13 @@ graph:
     seed: 1
 
 algorithm:
-  num_collections: 10000
+  num_collections: 4000
   rollout_steps: 0
   workers: 4
   ent_coef: 0.001
-  gamma: 1
+  sample_slices: True
+  slice_len: 16
+  gamma: 1 
   lmbda: 0.7
 
 optimizer:
@@ -86,4 +76,7 @@ runtime:
   batch_size: 5
   queue_threshold: 5
   max_in_flight: 64
+
+wandb:
+  enabled: true
 

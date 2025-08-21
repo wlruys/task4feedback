@@ -30,12 +30,13 @@ graph:
       n: 8
       steps: 60
       boundary_width: 1000
+      level_memory: 100e9
       workload_args:
         lower_bound: 1
         upper_bound: 5
   env:
-    change_priority: True
-    change_location: True
+    change_priority: False
+    change_location: False
     change_duration: False
     seed: 1
 
@@ -78,7 +79,4 @@ runtime:
 
 wandb:
   enabled: true
-
-eval:
-  eval_interval: 0
 

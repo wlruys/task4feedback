@@ -53,12 +53,13 @@ graph:
     seed: 1
 
 algorithm:
-  num_collections: 10000
+  num_collections: 4000
   rollout_steps: 80
   workers: 4
-  ent_coef: 0.2
+  ent_coef: 0.001
   gamma: 0.999
   lmbda: 0.95
+  sample_slices: True
 
 optimizer:
   lr: 2.5e-4

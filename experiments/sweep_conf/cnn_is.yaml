@@ -6,17 +6,19 @@ metric:
   goal: minimize
 parameters:
   reward.chance:
-    values: [0.05, 0.1, 0.2, 0.4, 0.8]
+    values: [0.5, 1]
   reward.random_start:
     values: [false, true]
   reward.terminal_reward:
     values: [false, true]
   seed:
-    values: [0, 100, 200]
+    values: [0, 100]
   algorithm.gamma:
     values: [1, 0.999, 0.99]
   algorithm.lmbda:
-    values: [0.95, 0.9, 0.7]
+    values: [0.95, 0.7]
+  algorithm.ent_coef:
+    values: [0.001, 0.01, 0.1]
 
 command:
   - ${env}
