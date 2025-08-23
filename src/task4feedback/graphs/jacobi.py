@@ -737,14 +737,6 @@ class JacobiGraph(ComputeDataGraph):
             f"vtxdist length {len(vtxdist)} does not match number of partitions + 1 ({n_compute_devices + 1})."
         )
 
-        # ---------- Convert to numpy-friendly outputs ----------
-        xadj_np = [np.asarray(x, dtype=np.int32) for x in xadj]
-        adjncy_np = [np.asarray(x, dtype=np.int32) for x in adjncy]
-        vwgt_np = [np.asarray(x, dtype=np.int32) for x in vwgt]
-        adjwgt_np = [np.asarray(x, dtype=np.int32) for x in adjwgt]
-        vsize_np = [np.asarray(x, dtype=np.int32) for x in vsize]
-        vtxdist_np = np.asarray(vtxdist, dtype=np.int32)
-        
         # ---------- Symmetry: take max weight for (u,v) and (v,u) ----------
         # Build max weight per undirected pair using global indices.
         edge_max = {}  # key: (min(u_gl, v_gl), max(u_gl, v_gl)) -> max_w
@@ -773,6 +765,14 @@ class JacobiGraph(ComputeDataGraph):
                     v_gl = int(adjncy[p][eidx])
                     a, b = (u_gl, v_gl) if u_gl < v_gl else (v_gl, u_gl)
                     adjwgt[p][eidx] = int(edge_max[(a, b)])
+
+        # ---------- Convert to numpy-friendly outputs ----------
+        xadj_np = [np.asarray(x, dtype=np.int32) for x in xadj]
+        adjncy_np = [np.asarray(x, dtype=np.int32) for x in adjncy]
+        vwgt_np = [np.asarray(x, dtype=np.int32) for x in vwgt]
+        adjwgt_np = [np.asarray(x, dtype=np.int32) for x in adjwgt]
+        vsize_np = [np.asarray(x, dtype=np.int32) for x in vsize]
+        vtxdist_np = np.asarray(vtxdist, dtype=np.int32)
 
         return (
             partitioned_tasks,

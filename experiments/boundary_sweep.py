@@ -31,11 +31,13 @@ from task4feedback.fastsim2 import ParMETIS_wrapper
 from task4feedback.graphs.mesh.partition import * 
 from task4feedback.graphs.base import weighted_cell_partition
 from task4feedback.graphs.mesh.plot import animate_mesh_graph
+from task4feedback.ml.models import FeatureDimConfig
+from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
 
 from helper.graph import make_graph_builder, GraphBuilder
 from helper.env import make_env
 from helper.parmetis import run_parmetis
-
+import math
 font_scale = 1.75
 mpl.rcParams["font.size"] = mpl.rcParams["font.size"] * font_scale
 
@@ -59,7 +61,8 @@ def seed_everything(seed: int = 0) -> None:
 
 def factorize(steps: int, include_one: bool) -> List[int]:
     f: List[int] = []
-    for i in range(max(1 if include_one else 2, steps // 30), steps // 5):
+    start = 1 if include_one else 0
+    for i in range(start, steps // 3):
         if steps % (i + 1) == 0:
             f.append(i + 1)
     return f
@@ -191,11 +194,11 @@ def add_metric_row(metrics: Dict[str, Dict[str, List[float]]], name: str, sim: "
         metrics[name]["eviction_movement"][idx] += (sum(list(sim.total_eviction_movement())[1:]) / 4)
 
 
-def average_last(metrics: Dict[str, Dict[str, List[float]]], names: Iterable[str], keys: Iterable[str], num_samples: int) -> None:
+def average_metric(metrics: Dict[str, Dict[str, List[float]]], names: Iterable[str], keys: Iterable[str], num_samples: int, idx: int = -1) -> None:
     for n in names:
         for k in keys:
             if metrics[n][k] and k != "time_history":
-                metrics[n][k][-1] /= num_samples
+                metrics[n][k][idx] /= num_samples
 
 # =====================================================================
 # ParMETIS distributed mapping
@@ -210,71 +213,123 @@ def run_parmetis_distributed(
     """
     Executes the ParMETIS portion with MPI, accumulating results in `metrics["ParMETIS"]`.
     """
-    sweep_list = [int(x) for x in list(np.linspace(int(cfg.sweep.start), int(cfg.sweep.stop), int(cfg.sweep.step)))]
     
     for sweep_idx, sweep_entry in enumerate(sweep_list):
-        best_cfg = (cfg.parmetis.unbalance,cfg.parmetis.itr)
         if rank == 0:
             cfg.graph.config.boundary_width = sweep_entry
             graph_builder = make_graph_builder(cfg, verbose=False)
             env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
-            records = {}
-        # Find the best configuration
-        for i in range(1):
-            for ub in np.linspace(1.1, 1.5, 5):
-                for itr in [10**x for x in np.linspace(-3, 4, 8)]:
-                    if rank == 0:
-                        temp = env.simulator.copy()
-                    run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, itr=itr, unbalance=ub)
-                    if rank == 0:
-                        print(temp.time, ub, itr, flush=True)
-                        records[(ub, itr)] = records.get((ub, itr), 0) + temp.time
-        if rank == 0:
-            best_cfg = min(records, key=records.get)
-            print(f"Best ParMETIS config for {sweep_entry} is ub of {best_cfg[0]} and itr of {best_cfg[1]}")
-        comm.barrier()
-        best_cfg = comm.bcast(best_cfg, root=0)
-        comm.barrier()
+        
+        # Find best ITR using recommended ub = 1.05
+        best_cfg = (None, None, float('inf'))  # (itr, ub, time)
 
+        for itr in [1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4]:
+            if rank == 0:
+                temp = env.simulator.copy()
+            run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, unbalance=1.05, itr=itr)
+            if rank == 0 and temp.time < best_cfg[2]:
+                best_cfg = (itr, 1.05, temp.time)
+                print(f"New best ITR {itr} with time {temp.time}", flush=True)
+        best_cfg = comm.bcast(best_cfg, root=0)
+        ub_lo, ub_hi = 1.01, 2.0
+        min_step   = 1e-3        # stop when step size shrinks below this
+        max_runs   = 50          # hard cap on total ParMETIS runs for this phase
+
+        # Initialize from existing best ub if present; otherwise use midpoint.
+        ub_cur = best_cfg[1]
+        ub_cur = max(min(ub_cur, ub_hi), ub_lo)
+
+        # Initial step = quarter of the range (conservative)
+        step = 0.25 * (ub_hi - ub_lo)
+        direction = 1.0  # +1 to go up, -1 to go down
+
+        runs = 0
+        while step >= min_step and runs < max_runs:
+            # Propose next ub and clamp to bounds
+            ub_next = ub_cur + direction * step
+            if ub_next < ub_lo or ub_next > ub_hi:
+                # Bounce off bound: reverse direction and shrink step
+                direction *= -1.0
+                step *= 0.5
+                continue
+            if rank == 0:
+                temp = env.simulator.copy()
+            run_parmetis(sim=(temp if rank == 0 else None), cfg=cfg, unbalance=ub_next, itr=best_cfg[0])
+            runs += 1
+            if rank == 0:
+                print(f"Tried ub {ub_next:.6f} with time {temp.time}", flush=True)
+                if temp.time < best_cfg[2]:
+                    # Improvement: accept move, keep direction, keep step
+                    ub_cur = ub_next
+                    best_cfg = (best_cfg[0], ub_cur, temp.time)
+                    print(f"New best ub {ub_cur:.6f} with time {temp.time}", flush=True)
+                else:
+                    # No improvement: reverse direction and halve step
+                    direction *= -1.0
+                    step *= 0.5
+            ub_cur = comm.bcast(ub_cur, root=0)
+            direction = comm.bcast(direction, root=0)
+            step = comm.bcast(step, root=0)
+        best_cfg = comm.bcast(best_cfg, root=0)
+                
         for _ in range(cfg.sweep.n_samples):
             if rank == 0:
                 env._reset()
                 eft_sim = env.simulator.copy()
                 eft_sim.disable_external_mapper()
                 eft_sim.run()
+                add_metric_row(metrics, "EFT", eft_sim, sweep_idx)
 
-            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, unbalance=best_cfg[0], itr=best_cfg[1])
-
+            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, unbalance=cfg.parmetis.unbalance, itr=cfg.parmetis.itr)
+            
             if rank == 0:
                 add_metric_row(metrics, "ParMETIS", env.simulator, sweep_idx)
-                assert metrics["EFT"]["time_history"][sweep_idx][len(metrics["ParMETIS"]["time_history"][sweep_idx])-1] == eft_sim.time, "Mismatch in EFT time history"
-
-    if rank == 0:
-        # average ParMETIS metrics over samples
-        for i in range(len(sweep_list)):
-            for key in MetricKeys:
-                if key != "time_history":
-                    metrics["ParMETIS"][key][i] /= num_samples
-
+                print(f"ParMETIS run complete: {env.simulator.time} s (EFT: {eft_sim.time} s, speedup: {eft_sim.time/env.simulator.time:.2f}x)", flush=True)
+            
 
 def run_host_experiments_and_plot(cfg: DictConfig):
     d2d_bandwidth = cfg.system.d2d_bw
-    sweep_list = [int(x) for x in list(np.linspace(int(cfg.sweep.start), int(cfg.sweep.stop), int(cfg.sweep.step)))]
+    cfg.system.mem = 2**62
+    if rank == 0:
+        graph_builder = make_graph_builder(cfg, verbose=False)
+        env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
+        data_stat = env.simulator_factory[0].input.graph.data.data_stat
+        print(data_stat)
+        cfg.graph.config.arithmetic_intensity = cfg.sweep.interior_ratio * (data_stat["interior_average_comm"] / data_stat["compute_average"]) * cfg.graph.config.arithmetic_intensity
+        boundary_scale = data_stat["interior_average_comm"] / data_stat["boundary_average_comm"]
+        sweep_list = [int(n * boundary_scale * cfg.graph.config.boundary_width) for n in cfg.sweep.list]
+        print(cfg.graph.config.arithmetic_intensity)
 
+    sweep_list = comm.bcast(sweep_list if rank == 0 else None, root=0)
+    
     experiment_names = cfg.sweep.exps
     mem_keys = experiment_names.copy()
     speedup_keys = experiment_names.copy()
     speedup_keys.remove("EFT")
+    seed_everything(cfg.seed)
+    
+    if rank == 0:
+        print(sweep_list)
+        metrics = init_metrics(experiment_names, MetricKeys)
+        for sweep_index, sweep_entry in enumerate(sweep_list):
+            append_zero_row(metrics, experiment_names, MetricKeys)
 
+    
+    
     if size < 4 and "ParMETIS" in experiment_names:
         print("ParMETIS is in experiment lists and it requires at least 4 ranks. Stopping...")
         exit()
-    if rank == 0:
-        seed_everything(cfg.seed)
+    elif "ParMETIS" in experiment_names:
+        run_parmetis_distributed(
+            cfg=cfg,
+            sweep_list=sweep_list,
+            num_samples=cfg.sweep.n_samples,
+            metrics=metrics if rank == 0 else None,
+        )
         
+    if rank == 0:
+        print(metrics)
         if "RL" in experiment_names:
-            from task4feedback.ml.models import FeatureDimConfig
-            from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
             graph_builder = make_graph_builder(cfg, verbose=False)
             env = make_env(graph_builder=graph_builder, cfg=cfg, eval=True, normalization=False)
             observer = env.get_observer()
@@ -296,17 +351,10 @@ def run_host_experiments_and_plot(cfg: DictConfig):
 
         # factorization for Oracle k
         include_one = "GlbAvg" in experiment_names
-        if "Oracle" in experiment_names:
-            f = factorize(cfg.graph.config.steps, include_one=include_one)
-            print(f"Factors of {cfg.graph.config.steps}: {f}")
+        f = factorize(cfg.graph.config.steps, include_one=include_one)
+        print(f"Factors of {cfg.graph.config.steps}: {f}")
         
-        print(sweep_list)
-
-        # --- Metrics
-        metrics = init_metrics(experiment_names, MetricKeys)
         dynamic_metis_k_best: List[int] = []
-        interior_compute_ratio = []
-        boundary_compute_ratio = []
 
         print(
             f"Memory,{str.join(',', [str(m) for m in experiment_names])}",
@@ -314,7 +362,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         )
 
         # ---- Sweep host-side (everything but ParMETIS)
-        for sweep_entry in sweep_list:
+        for sweep_index, sweep_entry in enumerate(sweep_list):
             # system config for this memory size
             cfg.graph.config.boundary_width = sweep_entry
             graph_builder = make_graph_builder(cfg, verbose=False)
@@ -323,21 +371,13 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                 env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
             else:
                 env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False, eval=True)
-                
-            # log interior-boundary compute ratios
-            interior_compute_ratio.append(env.get_graph().data.data_stat["interior_average_comm"] / env.get_graph().data.data_stat["compute_average"])
-            boundary_compute_ratio.append(env.get_graph().data.data_stat["boundary_average_comm"] / env.get_graph().data.data_stat["compute_average"])
             
             # per-k Oracle metrics
             if "Oracle" in experiment_names:
                 metis_metrics = init_metrics(f, MetricKeys)
-
-            # prepare accumulation bins for this memory point
-            append_zero_row(metrics, experiment_names, MetricKeys)
-            if "Oracle" in experiment_names:
                 append_zero_row(metis_metrics, f, MetricKeys)
 
-            for _ in range(cfg.sweep.n_samples):
+            for sample_idx in range(cfg.sweep.n_samples):
                 obs = env._reset()
 
                 # baseline graph and simulator
@@ -348,9 +388,10 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                 sim = sim_base.copy()
                 sim.disable_external_mapper()
                 sim.run()
-                add_metric_row(metrics, "EFT", sim)
-                eft_time = sim.time
-                print(f"EFT {eft_time}")
+                if "ParMETIS" in experiment_names:
+                    assert metrics["EFT"]["time_history"][sweep_index][sample_idx] == sim.time, "Mismatch in EFT time history"
+                else:
+                    add_metric_row(metrics, "EFT", sim, sweep_index)
 
                 # ---- Naïve / ColWise / GlbAvg
                 for name in ["Naive", "ColWise", "GlbAvg", "Quad", "Cyclic", "BlockCyclic", "GraphMETISMapper"]:
@@ -362,8 +403,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                         sim.external_mapper = mapper
                         sim.enable_external_mapper()
                         sim.run()
-                        print(f"{name} time={sim.time}")
-                        add_metric_row(metrics, name, sim)
+                        add_metric_row(metrics, name, sim, sweep_index)
 
                 # ---- Oracle (dynamic METIS over factors)
                 if "Oracle" in experiment_names:
@@ -375,62 +415,47 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                         sim.external_mapper = mapper
                         sim.enable_external_mapper()
                         sim.run()
-                        print(f"Oracle k={k}, time={sim.time}")
                         add_metric_row(metis_metrics, k, sim)
                 
                 if "RL" in experiment_names:
                     env.rollout(policy=model.actor, max_steps=10000, auto_reset=False, tensordict=obs)
-                    add_metric_row(metrics, "RL", env.simulator)
-                    assert env.EFT_baseline == eft_time, "Mismatch in EFT baseline time"
-                    
-
-            # --- Average over samples
-            average_last(metrics, experiment_names, MetricKeys, cfg.sweep.n_samples)
-            if "Oracle" in experiment_names:
-                average_last(metis_metrics, f, MetricKeys, cfg.sweep.n_samples)
-
+                    add_metric_row(metrics, "RL", env.simulator, sweep_index)
+            
             if "Oracle" in experiment_names:
                 # --- Pick best k for Oracle at this memory
-                min_time = 2 ** 62
+                min_time = float("inf")
+                best_k = 99999
                 for k in f:
-                    if k > 1 and metis_metrics[k]["time"][-1] < min_time:
-                        min_time = metis_metrics[k]["time"][-1]
+                    assert len(metis_metrics[k]["time"]) == 1
+                    if k > 1 and metis_metrics[k]["time"][0] < min_time:
+                        min_time = metis_metrics[k]["time"][0]
                         best_k = k
 
                 dynamic_metis_k_best.append(best_k)
                 # Copy best to "Oracle"
-                if best_k != 1:
-                    for key in MetricKeys:
-                        metrics["Oracle"][key][-1] = metis_metrics[best_k][key][-1]
-                else:
-                    for key in MetricKeys:
-                        metrics["Oracle"][key][-1] = metrics["GlbAvg"][key][-1]
+                for key in MetricKeys:
+                    metrics["Oracle"][key][sweep_index] = metis_metrics[best_k][key][0]        
 
-            print(f"{sweep_entry:_},", end="")
+            # --- Average over samples
+            average_metric(metrics, experiment_names, MetricKeys, cfg.sweep.n_samples, sweep_index)
+
+            print(f"{sweep_entry},", end="")
             for name in experiment_names:
                 if name == "Oracle":
                     print(
-                        f"{int(metrics[name]['time'][-1])}({dynamic_metis_k_best[-1]})",
+                        f"{int(metrics[name]['time'][sweep_index])}({dynamic_metis_k_best[-1]})",
                         end=",",
                     )
                 else:
-                    print(int(metrics[name]["time"][-1]), end=",")
+                    print(int(metrics[name]["time"][sweep_index]), end=",")
             print("")
-
-    # ---- Sync, broadcast sweep list to all ranks (for ParMETIS phase)
-    comm.Barrier()
-    sweep_list = comm.bcast(sweep_list if rank == 0 else None, root=0)
-    comm.Barrier()
-    if "ParMETIS" in experiment_names:
-        run_parmetis_distributed(
-            cfg=cfg,
-            sweep_list=sweep_list,
-            num_samples=cfg.sweep.n_samples,
-            metrics=metrics if rank == 0 else None,
-        )
 
     # ---- Post-processing, plots, and saving (rank 0 only)
     if rank == 0:
+        print(metrics)
+        
+        sweep_list = cfg.sweep.list
+        
         saved_lines = (
             f"# {cfg.graph.config.workload_args.traj_type} Trajectory\n"
             f"# Averaged over {cfg.sweep.n_samples} runs\n"
@@ -443,7 +468,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         )
         
         # -------- Save Figures & Logs
-        file_name = f"BoundaryWidth_{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}"
+        file_name = f"GraphSweep_{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}"
         try:
             file_name += f"_{cfg.graph.config.workload_args.scale}"
         except AttributeError:
@@ -476,7 +501,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                 "Sweep,TotalMem/ProblemSize," + ",".join([str(i) for i in metrics.keys()]) + "\n"
             )
             for idx in range(len(metrics["EFT"]["time"])):
-                ftxt.write(f"Problem size: {sweep_list[idx]}\n")
+                ftxt.write(f"Boundary / Interior: {sweep_list[idx]}\n")
                 for k in metrics.keys():
                     if k != "Oracle":
                         line = f"{k},"
@@ -492,15 +517,31 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         
         offset = 0
         xslice = slice(offset, None)  # Adjust this slice as needed
-        fig, axes = plt.subplots(2, 3, figsize=(19, 12), sharex=True)
-        sweep_list = [m for m in sweep_list]
+        fig, axes = plt.subplots(1, 4, figsize=(26, 6), sharex=True)
+        # Interior, Boundary vs Compute
+        interior_ratio = [cfg.sweep.interior_ratio for _ in sweep_list]
+        boundary_ratio = [i * cfg.sweep.interior_ratio for i in cfg.sweep.list]
+        
+        axes[0].plot(
+            sweep_list[xslice], interior_ratio[xslice], label="Interior", color="tab:blue", linewidth=4
+        )
+        axes[0].plot(
+            sweep_list[xslice], boundary_ratio[xslice], label="Boundary", color="tab:orange", linewidth=4
+        )
+        axes[0].set_title("Communication Time / Compute Time", fontsize=20)
+        axes[0].legend(loc="lower right", fontsize=16)
+        axes[0].grid()
+        # axes[0].set_xlabel("(d)", fontsize=20)
+        axes[0].tick_params(axis="both", which="major", labelsize=20)
+        axes[0].set_xscale("log", base=2)
+        
         speedup = {}
         for k in speedup_keys:
             speedup[k] = []
             for i in range(len(sweep_list)):
                 speedup[k].append(metrics["EFT"]["time"][i]/metrics[k]["time"][i])
         for k in experiment_names:
-            axes[0,0].plot(
+            axes[1].plot(
                 sweep_list[xslice],
                 metrics[k]["time"][xslice],
                 label=k,
@@ -508,44 +549,39 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                 color=colors[k],
                 linewidth=4,
             )
-        axes[0,0].set_title("Execution Time (s)", fontsize=20)
-        # axes[0,0].set_yscale("log")
-        axes[0,0].grid(axis="y", color="gray", linestyle="--", linewidth=0.5)
-        axes[0,0].legend(loc="upper right", fontsize=16)
-        axes[0,0].set_xlabel("(a)", fontsize=20)
-        axes[0,0].tick_params(axis="both", which="major", labelsize=20)
+        axes[1].set_title("Execution Time (s)", fontsize=20)
+        # axes[1].set_yscale("log")
+        axes[1].grid(axis="y", color="gray", linestyle="--", linewidth=0.5)
+        axes[1].legend(loc="upper right", fontsize=16)
+        # axes[1].set_xlabel("(a)", fontsize=20)
+        axes[1].tick_params(axis="both", which="major", labelsize=20)
+        axes[1].set_xscale("log", base=2)
         # 2) Relative Speedup vs EFT
         for k in speedup_keys:
-            axes[0,1].plot(
+            axes[2].plot(
                 sweep_list[xslice], speedup[k][xslice], label=k, color=colors[k], linewidth=4
             )
-        axes[0,1].set_title("Relative Speedup vs EFT", fontsize=20)
-        axes[0,1].legend(loc="upper right", fontsize=16)
-        axes[0,1].grid()
-        axes[0,1].set_xlabel("(b)", fontsize=20)
-        axes[0,1].tick_params(axis="both", which="major", labelsize=20)
+        axes[2].set_title("Relative Speedup vs EFT", fontsize=20)
+        axes[2].legend(loc="upper left", fontsize=16)
+        axes[2].grid()
+        # axes[2].set_xlabel("(b)", fontsize=20)
+        axes[2].tick_params(axis="both", which="major", labelsize=20)
+        axes[2].set_xscale("log", base=2)
         # 3) Max Memory Usage
         for k in mem_keys:
             # Divide every entry by 1e9
-            axes[0,2].plot(sweep_list[xslice], np.array(metrics[k]["mem_usage"][xslice]) / 1e9, label=k, color=colors[k], linewidth=4)
-            # axes[0,2].plot(sweep_list[xslice], metrics[k]["mem_usage"][xslice], label=k, color=colors[k], linewidth=4)
-        axes[0,2].legend(loc="lower left", fontsize=16)
-        axes[0,2].set_title("Peak Memory Occupation (GB)", fontsize=20)
-        axes[0,2].grid()
-        axes[0,2].set_xlabel("(c)", fontsize=20)
-        axes[0,2].tick_params(axis="both", which="major", labelsize=20)
-        
-        axes[1,0].set_title("Interior Compute Ratio", fontsize=20)
-        axes[1,0].plot(sweep_list[xslice], interior_compute_ratio[xslice], linewidth=4)
-        axes[1,0].set_xlabel("(d)", fontsize=20)
-        
-        axes[1,1].set_title("Boundary Compute Ratio", fontsize=20)
-        axes[1,1].plot(sweep_list[xslice], boundary_compute_ratio[xslice], linewidth=4)
-        axes[1,1].set_xlabel("(e)", fontsize=20)
+            axes[3].plot(sweep_list[xslice], np.array(metrics[k]["mem_usage"][xslice]) / 1e9, label=k, color=colors[k], linewidth=4)
+            # axes[3].plot(sweep_list[xslice], metrics[k]["mem_usage"][xslice], label=k, color=colors[k], linewidth=4)
+        axes[3].legend(loc="upper left", fontsize=16)
+        axes[3].set_title("Peak Memory Occupation (GB)", fontsize=20)
+        axes[3].grid()
+        # axes[3].set_xlabel("(c)", fontsize=20)
+        axes[3].tick_params(axis="both", which="major", labelsize=20)
+        axes[3].set_xscale("log", base=2)
 
         # # Shared x-axis label and layout
         fig.supxlabel(
-            "Boundary Width", fontsize=20
+            "Boundary Memory / Interior Memory", fontsize=20
         )
         fig.tight_layout()  # leave room at the bottom for the xlabel
         

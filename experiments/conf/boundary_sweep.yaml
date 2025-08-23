@@ -17,10 +17,9 @@ defaults:
 
 sweep:
   n_samples: 10
-  start: 100
-  stop: 5000
-  step: 20
+  list: [0.0078125, 0.015625, 0.03125, 0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
   exps: ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
+  interior_ratio: 1 # Interior / Compute time
 
 parmetis:
   itr: 1000
@@ -39,7 +38,7 @@ reward:
 
 graph:
   config:
-      arithmetic_intensity: 476.56
+      arithmetic_intensity: 1000
       memory_intensity: 0
       n: 8
       steps: 120
@@ -64,9 +63,6 @@ algorithm:
 
 optimizer:
   lr: 2.5e-4
-
-system:
-  mem: 999999999999
 
 feature:
   observer:
