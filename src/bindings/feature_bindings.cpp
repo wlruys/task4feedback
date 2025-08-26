@@ -311,6 +311,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_feature<TaskDataMappedCoordinates>(m, "TaskDataMappedCoordinatesFeature");
   bind_state_feature<CandidateVector>(m, "CandidateVectorFeature");
   bind_frame_feature<PrevReadSizeFeature>(m, "PrevReadSizeFeature");
+  bind_frame_feature<PrevMappedSizeFeature>(m, "PrevMappedSizeFeature");
   bind_state_feature<ReadDataLocationFeature>(m, "ReadDataLocationFeature");
   bind_state_feature<TaskMeanDurationFeature>(m, "TaskMeanDurationFeature");
 

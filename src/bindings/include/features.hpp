@@ -1351,6 +1351,7 @@ struct InputOutputTaskFeature : public StateFeature<InputOutputTaskFeature> {
     output[1] = static_cast<f_t>(data.get_total_size(static_graph.get_write(task_id)));
   }
 };
+
 struct ReadDataLocationFeature : public StateFeature<ReadDataLocationFeature> {
   ReadDataLocationFeature(const SchedulerState &state)
       : StateFeature<ReadDataLocationFeature>(state, NodeType::TASK) {
@@ -1404,7 +1405,6 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
   }
 
   size_t getFeatureDimImpl() const {
-    const auto &devices = this->state.get_devices();
     return frames;
   }
 
@@ -1419,6 +1419,40 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
     int i = 0;
     while (task_id >= 0 && i < frames) {
       output[i] =static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
+      task_id -= stride;
+      ++i;
+    }
+  }
+};
+
+struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
+  const int stride;
+  const int frames;
+  const bool add_current;
+  PrevMappedSizeFeature(const SchedulerState &state, int width, bool add_current, int frames)
+      : StateFeature<PrevMappedSizeFeature>(state, NodeType::TASK), stride(width * width),
+        add_current(add_current), frames(frames) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_devices();
+    return frames * (devices.size() - 1);
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &data = state.get_data();
+    const auto &task_runtime = state.get_task_runtime();
+    auto n_devices = this->state.get_devices().size() - 1; // Exclude CPU
+    if (!add_current) {
+      task_id -= stride;
+    }
+    int i = 0;
+    while (task_id >= 0 && i < frames) {
+      auto mapped_device = task_runtime.get_compute_task_mapped_device(task_id);
+      assert(mapped_device > 0);
+      output[i * n_devices + (mapped_device - 1)] =
+          static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
       task_id -= stride;
       ++i;
     }
