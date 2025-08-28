@@ -990,7 +990,7 @@ class BumpWorkload(DynamicWorkload):
             bumps = [b for b in bumps if b.is_alive()]
                 
             #Create a new bump with probability 0.1
-            if rng.rand() < kwargs['probability']:
+            if len(bumps) == 0:
                 bumps.append(create_bump_random_center(rng=rng, **kwargs['traj_specifics']))
 
             self.level_workload[j] = np.clip(
@@ -1001,6 +1001,106 @@ class BumpWorkload(DynamicWorkload):
             total_workload = np.sum(self.level_workload[j])
             assert( total_workload > 0), f"Total workload at level {j} is zero, cannot normalize."
             self.level_workload[j] /= total_workload
+
+class DiagonalWorkload(DynamicWorkload):
+
+    def generate_workload(
+        self,
+        num_levels: int,
+        start_step: int = 0,
+        lower_bound: float = 0.05,
+        upper_bound: float = 3.0,
+        seed: int = 0,
+        **kwargs,
+    ):
+        self.random = False
+
+        n_cells = self.num_cells
+        centroids = np.zeros((n_cells, 2))
+        for i, cell in enumerate(self.geom.cells):
+            centroids[i] = self.geom.get_centroid(i)
+
+        total_workload = np.sum(self.level_workload[start_step])
+        assert total_workload > 0, (
+            f"Total workload at level {start_step} is zero, cannot normalize."
+        )
+
+        x_min, x_max = self.geom.get_min_coordinate(0), self.geom.get_max_coordinate(0)
+        y_min, y_max = self.geom.get_min_coordinate(1), self.geom.get_max_coordinate(1)
+        width = x_max - x_min
+        height = y_max - y_min
+        domain_min_side = min(width, height)
+
+        # --- parameters ---
+        traj_specifics = kwargs["traj_specifics"]
+        # box width (fraction of domain min side)
+        side_frac = traj_specifics["width"]
+        # border softness (fraction of side). 0 -> hard edges
+        blur_frac = traj_specifics["blur_frac"]
+        # fraction of total time spent moving
+        transition_frac = traj_specifics["transition_frac"]
+
+        side = side_frac * domain_min_side
+        blur = blur_frac * side  # softness width in world units
+        half = 0.5 * side
+
+        # Start/End centers so the entire box stays inside domain
+        start_center = np.array([x_min + half, y_min + half], dtype=float)
+        end_center   = np.array([x_max - half, y_max - half], dtype=float)
+
+        # Precompute denominator to avoid div-by-zero for degenerate cases
+        travel_den = max(1, (num_levels - start_step - 1))
+
+        # Helper: smoothstep on [0,1]
+        def smoothstep01(t):
+            return t * t * (3.0 - 2.0 * t)
+
+        # --- generate per-level workloads ---
+        for j in range(start_step, num_levels):
+            # Progress with optional dwell plateaus at start/end controlled by transition_frac
+            raw_t = (j - start_step) / travel_den  # 0..1 across the whole horizon
+            if transition_frac >= 1.0:
+                t = raw_t
+            else:
+                pad = (1.0 - transition_frac) / 2.0
+                if raw_t < pad:
+                    t = 0.0          # dwell at start
+                elif raw_t > 1.0 - pad:
+                    t = 1.0          # dwell at end
+                else:
+                    t = (raw_t - pad) / transition_frac  # re-normalize middle segment to 0..1
+            center = (1.0 - t) * start_center + t * end_center
+
+            # Defensive clamp to ensure full box remains inside the domain
+            cx = float(np.clip(center[0], x_min + half, x_max - half))
+            cy = float(np.clip(center[1], y_min + half, y_max - half))
+
+            # Axis-aligned square with soft edges: use signed distance to the square.
+            # Positive inside, negative outside. We smooth values within a 'blur' band.
+            dx = np.abs(centroids[:, 0] - cx)
+            dy = np.abs(centroids[:, 1] - cy)
+            m = np.maximum(dx, dy)
+            d = (half - m)  # signed distance to the boundary: >=0 inside
+
+            if blur > 0:
+                # Map d ∈ [-blur, 0] -> [0,1] smoothly; clamp elsewhere
+                # w = 0  for d <= -blur, w = 1 for d >= 0
+                tt = np.clip((d + blur) / max(blur, 1e-12), 0.0, 1.0)
+                w = smoothstep01(tt)
+            else:
+                # Hard box: 1.0 inside, 0.0 outside
+                w = (d >= 0.0).astype(np.float64)
+
+            # Interpolate workload between lower and upper based on w
+            level = lower_bound + w * (upper_bound - lower_bound)
+
+            # Clip then normalize to keep total workload constant
+            level = np.clip(level, a_min=lower_bound, a_max=upper_bound)
+            total = np.sum(level)
+            assert total > 0, f"Total workload at level {j} is zero, cannot normalize."
+            level /= total
+
+            self.level_workload[j] = level
 
 
 class DebugWorkload(DynamicWorkload):
