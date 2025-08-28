@@ -20,7 +20,7 @@ def make_graph_function(
     graph_cfg: GraphConfig, cfg: DictConfig
 ) -> Callable[[GraphConfig, DictConfig], Graph]:
     def make_graph(system: System):
-        mesh = instantiate(cfg.mesh, L=1, n=graph_cfg.n)
+        mesh = instantiate(cfg.mesh, L=1, n=graph_cfg.n, domain_ratio=graph_cfg.domain_ratio)
 
         if cfg.init.partitioner == "metis":
             partitioner = metis_geometry_partition

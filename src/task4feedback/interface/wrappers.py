@@ -1754,6 +1754,7 @@ class CandidateObserver(ExternalObserver):
 class CnnSingleTaskObserver(ExternalObserver):
     """
     Observer that collects 2d flattened grid of task features.
+    ONLY WORKS FOR graphs with rectangular structured meshes
     """
 
     def reset(self):
@@ -1762,7 +1763,11 @@ class CnnSingleTaskObserver(ExternalObserver):
             self.graph_spec.max_candidates == 1
         ), "CnnSingleTaskObserver only supports 1 candidate"
 
-        self.task_ids = torch.Tensor([-1 for _ in range(graph.config.n**2)])
+        assert(hasattr(graph, "nx"))
+        assert(hasattr(graph, "ny"))
+        assert(hasattr(graph, "xy_from_id"))
+
+        self.task_ids = torch.Tensor([-1 for _ in range(graph.nx * graph.ny)])
         for task in graph.level_to_task[0]:
             self.task_ids[graph.xy_from_id(task)] = task
         if -1 in self.task_ids:
@@ -1793,7 +1798,7 @@ class CnnSingleTaskObserver(ExternalObserver):
                         "tasks": TensorDict(
                             {
                                 "attr": torch.zeros(
-                                    (graph.config.n**2, self.task_features.feature_dim),
+                                    (graph.nx * graph.ny, self.task_features.feature_dim),
                                     dtype=torch.float32,
                                 )
                             }
@@ -1885,7 +1890,7 @@ class CnnBatchTaskObserver(ExternalObserver):
                         "tasks": TensorDict(
                             {
                                 "attr": torch.zeros(
-                                    (graph.config.n**2, self.task_features.feature_dim),
+                                    (graph.nx * graph.ny, self.task_features.feature_dim),
                                     dtype=torch.float32,
                                 )
                             }
@@ -1904,15 +1909,15 @@ class CnnBatchTaskObserver(ExternalObserver):
             output = self.new_observation_buffer(self.graph_spec)
             raise Warning("Allocating new observation buffer, this is not efficient!")
         if self.task_ids is None:
-            self.task_ids = torch.Tensor([-1 for _ in range(graph.config.n**2)])
+            self.task_ids = torch.Tensor([-1 for _ in range(graph.nx * graph.ny)])
 
         # Get mappable candidates
         self.candidate_observation(output)
         assert (
-            output["aux", "candidates", "count"][0] == graph.config.n**2
+            output["aux", "candidates", "count"][0] == graph.nx * graph.ny
             or output["aux", "candidates", "count"][0] == 0
         ), "CnnBatchTaskObserver expects {} candidates but got {}.".format(
-            graph.config.n**2, output["aux", "candidates", "count"][0].item()
+            graph.nx * graph.ny, output["aux", "candidates", "count"][0].item()
         )
         for task_id in output["aux", "candidates", "idx"]:
             idx = graph.xy_from_id(task_id.item())

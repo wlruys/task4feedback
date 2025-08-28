@@ -255,7 +255,7 @@ void bind_feature_extractor(nb::module_ &m, const char *class_name) {
 
 template <typename FEType> void bind_frame_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
-      .def(nb::init<SchedulerState &, int, bool, int>(), nb::arg("state"), nb::arg("width"),
+      .def(nb::init<SchedulerState &, int, int, bool, int>(), nb::arg("state"), nb::arg("width"), nb::arg("length"),
            nb::arg("add_current") = false, nb::arg("frames") = 3)
       .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
@@ -267,10 +267,10 @@ template <typename FEType> void bind_frame_feature(nb::module_ &m, const char *c
            })
       .def_static(
           "create",
-          [](SchedulerState &state, int width, bool add_current,
+          [](SchedulerState &state, int width, int length, bool add_current,
              int frames) -> std::shared_ptr<IFeature> {
             return std::make_shared<FeatureAdapter<FEType>>(
-                FEType(state, width, add_current, frames));
+                FEType(state, width, length, add_current, frames));
           },
           nb::rv_policy::take_ownership);
 }

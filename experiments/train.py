@@ -97,11 +97,11 @@ def configure_training(cfg: DictConfig):
             eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
-            seed=cfg.seed   ,
+            seed=cfg.seed
         )
 
 
-@hydra.main(config_path="conf", config_name="config.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
     if cfg.wandb.enabled:
         wandb.init(

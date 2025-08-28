@@ -12,5 +12,6 @@ observer:
     max_edges_tasks_devices: 1
     max_candidates: 1
   width: NoNeedToChange
+  length: NoNeedToChange
   prev_frames: 1
   batched: false

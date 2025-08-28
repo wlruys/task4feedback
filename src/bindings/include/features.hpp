@@ -1398,8 +1398,8 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
   const int stride;
   const int frames;
   const bool add_current;
-  PrevReadSizeFeature(const SchedulerState &state, int width, bool add_current, int frames)
-      : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK), stride(width * width),
+  PrevReadSizeFeature(const SchedulerState &state, int width, int length, bool add_current, int frames)
+      : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK), stride(width * length),
         add_current(add_current), frames(frames) {
   }
 

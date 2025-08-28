@@ -6,6 +6,11 @@ from typing import Optional, Self
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import observation_to_heterodata
 from dataclasses import dataclass
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Tuple, List
+
 
 # from task4feedback.interface.wrappers import (
 #     observation_to_heterodata_truncate as observation_to_heterodata,
@@ -820,6 +825,7 @@ class OutputHead(nn.Module):
         self.network = nn.Sequential(*layers)
 
     def forward(self, x):
+        print("OutputHead input:", x.shape)
         return self.network(x)
 
 
@@ -2681,6 +2687,7 @@ class CNNSingleStateNet(nn.Module):
         activation: DictConfig = None,
         initialization: DictConfig = None,
         width: int = 4,
+        length: int = 4,
     ):
         super().__init__()
         self.in_channels = feature_config.task_feature_dim
@@ -2689,6 +2696,9 @@ class CNNSingleStateNet(nn.Module):
         hidden_ch = hidden_channels
         n_layers = width - 1
         self.width = width
+        self.length = length 
+
+        #TODO(wlr); Continue modifying this for rectangular domains
 
         blocks = []
         ch = self.in_channels
@@ -2719,7 +2729,7 @@ class CNNSingleStateNet(nn.Module):
 
         self.net = nn.Sequential(*blocks)
         self.output_dim = (
-            ((self.width**2) * ch + 1) if self.add_progress else ((self.width**2) * ch)
+            ((self.width*self.length) * ch + 1) if self.add_progress else ((self.width*self.length) * ch)
         )
         # Initialize CNN weights
         for m in self.net.modules():
@@ -2733,6 +2743,7 @@ class CNNSingleStateNet(nn.Module):
     def forward(self, x):
         # x is a TensorDict; x.batch_size might be [], [N], [N,M], etc.
         width = self.width
+        length = self.length 
         batch_size = x.batch_size
 
         # Pull out the tasks tensor: shape = (*batch_size, tasks, in_channels)
@@ -2748,12 +2759,12 @@ class CNNSingleStateNet(nn.Module):
         # Now we have a 3-D tensor (flat_bs, tasks, in_channels)
         x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
 
-        # Convert the 'tasks' dim back into (width, width) spatial dims
+        # Convert the 'tasks' dim back into (width, length) spatial dims
         x_flat = x_flat.view(
-            flat_bs, width, width, in_channels
-        ).permute(  # (flat_bs, W, W, C_in)
+            flat_bs, width, length, in_channels
+        ).permute(  # (flat_bs, W, L, C_in)
             0, 3, 1, 2
-        )  # (flat_bs, C_in, W, W)
+        )  # (flat_bs, C_in, W, L)
 
         # Run through your convolutional net
         x_flat = self.net(x_flat)
@@ -2774,7 +2785,268 @@ class CNNSingleStateNet(nn.Module):
             progress_feature = x["aux", "progress"]
             x_out = torch.cat([x_out, progress_feature], dim=-1)
         return x_out
+    
 
+def _ceil_div(a: int, b: int) -> int:
+    return (a + b - 1) // b
+
+
+def _compute_num_downsampling_layers(length: int, width: int, minimum_resolution: int) -> int:
+    """
+    Each layer halves H and W via 2x2 stride-2 pooling.
+    """
+    h, w = length, width
+    layers = 0
+    while min(h, w) >= 2 * minimum_resolution:
+        h = (h // 2)
+        w = (w // 2)
+        layers += 1
+    return layers
+
+
+class UNetRectangularEncoder(nn.Module):
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        hidden_channels: int,
+        width: int,
+        length: int,
+        add_progress: bool = False,
+        minimum_resoluation: int = 4,  
+        activation: Optional[DictConfig] = None,
+        initialization: Optional[DictConfig] = None,
+    ):
+        super().__init__()
+        self.output_keys = []
+        self.width = int(width)
+        self.length = int(length)
+        self.in_channels = int(feature_config.task_feature_dim)
+        self.hidden_channels = int(hidden_channels)
+        self.add_progress = bool(add_progress)
+
+        self.minimum_resolution = int(minimum_resoluation)
+
+        self.num_layers = _compute_num_downsampling_layers(self.length, self.width, self.minimum_resolution)
+
+        print(f"UNetRectangularEncoder: length={self.length}, width={self.width}, num_layers={self.num_layers}")
+
+        self.enc_blocks = nn.ModuleList()
+        channels = self.in_channels
+        for i in range(self.num_layers):
+            out_channels = self.hidden_channels * (2 ** i)
+            print(f"  Enc block {i}: in_ch={channels}, out_ch={out_channels}")
+            block = nn.Sequential(
+                nn.Conv2d(channels, out_channels, kernel_size=3, padding=1, bias=True),
+                nn.LeakyReLU(negative_slope=0.01, inplace=True),
+            )
+            self.enc_blocks.append(block)
+            channels = out_channels
+            self.output_keys.append(f"enc_{i}")
+
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=1, padding=0, bias=True),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+        )
+
+        print(f"  Bottleneck: in_ch={channels}, out_ch={channels}")
+        self.output_dim = channels
+        self.output_keys.append("embed")
+
+    def forward(self, x):
+        single = (x.batch_size == torch.Size([]))
+
+        xt = x["nodes", "tasks", "attr"]
+        if single:
+            xt = xt.unsqueeze(0)  # -> (1, tasks, C)
+
+        *batch_shape, tasks, in_ch = xt.shape
+        assert in_ch == self.in_channels, f"in_channels mismatch: expected {self.in_channels}, got {in_ch}"
+        assert tasks == self.length * self.width, (
+            f"tasks dimension {tasks} must equal length*width = {self.length*self.width}"
+        )
+        flat_bs = 1
+        for d in batch_shape:
+            flat_bs *= int(d)
+
+        # Reshape to (B, C, H, W) with H=length, W=width
+        x_img = xt.reshape(flat_bs, self.length, self.width, self.in_channels).permute(0, 3, 1, 2)
+
+        # Encoder
+        enc_feats_flat = []
+        h = x_img
+        for block in self.enc_blocks:
+            print("Before enc block:", h.shape)
+            h = block(h)
+            enc_feats_flat.append(h)  # (B, C, H, W)
+            print("After enc block:", h.shape)
+            h = self.pool(h)          # (B, C, H//2, W//2)
+            print("After pool:", h.shape)
+
+        b_map_flat = self.bottleneck(h)  # (B, C_bottleneck, Hb, Wb)
+
+        # Unflatten to original batch shape
+        def unflatten(t):
+            return t.view(*batch_shape, *t.shape[1:]) if not single else t.squeeze(0)
+
+        enc_feats = [unflatten(f) for f in enc_feats_flat]
+        b_map = unflatten(b_map_flat)
+
+        return (*enc_feats, b_map)
+
+
+class UNetRectangularDecoder(nn.Module):
+    input_keys = ["observation"]
+
+    def __init__(
+        self,
+        input_dim: int,               
+        hidden_channels: int,
+        width: int,
+        length: int,
+        output_dim: int,              # number of logits per pixel
+        minimum_resolution: int = 4,
+        activation: Optional[DictConfig] = None,
+        initialization: Optional[DictConfig] = None,
+        layer_norm: bool = False,
+        add_progress: bool = False,   
+        progress_dim: int = 0,        
+    ):
+        super().__init__()
+        self.width = int(width)
+        self.length = int(length)
+        self.hidden_channels = int(hidden_channels)
+        self.output_dim = int(output_dim)
+        self.input_dim = int(input_dim)
+        self.minimum_resolution = int(minimum_resolution)
+        self.add_progress = bool(add_progress)
+        self.progress_dim = int(progress_dim)
+
+        self.num_layers = _compute_num_downsampling_layers(self.length, self.width, self.minimum_resolution)
+
+        self.up_blocks = nn.ModuleList()
+        self.dec_blocks = nn.ModuleList()
+
+        # Channels at stage i of encoder were out_ch = hidden_channels * 2**i
+        # Bottleneck channels equal hidden_channels * 2**(num_layers-1) if num_layers>0,
+        expected_bottleneck_ch = self.hidden_channels * (2 ** max(self.num_layers - 1, 0))
+        assert self.input_dim == expected_bottleneck_ch, (
+            f"Decoder input_dim={self.input_dim} must equal encoder bottleneck channels "
+            f"{expected_bottleneck_ch} (hidden_channels={self.hidden_channels}, layers={self.num_layers})"
+        )
+
+        # Build transpose-conv upsamplers and decoders
+        for i in reversed(range(self.num_layers)):
+            in_ch = self.hidden_channels * (2 ** max(i, 0)) if i == (self.num_layers - 1) else self.hidden_channels * (2 ** (i + 1))
+            # For the first up-block (i = num_layers-1), input is bottleneck: hidden*2**(num_layers-1)
+            # For the next ones, input is hidden*2**(i+1) from previous decoder output
+            out_ch = self.hidden_channels * (2 ** i) if self.num_layers > 0 else self.hidden_channels
+
+            self.up_blocks.append(
+                nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
+            )
+
+            # After concatenation with skip (same out_ch), the decoder sees 2*out_ch channels
+            self.dec_blocks.append(
+                nn.Sequential(
+                    nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1, bias=True),
+                    nn.ReLU(inplace=True),
+                )
+            )
+
+        for i in range(self.num_layers):
+            self.input_keys.append(f"enc_{i}")
+        self.input_keys.append("embed")  # bottleneck map
+
+        self.out_conv = nn.Conv2d(
+            self.hidden_channels if self.num_layers == 0 else self.hidden_channels * (2 ** 0),
+            self.output_dim,
+            kernel_size=1,
+        )
+
+    @staticmethod
+    def _align_and_concat(up_feat: torch.Tensor, enc_feat: torch.Tensor) -> torch.Tensor:
+        """
+        Pad/crop up_feat (B, C, H_up, W_up) to match enc_feat (B, C, H_enc, W_enc), then concat on channels.
+        Works for odd/even dimension mismatches caused by floor pooling.
+        """
+        uh, uw = up_feat.shape[-2:]
+        eh, ew = enc_feat.shape[-2:]
+        dh, dw = eh - uh, ew - uw
+        if dh > 0 or dw > 0:
+            pad = [max(dw // 2, 0), max(dw - dw // 2, 0), max(dh // 2, 0), max(dh - dh // 2, 0)]
+            up_feat = F.pad(up_feat, pad)
+        elif dh < 0 or dw < 0:
+            top = (-dh) // 2
+            left = (-dw) // 2
+            up_feat = up_feat[..., top: top + eh, left: left + ew]
+        return torch.cat([up_feat, enc_feat], dim=1)
+
+    def forward(self, obs, *features):
+        single = (obs.batch_size == torch.Size([]))
+        enc_feats = features[:-1]
+        b_map = features[-1]  # (*batch_shape, Cb, Hb, Wb)
+
+        print(f"Decoder input b_map shape: {b_map.shape}")
+        print(f"Decoder input enc_feats shapes: {[e.shape for e in enc_feats]}")
+
+        # Flatten all leading batch dims to a single dimension to simplify the convs.
+        def flatten_batch(t: torch.Tensor):
+            if single:
+                return t.unsqueeze(0)
+            *batch_shape, c, h, w = t.shape
+            flat_bs = 1
+            for d in batch_shape:
+                flat_bs *= int(d)
+            return t.view(flat_bs, c, h, w), batch_shape, flat_bs
+
+        # Normalize everything to (flat_bs, C, H, W)
+        if single:
+            b_map_flat = b_map.unsqueeze(0)
+        else:
+            b_map_flat, batch_shape, flat_bs = flatten_batch(b_map)
+
+        enc_flat = []
+        for e in enc_feats:
+            if single:
+                enc_flat.append(e.unsqueeze(0))
+            else:
+                ef, _, _ = flatten_batch(e)
+                enc_flat.append(ef)
+
+        # Optional FiLM from progress on the bottleneck map
+        if self.add_progress:
+            prog = obs["aux", "progress"]
+            if single:
+                prog = prog.unsqueeze(0)  # (1, P)
+            gamma_beta = self.film(prog)  # (B, 2*C)
+            gamma, beta = gamma_beta.chunk(2, dim=-1)
+            # reshape to (B, C, 1, 1) and apply
+            gamma = gamma.unsqueeze(-1).unsqueeze(-1)
+            beta = beta.unsqueeze(-1).unsqueeze(-1)
+            b_map_flat = gamma * b_map_flat + beta
+
+        # If there are no downsampling layers, we only have the "bottleneck" which is same resolution as input
+        h = b_map_flat
+        if self.num_layers > 0:
+            for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(enc_flat)):
+                h = up(h)
+                h = self._align_and_concat(h, enc)
+                h = dec(h)
+
+        logits_map = self.out_conv(h)  # (flat_bs, output_dim, H, W)
+
+        if single:
+            # reshape to (H*W, output_dim)
+            logits = logits_map.permute(0, 2, 3, 1).reshape(-1, self.output_dim)
+            logits = logits.squeeze(0)
+            return logits  # (length*width, output_dim)
+        else:
+            # unflatten to (*batch_shape, H*W, output_dim)
+            *_, H, W = logits_map.shape
+            logits_flat = logits_map.permute(0, 2, 3, 1).reshape(-1, H * W, self.output_dim)
+            return logits_flat.view(*batch_shape, H * W, self.output_dim)
 
 class UNetEncoder(nn.Module):
     def __init__(
@@ -2782,18 +3054,24 @@ class UNetEncoder(nn.Module):
         feature_config: FeatureDimConfig,
         hidden_channels: int,
         width: int,
+        length: int,
         add_progress: bool = False,
+        minimum_resoluation: int = 4,
         activation: DictConfig = None,
         initialization: DictConfig = None,
     ):
         super().__init__()
         self.output_keys = []
         self.width = width
+        self.length = length 
         self.in_channels = feature_config.task_feature_dim
         self.hidden_channels = hidden_channels
         self.add_progress = add_progress
+        
+        #TODO(wlr); Continue modifying this for rectangular domains
         # Determine number of downsampling layers based on width
         self.num_layers = int(math.floor(math.log2(width)))
+
         # Create encoder conv blocks dynamically
         self.enc_blocks = nn.ModuleList()
 
@@ -2822,6 +3100,8 @@ class UNetEncoder(nn.Module):
         self.output_dim = channels + (1 if add_progress else 0)
         self.output_keys.append("embed")
 
+        print(f"Output keys: {self.output_keys}")
+
     # def forward(self, obs):
     #     single = obs.batch_size == torch.Size([])
     #     x = obs["nodes", "tasks", "attr"]
@@ -2849,6 +3129,7 @@ class UNetEncoder(nn.Module):
         # x is a TensorDict; x.batch_size might be [], [N], [N,M], etc.
         single = x.batch_size == torch.Size([])
         width = self.width
+        length = self.length
 
         # 1) Pull out the tasks tensor: shape = (*batch_shape, tasks, in_channels)
         x_tasks = x["nodes", "tasks", "attr"]
@@ -2868,7 +3149,7 @@ class UNetEncoder(nn.Module):
 
         # 4) Convert 'tasks' → spatial dims (width × width), then to (flat_bs, C_in, W, W)
         x_flat = x_flat.view(
-            flat_bs, width, width, in_channels
+            flat_bs, width, length, in_channels
         ).permute(  # (flat_bs, W, W, C_in)
             0, 3, 1, 2
         )  # (flat_bs, C_in, W, W)
@@ -2879,6 +3160,7 @@ class UNetEncoder(nn.Module):
         for block in self.enc_blocks:
             x_enc = block(x_enc)
             enc_feats_flat.append(x_enc)
+            print(f"Encoder feature shape: {x_enc.shape}")
             x_enc = self.pool(x_enc)
 
         # 6) Bottleneck + flatten spatial → (flat_bs, feat_dim)
@@ -2904,7 +3186,7 @@ class UNetEncoder(nn.Module):
 
         return (*enc_feats, b)
 
-
+#TODO(wlr): The current code breaks for non powers of 2. FIX THIS
 class UNetDecoder(nn.Module):
     input_keys = ["observation"]
 
@@ -2913,17 +3195,21 @@ class UNetDecoder(nn.Module):
         input_dim: int,
         hidden_channels: int,
         width: int,
+        length: int,
         output_dim: int,
+        minimum_resolution: int, 
         activation: DictConfig = None,
         initialization: DictConfig = None,
         layer_norm: bool = False,
     ):
         super().__init__()
         self.width = width
+        self.length = length
         self.hidden_channels = hidden_channels
         self.output_dim = output_dim
         self.input_dim = input_dim
-        self.num_layers = int(math.floor(math.log2(width)))
+        self.num_layers = int(math.floor(math.log2(min(self.width, self.length))))
+
         # Create upsampling and decoder blocks dynamically
         self.up_blocks = nn.ModuleList()
         self.dec_blocks = nn.ModuleList()
@@ -2979,7 +3265,7 @@ class UNetDecoder(nn.Module):
                 flat_bs,
                 self.hidden_channels * (2 ** (self.num_layers - 1)),
                 self.width // (2**self.num_layers),
-                self.width // (2**self.num_layers),
+                self.length // (2**self.num_layers), 
             )
         else:
             b = b.unsqueeze(0)
@@ -2987,19 +3273,141 @@ class UNetDecoder(nn.Module):
                 1,
                 self.hidden_channels * (2 ** (self.num_layers - 1)),
                 self.width // (2**self.num_layers),
-                self.width // (2**self.num_layers),
+                self.length // (2**self.num_layers), 
             )
 
         for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(enc_feats)):
             b = up(b)
+            print(f"Decoder upsampled shape: {b.shape}")
             if not single:
                 enc = enc.view(flat_bs, *enc.shape[len(batch_shape) :])
             b = self._align_and_concat(b, enc)
+            print(f"Decoder after concat shape: {b.shape}")
             b = dec(b)
+            print(f"Decoder after concat and decode shape: {b.shape}")
         logits = self.out_conv(b)
         logits = logits.permute(0, 2, 3, 1).flatten(1, 2)
         if single:
             logits = logits.squeeze(0)
         else:
-            logits = logits.view(*batch_shape, self.width * self.width, -1)
+            logits = logits.view(*batch_shape, self.width * self.length, -1)
+
+        print(f"Decoder output logits shape: {logits.shape}")
         return logits
+
+
+class PooledOutputHead(nn.Module):
+    """
+    Minimal multi-scale head:
+      GAP (per scale) -> LayerNorm -> Linear(C_i -> D) -> SUM (over scales) -> OutputHead
+    Expects encoder outputs: (*enc_feats, b_map), each shaped (*batch, C_i, H_i, W_i) or (C_i, H_i, W_i).
+    """
+
+    def __init__(
+        self,
+        input_dim: int,              # shared D
+        hidden_channels: int,         # hidden size for OutputHead
+        output_dim: int,            # e.g. 1 for V(s)
+        activation=None,
+        initialization=None,
+        layer_norm: bool = True,
+    ):
+        super().__init__()
+        self.proj_dim = int(input_dim)
+        self.output_hidden = int(hidden_channels)
+        self.output_dim = int(output_dim)
+
+        # Built on first forward (we infer the per-scale channel dims from tensors)
+        self._built = False
+        self._proj = nn.ModuleList()   # per-scale: LN -> Linear(C_i -> D)
+        self._head = None
+
+        self._oh_kwargs = dict(
+            activation=activation,
+            initialization=initialization,
+            layer_norm=layer_norm,
+        )
+
+    # --------- helpers ---------
+    @staticmethod
+    def _flatten_to_BCHW(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...]]:
+        # Accept (C,H,W) or (*batch,C,H,W); return (B,C,H,W), batch_shape
+        if x.dim() == 3:  # (C,H,W)
+            return x.unsqueeze(0), ()
+        elif x.dim() >= 4:
+            *batch, C, H, W = x.shape
+            B = 1
+            for d in batch: B *= int(d)
+            return x.reshape(B, C, H, W), tuple(batch)
+        else:
+            raise ValueError(f"Expected (C,H,W) or (*batch,C,H,W), got {tuple(x.shape)}")
+
+    @staticmethod
+    def _unflatten_from_B(xB: torch.Tensor, batch_shape: Tuple[int, ...]) -> torch.Tensor:
+        return xB.squeeze(0) if not batch_shape else xB.view(*batch_shape, *xB.shape[1:])
+
+    def _build_once(self, featsB: List[torch.Tensor]) -> None:
+        # featsB: list of (B, C_i, H_i, W_i)
+        in_dims = [f.shape[1] for f in featsB]  # C_i for each scale
+        print(f"PooledOutputHead: building with in_dims={in_dims}, proj_dim={self.proj_dim}, output_dim={self.output_dim}")
+
+        # Per-scale LN + Linear(C_i -> D)
+        self._proj = nn.ModuleList([
+            nn.Sequential(
+                nn.LayerNorm(Ci),
+                nn.Linear(Ci, self.proj_dim, bias=False),
+            ) for Ci in in_dims
+        ])
+
+        # Head input is just D (we SUM across scales)
+        self._head = OutputHead(
+            input_dim=self.proj_dim,
+            hidden_channels=self.output_hidden,
+            output_dim=self.output_dim,
+            **self._oh_kwargs,
+        )
+        self._built = True
+
+    # --------- forward ---------
+    def forward(self, *encoder_outputs: torch.Tensor) -> torch.Tensor:
+        if len(encoder_outputs) == 0:
+            raise ValueError("PooledOutputHead expects at least one encoder feature.")
+
+        # Flatten each feature to (B,C,H,W) and check batch shapes match
+        featsB = []
+        batch_shape_ref = None
+        for f in encoder_outputs:
+            fB, batch_shape = self._flatten_to_BCHW(f)
+            if batch_shape_ref is None:
+                batch_shape_ref = batch_shape
+            elif batch_shape != batch_shape_ref:
+                raise ValueError(f"Mismatched batch shapes: {batch_shape} vs {batch_shape_ref}")
+            featsB.append(fB)
+
+        # Lazy build (infer channels & number of scales)
+        if not self._built:
+            self._build_once(featsB)
+            self.to(featsB[0].device)
+
+        # For each scale: GAP -> (B,C_i) -> LN+Linear -> (B,D)
+        zs = []
+        for fB, proj in zip(featsB, self._proj):
+            print(f"Feature map shape before GAP: {fB.shape}")
+            z = F.adaptive_avg_pool2d(fB, 1).flatten(1)  # (B, C_i)
+            print(f"Feature vector shape after GAP: {z.shape}")
+            z = proj(z)                                  # (B, D)
+            print(f"Projected feature shape after LN+Linear: {z.shape}")
+            zs.append(z)
+
+        # Sum across scales -> (B, D)
+        v = torch.stack(zs, dim=1).sum(dim=1)
+
+        # Output MLP
+        yB = self._head(v)  # (B, output_dim)
+
+        print(f"Output head final output shape: {yB.shape}")
+
+        output = self._unflatten_from_B(yB, batch_shape_ref or ())
+        print(f"Output head unflattened output shape: {output.shape}")
+
+        return output

@@ -1,5 +1,6 @@
 from task4feedback.interface import SimulatorFactory, SimulatorInput, create_graph_spec 
 from task4feedback.interface import TaskNoise 
+from task4feedback.graphs.jacobi import get_length_from_config
 from typing import Callable
 from .graph import GraphBuilder
 import hydra
@@ -18,6 +19,7 @@ from typing import Optional
 from dataclasses import dataclass
 import torch
 from pathlib import Path
+import numpy as np 
 
 def create_system(cfg: DictConfig):
     system = hydra.utils.instantiate(cfg.system)
@@ -36,17 +38,22 @@ def create_runtime_reward(cfg: DictConfig):
 
 def create_observer_factory(cfg: DictConfig):
     graph_spec = hydra.utils.instantiate(cfg.feature.observer.spec)
+    graph_config = hydra.utils.instantiate(cfg.graph.config)
+
     if (
         hasattr(cfg.feature.observer, "width")
         and hasattr(cfg.feature.observer, "prev_frames")
         and hasattr(cfg.feature.observer, "batched")
     ):
         if cfg.feature.observer.batched:
-            graph_spec.max_candidates = cfg.graph.config.n**2
+            width = graph_config.n
+            length = get_length_from_config(graph_config)
+            graph_spec.max_candidates = width * length
         observer_factory = hydra.utils.instantiate(
             cfg.feature.observer,
             spec=graph_spec,
-            width=cfg.graph.config.n,
+            width=width,
+            length=get_length_from_config(graph_config),
             prev_frames=cfg.feature.observer.prev_frames,
             batched=cfg.feature.observer.batched,
         )
@@ -95,7 +102,8 @@ def make_env(
     task_noise = create_task_noise(cfg, graph.static_graph)
 
     if cfg.feature.observer.batched:
-        top_k_candidates = cfg.graph.config.n**2
+        assert(hasattr(graph, "nx") and hasattr(graph, "ny"))
+        top_k_candidates = graph.nx * graph.ny
     else:
         top_k_candidates = 1
 
@@ -112,7 +120,7 @@ def make_env(
         change_workload=cfg.graph.env.change_workload if hasattr(cfg.graph.env, "change_workload") else False,
         seed=cfg.graph.env.seed,
         max_samples_per_iter=(
-            (len(graph)//(cfg.graph.config.n**2) + 1
+            (len(graph)//(graph.nx * graph.ny) + 1
             if cfg.algorithm.rollout_steps == 0 
             else cfg.algorithm.rollout_steps + 1) if cfg.feature.observer.batched else (len(graph) + 1
             if cfg.algorithm.rollout_steps == 0 

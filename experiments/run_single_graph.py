@@ -67,7 +67,7 @@ def configure_training(cfg: DictConfig):
             bandwidth=cfg.system.d2d_bw,
             mode="metis",
             offset=1,
-            level_chunks=5,
+            level_chunks=1,
         )
         graph.align_partitions()
         env.simulator.enable_external_mapper()

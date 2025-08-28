@@ -1,9 +1,9 @@
 defaults:
   - graph: dynamic_jacobi_circle
-  - reward: ieft
+  - reward: incremental_schedule
   - system: h100
   - feature: cnn_batch
-  - network: cnn_batch_lstm
+  - network: cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -27,12 +27,9 @@ reward:
 
 graph:
   config:
-      n: 8
-      steps: 60
+      n: 3
+      steps: 10
       boundary_width: 1000
-      workload_args:
-        lower_bound: 0.5
-        upper_bound: 1.5
   env:
     change_priority: True
     change_location: True
@@ -43,11 +40,11 @@ algorithm:
   num_collections: 10000
   rollout_steps: 0
   workers: 4
-  ent_coef: 0.001
-  sample_slices: True
+  ent_coef: 0
+  sample_slices: False
   slice_len: 16
-  gamma: 1 
-  lmbda: 0.7
+  gamma: 0.999
+  lmbda: 0.95
 
 optimizer:
   lr: 2.5e-4
@@ -57,13 +54,13 @@ system:
 
 feature:
   observer:
-    prev_frames: 5
+    prev_frames: 2
     batched: true
 
 network:
   layers:
-    lstm:
-      hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
+    # lstm:
+    #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
     state:
       hidden_channels: 16
     actor:
@@ -81,4 +78,6 @@ wandb:
 
 eval:
   eval_interval: 100
+  max_frames: 400
+  video_seconds: 15
 

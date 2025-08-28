@@ -223,6 +223,7 @@ def run_ppo(
             average_gae=False,
             device=ppo_config.update_device,
             vectorized=(False if ppo_config.compile_advantage else True),
+            deactivate_vmap=True,
         )
     elif ppo_config.advantage_type == "vtrace":
         training.info("Using VTrace for advantage estimation")

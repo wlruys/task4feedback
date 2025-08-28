@@ -6,3 +6,4 @@ defaults:
 _target_: task4feedback.ml.models.CNNSingleStateNet
 hidden_channels: 16
 width: NoNeedToChange
+length: NoNeedToChange

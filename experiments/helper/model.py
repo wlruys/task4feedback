@@ -12,6 +12,7 @@ from rich import print as rprint
 from torchrl.envs import ExplorationType
 from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
 from pathlib import Path
+from task4feedback.graphs.jacobi import get_length_from_config
 
 def create_actor_critic_models(
     cfg: DictConfig, feature_cfg: FeatureDimConfig
@@ -59,19 +60,25 @@ def create_actor_critic_models(
 def create_td_actor_critic_models(
     cfg: DictConfig, feature_cfg: FeatureDimConfig
 ) -> tuple[nn.Module, LSTMModule | None]:
+        
+    graph_config = instantiate(cfg.graph.config)
+
     lstm_mod = None
     layers = cfg.network.layers
+
 
     state_layer = layers.state
     actor_layer = layers.actor
     critic_layer = layers.critic
     actor_layers = []
-    if hasattr(state_layer, "width"):
+    if hasattr(state_layer, "width") and hasattr(state_layer, "length"):
+        print("Using rectangular state layer")
         policy_state_module = instantiate(
             state_layer,
+            width=graph_config.n,
+            length=get_length_from_config(graph_config),
             feature_config=feature_cfg,
             _recursive_=False,
-            width=cfg.graph.config.n,
         )
     else:
         policy_state_module = instantiate(
@@ -93,8 +100,12 @@ def create_td_actor_critic_models(
     )
     actor_layers.append(_td_policy_state)
     output_dim = policy_state_module.output_dim
+    print(f"Policy state output dim: {output_dim}")
+
+    print(layers)
 
     if "lstm" in layers:
+        print("Using LSTM layer for actor")
         actor_lstm_layer = instantiate(
             layers.lstm,
             input_size=policy_state_module.output_dim,
@@ -102,13 +113,17 @@ def create_td_actor_critic_models(
         output_dim = layers.lstm.hidden_size
         actor_layers.append(actor_lstm_layer)
         lstm_mod = actor_lstm_layer
-    if hasattr(actor_layer, "width"):
+        print(f"  LSTM hidden size: {layers.lstm.hidden_size}, Output dim: {output_dim}")
+
+    if hasattr(actor_layer, "width") and hasattr(actor_layer, "length"):
+        print("Using rectangular actor layer for actor")
         policy_output_module = instantiate(
             actor_layer,
+            width=graph_config.n,
+            length=get_length_from_config(graph_config),
             input_dim=output_dim,
             output_dim=cfg.system.n_devices - 1,
             _recursive_=False,
-            width=cfg.graph.config.n,
         )
     else:
         policy_output_module = instantiate(
@@ -141,13 +156,14 @@ def create_td_actor_critic_models(
     )
 
     critic_layers = []
-    if hasattr(state_layer, "width"):
+    if hasattr(state_layer, "width") and hasattr(state_layer, "length"):
         critic_state_module = instantiate(
             state_layer,
             feature_config=feature_cfg,
             add_progress=cfg.network.critic.add_progress,
             _recursive_=False,
-            width=cfg.graph.config.n,
+            width=graph_config.n,
+            length=get_length_from_config(graph_config)
         )
     else:
         critic_state_module = instantiate(
@@ -182,7 +198,7 @@ def create_td_actor_critic_models(
 
     _td_critic_output = td_nn.TensorDictModule(
         critic_output_module,
-        in_keys=["embed"],
+        in_keys=["enc_0", "embed"],
         out_keys=["state_value"],
     )
     critic_layers.append(_td_critic_output)

@@ -3,6 +3,7 @@ defaults:
   - initialization/orthogonal@initialization
 
 
-_target_: task4feedback.ml.models.UNetDecoder
+_target_: task4feedback.ml.models.UNetRectangularDecoder
 hidden_channels: 16
 width: NoNeedToChange
+length: NoNeedToChange

@@ -364,7 +364,8 @@ class RuntimeEnv(EnvBase):
 
                 if isinstance(graph, JacobiGraph):
                     if isinstance(graph, DynamicJacobiGraph):
-                        graph.set_cell_locations([-1 for _ in range(graph.config.n**2)])
+                        print(f"nx: {graph.nx}, ny: {graph.ny}")
+                        graph.set_cell_locations([-1 for _ in range(graph.nx * graph.ny)])
                     graph.randomize_locations(
                         self.location_randomness,
                         self.location_list,

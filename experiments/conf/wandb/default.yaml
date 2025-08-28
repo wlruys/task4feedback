@@ -1,4 +1,4 @@
-project: task4feedback-experiments
+project: rectangle-dev
 name: default
 enabled: true
 dir: ~/workspace/scheduling/logs

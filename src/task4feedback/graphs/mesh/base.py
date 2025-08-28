@@ -216,19 +216,18 @@ def finalize_gmsh():
 
 def generate_quad_mesh(L: float = 1.0,
                        n: int = 4,
-                       W: float | None = None,
-                       nw: int | None = None,):
-    if W is None:
-        W = L
-
-    if nw is None:
-        nw = n
+                       domain_ratio: float = 1.0):
+    
+    W = 1.0 * domain_ratio
+    nw = int(np.ceil(n * domain_ratio))
 
     hx = L / n
     hy = W / nw
 
     nx = max(1, int(math.ceil(L / hx)))
     ny = max(1, int(math.ceil(W / hy)))
+
+    print(f"Generating quad mesh with {nx} x {ny} elements.")
 
     gmsh.option.set_number("Mesh.RecombineAll", 1)
     gmsh.option.set_number("Mesh.Algorithm", 8)
@@ -268,8 +267,37 @@ def get_cells(mesh):
     Returns:
     - NumPy array of cell vertex indices
     """
+    #plot mesh 
+    # Plot the mesh (if matplotlib is available)
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        plt = None
+
+    if plt is not None:
+        pts2d = np.asarray(mesh.points[:, :2], dtype=float)
+        fig, ax = plt.subplots()
+        for cb in mesh.cells:
+            if cb.type in ("triangle", "triangle3", "quad", "quad4"):
+                for elem in cb.data:
+                    poly = pts2d[np.r_[elem, elem[0]]]
+                    ax.plot(poly[:, 0], poly[:, 1], "k-", linewidth=0.7)
+            elif cb.type in ("line", "line2"):
+                for elem in cb.data:
+                    seg = pts2d[elem]
+                    ax.plot(seg[:, 0], seg[:, 1], "k-", linewidth=0.7)
+        ax.set_aspect("equal", "box")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_title("Mesh")
+        ax.autoscale(enable=True, tight=True)
+        plt.tight_layout()
+        plt.show()
+
     for cell_block in mesh.cells:
         if cell_block.type in ["quad", "quad4"]:
+            print(f"Using quadrilateral cells.")
+            print(f"Number of quadrilateral cells: {len(cell_block.data)}")
             return np.array(cell_block.data)
 
     # Return non quadrilateral cells
