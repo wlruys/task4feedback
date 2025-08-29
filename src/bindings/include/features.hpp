@@ -1401,6 +1401,7 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
   PrevReadSizeFeature(const SchedulerState &state, int width, int length, bool add_current, int frames)
       : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK), stride(width * length),
         add_current(add_current), frames(frames) {
+          std::cout << "MAKING NEW FEATURE" <<std::endl;
   }
 
   size_t getFeatureDimImpl() const {
@@ -1553,6 +1554,41 @@ struct TaskDataMappedSize : public StateFeature<TaskDataMappedSize> {
         output[j] += data_size * static_cast<f_t>(data_manager.check_valid_mapped(data_id, j));
       }
     }
+  }
+};
+
+
+struct TaskCoordinates : public StateFeature<TaskCoordinates> {
+  TaskCoordinates(const SchedulerState &state)
+      : StateFeature<TaskCoordinates>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 2; // average x, average y
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &data = state.get_data();
+    const auto read = static_graph.get_read(task_id);
+
+    if (read.empty()) {
+      output[0] = static_cast<f_t>(0.0);
+      output[1] = static_cast<f_t>(0.0);
+      return;
+    }
+
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    for (int i = 0; i < read.size(); ++i) {
+      auto data_id = read[i];
+      sum_x += static_cast<double>(data.get_x_pos(data_id));
+      sum_y += static_cast<double>(data.get_y_pos(data_id));
+    }
+
+    output[0] = static_cast<f_t>(sum_x / read.size());
+    output[1] = static_cast<f_t>(sum_y / read.size());
   }
 };
 

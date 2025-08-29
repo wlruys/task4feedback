@@ -200,7 +200,7 @@ class RuntimeEnv(EnvBase):
             # cprint("EFT baseline calculated.")
             return simulator_copy.time
         elif policy == "Cyclic":
-            simulator_copy = self.simulator.copy()
+            simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.enable_external_mapper()
@@ -343,6 +343,7 @@ class RuntimeEnv(EnvBase):
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         # start_t = perf_counter()
+        print("RESET", self.resets, flush=True)
         training.debug("Resetting environment (reset count: {})".format(self.resets))
         self.resets += 1
         self.step_count = 0
@@ -364,7 +365,6 @@ class RuntimeEnv(EnvBase):
 
                 if isinstance(graph, JacobiGraph):
                     if isinstance(graph, DynamicJacobiGraph):
-                        print(f"nx: {graph.nx}, ny: {graph.ny}")
                         graph.set_cell_locations([-1 for _ in range(graph.nx * graph.ny)])
                     graph.randomize_locations(
                         self.location_randomness,

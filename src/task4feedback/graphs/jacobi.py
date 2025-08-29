@@ -202,9 +202,6 @@ class JacobiData(DataGeometry):
 
         if isinstance(obj, Cell):
             # Update edges as well
-            print(f"# of cells: {len(self.geometry.cells)}")
-            print(f"# of edges: {len(self.geometry.edges)}")
-            print(f"Setting location for Cell {obj.id} and its edges to {location}")
             for edge in self.geometry.cell_edges[obj.id]:
                 id_list = self.map.key_to_block.get_leaves(
                     DataKey(Edge(edge), (obj,)), values=step_list
@@ -1739,7 +1736,7 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
 
         task_feature_factory = FeatureExtractorFactory()
         # task_feature_factory.add(fastsim.TaskMeanDurationFeature)
-        # task_feature_factory.add(fastsim.ReadDataLocationFeature)
+        task_feature_factory.add(fastsim.CandidateVectorFeature)
         if prev_frames > 0:
             task_feature_factory.add(
                 fastsim.PrevReadSizeFeature, width, length, True, prev_frames

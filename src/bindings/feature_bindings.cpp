@@ -313,6 +313,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_frame_feature<PrevReadSizeFeature>(m, "PrevReadSizeFeature");
   bind_state_feature<ReadDataLocationFeature>(m, "ReadDataLocationFeature");
   bind_state_feature<TaskMeanDurationFeature>(m, "TaskMeanDurationFeature");
+  bind_state_feature<TaskCoordinates>(m, "TaskCoordinatesFeature");
 
   // Data Features
   bind_int_feature<EmptyDataFeature>(m, "EmptyDataFeature");

@@ -267,33 +267,6 @@ def get_cells(mesh):
     Returns:
     - NumPy array of cell vertex indices
     """
-    #plot mesh 
-    # Plot the mesh (if matplotlib is available)
-    try:
-        import matplotlib.pyplot as plt
-    except Exception:
-        plt = None
-
-    if plt is not None:
-        pts2d = np.asarray(mesh.points[:, :2], dtype=float)
-        fig, ax = plt.subplots()
-        for cb in mesh.cells:
-            if cb.type in ("triangle", "triangle3", "quad", "quad4"):
-                for elem in cb.data:
-                    poly = pts2d[np.r_[elem, elem[0]]]
-                    ax.plot(poly[:, 0], poly[:, 1], "k-", linewidth=0.7)
-            elif cb.type in ("line", "line2"):
-                for elem in cb.data:
-                    seg = pts2d[elem]
-                    ax.plot(seg[:, 0], seg[:, 1], "k-", linewidth=0.7)
-        ax.set_aspect("equal", "box")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_title("Mesh")
-        ax.autoscale(enable=True, tight=True)
-        plt.tight_layout()
-        plt.show()
-
     for cell_block in mesh.cells:
         if cell_block.type in ["quad", "quad4"]:
             print(f"Using quadrilateral cells.")

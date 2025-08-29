@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, List
+from typing import Tuple, List, Sequence
 
 
 # from task4feedback.interface.wrappers import (
@@ -802,10 +802,12 @@ class OutputHead(nn.Module):
         activation: DictConfig = None,
         initialization: DictConfig = None,
         layer_norm: bool = True,
+        debug: bool = False
     ):
         super(OutputHead, self).__init__()
 
-        print(initialization)
+        #print(initialization)
+        self.debug = debug
 
         if initialization is None:
             layer1_init = kaiming_init
@@ -825,7 +827,8 @@ class OutputHead(nn.Module):
         self.network = nn.Sequential(*layers)
 
     def forward(self, x):
-        print("OutputHead input:", x.shape)
+        if self.debug:
+            printf("[OutputHead] input {x.shape}")
         return self.network(x)
 
 
@@ -2791,127 +2794,611 @@ def _ceil_div(a: int, b: int) -> int:
     return (a + b - 1) // b
 
 
+
 def _compute_num_downsampling_layers(length: int, width: int, minimum_resolution: int) -> int:
     """
-    Each layer halves H and W via 2x2 stride-2 pooling.
+    Compute the number of 2x downsamplings (H,W -> floor(H/2), floor(W/2)) such that
+    we never reduce the MIN side below `minimum_resolution` on the *next* pool.
+    Works for rectangular/non-power-of-two sizes.
     """
-    h, w = length, width
+    h, w = int(length), int(width)
     layers = 0
     while min(h, w) >= 2 * minimum_resolution:
-        h = (h // 2)
-        w = (w // 2)
+        h //= 2
+        w //= 2
         layers += 1
     return layers
 
 
-class UNetRectangularEncoder(nn.Module):
+def _init_deconv_bilinear_(deconv: nn.ConvTranspose2d) -> None:
+    """
+    Initialize ConvTranspose2d as (per-channel) bilinear upsampling *only* when shapes allow:
+      - groups == 1
+      - in_channels == out_channels
+      - kernel is square; stride == kernel_size
+    Otherwise, do nothing (safer than partial/incorrect init).
+    """
+    if deconv.groups != 1:
+        return
+    k_h, k_w = deconv.kernel_size
+    s_h, s_w = deconv.stride
+    if not (k_h == k_w == s_h == s_w):
+        return
+    if deconv.in_channels != deconv.out_channels:
+        return
+
+    k = k_h
+    factor = (k + 1) // 2
+    center = factor - 1 if (k % 2 == 1) else factor - 0.5
+    og = torch.arange(k, dtype=torch.float32)
+    filt1d = 1 - torch.abs(og - center) / factor
+    filt2d = torch.outer(filt1d, filt1d)
+
+    with torch.no_grad():
+        w = deconv.weight
+        w.zero_()
+        # Weight shape for ConvTranspose2d is (in_ch, out_ch, k, k) when groups==1
+        for c in range(deconv.in_channels):
+            w[c, c, :, :] = filt2d
+        if deconv.bias is not None:
+            deconv.bias.zero_()
+
+
+def _align_and_concat(up_feat: torch.Tensor, enc_feat: torch.Tensor) -> torch.Tensor:
+    """
+    Center-align upsampled feature (B, C_up, H_up, W_up) to encoder skip (B, C_enc, H_enc, W_enc)
+    by symmetric pad/crop, then concatenate along channels.
+
+    This guards against odd/even floor effects from pooling on rectangles.
+    """
+    uh, uw = up_feat.shape[-2:]
+    eh, ew = enc_feat.shape[-2:]
+    dh, dw = eh - uh, ew - uw
+    if dh > 0 or dw > 0:
+        # F.pad order: (left, right, top, bottom)
+        pad = [max(dw // 2, 0), max(dw - dw // 2, 0),
+               max(dh // 2, 0), max(dh - dh // 2, 0)]
+        up_feat = F.pad(up_feat, pad)
+    elif dh < 0 or dw < 0:
+        top = (-dh) // 2
+        left = (-dw) // 2
+        up_feat = up_feat[..., top: top + eh, left: left + ew]
+    return torch.cat([up_feat, enc_feat], dim=1)
+
+
+def _flatten_to_BCHW(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...], int]:
+    """
+    Accept (C,H,W) or (*batch, C, H, W). Return (B, C, H, W), batch_shape, B.
+    """
+    if x.dim() == 3:
+        return x.unsqueeze(0), (), 1
+    elif x.dim() >= 4:
+        *batch, C, H, W = x.shape
+        B = 1
+        for d in batch: B *= int(d)
+        return x.reshape(B, C, H, W), tuple(batch), B
+    else:
+        raise ValueError(f"Expected (C,H,W) or (*batch,C,H,W), got {tuple(x.shape)}")
+
+def _unflatten_from_B(xB: torch.Tensor, batch_shape: Tuple[int, ...]) -> torch.Tensor:
+    """Inverse of _flatten_to_BCHW for the *batch* part; keeps (C,H,W) tail intact."""
+    return xB.squeeze(0) if not batch_shape else xB.view(*batch_shape, *xB.shape[1:])
+
+
+def _extract_tasks_attr(x):
+    """
+    Robustly extract the task feature tensor from your nested dict.
+    Expected key per your code: x["nodes","tasks","attr"] -> (..., tasks, C)
+    """
+    try:
+        return x["nodes", "tasks", "attr"]
+    except Exception:
+        if isinstance(x, dict):
+            if "nodes" in x and isinstance(x["nodes"], dict):
+                nodes = x["nodes"]
+                if "tasks" in nodes and isinstance(nodes["tasks"], dict) and "attr" in nodes["tasks"]:
+                    return nodes["tasks"]["attr"]
+            if ("tasks", "attr") in x:
+                return x[("tasks", "attr")]
+    raise KeyError("Could not find x['nodes','tasks','attr']")
+
+def _flatten_last_dim(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...], int]:
+    """
+    Accept (P) or (*batch, P). Return (B, P), batch_shape, B.
+    """
+    if x.dim() == 1:
+        return x.unsqueeze(0), (), 1
+    elif x.dim() >= 2:
+        *batch, P = x.shape
+        B = 1
+        for d in batch: B *= int(d)
+        return x.reshape(B, P), tuple(batch), B
+    else:
+        raise ValueError(f"Expected (..., P), got {tuple(x.shape)}")
+
+def _coord_mesh(H: int, W: int, device, dtype):
+    """
+    Normalized CoordConv channels in [-1,1], shape (2,H,W).
+    x increases left->right, y increases top->bottom.
+    """
+    ys = torch.linspace(-1.0, 1.0, steps=H, device=device, dtype=dtype)
+    xs = torch.linspace(-1.0, 1.0, steps=W, device=device, dtype=dtype)
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    return torch.stack([xx, yy], dim=0)  # (2,H,W)
+
+class ConvNormAct(nn.Module):
+    def __init__(self, C_in, C_out, k=3, dilation=1, groups=1, act="silu"):
+        super().__init__()
+        pad = dilation * (k // 2)
+        self.conv = nn.Conv2d(C_in, C_out, kernel_size=k, padding=pad, dilation=dilation, bias=False, groups=groups)
+        self.norm = nn.GroupNorm(_choose_gn_groups(C_out), C_out)
+        self.act = nn.SiLU(inplace=True) if act == "silu" else nn.ReLU(inplace=True)
+    def forward(self, x):
+        return self.act(self.norm(self.conv(x)))
+
+class DilatedResBlock(nn.Module):
+    """
+    Two 3x3 convs; the first uses a (possibly >1) dilation; the second uses dilation=1.
+    Residual connection is identity because C_in==C_out here.
+    """
+    def __init__(self, C: int, dilation: int = 1, act="silu"):
+        super().__init__()
+        self.conv1 = ConvNormAct(C, C, k=3, dilation=dilation, act=act)
+        self.conv2 = ConvNormAct(C, C, k=3, dilation=1, act=act)
+    def forward(self, x):
+        return x + self.conv2(self.conv1(x))
+
+class ECA(nn.Module):
+    """
+    Efficient Channel Attention: global avg pool -> 1D conv (k odd) -> sigmoid gate.
+    Gives cheap global channel-wise calibration without spatial resampling.
+    """
+    def __init__(self, C: int, k_size: int = 3):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=k_size // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+    def forward(self, x):
+        y = self.pool(x)                             # (B,C,1,1)
+        y = y.squeeze(-1).transpose(1, 2)           # (B,1,C)
+        y = self.conv(y)                            # (B,1,C)
+        y = self.sigmoid(y).transpose(1, 2).unsqueeze(-1)  # (B,C,1,1)
+        return x * y
+
+def _choose_gn_groups(C: int) -> int:
+    """Pick a GroupNorm group count that divides C (prefer 8,4,2,1)."""
+    for g in (8, 4, 2):
+        if C % g == 0:
+            return g
+    return 1
+
+class TinyASPP(nn.Module):
+    """
+    Minimal ASPP with rates {1,2,3}. All stride-1, same-padding.
+    Concats parallel atrous feats and reduces back to C with a 1x1.
+    """
+    def __init__(self, C: int, rates=(1, 2, 3), act="silu"):
+        super().__init__()
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(C, C, kernel_size=3, padding=r, dilation=r, bias=False),
+                nn.GroupNorm(_choose_gn_groups(C), C),
+                nn.SiLU(inplace=True) if act == "silu" else nn.ReLU(inplace=True),
+            ) for r in rates
+        ])
+        self.fuse = nn.Sequential(
+            nn.Conv2d(len(rates) * C, C, kernel_size=1, bias=False),
+            nn.GroupNorm(_choose_gn_groups(C), C),
+            nn.SiLU(inplace=True) if act == "silu" else nn.ReLU(inplace=True),
+        )
+    def forward(self, x):
+        return self.fuse(torch.cat([b(x) for b in self.branches], dim=1))
+
+
+class DilationRectangularEncoder(nn.Module):
+    """
+    Drop-in replacement that preserves the interface but never downsamples.
+
+    Key compat features exported:
+      - self.in_channels_per_scale: [hidden_channels]
+      - self.output_keys: ["embed"]
+      - self.output_dim: hidden_channels
+      - self.num_layers: 0         (no downsampling in this variant)
+
+    Kept args for BC (ignored safely): minimum_resoluation, pool_mode, activation, initialization.
+    Extra optional kwargs (defaulted) add functionality without breaking old call-sites:
+      - add_coord: bool
+      - num_blocks: int
+      - dilation_schedule: List[int]
+      - use_tiny_aspp: bool
+      - use_eca: bool
+    """
     def __init__(
         self,
-        feature_config: FeatureDimConfig,
+        feature_config,
         hidden_channels: int,
         width: int,
         length: int,
-        add_progress: bool = False,
-        minimum_resoluation: int = 4,  
-        activation: Optional[DictConfig] = None,
-        initialization: Optional[DictConfig] = None,
+        add_progress: bool = False,                  # kept for symmetry; unused in encoder
+        minimum_resolution: int = 2,                # ignored; no downsampling
+        activation: Optional[DictConfig] = None,     # kept for BC
+        initialization: Optional[DictConfig] = None, # kept for BC
+        debug: bool = True,
+        pool_mode: str = "avg",                      # ignored; no pooling
+        # New optional knobs (do not break existing calls):
+        add_coord: bool = False,
+        num_blocks: int = 2,
+        dilation_schedule: Optional[List[int]] = None,
+        use_tiny_aspp: bool = False,
+        use_eca: bool = False,
     ):
         super().__init__()
-        self.output_keys = []
+        if not hasattr(feature_config, "task_feature_dim"):
+            raise AttributeError("feature_config must have attribute 'task_feature_dim'")
+
+        # Public attributes expected downstream
         self.width = int(width)
         self.length = int(length)
         self.in_channels = int(feature_config.task_feature_dim)
         self.hidden_channels = int(hidden_channels)
-        self.add_progress = bool(add_progress)
+        self.debug = bool(debug)
 
-        self.minimum_resolution = int(minimum_resoluation)
+        # No downsampling in this encoder
+        self.num_layers = 0
+
+        # Stem (optionally with CoordConv)
+        self.add_coord = bool(add_coord)
+        C_in = self.in_channels + (2 if self.add_coord else 0)
+        C = self.hidden_channels
+        self.stem = ConvNormAct(C_in, C, k=3, dilation=1, act="silu")
+
+        # Dilated residual stack
+        if not dilation_schedule:
+            dilation_schedule = [1, 2, 3]  # short, aperiodic cycle for ≤32x32
+        self.blocks = nn.ModuleList([
+            DilatedResBlock(C, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu")
+            for i in range(num_blocks)
+        ])
+
+        # Tiny ASPP and optional ECA gate
+        self.aspp = TinyASPP(C) if use_tiny_aspp else nn.Identity()
+        self.eca  = ECA(C, k_size=3) if use_eca else nn.Identity()
+
+        # Compatibility metadata
+        self.in_channels_per_scale: List[int] = [C]
+        self.output_dim = C
+        self.output_keys: List[str] = ["embed"]
+
+    def forward(self, x):
+        xt = _extract_tasks_attr(x)  # (..., tasks, C_in_no_coords)
+        single = (xt.dim() == 2)
+        if single:
+            xt = xt.unsqueeze(0)  # (1, tasks, C)
+
+        *batch_shape, T, Cin = xt.shape
+        H, W = self.length, self.width
+        assert T == H * W, f"tasks={T} differs from length*width={H*W}"
+        assert Cin == self.in_channels, f"in_channels mismatch: expected {self.in_channels}, got {Cin}"
+
+        # Flatten and reshape to BCHW
+        B = 1
+        for d in batch_shape: B *= int(d)
+        h = xt.reshape(B, H, W, Cin).permute(0, 3, 1, 2)  # (B,Cin,H,W)
+
+        # Optional CoordConv
+        if self.add_coord:
+            coords = _coord_mesh(H, W, device=h.device, dtype=h.dtype)  # (2,H,W)
+            coords = coords.unsqueeze(0).expand(B, -1, -1, -1)
+            h = torch.cat([h, coords], dim=1)
+
+        # Fixed-resolution processing
+        h = self.stem(h)
+        for blk in self.blocks:
+            h = blk(h)
+        h = self.aspp(h)
+        h = self.eca(h)
+
+        # Return like your encoder: (*enc_feats, embed) ; here enc_feats=[]
+        if single:
+            h = h.squeeze(0)  # (C,H,W)
+            if self.debug: print(f"[Encoder] embed {h.shape}")
+            return (h,)
+        else:
+            h = h.view(*batch_shape, *h.shape[1:])  # (*batch, C, H, W)
+            if self.debug: print(f"[Encoder] embed {h.shape}")
+            return (h,)
+
+# ======================================================================
+# Decoder: Fixed-resolution head, NO UPSAMPLING (drop-in)
+# ======================================================================
+
+class DilationRectangularDecoder(nn.Module):
+    """
+    Drop-in replacement head that preserves interface but never upsamples.
+
+    Public attributes kept:
+      - self.in_channels_per_scale = [input_dim]
+      - self.input_keys = ["observation","embed"]
+      - self.output_dim = output_dim
+      - self.num_layers = 0
+
+    Kept args for BC (ignored safely here): minimum_resolution, activation, initialization,
+      layer_norm, upsample_type, deconv_bilinear_init.
+    """
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_channels: int,
+        width: int,
+        length: int,
+        output_dim: int,
+        minimum_resolution: int = 2,                 # ignored; no resampling
+        activation: Optional[DictConfig] = None,
+        initialization: Optional[DictConfig] = None,
+        layer_norm: bool = False,                    # we use GroupNorm internally
+        add_progress: bool = False,
+        progress_dim: int = 0,
+        debug: bool = True,
+        upsample_type: str = "nearest",              # ignored; no upsampling
+        deconv_bilinear_init: bool = True,           # ignored; no deconv
+        # New optional knobs (safe defaults):
+        num_blocks: int = 2,
+        dilation_schedule: Optional[List[int]] = None,
+        use_eca: bool = False,
+    ):
+        super().__init__()
+        self.width = int(width)
+        self.length = int(length)
+        self.input_dim = int(input_dim)
+        self.hidden_channels = int(hidden_channels)
+        self.output_dim = int(output_dim)
+        self.add_progress = bool(add_progress)
+        self.progress_dim = int(progress_dim)
+        self.debug = bool(debug)
+
+        # No upsampling in this decoder
+        self.num_layers = 0
+
+        # Optional FiLM on the bottleneck features using progress vector
+        self.film = None
+        if self.add_progress:
+            assert self.progress_dim > 0, "progress_dim must be > 0 when add_progress=True"
+            self.film = nn.Linear(self.progress_dim, 2 * self.input_dim, bias=True)
+
+        # Small fixed-resolution head
+        if not dilation_schedule:
+            dilation_schedule = [1, 2]
+        self.pre = ConvNormAct(self.input_dim, self.hidden_channels, k=3, dilation=1, act="silu")
+        self.blocks = nn.ModuleList([
+            DilatedResBlock(self.hidden_channels, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu")
+            for i in range(num_blocks)
+        ])
+        self.eca = ECA(self.hidden_channels, k_size=3) if use_eca else nn.Identity()
+        self.out_conv = nn.Conv2d(self.hidden_channels, self.output_dim, kernel_size=1)
+
+        # Compatibility metadata
+        self.in_channels_per_scale: List[int] = [self.input_dim]
+        self.input_keys: List[str] = ["observation", "embed"]
+
+    def forward(self, obs, *features):
+        if len(features) == 0:
+            raise ValueError("Decoder expects encoder features: (*enc_feats, bottleneck_map)")
+        # In this fixed-res variant, enc_feats are unused; we only need the final embed/bottleneck.
+        b_map = features[-1]  # (C,H,W) or (*batch,C,H,W)
+
+        # Normalize to BCHW
+        hB, batch_shape, B = _flatten_to_BCHW(b_map)  # (B,C,H,W)
+        _, C, H, W = hB.shape
+        assert C == self.input_dim, f"Decoder input_dim={self.input_dim}, got bottleneck C={C}"
+        if self.debug: print(f"[Decoder] b_map {hB.shape}")
+
+        # Optional FiLM with progress vector
+        if self.add_progress:
+            prog = obs["aux", "progress"]  # (..., P)
+            progB, _, _ = _flatten_last_dim(prog)      # (B, P)
+            gamma_beta = self.film(progB)              # (B, 2*C)
+            gamma, beta = gamma_beta.chunk(2, dim=-1)  # (B, C), (B, C)
+            hB = gamma.unsqueeze(-1).unsqueeze(-1) * hB + beta.unsqueeze(-1).unsqueeze(-1)
+            if self.debug: print(f"[Decoder] FiLM applied {hB.shape}")
+
+        # Fixed-resolution head
+        hB = self.pre(hB)
+        for blk in self.blocks:
+            hB = blk(hB)
+        hB = self.eca(hB)
+        logits_map = self.out_conv(hB)  # (B, A, H, W)
+        if self.debug: print(f"[Decoder] logits_map {logits_map.shape}")
+
+        # Return shapes identical to your implementation
+        if len(batch_shape) == 0:
+            return logits_map.permute(0, 2, 3, 1).reshape(H * W, self.output_dim).squeeze(0)
+        else:
+            return logits_map.permute(0, 2, 3, 1).reshape(B, H * W, self.output_dim).view(
+                *batch_shape, H * W, self.output_dim
+            )
+
+# ------------------------- Encoder -------------------------
+
+class UNetRectangularEncoder(nn.Module):
+    """
+    Rectangular U-Net encoder with optional gentler downsampling.
+
+    Channels contract path:
+      i-th stage output channels: hidden_channels * 2**i   (i=0..L-1), pre-pool features are saved as skips.
+    Bottleneck channels:
+      num_layers>0: hidden_channels * 2**(num_layers-1)
+      num_layers==0: hidden_channels (via stem)
+
+    Args (public API kept):
+      feature_config: object with attribute `task_feature_dim` (input channels)
+      hidden_channels: base channel count
+      width, length: spatial size (W, H)
+      add_progress: kept for symmetry; not used in encoder
+      minimum_resolution: minimum side allowed after downsampling
+      activation, initialization: kept for compatibility (unused here)
+      debug: removed prints; kept arg for BC
+      pool_mode: "max" (default) or "avg"
+    """
+    def __init__(
+        self,
+        feature_config,
+        hidden_channels: int,
+        width: int,
+        length: int,
+        add_progress: bool = False,
+        minimum_resolution: int = 2,
+        activation: Optional[DictConfig] = None,
+        initialization: Optional[DictConfig] = None,
+        debug: bool = True,
+        pool_mode: str = "avg",
+    ):
+        super().__init__()
+        if not hasattr(feature_config, "task_feature_dim"):
+            raise AttributeError("feature_config must have attribute 'task_feature_dim'")
+        self.width = int(width)
+        self.length = int(length)
+        self.in_channels = int(feature_config.task_feature_dim)
+        self.hidden_channels = int(hidden_channels)
+        self.minimum_resolution = int(minimum_resolution)
+        self.debug = debug
 
         self.num_layers = _compute_num_downsampling_layers(self.length, self.width, self.minimum_resolution)
 
-        print(f"UNetRectangularEncoder: length={self.length}, width={self.width}, num_layers={self.num_layers}")
-
         self.enc_blocks = nn.ModuleList()
-        channels = self.in_channels
-        for i in range(self.num_layers):
-            out_channels = self.hidden_channels * (2 ** i)
-            print(f"  Enc block {i}: in_ch={channels}, out_ch={out_channels}")
-            block = nn.Sequential(
-                nn.Conv2d(channels, out_channels, kernel_size=3, padding=1, bias=True),
+        if self.num_layers == 0:
+            # No pooling—stem to hidden_channels while keeping resolution.
+            self.stem = nn.Sequential(
+                nn.Conv2d(self.in_channels, self.hidden_channels, kernel_size=3, padding=1, bias=True),
                 nn.LeakyReLU(negative_slope=0.01, inplace=True),
             )
-            self.enc_blocks.append(block)
-            channels = out_channels
-            self.output_keys.append(f"enc_{i}")
+            channels = self.hidden_channels
+            self.in_channels_per_scale = [channels]
+        else:
+            in_ch = self.in_channels
+            skip_channels = []
+            for i in range(self.num_layers):
+                out_ch = self.hidden_channels * (2 ** i)
+                self.enc_blocks.append(nn.Sequential(
+                    nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=True),
+                    nn.LeakyReLU(negative_slope=0.01, inplace=True),
+                ))
+                in_ch = out_ch
+                skip_channels.append(out_ch)
 
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+            channels = in_ch  # = hidden * 2**(num_layers-1)
+            self.in_channels_per_scale = [*skip_channels, channels]
 
+        # Downsampling choice (avg reduces aliasing slightly; keep "max" for BC)
+        if pool_mode == "avg":
+            self.pool = nn.AvgPool2d(kernel_size=2, stride=2, count_include_pad=False)
+        elif pool_mode == "max":
+            self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        else:
+            raise ValueError("pool_mode must be 'max' or 'avg'")
+
+        # 1x1 bottleneck mixer (keeps channels)
         self.bottleneck = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1, padding=0, bias=True),
             nn.LeakyReLU(negative_slope=0.01, inplace=True),
         )
 
-        print(f"  Bottleneck: in_ch={channels}, out_ch={channels}")
         self.output_dim = channels
-        self.output_keys.append("embed")
+        self.output_keys: List[str] = [f"enc_{i}" for i in range(self.num_layers)] + ["embed"]
+
+    def _extract_tasks_attr(self, x):
+        # Strict path (your original):
+        try:
+            return x["nodes", "tasks", "attr"]
+        except Exception:
+            # Common fallbacks (do not change public API; just be tolerant)
+            if isinstance(x, dict):
+                if "nodes" in x and isinstance(x["nodes"], dict):
+                    nodes = x["nodes"]
+                    if "tasks" in nodes and isinstance(nodes["tasks"], dict) and "attr" in nodes["tasks"]:
+                        return nodes["tasks"]["attr"]
+                if ("tasks", "attr") in x:
+                    return x[("tasks", "attr")]
+            raise KeyError("Could not find x['nodes','tasks','attr']")
 
     def forward(self, x):
-        single = (x.batch_size == torch.Size([]))
+        xt = self._extract_tasks_attr(x)  # shape: (*batch, tasks, C) or (tasks, C)
 
-        xt = x["nodes", "tasks", "attr"]
+        # Decide single vs batched by rank
+        single = (xt.dim() == 2)  # (tasks, C)
         if single:
             xt = xt.unsqueeze(0)  # -> (1, tasks, C)
 
         *batch_shape, tasks, in_ch = xt.shape
         assert in_ch == self.in_channels, f"in_channels mismatch: expected {self.in_channels}, got {in_ch}"
-        assert tasks == self.length * self.width, (
-            f"tasks dimension {tasks} must equal length*width = {self.length*self.width}"
-        )
-        flat_bs = 1
-        for d in batch_shape:
-            flat_bs *= int(d)
+        assert tasks == self.length * self.width, f"got tasks={tasks}, expected length*width={self.length*self.width}"
 
-        # Reshape to (B, C, H, W) with H=length, W=width
-        x_img = xt.reshape(flat_bs, self.length, self.width, self.in_channels).permute(0, 3, 1, 2)
+        # Flatten batch dims, reshape to BCHW
+        B = 1
+        for d in batch_shape: B *= int(d)
+        h = xt.reshape(B, self.length, self.width, self.in_channels).permute(0, 3, 1, 2)
 
-        # Encoder
-        enc_feats_flat = []
-        h = x_img
-        for block in self.enc_blocks:
-            print("Before enc block:", h.shape)
-            h = block(h)
-            enc_feats_flat.append(h)  # (B, C, H, W)
-            print("After enc block:", h.shape)
-            h = self.pool(h)          # (B, C, H//2, W//2)
-            print("After pool:", h.shape)
+        enc_feats: List[torch.Tensor] = []
+        if self.num_layers == 0:
+            h = self.stem(h)
+        else:
+            for block in self.enc_blocks:
+                if self.debug:
+                    print(f"[Encoder] pre-mix {h.shape}")
+                h = block(h)
+                if self.debug:
+                    print(f"[Encoder] post-mix {h.shape}")
+                enc_feats.append(h)  # pre-pool skip
+                h = self.pool(h)
+                if self.debug:
+                    print(f"[Encoder] post-pool {h.shape}")
 
-        b_map_flat = self.bottleneck(h)  # (B, C_bottleneck, Hb, Wb)
+        b_map = self.bottleneck(h)
+        if self.debug:
+            print(f"[Encoder] bottleneck {h.shape}")
 
-        # Unflatten to original batch shape
+        # Unflatten back to original batch shape; remove batch dim if single
         def unflatten(t):
-            return t.view(*batch_shape, *t.shape[1:]) if not single else t.squeeze(0)
+            return t.squeeze(0) if single else t.view(*batch_shape, *t.shape[1:])
 
-        enc_feats = [unflatten(f) for f in enc_feats_flat]
-        b_map = unflatten(b_map_flat)
-
+        enc_feats = [unflatten(f) for f in enc_feats]
+        b_map = unflatten(b_map)
         return (*enc_feats, b_map)
 
 
-class UNetRectangularDecoder(nn.Module):
-    input_keys = ["observation"]
+# ------------------------- Decoder -------------------------
 
+class UNetRectangularDecoder(nn.Module):
+    """
+    Rectangular U-Net decoder with switchable upsampling:
+      - upsample_type="deconv"  : ConvTranspose2d(k=2, s=2, p=0) [default]
+      - upsample_type="nearest" : nearest-neighbor upsample + Conv2d(3x3)
+    The latter is a "resize-convolution" that mitigates checkerboard artifacts.
+
+    Input/skip channel contract (matches encoder):
+      num_layers>0: bottleneck C  = hidden_channels * 2**(num_layers-1)
+      num_layers==0: bottleneck C = hidden_channels
+
+    Returns:
+      single input: (H*W, output_dim)
+      batched input: (*batch, H*W, output_dim)
+    """
+    # NOTE: do NOT use a class-level list; make it per-instance.
     def __init__(
         self,
-        input_dim: int,               
+        input_dim: int,
         hidden_channels: int,
         width: int,
         length: int,
-        output_dim: int,              # number of logits per pixel
-        minimum_resolution: int = 4,
+        output_dim: int,
+        minimum_resolution: int = 2,
         activation: Optional[DictConfig] = None,
         initialization: Optional[DictConfig] = None,
         layer_norm: bool = False,
-        add_progress: bool = False,   
-        progress_dim: int = 0,        
+        add_progress: bool = False,
+        progress_dim: int = 0,
+        debug: bool = True,
+        upsample_type: str = "nearest",
+        deconv_bilinear_init: bool = True,
     ):
         super().__init__()
         self.width = int(width)
@@ -2922,131 +3409,245 @@ class UNetRectangularDecoder(nn.Module):
         self.minimum_resolution = int(minimum_resolution)
         self.add_progress = bool(add_progress)
         self.progress_dim = int(progress_dim)
+        self.upsample_type = str(upsample_type)
+        self.deconv_bilinear_init = bool(deconv_bilinear_init)
+        self.debug = debug
 
         self.num_layers = _compute_num_downsampling_layers(self.length, self.width, self.minimum_resolution)
 
+        if self.num_layers == 0:
+            self.in_channels_per_scale = [self.input_dim]   # just bottleneck
+        else:
+            skip_channels = [self.hidden_channels * (2 ** i) for i in range(self.num_layers)]
+            self.in_channels_per_scale = [*skip_channels, self.input_dim]
+
+        expected_bottleneck_ch = self.hidden_channels * (2 ** max(self.num_layers - 1, 0))
+        assert self.input_dim == expected_bottleneck_ch, (
+            f"Decoder input_dim={self.input_dim} must equal encoder bottleneck channels {expected_bottleneck_ch}"
+        )
+
+        # Optional FiLM on bottleneck using progress vector in obs["aux","progress"]
+        if self.add_progress:
+            assert self.progress_dim > 0, "progress_dim must be > 0 when add_progress=True"
+            self.film = nn.Linear(self.progress_dim, 2 * self.input_dim, bias=True)
+
+        # Build upsampling ladder
         self.up_blocks = nn.ModuleList()
         self.dec_blocks = nn.ModuleList()
 
-        # Channels at stage i of encoder were out_ch = hidden_channels * 2**i
-        # Bottleneck channels equal hidden_channels * 2**(num_layers-1) if num_layers>0,
-        expected_bottleneck_ch = self.hidden_channels * (2 ** max(self.num_layers - 1, 0))
-        assert self.input_dim == expected_bottleneck_ch, (
-            f"Decoder input_dim={self.input_dim} must equal encoder bottleneck channels "
-            f"{expected_bottleneck_ch} (hidden_channels={self.hidden_channels}, layers={self.num_layers})"
-        )
-
-        # Build transpose-conv upsamplers and decoders
+        prev_ch = self.input_dim
         for i in reversed(range(self.num_layers)):
-            in_ch = self.hidden_channels * (2 ** max(i, 0)) if i == (self.num_layers - 1) else self.hidden_channels * (2 ** (i + 1))
-            # For the first up-block (i = num_layers-1), input is bottleneck: hidden*2**(num_layers-1)
-            # For the next ones, input is hidden*2**(i+1) from previous decoder output
-            out_ch = self.hidden_channels * (2 ** i) if self.num_layers > 0 else self.hidden_channels
+            out_ch = self.hidden_channels * (2 ** i)
 
-            self.up_blocks.append(
-                nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
-            )
-
-            # After concatenation with skip (same out_ch), the decoder sees 2*out_ch channels
-            self.dec_blocks.append(
-                nn.Sequential(
-                    nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1, bias=True),
-                    nn.ReLU(inplace=True),
+            if self.upsample_type == "deconv":
+                up = nn.ConvTranspose2d(prev_ch, out_ch, kernel_size=2, stride=2, padding=0, output_padding=0, bias=True)
+                if self.deconv_bilinear_init:
+                    _init_deconv_bilinear_(up)
+            elif self.upsample_type == "nearest":
+                up = nn.Sequential(
+                    nn.Upsample(scale_factor=2, mode="nearest"),
+                    nn.Conv2d(prev_ch, out_ch, kernel_size=3, padding=1, bias=True),
                 )
-            )
+            else:
+                raise ValueError("upsample_type must be 'deconv' or 'nearest'")
 
-        for i in range(self.num_layers):
-            self.input_keys.append(f"enc_{i}")
-        self.input_keys.append("embed")  # bottleneck map
+            self.up_blocks.append(up)
+            # After concat with skip (C=out_ch): fuse back to out_ch
+            self.dec_blocks.append(nn.Sequential(
+                nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1, bias=True),
+                nn.ReLU(inplace=True),
+            ))
+            prev_ch = out_ch
 
-        self.out_conv = nn.Conv2d(
-            self.hidden_channels if self.num_layers == 0 else self.hidden_channels * (2 ** 0),
-            self.output_dim,
-            kernel_size=1,
-        )
+        # Input key list is per-instance (avoid class list mutation)
+        self.input_keys: List[str] = ["observation"] + [f"enc_{i}" for i in range(self.num_layers)] + ["embed"]
 
-    @staticmethod
-    def _align_and_concat(up_feat: torch.Tensor, enc_feat: torch.Tensor) -> torch.Tensor:
-        """
-        Pad/crop up_feat (B, C, H_up, W_up) to match enc_feat (B, C, H_enc, W_enc), then concat on channels.
-        Works for odd/even dimension mismatches caused by floor pooling.
-        """
-        uh, uw = up_feat.shape[-2:]
-        eh, ew = enc_feat.shape[-2:]
-        dh, dw = eh - uh, ew - uw
-        if dh > 0 or dw > 0:
-            pad = [max(dw // 2, 0), max(dw - dw // 2, 0), max(dh // 2, 0), max(dh - dh // 2, 0)]
-            up_feat = F.pad(up_feat, pad)
-        elif dh < 0 or dw < 0:
-            top = (-dh) // 2
-            left = (-dw) // 2
-            up_feat = up_feat[..., top: top + eh, left: left + ew]
-        return torch.cat([up_feat, enc_feat], dim=1)
+        # Final projection to logits at full resolution
+        final_in = self.hidden_channels if self.num_layers >= 1 else self.input_dim
+        self.out_conv = nn.Conv2d(final_in, self.output_dim, kernel_size=1)
 
     def forward(self, obs, *features):
-        single = (obs.batch_size == torch.Size([]))
+        if len(features) == 0:
+            raise ValueError("Decoder expects encoder features: (*enc_feats, bottleneck_map)")
         enc_feats = features[:-1]
-        b_map = features[-1]  # (*batch_shape, Cb, Hb, Wb)
+        b_map = features[-1]  # shape: (C,H,W) or (*batch,C,H,W)
 
-        print(f"Decoder input b_map shape: {b_map.shape}")
-        print(f"Decoder input enc_feats shapes: {[e.shape for e in enc_feats]}")
+        # Determine single/batched by rank of bottleneck map
+        single = (b_map.dim() == 3)
 
-        # Flatten all leading batch dims to a single dimension to simplify the convs.
-        def flatten_batch(t: torch.Tensor):
-            if single:
-                return t.unsqueeze(0)
-            *batch_shape, c, h, w = t.shape
-            flat_bs = 1
-            for d in batch_shape:
-                flat_bs *= int(d)
-            return t.view(flat_bs, c, h, w), batch_shape, flat_bs
+        # Normalize shapes
+        b_mapB, batch_shape, B = _flatten_to_BCHW(b_map)
+        encB = [_flatten_to_BCHW(e)[0] for e in enc_feats]
 
-        # Normalize everything to (flat_bs, C, H, W)
-        if single:
-            b_map_flat = b_map.unsqueeze(0)
-        else:
-            b_map_flat, batch_shape, flat_bs = flatten_batch(b_map)
-
-        enc_flat = []
-        for e in enc_feats:
-            if single:
-                enc_flat.append(e.unsqueeze(0))
-            else:
-                ef, _, _ = flatten_batch(e)
-                enc_flat.append(ef)
-
-        # Optional FiLM from progress on the bottleneck map
+        # Optional FiLM on bottleneck features
         if self.add_progress:
-            prog = obs["aux", "progress"]
-            if single:
-                prog = prog.unsqueeze(0)  # (1, P)
-            gamma_beta = self.film(prog)  # (B, 2*C)
+            prog = obs["aux", "progress"]  # (..., P)
+            progB, _, _ = _flatten_last_dim(prog)
+            gamma_beta = self.film(progB)           # (B, 2*C)
             gamma, beta = gamma_beta.chunk(2, dim=-1)
-            # reshape to (B, C, 1, 1) and apply
-            gamma = gamma.unsqueeze(-1).unsqueeze(-1)
-            beta = beta.unsqueeze(-1).unsqueeze(-1)
-            b_map_flat = gamma * b_map_flat + beta
+            gamma = gamma.unsqueeze(-1).unsqueeze(-1)  # (B,C,1,1)
+            beta  = beta.unsqueeze(-1).unsqueeze(-1)
+            b_mapB = gamma * b_mapB + beta
+            if self.debug:
+                print(f"[Decoder] FiLM {b_mapB.shape}")
 
-        # If there are no downsampling layers, we only have the "bottleneck" which is same resolution as input
-        h = b_map_flat
+        # Decode
+        h = b_mapB
         if self.num_layers > 0:
-            for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(enc_flat)):
-                h = up(h)
-                h = self._align_and_concat(h, enc)
+            for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(encB)):
+                h = up(h)                     # deconv 2x or nearest+conv
+                if self.debug:
+                    print(f"[Decoder] up: {h.shape} + {enc.shape}")
+                h = _align_and_concat(h, enc) # robust to odd/even, rectangles
+                if self.debug:
+                    print(f"[Decoder] concat: {h.shape} + {enc.shape}")
                 h = dec(h)
+                if self.debug:
+                    print(f"[Decoder] dec: {h.shape}")
 
-        logits_map = self.out_conv(h)  # (flat_bs, output_dim, H, W)
+        logits_map = self.out_conv(h)          # (B, output_dim, H, W)
+        if self.debug:
+            print(f"[Decoder] logits: {logits_map.shape}")
 
         if single:
-            # reshape to (H*W, output_dim)
-            logits = logits_map.permute(0, 2, 3, 1).reshape(-1, self.output_dim)
-            logits = logits.squeeze(0)
-            return logits  # (length*width, output_dim)
+            # -> (H*W, output_dim)
+            return logits_map.permute(0, 2, 3, 1).reshape(-1, self.output_dim).squeeze(0)
         else:
-            # unflatten to (*batch_shape, H*W, output_dim)
-            *_, H, W = logits_map.shape
-            logits_flat = logits_map.permute(0, 2, 3, 1).reshape(-1, H * W, self.output_dim)
-            return logits_flat.view(*batch_shape, H * W, self.output_dim)
+            _, _, H, W = logits_map.shape
+            return logits_map.permute(0, 2, 3, 1).reshape(B, H * W, self.output_dim)\
+                             .view(*batch_shape, H * W, self.output_dim)
+
+
+class PooledOutputHead(nn.Module):
+    """
+    Multi-scale pooled head.
+
+    For each scale i:
+      (B, C_i, H_i, W_i) --GAP--> (B, C_i) --[LN(C_i), Linear(C_i->D)]--> (B, D)
+    Sum across scales -> (B, D) --OutputHead(D->output_dim)--> (B, output_dim)
+
+    Construction modes:
+      - Eager: provide `in_channels_per_scale=[C0,...,CS-1]` to build at __init__.
+      - Lazy:  omit it; the head infers channels on first forward and freezes the layout.
+
+    Inputs to forward must be ordered consistently with `(*enc_feats, b_map)`.
+    """
+    def __init__(
+        self,
+        input_dim: int,                 # shared D
+        hidden_channels: int,           # hidden size in OutputHead
+        output_dim: int,                # final dimension (e.g., 1 for V(s))
+        activation: Optional[nn.Module] = None,
+        initialization: Optional[dict] = None,  # kept for interface compat; unused here
+        layer_norm: bool = True,
+        in_channels_per_scale: Optional[Sequence[int]] = None,
+        debug: bool = False
+    ):
+        super().__init__()
+        self.proj_dim = int(input_dim)
+        self.output_hidden = int(hidden_channels)
+        self.output_dim = int(output_dim)
+        self.debug = debug
+
+        # Internal state
+        self._built: bool = False
+        self._in_dims: Optional[List[int]] = None
+        self._proj = nn.ModuleList()
+        self._head: Optional[OutputHead] = None
+
+        # Eager build if channels are supplied
+        if in_channels_per_scale is not None:
+            self._build(list(int(c) for c in in_channels_per_scale))
+
+        # Public: expose what we know now (or will set after lazy build)
+        self.in_channels_per_scale: Optional[List[int]] = (
+            list(in_channels_per_scale) if in_channels_per_scale is not None else None
+        )
+
+        # Store OutputHead kwargs (we construct it inside _build)
+        self._oh_kwargs = dict(
+            input_dim=self.proj_dim,
+            hidden_channels=self.output_hidden,
+            output_dim=self.output_dim,
+            activation=activation,
+            initialization=initialization,
+            layer_norm=layer_norm,
+        )
+
+
+
+    # ---------------- internal build ----------------
+    def _build(self, in_dims: List[int]) -> None:
+        if len(in_dims) == 0:
+            raise ValueError("PooledOutputHead: at least one scale is required.")
+        self._in_dims = in_dims
+        self.in_channels_per_scale = list(in_dims)  # publish
+
+        # Per-scale LN + Linear(C_i -> D)
+        self._proj = nn.ModuleList([
+            nn.Sequential(
+                nn.LayerNorm(Ci),
+                nn.Linear(Ci, self.proj_dim, bias=False),
+            ) for Ci in in_dims
+        ])
+
+        # Initialize the per-scale Linear weights predictably
+        for m in self._proj.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+
+        # Final head over the summed D
+        self._head = OutputHead(**self._oh_kwargs)
+
+        self._built = True
+
+    # ---------------- forward ----------------
+    def forward(self, *encoder_outputs: torch.Tensor) -> torch.Tensor:
+        if len(encoder_outputs) == 0:
+            raise ValueError("PooledOutputHead expects at least one encoder feature.")
+
+        # Flatten features and collect batch shapes/channels
+        featsB: List[torch.Tensor] = []
+        batch_shape_ref: Optional[Tuple[int, ...]] = None
+        seen_dims: List[int] = []
+
+        for f in encoder_outputs:
+            fB, batch_shape, _ = _flatten_to_BCHW(f)
+            seen_dims.append(int(fB.shape[1]))
+            print(f"[PooledOutputHead] features {fB.shape} {batch_shape}")
+            if batch_shape_ref is None:
+                batch_shape_ref = batch_shape
+            elif batch_shape != batch_shape_ref:
+                raise ValueError(f"Mismatched batch shapes among inputs: {batch_shape} vs {batch_shape_ref}")
+            featsB.append(fB)
+
+        # Lazy build if needed
+        if not self._built:
+            self._build(seen_dims)
+            # Ensure parameters live on the same device as inputs
+            self.to(featsB[0].device)
+        else:
+            # Eager mode: validate channel layout & number of scales
+            assert self._in_dims is not None and self._head is not None
+            if len(seen_dims) != len(self._in_dims):
+                raise ValueError(f"Expected {len(self._in_dims)} feature maps, got {len(seen_dims)}.")
+            for k, (got, exp) in enumerate(zip(seen_dims, self._in_dims)):
+                if got != exp:
+                    raise ValueError(f"Channel mismatch at scale {k}: got C={got}, expected C={exp}.")
+
+        # Per-scale: GAP -> (B,C_i) -> LN+Linear -> (B,D)
+        zs: List[torch.Tensor] = []
+        for fB, proj in zip(featsB, self._proj):
+            z = F.adaptive_avg_pool2d(fB, 1).flatten(1)  # (B, C_i)
+            z = proj(z)                                  # (B, D)
+            zs.append(z)
+            if self.debug:
+                print(f"[PooledOutputHead] features {fB.shape}")
+
+        v = torch.stack(zs, dim=1).sum(dim=1)            # (B, D)
+        yB = self._head(v)                                # (B, output_dim)
+        return _unflatten_from_B(yB, batch_shape_ref or ())
+
 
 class UNetEncoder(nn.Module):
     def __init__(
@@ -3054,24 +3655,19 @@ class UNetEncoder(nn.Module):
         feature_config: FeatureDimConfig,
         hidden_channels: int,
         width: int,
-        length: int,
+        length: int, #Put for compatibility, this version only uses width and supports square grids
         add_progress: bool = False,
-        minimum_resoluation: int = 4,
         activation: DictConfig = None,
         initialization: DictConfig = None,
     ):
         super().__init__()
         self.output_keys = []
         self.width = width
-        self.length = length 
         self.in_channels = feature_config.task_feature_dim
         self.hidden_channels = hidden_channels
         self.add_progress = add_progress
-        
-        #TODO(wlr); Continue modifying this for rectangular domains
         # Determine number of downsampling layers based on width
         self.num_layers = int(math.floor(math.log2(width)))
-
         # Create encoder conv blocks dynamically
         self.enc_blocks = nn.ModuleList()
 
@@ -3100,8 +3696,6 @@ class UNetEncoder(nn.Module):
         self.output_dim = channels + (1 if add_progress else 0)
         self.output_keys.append("embed")
 
-        print(f"Output keys: {self.output_keys}")
-
     # def forward(self, obs):
     #     single = obs.batch_size == torch.Size([])
     #     x = obs["nodes", "tasks", "attr"]
@@ -3129,7 +3723,6 @@ class UNetEncoder(nn.Module):
         # x is a TensorDict; x.batch_size might be [], [N], [N,M], etc.
         single = x.batch_size == torch.Size([])
         width = self.width
-        length = self.length
 
         # 1) Pull out the tasks tensor: shape = (*batch_shape, tasks, in_channels)
         x_tasks = x["nodes", "tasks", "attr"]
@@ -3149,7 +3742,7 @@ class UNetEncoder(nn.Module):
 
         # 4) Convert 'tasks' → spatial dims (width × width), then to (flat_bs, C_in, W, W)
         x_flat = x_flat.view(
-            flat_bs, width, length, in_channels
+            flat_bs, width, width, in_channels
         ).permute(  # (flat_bs, W, W, C_in)
             0, 3, 1, 2
         )  # (flat_bs, C_in, W, W)
@@ -3160,7 +3753,6 @@ class UNetEncoder(nn.Module):
         for block in self.enc_blocks:
             x_enc = block(x_enc)
             enc_feats_flat.append(x_enc)
-            print(f"Encoder feature shape: {x_enc.shape}")
             x_enc = self.pool(x_enc)
 
         # 6) Bottleneck + flatten spatial → (flat_bs, feat_dim)
@@ -3186,7 +3778,7 @@ class UNetEncoder(nn.Module):
 
         return (*enc_feats, b)
 
-#TODO(wlr): The current code breaks for non powers of 2. FIX THIS
+
 class UNetDecoder(nn.Module):
     input_keys = ["observation"]
 
@@ -3195,21 +3787,18 @@ class UNetDecoder(nn.Module):
         input_dim: int,
         hidden_channels: int,
         width: int,
-        length: int,
+        length: int, #Put for compatibility, this version only uses width and supports square grids
         output_dim: int,
-        minimum_resolution: int, 
         activation: DictConfig = None,
         initialization: DictConfig = None,
         layer_norm: bool = False,
     ):
         super().__init__()
         self.width = width
-        self.length = length
         self.hidden_channels = hidden_channels
         self.output_dim = output_dim
         self.input_dim = input_dim
-        self.num_layers = int(math.floor(math.log2(min(self.width, self.length))))
-
+        self.num_layers = int(math.floor(math.log2(width)))
         # Create upsampling and decoder blocks dynamically
         self.up_blocks = nn.ModuleList()
         self.dec_blocks = nn.ModuleList()
@@ -3265,7 +3854,7 @@ class UNetDecoder(nn.Module):
                 flat_bs,
                 self.hidden_channels * (2 ** (self.num_layers - 1)),
                 self.width // (2**self.num_layers),
-                self.length // (2**self.num_layers), 
+                self.width // (2**self.num_layers),
             )
         else:
             b = b.unsqueeze(0)
@@ -3273,141 +3862,19 @@ class UNetDecoder(nn.Module):
                 1,
                 self.hidden_channels * (2 ** (self.num_layers - 1)),
                 self.width // (2**self.num_layers),
-                self.length // (2**self.num_layers), 
+                self.width // (2**self.num_layers),
             )
 
         for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(enc_feats)):
             b = up(b)
-            print(f"Decoder upsampled shape: {b.shape}")
             if not single:
                 enc = enc.view(flat_bs, *enc.shape[len(batch_shape) :])
             b = self._align_and_concat(b, enc)
-            print(f"Decoder after concat shape: {b.shape}")
             b = dec(b)
-            print(f"Decoder after concat and decode shape: {b.shape}")
         logits = self.out_conv(b)
         logits = logits.permute(0, 2, 3, 1).flatten(1, 2)
         if single:
             logits = logits.squeeze(0)
         else:
-            logits = logits.view(*batch_shape, self.width * self.length, -1)
-
-        print(f"Decoder output logits shape: {logits.shape}")
+            logits = logits.view(*batch_shape, self.width * self.width, -1)
         return logits
-
-
-class PooledOutputHead(nn.Module):
-    """
-    Minimal multi-scale head:
-      GAP (per scale) -> LayerNorm -> Linear(C_i -> D) -> SUM (over scales) -> OutputHead
-    Expects encoder outputs: (*enc_feats, b_map), each shaped (*batch, C_i, H_i, W_i) or (C_i, H_i, W_i).
-    """
-
-    def __init__(
-        self,
-        input_dim: int,              # shared D
-        hidden_channels: int,         # hidden size for OutputHead
-        output_dim: int,            # e.g. 1 for V(s)
-        activation=None,
-        initialization=None,
-        layer_norm: bool = True,
-    ):
-        super().__init__()
-        self.proj_dim = int(input_dim)
-        self.output_hidden = int(hidden_channels)
-        self.output_dim = int(output_dim)
-
-        # Built on first forward (we infer the per-scale channel dims from tensors)
-        self._built = False
-        self._proj = nn.ModuleList()   # per-scale: LN -> Linear(C_i -> D)
-        self._head = None
-
-        self._oh_kwargs = dict(
-            activation=activation,
-            initialization=initialization,
-            layer_norm=layer_norm,
-        )
-
-    # --------- helpers ---------
-    @staticmethod
-    def _flatten_to_BCHW(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...]]:
-        # Accept (C,H,W) or (*batch,C,H,W); return (B,C,H,W), batch_shape
-        if x.dim() == 3:  # (C,H,W)
-            return x.unsqueeze(0), ()
-        elif x.dim() >= 4:
-            *batch, C, H, W = x.shape
-            B = 1
-            for d in batch: B *= int(d)
-            return x.reshape(B, C, H, W), tuple(batch)
-        else:
-            raise ValueError(f"Expected (C,H,W) or (*batch,C,H,W), got {tuple(x.shape)}")
-
-    @staticmethod
-    def _unflatten_from_B(xB: torch.Tensor, batch_shape: Tuple[int, ...]) -> torch.Tensor:
-        return xB.squeeze(0) if not batch_shape else xB.view(*batch_shape, *xB.shape[1:])
-
-    def _build_once(self, featsB: List[torch.Tensor]) -> None:
-        # featsB: list of (B, C_i, H_i, W_i)
-        in_dims = [f.shape[1] for f in featsB]  # C_i for each scale
-        print(f"PooledOutputHead: building with in_dims={in_dims}, proj_dim={self.proj_dim}, output_dim={self.output_dim}")
-
-        # Per-scale LN + Linear(C_i -> D)
-        self._proj = nn.ModuleList([
-            nn.Sequential(
-                nn.LayerNorm(Ci),
-                nn.Linear(Ci, self.proj_dim, bias=False),
-            ) for Ci in in_dims
-        ])
-
-        # Head input is just D (we SUM across scales)
-        self._head = OutputHead(
-            input_dim=self.proj_dim,
-            hidden_channels=self.output_hidden,
-            output_dim=self.output_dim,
-            **self._oh_kwargs,
-        )
-        self._built = True
-
-    # --------- forward ---------
-    def forward(self, *encoder_outputs: torch.Tensor) -> torch.Tensor:
-        if len(encoder_outputs) == 0:
-            raise ValueError("PooledOutputHead expects at least one encoder feature.")
-
-        # Flatten each feature to (B,C,H,W) and check batch shapes match
-        featsB = []
-        batch_shape_ref = None
-        for f in encoder_outputs:
-            fB, batch_shape = self._flatten_to_BCHW(f)
-            if batch_shape_ref is None:
-                batch_shape_ref = batch_shape
-            elif batch_shape != batch_shape_ref:
-                raise ValueError(f"Mismatched batch shapes: {batch_shape} vs {batch_shape_ref}")
-            featsB.append(fB)
-
-        # Lazy build (infer channels & number of scales)
-        if not self._built:
-            self._build_once(featsB)
-            self.to(featsB[0].device)
-
-        # For each scale: GAP -> (B,C_i) -> LN+Linear -> (B,D)
-        zs = []
-        for fB, proj in zip(featsB, self._proj):
-            print(f"Feature map shape before GAP: {fB.shape}")
-            z = F.adaptive_avg_pool2d(fB, 1).flatten(1)  # (B, C_i)
-            print(f"Feature vector shape after GAP: {z.shape}")
-            z = proj(z)                                  # (B, D)
-            print(f"Projected feature shape after LN+Linear: {z.shape}")
-            zs.append(z)
-
-        # Sum across scales -> (B, D)
-        v = torch.stack(zs, dim=1).sum(dim=1)
-
-        # Output MLP
-        yB = self._head(v)  # (B, output_dim)
-
-        print(f"Output head final output shape: {yB.shape}")
-
-        output = self._unflatten_from_B(yB, batch_shape_ref or ())
-        print(f"Output head unflattened output shape: {output.shape}")
-
-        return output
