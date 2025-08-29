@@ -216,7 +216,8 @@ def run_parmetis_distributed(
     
     for sweep_idx, sweep_entry in enumerate(sweep_list):
         if rank == 0:
-            cfg.graph.config.boundary_width = sweep_entry
+            cfg.graph.config.level_memory = sweep_entry[0]
+            cfg.graph.config.boundary_width = sweep_entry[2]
             graph_builder = make_graph_builder(cfg, verbose=False)
             env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
         
@@ -289,16 +290,47 @@ def run_parmetis_distributed(
 
 def run_host_experiments_and_plot(cfg: DictConfig):
     d2d_bandwidth = cfg.system.d2d_bw
-    cfg.system.mem = 2**62
     if rank == 0:
+        sweep_list = []
+        
+        cfg.graph.config.level_memory = 10e9
         graph_builder = make_graph_builder(cfg, verbose=False)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
         data_stat = env.simulator_factory[0].input.graph.data.data_stat
-        print(data_stat)
         cfg.graph.config.arithmetic_intensity =  (data_stat["interior_average_comm"] / data_stat["compute_average"]) * cfg.graph.config.arithmetic_intensity / cfg.sweep.interior_ratio
-        boundary_scale = data_stat["interior_average_comm"] / data_stat["boundary_average_comm"]
-        sweep_list = [int(n * boundary_scale * cfg.graph.config.boundary_width) for n in cfg.sweep.list]
-        print(cfg.graph.config.arithmetic_intensity)
+        cfg.graph.config.boundary_width = data_stat["interior_average_comm"] / data_stat["boundary_average_comm"] * cfg.graph.config.boundary_width * cfg.sweep.boundary_ratio / cfg.sweep.interior_ratio
+        
+        cnt = 0
+        while True:
+            graph_builder = make_graph_builder(cfg, verbose=False)
+            env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
+            max_mem = 0
+            for i in range(3):
+                env.reset()
+                env.simulator.disable_external_mapper()
+                env.simulator.run()
+                max_mem += env.simulator.max_mem_usage
+            max_mem /= 3
+            print(f"GPU MAX:{max_mem/1e9:.2f}GB")
+            data_stat = env.simulator_factory[0].input.graph.data.data_stat
+            print(f"Step: {data_stat['average_step_data']/1e9:.2f}GB")
+            print(f"Task MAX: {env.simulator_factory[0].input.graph.max_requirement/1e9:.2f}GB")
+            print(f"Boundary Width: {cfg.graph.config.boundary_width}")
+            
+            sweep_list.append((cfg.graph.config.level_memory, data_stat['average_step_data'], cfg.graph.config.boundary_width, env.simulator.max_mem_usage))
+            
+            
+            prev_level_memory = cfg.graph.config.level_memory
+            cfg.graph.config.level_memory += cfg.sweep.level_size_step
+            cfg.graph.config.boundary_width = cfg.graph.config.boundary_width / ((prev_level_memory / cfg.graph.config.level_memory) ** cfg.graph.config.boundary_complexity)
+            if max_mem > cfg.system.mem * 0.99:
+                if cnt == 0 and len(sweep_list) > 5:
+                    sweep_list = sweep_list[len(sweep_list) - 5:]
+                cnt += 1
+            if env.simulator_factory[0].input.graph.max_requirement / cfg.system.mem > cfg.sweep.task_th or cnt >= 5:
+                break
+        
+        
 
     sweep_list = comm.bcast(sweep_list if rank == 0 else None, root=0)
     
@@ -364,7 +396,8 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         # ---- Sweep host-side (everything but ParMETIS)
         for sweep_index, sweep_entry in enumerate(sweep_list):
             # system config for this memory size
-            cfg.graph.config.boundary_width = sweep_entry
+            cfg.graph.config.level_memory = sweep_entry[0]
+            cfg.graph.config.boundary_width = sweep_entry[2]
             graph_builder = make_graph_builder(cfg, verbose=False)
             if "RL" in experiment_names:
                 env, norm = make_env(graph_builder=graph_builder, cfg=cfg, normalization=None, eval=True)
@@ -454,21 +487,19 @@ def run_host_experiments_and_plot(cfg: DictConfig):
     if rank == 0:
         print(metrics)
         
-        sweep_list = cfg.sweep.list
-        
         saved_lines = (
             f"# {cfg.graph.config.workload_args.traj_type} Trajectory\n"
             f"# Averaged over {cfg.sweep.n_samples} runs\n"
             f"experiment_names={experiment_names}\n"
             f"speedup_keys={speedup_keys}\n"
             f"mem_keys={mem_keys}\n"
-            f"sweep_list={sweep_list}\n"
+            f"sweep_list={[x[1] for x in sweep_list]}\n"
             f"metrics={metrics}\n"
             f"colors={colors}\n"
         )
         
         # -------- Save Figures & Logs
-        file_name = f"GraphSweep_{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}"
+        file_name = f"SizeSweep_{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}"
         file_name += f"_{cfg.graph.config.workload_args.upper_bound}w{cfg.graph.config.workload_args.lower_bound}"
         file_name += f"_{cfg.graph.config.workload_args.traj_type}"
         try:
@@ -487,8 +518,8 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         base.mkdir(parents=True, exist_ok=True)
         # add time stamp
         ts = datetime.now().strftime("%m%d%H%M")  # mmddhhmm
-        log_file = f"result_{cfg.sweep.interior_ratio}_{ts}.txt"
-        fig_file = f"figure_{cfg.sweep.interior_ratio}_{ts}.png"
+        log_file = f"result_{cfg.sweep.interior_ratio}I_{cfg.sweep.boundary_ratio}B.txt"
+        fig_file = f"figure_{cfg.sweep.interior_ratio}I_{cfg.sweep.boundary_ratio}B.png"
         # Save results text
         with open(base / log_file, "w") as ftxt:
             ftxt.write(OmegaConf.to_yaml(cfg))
@@ -496,7 +527,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                 "Sweep,TotalMem/ProblemSize," + ",".join([str(i) for i in metrics.keys()]) + "\n"
             )
             for idx in range(len(metrics["EFT"]["time"])):
-                ftxt.write(f"Boundary / Interior: {sweep_list[idx]}\n")
+                ftxt.write(f"level_mem: {sweep_list[idx][0]} step_mem: {sweep_list[idx][1]} boundary_width: {sweep_list[idx][2]}\n")
                 for k in metrics.keys():
                     if k != "Oracle":
                         line = f"{k},"
@@ -515,20 +546,21 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         fig, axes = plt.subplots(1, 4, figsize=(26, 6), sharex=True)
         # Interior, Boundary vs Compute
         interior_ratio = [cfg.sweep.interior_ratio for _ in sweep_list]
-        boundary_ratio = [i * cfg.sweep.interior_ratio for i in cfg.sweep.list]
-        
+        boundary_ratio = [cfg.sweep.boundary_ratio for _ in sweep_list]
+
+        xaxis = [i[1]/1e9 for i in sweep_list]
+
         axes[0].plot(
-            sweep_list[xslice], interior_ratio[xslice], label="Interior", color="tab:blue", linewidth=4
+            xaxis, interior_ratio[xslice], label="Interior", color="tab:blue", linewidth=4
         )
         axes[0].plot(
-            sweep_list[xslice], boundary_ratio[xslice], label="Boundary", color="tab:orange", linewidth=4
+            xaxis, boundary_ratio[xslice], label="Boundary", color="tab:orange", linewidth=4
         )
         axes[0].set_title("Communication Time / Compute Time", fontsize=20)
         axes[0].legend(loc="lower right", fontsize=16)
         axes[0].grid()
         # axes[0].set_xlabel("(d)", fontsize=20)
         axes[0].tick_params(axis="both", which="major", labelsize=20)
-        axes[0].set_xscale("log", base=2)
         axes[0].set_yscale("log", base=2)
         
         speedup = {}
@@ -538,7 +570,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
                 speedup[k].append(metrics["EFT"]["time"][i]/metrics[k]["time"][i])
         for k in experiment_names:
             axes[1].plot(
-                sweep_list[xslice],
+                xaxis,
                 metrics[k]["time"][xslice],
                 label=k,
                 linestyle="-",
@@ -551,39 +583,36 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         axes[1].legend(loc="upper right", fontsize=16)
         # axes[1].set_xlabel("(a)", fontsize=20)
         axes[1].tick_params(axis="both", which="major", labelsize=20)
-        axes[1].set_xscale("log", base=2)
         # 2) Relative Speedup vs EFT
         for k in speedup_keys:
             axes[2].plot(
-                sweep_list[xslice], speedup[k][xslice], label=k, color=colors[k], linewidth=4
+                xaxis, speedup[k][xslice], label=k, color=colors[k], linewidth=4
             )
         axes[2].set_title("Relative Speedup vs EFT", fontsize=20)
         axes[2].legend(loc="upper left", fontsize=16)
         axes[2].grid()
         # axes[2].set_xlabel("(b)", fontsize=20)
         axes[2].tick_params(axis="both", which="major", labelsize=20)
-        axes[2].set_xscale("log", base=2)
         # 3) Max Memory Usage
         for k in mem_keys:
             # Divide every entry by 1e9
-            axes[3].plot(sweep_list[xslice], np.array(metrics[k]["mem_usage"][xslice]) / 1e9, label=k, color=colors[k], linewidth=4)
-            # axes[3].plot(sweep_list[xslice], metrics[k]["mem_usage"][xslice], label=k, color=colors[k], linewidth=4)
+            axes[3].plot(xaxis, np.array(metrics[k]["mem_usage"][xslice]) / 1e9, label=k, color=colors[k], linewidth=4)
+            # axes[3].plot(xaxis, metrics[k]["mem_usage"][xslice], label=k, color=colors[k], linewidth=4)
         axes[3].legend(loc="upper left", fontsize=16)
         axes[3].set_title("Peak Memory Occupation (GB)", fontsize=20)
         axes[3].grid()
         # axes[3].set_xlabel("(c)", fontsize=20)
         axes[3].tick_params(axis="both", which="major", labelsize=20)
-        axes[3].set_xscale("log", base=2)
 
         # # Shared x-axis label and layout
         fig.supxlabel(
-            "Boundary Memory / Interior Memory", fontsize=20
+            "Average Step Memory Requirement (GB)", fontsize=20
         )
         fig.tight_layout()  # leave room at the bottom for the xlabel
         
         fig.savefig(base / fig_file)
 
-@hydra.main(config_path="conf", config_name="boundary_sweep", version_base=None)
+@hydra.main(config_path="conf", config_name="size_sweep", version_base=None)
 def main(cfg: DictConfig):
     run_host_experiments_and_plot(cfg)
 

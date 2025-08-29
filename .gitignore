@@ -189,3 +189,5 @@ cython_debug/
 
 # Test scripts
 test/run_tests.sh
+
+*.mp4

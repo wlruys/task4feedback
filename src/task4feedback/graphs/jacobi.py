@@ -311,6 +311,7 @@ class JacobiGraph(ComputeDataGraph):
         self.task_to_level = {}
         self.level_to_task = defaultdict(list)
         prev_interiors = {}
+        self.max_requirement = 0
 
         if retire_data:
             self.dynamic = True
@@ -378,6 +379,7 @@ class JacobiGraph(ComputeDataGraph):
                     print(
                         f"Warning: Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds half of the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB"
                     )
+                self.max_requirement = max(self.max_requirement, data_req)
                 # if data_req > 80e9:
                 #     print(f"Task {task_id} requires {data_req/1e9} GB of data")
                 #     print(f"Interior size: {self.data.blocks.data.get_size(interior_block)/1e9}")

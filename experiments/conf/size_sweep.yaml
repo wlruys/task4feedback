@@ -1,0 +1,99 @@
+defaults:
+  - graph: dynamic_jacobi_bump
+  - reward: default
+  - system: h100
+  - feature: cnn_batch
+  - network: cnn_batch
+  - algorithm: ppo
+  - runtime: batch
+  - wandb: default
+  - logging: default
+  - lr_scheduler: none 
+  - noise: none
+  - optimizer: adamw
+  - eval: default
+  - _self_
+
+
+sweep:
+  n_samples: 10
+  task_th: 0.4
+  level_size_step: 5e9
+  exps: ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
+  interior_ratio: 2 # Interior / Compute time
+  boundary_ratio: 2 # Boundary / Compute time
+
+system:
+  mem: 80e9
+
+parmetis:
+  itr: 1000
+  unbalance: 1.225
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: train.GitInfo
+seed: 256
+deterministic_torch: true
+
+reward:
+  verbose: true
+  random_start: false
+
+graph:
+  config:
+      level_memory: 80e9
+      arithmetic_intensity: 1000
+      memory_intensity: 0
+      n: 8
+      steps: 120
+      workload_args:
+        lower_bound: 1
+        upper_bound: 5
+  env:
+    change_priority: True
+    change_location: True
+    change_duration: False
+    seed: 1
+
+algorithm:
+  num_collections: 10000
+  rollout_steps: 0
+  workers: 4
+  ent_coef: 0.001
+  sample_slices: True
+  slice_len: 16
+  gamma: 1 
+  lmbda: 0.7
+
+optimizer:
+  lr: 2.5e-4
+
+feature:
+  observer:
+    prev_frames: 5
+    batched: true
+
+network:
+  layers:
+    # lstm:
+    #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
+    state:
+      hidden_channels: 16
+    actor:
+      hidden_channels: 16
+    critic:
+      hidden_channels: 128
+
+runtime:
+  batch_size: 5
+  queue_threshold: 5
+  max_in_flight: 64
+
+wandb:
+  enabled: true
+
+eval:
+  eval_interval: 0
+
