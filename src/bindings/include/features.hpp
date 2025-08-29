@@ -1429,8 +1429,8 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
   const int stride;
   const int frames;
   const bool add_current;
-  PrevMappedSizeFeature(const SchedulerState &state, int width, bool add_current, int frames)
-      : StateFeature<PrevMappedSizeFeature>(state, NodeType::TASK), stride(width * width),
+  PrevMappedSizeFeature(const SchedulerState &state, int width, int length, bool add_current, int frames)
+      : StateFeature<PrevMappedSizeFeature>(state, NodeType::TASK), stride(width * length),
         add_current(add_current), frames(frames) {
   }
 
