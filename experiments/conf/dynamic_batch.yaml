@@ -1,9 +1,9 @@
 defaults:
-  - graph: dynamic_jacobi_circle
+  - graph: dynamic_jacobi_diag
   - reward: incremental_schedule
   - system: h100
   - feature: cnn_batch
-  - network: dilation_cnn_batch
+  - network: rec_unet_cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -27,18 +27,18 @@ reward:
 
 graph:
   config:
-      n: 6
-      steps: 60
-      boundary_width: 1000
+      n: 8
+      steps: 240
+      boundary_width: 500
   env:
-    change_priority: True
-    change_location: True
+    change_priority: False
+    change_location: False
     change_duration: False
     seed: 1
 
 algorithm:
   num_collections: 10000
-  rollout_steps: 0
+  rollout_steps: 10
   workers: 4
   ent_coef: 0
   sample_slices: False
@@ -47,14 +47,14 @@ algorithm:
   lmbda: 0.7
 
 optimizer:
-  lr: 2.5e-4
+  lr: 2.5e-3
 
 system:
-  mem: 80000000000
+  mem: 80000000000000
 
 feature:
   observer:
-    prev_frames: 0
+    prev_frames: 3
     batched: true
 
 network:

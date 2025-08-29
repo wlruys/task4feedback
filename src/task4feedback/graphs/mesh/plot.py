@@ -579,7 +579,8 @@ def animate_state_list(graph, state_list, figsize=(8, 8), video_seconds=15, dura
                 cell_labels[color_value].append(cellid)
                 #print(f"Cell {cellid} duration {duration} color value {color_value}")
                 #cell_highlights[f"#{color_value:02x}00{255 - color_value:02x}"].append(cellid)
-        else:
+        
+        if False:
             for cellid, level in last_level_label.items():
                 cell_labels[level].append(cellid)
 

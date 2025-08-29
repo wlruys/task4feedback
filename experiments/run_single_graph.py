@@ -67,7 +67,7 @@ def configure_training(cfg: DictConfig):
             bandwidth=cfg.system.d2d_bw,
             mode="metis",
             offset=1,
-            level_chunks=1,
+            level_chunks=2,
         )
         graph.align_partitions()
         env.simulator.enable_external_mapper()
@@ -91,13 +91,13 @@ def configure_training(cfg: DictConfig):
     if rank==0:
         config = instantiate(cfg.eval)
         env.simulator.run()
-        # print(env.simulator.time, env._get_baseline("EFT"))
+        print(env.simulator.time, env._get_baseline("EFT"))
         print(f"Interval", int(env.simulator.time / config.max_frames))
         animate_mesh_graph(
             env,
             show=False,
             time_interval=int(env.simulator.time / config.max_frames),
-            title="outputs/partition_result",
+            title="outputs/partition_result_2",
             figsize=config.fig_size,
             dpi=config.dpi,
             bitrate=config.bitrate,

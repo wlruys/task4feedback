@@ -1402,7 +1402,6 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
   PrevReadSizeFeature(const SchedulerState &state, int width, int length, bool add_current, int frames)
       : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK), stride(width * length),
         add_current(add_current), frames(frames) {
-          std::cout << "MAKING NEW FEATURE" <<std::endl;
   }
 
   size_t getFeatureDimImpl() const {

@@ -2996,31 +2996,15 @@ class TinyASPP(nn.Module):
 
 
 class DilationRectangularEncoder(nn.Module):
-    """
-    Drop-in replacement that preserves the interface but never downsamples.
 
-    Key compat features exported:
-      - self.in_channels_per_scale: [hidden_channels]
-      - self.output_keys: ["embed"]
-      - self.output_dim: hidden_channels
-      - self.num_layers: 0         (no downsampling in this variant)
-
-    Kept args for BC (ignored safely): minimum_resoluation, pool_mode, activation, initialization.
-    Extra optional kwargs (defaulted) add functionality without breaking old call-sites:
-      - add_coord: bool
-      - num_blocks: int
-      - dilation_schedule: List[int]
-      - use_tiny_aspp: bool
-      - use_eca: bool
-    """
     def __init__(
         self,
         feature_config,
         hidden_channels: int,
         width: int,
         length: int,
-        add_progress: bool = False,                  # kept for symmetry; unused in encoder
-        minimum_resolution: int = 2,                # ignored; no downsampling
+        add_progress: bool = False,                 
+        minimum_resolution: int = 2,                
         activation: Optional[DictConfig] = None,     # kept for BC
         initialization: Optional[DictConfig] = None, # kept for BC
         debug: bool = True,
@@ -3036,17 +3020,14 @@ class DilationRectangularEncoder(nn.Module):
         if not hasattr(feature_config, "task_feature_dim"):
             raise AttributeError("feature_config must have attribute 'task_feature_dim'")
 
-        # Public attributes expected downstream
         self.width = int(width)
         self.length = int(length)
         self.in_channels = int(feature_config.task_feature_dim)
         self.hidden_channels = int(hidden_channels)
         self.debug = bool(debug)
 
-        # No downsampling in this encoder
         self.num_layers = 0
 
-        # Stem (optionally with CoordConv)
         self.add_coord = bool(add_coord)
         C_in = self.in_channels + (2 if self.add_coord else 0)
         C = self.hidden_channels
@@ -3064,7 +3045,6 @@ class DilationRectangularEncoder(nn.Module):
         self.aspp = TinyASPP(C) if use_tiny_aspp else nn.Identity()
         self.eca  = ECA(C, k_size=3) if use_eca else nn.Identity()
 
-        # Compatibility metadata
         self.in_channels_per_scale: List[int] = [C]
         self.output_dim = C
         self.output_keys: List[str] = ["embed"]
@@ -3085,20 +3065,17 @@ class DilationRectangularEncoder(nn.Module):
         for d in batch_shape: B *= int(d)
         h = xt.reshape(B, H, W, Cin).permute(0, 3, 1, 2)  # (B,Cin,H,W)
 
-        # Optional CoordConv
         if self.add_coord:
             coords = _coord_mesh(H, W, device=h.device, dtype=h.dtype)  # (2,H,W)
             coords = coords.unsqueeze(0).expand(B, -1, -1, -1)
             h = torch.cat([h, coords], dim=1)
 
-        # Fixed-resolution processing
         h = self.stem(h)
         for blk in self.blocks:
             h = blk(h)
         h = self.aspp(h)
         h = self.eca(h)
 
-        # Return like your encoder: (*enc_feats, embed) ; here enc_feats=[]
         if single:
             h = h.squeeze(0)  # (C,H,W)
             if self.debug: print(f"[Encoder] embed {h.shape}")
@@ -3108,23 +3085,9 @@ class DilationRectangularEncoder(nn.Module):
             if self.debug: print(f"[Encoder] embed {h.shape}")
             return (h,)
 
-# ======================================================================
-# Decoder: Fixed-resolution head, NO UPSAMPLING (drop-in)
-# ======================================================================
 
 class DilationRectangularDecoder(nn.Module):
-    """
-    Drop-in replacement head that preserves interface but never upsamples.
 
-    Public attributes kept:
-      - self.in_channels_per_scale = [input_dim]
-      - self.input_keys = ["observation","embed"]
-      - self.output_dim = output_dim
-      - self.num_layers = 0
-
-    Kept args for BC (ignored safely here): minimum_resolution, activation, initialization,
-      layer_norm, upsample_type, deconv_bilinear_init.
-    """
     def __init__(
         self,
         input_dim: int,
@@ -3132,15 +3095,15 @@ class DilationRectangularDecoder(nn.Module):
         width: int,
         length: int,
         output_dim: int,
-        minimum_resolution: int = 2,                 # ignored; no resampling
+        minimum_resolution: int = 2,                
         activation: Optional[DictConfig] = None,
         initialization: Optional[DictConfig] = None,
         layer_norm: bool = False,                    # we use GroupNorm internally
         add_progress: bool = False,
         progress_dim: int = 0,
         debug: bool = True,
-        upsample_type: str = "nearest",              # ignored; no upsampling
-        deconv_bilinear_init: bool = True,           # ignored; no deconv
+        upsample_type: str = "nearest",              
+        deconv_bilinear_init: bool = True,           
         # New optional knobs (safe defaults):
         num_blocks: int = 2,
         dilation_schedule: Optional[List[int]] = None,
@@ -3159,7 +3122,6 @@ class DilationRectangularDecoder(nn.Module):
         # No upsampling in this decoder
         self.num_layers = 0
 
-        # Optional FiLM on the bottleneck features using progress vector
         self.film = None
         if self.add_progress:
             assert self.progress_dim > 0, "progress_dim must be > 0 when add_progress=True"
@@ -3176,14 +3138,12 @@ class DilationRectangularDecoder(nn.Module):
         self.eca = ECA(self.hidden_channels, k_size=3) if use_eca else nn.Identity()
         self.out_conv = nn.Conv2d(self.hidden_channels, self.output_dim, kernel_size=1)
 
-        # Compatibility metadata
         self.in_channels_per_scale: List[int] = [self.input_dim]
         self.input_keys: List[str] = ["observation", "embed"]
 
     def forward(self, obs, *features):
         if len(features) == 0:
             raise ValueError("Decoder expects encoder features: (*enc_feats, bottleneck_map)")
-        # In this fixed-res variant, enc_feats are unused; we only need the final embed/bottleneck.
         b_map = features[-1]  # (C,H,W) or (*batch,C,H,W)
 
         # Normalize to BCHW
@@ -3192,7 +3152,6 @@ class DilationRectangularDecoder(nn.Module):
         assert C == self.input_dim, f"Decoder input_dim={self.input_dim}, got bottleneck C={C}"
         if self.debug: print(f"[Decoder] b_map {hB.shape}")
 
-        # Optional FiLM with progress vector
         if self.add_progress:
             prog = obs["aux", "progress"]  # (..., P)
             progB, _, _ = _flatten_last_dim(prog)      # (B, P)
@@ -3209,7 +3168,6 @@ class DilationRectangularDecoder(nn.Module):
         logits_map = self.out_conv(hB)  # (B, A, H, W)
         if self.debug: print(f"[Decoder] logits_map {logits_map.shape}")
 
-        # Return shapes identical to your implementation
         if len(batch_shape) == 0:
             return logits_map.permute(0, 2, 3, 1).reshape(H * W, self.output_dim).squeeze(0)
         else:
@@ -3220,25 +3178,7 @@ class DilationRectangularDecoder(nn.Module):
 # ------------------------- Encoder -------------------------
 
 class UNetRectangularEncoder(nn.Module):
-    """
-    Rectangular U-Net encoder with optional gentler downsampling.
 
-    Channels contract path:
-      i-th stage output channels: hidden_channels * 2**i   (i=0..L-1), pre-pool features are saved as skips.
-    Bottleneck channels:
-      num_layers>0: hidden_channels * 2**(num_layers-1)
-      num_layers==0: hidden_channels (via stem)
-
-    Args (public API kept):
-      feature_config: object with attribute `task_feature_dim` (input channels)
-      hidden_channels: base channel count
-      width, length: spatial size (W, H)
-      add_progress: kept for symmetry; not used in encoder
-      minimum_resolution: minimum side allowed after downsampling
-      activation, initialization: kept for compatibility (unused here)
-      debug: removed prints; kept arg for BC
-      pool_mode: "max" (default) or "avg"
-    """
     def __init__(
         self,
         feature_config,
@@ -3266,7 +3206,6 @@ class UNetRectangularEncoder(nn.Module):
 
         self.enc_blocks = nn.ModuleList()
         if self.num_layers == 0:
-            # No pooling—stem to hidden_channels while keeping resolution.
             self.stem = nn.Sequential(
                 nn.Conv2d(self.in_channels, self.hidden_channels, kernel_size=3, padding=1, bias=True),
                 nn.LeakyReLU(negative_slope=0.01, inplace=True),
@@ -3288,7 +3227,6 @@ class UNetRectangularEncoder(nn.Module):
             channels = in_ch  # = hidden * 2**(num_layers-1)
             self.in_channels_per_scale = [*skip_channels, channels]
 
-        # Downsampling choice (avg reduces aliasing slightly; keep "max" for BC)
         if pool_mode == "avg":
             self.pool = nn.AvgPool2d(kernel_size=2, stride=2, count_include_pad=False)
         elif pool_mode == "max":
@@ -3296,7 +3234,6 @@ class UNetRectangularEncoder(nn.Module):
         else:
             raise ValueError("pool_mode must be 'max' or 'avg'")
 
-        # 1x1 bottleneck mixer (keeps channels)
         self.bottleneck = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1, padding=0, bias=True),
             nn.LeakyReLU(negative_slope=0.01, inplace=True),
@@ -3306,24 +3243,12 @@ class UNetRectangularEncoder(nn.Module):
         self.output_keys: List[str] = [f"enc_{i}" for i in range(self.num_layers)] + ["embed"]
 
     def _extract_tasks_attr(self, x):
-        # Strict path (your original):
-        try:
-            return x["nodes", "tasks", "attr"]
-        except Exception:
-            # Common fallbacks (do not change public API; just be tolerant)
-            if isinstance(x, dict):
-                if "nodes" in x and isinstance(x["nodes"], dict):
-                    nodes = x["nodes"]
-                    if "tasks" in nodes and isinstance(nodes["tasks"], dict) and "attr" in nodes["tasks"]:
-                        return nodes["tasks"]["attr"]
-                if ("tasks", "attr") in x:
-                    return x[("tasks", "attr")]
-            raise KeyError("Could not find x['nodes','tasks','attr']")
+        return x["nodes", "tasks", "attr"]
+        
 
     def forward(self, x):
         xt = self._extract_tasks_attr(x)  # shape: (*batch, tasks, C) or (tasks, C)
 
-        # Decide single vs batched by rank
         single = (xt.dim() == 2)  # (tasks, C)
         if single:
             xt = xt.unsqueeze(0)  # -> (1, tasks, C)
@@ -3368,21 +3293,7 @@ class UNetRectangularEncoder(nn.Module):
 # ------------------------- Decoder -------------------------
 
 class UNetRectangularDecoder(nn.Module):
-    """
-    Rectangular U-Net decoder with switchable upsampling:
-      - upsample_type="deconv"  : ConvTranspose2d(k=2, s=2, p=0) [default]
-      - upsample_type="nearest" : nearest-neighbor upsample + Conv2d(3x3)
-    The latter is a "resize-convolution" that mitigates checkerboard artifacts.
 
-    Input/skip channel contract (matches encoder):
-      num_layers>0: bottleneck C  = hidden_channels * 2**(num_layers-1)
-      num_layers==0: bottleneck C = hidden_channels
-
-    Returns:
-      single input: (H*W, output_dim)
-      batched input: (*batch, H*W, output_dim)
-    """
-    # NOTE: do NOT use a class-level list; make it per-instance.
     def __init__(
         self,
         input_dim: int,
@@ -3426,12 +3337,10 @@ class UNetRectangularDecoder(nn.Module):
             f"Decoder input_dim={self.input_dim} must equal encoder bottleneck channels {expected_bottleneck_ch}"
         )
 
-        # Optional FiLM on bottleneck using progress vector in obs["aux","progress"]
         if self.add_progress:
             assert self.progress_dim > 0, "progress_dim must be > 0 when add_progress=True"
             self.film = nn.Linear(self.progress_dim, 2 * self.input_dim, bias=True)
 
-        # Build upsampling ladder
         self.up_blocks = nn.ModuleList()
         self.dec_blocks = nn.ModuleList()
 
@@ -3459,7 +3368,6 @@ class UNetRectangularDecoder(nn.Module):
             ))
             prev_ch = out_ch
 
-        # Input key list is per-instance (avoid class list mutation)
         self.input_keys: List[str] = ["observation"] + [f"enc_{i}" for i in range(self.num_layers)] + ["embed"]
 
         # Final projection to logits at full resolution
@@ -3472,14 +3380,12 @@ class UNetRectangularDecoder(nn.Module):
         enc_feats = features[:-1]
         b_map = features[-1]  # shape: (C,H,W) or (*batch,C,H,W)
 
-        # Determine single/batched by rank of bottleneck map
         single = (b_map.dim() == 3)
 
         # Normalize shapes
         b_mapB, batch_shape, B = _flatten_to_BCHW(b_map)
         encB = [_flatten_to_BCHW(e)[0] for e in enc_feats]
 
-        # Optional FiLM on bottleneck features
         if self.add_progress:
             prog = obs["aux", "progress"]  # (..., P)
             progB, _, _ = _flatten_last_dim(prog)
@@ -3519,19 +3425,6 @@ class UNetRectangularDecoder(nn.Module):
 
 
 class PooledOutputHead(nn.Module):
-    """
-    Multi-scale pooled head.
-
-    For each scale i:
-      (B, C_i, H_i, W_i) --GAP--> (B, C_i) --[LN(C_i), Linear(C_i->D)]--> (B, D)
-    Sum across scales -> (B, D) --OutputHead(D->output_dim)--> (B, output_dim)
-
-    Construction modes:
-      - Eager: provide `in_channels_per_scale=[C0,...,CS-1]` to build at __init__.
-      - Lazy:  omit it; the head infers channels on first forward and freezes the layout.
-
-    Inputs to forward must be ordered consistently with `(*enc_feats, b_map)`.
-    """
     def __init__(
         self,
         input_dim: int,                 # shared D
@@ -3559,12 +3452,10 @@ class PooledOutputHead(nn.Module):
         if in_channels_per_scale is not None:
             self._build(list(int(c) for c in in_channels_per_scale))
 
-        # Public: expose what we know now (or will set after lazy build)
         self.in_channels_per_scale: Optional[List[int]] = (
             list(in_channels_per_scale) if in_channels_per_scale is not None else None
         )
 
-        # Store OutputHead kwargs (we construct it inside _build)
         self._oh_kwargs = dict(
             input_dim=self.proj_dim,
             hidden_channels=self.output_hidden,
@@ -3576,12 +3467,11 @@ class PooledOutputHead(nn.Module):
 
 
 
-    # ---------------- internal build ----------------
     def _build(self, in_dims: List[int]) -> None:
         if len(in_dims) == 0:
             raise ValueError("PooledOutputHead: at least one scale is required.")
         self._in_dims = in_dims
-        self.in_channels_per_scale = list(in_dims)  # publish
+        self.in_channels_per_scale = list(in_dims)  
 
         # Per-scale LN + Linear(C_i -> D)
         self._proj = nn.ModuleList([
@@ -3591,12 +3481,10 @@ class PooledOutputHead(nn.Module):
             ) for Ci in in_dims
         ])
 
-        # Initialize the per-scale Linear weights predictably
         for m in self._proj.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
 
-        # Final head over the summed D
         self._head = OutputHead(**self._oh_kwargs)
 
         self._built = True
@@ -3624,10 +3512,8 @@ class PooledOutputHead(nn.Module):
         # Lazy build if needed
         if not self._built:
             self._build(seen_dims)
-            # Ensure parameters live on the same device as inputs
             self.to(featsB[0].device)
         else:
-            # Eager mode: validate channel layout & number of scales
             assert self._in_dims is not None and self._head is not None
             if len(seen_dims) != len(self._in_dims):
                 raise ValueError(f"Expected {len(self._in_dims)} feature maps, got {len(seen_dims)}.")

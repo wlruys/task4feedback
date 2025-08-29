@@ -264,7 +264,8 @@ class RuntimeEnv(EnvBase):
 
     def _handle_done(self, obs):
         time = obs[self.time_key].item()
-        improvement = (self.EFT_baseline - time) / self.EFT_baseline
+        #improvement = (self.EFT_baseline - time) / self.EFT_baseline
+        improvement = (self.EFT_baseline)/(time) # as speedup
         obs.set_at_(self.improvement_key, improvement, 0)
         reward = improvement
         if self.verbose:
