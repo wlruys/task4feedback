@@ -11,4 +11,5 @@ layers:
     hidden_channels: 128
 
 critic:
-  add_progress: false
+  add_progress: True
+  input_keys: ["embed"]

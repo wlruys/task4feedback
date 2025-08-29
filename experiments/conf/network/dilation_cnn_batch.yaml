@@ -1,0 +1,14 @@
+defaults:
+  - architecture/dilation_enc@layers.state
+  - architecture/dilation_dec@layers.actor
+  - architecture/rec_unet_output_head@layers.critic
+layers:
+  state:
+    hidden_channels: 16
+  actor:
+    hidden_channels: 16
+  critic:
+    hidden_channels: 128
+
+critic:
+  add_progress: True

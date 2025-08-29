@@ -77,6 +77,23 @@ def configure_training(cfg: DictConfig):
 
     eval_config = instantiate(cfg.eval)
 
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    if cfg.wandb.enabled:
+        wandb.run.summary["model/parameters_total"] = int(total_params)
+        wandb.run.summary["model/parameters_trainable"] = int(trainable_params)
+        try:
+            arch_file = Path(HydraConfig.get().runtime.output_dir) / "model_arch.txt"
+            arch_file.write_text(str(model))
+            wandb.save(str(arch_file))
+        except Exception as e:
+            print(f"Failed to save model architecture: {e}")
+        try:
+            wandb.watch(model, log="all")
+        except Exception as e:
+            print(f"wandb.watch failed: {e}")
+
     if lstm is not None:
         run_ppo_lstm(
             actor_critic_module=model,

@@ -3,7 +3,7 @@ defaults:
   - reward: incremental_schedule
   - system: h100
   - feature: cnn_batch
-  - network: cnn_batch
+  - network: dilation_cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -27,8 +27,8 @@ reward:
 
 graph:
   config:
-      n: 3
-      steps: 10
+      n: 6
+      steps: 60
       boundary_width: 1000
   env:
     change_priority: True
@@ -43,8 +43,8 @@ algorithm:
   ent_coef: 0
   sample_slices: False
   slice_len: 16
-  gamma: 0.999
-  lmbda: 0.95
+  gamma: 1.0
+  lmbda: 0.7
 
 optimizer:
   lr: 2.5e-4
@@ -54,7 +54,7 @@ system:
 
 feature:
   observer:
-    prev_frames: 2
+    prev_frames: 0
     batched: true
 
 network:

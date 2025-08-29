@@ -194,11 +194,20 @@ def create_td_actor_critic_models(
         input_dim=output_dim,
         output_dim=1,
         _recursive_=False,
+        
     )
+
+
+
+    if "input_keys" in cfg.network.critic:
+        critic_input_keys = cfg.network.critic.input_keys
+        print(f"Critic input keys: {critic_input_keys}")
+    else:
+        critic_input_keys = state_output_keys
 
     _td_critic_output = td_nn.TensorDictModule(
         critic_output_module,
-        in_keys=["enc_0", "embed"],
+        in_keys=critic_input_keys,
         out_keys=["state_value"],
     )
     critic_layers.append(_td_critic_output)
