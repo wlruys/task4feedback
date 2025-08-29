@@ -1741,6 +1741,10 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
             task_feature_factory.add(
                 fastsim.PrevReadSizeFeature, width, length, True, prev_frames
             )
+        # if prev_frames > 0:
+        #     task_feature_factory.add(
+        #         fastsim.PrevMappedSizeFeature, width, False, prev_frames
+        #     )
         if not batched:
             # Difference in depth doesn't exist in batched
             task_feature_factory.add(fastsim.DepthTaskFeature)
