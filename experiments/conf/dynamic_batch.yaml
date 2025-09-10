@@ -3,7 +3,7 @@ defaults:
   - reward: incremental_schedule
   - system: h100
   - feature: cnn_batch
-  - network: rec_unet_cnn_batch
+  - network: cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -28,8 +28,9 @@ reward:
 graph:
   config:
       n: 8
-      steps: 240
-      boundary_width: 500
+      domain_ratio: 1.0
+      steps: 100
+      boundary_width: 1000
   env:
     change_priority: False
     change_location: False
@@ -38,7 +39,7 @@ graph:
 
 algorithm:
   num_collections: 10000
-  rollout_steps: 10
+  rollout_steps: 0
   workers: 4
   ent_coef: 0
   sample_slices: False
@@ -47,7 +48,7 @@ algorithm:
   lmbda: 0.7
 
 optimizer:
-  lr: 2.5e-3
+  lr: 2.5e-5
 
 system:
   mem: 80000000000000

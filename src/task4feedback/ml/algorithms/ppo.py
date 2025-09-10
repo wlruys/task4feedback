@@ -25,6 +25,61 @@ import time
 from torchrl.collectors.utils import split_trajectories
 from task4feedback.ml.util import log_parameter_and_gradient_norms
 
+from tensordict.nn import set_composite_lp_aggregate
+set_composite_lp_aggregate(True).set()
+
+def joint_stats(td, ppo):
+    with torch.no_grad():
+        prev_lp = td["sample_log_prob"].squeeze(-1)  # [N]
+        cur_lp, dist, _ = ppo._get_cur_log_prob(td)
+        cur_lp = cur_lp.squeeze(-1)                  # [N]
+        act = td["action"]                           # [N, 64]
+        logits = td["logits"]                        # [N, 64, 4]
+
+        # Recompute joint log-prob explicitly via per-head log_softmax (+ gather)
+        logp_heads = F.log_softmax(logits, dim=-1)                     # [N, 64, 4]
+        gathered = logp_heads.gather(-1, act.unsqueeze(-1)).squeeze(-1)  # [N, 64]
+        joint_lp_explicit = gathered.sum(-1)                            # [N]
+
+        print("\n=== LOG-PROB STATS ===")
+        for name, x in [
+            ("prev_lp (stored)", prev_lp),
+            ("cur_lp (dist)", cur_lp),
+            ("cur_lp (explicit)", joint_lp_explicit),
+        ]:
+            x = x.detach()
+            print(f"{name:20s} mean={x.mean():8.3f} std={x.std():8.3f} "
+                  f"min={x.min():8.3f} max={x.max():8.3f}")
+            
+        x = td["observation", "nodes", "tasks", "attr"]     # [B, 600] ideally; if it's [600], fix your batch shaping first
+        x = x.detach()
+        print("\n=== OBSERVATION STATS ===")
+        print(f"obs: {x}")
+        print(f"obs mean={x.mean():8.3f} std={x.std():8.3f}")
+        print(f"obs min={x.min():8.3f} max={x.max():8.3f}")
+        print(f"obs numel={x.numel()} nan={torch.isnan(x).sum()} inf={torch.isinf(x).sum()}")
+        print(f"obs unique={torch.unique(x)}")
+
+        # KL approximations
+        kl_approx = (prev_lp - cur_lp)   # [N]
+        kl_approx_explicit = (prev_lp - joint_lp_explicit)
+        print("\n=== KL APPROX (sample-wise) ===")
+        for name, x in [
+            ("kl_approx", kl_approx),
+            ("kl_approx_explicit", kl_approx_explicit),
+        ]:
+            x = x.detach()
+            print(f"{name:20s} mean={x.mean():8.3f} std={x.std():8.3f} "
+                  f"min={x.min():8.3f} max={x.max():8.3f}")
+
+        # Logit scale diagnostics
+        l = logits.detach()
+        print(f"\nlogits shape: {l.shape}")
+        lmax = l.abs().amax().item()
+        per_head_span = (l.max(dim=-1).values - l.min(dim=-1).values)  # [N, 64]
+        print("\n=== LOGIT SCALE ===")
+        print(f"|logits|_max = {lmax:.1f}; span per head: mean={per_head_span.mean():.2f} "
+              f"max={per_head_span.max():.2f}")
 
 @dataclass
 class PPOConfig(AlgorithmConfig):
@@ -325,6 +380,8 @@ def run_ppo(
             + loss_vals["loss_entropy"]
         )
 
+        joint_stats(batch, loss_module)
+
         optimizer.zero_grad()
         loss_value.backward()
 
@@ -412,11 +469,41 @@ def run_ppo(
         samples_in_collection = flattened_data.shape[0]
         n_samples += samples_in_collection
 
-        if max_candidates > 1:
-            flattened_data["advantage"] = flattened_data["advantage"].expand(
-                -1, max_candidates
-            )
-            flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
+        print("SANITY CHECK OF SIZES IN OBSERVATION")
+        print("observation shape", flattened_data["observation"].shape)
+        print("action shape", flattened_data["action"].shape)
+        print("reward shape", flattened_data["next", "reward"].shape)
+        print("done shape", flattened_data["next", "done"].shape)
+        print("logits shape", flattened_data["logits"].shape)
+
+        print("keys", flattened_data.keys())
+
+        #if max_candidates > 1:
+        #    flattened_data["advantage"] = flattened_data["advantage"].expand(
+        #        -1, max_candidates
+        #    )
+        #    flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
+        #
+        #    flattened_data["value_target"] = flattened_data["value_target"].expand(
+        #        -1, max_candidates
+        #    )
+        #    flattened_data["value_target"] = flattened_data["value_target"].unsqueeze(-1)
+
+            # flattened_data["reward"] = flattened_data["next", "reward"].expand(
+            #     -1, max_candidates
+            # )
+
+            # flattened_data["reward"] = flattened_data["reward"].unsqueeze(-1)
+
+            # flattened_data["done"] = flattened_data["next", "done"].expand(
+            #     -1, max_candidates
+            # )
+            # flattened_data["done"] = flattened_data["done"].unsqueeze(-1)
+
+        print("advantage shape", flattened_data["advantage"].shape)
+        print("value target shape", flattened_data["value_target"].shape)
+        print("reward shape", flattened_data["next", "reward"].shape)
+        print("done shape", flattened_data["next", "done"].shape)
         replay_buffer.extend(flattened_data)
 
         update_start_t = time.perf_counter()
@@ -656,6 +743,7 @@ def run_ppo_lstm(
             + loss_vals["loss_entropy"]
         )
 
+
         optimizer.zero_grad()
         loss_value.backward()
 
@@ -734,12 +822,14 @@ def run_ppo_lstm(
 
         flattened_data = tensordict_data.reshape(-1)
 
+
         if ppo_config.sample_slices:
             if max_candidates > 1:
                 flattened_data["advantage"] = flattened_data["advantage"].expand(
                     -1, max_candidates
                 )
                 flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
+
             replay_buffer.extend(flattened_data)
         else:
             if max_candidates > 1:

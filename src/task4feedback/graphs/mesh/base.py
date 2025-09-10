@@ -199,6 +199,17 @@ class Geometry:
             normal = np.round(normal, round_out)
 
         return normal
+    
+    def get_edges_of_cells(self, cells: np.array) -> list[int]:
+        """
+        Get the unique edges of a list of cells.
+        """
+        edge_set = set()
+        for cell in cells:
+            edges = self.cell_edges[cell]
+            print(f"Cell {cell} has edges {edges}", type(edges))
+            edge_set.update(edges)
+        return np.array(list(edge_set), dtype=int)
 
 
 def initialize_gmsh():

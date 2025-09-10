@@ -2,8 +2,9 @@ from tensordict import TensorDict
 import torch
 from typing import Callable, Optional
 from torchrl.envs import set_exploration_type, ExplorationType
+from torchrl.envs.utils import check_env_specs
 from tensordict import TensorDict
-from task4feedback.graphs.mesh.plot import animate_mesh_graph
+from task4feedback.graphs.mesh.plot import animate_mesh_graph, PlotConfig, ColorConfig
 from dataclasses import dataclass, field 
 import wandb
 from pathlib import Path
@@ -259,10 +260,13 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
         env.reset_for_evaluation(seed=seed)
         env.disable_reward()
         with set_exploration_type(exploration_type), torch.no_grad():
+            check_env_specs(env)
             tensordict = env.rollout(
                 policy=policy,
                 max_steps=100000,
             )
+
+
 
         if "next" in tensordict and "reward" in tensordict["next"]:
             rewards = tensordict["next", "reward"]
@@ -366,21 +370,31 @@ def visualize_envs(n_collections: int, viz_envs: list[RuntimeEnv], config: Evalu
         assert(env is not None)
         training.info(f"Visualizing environment {i} with policy {exploration_type} at n_updates={n_collections}")
         title = f"network_eval_{exploration_type}_{n_collections}"
-        animate_mesh_graph(
-            env,
-            time_interval=int(env.simulator.time / config.max_frames),
-            show=False,
-            title=title,
-            figsize=config.fig_size,
+
+        plot_config = PlotConfig(
+            use_labels=False,
+            use_duration_shading=True,
             dpi=config.dpi,
+            figsize=config.fig_size,
             bitrate=config.bitrate,
             video_seconds=config.video_seconds,
+            n_frames=config.max_frames,
         )
+
+        color_config = ColorConfig()
 
         if wandb is None or wandb.run is None or wandb.run.dir is None:
             path = "."
         else:
             path = wandb.run.dir
+
+        animate_mesh_graph(
+            env,
+            plot_cfg=plot_config,
+            color_cfg=color_config,
+            folder=path,
+            filename=f"{title}.mp4",
+        )
 
         video_path = Path(path) / f"{title}.mp4"
         video_log[f"eval/video/{i}/{exploration_type}"] = wandb.Video(

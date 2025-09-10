@@ -12,7 +12,7 @@ config:
   level_memory: 4e9
   randomness: 0.0
   permute_idx: 0
-  vcu_usage: 1.0
+  vcu_usage: 0.25
   task_internal_memory: 0 
   task_time: 1000 
   boundary_time: 1000

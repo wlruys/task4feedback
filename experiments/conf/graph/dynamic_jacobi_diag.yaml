@@ -24,7 +24,7 @@ config:
     traj_specifics:
       transition_frac: 0.25 # fraction of total time spent moving
       blur_frac: 0.10 # border softness (fraction of side). 0 -> hard edges
-      width: 0.8 # box width (fraction of domain min side)
+      width: 0.5 # box width (fraction of domain min side)
 init:
   partitioner: metis
   nparts: 4

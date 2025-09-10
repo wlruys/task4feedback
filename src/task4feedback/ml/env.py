@@ -344,7 +344,7 @@ class RuntimeEnv(EnvBase):
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         # start_t = perf_counter()
-        print("RESET", self.resets, flush=True)
+        #print("RESET", self.resets, flush=True)
         training.debug("Resetting environment (reset count: {})".format(self.resets))
         self.resets += 1
         self.step_count = 0

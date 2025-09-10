@@ -14,6 +14,15 @@ from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUMo
 from pathlib import Path
 from task4feedback.graphs.jacobi import get_length_from_config
 
+
+def MultiHeadCategorical(**kwargs):
+    return torch.distributions.Categorical(**kwargs).to_event(1)   # equivalent to Independent(base, 1)
+
+def MultiHeadCategorical(**kwargs):
+    # kwargs will contain 'logits' read from the TensorDict by Probabilistic* module
+    base = torch.distributions.Categorical(**kwargs)          # batch_shape: [..., 64], event_shape: ()
+    return torch.distributions.Independent(base, 1)           # reinterpret the last batch dim as event -> joint log_prob
+
 def create_actor_critic_models(
     cfg: DictConfig, feature_cfg: FeatureDimConfig
 ) -> nn.Module:
@@ -151,7 +160,9 @@ def create_td_actor_critic_models(
     probabilistic_policy = ProbabilisticActor(
         module=policy_module,
         in_keys=["logits"],
-        distribution_class=torch.distributions.Categorical,
+        out_keys=["action"],
+        #distribution_class=torch.distributions.Categorical,
+        distribution_class=MultiHeadCategorical,
         return_log_prob=True,
     )
 

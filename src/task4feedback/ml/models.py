@@ -3502,7 +3502,8 @@ class PooledOutputHead(nn.Module):
         for f in encoder_outputs:
             fB, batch_shape, _ = _flatten_to_BCHW(f)
             seen_dims.append(int(fB.shape[1]))
-            print(f"[PooledOutputHead] features {fB.shape} {batch_shape}")
+            if self.debug:
+                print(f"[PooledOutputHead] features {fB.shape} {batch_shape}")
             if batch_shape_ref is None:
                 batch_shape_ref = batch_shape
             elif batch_shape != batch_shape_ref:

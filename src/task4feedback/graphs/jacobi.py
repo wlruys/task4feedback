@@ -811,6 +811,18 @@ class JacobiGraph(ComputeDataGraph):
             adjwgt_np,
             vsize_np,
         )
+    
+    def initial_mincut_partition(
+        self,
+        arch: DeviceType = DeviceType.GPU,
+        bandwidth: int = 1000,
+        n_parts: int = 4,
+        offset: int = 1,  # 1 to ignore cpu
+    ):
+        cell_graph = self.get_weighted_cell_graph(arch, bandwidth=bandwidth, levels=[0])
+        edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
+        partition = [x + offset for x in partition]
+        return partition
 
     def mincut_per_levels(
         self,
@@ -1151,6 +1163,7 @@ class BlockCyclicMapper(PartitionMapper):
         block_size: int = 2, offset: int = 1):
         self.level_start = 0
         self.offset = offset
+        self.geometry = geometry
         if mapper is not None:
             assert isinstance(mapper, BlockCyclicMapper), (
                 "Mapper must be of type BlockCyclicMapper, is " + str(type(mapper))

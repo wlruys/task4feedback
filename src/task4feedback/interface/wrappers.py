@@ -2073,7 +2073,11 @@ class SimulatorDriver:
         external_mapper_t = type(self.external_mapper)
 
         internal_mapper_copy = internal_mapper_t()
-        external_mapper_copy = external_mapper_t()
+
+        try: 
+            external_mapper_copy = external_mapper_t()
+        except ValueError:
+            external_mapper_copy = external_mapper_t(geometry=self.external_mapper.geometry)
 
         observer_factory = self.observer_factory
 
