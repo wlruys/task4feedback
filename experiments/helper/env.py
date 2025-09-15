@@ -82,6 +82,7 @@ def make_env(
     lstm: Optional[LSTMModule] = None,
     normalization: Optional[NormalizationDetails] = None,
     eval=False,
+    network=None,
 )->RuntimeEnv | tuple[RuntimeEnv, NormalizationDetails]:
     from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
     gmsh.initialize()
@@ -126,6 +127,7 @@ def make_env(
             if cfg.algorithm.rollout_steps == 0 
             else cfg.algorithm.rollout_steps + 1)
         ),
+        network=network,
     )
     env = TransformedEnv(env, StepCounter())
     env.append_transform(TrajCounter())
@@ -149,10 +151,13 @@ def make_env(
                     transform.init_stats(
                         num_iter=env.size() * cfg.graph.env.warmup,
                         key=("observation", "nodes", "tasks", "attr"),
+                        reduce_dim=(0, 1),
+                        cat_dim=0,
                     )
                     env.enable_reward()
         new_norm = NormalizationDetails(task_norm=task_norm_transform.state_dict())
     elif isinstance(normalization, NormalizationDetails):
+        print("NORM: ", normalization)
         task_norm_transform = ObservationNorm(
             in_keys=[("observation", "nodes", "tasks", "attr")],
             eps=1e-4,

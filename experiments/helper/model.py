@@ -68,7 +68,7 @@ def create_actor_critic_models(
 
 def create_td_actor_critic_models(
     cfg: DictConfig, feature_cfg: FeatureDimConfig
-) -> tuple[nn.Module, LSTMModule | None]:
+) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
         
     graph_config = instantiate(cfg.graph.config)
 
@@ -167,8 +167,18 @@ def create_td_actor_critic_models(
     )
 
     critic_layers = []
+    reference_layers = []
+
     if hasattr(state_layer, "width") and hasattr(state_layer, "length"):
         critic_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_progress=cfg.network.critic.add_progress,
+            _recursive_=False,
+            width=graph_config.n,
+            length=get_length_from_config(graph_config)
+        )
+        reference_state_module = instantiate(
             state_layer,
             feature_config=feature_cfg,
             add_progress=cfg.network.critic.add_progress,
@@ -183,14 +193,28 @@ def create_td_actor_critic_models(
             add_progress=cfg.network.critic.add_progress,
             _recursive_=False,
         )
+        reference_state_module  = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_progress=cfg.network.critic.add_progress,
+            _recursive_=False,
+        )
 
     _td_critic_state = td_nn.TensorDictModule(
         critic_state_module,
         in_keys=["observation"],
         out_keys=state_output_keys,
     )
+    _td_reference_state = td_nn.TensorDictModule(
+        critic_state_module,
+        in_keys=["observation"],
+        out_keys=state_output_keys,
+    )
+
     output_dim = critic_state_module.output_dim
     critic_layers.append(_td_critic_state)
+    reference_layers.append(_td_reference_state)
+
 
     if "lstm" in layers:
         critic_lstm_layer = instantiate(
@@ -200,6 +224,8 @@ def create_td_actor_critic_models(
         output_dim = layers.lstm.hidden_size
         critic_layers.append(critic_lstm_layer)
 
+    
+
     critic_output_module = instantiate(
         critic_layer,
         input_dim=output_dim,
@@ -207,8 +233,12 @@ def create_td_actor_critic_models(
         _recursive_=False,
         
     )
-
-
+    reference_output_module = instantiate(
+        critic_layer,
+        input_dim=output_dim,
+        output_dim=8,
+        _recursive_=False,
+    )
 
     if "input_keys" in cfg.network.critic:
         critic_input_keys = cfg.network.critic.input_keys
@@ -221,12 +251,19 @@ def create_td_actor_critic_models(
         in_keys=critic_input_keys,
         out_keys=["state_value"],
     )
+    _td_reference_output = td_nn.TensorDictModule(
+        reference_output_module, 
+        in_keys=critic_input_keys,
+        out_keys=["reference_state"],
+    )
     critic_layers.append(_td_critic_output)
+    reference_layers.append(_td_reference_output)
 
     critic_module = td_nn.TensorDictSequential(*critic_layers, inplace=True)
+    reference_module = td_nn.TensorDictSequential(*reference_layers, inplace=True)
     value_operator = critic_module
 
-    return ActorCriticModule(probabilistic_policy, value_operator), lstm_mod
+    return ActorCriticModule(probabilistic_policy, value_operator), reference_module, lstm_mod
 
 def load_policy_from_checkpoint(model: torch.nn.Module, ckpt_path: Path) -> bool:
     """Load a policy module state_dict from `ckpt_path` into `model`.

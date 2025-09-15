@@ -832,6 +832,59 @@ class OutputHead(nn.Module):
         return self.network(x)
 
 
+class LogitStabilizer(nn.Module):
+    def __init__(self, init_tau=2.0, learnable=True):
+        super(LogitStabilizer, self).__init__()
+        t = torch.tensor(float(init_tau)).log()
+        self.log_tau = nn.Parameter(t, requires_grad=learnable)
+
+    @property
+    def tau(self):
+        return self.log_tau.exp().clamp_min(1.0)
+    
+    def forward(self, logits):
+        logits = logits - logits.mean(dim=-1, keepdim=True)
+        logits = logits / self.tau
+        return logits
+    
+    
+
+
+class LogitsOutputHead(OutputHead):
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_channels: int,
+        output_dim: int,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+        layer_norm: bool = True,
+        logit_stabilizer: Optional[LogitStabilizer] = None,
+        debug: bool = False
+    ):
+        super(LogitsOutputHead, self).__init__(
+            input_dim,
+            hidden_channels,
+            output_dim,
+            activation=activation,
+            initialization=initialization,
+            layer_norm=layer_norm,
+            debug=debug
+        )
+        if logit_stabilizer is None:
+            self.logit_stabilizer = LogitStabilizer()
+        else:
+            self.logit_stabilizer = logit_stabilizer
+
+    def forward(self, x):
+        if self.debug:
+            printf("[LogitsOutputHead] input {x.shape}")
+        logits = super().forward(x)
+        logits = self.logit_stabilizer(logits)
+        return logits
+
+
 class OldOutputHead(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, logits=False):
         super(OldOutputHead, self).__init__()
@@ -2668,9 +2721,9 @@ class ResidualBlock(nn.Module):
         super().__init__()
         pad = kernel_size // 2
         self.conv1 = nn.Conv2d(in_ch, hidden_ch, kernel_size, padding=pad)
-        self.act1 = nn.LeakyReLU(inplace=True, negative_slope=0.01)
+        self.act1 = nn.LeakyReLU(inplace=False, negative_slope=0.01)
         self.conv2 = nn.Conv2d(hidden_ch, hidden_ch, kernel_size, padding=pad)
-        self.act2 = nn.LeakyReLU(inplace=True, negative_slope=0.01)
+        self.act2 = nn.LeakyReLU(inplace=False, negative_slope=0.01)
 
     def forward(self, x):
         residual = x
@@ -2709,7 +2762,7 @@ class CNNSingleStateNet(nn.Module):
         pad = kernel_size // 2
         blocks += [
             nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
-            nn.LeakyReLU(inplace=True, negative_slope=0.01),
+            nn.LeakyReLU(inplace=False, negative_slope=0.01),
         ]
         ch = hidden_ch
 
@@ -2722,12 +2775,12 @@ class CNNSingleStateNet(nn.Module):
         if n_layers % 2 == 1:
             blocks += [
                 nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
-                nn.LeakyReLU(inplace=True, negative_slope=0.01),
+                nn.LeakyReLU(inplace=False, negative_slope=0.01),
             ]
             ch = hidden_ch
         # final conv layer
         blocks.append(nn.Conv2d(ch, 1, kernel_size, padding=pad))
-        blocks.append(nn.LeakyReLU(inplace=True, negative_slope=0.01))
+        blocks.append(nn.LeakyReLU(inplace=False, negative_slope=0.01))
         ch = 1
 
         self.net = nn.Sequential(*blocks)
@@ -2885,22 +2938,6 @@ def _unflatten_from_B(xB: torch.Tensor, batch_shape: Tuple[int, ...]) -> torch.T
     return xB.squeeze(0) if not batch_shape else xB.view(*batch_shape, *xB.shape[1:])
 
 
-def _extract_tasks_attr(x):
-    """
-    Robustly extract the task feature tensor from your nested dict.
-    Expected key per your code: x["nodes","tasks","attr"] -> (..., tasks, C)
-    """
-    try:
-        return x["nodes", "tasks", "attr"]
-    except Exception:
-        if isinstance(x, dict):
-            if "nodes" in x and isinstance(x["nodes"], dict):
-                nodes = x["nodes"]
-                if "tasks" in nodes and isinstance(nodes["tasks"], dict) and "attr" in nodes["tasks"]:
-                    return nodes["tasks"]["attr"]
-            if ("tasks", "attr") in x:
-                return x[("tasks", "attr")]
-    raise KeyError("Could not find x['nodes','tasks','attr']")
 
 def _flatten_last_dim(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...], int]:
     """
@@ -2932,7 +2969,7 @@ class ConvNormAct(nn.Module):
         pad = dilation * (k // 2)
         self.conv = nn.Conv2d(C_in, C_out, kernel_size=k, padding=pad, dilation=dilation, bias=False, groups=groups)
         self.norm = nn.GroupNorm(_choose_gn_groups(C_out), C_out)
-        self.act = nn.SiLU(inplace=True) if act == "silu" else nn.ReLU(inplace=True)
+        self.act = nn.SiLU(inplace=False) if act == "silu" else nn.ReLU(inplace=False)
     def forward(self, x):
         return self.act(self.norm(self.conv(x)))
 
@@ -2983,13 +3020,13 @@ class TinyASPP(nn.Module):
             nn.Sequential(
                 nn.Conv2d(C, C, kernel_size=3, padding=r, dilation=r, bias=False),
                 nn.GroupNorm(_choose_gn_groups(C), C),
-                nn.SiLU(inplace=True) if act == "silu" else nn.ReLU(inplace=True),
+                nn.SiLU(inplace=False) if act == "silu" else nn.ReLU(inplace=False),
             ) for r in rates
         ])
         self.fuse = nn.Sequential(
             nn.Conv2d(len(rates) * C, C, kernel_size=1, bias=False),
             nn.GroupNorm(_choose_gn_groups(C), C),
-            nn.SiLU(inplace=True) if act == "silu" else nn.ReLU(inplace=True),
+            nn.SiLU(inplace=False) if act == "silu" else nn.ReLU(inplace=False),
         )
     def forward(self, x):
         return self.fuse(torch.cat([b(x) for b in self.branches], dim=1))
@@ -3010,11 +3047,11 @@ class DilationRectangularEncoder(nn.Module):
         debug: bool = True,
         pool_mode: str = "avg",                      # ignored; no pooling
         # New optional knobs (do not break existing calls):
-        add_coord: bool = False,
+        add_coord: bool = True,
         num_blocks: int = 2,
         dilation_schedule: Optional[List[int]] = None,
-        use_tiny_aspp: bool = False,
-        use_eca: bool = False,
+        use_tiny_aspp: bool = True,
+        use_eca: bool = True,
     ):
         super().__init__()
         if not hasattr(feature_config, "task_feature_dim"):
@@ -3045,12 +3082,18 @@ class DilationRectangularEncoder(nn.Module):
         self.aspp = TinyASPP(C) if use_tiny_aspp else nn.Identity()
         self.eca  = ECA(C, k_size=3) if use_eca else nn.Identity()
 
+        self.film = nn.Linear(8, 2*self.hidden_channels, bias=True)
+
         self.in_channels_per_scale: List[int] = [C]
         self.output_dim = C
         self.output_keys: List[str] = ["embed"]
 
     def forward(self, x):
-        xt = _extract_tasks_attr(x)  # (..., tasks, C_in_no_coords)
+        xt = x["nodes", "tasks", "attr"]  # (..., tasks, C_in_no_coords)
+        z = x["aux", "z"]
+
+        #print(f"[Encoder] input {xt.shape}")
+        #print(f"[features] ", xt[0, :])
         single = (xt.dim() == 2)
         if single:
             xt = xt.unsqueeze(0)  # (1, tasks, C)
@@ -3083,7 +3126,117 @@ class DilationRectangularEncoder(nn.Module):
         else:
             h = h.view(*batch_shape, *h.shape[1:])  # (*batch, C, H, W)
             if self.debug: print(f"[Encoder] embed {h.shape}")
+
+        # zB, _, _ = _flatten_last_dim(z)
+        # gamma_beta = self.film(z)
+        # gamma, beta = gamma_beta.chunk(2, dim=-1)
+        # print(f"H shape {h.shape}, gamma shape {gamma.shape}, beta shape {beta.shape}")
+        #h = gamma.unsqueeze(-1).unsqueeze(-1) * h + beta.unsqueeze(-1).unsqueeze(-1)
+        
+        return (h,)
+
+class ConditionedDilationRectangularEncoder(nn.Module):
+
+    def __init__(
+        self,
+        feature_config,
+        hidden_channels: int,
+        width: int,
+        length: int,
+        add_progress: bool = False,                 
+        minimum_resolution: int = 2,                
+        activation: Optional[DictConfig] = None,     # kept for BC
+        initialization: Optional[DictConfig] = None, # kept for BC
+        debug: bool = True,
+        pool_mode: str = "avg",                      # ignored; no pooling
+        # New optional knobs (do not break existing calls):
+        add_coord: bool = True,
+        num_blocks: int = 2,
+        dilation_schedule: Optional[List[int]] = None,
+        use_tiny_aspp: bool = True,
+        use_eca: bool = True,
+    ):
+        super().__init__()
+        if not hasattr(feature_config, "task_feature_dim"):
+            raise AttributeError("feature_config must have attribute 'task_feature_dim'")
+
+        self.width = int(width)
+        self.length = int(length)
+        self.in_channels = int(feature_config.task_feature_dim)
+        self.hidden_channels = int(hidden_channels)
+        self.debug = bool(debug)
+
+        self.num_layers = 0
+
+        self.add_coord = bool(add_coord)
+        C_in = self.in_channels + (2 if self.add_coord else 0)
+        C = self.hidden_channels
+        self.stem = ConvNormAct(C_in, C, k=3, dilation=1, act="silu")
+
+        # Dilated residual stack
+        if not dilation_schedule:
+            dilation_schedule = [1, 2, 3]  # short, aperiodic cycle for ≤32x32
+        self.blocks = nn.ModuleList([
+            DilatedResBlock(C, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu")
+            for i in range(num_blocks)
+        ])
+
+        # Tiny ASPP and optional ECA gate
+        self.aspp = TinyASPP(C) if use_tiny_aspp else nn.Identity()
+        self.eca  = ECA(C, k_size=3) if use_eca else nn.Identity()
+
+        self.film = nn.Linear(8, 2*self.hidden_channels, bias=True)
+
+        self.in_channels_per_scale: List[int] = [C]
+        self.output_dim = C
+        self.output_keys: List[str] = ["embed"]
+
+    def forward(self, x):
+        xt = x["nodes", "tasks", "attr"]  # (..., tasks, C_in_no_coords)
+        z = x["aux", "z"]
+
+        #print(f"[Encoder] input {xt.shape}")
+        #print(f"[features] ", xt[0, :])
+        single = (xt.dim() == 2)
+        if single:
+            xt = xt.unsqueeze(0)  # (1, tasks, C)
+
+        *batch_shape, T, Cin = xt.shape
+        H, W = self.length, self.width
+        assert T == H * W, f"tasks={T} differs from length*width={H*W}"
+        assert Cin == self.in_channels, f"in_channels mismatch: expected {self.in_channels}, got {Cin}"
+
+        # Flatten and reshape to BCHW
+        B = 1
+        for d in batch_shape: B *= int(d)
+        h = xt.reshape(B, H, W, Cin).permute(0, 3, 1, 2)  # (B,Cin,H,W)
+
+        if self.add_coord:
+            coords = _coord_mesh(H, W, device=h.device, dtype=h.dtype)  # (2,H,W)
+            coords = coords.unsqueeze(0).expand(B, -1, -1, -1)
+            h = torch.cat([h, coords], dim=1)
+
+        h = self.stem(h)
+        for blk in self.blocks:
+            h = blk(h)
+        h = self.aspp(h)
+        h = self.eca(h)
+
+        if single:
+            h = h.squeeze(0)  # (C,H,W)
+            if self.debug: print(f"[Encoder] embed {h.shape}")
             return (h,)
+        else:
+            h = h.view(*batch_shape, *h.shape[1:])  # (*batch, C, H, W)
+            if self.debug: print(f"[Encoder] embed {h.shape}")
+
+        zB, _, _ = _flatten_last_dim(z)
+        gamma_beta = self.film(z)
+        gamma, beta = gamma_beta.chunk(2, dim=-1)
+        print(f"H shape {h.shape}, gamma shape {gamma.shape}, beta shape {beta.shape}")
+        h = gamma.unsqueeze(-1).unsqueeze(-1) * h + beta.unsqueeze(-1).unsqueeze(-1)
+        
+        return (h,)
 
 
 class DilationRectangularDecoder(nn.Module):
@@ -3136,10 +3289,13 @@ class DilationRectangularDecoder(nn.Module):
             for i in range(num_blocks)
         ])
         self.eca = ECA(self.hidden_channels, k_size=3) if use_eca else nn.Identity()
+        #self.out_conv = nn.Conv2d(self.hidden_channels, 2*self.output_dim, kernel_size=1)
         self.out_conv = nn.Conv2d(self.hidden_channels, self.output_dim, kernel_size=1)
 
         self.in_channels_per_scale: List[int] = [self.input_dim]
         self.input_keys: List[str] = ["observation", "embed"]
+
+        #self.logit_layer = LogitsOutputHead(input_dim=2*self.output_dim, hidden_channels=16, output_dim=self.output_dim)
 
     def forward(self, obs, *features):
         if len(features) == 0:
@@ -3169,13 +3325,13 @@ class DilationRectangularDecoder(nn.Module):
         if self.debug: print(f"[Decoder] logits_map {logits_map.shape}")
 
         if len(batch_shape) == 0:
-            return logits_map.permute(0, 2, 3, 1).reshape(H * W, self.output_dim).squeeze(0)
+            logits = logits_map.permute(0, 2, 3, 1).reshape(H * W, self.output_dim).squeeze(0)
         else:
-            return logits_map.permute(0, 2, 3, 1).reshape(B, H * W, self.output_dim).view(
+            logits = logits_map.permute(0, 2, 3, 1).reshape(B, H * W, self.output_dim).view(
                 *batch_shape, H * W, self.output_dim
             )
-
-# ------------------------- Encoder -------------------------
+        #return self.logit_layer(logits)
+        return logits
 
 class UNetRectangularEncoder(nn.Module):
 
@@ -3208,7 +3364,7 @@ class UNetRectangularEncoder(nn.Module):
         if self.num_layers == 0:
             self.stem = nn.Sequential(
                 nn.Conv2d(self.in_channels, self.hidden_channels, kernel_size=3, padding=1, bias=True),
-                nn.LeakyReLU(negative_slope=0.01, inplace=True),
+                nn.LeakyReLU(negative_slope=0.01, inplace=False),
             )
             channels = self.hidden_channels
             self.in_channels_per_scale = [channels]
@@ -3219,7 +3375,7 @@ class UNetRectangularEncoder(nn.Module):
                 out_ch = self.hidden_channels * (2 ** i)
                 self.enc_blocks.append(nn.Sequential(
                     nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=True),
-                    nn.LeakyReLU(negative_slope=0.01, inplace=True),
+                    nn.LeakyReLU(negative_slope=0.01, inplace=False),
                 ))
                 in_ch = out_ch
                 skip_channels.append(out_ch)
@@ -3236,18 +3392,15 @@ class UNetRectangularEncoder(nn.Module):
 
         self.bottleneck = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1, padding=0, bias=True),
-            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+            nn.LeakyReLU(negative_slope=0.01, inplace=False),
         )
 
         self.output_dim = channels
         self.output_keys: List[str] = [f"enc_{i}" for i in range(self.num_layers)] + ["embed"]
 
-    def _extract_tasks_attr(self, x):
-        return x["nodes", "tasks", "attr"]
-        
 
     def forward(self, x):
-        xt = self._extract_tasks_attr(x)  # shape: (*batch, tasks, C) or (tasks, C)
+        xt = x["nodes", "tasks", "attr"] # shape: (*batch, tasks, C) or (tasks, C)
 
         single = (xt.dim() == 2)  # (tasks, C)
         if single:
@@ -3257,7 +3410,6 @@ class UNetRectangularEncoder(nn.Module):
         assert in_ch == self.in_channels, f"in_channels mismatch: expected {self.in_channels}, got {in_ch}"
         assert tasks == self.length * self.width, f"got tasks={tasks}, expected length*width={self.length*self.width}"
 
-        # Flatten batch dims, reshape to BCHW
         B = 1
         for d in batch_shape: B *= int(d)
         h = xt.reshape(B, self.length, self.width, self.in_channels).permute(0, 3, 1, 2)
@@ -3281,7 +3433,6 @@ class UNetRectangularEncoder(nn.Module):
         if self.debug:
             print(f"[Encoder] bottleneck {h.shape}")
 
-        # Unflatten back to original batch shape; remove batch dim if single
         def unflatten(t):
             return t.squeeze(0) if single else t.view(*batch_shape, *t.shape[1:])
 
@@ -3289,8 +3440,6 @@ class UNetRectangularEncoder(nn.Module):
         b_map = unflatten(b_map)
         return (*enc_feats, b_map)
 
-
-# ------------------------- Decoder -------------------------
 
 class UNetRectangularDecoder(nn.Module):
 
@@ -3364,7 +3513,7 @@ class UNetRectangularDecoder(nn.Module):
             # After concat with skip (C=out_ch): fuse back to out_ch
             self.dec_blocks.append(nn.Sequential(
                 nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1, bias=True),
-                nn.ReLU(inplace=True),
+                nn.ReLU(inplace=False),
             ))
             prev_ch = out_ch
 
@@ -3372,7 +3521,13 @@ class UNetRectangularDecoder(nn.Module):
 
         # Final projection to logits at full resolution
         final_in = self.hidden_channels if self.num_layers >= 1 else self.input_dim
-        self.out_conv = nn.Conv2d(final_in, self.output_dim, kernel_size=1)
+        self.out_conv = nn.Conv2d(final_in, 2*self.output_dim, kernel_size=1)
+
+        self.logit_layer = LogitsOutputHead(
+            input_dim=2*self.output_dim,
+            hidden_channels=self.hidden_channels,
+            output_dim=self.output_dim,
+        )
 
     def forward(self, obs, *features):
         if len(features) == 0:
@@ -3401,10 +3556,10 @@ class UNetRectangularDecoder(nn.Module):
         h = b_mapB
         if self.num_layers > 0:
             for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(encB)):
-                h = up(h)                     # deconv 2x or nearest+conv
+                h = up(h)                    
                 if self.debug:
                     print(f"[Decoder] up: {h.shape} + {enc.shape}")
-                h = _align_and_concat(h, enc) # robust to odd/even, rectangles
+                h = _align_and_concat(h, enc) 
                 if self.debug:
                     print(f"[Decoder] concat: {h.shape} + {enc.shape}")
                 h = dec(h)
@@ -3417,21 +3572,25 @@ class UNetRectangularDecoder(nn.Module):
 
         if single:
             # -> (H*W, output_dim)
-            return logits_map.permute(0, 2, 3, 1).reshape(-1, self.output_dim).squeeze(0)
+            logits =  logits_map.permute(0, 2, 3, 1).reshape(-1, 2*self.output_dim).squeeze(0)
+            logits = self.logit_layer(logits)  # (H*W, output_dim)
         else:
             _, _, H, W = logits_map.shape
-            return logits_map.permute(0, 2, 3, 1).reshape(B, H * W, self.output_dim)\
-                             .view(*batch_shape, H * W, self.output_dim)
+            logits = logits_map.permute(0, 2, 3, 1).reshape(B, H * W, 2*self.output_dim)\
+                             .view(*batch_shape, H * W, 2*self.output_dim)
+            logits = self.logit_layer(logits)  # (*batch, H*W, output_dim)
+
+        return logits
 
 
 class PooledOutputHead(nn.Module):
     def __init__(
         self,
-        input_dim: int,                 # shared D
+        input_dim: int,                 # shared dim before final MLP
         hidden_channels: int,           # hidden size in OutputHead
         output_dim: int,                # final dimension (e.g., 1 for V(s))
         activation: Optional[nn.Module] = None,
-        initialization: Optional[dict] = None,  # kept for interface compat; unused here
+        initialization: Optional[dict] = None,
         layer_norm: bool = True,
         in_channels_per_scale: Optional[Sequence[int]] = None,
         debug: bool = False
@@ -3442,13 +3601,11 @@ class PooledOutputHead(nn.Module):
         self.output_dim = int(output_dim)
         self.debug = debug
 
-        # Internal state
         self._built: bool = False
         self._in_dims: Optional[List[int]] = None
         self._proj = nn.ModuleList()
         self._head: Optional[OutputHead] = None
 
-        # Eager build if channels are supplied
         if in_channels_per_scale is not None:
             self._build(list(int(c) for c in in_channels_per_scale))
 
@@ -3489,12 +3646,10 @@ class PooledOutputHead(nn.Module):
 
         self._built = True
 
-    # ---------------- forward ----------------
     def forward(self, *encoder_outputs: torch.Tensor) -> torch.Tensor:
         if len(encoder_outputs) == 0:
             raise ValueError("PooledOutputHead expects at least one encoder feature.")
 
-        # Flatten features and collect batch shapes/channels
         featsB: List[torch.Tensor] = []
         batch_shape_ref: Optional[Tuple[int, ...]] = None
         seen_dims: List[int] = []
@@ -3510,7 +3665,6 @@ class PooledOutputHead(nn.Module):
                 raise ValueError(f"Mismatched batch shapes among inputs: {batch_shape} vs {batch_shape_ref}")
             featsB.append(fB)
 
-        # Lazy build if needed
         if not self._built:
             self._build(seen_dims)
             self.to(featsB[0].device)
@@ -3542,7 +3696,7 @@ class UNetEncoder(nn.Module):
         feature_config: FeatureDimConfig,
         hidden_channels: int,
         width: int,
-        length: int, #Put for compatibility, this version only uses width and supports square grids
+        length: int, 
         add_progress: bool = False,
         activation: DictConfig = None,
         initialization: DictConfig = None,
@@ -3564,7 +3718,7 @@ class UNetEncoder(nn.Module):
             block = nn.Sequential(
                 nn.Conv2d(channels, out_channels, kernel_size=3, padding=1),
                 nn.LeakyReLU(
-                    inplace=True,
+                    inplace=False,
                     negative_slope=0.01,
                 ),
             )
@@ -3576,7 +3730,7 @@ class UNetEncoder(nn.Module):
         self.bottleneck = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1, padding=0),
             nn.LeakyReLU(
-                inplace=True,
+                inplace=False,
                 negative_slope=0.01,
             ),
         )
@@ -3674,7 +3828,7 @@ class UNetDecoder(nn.Module):
         input_dim: int,
         hidden_channels: int,
         width: int,
-        length: int, #Put for compatibility, this version only uses width and supports square grids
+        length: int, 
         output_dim: int,
         activation: DictConfig = None,
         initialization: DictConfig = None,
@@ -3702,13 +3856,18 @@ class UNetDecoder(nn.Module):
             self.dec_blocks.append(
                 nn.Sequential(
                     nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1),
-                    nn.ReLU(inplace=True),
+                    nn.ReLU(inplace=False),
                 )
             )
         for i in range(self.num_layers):
             self.input_keys.append(f"enc_{i}")
         self.input_keys.append("embed")
-        self.out_conv = nn.Conv2d(hidden_channels, output_dim, kernel_size=1)
+        self.out_conv = nn.Conv2d(hidden_channels, 2*output_dim, kernel_size=1)
+
+        print(f"Initialization Dict: {initialization}")
+        print(f"Activation Dict: {activation}")
+
+        self.logit_layer = LogitsOutputHead(input_dim=2*output_dim, hidden_channels=16, output_dim=output_dim)
         assert (
             input_dim == self.up_blocks[0].in_channels
         ), f"Input dimension mismatch: expected {self.up_blocks[0].in_channels}, got {input_dim}"
@@ -3760,6 +3919,8 @@ class UNetDecoder(nn.Module):
             b = dec(b)
         logits = self.out_conv(b)
         logits = logits.permute(0, 2, 3, 1).flatten(1, 2)
+        logits = self.logit_layer(logits)
+
         if single:
             logits = logits.squeeze(0)
         else:

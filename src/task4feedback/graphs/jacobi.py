@@ -1752,10 +1752,13 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         task_feature_factory = FeatureExtractorFactory()
         # task_feature_factory.add(fastsim.TaskMeanDurationFeature)
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
+        # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
         if prev_frames > 0:
             task_feature_factory.add(
                 fastsim.PrevReadSizeFeature, width, length, True, prev_frames
             )
+            task_feature_factory.add(
+                fastsim.PrevMappedDeviceFeature, width, length, False, prev_frames)
         # if prev_frames > 0:
         #     task_feature_factory.add(
         #         fastsim.PrevMappedSizeFeature, width, False, prev_frames

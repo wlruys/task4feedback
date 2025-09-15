@@ -3,7 +3,7 @@ defaults:
   - reward: incremental_schedule
   - system: h100
   - feature: cnn_batch
-  - network: cnn_batch
+  - network: cond_dilation_cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -22,14 +22,14 @@ seed: 256
 deterministic_torch: true
 
 reward:
-  verbose: True
+  verbose: False
   random_start: False
 
 graph:
   config:
-      n: 8
+      n: 16
       domain_ratio: 1.0
-      steps: 100
+      steps: 120
       boundary_width: 1000
   env:
     change_priority: False
@@ -39,23 +39,25 @@ graph:
 
 algorithm:
   num_collections: 10000
-  rollout_steps: 0
-  workers: 4
+  rollout_steps: 30
+  workers: 12
+  graphs_per_collection: 12
   ent_coef: 0
   sample_slices: False
   slice_len: 16
-  gamma: 1.0
-  lmbda: 0.7
+  gamma: 0.99
+  lmbda: 0.95
+  minibatch_size: 128
 
 optimizer:
-  lr: 2.5e-5
+  lr: 1e-3
 
 system:
-  mem: 80000000000000
+  mem: 80000000000
 
 feature:
   observer:
-    prev_frames: 3
+    prev_frames: 1
     batched: true
 
 network:

@@ -1,4 +1,4 @@
-project: reward-dev
+project: exploration-dev
 name: default
 enabled: true
 dir: ~/workspace/scheduling/logs

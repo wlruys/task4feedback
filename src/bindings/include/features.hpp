@@ -1148,14 +1148,14 @@ template <typename Derived> struct Feature {
     return static_cast<const Derived *>(this)->getFeatureDimImpl();
   }
 
-  void extractFeature(int32_t object_id, TorchArr &output) const {
+  void extractFeature(int32_t object_id, TorchArr &output) {
 
     std::span<float> sp(output.data(), output.size());
-    static_cast<const Derived *>(this)->extractFeatureImpl(object_id, sp);
+    static_cast< Derived *>(this)->extractFeatureImpl(object_id, sp);
   }
 
-  template <typename Span> void extractFeature(int32_t object_id, Span output) const {
-    static_cast<const Derived *>(this)->extractFeatureImpl(object_id, output);
+  template <typename Span> void extractFeature(int32_t object_id, Span output) {
+    static_cast< Derived *>(this)->extractFeatureImpl(object_id, output);
   }
 };
 
@@ -1164,14 +1164,14 @@ template <typename Derived> struct EdgeFeature {
     return static_cast<const Derived *>(this)->getFeatureDimImpl();
   }
 
-  void extractFeature(int32_t source_id, int32_t target_id, TorchArr &output) const {
+  void extractFeature(int32_t source_id, int32_t target_id, TorchArr &output) {
     std::span<float> sp(output.data(), output.size());
-    static_cast<const Derived *>(this)->extractFeatureImpl(source_id, target_id, sp);
+    static_cast< Derived *>(this)->extractFeatureImpl(source_id, target_id, sp);
   }
 
   template <typename Span>
-  void extractFeature(int32_t source_id, int32_t target_id, Span output) const {
-    static_cast<const Derived *>(this)->extractFeatureImpl(source_id, target_id, output);
+  void extractFeature(int32_t source_id, int32_t target_id, Span output) {
+    static_cast< Derived *>(this)->extractFeatureImpl(source_id, target_id, output);
   }
 };
 
@@ -1192,12 +1192,12 @@ public:
     return computeFeatureDim(std::make_index_sequence<sizeof...(Features)>{});
   }
 
-  void getFeatures(int object_id, TorchArr &output) const {
+  void getFeatures(int object_id, TorchArr &output) {
     std::span<float> sp(output.data(), output.size());
     getFeatures(object_id, sp);
   }
 
-  template <typename Span> void getFeatures(int object_id, Span output) const {
+  template <typename Span> void getFeatures(int object_id, Span output) {
     size_t offset = 0;
     std::apply(
         [&](const auto &...feats) {
@@ -1229,7 +1229,7 @@ public:
     getFeatures(source_id, target_id, sp);
   }
 
-  template <typename Span> void getFeatures(int source_id, int target_id, Span output) const {
+  template <typename Span> void getFeatures(int source_id, int target_id, Span output) {
     size_t offset = 0;
     std::apply(
         [&](const auto &...feats) {
@@ -1419,6 +1419,8 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
     int i = 0;
     while (task_id >= 0 && i < frames) {
       output[i] =static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
+      //output[i] = static_cast<f_t>(std::log(static_cast<double>(1 + output[i])));
+      //output[i] = static_cast<f_t>(task_id);
       task_id -= stride;
       ++i;
     }
@@ -1429,8 +1431,117 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
   const int stride;
   const int frames;
   const bool add_current;
+  std::vector<f_t> history;
   PrevMappedSizeFeature(const SchedulerState &state, int width, int length, bool add_current, int frames)
       : StateFeature<PrevMappedSizeFeature>(state, NodeType::TASK), stride(width * length),
+        add_current(add_current), frames(frames) {
+
+        const auto &devices = this->state.get_devices();
+        auto grid_size = width * length;
+        history.resize(grid_size * (devices.size() - 1) * frames, 0.0);
+
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_devices();
+    return frames * (devices.size() - 1);
+  }
+
+  template<typename ID> void shift_history_of_task(ID task_id){
+    const auto &devices = this->state.get_devices();
+    auto n_devices = devices.size() - 1; // Exclude CPU
+    auto grid_size = stride;
+    auto offset = (task_id % grid_size) * n_devices * frames;
+
+    std::cout << "Shifting history for task " << task_id << " at offset " << offset << std::endl;
+    std:: cout << "History before shift: ";
+    for(int f = 0; f < frames; f++){
+      for(int d = 0; d < n_devices; d++){
+        std::cout << history[offset + f * n_devices + d] << " ";
+      }
+    }
+    std::cout << std::endl;
+
+
+    for(int f = frames - 1; f > 0; f--){
+      for(int d = 0; d < n_devices; d++){
+        history[offset + f * n_devices + d] = history[offset + (f - 1) * n_devices + d];
+      }
+    }
+    for(int d = 0; d < n_devices; d++){
+      history[offset + d] = 0.0;
+    }
+
+    std:: cout << "History after shift: ";
+    for(int f = 0; f < frames; f++){
+      for(int d = 0; d < n_devices; d++){
+        std::cout << history[offset + f * n_devices + d] << " ";
+      }
+    }
+    std::cout << std::endl;
+    
+  }
+
+  template<typename ID> void update_history_of_task(ID task_id){
+    const auto &static_graph = state.get_tasks();
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = state.get_data();
+    const auto &task_runtime = state.get_task_runtime();
+    const auto &devices = this->state.get_devices();
+    auto n_devices = devices.size() - 1; // Exclude CPU
+    auto grid_size = stride;
+    auto offset = (task_id % grid_size) * n_devices * frames;
+
+    for (auto data_id : static_graph.get_read(task_id)) {
+      auto data_size = static_cast<f_t>(data.get_size(data_id));
+      for (devid_t i = 1; i < devices.size(); i++) {
+        if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_id), i)) {
+          history[offset + i - 1] += data_size;
+        }
+      }
+    }
+
+    std:: cout << "History after update: ";
+    for(int f = 0; f < frames; f++){
+      for(int d = 0; d < n_devices; d++){
+        std::cout << history[offset + f * n_devices + d] << " ";
+      }
+    }
+    std::cout << std::endl;
+
+  }
+
+  template<typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) {
+    shift_history_of_task(task_id);
+    update_history_of_task(task_id);
+    const auto &devices = this->state.get_devices();
+    auto n_devices = devices.size() - 1; // Exclude CPU
+    auto grid_size = stride;
+    auto offset = (task_id % grid_size) * n_devices * frames;
+    int i = 0;
+    while (i < frames) {
+      for(int d = 0; d < n_devices; d++){
+        output[i * n_devices + d] = history[offset + i * n_devices + d];
+      }
+      ++i;
+    }
+    std::cout << "Extracted feature for task " << task_id << ": ";
+    for(int f = 0; f < frames; f++){
+      for(int d = 0; d < n_devices; d++){
+        std::cout << output[f * n_devices + d] << " ";
+      }
+    }
+    std::cout << std::endl;
+  }
+
+};
+
+struct PrevMappedDevice : public StateFeature<PrevMappedDevice> {
+  const int stride;
+  const int frames;
+  const bool add_current;
+  PrevMappedDevice(const SchedulerState &state, int width, int length, bool add_current, int frames)
+      : StateFeature<PrevMappedDevice>(state, NodeType::TASK), stride(width * length),
         add_current(add_current), frames(frames) {
   }
 
@@ -1441,7 +1552,6 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &static_graph = state.get_tasks();
-    const auto &data = state.get_data();
     const auto &task_runtime = state.get_task_runtime();
     auto n_devices = this->state.get_devices().size() - 1; // Exclude CPU
     if (!add_current) {
@@ -1449,10 +1559,10 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
     }
     int i = 0;
     while (task_id >= 0 && i < frames) {
-      auto mapped_device = task_runtime.get_compute_task_mapped_device(task_id);
-      assert(mapped_device > 0);
-      output[i * n_devices + (mapped_device - 1)] =
-          static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
+      devid_t mapped_device = task_runtime.get_compute_task_mapped_device(task_id);
+      for (devid_t d = 1; d <= n_devices; d++) {
+        output[i * n_devices + d - 1] = static_cast<f_t>(d == mapped_device);
+      }
       task_id -= stride;
       ++i;
     }

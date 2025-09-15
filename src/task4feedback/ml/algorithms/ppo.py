@@ -55,10 +55,20 @@ def joint_stats(td, ppo):
         x = x.detach()
         print("\n=== OBSERVATION STATS ===")
         print(f"obs: {x}")
+        print(f"obs shape: {x.shape}")
         print(f"obs mean={x.mean():8.3f} std={x.std():8.3f}")
         print(f"obs min={x.min():8.3f} max={x.max():8.3f}")
         print(f"obs numel={x.numel()} nan={torch.isnan(x).sum()} inf={torch.isinf(x).sum()}")
         print(f"obs unique={torch.unique(x)}")
+
+        #Show me the row where the max value is 
+        max_val = x.max()
+        max_pos = (x == max_val).nonzero(as_tuple=False)
+        print(f"obs max position: {max_pos}")
+        if max_pos.shape[0] < 100:
+            for pos in max_pos:
+                b, i, z = pos
+                print(f"obs[{b}, {i}, :] = {x[b, i, :]}")
 
         # KL approximations
         kl_approx = (prev_lp - cur_lp)   # [N]
@@ -232,6 +242,7 @@ def log_training_metrics(
 
             training.info(f"Average training improvement: {avg_improvement}")
 
+        training.info(f"Average entropy {loss["entropy"].item()}")
         wandb.log(log_payload)
 
 
@@ -380,7 +391,7 @@ def run_ppo(
             + loss_vals["loss_entropy"]
         )
 
-        joint_stats(batch, loss_module)
+        # joint_stats(batch, loss_module)
 
         optimizer.zero_grad()
         loss_value.backward()
@@ -454,6 +465,9 @@ def run_ppo(
             ppo_config.update_device, non_blocking=True
         )
 
+        # print("Task obs", tensordict_data[0]["observation", "nodes", "tasks", "attr"])
+        # print("obs shape", tensordict_data.shape)
+
         adv_start_t = time.perf_counter()
         with torch.no_grad():
             # Redistribute Rewards
@@ -469,14 +483,14 @@ def run_ppo(
         samples_in_collection = flattened_data.shape[0]
         n_samples += samples_in_collection
 
-        print("SANITY CHECK OF SIZES IN OBSERVATION")
-        print("observation shape", flattened_data["observation"].shape)
-        print("action shape", flattened_data["action"].shape)
-        print("reward shape", flattened_data["next", "reward"].shape)
-        print("done shape", flattened_data["next", "done"].shape)
-        print("logits shape", flattened_data["logits"].shape)
+        # print("SANITY CHECK OF SIZES IN OBSERVATION")
+        # print("observation shape", flattened_data["observation"].shape)
+        # print("action shape", flattened_data["action"].shape)
+        # print("reward shape", flattened_data["next", "reward"].shape)
+        # print("done shape", flattened_data["next", "done"].shape)
+        # print("logits shape", flattened_data["logits"].shape)
 
-        print("keys", flattened_data.keys())
+        # print("keys", flattened_data.keys())
 
         #if max_candidates > 1:
         #    flattened_data["advantage"] = flattened_data["advantage"].expand(
@@ -500,11 +514,12 @@ def run_ppo(
             # )
             # flattened_data["done"] = flattened_data["done"].unsqueeze(-1)
 
-        print("advantage shape", flattened_data["advantage"].shape)
-        print("value target shape", flattened_data["value_target"].shape)
-        print("reward shape", flattened_data["next", "reward"].shape)
-        print("done shape", flattened_data["next", "done"].shape)
+        # print("advantage shape", flattened_data["advantage"].shape)
+        # print("value target shape", flattened_data["value_target"].shape)
+        # print("reward shape", flattened_data["next", "reward"].shape)
+        # print("done shape", flattened_data["next", "done"].shape)
         replay_buffer.extend(flattened_data)
+
 
         update_start_t = time.perf_counter()
         for j in range(ppo_config.epochs_per_collection):

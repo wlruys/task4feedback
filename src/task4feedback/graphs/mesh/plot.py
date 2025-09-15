@@ -56,7 +56,7 @@ class ColorConfig:
     # Duration shading
     duration_cmap: str | mcolors.Colormap = "viridis" 
     duration_mode: Literal["overlay", "to_white", "duration_only"] = "to_white"
-    duration_gamma: float = 0.8                  
+    duration_gamma: float = 0.4              
     duration_alpha: float = 0.65                       
     duration_percentile_max: float = 0.98             
     ema_tau_frames: int = 5    
@@ -556,7 +556,7 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
             norm[last_duration <= 0.0] = 1.0
 
             if frame<=1:
-                shade_fc[:, :3] = base_colors[:, :3]  # Reset to base colors
+                shade_fc[:, :3] = base_colors[:, :3]
             else:
                 if color_cfg.duration_mode == "overlay":
                     dur_colors = duration_cmap(norm.squeeze()).astype(np.float32)  

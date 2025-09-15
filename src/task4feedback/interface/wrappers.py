@@ -1880,6 +1880,7 @@ class CnnBatchTaskObserver(ExternalObserver):
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.ones((1), dtype=torch.float32),
+                "z": torch.zeros((8), dtype=torch.float32),
             }
         )
 

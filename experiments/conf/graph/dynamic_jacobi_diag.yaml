@@ -3,8 +3,8 @@ mesh:
 config:
   _target_: task4feedback.graphs.dynamic_jacobi.DynamicJacobiConfig
   steps: 240
-  n: 8
-  domain_ratio: 2.0
+  n: 16
+  domain_ratio: 1.0
   arithmetic_intensity: 5.0
   arithmetic_complexity: 1.0
   boundary_width: 5.0

@@ -8,14 +8,14 @@ collect_device: cpu
 update_device: cpu
 storing_device: cpu
 threads_per_worker: 1
-ent_coef: 0.25
+ent_coef: 0
 lmbda: 0.95
 gamma: 0.999
-clip_eps: 0.1
+clip_eps: 0.2
 clip_vloss: false
-value_norm: "l2"
+value_norm: "l1"
 val_coef: 0.5
-normalize_advantage: false
+normalize_advantage: true
 max_grad_norm: 0.5
 compile_policy: false
 compile_advantage: false
@@ -28,5 +28,5 @@ slice_len: 32
 sample_slices: false
 #number of samples per minibatch (episodes per minibatch if sample_slices = false and using ppo LSTM)
 minibatch_size: 128
-rollout_steps: 80
+rollout_steps: 30
 
