@@ -19,9 +19,8 @@ def MultiHeadCategorical(**kwargs):
     return torch.distributions.Categorical(**kwargs).to_event(1)   # equivalent to Independent(base, 1)
 
 def MultiHeadCategorical(**kwargs):
-    # kwargs will contain 'logits' read from the TensorDict by Probabilistic* module
-    base = torch.distributions.Categorical(**kwargs)          # batch_shape: [..., 64], event_shape: ()
-    return torch.distributions.Independent(base, 1)           # reinterpret the last batch dim as event -> joint log_prob
+    base = torch.distributions.Categorical(**kwargs)
+    return torch.distributions.Independent(base, 1)
 
 def create_actor_critic_models(
     cfg: DictConfig, feature_cfg: FeatureDimConfig
@@ -71,6 +70,7 @@ def create_td_actor_critic_models(
 ) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
         
     graph_config = instantiate(cfg.graph.config)
+    batched = cfg.feature.observer.get("batched", False)
 
     lstm_mod = None
     layers = cfg.network.layers
@@ -111,8 +111,6 @@ def create_td_actor_critic_models(
     output_dim = policy_state_module.output_dim
     print(f"Policy state output dim: {output_dim}")
 
-    print(layers)
-
     if "lstm" in layers:
         print("Using LSTM layer for actor")
         actor_lstm_layer = instantiate(
@@ -148,6 +146,8 @@ def create_td_actor_critic_models(
     else:
         actor_input_keys = ["embed"]
 
+    actor_input_keys = ["observation"] + actor_input_keys
+
     _td_policy_output = td_nn.TensorDictModule(
         policy_output_module,
         in_keys=actor_input_keys,
@@ -161,8 +161,7 @@ def create_td_actor_critic_models(
         module=policy_module,
         in_keys=["logits"],
         out_keys=["action"],
-        #distribution_class=torch.distributions.Categorical,
-        distribution_class=MultiHeadCategorical,
+        distribution_class=MultiHeadCategorical if batched else torch.distributions.Categorical,
         return_log_prob=True,
     )
 
@@ -245,6 +244,8 @@ def create_td_actor_critic_models(
         print(f"Critic input keys: {critic_input_keys}")
     else:
         critic_input_keys = state_output_keys
+
+    critic_input_keys = ["observation"] + critic_input_keys
 
     _td_critic_output = td_nn.TensorDictModule(
         critic_output_module,

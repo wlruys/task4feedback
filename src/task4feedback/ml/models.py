@@ -846,8 +846,6 @@ class LogitStabilizer(nn.Module):
         logits = logits - logits.mean(dim=-1, keepdim=True)
         logits = logits / self.tau
         return logits
-    
-    
 
 
 class LogitsOutputHead(OutputHead):
@@ -879,11 +877,24 @@ class LogitsOutputHead(OutputHead):
 
     def forward(self, x):
         if self.debug:
-            printf("[LogitsOutputHead] input {x.shape}")
+            print("[LogitsOutputHead] input {x.shape}")
         logits = super().forward(x)
         logits = self.logit_stabilizer(logits)
         return logits
 
+class ValueOutputHead(OutputHead):
+    def __init__(self, *args, **kwargs):
+        super(ValueOutputHead, self).__init__(*args, **kwargs)
+
+    def forward(self, obs, emb):
+        return super().forward(emb)
+    
+class PolicyOutputHead(OutputHead):
+    def __init__(self, *args, **kwargs):
+        super(PolicyOutputHead, self).__init__(*args, **kwargs)
+
+    def forward(self, obs, emb):
+        return super().forward(emb)
 
 class OldOutputHead(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, logits=False):
@@ -2564,7 +2575,7 @@ class VectorStateNet(nn.Module):
     def __init__(
         self,
         feature_config: FeatureDimConfig,
-        hidden_channels: list[int],
+        hidden_channels: list[int] | int,
         add_progress: bool = False,
         activation: DictConfig = None,
         initialization: DictConfig = None,
@@ -2572,8 +2583,11 @@ class VectorStateNet(nn.Module):
     ):
         super(VectorStateNet, self).__init__()
         self.feature_config = feature_config
+        if isinstance(hidden_channels, int):
+            hidden_channels = [hidden_channels]
         self.hidden_channels = hidden_channels
         self.k = len(self.hidden_channels)
+
 
         def make_activation(activation_config):
             return (
@@ -2607,6 +2621,8 @@ class VectorStateNet(nn.Module):
 
             self.layers = nn.Sequential(*layers)
             self.output_dim = layer_channels
+
+            self.output_keys = ["embed"]
 
     def forward(self, tensordict: TensorDict):
         task_features = tensordict["nodes", "tasks", "attr"]
@@ -3030,6 +3046,420 @@ class TinyASPP(nn.Module):
         )
     def forward(self, x):
         return self.fuse(torch.cat([b(x) for b in self.branches], dim=1))
+
+class ConvNormAct(nn.Module):
+    def __init__(self, C_in, C_out, k=3, dilation=1, groups=1, act="silu"):
+        super().__init__()
+        pad = dilation * (k // 2)
+        self.conv = nn.Conv2d(C_in, C_out, kernel_size=k, padding=pad,
+                              dilation=dilation, bias=False, groups=groups)
+        self.norm = nn.GroupNorm(_choose_gn_groups(C_out), C_out)
+        self.act = nn.SiLU(inplace=False) if act == "silu" else nn.ReLU(inplace=False)
+    def forward(self, x):
+        return self.act(self.norm(self.conv(x)))
+    
+
+
+# ----- SPADE-style conditioning with explicit dims ---------------------------
+
+class SpatialModulator(nn.Module):
+    """
+    SPADE-style: z_spa -> (gamma_xy, beta_xy) in R^{B×C×H×W}.
+    Identity at init (near 0) with nonzero grads; runtime strength knobs.
+    """
+    def __init__(self, C: int, H: int, W: int,
+                 z_spa_dim: int,
+                 ch_hidden: int = 128,
+                 seed_hw: Optional[Tuple[int,int]] = None,
+                 init_scale_gamma_xy: float = 0.5,
+                 init_scale_beta_xy:  float = 0.5):
+        super().__init__()
+        self.C, self.H, self.W = int(C), int(H), int(W)
+        self.h0 = max(4, H//4) if not seed_hw else seed_hw[0]
+        self.w0 = max(4, W//4) if not seed_hw else seed_hw[1]
+
+        self.to_seed = nn.Sequential(
+            nn.Linear(z_spa_dim, ch_hidden), nn.SiLU(),
+            nn.Linear(ch_hidden, 2*C*self.h0*self.w0)
+        )
+        nn.init.normal_(self.to_seed[-1].weight, std=1e-4)
+        nn.init.zeros_(self.to_seed[-1].bias)
+
+        # keep as non-trainable parameters for backwards compat; buffers are also fine
+        self.scale_gamma_xy = nn.Parameter(torch.tensor(float(init_scale_gamma_xy)), requires_grad=False)
+        self.scale_beta_xy  = nn.Parameter(torch.tensor(float(init_scale_beta_xy)),  requires_grad=False)
+
+    @torch.no_grad()
+    def set_strength(self, gamma_xy: Optional[float]=None, beta_xy: Optional[float]=None):
+        if gamma_xy is not None: self.scale_gamma_xy.fill_(float(gamma_xy))
+        if beta_xy  is not None: self.scale_beta_xy.fill_(float(beta_xy))
+
+    def forward(self, z) -> Tuple[torch.Tensor, torch.Tensor]:   # z: (B, z_spa_dim)
+
+        *lead, z_dim = z.shape
+        B = int(torch.prod(torch.tensor(lead))) if lead else z.shape[0]
+        zf = z.reshape(-1, z_dim)
+        seed = self.to_seed(zf).view(B, 2*self.C, self.h0, self.w0)
+        maps = F.interpolate(seed, size=(self.H, self.W), mode='bilinear', align_corners=False)
+        g_raw, b_raw = maps.chunk(2, dim=1)                      # (B,C,H,W)
+        g_xy = self.scale_gamma_xy * torch.tanh(g_raw)           # bounded, ≈0
+        b_xy = self.scale_beta_xy  * b_raw                       # small bias
+        return g_xy, b_xy
+
+class AdaSPADE_GN(nn.Module):
+    """
+    GroupNorm (affine=False) + channel FiLM(z_ch) + (optional) spatial FiLM(z_spa).
+    Dimensions explicit via z_ch_dim.
+    """
+    def __init__(self, C: int, groups: int, spatial: SpatialModulator,
+                 z_ch_dim: int,
+                 ch_hidden: int = 128,
+                 init_scale_gamma_c: float = 0.5, init_scale_beta_c: float = 0.5,
+                 enable_spatial: bool = True, enable_channel: bool = True):
+        super().__init__()
+        self.gn = nn.GroupNorm(groups, C, affine=False)
+        self.to_gb_c = nn.Sequential(
+            nn.Linear(z_ch_dim, ch_hidden), nn.SiLU(),
+            nn.Linear(ch_hidden, 2*C)
+        )
+        nn.init.normal_(self.to_gb_c[-1].weight, std=1e-4)
+        nn.init.zeros_(self.to_gb_c[-1].bias)
+
+        self.scale_gamma_c = nn.Parameter(torch.tensor(init_scale_gamma_c), requires_grad=False)
+        self.scale_beta_c  = nn.Parameter(torch.tensor(init_scale_beta_c),  requires_grad=False)
+
+        self.spatial = spatial
+        self.enable_spatial = bool(enable_spatial)
+        self.enable_channel = bool(enable_channel)
+
+    @torch.no_grad()
+    def set_strength(self, gamma_c: Optional[float]=None, beta_c: Optional[float]=None):
+        if gamma_c is not None: self.scale_gamma_c.fill_(float(gamma_c))
+        if beta_c  is not None: self.scale_beta_c.fill_(float(beta_c))
+
+    def forward(self, x: torch.Tensor, z_ch: torch.Tensor, z_spa: torch.Tensor) -> torch.Tensor:
+        # z_ch: (B, z_ch_dim); z_spa: (B, z_spa_dim)
+        B, Cx, H, W = x.shape
+        z_ch = z_ch.reshape(B, -1)
+        z_spa = z_spa.reshape(B, -1)
+
+        x = self.gn(x)
+
+        if not self.enable_channel:
+            return x
+        
+        g_c_raw, b_c_raw = self.to_gb_c(z_ch).chunk(2, dim=-1)   # (B,C)
+        g_c = 1.0 + self.scale_gamma_c * torch.tanh(g_c_raw)
+        b_c =        self.scale_beta_c  * b_c_raw
+
+        if self.enable_spatial:
+            g_xy, b_xy = self.spatial(z_spa)                     # (B,C,H,W)
+        else:
+            B, C, H, W = x.shape
+            g_xy = x.new_zeros((B,Cx,H,W)); b_xy = x.new_zeros((B,Cx,H,W))
+
+        gamma = g_c.unsqueeze(-1).unsqueeze(-1) * (1.0 + g_xy)
+        beta  = b_c.unsqueeze(-1).unsqueeze(-1) + b_xy
+        return x * gamma + beta
+
+class DilatedResBlock_SPADE(nn.Module):
+    def __init__(self, C: int, dilation: int, norm1: AdaSPADE_GN, norm2: AdaSPADE_GN):
+        super().__init__()
+        self.conv1 = nn.Conv2d(C, C, 3, padding=dilation, dilation=dilation, bias=False)
+        self.norm1 = norm1
+        self.act1  = nn.SiLU()
+        self.conv2 = nn.Conv2d(C, C, 3, padding=1, bias=False)
+        self.norm2 = norm2
+        self.act2  = nn.SiLU()
+        nn.init.zeros_(self.conv2.weight)  # identity-at-init
+
+    def forward(self, x, z_ch, z_spa):
+        h = self.act1(self.norm1(self.conv1(x), z_ch, z_spa))
+        h = self.act2(self.norm2(self.conv2(h), z_ch, z_spa))
+        return x + h
+
+# ----- Backbone with explicit z dims -----------------------------------------
+
+class DilationState(nn.Module):
+    """
+    Fixed-resolution backbone to be used as `layers.state`.
+    Produces `("embed")` = (B, C, H, W). `output_dim = C`.
+    All dimensions are explicit, including z dims.
+    """
+    def __init__(self,
+                 feature_config,
+                 hidden_channels: int,
+                 width: int,
+                 length: int,
+                 z_ch_dim: int = 8,
+                 z_spa_dim: int = 8,
+                 num_blocks: int = 3,
+                 dilation_schedule: Optional[List[int]] = None,
+                 use_tiny_aspp: bool = False,
+                 use_eca: bool = False,
+                 spatial_in_all_blocks: bool = False,
+                 film_in_all_blocks: bool = False,
+                 spatial_last_k: int = 1,
+                 film_last_k: int = 2,
+                 init_gamma_c: float = 0.05, init_beta_c: float = 0.05,
+                 init_gamma_xy: float = 0.05, init_beta_xy: float = 0.05,
+                 debug: bool = False,
+                 add_progress: bool = False,
+                 **_ignored):
+        super().__init__()
+        if not hasattr(feature_config, "task_feature_dim"):
+            raise AttributeError("feature_config must have attribute 'task_feature_dim'")
+
+        self.width  = int(width)
+        self.length = int(length)
+        self.in_channels     = int(feature_config.task_feature_dim)
+        self.hidden_channels = int(hidden_channels)
+        self.debug = bool(debug)
+        self.output_dim  = self.hidden_channels
+        self.output_keys = ["embed"]
+        self.add_progress = bool(add_progress)
+
+        C_in = self.in_channels
+        C    = self.hidden_channels
+
+        self.stem = ConvNormAct(C_in, C, k=3, dilation=1, act="silu")
+        if not dilation_schedule:
+            dilation_schedule = [1, 2, 3, 1]
+
+        # Effective z dims after optional progress concatenation
+        zc_eff = int(z_ch_dim)  + (1 if self.add_progress else 0)
+        zs_eff = int(z_spa_dim) + (1 if self.add_progress else 0)
+
+        self.spatial = SpatialModulator(
+            C=C, H=self.length, W=self.width,
+            z_spa_dim=zs_eff, ch_hidden=16,
+            seed_hw=(max(4,self.length//4), max(4,self.width//4)),
+            init_scale_gamma_xy=init_gamma_xy, init_scale_beta_xy=init_beta_xy
+        )
+
+        groups = _choose_gn_groups(C)
+
+        self.blocks = nn.ModuleList()
+        for i in range(num_blocks):
+            use_spa = spatial_in_all_blocks or (i >= num_blocks - spatial_last_k)
+            use_film = film_in_all_blocks or (i >= num_blocks - film_last_k)
+
+            norm1 = AdaSPADE_GN(
+                C=C, groups=groups, spatial=self.spatial,
+                z_ch_dim=zc_eff, ch_hidden=16,
+                init_scale_gamma_c=init_gamma_c, init_scale_beta_c=init_beta_c,
+                enable_spatial=use_spa,
+                enable_channel=use_film
+            )
+            norm2 = AdaSPADE_GN(
+                C=C, groups=groups, spatial=self.spatial,
+                z_ch_dim=zc_eff, ch_hidden=16,
+                init_scale_gamma_c=init_gamma_c, init_scale_beta_c=init_beta_c,
+                enable_spatial=use_spa,
+                enable_channel=use_film
+            )
+
+            self.blocks.append(
+                DilatedResBlock_SPADE(
+                    C, dilation=dilation_schedule[i % len(dilation_schedule)],
+                    norm1=norm1, norm2=norm2
+                )
+            )
+
+        self.aspp = TinyASPP(C) if use_tiny_aspp else nn.Identity()
+        self.eca  = ECA(C, k_size=3) if use_eca else nn.Identity()
+
+    @torch.no_grad()
+    def set_noise_strength(self, gamma_c=None, beta_c=None, gamma_xy=None, beta_xy=None):
+        if gamma_xy is not None or beta_xy is not None:
+            self.spatial.set_strength(gamma_xy, beta_xy)
+        for blk in self.blocks:
+            blk.norm1.set_strength(gamma_c, beta_c)
+            blk.norm2.set_strength(gamma_c, beta_c)
+
+    def forward(self, observation):
+        """
+        Expects a TensorDict-like `observation` with:
+          ('nodes','tasks','attr'): (..., H*W, Cin)
+          ('aux','z_ch'): (..., z_ch_dim[+1 if add_progress])
+          ('aux','z_spa'): (..., z_spa_dim[+1 if add_progress])
+          optionally ('aux','progress'): (...,1) if add_progress
+        Returns: (embed,)
+        """
+        xt   = observation[("nodes","tasks","attr")]   # (..., T, Cin)
+        z_ch = observation[("aux","z_ch")]             # (..., z_ch_dim or z_ch_dim+1)
+        z_spa= observation[("aux","z_spa")]            # (..., z_spa_dim or z_spa_dim+1)
+
+        if self.add_progress:
+            progress = observation[("aux","progress")] # (..., 1)
+            z_ch  = torch.cat([z_ch,  progress], dim=-1)
+            z_spa = torch.cat([z_spa, progress], dim=-1)
+
+        single = (xt.dim() == 2)
+        if single: xt = xt.unsqueeze(0)
+        *batch_shape, T, Cin = xt.shape
+        H, W = self.length, self.width
+        assert T == H * W, f"tasks={T} differs from H*W={H*W}"
+        assert Cin == self.in_channels
+
+        B = 1
+        for d in batch_shape: B *= int(d)
+        h = xt.reshape(B, H, W, Cin).permute(0,3,1,2)  # (B,Cin,H,W)
+
+        h = self.stem(h)
+        for blk in self.blocks:
+            h = blk(h, z_ch, z_spa)
+        h = self.aspp(h)
+        h = self.eca(h)
+
+        if single: h = h.squeeze(0)  # (C,H,W)
+        else:
+            C = h.size(1)
+            h = h.view(*batch_shape, C, H, W)
+
+        #print("DilationState output", h.shape)
+        return (h,)
+
+# ----- Policy head unchanged (no lazy) ---------------------------------------
+
+class DilationPolicyHead(nn.Module):
+    """
+    Minimal actor head: ('embed')=(..., C, H, W) -> logits (…, H*W, A)
+    """
+    def __init__(self,
+                 input_dim: int,
+                 output_dim: int,
+                 width: int,
+                 length: int,
+                 init_mode: str = "tiny",     # 'zero' | 'tiny' | 'kaiming'
+                 tiny_std: float = 1e-3,
+                 debug: bool = False,
+                 **_ignored):
+        super().__init__()
+        self.width  = int(width)
+        self.length = int(length)
+        self.Cin    = int(input_dim)
+        self.A      = int(output_dim)
+        self.debug  = bool(debug)
+
+        self.input_keys = ["embed"]
+        self.output_dim = self.A
+
+        self.proj = nn.Conv2d(self.Cin, self.A, kernel_size=1, bias=True)
+
+        init_mode = init_mode.lower()
+        if init_mode == "zero":
+            nn.init.zeros_(self.proj.weight); nn.init.zeros_(self.proj.bias)
+        elif init_mode == "tiny":
+            nn.init.normal_(self.proj.weight, std=float(tiny_std)); nn.init.zeros_(self.proj.bias)
+        elif init_mode == "kaiming":
+            nn.init.kaiming_normal_(self.proj.weight, nonlinearity="linear"); nn.init.zeros_(self.proj.bias)
+        else:
+            raise ValueError(f"init_mode must be 'zero' | 'tiny' | 'kaiming', got {init_mode!r}")
+
+    def forward(self, embed: torch.Tensor):
+        if embed.dim() == 3:
+            h = embed.unsqueeze(0); single = True
+        else:
+            h = embed; single = False
+        *B, C, H, W = h.shape
+        h = embed.view(-1, C, H, W)
+        logits_hw = self.proj(h)                         # (B, A, H, W)
+        logits = logits_hw.permute(0, 2, 3, 1).reshape(h.size(0), H * W, self.A)
+        logits = logits.view(*B, H*W, self.A)
+        #print("DilationPolicyHead logits", logits.shape)
+        return logits[0] if single else logits
+
+# ----- Value head with explicit dims -----------------------------------------
+
+class DilationValueHead(nn.Module):
+    """
+    embed: (B,C,H,W) or (C,H,W)
+    z    : (B,z_dim)  or (z_dim,)
+    returns: (B,) or scalar if single
+    """
+    def __init__(self,
+                 input_dim: int,
+                 z_dim: int = 8,
+                 proj_dim: int = 8,
+                 hidden_channels: int = 128,
+                 tiny_std: float = 1e-3,
+                 add_gap: bool = True, **_ignored):
+        super().__init__()
+        C = int(input_dim)
+        P = int(proj_dim)
+        Dz = int(z_dim)
+
+        # 1×1 channel mixer (no bias before GN/act)
+        self.mix = nn.Conv2d(C, P, kernel_size=1, bias=False)
+        nn.init.kaiming_normal_(self.mix.weight, nonlinearity='relu')
+
+        # attention scorer -> (B,1,H,W); tiny init
+        self.attn = nn.Conv2d(P, 1, kernel_size=1, bias=True)
+        nn.init.normal_(self.attn.weight, std=tiny_std)
+        nn.init.zeros_(self.attn.bias)
+
+        self.add_gap = bool(add_gap)
+
+        mlp_in = (2 * P if self.add_gap else P) #+ Dz
+        self.mlp = nn.Sequential(
+            nn.Linear(mlp_in, hidden_channels), nn.SiLU(),
+            nn.Linear(hidden_channels, 1)
+        )
+        nn.init.normal_(self.mlp[-1].weight, std=tiny_std)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, embed: torch.Tensor):
+        # embed: (*batch, C, H, W) ; z: (*batch, Dz)
+        *batch, C, H, W = embed.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        embed_f = embed.view(-1, C, H, W)                        # (B, C, H, W)
+        #z_f = z.view(-1, z.shape[-1])                            # (B, Dz)
+
+        Fm = F.silu(self.mix(embed_f))                           # (B, P, H, W)
+        scores = self.attn(Fm)                                   # (B, 1, H, W)
+        attn = scores.flatten(2).softmax(dim=-1).view(B, 1, H, W)
+        pooled_attn = (Fm * attn).sum(dim=(2,3))                 # (B, P)
+        if self.add_gap:
+            pooled_gap = Fm.mean(dim=(2,3))                      # (B, P)
+            pooled = torch.cat([pooled_attn, pooled_gap], dim=1) # (B, 2P)
+        else:
+            pooled = pooled_attn
+
+        #v = self.mlp(torch.cat([pooled, z_f], dim=-1)).squeeze(-1)  # (B,)
+        v = self.mlp(pooled).squeeze(-1)  # (B,)
+        v = v.view(*batch)                                        # (*batch,)
+        #print("DilationValueHead v", v.shape)
+        return v
+
+class DilationMultiValueHead(nn.Module):
+    """ 
+    Returns (B, H*W) or (H*W) if single values (one for each pixel)
+    """
+
+    def __init__(self,
+                 input_dim: int,
+                 tiny_std: float = 1e-3, **_ignored):
+        super().__init__()
+        C = int(input_dim)
+        self.proj = nn.Conv2d(C, 1, kernel_size=1, bias=True)
+        nn.init.normal_(self.proj.weight, std=float(tiny_std))
+        nn.init.zeros_(self.proj.bias)
+        self.input_keys = ["embed"]
+        self.output_dim = 1
+
+    def forward(self, embed: torch.Tensor):
+        if embed.dim() == 3:
+            h = embed.unsqueeze(0); single = True
+        else:
+            h = embed; single = False
+        *B, C, H, W = h.shape
+        h = h.view(-1, C, H, W)
+        v_hw = self.proj(h)                         # (B, 1, H, W)
+        v = v_hw.squeeze(1)                         # (B, H, W)
+        v = v.view(*B, H*W)
+        print("DilationMultiValueHead v", v.shape)
+        return v[0] if single else v
 
 
 class DilationRectangularEncoder(nn.Module):

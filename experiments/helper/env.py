@@ -82,7 +82,6 @@ def make_env(
     lstm: Optional[LSTMModule] = None,
     normalization: Optional[NormalizationDetails] = None,
     eval=False,
-    network=None,
 )->RuntimeEnv | tuple[RuntimeEnv, NormalizationDetails]:
     from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
     gmsh.initialize()
@@ -127,7 +126,6 @@ def make_env(
             if cfg.algorithm.rollout_steps == 0 
             else cfg.algorithm.rollout_steps + 1)
         ),
-        network=network,
     )
     env = TransformedEnv(env, StepCounter())
     env.append_transform(TrajCounter())

@@ -25,9 +25,6 @@ import time
 from torchrl.collectors.utils import split_trajectories
 from task4feedback.ml.util import log_parameter_and_gradient_norms
 
-from tensordict.nn import set_composite_lp_aggregate
-set_composite_lp_aggregate(True).set()
-
 def joint_stats(td, ppo):
     with torch.no_grad():
         prev_lp = td["sample_log_prob"].squeeze(-1)  # [N]
@@ -465,9 +462,6 @@ def run_ppo(
             ppo_config.update_device, non_blocking=True
         )
 
-        # print("Task obs", tensordict_data[0]["observation", "nodes", "tasks", "attr"])
-        # print("obs shape", tensordict_data.shape)
-
         adv_start_t = time.perf_counter()
         with torch.no_grad():
             # Redistribute Rewards
@@ -475,6 +469,7 @@ def run_ppo(
                 redistribute_rewards_uniform(tensordict_data)
             # Compute advantages
             advantage_module(tensordict_data)
+
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
         training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")
@@ -482,42 +477,6 @@ def run_ppo(
         flattened_data = tensordict_data.reshape(-1)
         samples_in_collection = flattened_data.shape[0]
         n_samples += samples_in_collection
-
-        # print("SANITY CHECK OF SIZES IN OBSERVATION")
-        # print("observation shape", flattened_data["observation"].shape)
-        # print("action shape", flattened_data["action"].shape)
-        # print("reward shape", flattened_data["next", "reward"].shape)
-        # print("done shape", flattened_data["next", "done"].shape)
-        # print("logits shape", flattened_data["logits"].shape)
-
-        # print("keys", flattened_data.keys())
-
-        #if max_candidates > 1:
-        #    flattened_data["advantage"] = flattened_data["advantage"].expand(
-        #        -1, max_candidates
-        #    )
-        #    flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
-        #
-        #    flattened_data["value_target"] = flattened_data["value_target"].expand(
-        #        -1, max_candidates
-        #    )
-        #    flattened_data["value_target"] = flattened_data["value_target"].unsqueeze(-1)
-
-            # flattened_data["reward"] = flattened_data["next", "reward"].expand(
-            #     -1, max_candidates
-            # )
-
-            # flattened_data["reward"] = flattened_data["reward"].unsqueeze(-1)
-
-            # flattened_data["done"] = flattened_data["next", "done"].expand(
-            #     -1, max_candidates
-            # )
-            # flattened_data["done"] = flattened_data["done"].unsqueeze(-1)
-
-        # print("advantage shape", flattened_data["advantage"].shape)
-        # print("value target shape", flattened_data["value_target"].shape)
-        # print("reward shape", flattened_data["next", "reward"].shape)
-        # print("done shape", flattened_data["next", "done"].shape)
         replay_buffer.extend(flattened_data)
 
 

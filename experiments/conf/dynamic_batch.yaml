@@ -2,8 +2,8 @@ defaults:
   - graph: dynamic_jacobi_diag
   - reward: incremental_schedule
   - system: h100
-  - feature: cnn_batch
-  - network: cond_dilation_cnn_batch
+  - feature: candidate_coordinate
+  - network: vector_baseline
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -27,9 +27,9 @@ reward:
 
 graph:
   config:
-      n: 16
+      n: 4
       domain_ratio: 1.0
-      steps: 120
+      steps: 20
       boundary_width: 1000
   env:
     change_priority: False
@@ -55,10 +55,10 @@ optimizer:
 system:
   mem: 80000000000
 
-feature:
-  observer:
-    prev_frames: 1
-    batched: true
+# feature:
+#   observer:
+#     prev_frames: 3
+#     batched: true
 
 network:
   layers:
