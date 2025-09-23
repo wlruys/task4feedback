@@ -2,8 +2,8 @@ defaults:
   - graph: dynamic_jacobi_diag
   - reward: incremental_schedule
   - system: h100
-  - feature: candidate_coordinate
-  - network: vector_baseline
+  - feature: cnn_batch
+  - network: dilation_cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -27,9 +27,9 @@ reward:
 
 graph:
   config:
-      n: 4
+      n: 8
       domain_ratio: 1.0
-      steps: 20
+      steps: 120
       boundary_width: 1000
   env:
     change_priority: False
@@ -69,7 +69,7 @@ network:
     actor:
       hidden_channels: 16
     critic:
-      hidden_channels: 128
+      hidden_channels: 16
 
 runtime:
   batch_size: 5
