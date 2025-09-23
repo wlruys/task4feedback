@@ -26,20 +26,22 @@ from torchrl.collectors.utils import split_trajectories
 from task4feedback.ml.util import log_parameter_and_gradient_norms
 
 from tensordict.nn import set_composite_lp_aggregate
+
 set_composite_lp_aggregate(True).set()
+
 
 def joint_stats(td, ppo):
     with torch.no_grad():
         prev_lp = td["sample_log_prob"].squeeze(-1)  # [N]
         cur_lp, dist, _ = ppo._get_cur_log_prob(td)
-        cur_lp = cur_lp.squeeze(-1)                  # [N]
-        act = td["action"]                           # [N, 64]
-        logits = td["logits"]                        # [N, 64, 4]
+        cur_lp = cur_lp.squeeze(-1)  # [N]
+        act = td["action"]  # [N, 64]
+        logits = td["logits"]  # [N, 64, 4]
 
         # Recompute joint log-prob explicitly via per-head log_softmax (+ gather)
-        logp_heads = F.log_softmax(logits, dim=-1)                     # [N, 64, 4]
+        logp_heads = F.log_softmax(logits, dim=-1)  # [N, 64, 4]
         gathered = logp_heads.gather(-1, act.unsqueeze(-1)).squeeze(-1)  # [N, 64]
-        joint_lp_explicit = gathered.sum(-1)                            # [N]
+        joint_lp_explicit = gathered.sum(-1)  # [N]
 
         print("\n=== LOG-PROB STATS ===")
         for name, x in [
@@ -48,10 +50,9 @@ def joint_stats(td, ppo):
             ("cur_lp (explicit)", joint_lp_explicit),
         ]:
             x = x.detach()
-            print(f"{name:20s} mean={x.mean():8.3f} std={x.std():8.3f} "
-                  f"min={x.min():8.3f} max={x.max():8.3f}")
-            
-        x = td["observation", "nodes", "tasks", "attr"]     # [B, 600] ideally; if it's [600], fix your batch shaping first
+            print(f"{name:20s} mean={x.mean():8.3f} std={x.std():8.3f} " f"min={x.min():8.3f} max={x.max():8.3f}")
+
+        x = td["observation", "nodes", "tasks", "attr"]  # [B, 600] ideally; if it's [600], fix your batch shaping first
         x = x.detach()
         print("\n=== OBSERVATION STATS ===")
         print(f"obs: {x}")
@@ -61,7 +62,7 @@ def joint_stats(td, ppo):
         print(f"obs numel={x.numel()} nan={torch.isnan(x).sum()} inf={torch.isinf(x).sum()}")
         print(f"obs unique={torch.unique(x)}")
 
-        #Show me the row where the max value is 
+        # Show me the row where the max value is
         max_val = x.max()
         max_pos = (x == max_val).nonzero(as_tuple=False)
         print(f"obs max position: {max_pos}")
@@ -71,25 +72,24 @@ def joint_stats(td, ppo):
                 print(f"obs[{b}, {i}, :] = {x[b, i, :]}")
 
         # KL approximations
-        kl_approx = (prev_lp - cur_lp)   # [N]
-        kl_approx_explicit = (prev_lp - joint_lp_explicit)
+        kl_approx = prev_lp - cur_lp  # [N]
+        kl_approx_explicit = prev_lp - joint_lp_explicit
         print("\n=== KL APPROX (sample-wise) ===")
         for name, x in [
             ("kl_approx", kl_approx),
             ("kl_approx_explicit", kl_approx_explicit),
         ]:
             x = x.detach()
-            print(f"{name:20s} mean={x.mean():8.3f} std={x.std():8.3f} "
-                  f"min={x.min():8.3f} max={x.max():8.3f}")
+            print(f"{name:20s} mean={x.mean():8.3f} std={x.std():8.3f} " f"min={x.min():8.3f} max={x.max():8.3f}")
 
         # Logit scale diagnostics
         l = logits.detach()
         print(f"\nlogits shape: {l.shape}")
         lmax = l.abs().amax().item()
-        per_head_span = (l.max(dim=-1).values - l.min(dim=-1).values)  # [N, 64]
+        per_head_span = l.max(dim=-1).values - l.min(dim=-1).values  # [N, 64]
         print("\n=== LOGIT SCALE ===")
-        print(f"|logits|_max = {lmax:.1f}; span per head: mean={per_head_span.mean():.2f} "
-              f"max={per_head_span.max():.2f}")
+        print(f"|logits|_max = {lmax:.1f}; span per head: mean={per_head_span.mean():.2f} " f"max={per_head_span.max():.2f}")
+
 
 @dataclass
 class PPOConfig(AlgorithmConfig):
@@ -117,14 +117,12 @@ class PPOConfig(AlgorithmConfig):
     compile_update: bool = False
     compile_advantage: bool = False
     collector: str = "multi_sync"  # "sync" or "multi_sync"
-    sample_slices: bool = (
-        True  # if using lstm, whether slices are used instead of episodes
-    )
+    sample_slices: bool = True  # if using lstm, whether slices are used instead of episodes
     slice_len: int = 16  # length of slices for LSTM, only used if sample_slices is True
     rollout_steps: int = 250
     advantage_type: str = "gae"  # "gae" or "vtrace"
     bagged_policy: str = "uniform"
-    timeout: int = 60 * 60 * 24 # 1 day
+    timeout: int = 60 * 60 * 24  # 1 day
 
 
 def should_log(
@@ -136,6 +134,7 @@ def should_log(
         return False
     return n_updates % logging_config.stats_interval == 0
 
+
 def should_eval(
     n_updates: int,
     eval_config: Optional[EvaluationConfig],
@@ -143,10 +142,7 @@ def should_eval(
     """Check if we should evaluate based on the current update count and logging configuration."""
     if eval_config is None:
         return False
-    return (
-        eval_config.eval_interval > 0
-        and n_updates % eval_config.eval_interval == 0
-    )
+    return eval_config.eval_interval > 0 and n_updates % eval_config.eval_interval == 0
 
 
 def should_checkpoint(
@@ -157,6 +153,7 @@ def should_checkpoint(
     if logging_config is None:
         return False
     return n_updates % logging_config.checkpoint_interval == 0
+
 
 def log_training_metrics(
     flattened_data: TensorDict,
@@ -193,13 +190,23 @@ def log_training_metrics(
             if rewards.numel() > 1:
                 std_reward = rewards.std().item()
             else:
-                std_reward = None 
+                std_reward = None
 
         # Calculate advantage and value target metrics
         advantage_mean = tensordict_data["advantage"].mean().item()
         advantage_std = tensordict_data["advantage"].std().item()
         value_target_mean = tensordict_data["value_target"].mean().item()
         value_target_std = tensordict_data["value_target"].std().item()
+
+        explained_variance = None
+        if "state_value" in flattened_data.keys() and "value_target" in flattened_data.keys():
+            values = flattened_data["state_value"].squeeze(-1)
+            targets = flattened_data["value_target"].squeeze(-1)
+            if targets.numel() > 1:
+                var_targets = targets.var(unbiased=False)
+                if torch.isfinite(var_targets) and var_targets > 1e-8:
+                    residual_var = (targets - values).var(unbiased=False)
+                    explained_variance = (1.0 - (residual_var / var_targets)).item()
 
         # Get gradient and parameter norms
         post_clip_norms = log_parameter_and_gradient_norms(loss_module)
@@ -228,6 +235,9 @@ def log_training_metrics(
         if std_reward is not None:
             log_payload["batch/std_reward"] = std_reward
 
+        if explained_variance is not None:
+            log_payload["batch/explained_variance"] = explained_variance
+
         # Add improvement metrics if available
         if valid_improvements.numel() > 0:
             log_payload.update(
@@ -242,7 +252,7 @@ def log_training_metrics(
 
             training.info(f"Average training improvement: {avg_improvement}")
 
-        training.info(f"Average entropy {loss["entropy"].item()}")
+        training.info(f"Average entropy {loss['entropy'].item()}")
         wandb.log(log_payload)
 
 
@@ -253,12 +263,10 @@ def run_ppo(
     logging_config: Optional[LoggingConfig],
     eval_config: Optional[EvaluationConfig] = None,
     optimizer: Optional[torch.optim.Optimizer] = None,
-    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None, 
-    seed: int = 0 
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
+    seed: int = 0,
 ):
-    if logging_config is not None and (
-        logging_frequency := logging_config.stats_interval
-    ):
+    if logging_config is not None and (logging_frequency := logging_config.stats_interval):
         wandb.define_metric("batch/n_updates")
         wandb.define_metric("batch/n_samples", step_metric="batch/n_updates")
         wandb.define_metric("batch/n_collections", step_metric="batch/n_updates")
@@ -271,9 +279,7 @@ def run_ppo(
 
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
-    max_candidates = max(
-        [env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs]
-    )
+    max_candidates = max([env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs])
 
     if ppo_config.rollout_steps > 0:
         max_tasks = ppo_config.rollout_steps
@@ -306,15 +312,11 @@ def run_ppo(
             device=ppo_config.update_device,
         ),
         sampler=SamplerWithoutReplacement(),
-        prefetch=4,
         batch_size=ppo_config.minibatch_size,
     )
 
     def env_workers():
-        return [
-            env_constructors[i % len(env_constructors)]
-            for i in range(ppo_config.workers)
-        ]
+        return [env_constructors[i % len(env_constructors)] for i in range(ppo_config.workers)]
 
     if ppo_config.collector == "multi_sync":
         collector = MultiSyncDataCollector(
@@ -327,9 +329,7 @@ def run_ppo(
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            compile_policy=(
-                {"mode": "reduce-overhead"} if ppo_config.compile_policy else None
-            ),
+            compile_policy=({"mode": "reduce-overhead"} if ppo_config.compile_policy else None),
         )
     elif ppo_config.collector == "sync":
         collector = SyncDataCollector(
@@ -341,15 +341,10 @@ def run_ppo(
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            compile_policy=(
-                {"mode": "reduce-overhead"} if ppo_config.compile_policy else None
-            ),
+            compile_policy=({"mode": "reduce-overhead"} if ppo_config.compile_policy else None),
         )
     else:
-        raise ValueError(
-            f"Unknown collector type: {ppo_config.collector}. "
-            "Use 'sync' or 'multi_sync'."
-        )
+        raise ValueError(f"Unknown collector type: {ppo_config.collector}. " "Use 'sync' or 'multi_sync'.")
 
     collector.set_seed(seed)
 
@@ -385,41 +380,29 @@ def run_ppo(
 
     def update(batch, loss_module, optimizer, ppo_config):
         loss_vals = loss_module(batch)
-        loss_value = (
-            loss_vals["loss_objective"]
-            + loss_vals["loss_critic"]
-            + loss_vals["loss_entropy"]
-        )
+        loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
 
         # joint_stats(batch, loss_module)
 
         optimizer.zero_grad()
         loss_value.backward()
 
-        torch.nn.utils.clip_grad_norm_(
-            loss_module.parameters(), max_norm=ppo_config.max_grad_norm
-        )
+        torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_norm=ppo_config.max_grad_norm)
 
         optimizer.step()
 
         return loss_vals
 
     if ppo_config.compile_advantage:
-        advantage_module = compile_with_warmup(
-            advantage_module, mode="reduce-overhead", warmup=8
-        )
+        advantage_module = compile_with_warmup(advantage_module, mode="reduce-overhead", warmup=8)
 
     if ppo_config.compile_update:
         update = compile_with_warmup(update, mode="reduce-overhead", warmup=8)
 
-    states_per_collection = min(
-        ppo_config.states_per_collection, max_states_per_collection
-    )
+    states_per_collection = min(ppo_config.states_per_collection, max_states_per_collection)
     n_batch = max(1, states_per_collection // ppo_config.minibatch_size)
     if ppo_config.minibatch_size > states_per_collection:
-        training.warning(
-            f"Minibatch size <{ppo_config.minibatch_size}> is larger than states per collection <{states_per_collection}>. "
-        )
+        training.warning(f"Minibatch size <{ppo_config.minibatch_size}> is larger than states per collection <{states_per_collection}>. ")
 
     training.info(
         f"Running PPO training with {ppo_config.num_collections} collections, "
@@ -435,7 +418,6 @@ def run_ppo(
         training.info("Running initial evaluation before training")
         run_evaluation(collector.policy, eval_envs, eval_config, 0)
 
-
     training.info("Starting PPO training loop")
 
     start_t = time.perf_counter()
@@ -450,20 +432,16 @@ def run_ppo(
         if i >= ppo_config.num_collections:
             break
 
+        collector.policy.eval()
+
         current_t = time.perf_counter()
         elapsed_time = current_t - start_t
         updates_per_second = (i + 1) / elapsed_time if elapsed_time > 0 else 0
         seconds_per_update = elapsed_time / (i + 1) if (i + 1) > 0 else 0
 
-        training.info(
-            f"Collection {i + 1}/{ppo_config.num_collections}, "
-            f"Collections/s: {updates_per_second:.2f}, "
-            f"ms/Update: {seconds_per_update * 1000:.2f}"
-        )
+        training.info(f"Collection {i + 1}/{ppo_config.num_collections}, " f"Collections/s: {updates_per_second:.2f}, " f"ms/Update: {seconds_per_update * 1000:.2f}")
 
-        tensordict_data = tensordict_data.to(
-            ppo_config.update_device, non_blocking=True
-        )
+        tensordict_data = tensordict_data.to(ppo_config.update_device, non_blocking=True)
 
         # print("Task obs", tensordict_data[0]["observation", "nodes", "tasks", "attr"])
         # print("obs shape", tensordict_data.shape)
@@ -474,7 +452,7 @@ def run_ppo(
             if ppo_config.bagged_policy == "uniform":
                 redistribute_rewards_uniform(tensordict_data)
             # Compute advantages
-            advantage_module(tensordict_data)
+        advantage_module(tensordict_data)
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
         training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")
@@ -492,7 +470,7 @@ def run_ppo(
 
         # print("keys", flattened_data.keys())
 
-        #if max_candidates > 1:
+        # if max_candidates > 1:
         #    flattened_data["advantage"] = flattened_data["advantage"].expand(
         #        -1, max_candidates
         #    )
@@ -503,16 +481,16 @@ def run_ppo(
         #    )
         #    flattened_data["value_target"] = flattened_data["value_target"].unsqueeze(-1)
 
-            # flattened_data["reward"] = flattened_data["next", "reward"].expand(
-            #     -1, max_candidates
-            # )
+        # flattened_data["reward"] = flattened_data["next", "reward"].expand(
+        #     -1, max_candidates
+        # )
 
-            # flattened_data["reward"] = flattened_data["reward"].unsqueeze(-1)
+        # flattened_data["reward"] = flattened_data["reward"].unsqueeze(-1)
 
-            # flattened_data["done"] = flattened_data["next", "done"].expand(
-            #     -1, max_candidates
-            # )
-            # flattened_data["done"] = flattened_data["done"].unsqueeze(-1)
+        # flattened_data["done"] = flattened_data["next", "done"].expand(
+        #     -1, max_candidates
+        # )
+        # flattened_data["done"] = flattened_data["done"].unsqueeze(-1)
 
         # print("advantage shape", flattened_data["advantage"].shape)
         # print("value target shape", flattened_data["value_target"].shape)
@@ -520,8 +498,9 @@ def run_ppo(
         # print("done shape", flattened_data["next", "done"].shape)
         replay_buffer.extend(flattened_data)
 
-
         update_start_t = time.perf_counter()
+        loss_module.actor_network.train()
+        loss_module.critic_network.train()
         for j in range(ppo_config.epochs_per_collection):
             for k in range(n_batch):
                 n_updates += 1
@@ -541,11 +520,7 @@ def run_ppo(
                         n_samples,
                     )
 
-        collector.update_policy_weights_(
-            TensorDict.from_module(loss_module.actor_network).to(
-                ppo_config.collect_device
-            )
-        )
+        collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
         update_end_t = time.perf_counter()
         update_elapsed_time = update_end_t - update_start_t
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
@@ -554,9 +529,8 @@ def run_ppo(
             lr_scheduler.step()
 
         if should_eval(n_collections, eval_config=eval_config):
-            run_evaluation(
-                collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples
-            )
+            collector.policy.eval()
+            run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at collection {n_collections}")
@@ -571,12 +545,8 @@ def run_ppo(
         current_t = time.perf_counter()
         elapsed_time = current_t - start_t
         if elapsed_time > ppo_config.timeout:
-            training.warning(
-                f"Timeout reached after {elapsed_time:.2f} seconds. Stopping training."
-            )
+            training.warning(f"Timeout reached after {elapsed_time:.2f} seconds. Stopping training.")
             break
-
-        
 
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
@@ -586,6 +556,7 @@ def run_ppo(
 
     collector.shutdown()
 
+
 def run_ppo_lstm(
     actor_critic_module: ActorCriticModule,
     env_constructors: List[Callable[[], EnvBase]],
@@ -593,12 +564,10 @@ def run_ppo_lstm(
     logging_config: Optional[LoggingConfig],
     eval_config: Optional[EvaluationConfig] = None,
     optimizer: Optional[torch.optim.Optimizer] = None,
-    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None, 
-    seed: int = 0
+    lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
+    seed: int = 0,
 ):
-    if logging_config is not None and (
-        logging_frequency := logging_config.stats_interval
-    ):
+    if logging_config is not None and (logging_frequency := logging_config.stats_interval):
         wandb.define_metric("batch/n_updates")
         wandb.define_metric("batch/n_samples", step_metric="batch/n_updates")
         wandb.define_metric("batch/n_collections", step_metric="batch/n_updates")
@@ -611,9 +580,7 @@ def run_ppo_lstm(
 
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
-    max_candidates = max(
-        [env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs]
-    )
+    max_candidates = max([env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs])
 
     print(f"Max tasks in env constructors: {max_tasks}")
 
@@ -670,10 +637,7 @@ def run_ppo_lstm(
         num_slices = ppo_config.minibatch_size
 
     def env_workers():
-        return [
-            env_constructors[i % len(env_constructors)]
-            for i in range(ppo_config.workers)
-        ]
+        return [env_constructors[i % len(env_constructors)] for i in range(ppo_config.workers)]
 
     print(f"Creating collector with {ppo_config.workers} workers")
 
@@ -688,9 +652,7 @@ def run_ppo_lstm(
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
-            compile_policy=(
-                {"mode": "reduce-overhead"} if ppo_config.compile_policy else None
-            ),
+            compile_policy=({"mode": "reduce-overhead"} if ppo_config.compile_policy else None),
         )
     elif ppo_config.collector == "sync":
         collector = SyncDataCollector(
@@ -704,10 +666,7 @@ def run_ppo_lstm(
             use_buffers=True,
         )
     else:
-        raise ValueError(
-            f"Unknown collector type: {ppo_config.collector}. "
-            "Use 'sync' or 'multi_sync'."
-        )
+        raise ValueError(f"Unknown collector type: {ppo_config.collector}. " "Use 'sync' or 'multi_sync'.")
 
     collector.set_seed(seed)
 
@@ -747,40 +706,30 @@ def run_ppo_lstm(
         print(f"Using learning rate scheduler: {lr_scheduler}")
 
     def update(batch, i, j, k):
+
         if ppo_config.sample_slices:
             batch = batch.reshape(num_slices, -1)
             # print(batch.shape)
 
         loss_vals = loss_module(batch)
-        loss_value = (
-            loss_vals["loss_objective"]
-            + loss_vals["loss_critic"]
-            + loss_vals["loss_entropy"]
-        )
-
+        loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
 
         optimizer.zero_grad()
         loss_value.backward()
 
-        torch.nn.utils.clip_grad_norm_(
-            loss_module.parameters(), max_norm=ppo_config.max_grad_norm
-        )
+        torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_norm=ppo_config.max_grad_norm)
 
         optimizer.step()
 
         return loss_vals
 
     if ppo_config.compile_advantage:
-        advantage_module = compile_with_warmup(
-            advantage_module, mode="reduce-overhead", warmup=8
-        )
+        advantage_module = compile_with_warmup(advantage_module, mode="reduce-overhead", warmup=8)
 
     if ppo_config.compile_update:
         update = compile_with_warmup(update, mode="reduce-overhead", warmup=8)
 
-    states_per_collection = min(
-        ppo_config.states_per_collection, max_states_per_collection
-    )
+    states_per_collection = min(ppo_config.states_per_collection, max_states_per_collection)
 
     if ppo_config.sample_slices:
         n_batch = max(1, states_per_collection // ppo_config.minibatch_size)
@@ -820,13 +769,10 @@ def run_ppo_lstm(
         updates_per_second = (i + 1) / elapsed_time if elapsed_time > 0 else 0
 
         training.info(
-            f"Collection {i + 1}/{ppo_config.num_collections}, "
-            f"Collections/s: {updates_per_second:.2f}",
+            f"Collection {i + 1}/{ppo_config.num_collections}, " f"Collections/s: {updates_per_second:.2f}",
         )
 
-        tensordict_data = tensordict_data.to(
-            ppo_config.update_device, non_blocking=True
-        )
+        tensordict_data = tensordict_data.to(ppo_config.update_device, non_blocking=True)
 
         adv_start_t = time.perf_counter()
         with torch.no_grad():
@@ -837,23 +783,16 @@ def run_ppo_lstm(
 
         flattened_data = tensordict_data.reshape(-1)
 
-
         if ppo_config.sample_slices:
             if max_candidates > 1:
-                flattened_data["advantage"] = flattened_data["advantage"].expand(
-                    -1, max_candidates
-                )
+                flattened_data["advantage"] = flattened_data["advantage"].expand(-1, max_candidates)
                 flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
 
             replay_buffer.extend(flattened_data)
         else:
             if max_candidates > 1:
-                tensordict_data["advantage"] = tensordict_data["advantage"].expand(
-                    -1, max_candidates
-                )
-                tensordict_data["advantage"] = tensordict_data["advantage"].unsqueeze(
-                    -1
-                )
+                tensordict_data["advantage"] = tensordict_data["advantage"].expand(-1, max_candidates)
+                tensordict_data["advantage"] = tensordict_data["advantage"].unsqueeze(-1)
             replay_buffer.extend(tensordict_data)
 
         n_samples += flattened_data.shape[0]
@@ -862,9 +801,7 @@ def run_ppo_lstm(
         for j in range(ppo_config.epochs_per_collection):
             for k in range(n_batch):
                 n_updates += 1
-                batch, info = replay_buffer.sample(
-                    ppo_config.minibatch_size, return_info=True
-                )
+                batch, info = replay_buffer.sample(ppo_config.minibatch_size, return_info=True)
 
                 batch.to(ppo_config.update_device, non_blocking=True)
                 loss = update(batch, i, j, k)
@@ -881,11 +818,7 @@ def run_ppo_lstm(
                         n_samples,
                     )
 
-        collector.update_policy_weights_(
-            TensorDict.from_module(loss_module.actor_network).to(
-                ppo_config.collect_device
-            )
-        )
+        collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
         update_end_t = time.perf_counter()
         update_elapsed_time = update_end_t - update_start_t
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
@@ -897,16 +830,13 @@ def run_ppo_lstm(
             run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
 
         if should_checkpoint(n_collections, logging_config):
-            training.info(f"Checkpointing at update: {n_updates}") 
+            training.info(f"Checkpointing at update: {n_updates}")
             save_checkpoint(n_updates, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
-
 
         current_t = time.perf_counter()
         elapsed_time = current_t - start_t
         if elapsed_time > ppo_config.timeout:
-            training.warning(
-                f"Timeout reached after {elapsed_time:.2f} seconds. Stopping training."
-            )
+            training.warning(f"Timeout reached after {elapsed_time:.2f} seconds. Stopping training.")
             break
 
     if eval_config is not None and eval_config.eval_interval > 0:

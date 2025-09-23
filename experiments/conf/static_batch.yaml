@@ -1,7 +1,7 @@
 defaults:
-  - graph: dynamic_jacobi_diag
+  - graph: static_jacobi
   - reward: incremental_schedule
-  - system: h100
+  - system: 4h100
   - feature: cnn_batch
   - network: cond_dilation_cnn_batch
   - algorithm: ppo
@@ -26,6 +26,8 @@ reward:
   random_start: False
 
 graph:
+  config:
+    level_memory: 85e9
   env:
     change_priority: False
     change_location: True
@@ -34,20 +36,21 @@ graph:
 
 algorithm:
   num_collections: 10000
-  rollout_steps: 30
-  workers: 12
-  graphs_per_collection: 12
-  ent_coef: 0
+  rollout_steps: 64
+  workers: 4
+  graphs_per_collection: 4
+  ent_coef: 0.001
   sample_slices: False
   slice_len: 16
   gamma: 0.99
   lmbda: 0.95
-  minibatch_size: 128
+  minibatch_size: 64
 
 optimizer:
   lr: 1e-3
 
 system:
+  # mem: 99999e9
   mem: 80e9
 
 feature:
@@ -73,6 +76,8 @@ runtime:
 
 wandb:
   enabled: true
+  project: static_jacobi_ipdps
+  name: 4x4_cnn
 
 eval:
   eval_interval: 100

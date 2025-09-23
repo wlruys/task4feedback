@@ -16,16 +16,16 @@ from task4feedback.graphs.jacobi import get_length_from_config
 
 
 def MultiHeadCategorical(**kwargs):
-    return torch.distributions.Categorical(**kwargs).to_event(1)   # equivalent to Independent(base, 1)
+    return torch.distributions.Categorical(**kwargs).to_event(1)  # equivalent to Independent(base, 1)
+
 
 def MultiHeadCategorical(**kwargs):
     # kwargs will contain 'logits' read from the TensorDict by Probabilistic* module
-    base = torch.distributions.Categorical(**kwargs)          # batch_shape: [..., 64], event_shape: ()
-    return torch.distributions.Independent(base, 1)           # reinterpret the last batch dim as event -> joint log_prob
+    base = torch.distributions.Categorical(**kwargs)  # batch_shape: [..., 64], event_shape: ()
+    return torch.distributions.Independent(base, 1)  # reinterpret the last batch dim as event -> joint log_prob
 
-def create_actor_critic_models(
-    cfg: DictConfig, feature_cfg: FeatureDimConfig
-) -> nn.Module:
+
+def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> nn.Module:
     layers = cfg.network.layers
 
     state_layer = layers.state
@@ -66,15 +66,12 @@ def create_actor_critic_models(
     return ActorCriticModule(policy_module, value_module)
 
 
-def create_td_actor_critic_models(
-    cfg: DictConfig, feature_cfg: FeatureDimConfig
-) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
-        
+def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
+
     graph_config = instantiate(cfg.graph.config)
 
     lstm_mod = None
     layers = cfg.network.layers
-
 
     state_layer = layers.state
     actor_layer = layers.actor
@@ -161,7 +158,7 @@ def create_td_actor_critic_models(
         module=policy_module,
         in_keys=["logits"],
         out_keys=["action"],
-        #distribution_class=torch.distributions.Categorical,
+        # distribution_class=torch.distributions.Categorical,
         distribution_class=MultiHeadCategorical,
         return_log_prob=True,
     )
@@ -171,20 +168,10 @@ def create_td_actor_critic_models(
 
     if hasattr(state_layer, "width") and hasattr(state_layer, "length"):
         critic_state_module = instantiate(
-            state_layer,
-            feature_config=feature_cfg,
-            add_progress=cfg.network.critic.add_progress,
-            _recursive_=False,
-            width=graph_config.n,
-            length=get_length_from_config(graph_config)
+            state_layer, feature_config=feature_cfg, add_progress=cfg.network.critic.add_progress, _recursive_=False, width=graph_config.n, length=get_length_from_config(graph_config)
         )
         reference_state_module = instantiate(
-            state_layer,
-            feature_config=feature_cfg,
-            add_progress=cfg.network.critic.add_progress,
-            _recursive_=False,
-            width=graph_config.n,
-            length=get_length_from_config(graph_config)
+            state_layer, feature_config=feature_cfg, add_progress=cfg.network.critic.add_progress, _recursive_=False, width=graph_config.n, length=get_length_from_config(graph_config)
         )
     else:
         critic_state_module = instantiate(
@@ -193,7 +180,7 @@ def create_td_actor_critic_models(
             add_progress=cfg.network.critic.add_progress,
             _recursive_=False,
         )
-        reference_state_module  = instantiate(
+        reference_state_module = instantiate(
             state_layer,
             feature_config=feature_cfg,
             add_progress=cfg.network.critic.add_progress,
@@ -215,7 +202,6 @@ def create_td_actor_critic_models(
     critic_layers.append(_td_critic_state)
     reference_layers.append(_td_reference_state)
 
-
     if "lstm" in layers:
         critic_lstm_layer = instantiate(
             layers.lstm,
@@ -224,14 +210,11 @@ def create_td_actor_critic_models(
         output_dim = layers.lstm.hidden_size
         critic_layers.append(critic_lstm_layer)
 
-    
-
     critic_output_module = instantiate(
         critic_layer,
         input_dim=output_dim,
         output_dim=1,
         _recursive_=False,
-        
     )
     reference_output_module = instantiate(
         critic_layer,
@@ -252,7 +235,7 @@ def create_td_actor_critic_models(
         out_keys=["state_value"],
     )
     _td_reference_output = td_nn.TensorDictModule(
-        reference_output_module, 
+        reference_output_module,
         in_keys=critic_input_keys,
         out_keys=["reference_state"],
     )
@@ -264,6 +247,7 @@ def create_td_actor_critic_models(
     value_operator = critic_module
 
     return ActorCriticModule(probabilistic_policy, value_operator), reference_module, lstm_mod
+
 
 def load_policy_from_checkpoint(model: torch.nn.Module, ckpt_path: Path) -> bool:
     """Load a policy module state_dict from `ckpt_path` into `model`.
@@ -310,10 +294,7 @@ def load_policy_from_checkpoint(model: torch.nn.Module, ckpt_path: Path) -> bool
 
     try:
         missing, unexpected = target_module.load_state_dict(state_dict, strict=False)
-        print(
-            f"Loaded policy weights from {ckpt_path} into "
-            f"{target_module.__class__.__name__} (missing={len(missing)}, unexpected={len(unexpected)})."
-        )
+        print(f"Loaded policy weights from {ckpt_path} into " f"{target_module.__class__.__name__} (missing={len(missing)}, unexpected={len(unexpected)}).")
         return True
     except Exception as e:
         print(f"Failed to load policy weights into target module: {e}")

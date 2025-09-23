@@ -52,7 +52,7 @@ class GitInfo(Callback):
 
 
 def configure_training(cfg: DictConfig):
-    #start_logger()
+    # start_logger()
     graph_builder = make_graph_builder(cfg)
     env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
 
@@ -60,7 +60,7 @@ def configure_training(cfg: DictConfig):
     feature_config = FeatureDimConfig.from_observer(observer)
     model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
 
-    network =reference
+    network = reference
 
     def env_fn(eval: bool = False):
         return make_env(
@@ -117,11 +117,11 @@ def configure_training(cfg: DictConfig):
             eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
-            seed=cfg.seed
+            seed=cfg.seed,
         )
 
 
-@hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
     if cfg.wandb.enabled:
         wandb.init(

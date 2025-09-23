@@ -1,6 +1,6 @@
 # conf/system/uniform.yaml
 _target_: task4feedback.interface.uniform_connected_devices
-n_devices: 5
+n_devices: 9
 h2d_bw: 64e9
 d2d_bw: 450e9
 latency: 1

@@ -22,12 +22,12 @@ rebuild-dev: clean build-dev
 rebuild-release: clean build-release
 clean:
 	rm -rf build/
-	rm -rf dist/
-	rm -rf *.egg-info/
-	find . -name "*.so" -delete
-	find . -name "*.pyc" -delete
-	find . -name "__pycache__" -type d -exec rm -rf {} +
-	find . -name ".pytest_cache" -type d -exec rm -rf {} +
+#	rm -rf dist/
+#	rm -rf *.egg-info/
+#	find . -name "*.so" -delete
+#	find . -name "*.pyc" -delete
+#	find . -name "__pycache__" -type d -exec rm -rf {} +
+#	find . -name ".pytest_cache" -type d -exec rm -rf {} +
 test:
 	pytest test/ -v
 test-cov:

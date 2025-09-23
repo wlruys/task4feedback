@@ -46,15 +46,11 @@ def kaiming_init(layer, a=0.01, mode="fan_in", nonlinearity="leaky_relu"):
     """
     print(f"Initializing layer {layer} with Kaiming He initialization")
     if isinstance(layer, nn.Linear):
-        nn.init.kaiming_uniform_(
-            layer.weight, a=a, mode=mode, nonlinearity=nonlinearity
-        )
+        nn.init.kaiming_uniform_(layer.weight, a=a, mode=mode, nonlinearity=nonlinearity)
         if layer.bias is not None:
             nn.init.constant_(layer.bias, 0.0)
     elif isinstance(layer, nn.Conv2d):
-        nn.init.kaiming_uniform_(
-            layer.weight, a=a, mode=mode, nonlinearity=nonlinearity
-        )
+        nn.init.kaiming_uniform_(layer.weight, a=a, mode=mode, nonlinearity=nonlinearity)
         if layer.bias is not None:
             nn.init.constant_(layer.bias, 0.0)
     return layer
@@ -113,9 +109,7 @@ class BatchWrapper(nn.Module):
             return False
         return True
 
-    def _convert_to_heterodata(
-        self, obs: TensorDict, is_batch: bool = False
-    ) -> HeteroData | Batch:
+    def _convert_to_heterodata(self, obs: TensorDict, is_batch: bool = False) -> HeteroData | Batch:
         if not is_batch:
             return obs["hetero_data"]
 
@@ -234,9 +228,7 @@ class HeteroDataWrapper(nn.Module):
         is_batch = self._is_batch(obs)
 
         with torch.no_grad():
-            data, task_count, data_count = self._convert_to_heterodata(
-                obs, is_batch, actions=actions
-            )
+            data, task_count, data_count = self._convert_to_heterodata(obs, is_batch, actions=actions)
 
         out = self.network(data, (task_count, data_count))
         return out
@@ -274,18 +266,10 @@ class FeatureDimConfig:
         return FeatureDimConfig(
             task_feature_dim=overrides.get("task_feature_dim", other.task_feature_dim),
             data_feature_dim=overrides.get("data_feature_dim", other.data_feature_dim),
-            device_feature_dim=overrides.get(
-                "device_feature_dim", other.device_feature_dim
-            ),
-            task_data_edge_dim=overrides.get(
-                "task_data_edge_dim", other.task_data_edge_dim
-            ),
-            task_device_edge_dim=overrides.get(
-                "task_device_edge_dim", other.task_device_edge_dim
-            ),
-            task_task_edge_dim=overrides.get(
-                "task_task_edge_dim", other.task_task_edge_dim
-            ),
+            device_feature_dim=overrides.get("device_feature_dim", other.device_feature_dim),
+            task_data_edge_dim=overrides.get("task_data_edge_dim", other.task_data_edge_dim),
+            task_device_edge_dim=overrides.get("task_device_edge_dim", other.task_device_edge_dim),
+            task_task_edge_dim=overrides.get("task_task_edge_dim", other.task_task_edge_dim),
         )
 
 
@@ -342,9 +326,7 @@ class HeteroGAT1Layer(nn.Module):
         self.layer_norm3 = nn.LayerNorm(layer_config.hidden_channels)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
 
-        self.output_dim = (
-            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
-        )
+        self.output_dim = layer_config.hidden_channels * 3 + feature_config.task_feature_dim
 
     def forward(self, data):
         data_fused_tasks = self.gnn_tasks_data(
@@ -411,9 +393,7 @@ class NoDeviceHeteroGAT1Layer(nn.Module):
         self.layer_norm2 = nn.LayerNorm(layer_config.hidden_channels)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
 
-        self.output_dim = (
-            layer_config.hidden_channels * 2 + feature_config.task_feature_dim
-        )
+        self.output_dim = layer_config.hidden_channels * 2 + feature_config.task_feature_dim
 
     def forward(self, data):
         data_fused_tasks = self.gnn_tasks_data(
@@ -462,9 +442,7 @@ class NoDeviceSAGE1Layer(nn.Module):
         self.layer_norm2 = nn.LayerNorm(layer_config.hidden_channels)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
 
-        self.output_dim = (
-            layer_config.hidden_channels * 2 + feature_config.task_feature_dim
-        )
+        self.output_dim = layer_config.hidden_channels * 2 + feature_config.task_feature_dim
 
     def forward(self, data):
         data_fused_tasks = self.gnn_tasks_data(
@@ -556,9 +534,7 @@ class DataTaskGAT2Layer(nn.Module):
     def forward(self, data: HeteroData | Batch):
         x_dict = data.x_dict
         edge_index_dict = data.edge_index_dict
-        edge_attr_dict = (
-            data.edge_attr_dict if hasattr(data, "edge_attr_dict") else None
-        )
+        edge_attr_dict = data.edge_attr_dict if hasattr(data, "edge_attr_dict") else None
         x_dict = self.data_task_conv(x_dict, edge_index_dict, edge_attr_dict)
         x_dict = {
             "tasks": self.norm_tasks(x_dict["tasks"]),
@@ -684,22 +660,16 @@ class TaskTaskGATkLayer(nn.Module):
 
         # Process through all layers
         for i in range(self.k):
-            tasks_dependency = self.conv_dependency_layers[i](
-                tasks_dependency, edge_dependency_index, edge_attr
-            )
+            tasks_dependency = self.conv_dependency_layers[i](tasks_dependency, edge_dependency_index, edge_attr)
             tasks_dependency = self.norm_dependency(tasks_dependency)
             tasks_dependency = self.activation(tasks_dependency)
 
-            tasks_dependant = self.conv_dependent_layers[i](
-                tasks_dependant, edge_dependant_index, edge_attr
-            )
+            tasks_dependant = self.conv_dependent_layers[i](tasks_dependant, edge_dependant_index, edge_attr)
             tasks_dependant = self.norm_dependant(tasks_dependant)
             tasks_dependant = self.activation(tasks_dependant)
 
         if self.skip_connection:
-            task_embedding = torch.cat(
-                [tasks_dependency, tasks_dependant, tasks], dim=-1
-            )
+            task_embedding = torch.cat([tasks_dependency, tasks_dependant, tasks], dim=-1)
         else:
             task_embedding = torch.cat([tasks_dependency, tasks_dependant], dim=-1)
 
@@ -784,9 +754,7 @@ class TaskTaskGAT1Layer(nn.Module):
         tasks_dependant = self.activation(tasks_dependant)
 
         if self.skip_connection:
-            task_embedding = torch.cat(
-                [tasks_dependency, tasks_dependant, tasks], dim=-1
-            )
+            task_embedding = torch.cat([tasks_dependency, tasks_dependant, tasks], dim=-1)
         else:
             task_embedding = torch.cat([tasks_dependency, tasks_dependant], dim=-1)
 
@@ -794,19 +762,10 @@ class TaskTaskGAT1Layer(nn.Module):
 
 
 class OutputHead(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_channels: int,
-        output_dim: int,
-        activation: DictConfig = None,
-        initialization: DictConfig = None,
-        layer_norm: bool = True,
-        debug: bool = False
-    ):
+    def __init__(self, input_dim: int, hidden_channels: int, output_dim: int, activation: DictConfig = None, initialization: DictConfig = None, layer_norm: bool = True, debug: bool = False):
         super(OutputHead, self).__init__()
 
-        #print(initialization)
+        # print(initialization)
         self.debug = debug
 
         if initialization is None:
@@ -820,9 +779,7 @@ class OutputHead(nn.Module):
         layers.append(layer1_init(nn.Linear(input_dim, hidden_channels)))
         if layer_norm:
             layers.append(nn.LayerNorm(hidden_channels))
-        layers.append(
-            instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01)
-        )
+        layers.append(instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01))
         layers.append(layer2_init(nn.Linear(hidden_channels, output_dim)))
         self.network = nn.Sequential(*layers)
 
@@ -841,13 +798,11 @@ class LogitStabilizer(nn.Module):
     @property
     def tau(self):
         return self.log_tau.exp().clamp_min(1.0)
-    
+
     def forward(self, logits):
         logits = logits - logits.mean(dim=-1, keepdim=True)
         logits = logits / self.tau
         return logits
-    
-    
 
 
 class LogitsOutputHead(OutputHead):
@@ -861,17 +816,9 @@ class LogitsOutputHead(OutputHead):
         initialization: DictConfig = None,
         layer_norm: bool = True,
         logit_stabilizer: Optional[LogitStabilizer] = None,
-        debug: bool = False
+        debug: bool = False,
     ):
-        super(LogitsOutputHead, self).__init__(
-            input_dim,
-            hidden_channels,
-            output_dim,
-            activation=activation,
-            initialization=initialization,
-            layer_norm=layer_norm,
-            debug=debug
-        )
+        super(LogitsOutputHead, self).__init__(input_dim, hidden_channels, output_dim, activation=activation, initialization=initialization, layer_norm=layer_norm, debug=debug)
         if logit_stabilizer is None:
             self.logit_stabilizer = LogitStabilizer()
         else:
@@ -973,9 +920,7 @@ class DeviceGlobalLayer(nn.Module):
         self.layer_config = layer_config
 
         # Linear layer from dvice dim to hidden dim
-        self.device_layer = layer_init(
-            nn.Linear(feature_config.device_feature_dim, layer_config.hidden_channels)
-        )
+        self.device_layer = layer_init(nn.Linear(feature_config.device_feature_dim, layer_config.hidden_channels))
 
         self.norm_tasks = nn.LayerNorm(layer_config.hidden_channels)
         self.activation = nn.LeakyReLU(negative_slope=0.01)
@@ -1138,9 +1083,7 @@ class DeviceCandidateGAT(nn.Module):
             add_self_loops=False,
         )
 
-        self.output_layer = layer_init(
-            nn.Linear(layer_config.hidden_channels, layer_config.hidden_channels)
-        )
+        self.output_layer = layer_init(nn.Linear(layer_config.hidden_channels, layer_config.hidden_channels))
         self.output_dim = layer_config.hidden_channels
 
         self.layer_norm = nn.LayerNorm(layer_config.hidden_channels)
@@ -1149,9 +1092,7 @@ class DeviceCandidateGAT(nn.Module):
     def forward(self, device_embeddings, candidate_embedding, edge_index):
         # print("device_embeddings", device_embeddings.shape)
         # print("candidate_embeddings", candidate_embeddings.shape)
-        x = self.conv_device_candidate(
-            (device_embeddings, candidate_embedding), edge_index
-        )
+        x = self.conv_device_candidate((device_embeddings, candidate_embedding), edge_index)
         x = self.layer_norm(x)
         x = self.activation(x)
         x = self.output_layer(x)
@@ -1180,9 +1121,7 @@ class DeviceAssignmentNet2Layer(nn.Module):
         # Returns concatenated embeddings for tasks at depth 2
         # Two directions of task -> task information (dependency and dependant)
         # Output feature dim: hidden_channels * 2
-        self.task_task_layer = TaskTaskGATkLayer(
-            layer_config.hidden_channels, feature_config, layer_config
-        )
+        self.task_task_layer = TaskTaskGATkLayer(layer_config.hidden_channels, feature_config, layer_config)
 
         self.device_layer = DeviceGlobalLayer(feature_config, layer_config)
 
@@ -1223,21 +1162,15 @@ class DeviceAssignmentNet2Layer(nn.Module):
         task_counts = torch.clip(counts[0], min=1)
         data_counts = torch.clip(counts[1], min=1)
 
-        task_pooling = torch.div(
-            global_add_pool(task_embeddings, task_batch), task_counts
-        )
-        data_pooling = torch.div(
-            global_add_pool(data_task_embedding["data"], data_batch), data_counts
-        )
+        task_pooling = torch.div(global_add_pool(task_embeddings, task_batch), task_counts)
+        data_pooling = torch.div(global_add_pool(data_task_embedding["data"], data_batch), data_counts)
         device_pooling = global_mean_pool(device_embeddings, device_batch)
 
         # task_pooling = global_mean_pool(task_embeddings, task_batch)
         # data_pooling = global_mean_pool(data_task_embedding["data"], data_batch)
         # device_pooling = global_mean_pool(device_embeddings, device_batch)
 
-        global_embedding = self.combine_layer(
-            data_pooling, task_pooling, device_pooling
-        )
+        global_embedding = self.combine_layer(data_pooling, task_pooling, device_pooling)
         global_embedding = global_embedding.squeeze(0)
 
         # print("candidate_embedding", candidate_embedding.shape)
@@ -1324,22 +1257,16 @@ class ValueNetkLayer(nn.Module):
         task_counts = torch.clip(counts[0], min=1)
         data_counts = torch.clip(counts[1], min=1)
 
-        task_pooling = torch.div(
-            global_add_pool(task_embeddings, task_batch), task_counts
-        )
+        task_pooling = torch.div(global_add_pool(task_embeddings, task_batch), task_counts)
         counts[1] = torch.clip(counts[1], min=1)
-        data_pooling = torch.div(
-            global_add_pool(data_task_embedding["data"], data_batch), data_counts
-        )
+        data_pooling = torch.div(global_add_pool(data_task_embedding["data"], data_batch), data_counts)
         device_pooling = global_mean_pool(device_embeddings, device_batch)
 
         # task_pooling = global_mean_pool(task_embeddings, task_batch)
         # data_pooling = global_mean_pool(data_task_embedding["data"], data_batch)
         # device_pooling = global_mean_pool(device_embeddings, device_batch)
 
-        global_embedding = self.combine_layer(
-            data_pooling, task_pooling, device_pooling
-        )
+        global_embedding = self.combine_layer(data_pooling, task_pooling, device_pooling)
         global_embedding = global_embedding.squeeze(0)
 
         # print("candidate_embedding", candidate_embedding.shape)
@@ -1389,12 +1316,8 @@ class OldCombinedNet(nn.Module):
         self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
         gat_output_dim = self.hetero_gat.output_dim
 
-        self.actor = OutputHead(
-            gat_output_dim, layer_config.hidden_channels, n_devices, logits=True
-        )
-        self.critic = OutputHead(
-            gat_output_dim, layer_config.hidden_channels, 1, logits=False
-        )
+        self.actor = OutputHead(gat_output_dim, layer_config.hidden_channels, n_devices, logits=True)
+        self.critic = OutputHead(gat_output_dim, layer_config.hidden_channels, 1, logits=False)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         if next(self.parameters()).is_cuda:
@@ -1433,9 +1356,7 @@ class UnRolledDeviceLayer(nn.Module):
         # Device features are n_devices x device_feature_dim
 
         device_features = data["devices"].x
-        device_features = device_features.reshape(
-            -1, self.n_devices * self.feature_config.device_feature_dim
-        )
+        device_features = device_features.reshape(-1, self.n_devices * self.feature_config.device_feature_dim)
 
         return device_features
 
@@ -1467,9 +1388,7 @@ class DataTaskGraphConv(nn.Module):
     def forward(self, data: HeteroData | Batch):
         data_task_edges = data["data", "to", "tasks"].edge_index
 
-        task_agg = self.data_task_conv(
-            (data["data"].x, data["tasks"].x), data_task_edges
-        )
+        task_agg = self.data_task_conv((data["data"].x, data["tasks"].x), data_task_edges)
 
         task_agg = self.layer_norm(task_agg)
 
@@ -1503,11 +1422,7 @@ class TaskTaskEdgeConv(nn.Module):
             mlp = nn.Sequential(
                 layer_init(nn.Linear(current_dim * 2, layer_config.hidden_channels)),
                 nn.LeakyReLU(negative_slope=0.01),
-                layer_init(
-                    nn.Linear(
-                        layer_config.hidden_channels, layer_config.hidden_channels
-                    )
-                ),
+                layer_init(nn.Linear(layer_config.hidden_channels, layer_config.hidden_channels)),
             )
             self.conv_layers.append(EdgeConv(mlp, aggr=agg_type))
             self.norm_layers.append(nn.LayerNorm(layer_config.hidden_channels))
@@ -1776,9 +1691,7 @@ class HeteroConvStateNet(nn.Module):
         self.feature_config = feature_config
         self.layer_config = layer_config
 
-        self.hetero_conv = HeteroConvkLayer(
-            feature_config, layer_config, n_devices, k=k
-        )
+        self.hetero_conv = HeteroConvkLayer(feature_config, layer_config, n_devices, k=k)
 
         self.output_dim = layer_config.hidden_channels * 2
 
@@ -1864,17 +1777,11 @@ class AddConvStateNet(nn.Module):
         self.data_task_conv = DataTaskGraphConv(feature_config, layer_config, n_devices)
         data_task_dim = self.data_task_conv.output_dim
 
-        self.task_task_conv_dependants = TaskTaskEdgeConv(
-            data_task_dim, layer_config, k=1, agg_type="add"
-        )
+        self.task_task_conv_dependants = TaskTaskEdgeConv(data_task_dim, layer_config, k=1, agg_type="add")
 
-        self.task_task_conv_dependencies = TaskTaskEdgeConv(
-            data_task_dim, layer_config, k=1, agg_type="add"
-        )
+        self.task_task_conv_dependencies = TaskTaskEdgeConv(data_task_dim, layer_config, k=1, agg_type="add")
 
-        self.unroll_devices = UnRolledDeviceLayer(
-            feature_config, layer_config, n_devices
-        )
+        self.unroll_devices = UnRolledDeviceLayer(feature_config, layer_config, n_devices)
 
         # MLP that turns (n_devices * device_feature_dim) into [1 x hidden_channels]
         self.device_layer = nn.Sequential(
@@ -1887,10 +1794,7 @@ class AddConvStateNet(nn.Module):
             nn.LeakyReLU(negative_slope=0.01),
         )
 
-        self.stacked_task_dim = (
-            self.task_task_conv_dependants.output_dim
-            + self.task_task_conv_dependencies.output_dim
-        )
+        self.stacked_task_dim = self.task_task_conv_dependants.output_dim + self.task_task_conv_dependencies.output_dim
 
         self.project_down = nn.Sequential(
             layer_init(nn.Linear(self.stacked_task_dim, layer_config.hidden_channels)),
@@ -1903,12 +1807,8 @@ class AddConvStateNet(nn.Module):
         task_batch = data["tasks"].batch if isinstance(data, Batch) else None
 
         data_fused_tasks = self.data_task_conv(data)
-        task_task_dependants = self.task_task_conv_dependants(
-            data_fused_tasks, data["tasks", "to", "tasks"].edge_index
-        )
-        task_task_dependencies = self.task_task_conv_dependencies(
-            data_fused_tasks, data["tasks", "to", "tasks"].edge_index.flip(0)
-        )
+        task_task_dependants = self.task_task_conv_dependants(data_fused_tasks, data["tasks", "to", "tasks"].edge_index)
+        task_task_dependencies = self.task_task_conv_dependencies(data_fused_tasks, data["tasks", "to", "tasks"].edge_index.flip(0))
 
         device_features = self.unroll_devices(data)
         device_features = device_features.squeeze(0)
@@ -1959,9 +1859,7 @@ class AddConvStateNet(nn.Module):
         # print("device_features", device_features.shape)
         # print("candidate_features", candidate_features.shape)
 
-        state_features = torch.cat(
-            (global_state, candidate_features, device_features), dim=-1
-        )
+        state_features = torch.cat((global_state, candidate_features, device_features), dim=-1)
 
         # print("state_features", state_features)
 
@@ -1984,21 +1882,13 @@ class DataTaskPolicyNet(nn.Module):
         self.data_task_gat = DataTaskGATkLayer(feature_config, layer_config)
         data_task_dim = self.data_task_gat.output_dim
 
-        self.task_task_gat = TaskTaskGATkLayer(
-            data_task_dim, feature_config, layer_config
-        )
+        self.task_task_gat = TaskTaskGATkLayer(data_task_dim, feature_config, layer_config)
 
-        self.unrolled_device_layer = UnRolledDeviceLayer(
-            feature_config, layer_config, n_devices
-        )
+        self.unrolled_device_layer = UnRolledDeviceLayer(feature_config, layer_config, n_devices)
 
-        output_dim = (
-            self.task_task_gat.output_dim * 2 + self.unrolled_device_layer.output_dim
-        )
+        output_dim = self.task_task_gat.output_dim * 2 + self.unrolled_device_layer.output_dim
 
-        self.actor_head = OutputHead(
-            output_dim, layer_config.hidden_channels, n_devices - 1, logits=True
-        )
+        self.actor_head = OutputHead(output_dim, layer_config.hidden_channels, n_devices - 1, logits=True)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         task_embeddings = self.data_task_gat(data)
@@ -2024,9 +1914,7 @@ class DataTaskPolicyNet(nn.Module):
         time = data["auxilary"]["time"]
         time = time.reshape(-1, 1)
 
-        candidate_embedding = torch.cat(
-            [candidate_embedding, global_embedding, device_features, time], dim=-1
-        )
+        candidate_embedding = torch.cat([candidate_embedding, global_embedding, device_features, time], dim=-1)
 
         d_logits = self.actor_head(candidate_embedding)
 
@@ -2043,9 +1931,7 @@ class HeteroConvPolicyNet(nn.Module):
     ):
         super(HeteroConvPolicyNet, self).__init__()
 
-        self.heteroconv_state_net = HeteroConvStateNet(
-            feature_config, layer_config, n_devices, k=k
-        )
+        self.heteroconv_state_net = HeteroConvStateNet(feature_config, layer_config, n_devices, k=k)
 
         self.output_head = OutputHead(
             self.heteroconv_state_net.output_dim,
@@ -2075,9 +1961,7 @@ class HeteroConvValueNet(nn.Module):
         self.feature_config = feature_config
         self.layer_config = layer_config
 
-        self.heteroconv_state_net = HeteroConvStateNet(
-            feature_config, layer_config, n_devices, k=k
-        )
+        self.heteroconv_state_net = HeteroConvStateNet(feature_config, layer_config, n_devices, k=k)
 
         self.output_head = OutputHead(
             self.heteroconv_state_net.output_dim,
@@ -2102,9 +1986,7 @@ class AddConvPolicyNet(nn.Module):
     ):
         super(AddConvPolicyNet, self).__init__()
 
-        self.add_conv_state_net = AddConvStateNet(
-            feature_config, layer_config, n_devices
-        )
+        self.add_conv_state_net = AddConvStateNet(feature_config, layer_config, n_devices)
 
         self.output_head = OutputHead(
             self.add_conv_state_net.output_dim,
@@ -2130,9 +2012,7 @@ class AddConvValueNet(nn.Module):
         self.feature_config = feature_config
         self.layer_config = layer_config
 
-        self.add_conv_state_net = AddConvStateNet(
-            feature_config, layer_config, n_devices
-        )
+        self.add_conv_state_net = AddConvStateNet(feature_config, layer_config, n_devices)
 
         self.output_head = OutputHead(
             self.add_conv_state_net.output_dim,
@@ -2161,21 +2041,13 @@ class DataTaskValueNet(nn.Module):
         self.data_task_gat = DataTaskGATkLayer(feature_config, layer_config)
         data_task_dim = self.data_task_gat.output_dim
 
-        self.task_task_gat = TaskTaskGATkLayer(
-            data_task_dim, feature_config, layer_config
-        )
+        self.task_task_gat = TaskTaskGATkLayer(data_task_dim, feature_config, layer_config)
 
-        self.unrolled_device_layer = UnRolledDeviceLayer(
-            feature_config, layer_config, n_devices
-        )
+        self.unrolled_device_layer = UnRolledDeviceLayer(feature_config, layer_config, n_devices)
 
-        output_dim = (
-            self.task_task_gat.output_dim * 2 + self.unrolled_device_layer.output_dim
-        )
+        output_dim = self.task_task_gat.output_dim * 2 + self.unrolled_device_layer.output_dim
 
-        self.critic_head = OutputHead(
-            output_dim, layer_config.hidden_channels, 1, logits=False
-        )
+        self.critic_head = OutputHead(output_dim, layer_config.hidden_channels, 1, logits=False)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         task_embeddings = self.data_task_gat(data)
@@ -2198,9 +2070,7 @@ class DataTaskValueNet(nn.Module):
 
         global_embedding = global_embedding.squeeze(0)
 
-        candidate_embedding = torch.cat(
-            [candidate_embedding, global_embedding, device_features], dim=-1
-        )
+        candidate_embedding = torch.cat([candidate_embedding, global_embedding, device_features], dim=-1)
 
         v = self.critic_head(candidate_embedding)
 
@@ -2240,9 +2110,7 @@ class OldTaskAssignmentNet(nn.Module):
 
         self.hetero_gat = NoDeviceHeteroGAT1Layer(feature_config, layer_config)
         gat_output_dim = self.hetero_gat.output_dim
-        self.unrolled_device_layer = UnRolledDeviceLayer(
-            feature_config, layer_config, n_devices
-        )
+        self.unrolled_device_layer = UnRolledDeviceLayer(feature_config, layer_config, n_devices)
 
         self.actor_head = OutputHead(
             gat_output_dim * 2 + self.unrolled_device_layer.output_dim,
@@ -2272,9 +2140,7 @@ class OldTaskAssignmentNet(nn.Module):
         global_embedding = torch.div(global_embedding, counts_0)
         global_embedding = global_embedding.squeeze(0)
 
-        candidate_embedding = torch.cat(
-            [candidate_embedding, global_embedding, device_features], dim=-1
-        )
+        candidate_embedding = torch.cat([candidate_embedding, global_embedding, device_features], dim=-1)
 
         d_logits = self.actor_head(candidate_embedding)
 
@@ -2295,9 +2161,7 @@ class OldValueNet(nn.Module):
         self.hetero_gat = NoDeviceHeteroGAT1Layer(feature_config, layer_config)
         gat_output_dim = self.hetero_gat.output_dim
 
-        self.unrolled_device_layer = UnRolledDeviceLayer(
-            feature_config, layer_config, n_devices
-        )
+        self.unrolled_device_layer = UnRolledDeviceLayer(feature_config, layer_config, n_devices)
 
         self.critic_head = OutputHead(
             gat_output_dim + self.unrolled_device_layer.output_dim,
@@ -2343,9 +2207,7 @@ class OldActionValueNet(nn.Module):
         self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
         gat_output_dim = self.hetero_gat.output_dim
 
-        self.critic_head = OutputHead(
-            gat_output_dim, layer_config.hidden_channels, n_devices - 1, logits=True
-        )
+        self.critic_head = OutputHead(gat_output_dim, layer_config.hidden_channels, n_devices - 1, logits=True)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         task_embeddings = self.hetero_gat(data)
@@ -2401,12 +2263,8 @@ class OldTaskAssignmentNetwDevice(nn.Module):
         self.layer_config = layer_config
 
         self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
-        gat_output_dim = (
-            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
-        )
-        self.actor_head = OldOutputHead(
-            gat_output_dim, layer_config.hidden_channels, n_devices - 1, False
-        )
+        gat_output_dim = layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        self.actor_head = OldOutputHead(gat_output_dim, layer_config.hidden_channels, n_devices - 1, False)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         if next(self.parameters()).is_cuda:
@@ -2437,12 +2295,8 @@ class OldValueNetwDevice(nn.Module):
         self.layer_config = layer_config
 
         self.hetero_gat = HeteroGAT1Layer(feature_config, layer_config)
-        gat_output_dim = (
-            layer_config.hidden_channels * 3 + feature_config.task_feature_dim
-        )
-        self.critic_head = OldOutputHead(
-            gat_output_dim, layer_config.hidden_channels, 1, logits=False
-        )
+        gat_output_dim = layer_config.hidden_channels * 3 + feature_config.task_feature_dim
+        self.critic_head = OldOutputHead(gat_output_dim, layer_config.hidden_channels, 1, logits=False)
 
     def forward(self, data: HeteroData | Batch, counts=None):
         task_embeddings = self.hetero_gat(data)
@@ -2479,9 +2333,7 @@ class OldSeparateNetwDevice(nn.Module):
         self.feature_config = feature_config
         self.layer_config = layer_config
 
-        self.actor = OldTaskAssignmentNetwDevice(
-            feature_config, layer_config, n_devices
-        )
+        self.actor = OldTaskAssignmentNetwDevice(feature_config, layer_config, n_devices)
         self.critic = OldValueNetwDevice(feature_config, layer_config, n_devices)
 
     def forward(self, data: HeteroData | Batch, counts=None):
@@ -2576,11 +2428,7 @@ class VectorStateNet(nn.Module):
         self.k = len(self.hidden_channels)
 
         def make_activation(activation_config):
-            return (
-                instantiate(activation)
-                if activation
-                else nn.LeakyReLU(negative_slope=0.01)
-            )
+            return instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01)
 
         layer_init = call(initialization if initialization else kaiming_init)
 
@@ -2616,9 +2464,7 @@ class VectorStateNet(nn.Module):
         if self.add_progress:
             time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
             progress_feature = tensordict["aux", "progress"]
-            task_features = torch.cat(
-                [task_features, time_feature, progress_feature], dim=-1
-            )
+            task_features = torch.cat([task_features, time_feature, progress_feature], dim=-1)
 
         task_activations = self.layers(task_features)
 
@@ -2686,9 +2532,7 @@ class VectorValueNet(nn.Module):
         # print(f"state_features: {state_features}")
         # state_features = state_features.squeeze(1)
 
-        state_features = torch.cat(
-            [state_features, time_feature, progress_feature], dim=-1
-        )
+        state_features = torch.cat([state_features, time_feature, progress_feature], dim=-1)
 
         v = self.critic_head(state_features)
         # v = v.squeeze(1)
@@ -2752,9 +2596,9 @@ class CNNSingleStateNet(nn.Module):
         hidden_ch = hidden_channels
         n_layers = width - 1
         self.width = width
-        self.length = length 
+        self.length = length
 
-        #TODO(wlr); Continue modifying this for rectangular domains
+        # TODO(wlr); Continue modifying this for rectangular domains
 
         blocks = []
         ch = self.in_channels
@@ -2784,22 +2628,18 @@ class CNNSingleStateNet(nn.Module):
         ch = 1
 
         self.net = nn.Sequential(*blocks)
-        self.output_dim = (
-            ((self.width*self.length) * ch + 1) if self.add_progress else ((self.width*self.length) * ch)
-        )
+        self.output_dim = ((self.width * self.length) * ch + 1) if self.add_progress else ((self.width * self.length) * ch)
         # Initialize CNN weights
         for m in self.net.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(
-                    m.weight, mode="fan_in", nonlinearity="leaky_relu"
-                )
+                nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="leaky_relu")
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
     def forward(self, x):
         # x is a TensorDict; x.batch_size might be [], [N], [N,M], etc.
         width = self.width
-        length = self.length 
+        length = self.length
         batch_size = x.batch_size
 
         # Pull out the tasks tensor: shape = (*batch_size, tasks, in_channels)
@@ -2816,11 +2656,7 @@ class CNNSingleStateNet(nn.Module):
         x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
 
         # Convert the 'tasks' dim back into (width, length) spatial dims
-        x_flat = x_flat.view(
-            flat_bs, width, length, in_channels
-        ).permute(  # (flat_bs, W, L, C_in)
-            0, 3, 1, 2
-        )  # (flat_bs, C_in, W, L)
+        x_flat = x_flat.view(flat_bs, width, length, in_channels).permute(0, 3, 1, 2)  # (flat_bs, W, L, C_in)  # (flat_bs, C_in, W, L)
 
         # Run through your convolutional net
         x_flat = self.net(x_flat)
@@ -2841,11 +2677,10 @@ class CNNSingleStateNet(nn.Module):
             progress_feature = x["aux", "progress"]
             x_out = torch.cat([x_out, progress_feature], dim=-1)
         return x_out
-    
+
 
 def _ceil_div(a: int, b: int) -> int:
     return (a + b - 1) // b
-
 
 
 def _compute_num_downsampling_layers(length: int, width: int, minimum_resolution: int) -> int:
@@ -2909,13 +2744,12 @@ def _align_and_concat(up_feat: torch.Tensor, enc_feat: torch.Tensor) -> torch.Te
     dh, dw = eh - uh, ew - uw
     if dh > 0 or dw > 0:
         # F.pad order: (left, right, top, bottom)
-        pad = [max(dw // 2, 0), max(dw - dw // 2, 0),
-               max(dh // 2, 0), max(dh - dh // 2, 0)]
+        pad = [max(dw // 2, 0), max(dw - dw // 2, 0), max(dh // 2, 0), max(dh - dh // 2, 0)]
         up_feat = F.pad(up_feat, pad)
     elif dh < 0 or dw < 0:
         top = (-dh) // 2
         left = (-dw) // 2
-        up_feat = up_feat[..., top: top + eh, left: left + ew]
+        up_feat = up_feat[..., top : top + eh, left : left + ew]
     return torch.cat([up_feat, enc_feat], dim=1)
 
 
@@ -2928,15 +2762,16 @@ def _flatten_to_BCHW(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...], in
     elif x.dim() >= 4:
         *batch, C, H, W = x.shape
         B = 1
-        for d in batch: B *= int(d)
+        for d in batch:
+            B *= int(d)
         return x.reshape(B, C, H, W), tuple(batch), B
     else:
         raise ValueError(f"Expected (C,H,W) or (*batch,C,H,W), got {tuple(x.shape)}")
 
+
 def _unflatten_from_B(xB: torch.Tensor, batch_shape: Tuple[int, ...]) -> torch.Tensor:
     """Inverse of _flatten_to_BCHW for the *batch* part; keeps (C,H,W) tail intact."""
     return xB.squeeze(0) if not batch_shape else xB.view(*batch_shape, *xB.shape[1:])
-
 
 
 def _flatten_last_dim(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...], int]:
@@ -2948,10 +2783,12 @@ def _flatten_last_dim(x: torch.Tensor) -> Tuple[torch.Tensor, Tuple[int, ...], i
     elif x.dim() >= 2:
         *batch, P = x.shape
         B = 1
-        for d in batch: B *= int(d)
+        for d in batch:
+            B *= int(d)
         return x.reshape(B, P), tuple(batch), B
     else:
         raise ValueError(f"Expected (..., P), got {tuple(x.shape)}")
+
 
 def _coord_mesh(H: int, W: int, device, dtype):
     """
@@ -2963,6 +2800,7 @@ def _coord_mesh(H: int, W: int, device, dtype):
     yy, xx = torch.meshgrid(ys, xs, indexing="ij")
     return torch.stack([xx, yy], dim=0)  # (2,H,W)
 
+
 class ConvNormAct(nn.Module):
     def __init__(self, C_in, C_out, k=3, dilation=1, groups=1, act="silu"):
         super().__init__()
@@ -2970,37 +2808,45 @@ class ConvNormAct(nn.Module):
         self.conv = nn.Conv2d(C_in, C_out, kernel_size=k, padding=pad, dilation=dilation, bias=False, groups=groups)
         self.norm = nn.GroupNorm(_choose_gn_groups(C_out), C_out)
         self.act = nn.SiLU(inplace=False) if act == "silu" else nn.ReLU(inplace=False)
+
     def forward(self, x):
         return self.act(self.norm(self.conv(x)))
+
 
 class DilatedResBlock(nn.Module):
     """
     Two 3x3 convs; the first uses a (possibly >1) dilation; the second uses dilation=1.
     Residual connection is identity because C_in==C_out here.
     """
+
     def __init__(self, C: int, dilation: int = 1, act="silu"):
         super().__init__()
         self.conv1 = ConvNormAct(C, C, k=3, dilation=dilation, act=act)
         self.conv2 = ConvNormAct(C, C, k=3, dilation=1, act=act)
+
     def forward(self, x):
         return x + self.conv2(self.conv1(x))
+
 
 class ECA(nn.Module):
     """
     Efficient Channel Attention: global avg pool -> 1D conv (k odd) -> sigmoid gate.
     Gives cheap global channel-wise calibration without spatial resampling.
     """
+
     def __init__(self, C: int, k_size: int = 3):
         super().__init__()
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=k_size // 2, bias=False)
         self.sigmoid = nn.Sigmoid()
+
     def forward(self, x):
-        y = self.pool(x)                             # (B,C,1,1)
-        y = y.squeeze(-1).transpose(1, 2)           # (B,1,C)
-        y = self.conv(y)                            # (B,1,C)
+        y = self.pool(x)  # (B,C,1,1)
+        y = y.squeeze(-1).transpose(1, 2)  # (B,1,C)
+        y = self.conv(y)  # (B,1,C)
         y = self.sigmoid(y).transpose(1, 2).unsqueeze(-1)  # (B,C,1,1)
         return x * y
+
 
 def _choose_gn_groups(C: int) -> int:
     """Pick a GroupNorm group count that divides C (prefer 8,4,2,1)."""
@@ -3009,25 +2855,31 @@ def _choose_gn_groups(C: int) -> int:
             return g
     return 1
 
+
 class TinyASPP(nn.Module):
     """
     Minimal ASPP with rates {1,2,3}. All stride-1, same-padding.
     Concats parallel atrous feats and reduces back to C with a 1x1.
     """
+
     def __init__(self, C: int, rates=(1, 2, 3), act="silu"):
         super().__init__()
-        self.branches = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(C, C, kernel_size=3, padding=r, dilation=r, bias=False),
-                nn.GroupNorm(_choose_gn_groups(C), C),
-                nn.SiLU(inplace=False) if act == "silu" else nn.ReLU(inplace=False),
-            ) for r in rates
-        ])
+        self.branches = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Conv2d(C, C, kernel_size=3, padding=r, dilation=r, bias=False),
+                    nn.GroupNorm(_choose_gn_groups(C), C),
+                    nn.SiLU(inplace=False) if act == "silu" else nn.ReLU(inplace=False),
+                )
+                for r in rates
+            ]
+        )
         self.fuse = nn.Sequential(
             nn.Conv2d(len(rates) * C, C, kernel_size=1, bias=False),
             nn.GroupNorm(_choose_gn_groups(C), C),
             nn.SiLU(inplace=False) if act == "silu" else nn.ReLU(inplace=False),
         )
+
     def forward(self, x):
         return self.fuse(torch.cat([b(x) for b in self.branches], dim=1))
 
@@ -3040,12 +2892,12 @@ class DilationRectangularEncoder(nn.Module):
         hidden_channels: int,
         width: int,
         length: int,
-        add_progress: bool = False,                 
-        minimum_resolution: int = 2,                
-        activation: Optional[DictConfig] = None,     # kept for BC
-        initialization: Optional[DictConfig] = None, # kept for BC
+        add_progress: bool = False,
+        minimum_resolution: int = 2,
+        activation: Optional[DictConfig] = None,  # kept for BC
+        initialization: Optional[DictConfig] = None,  # kept for BC
         debug: bool = True,
-        pool_mode: str = "avg",                      # ignored; no pooling
+        pool_mode: str = "avg",  # ignored; no pooling
         # New optional knobs (do not break existing calls):
         add_coord: bool = True,
         num_blocks: int = 2,
@@ -3065,6 +2917,9 @@ class DilationRectangularEncoder(nn.Module):
 
         self.num_layers = 0
 
+        self.add_progress = bool(add_progress)
+        self.progress_dim: int = 0
+
         self.add_coord = bool(add_coord)
         C_in = self.in_channels + (2 if self.add_coord else 0)
         C = self.hidden_channels
@@ -3073,16 +2928,13 @@ class DilationRectangularEncoder(nn.Module):
         # Dilated residual stack
         if not dilation_schedule:
             dilation_schedule = [1, 2, 3]  # short, aperiodic cycle for ≤32x32
-        self.blocks = nn.ModuleList([
-            DilatedResBlock(C, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu")
-            for i in range(num_blocks)
-        ])
+        self.blocks = nn.ModuleList([DilatedResBlock(C, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu") for i in range(num_blocks)])
 
         # Tiny ASPP and optional ECA gate
         self.aspp = TinyASPP(C) if use_tiny_aspp else nn.Identity()
-        self.eca  = ECA(C, k_size=3) if use_eca else nn.Identity()
+        self.eca = ECA(C, k_size=3) if use_eca else nn.Identity()
 
-        self.film = nn.Linear(8, 2*self.hidden_channels, bias=True)
+        self.film = nn.Linear(8, 2 * self.hidden_channels, bias=True)
 
         self.in_channels_per_scale: List[int] = [C]
         self.output_dim = C
@@ -3092,9 +2944,9 @@ class DilationRectangularEncoder(nn.Module):
         xt = x["nodes", "tasks", "attr"]  # (..., tasks, C_in_no_coords)
         z = x["aux", "z"]
 
-        #print(f"[Encoder] input {xt.shape}")
-        #print(f"[features] ", xt[0, :])
-        single = (xt.dim() == 2)
+        # print(f"[Encoder] input {xt.shape}")
+        # print(f"[features] ", xt[0, :])
+        single = xt.dim() == 2
         if single:
             xt = xt.unsqueeze(0)  # (1, tasks, C)
 
@@ -3105,7 +2957,8 @@ class DilationRectangularEncoder(nn.Module):
 
         # Flatten and reshape to BCHW
         B = 1
-        for d in batch_shape: B *= int(d)
+        for d in batch_shape:
+            B *= int(d)
         h = xt.reshape(B, H, W, Cin).permute(0, 3, 1, 2)  # (B,Cin,H,W)
 
         if self.add_coord:
@@ -3119,21 +2972,41 @@ class DilationRectangularEncoder(nn.Module):
         h = self.aspp(h)
         h = self.eca(h)
 
+        if self.add_progress:
+            progress = x["aux", "progress"]
+            if single and progress.dim() == 1:
+                progress = progress.unsqueeze(0)
+
+            progB, _, _ = _flatten_last_dim(progress)
+            progB = progB.to(h.dtype)
+            if self.progress_dim == 0:
+                self.progress_dim = progB.shape[-1]
+
+            prog_map = progB.unsqueeze(-1).unsqueeze(-1).expand(-1, progB.shape[-1], H, W)
+            h = torch.cat([h, prog_map], dim=1)
+
+            new_channels = int(h.shape[1])
+            self.in_channels_per_scale[0] = new_channels
+            self.output_dim = new_channels
+
         if single:
             h = h.squeeze(0)  # (C,H,W)
-            if self.debug: print(f"[Encoder] embed {h.shape}")
+            if self.debug:
+                print(f"[Encoder] embed {h.shape}")
             return (h,)
         else:
             h = h.view(*batch_shape, *h.shape[1:])  # (*batch, C, H, W)
-            if self.debug: print(f"[Encoder] embed {h.shape}")
+            if self.debug:
+                print(f"[Encoder] embed {h.shape}")
 
         # zB, _, _ = _flatten_last_dim(z)
         # gamma_beta = self.film(z)
         # gamma, beta = gamma_beta.chunk(2, dim=-1)
         # print(f"H shape {h.shape}, gamma shape {gamma.shape}, beta shape {beta.shape}")
-        #h = gamma.unsqueeze(-1).unsqueeze(-1) * h + beta.unsqueeze(-1).unsqueeze(-1)
-        
+        # h = gamma.unsqueeze(-1).unsqueeze(-1) * h + beta.unsqueeze(-1).unsqueeze(-1)
+
         return (h,)
+
 
 class ConditionedDilationRectangularEncoder(nn.Module):
 
@@ -3143,12 +3016,12 @@ class ConditionedDilationRectangularEncoder(nn.Module):
         hidden_channels: int,
         width: int,
         length: int,
-        add_progress: bool = False,                 
-        minimum_resolution: int = 2,                
-        activation: Optional[DictConfig] = None,     # kept for BC
-        initialization: Optional[DictConfig] = None, # kept for BC
+        add_progress: bool = False,
+        minimum_resolution: int = 2,
+        activation: Optional[DictConfig] = None,  # kept for BC
+        initialization: Optional[DictConfig] = None,  # kept for BC
         debug: bool = True,
-        pool_mode: str = "avg",                      # ignored; no pooling
+        pool_mode: str = "avg",  # ignored; no pooling
         # New optional knobs (do not break existing calls):
         add_coord: bool = True,
         num_blocks: int = 2,
@@ -3176,16 +3049,13 @@ class ConditionedDilationRectangularEncoder(nn.Module):
         # Dilated residual stack
         if not dilation_schedule:
             dilation_schedule = [1, 2, 3]  # short, aperiodic cycle for ≤32x32
-        self.blocks = nn.ModuleList([
-            DilatedResBlock(C, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu")
-            for i in range(num_blocks)
-        ])
+        self.blocks = nn.ModuleList([DilatedResBlock(C, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu") for i in range(num_blocks)])
 
         # Tiny ASPP and optional ECA gate
         self.aspp = TinyASPP(C) if use_tiny_aspp else nn.Identity()
-        self.eca  = ECA(C, k_size=3) if use_eca else nn.Identity()
+        self.eca = ECA(C, k_size=3) if use_eca else nn.Identity()
 
-        self.film = nn.Linear(8, 2*self.hidden_channels, bias=True)
+        self.film = nn.Linear(8, 2 * self.hidden_channels, bias=True)
 
         self.in_channels_per_scale: List[int] = [C]
         self.output_dim = C
@@ -3195,9 +3065,9 @@ class ConditionedDilationRectangularEncoder(nn.Module):
         xt = x["nodes", "tasks", "attr"]  # (..., tasks, C_in_no_coords)
         z = x["aux", "z"]
 
-        #print(f"[Encoder] input {xt.shape}")
-        #print(f"[features] ", xt[0, :])
-        single = (xt.dim() == 2)
+        # print(f"[Encoder] input {xt.shape}")
+        # print(f"[features] ", xt[0, :])
+        single = xt.dim() == 2
         if single:
             xt = xt.unsqueeze(0)  # (1, tasks, C)
 
@@ -3208,7 +3078,8 @@ class ConditionedDilationRectangularEncoder(nn.Module):
 
         # Flatten and reshape to BCHW
         B = 1
-        for d in batch_shape: B *= int(d)
+        for d in batch_shape:
+            B *= int(d)
         h = xt.reshape(B, H, W, Cin).permute(0, 3, 1, 2)  # (B,Cin,H,W)
 
         if self.add_coord:
@@ -3224,18 +3095,20 @@ class ConditionedDilationRectangularEncoder(nn.Module):
 
         if single:
             h = h.squeeze(0)  # (C,H,W)
-            if self.debug: print(f"[Encoder] embed {h.shape}")
+            if self.debug:
+                print(f"[Encoder] embed {h.shape}")
             return (h,)
         else:
             h = h.view(*batch_shape, *h.shape[1:])  # (*batch, C, H, W)
-            if self.debug: print(f"[Encoder] embed {h.shape}")
+            if self.debug:
+                print(f"[Encoder] embed {h.shape}")
 
         zB, _, _ = _flatten_last_dim(z)
         gamma_beta = self.film(z)
         gamma, beta = gamma_beta.chunk(2, dim=-1)
         print(f"H shape {h.shape}, gamma shape {gamma.shape}, beta shape {beta.shape}")
         h = gamma.unsqueeze(-1).unsqueeze(-1) * h + beta.unsqueeze(-1).unsqueeze(-1)
-        
+
         return (h,)
 
 
@@ -3248,15 +3121,15 @@ class DilationRectangularDecoder(nn.Module):
         width: int,
         length: int,
         output_dim: int,
-        minimum_resolution: int = 2,                
+        minimum_resolution: int = 2,
         activation: Optional[DictConfig] = None,
         initialization: Optional[DictConfig] = None,
-        layer_norm: bool = False,                    # we use GroupNorm internally
+        layer_norm: bool = False,  # we use GroupNorm internally
         add_progress: bool = False,
         progress_dim: int = 0,
         debug: bool = True,
-        upsample_type: str = "nearest",              
-        deconv_bilinear_init: bool = True,           
+        upsample_type: str = "nearest",
+        deconv_bilinear_init: bool = True,
         # New optional knobs (safe defaults):
         num_blocks: int = 2,
         dilation_schedule: Optional[List[int]] = None,
@@ -3284,18 +3157,15 @@ class DilationRectangularDecoder(nn.Module):
         if not dilation_schedule:
             dilation_schedule = [1, 2]
         self.pre = ConvNormAct(self.input_dim, self.hidden_channels, k=3, dilation=1, act="silu")
-        self.blocks = nn.ModuleList([
-            DilatedResBlock(self.hidden_channels, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu")
-            for i in range(num_blocks)
-        ])
+        self.blocks = nn.ModuleList([DilatedResBlock(self.hidden_channels, dilation=dilation_schedule[i % len(dilation_schedule)], act="silu") for i in range(num_blocks)])
         self.eca = ECA(self.hidden_channels, k_size=3) if use_eca else nn.Identity()
-        #self.out_conv = nn.Conv2d(self.hidden_channels, 2*self.output_dim, kernel_size=1)
+        # self.out_conv = nn.Conv2d(self.hidden_channels, 2*self.output_dim, kernel_size=1)
         self.out_conv = nn.Conv2d(self.hidden_channels, self.output_dim, kernel_size=1)
 
         self.in_channels_per_scale: List[int] = [self.input_dim]
         self.input_keys: List[str] = ["observation", "embed"]
 
-        #self.logit_layer = LogitsOutputHead(input_dim=2*self.output_dim, hidden_channels=16, output_dim=self.output_dim)
+        # self.logit_layer = LogitsOutputHead(input_dim=2*self.output_dim, hidden_channels=16, output_dim=self.output_dim)
 
     def forward(self, obs, *features):
         if len(features) == 0:
@@ -3306,15 +3176,17 @@ class DilationRectangularDecoder(nn.Module):
         hB, batch_shape, B = _flatten_to_BCHW(b_map)  # (B,C,H,W)
         _, C, H, W = hB.shape
         assert C == self.input_dim, f"Decoder input_dim={self.input_dim}, got bottleneck C={C}"
-        if self.debug: print(f"[Decoder] b_map {hB.shape}")
+        if self.debug:
+            print(f"[Decoder] b_map {hB.shape}")
 
         if self.add_progress:
             prog = obs["aux", "progress"]  # (..., P)
-            progB, _, _ = _flatten_last_dim(prog)      # (B, P)
-            gamma_beta = self.film(progB)              # (B, 2*C)
+            progB, _, _ = _flatten_last_dim(prog)  # (B, P)
+            gamma_beta = self.film(progB)  # (B, 2*C)
             gamma, beta = gamma_beta.chunk(2, dim=-1)  # (B, C), (B, C)
             hB = gamma.unsqueeze(-1).unsqueeze(-1) * hB + beta.unsqueeze(-1).unsqueeze(-1)
-            if self.debug: print(f"[Decoder] FiLM applied {hB.shape}")
+            if self.debug:
+                print(f"[Decoder] FiLM applied {hB.shape}")
 
         # Fixed-resolution head
         hB = self.pre(hB)
@@ -3322,16 +3194,16 @@ class DilationRectangularDecoder(nn.Module):
             hB = blk(hB)
         hB = self.eca(hB)
         logits_map = self.out_conv(hB)  # (B, A, H, W)
-        if self.debug: print(f"[Decoder] logits_map {logits_map.shape}")
+        if self.debug:
+            print(f"[Decoder] logits_map {logits_map.shape}")
 
         if len(batch_shape) == 0:
             logits = logits_map.permute(0, 2, 3, 1).reshape(H * W, self.output_dim).squeeze(0)
         else:
-            logits = logits_map.permute(0, 2, 3, 1).reshape(B, H * W, self.output_dim).view(
-                *batch_shape, H * W, self.output_dim
-            )
-        #return self.logit_layer(logits)
+            logits = logits_map.permute(0, 2, 3, 1).reshape(B, H * W, self.output_dim).view(*batch_shape, H * W, self.output_dim)
+        # return self.logit_layer(logits)
         return logits
+
 
 class UNetRectangularEncoder(nn.Module):
 
@@ -3372,11 +3244,13 @@ class UNetRectangularEncoder(nn.Module):
             in_ch = self.in_channels
             skip_channels = []
             for i in range(self.num_layers):
-                out_ch = self.hidden_channels * (2 ** i)
-                self.enc_blocks.append(nn.Sequential(
-                    nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=True),
-                    nn.LeakyReLU(negative_slope=0.01, inplace=False),
-                ))
+                out_ch = self.hidden_channels * (2**i)
+                self.enc_blocks.append(
+                    nn.Sequential(
+                        nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=True),
+                        nn.LeakyReLU(negative_slope=0.01, inplace=False),
+                    )
+                )
                 in_ch = out_ch
                 skip_channels.append(out_ch)
 
@@ -3398,11 +3272,10 @@ class UNetRectangularEncoder(nn.Module):
         self.output_dim = channels
         self.output_keys: List[str] = [f"enc_{i}" for i in range(self.num_layers)] + ["embed"]
 
-
     def forward(self, x):
-        xt = x["nodes", "tasks", "attr"] # shape: (*batch, tasks, C) or (tasks, C)
+        xt = x["nodes", "tasks", "attr"]  # shape: (*batch, tasks, C) or (tasks, C)
 
-        single = (xt.dim() == 2)  # (tasks, C)
+        single = xt.dim() == 2  # (tasks, C)
         if single:
             xt = xt.unsqueeze(0)  # -> (1, tasks, C)
 
@@ -3411,7 +3284,8 @@ class UNetRectangularEncoder(nn.Module):
         assert tasks == self.length * self.width, f"got tasks={tasks}, expected length*width={self.length*self.width}"
 
         B = 1
-        for d in batch_shape: B *= int(d)
+        for d in batch_shape:
+            B *= int(d)
         h = xt.reshape(B, self.length, self.width, self.in_channels).permute(0, 3, 1, 2)
 
         enc_feats: List[torch.Tensor] = []
@@ -3476,15 +3350,13 @@ class UNetRectangularDecoder(nn.Module):
         self.num_layers = _compute_num_downsampling_layers(self.length, self.width, self.minimum_resolution)
 
         if self.num_layers == 0:
-            self.in_channels_per_scale = [self.input_dim]   # just bottleneck
+            self.in_channels_per_scale = [self.input_dim]  # just bottleneck
         else:
-            skip_channels = [self.hidden_channels * (2 ** i) for i in range(self.num_layers)]
+            skip_channels = [self.hidden_channels * (2**i) for i in range(self.num_layers)]
             self.in_channels_per_scale = [*skip_channels, self.input_dim]
 
         expected_bottleneck_ch = self.hidden_channels * (2 ** max(self.num_layers - 1, 0))
-        assert self.input_dim == expected_bottleneck_ch, (
-            f"Decoder input_dim={self.input_dim} must equal encoder bottleneck channels {expected_bottleneck_ch}"
-        )
+        assert self.input_dim == expected_bottleneck_ch, f"Decoder input_dim={self.input_dim} must equal encoder bottleneck channels {expected_bottleneck_ch}"
 
         if self.add_progress:
             assert self.progress_dim > 0, "progress_dim must be > 0 when add_progress=True"
@@ -3495,7 +3367,7 @@ class UNetRectangularDecoder(nn.Module):
 
         prev_ch = self.input_dim
         for i in reversed(range(self.num_layers)):
-            out_ch = self.hidden_channels * (2 ** i)
+            out_ch = self.hidden_channels * (2**i)
 
             if self.upsample_type == "deconv":
                 up = nn.ConvTranspose2d(prev_ch, out_ch, kernel_size=2, stride=2, padding=0, output_padding=0, bias=True)
@@ -3511,20 +3383,22 @@ class UNetRectangularDecoder(nn.Module):
 
             self.up_blocks.append(up)
             # After concat with skip (C=out_ch): fuse back to out_ch
-            self.dec_blocks.append(nn.Sequential(
-                nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1, bias=True),
-                nn.ReLU(inplace=False),
-            ))
+            self.dec_blocks.append(
+                nn.Sequential(
+                    nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1, bias=True),
+                    nn.ReLU(inplace=False),
+                )
+            )
             prev_ch = out_ch
 
         self.input_keys: List[str] = ["observation"] + [f"enc_{i}" for i in range(self.num_layers)] + ["embed"]
 
         # Final projection to logits at full resolution
         final_in = self.hidden_channels if self.num_layers >= 1 else self.input_dim
-        self.out_conv = nn.Conv2d(final_in, 2*self.output_dim, kernel_size=1)
+        self.out_conv = nn.Conv2d(final_in, 2 * self.output_dim, kernel_size=1)
 
         self.logit_layer = LogitsOutputHead(
-            input_dim=2*self.output_dim,
+            input_dim=2 * self.output_dim,
             hidden_channels=self.hidden_channels,
             output_dim=self.output_dim,
         )
@@ -3535,7 +3409,7 @@ class UNetRectangularDecoder(nn.Module):
         enc_feats = features[:-1]
         b_map = features[-1]  # shape: (C,H,W) or (*batch,C,H,W)
 
-        single = (b_map.dim() == 3)
+        single = b_map.dim() == 3
 
         # Normalize shapes
         b_mapB, batch_shape, B = _flatten_to_BCHW(b_map)
@@ -3544,10 +3418,10 @@ class UNetRectangularDecoder(nn.Module):
         if self.add_progress:
             prog = obs["aux", "progress"]  # (..., P)
             progB, _, _ = _flatten_last_dim(prog)
-            gamma_beta = self.film(progB)           # (B, 2*C)
+            gamma_beta = self.film(progB)  # (B, 2*C)
             gamma, beta = gamma_beta.chunk(2, dim=-1)
             gamma = gamma.unsqueeze(-1).unsqueeze(-1)  # (B,C,1,1)
-            beta  = beta.unsqueeze(-1).unsqueeze(-1)
+            beta = beta.unsqueeze(-1).unsqueeze(-1)
             b_mapB = gamma * b_mapB + beta
             if self.debug:
                 print(f"[Decoder] FiLM {b_mapB.shape}")
@@ -3556,28 +3430,27 @@ class UNetRectangularDecoder(nn.Module):
         h = b_mapB
         if self.num_layers > 0:
             for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(encB)):
-                h = up(h)                    
+                h = up(h)
                 if self.debug:
                     print(f"[Decoder] up: {h.shape} + {enc.shape}")
-                h = _align_and_concat(h, enc) 
+                h = _align_and_concat(h, enc)
                 if self.debug:
                     print(f"[Decoder] concat: {h.shape} + {enc.shape}")
                 h = dec(h)
                 if self.debug:
                     print(f"[Decoder] dec: {h.shape}")
 
-        logits_map = self.out_conv(h)          # (B, output_dim, H, W)
+        logits_map = self.out_conv(h)  # (B, output_dim, H, W)
         if self.debug:
             print(f"[Decoder] logits: {logits_map.shape}")
 
         if single:
             # -> (H*W, output_dim)
-            logits =  logits_map.permute(0, 2, 3, 1).reshape(-1, 2*self.output_dim).squeeze(0)
+            logits = logits_map.permute(0, 2, 3, 1).reshape(-1, 2 * self.output_dim).squeeze(0)
             logits = self.logit_layer(logits)  # (H*W, output_dim)
         else:
             _, _, H, W = logits_map.shape
-            logits = logits_map.permute(0, 2, 3, 1).reshape(B, H * W, 2*self.output_dim)\
-                             .view(*batch_shape, H * W, 2*self.output_dim)
+            logits = logits_map.permute(0, 2, 3, 1).reshape(B, H * W, 2 * self.output_dim).view(*batch_shape, H * W, 2 * self.output_dim)
             logits = self.logit_layer(logits)  # (*batch, H*W, output_dim)
 
         return logits
@@ -3586,14 +3459,14 @@ class UNetRectangularDecoder(nn.Module):
 class PooledOutputHead(nn.Module):
     def __init__(
         self,
-        input_dim: int,                 # shared dim before final MLP
-        hidden_channels: int,           # hidden size in OutputHead
-        output_dim: int,                # final dimension (e.g., 1 for V(s))
+        input_dim: int,  # shared dim before final MLP
+        hidden_channels: int,  # hidden size in OutputHead
+        output_dim: int,  # final dimension (e.g., 1 for V(s))
         activation: Optional[nn.Module] = None,
         initialization: Optional[dict] = None,
         layer_norm: bool = True,
         in_channels_per_scale: Optional[Sequence[int]] = None,
-        debug: bool = False
+        debug: bool = False,
     ):
         super().__init__()
         self.proj_dim = int(input_dim)
@@ -3609,9 +3482,7 @@ class PooledOutputHead(nn.Module):
         if in_channels_per_scale is not None:
             self._build(list(int(c) for c in in_channels_per_scale))
 
-        self.in_channels_per_scale: Optional[List[int]] = (
-            list(in_channels_per_scale) if in_channels_per_scale is not None else None
-        )
+        self.in_channels_per_scale: Optional[List[int]] = list(in_channels_per_scale) if in_channels_per_scale is not None else None
 
         self._oh_kwargs = dict(
             input_dim=self.proj_dim,
@@ -3622,21 +3493,22 @@ class PooledOutputHead(nn.Module):
             layer_norm=layer_norm,
         )
 
-
-
     def _build(self, in_dims: List[int]) -> None:
         if len(in_dims) == 0:
             raise ValueError("PooledOutputHead: at least one scale is required.")
         self._in_dims = in_dims
-        self.in_channels_per_scale = list(in_dims)  
+        self.in_channels_per_scale = list(in_dims)
 
         # Per-scale LN + Linear(C_i -> D)
-        self._proj = nn.ModuleList([
-            nn.Sequential(
-                nn.LayerNorm(Ci),
-                nn.Linear(Ci, self.proj_dim, bias=False),
-            ) for Ci in in_dims
-        ])
+        self._proj = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.LayerNorm(Ci),
+                    nn.Linear(Ci, self.proj_dim, bias=False),
+                )
+                for Ci in in_dims
+            ]
+        )
 
         for m in self._proj.modules():
             if isinstance(m, nn.Linear):
@@ -3680,13 +3552,13 @@ class PooledOutputHead(nn.Module):
         zs: List[torch.Tensor] = []
         for fB, proj in zip(featsB, self._proj):
             z = F.adaptive_avg_pool2d(fB, 1).flatten(1)  # (B, C_i)
-            z = proj(z)                                  # (B, D)
+            z = proj(z)  # (B, D)
             zs.append(z)
             if self.debug:
                 print(f"[PooledOutputHead] features {fB.shape}")
 
-        v = torch.stack(zs, dim=1).sum(dim=1)            # (B, D)
-        yB = self._head(v)                                # (B, output_dim)
+        v = torch.stack(zs, dim=1).sum(dim=1)  # (B, D)
+        yB = self._head(v)  # (B, output_dim)
         return _unflatten_from_B(yB, batch_shape_ref or ())
 
 
@@ -3696,7 +3568,7 @@ class UNetEncoder(nn.Module):
         feature_config: FeatureDimConfig,
         hidden_channels: int,
         width: int,
-        length: int, 
+        length: int,
         add_progress: bool = False,
         activation: DictConfig = None,
         initialization: DictConfig = None,
@@ -3782,11 +3654,7 @@ class UNetEncoder(nn.Module):
         x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
 
         # 4) Convert 'tasks' → spatial dims (width × width), then to (flat_bs, C_in, W, W)
-        x_flat = x_flat.view(
-            flat_bs, width, width, in_channels
-        ).permute(  # (flat_bs, W, W, C_in)
-            0, 3, 1, 2
-        )  # (flat_bs, C_in, W, W)
+        x_flat = x_flat.view(flat_bs, width, width, in_channels).permute(0, 3, 1, 2)  # (flat_bs, W, W, C_in)  # (flat_bs, C_in, W, W)
 
         # 5) Run through encoder blocks + pooling, collecting intermediate feats
         enc_feats_flat = []
@@ -3828,7 +3696,7 @@ class UNetDecoder(nn.Module):
         input_dim: int,
         hidden_channels: int,
         width: int,
-        length: int, 
+        length: int,
         output_dim: int,
         activation: DictConfig = None,
         initialization: DictConfig = None,
@@ -3844,15 +3712,9 @@ class UNetDecoder(nn.Module):
         self.up_blocks = nn.ModuleList()
         self.dec_blocks = nn.ModuleList()
         for i in reversed(range(self.num_layers)):
-            in_ch = (
-                hidden_channels * (2 ** (i + 1))
-                if i < self.num_layers - 1
-                else hidden_channels * (2**i)
-            )
+            in_ch = hidden_channels * (2 ** (i + 1)) if i < self.num_layers - 1 else hidden_channels * (2**i)
             out_ch = hidden_channels * (2**i)
-            self.up_blocks.append(
-                nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
-            )
+            self.up_blocks.append(nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2))
             self.dec_blocks.append(
                 nn.Sequential(
                     nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1),
@@ -3862,15 +3724,13 @@ class UNetDecoder(nn.Module):
         for i in range(self.num_layers):
             self.input_keys.append(f"enc_{i}")
         self.input_keys.append("embed")
-        self.out_conv = nn.Conv2d(hidden_channels, 2*output_dim, kernel_size=1)
+        self.out_conv = nn.Conv2d(hidden_channels, 2 * output_dim, kernel_size=1)
 
         print(f"Initialization Dict: {initialization}")
         print(f"Activation Dict: {activation}")
 
-        self.logit_layer = LogitsOutputHead(input_dim=2*output_dim, hidden_channels=16, output_dim=output_dim)
-        assert (
-            input_dim == self.up_blocks[0].in_channels
-        ), f"Input dimension mismatch: expected {self.up_blocks[0].in_channels}, got {input_dim}"
+        self.logit_layer = LogitsOutputHead(input_dim=2 * output_dim, hidden_channels=16, output_dim=output_dim)
+        assert input_dim == self.up_blocks[0].in_channels, f"Input dimension mismatch: expected {self.up_blocks[0].in_channels}, got {input_dim}"
 
     def _align_and_concat(self, up_feat, enc_feat):
         uh, uw = up_feat.shape[-2:]

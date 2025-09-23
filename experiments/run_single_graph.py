@@ -20,7 +20,8 @@ from task4feedback.graphs.jacobi import (
     BlockCyclicMapper,
     GraphMETISMapper,
 )
-# from task4feedback.graphs.mesh.plot_fast import * 
+
+# from task4feedback.graphs.mesh.plot_fast import *
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -41,14 +42,16 @@ from task4feedback.graphs.mesh.plot import animate_mesh_graph
 from task4feedback.ml.util import EvaluationConfig
 from helper.parmetis import run_parmetis
 from mpi4py import MPI
+
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
+
 def configure_training(cfg: DictConfig):
     # start_logger()
-    
-    option = "Oracle"
+
+    option = "Quad"
     if rank == 0:
         graph_builder = make_graph_builder(cfg)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
@@ -58,11 +61,11 @@ def configure_training(cfg: DictConfig):
             workload = graph.get_workload()
             # workload.animate_workload(show=False, title="outputs/workload_animation.mp4")
         else:
-            raise ValueError("Graph is not a DynamicJacobiGraph")
-        
+            pass
+
     if option == "EFT" and rank == 0:
         env.simulator.disable_external_mapper()
-    elif option == "Oracle" and rank == 0:    
+    elif option == "Oracle" and rank == 0:
         graph.mincut_per_levels(
             bandwidth=cfg.system.d2d_bw,
             mode="metis",
@@ -71,34 +74,43 @@ def configure_training(cfg: DictConfig):
         )
         graph.align_partitions()
         env.simulator.enable_external_mapper()
-        env.simulator.external_mapper=LevelPartitionMapper(level_cell_mapping=graph.partitions)
+        env.simulator.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
     elif option == "BlockCyclic":
         env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices-1, block_size=2, offset=1)
+        env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=2, offset=1)
     elif option == "GraphMETISMapper":
         env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = GraphMETISMapper(graph=graph, n_devices=cfg.system.n_devices-1, offset=1)
-    
-    elif option== "Cyclic":
+        env.simulator.external_mapper = GraphMETISMapper(graph=graph, n_devices=cfg.system.n_devices - 1, offset=1)
+    elif option == "Quad":
         env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = JacobiRoundRobinMapper(n_devices=cfg.system.n_devices-1, offset=1, setting=0)
-    elif option == "ParMETIS": 
-        run_parmetis(sim=env.simulator if rank == 0 else None,
-                     cfg=cfg)
+        env.simulator.external_mapper = JacobiQuadrantMapper(n_devices=cfg.system.n_devices - 1, graph=graph, offset=1)
+    elif option == "Cyclic":
+        env.simulator.enable_external_mapper()
+        env.simulator.external_mapper = JacobiRoundRobinMapper(n_devices=cfg.system.n_devices - 1, offset=1, setting=0)
+    elif option == "ParMETIS":
+        run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg)
     else:
         raise ValueError(f"Unknown option: {option}")
-    
-    if rank==0:
+
+    # Added to check priority of each task
+    sim: SimulatorDriver = env.simulator
+    # for i in range(16 * 4):
+    #     print(f"Task ID: {i} Mapping Priority: {sim.get_mapping_priority(i)}")
+
+    if rank == 0:
         config = instantiate(cfg.eval)
+        # start_logger()
         env.simulator.run()
+        env.simulator.external_mapper = ExternalMapper()
         print(env.simulator.time, env._get_baseline("EFT"))
-        print(f"Interval", int(env.simulator.time / config.max_frames))
+        print("Interval: ", int(env.simulator.time / config.max_frames))
         start_t = time.perf_counter()
-        animate_mesh_graph(env=env, folder=Path("outputs/"))
+        # animate_mesh_graph(env=env, folder=Path("outputs/"))
         end_t = time.perf_counter()
         print("Plotting time:", end_t - start_t)
-        
-        #animate_mesh_graph(env=env)
+
+        # animate_mesh_graph(env=env)
+
 
 @hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
 def main(cfg: DictConfig):

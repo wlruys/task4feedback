@@ -1,0 +1,3 @@
+_target_: task4feedback.ml.env.PBRS_EFT_Diff
+_partial_: true
+gamma: 0.99

@@ -144,7 +144,8 @@ public:
 
   virtual void generate_priority(StaticTaskInfo &task_info) {
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
-      set_priority(task_id, sample_priority(task_id));
+      // set_priority(task_id, sample_priority(task_id));
+      set_priority(task_id, task_id);
     }
   }
 
@@ -156,7 +157,8 @@ public:
   // Binary dump/load for durations
   void dump_to_binary(const std::string &filename) const {
     std::ofstream file(filename, std::ios::binary);
-    if (!file) throw std::runtime_error("Unable to open file for writing: " + filename);
+    if (!file)
+      throw std::runtime_error("Unable to open file for writing: " + filename);
 
     std::array<char, BUFFER_SIZE> buffer;
     file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
@@ -167,26 +169,31 @@ public:
     const uint64_t data_size = static_cast<uint64_t>(task_durations.size());
     file.write(reinterpret_cast<const char *>(&data_size), sizeof(data_size));
 
-    file.write(reinterpret_cast<const char *>(task_durations.data()), data_size * sizeof(timecount_t));
+    file.write(reinterpret_cast<const char *>(task_durations.data()),
+               data_size * sizeof(timecount_t));
 
     // Optionally add checksum here if needed for integrity
-    if (file.fail()) throw std::runtime_error("Error writing to file: " + filename);
+    if (file.fail())
+      throw std::runtime_error("Error writing to file: " + filename);
   }
 
   void load_from_binary(const std::string &filename) {
     std::ifstream file(filename, std::ios::binary);
-    if (!file) throw std::runtime_error("Unable to open file for reading: " + filename);
+    if (!file)
+      throw std::runtime_error("Unable to open file for reading: " + filename);
 
     std::array<char, BUFFER_SIZE> buffer;
     file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
 
     char header[4];
     file.read(header, 4);
-    if (std::string(header, 4) != "TASK") throw std::runtime_error("Invalid file format");
+    if (std::string(header, 4) != "TASK")
+      throw std::runtime_error("Invalid file format");
 
     uint32_t version;
     file.read(reinterpret_cast<char *>(&version), sizeof(version));
-    if (version != FILE_VERSION) throw std::runtime_error("Unsupported file version");
+    if (version != FILE_VERSION)
+      throw std::runtime_error("Unsupported file version");
 
     uint64_t data_size;
     file.read(reinterpret_cast<char *>(&data_size), sizeof(data_size));
@@ -194,14 +201,16 @@ public:
     task_durations.resize(data_size);
     file.read(reinterpret_cast<char *>(task_durations.data()), data_size * sizeof(timecount_t));
 
-    if (file.fail()) throw std::runtime_error("Error reading from file: " + filename);
+    if (file.fail())
+      throw std::runtime_error("Error reading from file: " + filename);
     generated = true;
   }
 
   // Binary dump/load for priorities
   void dump_priorities_to_binary(const std::string &filename) const {
     std::ofstream file(filename, std::ios::binary);
-    if (!file) throw std::runtime_error("Unable to open file for writing: " + filename);
+    if (!file)
+      throw std::runtime_error("Unable to open file for writing: " + filename);
 
     std::array<char, BUFFER_SIZE> buffer;
     file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
@@ -212,25 +221,30 @@ public:
     const uint64_t data_size = static_cast<uint64_t>(mapping_priority.size());
     file.write(reinterpret_cast<const char *>(&data_size), sizeof(data_size));
 
-    file.write(reinterpret_cast<const char *>(mapping_priority.data()), data_size * sizeof(priority_t));
+    file.write(reinterpret_cast<const char *>(mapping_priority.data()),
+               data_size * sizeof(priority_t));
 
-    if (file.fail()) throw std::runtime_error("Error writing to file: " + filename);
+    if (file.fail())
+      throw std::runtime_error("Error writing to file: " + filename);
   }
 
   void load_priorities_from_binary(const std::string &filename) {
     std::ifstream file(filename, std::ios::binary);
-    if (!file) throw std::runtime_error("Unable to open file for reading: " + filename);
+    if (!file)
+      throw std::runtime_error("Unable to open file for reading: " + filename);
 
     std::array<char, BUFFER_SIZE> buffer;
     file.rdbuf()->pubsetbuf(buffer.data(), buffer.size());
 
     char header[4];
     file.read(header, 4);
-    if (std::string(header, 4) != "TASK") throw std::runtime_error("Invalid file format");
+    if (std::string(header, 4) != "TASK")
+      throw std::runtime_error("Invalid file format");
 
     uint32_t version;
     file.read(reinterpret_cast<char *>(&version), sizeof(version));
-    if (version != FILE_VERSION) throw std::runtime_error("Unsupported file version");
+    if (version != FILE_VERSION)
+      throw std::runtime_error("Unsupported file version");
 
     uint64_t data_size;
     file.read(reinterpret_cast<char *>(&data_size), sizeof(data_size));
@@ -238,7 +252,8 @@ public:
     mapping_priority.resize(data_size);
     file.read(reinterpret_cast<char *>(mapping_priority.data()), data_size * sizeof(priority_t));
 
-    if (file.fail()) throw std::runtime_error("Error reading from file: " + filename);
+    if (file.fail())
+      throw std::runtime_error("Error reading from file: " + filename);
   }
 
   void save(const std::string &filename) const {
@@ -306,8 +321,8 @@ protected:
   }
 
 public:
-  LognormalTaskNoise(StaticTaskInfo &tasks_, unsigned int seed_ = 0,
-                     unsigned int pseed_ = 1000, double scale = 500)
+  LognormalTaskNoise(StaticTaskInfo &tasks_, unsigned int seed_ = 0, unsigned int pseed_ = 1000,
+                     double scale = 500)
       : TaskNoise(tasks_, seed_, pseed_), scale(scale) {
   }
 };
