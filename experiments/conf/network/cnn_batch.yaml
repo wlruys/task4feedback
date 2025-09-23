@@ -1,7 +1,7 @@
 defaults:
-  - architecture/unet_enc@layers.state
-  - architecture/unet_dec@layers.actor
-  - architecture/unet_output_head@layers.critic
+  - architecture/unet_state@layers.state
+  - architecture/unet_policy_head@layers.actor
+  - architecture/unet_value_head@layers.critic
 layers:
   state:
     hidden_channels: 16

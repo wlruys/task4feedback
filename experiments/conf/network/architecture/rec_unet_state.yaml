@@ -3,7 +3,7 @@ defaults:
   - initialization/orthogonal@initialization
 
 
-_target_: task4feedback.ml.models.UnconditionedDilationPolicyHead
+_target_: task4feedback.ml.models.UNetState
 hidden_channels: 16
 width: NoNeedToChange
 length: NoNeedToChange
