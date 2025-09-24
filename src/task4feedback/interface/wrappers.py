@@ -1208,7 +1208,9 @@ class ExternalObserver:
                 "candidates": _make_index_tensor(spec.max_candidates),
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
+                "vs_quad": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
+                "z": torch.zeros((8), dtype=torch.float32),
             }
         )
 
@@ -1575,6 +1577,8 @@ class CandidateObserver(ExternalObserver):
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.ones((1), dtype=torch.float32),
+                "vs_quad": torch.zeros((1), dtype=torch.float32),
+                "z": torch.zeros((8), dtype=torch.float32),
             }
         )
 

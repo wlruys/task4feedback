@@ -25,6 +25,7 @@ reward:
   verbose: False
   random_start: False
   gamma: 0.99
+  scaling_factor: 1.0
 
 graph:
   config:

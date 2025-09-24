@@ -1,8 +1,8 @@
 defaults:
   - graph: static_jacobi
-  - reward: ieft
+  - reward: pbrs
   - system: 4h100
-  - feature: CandidateCoordinateObserverFactory
+  - feature: candidate_coordinate
   - network: vector_baseline
   - algorithm: ppo
   - runtime: batch
@@ -25,6 +25,7 @@ reward:
   verbose: False
   random_start: False
   gamma: 0.99
+  scaling_factor: 1.0
 
 graph:
   config:
@@ -38,9 +39,9 @@ graph:
 
 algorithm:
   num_collections: 2000
-  rollout_steps: 0
+  rollout_steps: 64
   workers: 4
-  graphs_per_collection: 32
+  graphs_per_collection: 8
   ent_coef: 0.01
   sample_slices: False
   slice_len: 16 # only used if sample_slices is True (LSTM)
@@ -58,7 +59,6 @@ system:
 
 feature:
   observer:
-    prev_frames: 1
     batched: False
 
 network:
@@ -66,11 +66,11 @@ network:
     # lstm:
     #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
     state:
-      hidden_channels: 16
+      hidden_channels: [64, 32, 16, 32]
     actor:
-      hidden_channels: 16
+      hidden_channels: 32
     critic:
-      hidden_channels: 128
+      hidden_channels: 32
   critic:
     add_progress: True
 
@@ -82,7 +82,7 @@ runtime:
 wandb:
   enabled: true
   project: static_4x4x16_ipdps
-  name: CNN-A_IEFT
+  name: MLP-A_IEFT
 
 eval:
   eval_interval: 500

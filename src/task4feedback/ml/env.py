@@ -479,10 +479,25 @@ class RuntimeEnv(EnvBase):
 
 class IncrementalEFT(RuntimeEnv):
 
-    def __init__(self, *args, gamma: float = 1.0, baseline_policy: str = "EFT", **kwargs):
+    def __init__(self, *args, gamma: float = 1.0, scaling_factor: float = 1.0, baseline_policy: str = "EFT", **kwargs):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
+        self.scaling_factor = scaling_factor
         self.baseline_policy = baseline_policy
+
+    def _handle_done(self, obs):
+        time = obs[self.time_key].item()
+        improvement = (self.EFT_baseline) / (time)
+        obs.set_at_(self.improvement_key, improvement, 0)
+        obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
+        reward = (self.EFT_baseline - time) / (self.EFT_baseline / self.scaling_factor)
+        if self.verbose:
+            print(
+                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
+                flush=True,
+            )
+
+        return obs, reward, time, improvement
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
@@ -508,7 +523,7 @@ class IncrementalEFT(RuntimeEnv):
 
             ml_time = sim_ml.time
 
-            reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / self.size())
+            reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / self.scaling_factor)
             self.eft_time = ml_time
         else:
             reward = 0.0
@@ -526,6 +541,7 @@ class IncrementalEFT(RuntimeEnv):
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
         buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
+        # print(f"Progress : {buf['observation','aux','progress'].item():.3f}, Reward: {buf['reward'].item():.3f}, {_reward}", flush=True)
         return buf
 
 
@@ -861,9 +877,10 @@ class IncrementalSchedule(RuntimeEnv):
 
 class PBRS_EFT_Diff(RuntimeEnv):
 
-    def __init__(self, *args, gamma: float = 1.0, **kwargs):
+    def __init__(self, *args, gamma: float = 1.0, scaling_factor: float = 1.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
+        self.scaling_factor = scaling_factor
         print(f"PBRS Diff with gamma of {gamma}")
 
     def _handle_done(self, obs):
@@ -884,7 +901,6 @@ class PBRS_EFT_Diff(RuntimeEnv):
         # print(f"Step", self.step_count)
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(policy="EFT")
-            self.scaling_factor = 1
 
             graph: JacobiGraph = self.simulator.input.graph
             self.prev_potential = -self.scaling_factor
