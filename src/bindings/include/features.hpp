@@ -1590,12 +1590,12 @@ struct OneHotMappedDeviceTaskFeature : public StateFeature<OneHotMappedDeviceTas
 
   size_t getFeatureDimImpl() const {
     const auto &devices = this->state.get_devices();
-    return devices.size();
+    return devices.size()-1;
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task_runtime = state.get_task_runtime();
-    one_hot(task_runtime.get_compute_task_mapped_device(task_id), output);
+    one_hot(task_runtime.get_compute_task_mapped_device(task_id)-1, output);
   }
 };
 

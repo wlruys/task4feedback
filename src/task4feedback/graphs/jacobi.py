@@ -1551,7 +1551,10 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
         self.batched = batched
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.CandidateVectorFeature)
+        # task_feature_factory.add(fastsim.CandidateVectorFeature)
+        task_feature_factory.add(fastsim.PrevReadSizeFeature, 4, 4, True, 1)
+        task_feature_factory.add(fastsim.TaskCoordinatesFeature)
+        task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.EmptyDataFeature, 1)
@@ -1602,7 +1605,9 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         task_feature_factory = FeatureExtractorFactory()
         # task_feature_factory.add(fastsim.TaskMeanDurationFeature)
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
-        # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
+        task_feature_factory.add(fastsim.TaskCoordinatesFeature)  # CNN-B
+        # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
+        task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)  # CNN-B
         if prev_frames > 0:
             task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)  # CNN-A,B,C
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, prev_frames) # CNN-B
