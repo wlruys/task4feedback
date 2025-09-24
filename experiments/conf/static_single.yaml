@@ -2,8 +2,8 @@ defaults:
   - graph: static_jacobi
   - reward: ieft
   - system: 4h100
-  - feature: cnn_batch
-  - network: cond_dilation_cnn_batch
+  - feature: CandidateCoordinateObserverFactory
+  - network: vector_baseline
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -59,7 +59,7 @@ system:
 feature:
   observer:
     prev_frames: 1
-    batched: true
+    batched: False
 
 network:
   layers:

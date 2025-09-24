@@ -158,6 +158,7 @@ class RuntimeEnv(EnvBase):
         self.progress_key = ("aux", "progress")
         self.baseline_key = ("aux", "baseline")
         self.improvement_key = ("aux", "improvement")
+        self.vs_quad_key = ("aux", "vs_quad")
         self.z_key = ("aux", "z")
         self.time_key = ("aux", "time")
         self.action_n = "action"
@@ -269,6 +270,7 @@ class RuntimeEnv(EnvBase):
         baseline = max(1.0, self.EFT_baseline)
         obs.set_at_(self.progress_key, progress, 0)
         obs.set_at_(self.baseline_key, baseline, 0)
+        obs.set_at_(self.vs_quad_key, -100, 0)
         return obs
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -280,6 +282,7 @@ class RuntimeEnv(EnvBase):
         # improvement = (self.EFT_baseline - time) / self.EFT_baseline
         improvement = (self.EFT_baseline) / (time)  # as speedup
         obs.set_at_(self.improvement_key, improvement, 0)
+        obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
         reward = improvement
         if self.verbose:
             print(
@@ -865,11 +868,10 @@ class PBRS_EFT_Diff(RuntimeEnv):
 
     def _handle_done(self, obs):
         time = obs[self.time_key].item()
-        # improvement = (self.EFT_baseline - time) / self.EFT_baseline
-        # improvement = (self.EFT_baseline) / (time)  # as speedup
-        improvement = (self._get_baseline("Quad")) / (time)
+        improvement = (self.EFT_baseline) / (time)
         obs.set_at_(self.improvement_key, improvement, 0)
-        reward = (self.EFT_baseline) / (time)
+        obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
+        reward = (self.EFT_baseline - time) / (self.EFT_baseline / self.scaling_factor)
         if self.verbose:
             print(
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
@@ -882,13 +884,17 @@ class PBRS_EFT_Diff(RuntimeEnv):
         # print(f"Step", self.step_count)
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(policy="EFT")
-            self.prev_makespan = self.EFT_baseline
-            # self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
-            self.eft_time = self.EFT_baseline
+            self.scaling_factor = 1
+
+            graph: JacobiGraph = self.simulator.input.graph
+            self.prev_potential = -self.scaling_factor
 
         self.step_count += 1
 
         self.map_tasks(td[self.action_n])
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        done = simulator_status == fastsim.ExecutionState.COMPLETE
 
         if not self.disable_reward_flag:
             sim_current = self.simulator.copy()
@@ -898,19 +904,25 @@ class PBRS_EFT_Diff(RuntimeEnv):
 
             # Normalized in per-task time observed in global baseline.
             current_time = sim_current.time
-            reward = (self.prev_makespan - self.gamma * current_time) / (self.EFT_baseline / (self.size()))
-            self.prev_makespan = current_time
+            current_potential = -current_time / (self.EFT_baseline / (self.scaling_factor))
+            if not done:
+                reward = self.gamma * current_potential - self.prev_potential
+            else:
+                reward = 0 - self.prev_potential
+
+            self.prev_potential = current_potential
         else:
             reward = 0.0
-
-        simulator_status = self.simulator.run_until_external_mapping()
-        done = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
         if done:
             obs, r, time, improvement = self._handle_done(obs)
-            reward = r
+            reward += r
 
+        # print(reward)
+        # if done and not self.disable_reward_flag:
+        #     print(r, self.scaling_factor)
+        #     exit()
         buf = td.empty().clone()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
 

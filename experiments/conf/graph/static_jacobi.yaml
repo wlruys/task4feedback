@@ -2,7 +2,7 @@ mesh:
   _target_: task4feedback.graphs.mesh.generate_quad_mesh
 config:
   _target_: task4feedback.graphs.jacobi.JacobiConfig
-  steps: 60
+  steps: 32
   n: 4
   arithmetic_intensity: 595.5555555
   arithmetic_complexity: 1.0

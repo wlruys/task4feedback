@@ -1,5 +1,5 @@
-from task4feedback.interface import SimulatorFactory, SimulatorInput, create_graph_spec 
-from task4feedback.interface import TaskNoise 
+from task4feedback.interface import SimulatorFactory, SimulatorInput, create_graph_spec
+from task4feedback.interface import TaskNoise
 from task4feedback.graphs.jacobi import get_length_from_config
 from typing import Callable
 from .graph import GraphBuilder
@@ -19,7 +19,8 @@ from typing import Optional
 from dataclasses import dataclass
 import torch
 from pathlib import Path
-import numpy as np 
+import numpy as np
+
 
 def create_system(cfg: DictConfig):
     system = hydra.utils.instantiate(cfg.system)
@@ -40,11 +41,7 @@ def create_observer_factory(cfg: DictConfig):
     graph_spec = hydra.utils.instantiate(cfg.feature.observer.spec)
     graph_config = hydra.utils.instantiate(cfg.graph.config)
 
-    if (
-        hasattr(cfg.feature.observer, "width")
-        and hasattr(cfg.feature.observer, "prev_frames")
-        and hasattr(cfg.feature.observer, "batched")
-    ):
+    if hasattr(cfg.feature.observer, "width") and hasattr(cfg.feature.observer, "prev_frames") and hasattr(cfg.feature.observer, "batched"):
         if cfg.feature.observer.batched:
             width = graph_config.n
             length = get_length_from_config(graph_config)
@@ -71,6 +68,7 @@ def create_task_noise(cfg: DictConfig, static_graph):
 
     return task_noise
 
+
 @dataclass
 class NormalizationDetails:
     task_norm: dict
@@ -83,8 +81,9 @@ def make_env(
     normalization: Optional[NormalizationDetails] = None,
     eval=False,
     network=None,
-)->RuntimeEnv | tuple[RuntimeEnv, NormalizationDetails]:
+) -> RuntimeEnv | tuple[RuntimeEnv, NormalizationDetails]:
     from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
+
     gmsh.initialize()
 
     s = create_system(cfg)
@@ -94,23 +93,18 @@ def make_env(
     m = graph
 
     transition_conditions = create_conditions(cfg)
-    if not eval:
-        runtime_env_t = create_runtime_reward(cfg)
-    else:
-        runtime_env_t = RuntimeEnv
+    runtime_env_t = create_runtime_reward(cfg)
     observer_factory, graph_spec = create_observer_factory(cfg)
 
     task_noise = create_task_noise(cfg, graph.static_graph)
 
     if cfg.feature.observer.batched:
-        assert(hasattr(graph, "nx") and hasattr(graph, "ny"))
+        assert hasattr(graph, "nx") and hasattr(graph, "ny")
         top_k_candidates = graph.nx * graph.ny
     else:
         top_k_candidates = 1
 
     input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise, top_k_candidates=top_k_candidates)
-
-
 
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),
@@ -121,17 +115,18 @@ def make_env(
         change_workload=cfg.graph.env.change_workload if hasattr(cfg.graph.env, "change_workload") else False,
         seed=cfg.graph.env.seed,
         max_samples_per_iter=(
-            (len(graph)//(graph.nx * graph.ny) + 1
-            if cfg.algorithm.rollout_steps == 0 
-            else cfg.algorithm.rollout_steps + 1) if cfg.feature.observer.batched else (len(graph) + 1
-            if cfg.algorithm.rollout_steps == 0 
-            else cfg.algorithm.rollout_steps + 1)
+            (len(graph) // (graph.nx * graph.ny) + 1 if cfg.algorithm.rollout_steps == 0 else cfg.algorithm.rollout_steps + 1)
+            if cfg.feature.observer.batched
+            else (len(graph) + 1 if cfg.algorithm.rollout_steps == 0 else cfg.algorithm.rollout_steps + 1)
         ),
         network=network,
     )
     env = TransformedEnv(env, StepCounter())
     env.append_transform(TrajCounter())
     env.append_transform(InitTracker())
+
+    if eval:
+        env.disable_reward()
 
     if lstm is not None:
         print("Adding LSTM module to environment", flush=True)

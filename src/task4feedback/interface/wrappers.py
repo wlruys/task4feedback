@@ -1342,8 +1342,6 @@ class ExternalObserver:
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
 
-        # print(output)
-
         # Get mappable candidates
         self.candidate_observation(output)
 
@@ -1364,6 +1362,7 @@ class ExternalObserver:
         # Auxiliary observations
         output["aux"]["time"][0] = self.simulator.time
         output["aux"]["improvement"][0] = -100
+        output["aux"]["vs_quad"][0] = -100
         # print("Auxiliary observation")
 
         return output
@@ -1731,6 +1730,7 @@ class CnnBatchTaskObserver(ExternalObserver):
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.ones((1), dtype=torch.float32),
+                "vs_quad": torch.zeros((1), dtype=torch.float32),
                 "z": torch.zeros((8), dtype=torch.float32),
             }
         )

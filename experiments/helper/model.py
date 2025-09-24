@@ -154,12 +154,12 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
 
     policy_module = td_nn.TensorDictSequential(*actor_layers, inplace=True)
 
+    batched = cfg.feature.observer.get("batched", False)
     probabilistic_policy = ProbabilisticActor(
         module=policy_module,
         in_keys=["logits"],
         out_keys=["action"],
-        # distribution_class=torch.distributions.Categorical,
-        distribution_class=MultiHeadCategorical,
+        distribution_class=MultiHeadCategorical if batched else torch.distributions.Categorical,
         return_log_prob=True,
     )
 

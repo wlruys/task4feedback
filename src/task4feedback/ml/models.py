@@ -2436,7 +2436,8 @@ class VectorStateNet(nn.Module):
 
         self.add_progress = add_progress
         if add_progress:
-            input_dim += 2
+            # input_dim += 2
+            input_dim += 1
 
         if self.k == 0:
             self.layers = nn.Identity()
@@ -2462,9 +2463,10 @@ class VectorStateNet(nn.Module):
         # print("TF SHAPE", task_features.shape)
 
         if self.add_progress:
-            time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+            # time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
             progress_feature = tensordict["aux", "progress"]
-            task_features = torch.cat([task_features, time_feature, progress_feature], dim=-1)
+            # task_features = torch.cat([task_features, time_feature, progress_feature], dim=-1)
+            task_features = torch.cat([task_features, progress_feature], dim=-1)
 
         task_activations = self.layers(task_features)
 
@@ -2934,7 +2936,7 @@ class DilationRectangularEncoder(nn.Module):
         self.aspp = TinyASPP(C) if use_tiny_aspp else nn.Identity()
         self.eca = ECA(C, k_size=3) if use_eca else nn.Identity()
 
-        self.film = nn.Linear(8, 2 * self.hidden_channels, bias=True)
+        self.film = nn.Linear(1, 2 * self.hidden_channels, bias=True)
 
         self.in_channels_per_scale: List[int] = [C]
         self.output_dim = C
@@ -2942,7 +2944,7 @@ class DilationRectangularEncoder(nn.Module):
 
     def forward(self, x):
         xt = x["nodes", "tasks", "attr"]  # (..., tasks, C_in_no_coords)
-        z = x["aux", "z"]
+        z = x["aux", "progress"]
 
         # print(f"[Encoder] input {xt.shape}")
         # print(f"[features] ", xt[0, :])
@@ -2972,23 +2974,6 @@ class DilationRectangularEncoder(nn.Module):
         h = self.aspp(h)
         h = self.eca(h)
 
-        if self.add_progress:
-            progress = x["aux", "progress"]
-            if single and progress.dim() == 1:
-                progress = progress.unsqueeze(0)
-
-            progB, _, _ = _flatten_last_dim(progress)
-            progB = progB.to(h.dtype)
-            if self.progress_dim == 0:
-                self.progress_dim = progB.shape[-1]
-
-            prog_map = progB.unsqueeze(-1).unsqueeze(-1).expand(-1, progB.shape[-1], H, W)
-            h = torch.cat([h, prog_map], dim=1)
-
-            new_channels = int(h.shape[1])
-            self.in_channels_per_scale[0] = new_channels
-            self.output_dim = new_channels
-
         if single:
             h = h.squeeze(0)  # (C,H,W)
             if self.debug:
@@ -2999,11 +2984,12 @@ class DilationRectangularEncoder(nn.Module):
             if self.debug:
                 print(f"[Encoder] embed {h.shape}")
 
-        # zB, _, _ = _flatten_last_dim(z)
-        # gamma_beta = self.film(z)
-        # gamma, beta = gamma_beta.chunk(2, dim=-1)
-        # print(f"H shape {h.shape}, gamma shape {gamma.shape}, beta shape {beta.shape}")
-        # h = gamma.unsqueeze(-1).unsqueeze(-1) * h + beta.unsqueeze(-1).unsqueeze(-1)
+        if self.add_progress:
+            zB, _, _ = _flatten_last_dim(z)
+            gamma_beta = self.film(z)
+            gamma, beta = gamma_beta.chunk(2, dim=-1)
+            # print(f"H shape {h.shape}, gamma shape {gamma.shape}, beta shape {beta.shape}")
+            h = gamma.unsqueeze(-1).unsqueeze(-1) * h + beta.unsqueeze(-1).unsqueeze(-1)
 
         return (h,)
 

@@ -127,12 +127,15 @@ def main(cfg: DictConfig):
         wandb.init(
             project=cfg.wandb.project,
             config=OmegaConf.to_container(cfg, resolve=True),
-            name=cfg.wandb.name,
-            group=cfg.wandb.name,
+            name=make_run_name(cfg),
             # name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
             tags=cfg.wandb.tags,
         )
+
+        with open_dict(cfg):
+            for k, v in wandb.config.items():
+                OmegaConf.update(cfg, k, v, merge=True)
 
         hydra_output_dir = Path(HydraConfig.get().runtime.output_dir)
 

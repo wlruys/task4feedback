@@ -123,10 +123,10 @@ def configure_training(cfg: DictConfig):
     plt.tight_layout()
     out_path = "outputs/const_vs_inf.png"
     fig.savefig(out_path, dpi=200)
-    plt.show()
+    # plt.show()
 
 
-@hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
 
     torch.manual_seed(cfg.seed)

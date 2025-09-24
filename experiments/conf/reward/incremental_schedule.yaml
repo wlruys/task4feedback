@@ -3,4 +3,4 @@ _partial_: true
 k: 0
 random_start: False
 terminal_reward: True
-chance: 0.5
+chance: 1

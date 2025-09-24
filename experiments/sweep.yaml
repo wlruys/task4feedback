@@ -1,0 +1,20 @@
+program: sweep_wandb.py   # name of your training script
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+method: bayes       # or grid, random
+metric:
+  name: batch/mean_improvement   # <-- change to whatever metric you log
+  goal: maximize
+
+parameters:
+  algorithm.ent_coef:
+    min: 0.0001
+    max: 0.1
+  algorithm.gamma:
+    min: 0.9
+    max: 0.9999
+  algorithm.lmbda:
+    min: 0.7
+    max: 1.0
