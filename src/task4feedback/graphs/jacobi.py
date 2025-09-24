@@ -1552,9 +1552,9 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
-        task_feature_factory.add(fastsim.PrevReadSizeFeature, 4, 4, True, 1)
-        task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-        task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
+        task_feature_factory.add(fastsim.PrevReadSizeFeature, 4, 4, True, 1)  # MLP-B
+        task_feature_factory.add(fastsim.TaskCoordinatesFeature)  # MLP-B
+        task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)  # MLP-B
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.EmptyDataFeature, 1)
