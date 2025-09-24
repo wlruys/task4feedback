@@ -3,7 +3,7 @@ defaults:
   - reward: incremental_schedule
   - system: h100
   - feature: cnn_batch
-  - network: cnn_batch
+  - network: cond_dilation_cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default

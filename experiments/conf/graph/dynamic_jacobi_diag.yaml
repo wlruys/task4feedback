@@ -36,4 +36,3 @@ env:
   change_duration: False
   change_workload: False
   seed: 1
-  warmup: 10

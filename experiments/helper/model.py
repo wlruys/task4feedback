@@ -71,6 +71,7 @@ def create_td_actor_critic_models(
         
     graph_config = instantiate(cfg.graph.config)
     batched = cfg.feature.observer.get("batched", False)
+    add_device_load = cfg.feature.get("add_device_load", False)
 
     lstm_mod = None
     layers = cfg.network.layers
@@ -85,6 +86,8 @@ def create_td_actor_critic_models(
         policy_state_module = instantiate(
             state_layer,
             width=graph_config.n,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             length=get_length_from_config(graph_config),
             feature_config=feature_cfg,
             _recursive_=False,
@@ -92,6 +95,8 @@ def create_td_actor_critic_models(
     else:
         policy_state_module = instantiate(
             state_layer,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             feature_config=feature_cfg,
             _recursive_=False,
         )
@@ -173,6 +178,8 @@ def create_td_actor_critic_models(
             state_layer,
             feature_config=feature_cfg,
             add_progress=cfg.network.critic.add_progress,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             _recursive_=False,
             width=graph_config.n,
             length=get_length_from_config(graph_config)
@@ -181,6 +188,8 @@ def create_td_actor_critic_models(
             state_layer,
             feature_config=feature_cfg,
             add_progress=cfg.network.critic.add_progress,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             _recursive_=False,
             width=graph_config.n,
             length=get_length_from_config(graph_config)
@@ -189,12 +198,16 @@ def create_td_actor_critic_models(
         critic_state_module = instantiate(
             state_layer,
             feature_config=feature_cfg,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             add_progress=cfg.network.critic.add_progress,
             _recursive_=False,
         )
         reference_state_module  = instantiate(
             state_layer,
             feature_config=feature_cfg,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             add_progress=cfg.network.critic.add_progress,
             _recursive_=False,
         )
@@ -228,6 +241,9 @@ def create_td_actor_critic_models(
     critic_output_module = instantiate(
         critic_layer,
         input_dim=output_dim,
+        add_device_load=add_device_load,
+        n_devices=cfg.system.n_devices,
+        add_progress=cfg.network.critic.add_progress,
         output_dim=1,
         _recursive_=False,
         
@@ -235,6 +251,9 @@ def create_td_actor_critic_models(
     reference_output_module = instantiate(
         critic_layer,
         input_dim=output_dim,
+        add_device_load=add_device_load,
+        n_devices=cfg.system.n_devices,
+        add_progress=cfg.network.critic.add_progress,
         output_dim=8,
         _recursive_=False,
     )

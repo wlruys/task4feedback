@@ -306,7 +306,8 @@ class OutputHead(nn.Module):
         activation: DictConfig = None,
         initialization: DictConfig = None,
         layer_norm: bool = True,
-        debug: bool = False
+        debug: bool = False,
+        **_ignored
     ):
         super(OutputHead, self).__init__()
         self.debug = debug
@@ -424,6 +425,8 @@ class VectorStateNet(nn.Module):
         activation: DictConfig = None,
         initialization: DictConfig = None,
         layer_norm: bool = True,
+        add_device_load: bool = True,
+        n_devices: int = 5,
     ):
         super(VectorStateNet, self).__init__()
         self.feature_config = feature_config
@@ -431,6 +434,8 @@ class VectorStateNet(nn.Module):
             hidden_channels = [hidden_channels]
         self.hidden_channels = hidden_channels
         self.k = len(self.hidden_channels)
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
 
 
         def make_activation(activation_config):
@@ -441,12 +446,13 @@ class VectorStateNet(nn.Module):
             )
 
         layer_init = call(initialization if initialization else kaiming_init)
-
         input_dim = feature_config.task_feature_dim
 
-        self.add_progress = add_progress
         if add_progress:
             input_dim += 2
+
+        if add_device_load:
+            input_dim += 3 * n_devices
 
         if self.k == 0:
             self.layers = nn.Identity()
@@ -478,6 +484,10 @@ class VectorStateNet(nn.Module):
             task_features = torch.cat(
                 [task_features, time_feature, progress_feature], dim=-1
             )
+        if self.add_device_load:
+            device_load = tensordict["aux","device_load"]
+            device_memory = tensordict["aux","device_memory"]
+            task_features = torch.cat([task_features, device_load, device_memory], dim=-1)
 
         task_activations = self.layers(task_features)
 
@@ -889,7 +899,10 @@ class DilationState(nn.Module):
                  z_spa_dim: int = 8,
                  num_blocks: int = 3,
                  dilation_schedule: Optional[List[int]] = None,
-                 use_eca: bool = False,
+                 use_eca: bool = True,
+                 add_z: bool = False,
+                 add_device_load: bool = False,
+                 n_devices: int = 5,
                  spatial_in_all_blocks: bool = False,
                  film_in_all_blocks: bool = False,
                  spatial_last_k: int = 1,
@@ -911,6 +924,8 @@ class DilationState(nn.Module):
         self.output_dim  = self.hidden_channels
         self.output_keys = ["embed"]
         self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+        self.add_z = bool(add_z)
 
         C_in = self.in_channels
         C    = self.hidden_channels
@@ -919,8 +934,20 @@ class DilationState(nn.Module):
         if not dilation_schedule:
             dilation_schedule = [1, 2, 3, 1]
 
-        zc_eff = int(z_ch_dim)  + (1 if self.add_progress else 0)
-        zs_eff = int(z_spa_dim) + (1 if self.add_progress else 0)
+        if self.add_z:
+            zc_eff = int(z_ch_dim)
+            zs_eff = int(z_spa_dim)
+        else:
+            zc_eff = 1
+            zs_eff = 1
+
+        if self.add_progress:
+            zc_eff = zc_eff + 2
+            zs_eff = zs_eff + 2
+
+        if self.add_device_load:
+            zc_eff = zc_eff + 3*n_devices
+            zs_eff = zs_eff + 3*n_devices
 
         self.spatial = SpatialModulator(
             C=C, H=self.length, W=self.width,
@@ -970,13 +997,14 @@ class DilationState(nn.Module):
 
     def forward(self, observation):
         xt   = observation[("nodes","tasks","attr")]  
-        z_ch = observation[("aux","z_ch")]             
-        z_spa= observation[("aux","z_spa")]           
-
-        if self.add_progress:
-            progress = observation[("aux","progress")] # (..., 1)
-            z_ch  = torch.cat([z_ch,  progress], dim=-1)
-            z_spa = torch.cat([z_spa, progress], dim=-1)
+        _z_ch = observation[("aux","z_ch")]             
+        _z_spa= observation[("aux","z_spa")]
+        _device_load = observation["aux","device_load"]
+        _device_memory = observation["aux","device_memory"]
+        _progress = observation["aux","progress"]
+        _baseline = observation["aux","baseline"]
+        _time = observation["aux","time"]
+        _perc = _time / _baseline
 
         single = (xt.dim() == 2)
         if single: xt = xt.unsqueeze(0)
@@ -988,6 +1016,31 @@ class DilationState(nn.Module):
         B = 1
         for d in batch_shape: B *= int(d)
         h = xt.reshape(B, H, W, Cin).permute(0,3,1,2)  # (B,Cin,H,W)
+
+        if self.add_z:
+            z_ch = _z_ch
+            z_spa= _z_spa
+        else:
+            if B == 1:
+                z_ch = torch.zeros(1, device=xt.device, dtype=xt.dtype)
+                z_spa= torch.zeros(1, device=xt.device, dtype=xt.dtype)
+            else:
+                z_ch = torch.zeros(B, 1, device=xt.device, dtype=xt.dtype)
+                z_spa= torch.zeros(B, 1, device=xt.device, dtype=xt.dtype)
+
+        if self.add_device_load:
+            if B > 1:
+                _device_memory = _device_memory.reshape(B, -1)
+                _device_load = _device_load.reshape(B, -1)
+            z_ch = torch.cat([z_ch, _device_load, _device_memory], dim=-1)
+            z_spa= torch.cat([z_spa, _device_load, _device_memory], dim=-1)
+        
+        if self.add_progress:
+            if B > 1:
+                _progress = _progress.reshape(B, -1)
+                _perc = _perc.reshape(B, -1)
+            z_ch = torch.cat([z_ch, _progress, _perc], dim=-1)
+            z_spa= torch.cat([z_spa, _progress, _perc], dim=-1)
 
         h = self.stem(h)
         for blk in self.blocks:
@@ -1058,6 +1111,10 @@ class DilationValueHead(nn.Module):
                  hidden_channels: int = 128,
                  tiny_std: float = 1e-3,
                  add_gap: bool = True, #global avg pool
+                 add_z: bool = False,
+                 add_progress: bool = True,
+                 add_device_load: bool = False,
+                 n_devices: int = 5,
                  **_ignored):
         
         super().__init__()
@@ -1067,6 +1124,9 @@ class DilationValueHead(nn.Module):
 
         self.mix = nn.Conv2d(C, P, kernel_size=1, bias=False)
         nn.init.kaiming_normal_(self.mix.weight, nonlinearity='relu')
+        self.add_z = bool(add_z)
+        self.add_device_load = bool(add_device_load)
+        self.add_progress = bool(add_progress)
 
         # attention scorer -> (B,1,H,W);
         self.attn = nn.Conv2d(P, 1, kernel_size=1, bias=True)
@@ -1074,7 +1134,7 @@ class DilationValueHead(nn.Module):
         nn.init.zeros_(self.attn.bias)
 
         self.add_gap = bool(add_gap)
-        mlp_in = (2 * P if self.add_gap else P) + Dz
+        mlp_in = (2 * P if self.add_gap else P) + (Dz if add_z else 0) + (3*n_devices if add_device_load else 0) + (2 if add_progress else 0)
         self.mlp = nn.Sequential(
             nn.Linear(mlp_in, hidden_channels), nn.SiLU(),
             nn.Linear(hidden_channels, 1)
@@ -1103,7 +1163,28 @@ class DilationValueHead(nn.Module):
             pooled = torch.cat([pooled_attn, pooled_gap], dim=1) # (B, 2P)
         else:
             pooled = pooled_attn
-        v = self.mlp(torch.cat([pooled, z_f], dim=-1)).squeeze(-1)  # (B,)
+
+        if self.add_z:
+            pooled = torch.cat([pooled, z_f], dim=-1)           # (B, 2P + Dz)
+        else:
+            pooled = pooled
+
+        if self.add_device_load:
+            device_load = obs["aux","device_load"]
+            device_memory = obs["aux","device_memory"]
+            device_feat = torch.cat([device_load, device_memory], dim=-1)
+            device_feat = device_feat.reshape(-1, device_feat.size(-1))  # (B, 3*n_devices)
+            pooled = torch.cat([pooled, device_feat], dim=-1)
+
+        if self.add_progress:
+            progress = obs["aux","progress"].reshape(B, -1)  # (B, 1)
+            baseline = obs["aux","baseline"].reshape(B, -1)  # (B, 1)
+            time = obs["aux","time"].reshape(B, -1)          # (B, 1)
+            perc = time / baseline
+            prog_feat = torch.cat([progress, perc], dim=-1)  # (B, 2)
+            pooled = torch.cat([pooled, prog_feat], dim=-1)
+
+        v = self.mlp(pooled).squeeze(-1)  # (B,)
         v = v.view(*batch, 1)                                        # (*batch,)
         return v
 
@@ -1117,7 +1198,9 @@ class UnconditionedDilationState(nn.Module):
         hidden_channels: int,
         width: int,
         length: int,
-        add_progress: bool = False,                 
+        add_progress: bool = False,
+        add_device_load: bool = True,
+        n_devices: int = 5,                 
         debug: bool = True,             
         num_blocks: int = 2,
         dilation_schedule: Optional[List[int]] = None,
@@ -1149,7 +1232,19 @@ class UnconditionedDilationState(nn.Module):
         ])
 
         self.eca  = ECA(C, k_size=3) if use_eca else nn.Identity()
-        self.film = nn.Linear(1, 2*self.hidden_channels, bias=True) if add_progress else None 
+
+        film_dim = 2 if add_progress else 0
+        film_dim += 3*n_devices if add_device_load else 0
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+        self.n_devices = int(n_devices)
+
+        self.film_dim = film_dim
+        if film_dim > 0:
+            self.film = nn.Linear(film_dim, 2*self.hidden_channels, bias=True)
+        else:
+            self.film = None
+        
 
         self.in_channels_per_scale: List[int] = [C]
         self.output_dim = C
@@ -1175,6 +1270,35 @@ class UnconditionedDilationState(nn.Module):
         h = self.stem(h)
         for blk in self.blocks:
             h = blk(h)
+
+        if self.film is not None:
+            c = None 
+
+            if self.add_device_load:
+                device_load = x["aux", "device_load"]
+                device_memory = x["aux", "device_memory"]
+                device_feat = torch.cat([device_load, device_memory], dim=-1)
+                if c is None:
+                    c = device_feat
+                else:
+                    c = torch.cat([c, device_feat], dim=-1)
+
+            if self.add_progress:
+                progress = x["aux", "progress"]
+                baseline = x["aux", "baseline"]
+                time = x["aux", "time"]
+                perc = time / baseline
+                prog_feat = torch.cat([progress, perc], dim=-1)
+                if c is None:
+                    c = prog_feat
+                else:
+                    c = torch.cat([c, prog_feat], dim=-1)
+
+            cB, _, _ = _flatten_last_dim(c)
+            gamma_beta = self.film(cB)
+            gamma, beta = gamma_beta.chunk(2, dim=-1)
+            h = gamma.unsqueeze(-1).unsqueeze(-1) * h + beta.unsqueeze(-1).unsqueeze(-1)
+
         h = self.eca(h)
 
         if single:
@@ -1184,13 +1308,6 @@ class UnconditionedDilationState(nn.Module):
         else:
             h = h.view(*batch_shape, *h.shape[1:])  # (*batch, C, H, W)
             if self.debug: print(f"[Encoder] embed {h.shape}")
-
-        if self.film is not None:
-            z = x["aux", "progress"]
-            zB, _, _ = _flatten_last_dim(z)
-            gamma_beta = self.film(z)
-            gamma, beta = gamma_beta.chunk(2, dim=-1)
-            h = gamma.unsqueeze(-1).unsqueeze(-1) * h + beta.unsqueeze(-1).unsqueeze(-1)
         
         return (h,)
 
@@ -1496,6 +1613,9 @@ class PooledOutputHead(nn.Module):
         initialization: Optional[dict] = None,
         layer_norm: bool = True,
         in_channels_per_scale: Optional[Sequence[int]] = None,
+        add_device_load: bool = False,
+        add_progress: bool = True,
+        n_devices: int = 5,
         debug: bool = False, 
         **_ignored
     ):
@@ -1509,6 +1629,9 @@ class PooledOutputHead(nn.Module):
         self._in_dims: Optional[List[int]] = None
         self._proj = nn.ModuleList()
         self._head: Optional[OutputHead] = None
+        self.add_device_load = bool(add_device_load)
+        self.n_devices = int(n_devices)
+        self.add_progress = bool(add_progress)
 
         if in_channels_per_scale is not None:
             self._build(list(int(c) for c in in_channels_per_scale))
@@ -1517,8 +1640,14 @@ class PooledOutputHead(nn.Module):
             list(in_channels_per_scale) if in_channels_per_scale is not None else None
         )
 
+        oh_input_dim = self.proj_dim
+        if self.add_device_load:
+            oh_input_dim += 3 * self.n_devices
+        if self.add_progress:
+            oh_input_dim += 2
+
         self._oh_kwargs = dict(
-            input_dim=self.proj_dim,
+            input_dim=oh_input_dim,
             hidden_channels=self.output_hidden,
             output_dim=self.output_dim,
             activation=activation,
@@ -1548,7 +1677,7 @@ class PooledOutputHead(nn.Module):
 
         self._built = True
 
-    def forward(self, *encoder_outputs: torch.Tensor) -> torch.Tensor:
+    def forward(self, obs, *encoder_outputs: torch.Tensor) -> torch.Tensor:
         if len(encoder_outputs) == 0:
             raise ValueError("PooledOutputHead expects at least one encoder feature.")
 
@@ -1588,6 +1717,25 @@ class PooledOutputHead(nn.Module):
                 print(f"[PooledOutputHead] features {fB.shape}")
 
         v = torch.stack(zs, dim=1).sum(dim=1)            # (B, D)
+
+        if self.add_device_load:
+            obs_device_load = obs["aux","device_load"]
+            obs_device_memory = obs["aux","device_memory"]
+            device_feat = torch.cat([obs_device_load, obs_device_memory], dim=-1)
+            deviceB, _, _ = _flatten_last_dim(device_feat)
+            v = torch.cat([v, deviceB], dim=-1)           # (B, D + 3*n_devices)
+
+        if self.add_progress:
+            progress = obs["aux","progress"]
+            baseline = obs["aux","baseline"]
+            time = obs["aux","time"]
+            perc = time / baseline
+            prog_feat = torch.cat([progress, perc], dim=-1)
+            progB, _, _ = _flatten_last_dim(prog_feat)
+            v = torch.cat([v, progB], dim=-1)             # (B, D + 2)
+            
+
+
         yB = self._head(v)                                # (B, output_dim)
         output =  _unflatten_from_B(yB, batch_shape_ref or ())
 
@@ -1609,6 +1757,9 @@ class UNetValueHead(nn.Module):
         layer_norm: bool = True,
         in_channels_per_scale: Optional[Sequence[int]] = None,
         debug: bool = False, 
+        add_device_load: bool = True,
+        add_progress: bool = False,
+        n_devices: int = 5,
         **_ignored
     ):
         super().__init__()
@@ -1629,13 +1780,16 @@ class UNetValueHead(nn.Module):
             layer_norm=layer_norm,
             in_channels_per_scale=self.in_channels_per_scale,
             debug=self.debug,
+            add_device_load=add_device_load,
+            n_devices=n_devices,
+            add_progress=add_progress,
         )
         self.output_dim = output_dim
 
     def forward(self, obs, *features):
         if len(features) == 0:
             raise ValueError("ValueHead expects at least one encoder feature.")
-        return self.head(*features) 
+        return self.head(obs, *features) 
     
 class UnconditionedDilationValueHead(nn.Module):
     """ 
@@ -1652,6 +1806,9 @@ class UnconditionedDilationValueHead(nn.Module):
         layer_norm: bool = True,
         in_channels_per_scale: Optional[Sequence[int]] = None,
         debug: bool = False, 
+        add_device_load: bool = True,
+        add_progress: bool = True,
+        n_devices: int = 5,
         **_ignored
     ):
         super().__init__()
@@ -1673,13 +1830,16 @@ class UnconditionedDilationValueHead(nn.Module):
             layer_norm=layer_norm,
             in_channels_per_scale=self.in_channels_per_scale,
             debug=self.debug,
+            add_device_load=add_device_load,
+            n_devices=n_devices,
+            add_progress=add_progress,
         )
         self.output_dim = output_dim
 
     def forward(self, obs, *features):
         if len(features) == 0:
             raise ValueError("ValueHead expects at least one encoder feature.")
-        return self.head(*features)
+        return self.head(obs, *features)
 
 
 class OriginalUNetState(nn.Module):

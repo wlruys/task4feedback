@@ -1,10 +1,10 @@
 from task4feedback.interface import SimulatorFactory, SimulatorInput, create_graph_spec 
 from task4feedback.interface import TaskNoise 
 from task4feedback.graphs.jacobi import get_length_from_config
-from typing import Callable
+from typing import Callable, Dict, Any, Optional, Tuple, List, Sequence
 from .graph import GraphBuilder
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, ListConfig 
 from task4feedback.ml.env import RuntimeEnv
 from torchrl.envs import (
     TransformedEnv,
@@ -71,9 +71,85 @@ def create_task_noise(cfg: DictConfig, static_graph):
 
     return task_noise
 
+
 @dataclass
 class NormalizationDetails:
-    task_norm: dict
+    states: Dict[str, Dict[str, Any]]
+
+def _oc_to_py(x: Any) -> Any:
+    if isinstance(x, (DictConfig, ListConfig)):
+        return OmegaConf.to_container(x, resolve=True)
+    return x
+
+def _parse_norm_specs(cfg: DictConfig) -> Tuple[bool, int, List[dict]]:
+    norm_cfg = getattr(cfg.feature, "normalization", None)
+    if norm_cfg is None:
+        return False, 0, []
+    enabled = bool(_oc_to_py(getattr(norm_cfg, "enabled", True)))
+    warmup = int(_oc_to_py(getattr(norm_cfg, "warmup", 1)))
+    specs = _oc_to_py(getattr(norm_cfg, "specs", []))
+    return enabled and bool(specs), warmup, specs
+
+def _setup_observation_norms(
+    env: TransformedEnv,
+    cfg: DictConfig,
+    normalization: Optional[NormalizationDetails],
+) -> Optional[NormalizationDetails]:
+    enabled, warmup, specs = _parse_norm_specs(cfg)
+    if not enabled:
+        return None
+
+    created: Dict[str, ObservationNorm] = {}
+    # Build & attach; seed shapes from saved state if available
+    for spec in specs:
+        name = spec["name"]
+        in_keys = [tuple(k) for k in _oc_to_py(spec["in_keys"])]
+        eps = float(spec.get("eps", 1e-4))
+        standard_normal = bool(spec.get("standard_normal", True))
+        state = normalization.states.get(name) if normalization else None
+
+        norm = ObservationNorm(
+            in_keys=in_keys,
+            eps=eps,
+            standard_normal=standard_normal,
+            loc=(state.get("loc") if state else None),
+            scale=(state.get("scale") if state else None),
+        )
+        env.append_transform(norm)
+        created[name] = norm
+
+    # Load or init
+    to_init: List[Tuple[str, ObservationNorm, dict]] = []
+    for spec in specs:
+        name = spec["name"]
+        state = normalization.states.get(name) if normalization else None
+        if state is not None:
+            try:
+                print(f"Loading saved observation norm state {name}")
+                created[name].load_state_dict(state)
+                continue
+            except Exception:
+                pass  # shape mismatch -> init
+        to_init.append((name, created[name], spec))
+
+    if to_init:
+        print(f"Initializing observation norms: {[n for n, _, _ in to_init]}")
+        num_iter = max(1, getattr(env, "size", lambda: 1)()) * max(1, int(getattr(cfg.feature.normalization, "warmup", 1)))
+        env.disable_reward()
+        try:
+            for name, norm, spec in to_init:
+                in_keys = [tuple(k) for k in _oc_to_py(spec["in_keys"])]
+                reduce_dim = tuple(spec.get("reduce_dim", (0, 1)))
+                cat_dim = int(spec.get("cat_dim", 0))
+                try:
+                    norm.init_stats(num_iter=num_iter, key=in_keys[0], reduce_dim=reduce_dim, cat_dim=cat_dim)
+                except TypeError:
+                    norm.init_stats(num_iter=num_iter, key=in_keys[0])
+        finally:
+            env.enable_reward()
+        return NormalizationDetails(states={n: t.state_dict() for n, t in created.items()})
+
+    return None
 
 
 def make_env(
@@ -109,8 +185,6 @@ def make_env(
 
     input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise, top_k_candidates=top_k_candidates)
 
-
-
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),
         device="cpu",
@@ -134,41 +208,10 @@ def make_env(
     if lstm is not None:
         print("Adding LSTM module to environment", flush=True)
         env.append_transform(lstm.make_tensordict_primer())
-    new_norm = None
-    if normalization is None and normalization is not False:
-        task_norm_transform = ObservationNorm(
-            in_keys=[("observation", "nodes", "tasks", "attr")],
-            eps=1e-4,
-            standard_normal=True,
-        )
-        env.append_transform(task_norm_transform)
-        if isinstance(env.transform, Compose):
-            for transform in env.transform:
-                if isinstance(transform, ObservationNorm) and not transform.initialized:
-                    env.disable_reward()
-                    transform.init_stats(
-                        num_iter=env.size() * cfg.graph.env.warmup,
-                        key=("observation", "nodes", "tasks", "attr"),
-                        reduce_dim=(0, 1),
-                        cat_dim=0,
-                    )
-                    env.enable_reward()
-        new_norm = NormalizationDetails(task_norm=task_norm_transform.state_dict())
-    elif isinstance(normalization, NormalizationDetails):
-        print("NORM: ", normalization)
-        task_norm_transform = ObservationNorm(
-            in_keys=[("observation", "nodes", "tasks", "attr")],
-            eps=1e-4,
-            standard_normal=True,
-            loc=normalization.task_norm["loc"],
-            scale=normalization.task_norm["scale"],
-        )
-        task_norm_transform.load_state_dict(normalization.task_norm)
 
-        env.append_transform(task_norm_transform)
-        new_norm = None
-
-    if new_norm is not None:
-        return env, new_norm
+    if normalization != False:
+        new_norm = _setup_observation_norms(env, cfg, normalization)
     else:
-        return env
+        new_norm = None  
+
+    return (env, new_norm) if new_norm is not None else env 
