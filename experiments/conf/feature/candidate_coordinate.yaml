@@ -14,7 +14,7 @@ observer:
   batched: false
 normalization:
   enabled: true 
-  warmup: 20
+  warmup: 10
   specs:
     - name: "tasks_attr"
       in_keys: [ ["observation","nodes","tasks","attr"] ]
