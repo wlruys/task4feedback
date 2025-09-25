@@ -1552,9 +1552,9 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
-        if version in "AC":
+        if "A" in version:
             task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)  # MLP-A
-        elif version in "BD":
+        elif "B" in version:
             task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)  # MLP-B
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)  # MLP-B
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)  # MLP-B
@@ -1607,16 +1607,16 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         ), f"Batched {self.batched} CNN observer requires max_candidates to be {width*length if self.batched else 1}, but got {spec.max_candidates}"
         task_feature_factory = FeatureExtractorFactory()
 
-        if version in "AC":
+        if "A" in version:
             task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
-        elif version in "BD":
+        elif "B" in version:
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
+            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
+        elif "C" in version:
             task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
             task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-        elif version in "EF":
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
 
         # task_feature_factory.add(fastsim.TaskMeanDurationFeature)
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
