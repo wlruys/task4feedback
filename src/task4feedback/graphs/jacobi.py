@@ -1613,6 +1613,10 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
             task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
             task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
+        elif version in "EF":
+            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
+            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
 
         # task_feature_factory.add(fastsim.TaskMeanDurationFeature)
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
