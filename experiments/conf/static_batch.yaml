@@ -51,7 +51,7 @@ algorithm:
   collector: "multi_sync"
 
 optimizer:
-  lr: 5e-4
+  lr: 1e-3
 
 system:
   # mem: 99999e9
