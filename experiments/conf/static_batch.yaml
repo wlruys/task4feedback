@@ -3,7 +3,7 @@ defaults:
   - reward: ieft
   - system: 4h100
   - feature: cnn_batch
-  - network: cond_dilation_cnn_batch
+  - network: dilation_cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -30,7 +30,7 @@ reward:
 graph:
   config:
     steps: 16
-    level_memory: 80e9
+    level_memory: 110e9
   env:
     change_priority: False
     change_location: True
@@ -39,15 +39,15 @@ graph:
 
 algorithm:
   num_collections: 2000
-  rollout_steps: 0
+  rollout_steps: 16
   workers: 4
-  graphs_per_collection: 32
+  graphs_per_collection: 8
   ent_coef: 0.01
   sample_slices: False
   slice_len: 16 # only used if sample_slices is True (LSTM)
   gamma: 0.99
   lmbda: 0.95
-  minibatch_size: 128
+  minibatch_size: 32
   collector: "multi_sync"
 
 optimizer:
@@ -86,7 +86,9 @@ wandb:
   name: CNN-A_IEFT
 
 eval:
-  eval_interval: 500
+  animation_interval: 0
+  eval_interval: 100
   max_frames: 400
   video_seconds: 15
+  samples: 10
 

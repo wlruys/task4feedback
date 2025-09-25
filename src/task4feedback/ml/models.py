@@ -439,7 +439,17 @@ class VectorStateNet(nn.Module):
 
     def forward(self, tensordict: TensorDict):
         task_features = tensordict["nodes", "tasks", "attr"]
-        task_features = torch.squeeze(task_features)
+        if task_features.ndim == 2 and task_features.shape[0] == 1:
+            # case [1, k] -> [k]
+            task_features = task_features.squeeze(0)
+        elif task_features.ndim == 3 and task_features.shape[1] == 1:
+            # case [b, 1, k] -> [b, k]
+            task_features = task_features.squeeze(1)
+        elif task_features.ndim == 4 and task_features.shape[2] == 1:
+            # case [b1, b2, 1, k] -> [b1, b2, k]
+            task_features = task_features.squeeze(2)
+        else:
+            raise ValueError(f"Unexpected shape {task_features.shape}")
 
         if self.add_progress:
             time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]

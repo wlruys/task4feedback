@@ -34,6 +34,7 @@ def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -
     policy_state_module = instantiate(
         state_layer,
         feature_config=feature_cfg,
+        add_device_load=cfg.network.add_device_load,
         _recursive_=False,
     )
 
@@ -50,6 +51,7 @@ def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -
         state_layer,
         feature_config=feature_cfg,
         add_progress=cfg.network.critic.add_progress,
+        add_device_load=cfg.network.add_device_load,
         _recursive_=False,
     )
 

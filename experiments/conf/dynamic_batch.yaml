@@ -1,5 +1,5 @@
 defaults:
-  - graph: dynamic_jacobi_diag
+  - graph: dynamic_jacobi_bump
   - reward: incremental_schedule
   - system: h100
   - feature: cnn_batch

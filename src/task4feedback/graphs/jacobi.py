@@ -1547,14 +1547,17 @@ class CandidateObserverFactory(CandidateExternalObserverFactory):
 
 
 class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, batched: bool = False):
+    def __init__(self, spec: fastsim.GraphSpec, version: str, batched: bool = False):
         self.batched = batched
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
-        task_feature_factory.add(fastsim.PrevReadSizeFeature, 4, 4, True, 1)  # MLP-B
-        task_feature_factory.add(fastsim.TaskCoordinatesFeature)  # MLP-B
-        task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)  # MLP-B
+        if version in "A":
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)  # MLP-A
+        elif version in "B":
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)  # MLP-B
+            task_feature_factory.add(fastsim.TaskCoordinatesFeature)  # MLP-B
+            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)  # MLP-B
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.EmptyDataFeature, 1)
@@ -1595,31 +1598,38 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         width: int,
         length: int,
         prev_frames: int,
+        version: str,
         batched: bool = False,
     ):
         self.batched = batched
         assert (not batched and spec.max_candidates == 1) or (
             spec.max_candidates == width * length
         ), f"Batched {self.batched} CNN observer requires max_candidates to be {width*length if self.batched else 1}, but got {spec.max_candidates}"
-
         task_feature_factory = FeatureExtractorFactory()
+
+        if version in "AC":
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+        elif version in "BD":
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
+
         # task_feature_factory.add(fastsim.TaskMeanDurationFeature)
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
-        task_feature_factory.add(fastsim.TaskCoordinatesFeature)  # CNN-B
         # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-        task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)  # CNN-B
-        if prev_frames > 0:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)  # CNN-A,B,C
-            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, prev_frames) # CNN-B
+
+        # if prev_frames > 0:
+        #     task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)  # CNN-A,B,C
+        # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, prev_frames) # CNN-B
         # if prev_frames > 0:
         #     task_feature_factory.add(
         #         fastsim.PrevMappedSizeFeature, width, False, prev_frames
         #     )
-        if not batched:
-            # Difference in depth doesn't exist in batched
-            task_feature_factory.add(fastsim.DepthTaskFeature)
-            # Tag candidate only when it is not batched
-            task_feature_factory.add(fastsim.EmptyTaskFeature, 1)
+        # if not batched:
+        #     # Difference in depth doesn't exist in batched
+        #     task_feature_factory.add(fastsim.DepthTaskFeature)
+        #     # Tag candidate only when it is not batched
+        #     task_feature_factory.add(fastsim.EmptyTaskFeature, 1)
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.EmptyDataFeature, 1)

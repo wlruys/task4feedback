@@ -7,7 +7,7 @@ config:
   arithmetic_intensity: 595.5555555
   arithmetic_complexity: 1.0
   memory_intensity: 0
-  boundary_width: 1
+  boundary_width: 0.25
   boundary_complexity: 1.0
   level_memory: 80e9
   randomness: 0.0
@@ -27,5 +27,5 @@ env:
   change_priority: False
   change_location: True
   change_duration: False 
-  warmup: 10
+  warmup: 20
   seed: 1

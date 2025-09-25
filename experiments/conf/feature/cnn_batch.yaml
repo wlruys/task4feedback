@@ -15,6 +15,7 @@ observer:
   length: NoNeedToChange
   prev_frames: 1
   batched: true
+  version: A
 normalization:
   enabled: true 
   warmup: 10

@@ -9,6 +9,7 @@ bitrate: 50
 exploration_types:
     - RANDOM
     - DETERMINISTIC
-samples: 2
+samples: 10
 seeds: [0]
+pickle_path: /Users/jaeyoung/work/nanobind_task4feedback/experiments/4x4x16_static_1:1:1.pkl
 

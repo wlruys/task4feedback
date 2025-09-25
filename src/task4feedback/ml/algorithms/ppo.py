@@ -321,7 +321,7 @@ def run_ppo(
     )
 
     def env_workers():
-        return [env_constructors[i % len(env_constructors)] for i in range(ppo_config.workers)]
+        return [env_constructors[i % len(env_constructors)] for i in range(ppo_config.graphs_per_collection)]
 
     if ppo_config.collector == "multi_sync":
         collector = MultiSyncDataCollector(
@@ -334,6 +334,7 @@ def run_ppo(
             storing_device=ppo_config.storing_device,
             env_device="cpu",
             use_buffers=True,
+            num_threads=ppo_config.workers,
             compile_policy=({"mode": "reduce-overhead"} if ppo_config.compile_policy else None),
         )
     elif ppo_config.collector == "sync":

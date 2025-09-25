@@ -9,6 +9,6 @@ layers:
     hidden_channels: 16
   critic:
     hidden_channels: 128
-
+add_device_load: True
 critic:
   add_progress: True

@@ -5,16 +5,18 @@ from torchrl.envs import set_exploration_type, ExplorationType
 from torchrl.envs.utils import check_env_specs
 from tensordict import TensorDict
 from task4feedback.graphs.mesh.plot import animate_mesh_graph, PlotConfig, ColorConfig
-from dataclasses import dataclass, field 
+from dataclasses import dataclass, field
 import wandb
 from pathlib import Path
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
-from task4feedback.logging import training 
-import os 
-import git 
+from task4feedback.logging import training
+import os
+import git
 from task4feedback.ml.env import RuntimeEnv
+import pickle
+
 
 def compute_advantage(td: TensorDict):
     with torch.no_grad():
@@ -28,14 +30,13 @@ def compute_advantage(td: TensorDict):
             mask = traj_ids == traj
             traj_rewards = rewards[mask]
             # each element = sum of rewards from that step to the end of the trajectory
-            traj_cum_rewards = torch.flip(
-                torch.cumsum(torch.flip(traj_rewards, dims=[0]), dim=0), dims=[0]
-            )
+            traj_cum_rewards = torch.flip(torch.cumsum(torch.flip(traj_rewards, dims=[0]), dim=0), dims=[0])
             cumulative_rewards[mask] = traj_cum_rewards.to(torch.float32)
 
         td["value_target"] = cumulative_rewards.unsqueeze(1)
         td["advantage"] = cumulative_rewards - state_values
     return td
+
 
 def redistribute_rewards_uniform(td: TensorDict) -> TensorDict:
     """
@@ -201,6 +202,7 @@ class Timer:
         """Returns the elapsed time in seconds."""
         return self.interval
 
+
 def log_parameter_and_gradient_norms(model):
     """Log parameter and gradient norms to wandb"""
     param_norms = {}
@@ -230,13 +232,14 @@ def log_parameter_and_gradient_norms(model):
         "grad_norm/total": total_grad_norm,
     }
 
+
 def make_eval_envs(
     eval_env_fn: list[Callable],
 ):
     return [eval_env_fn(eval=True) for eval_env_fn in eval_env_fn]
 
 
-@dataclass 
+@dataclass
 class EvaluationConfig:
     eval_interval: int = 100
     animation_interval: int = 100
@@ -248,6 +251,85 @@ class EvaluationConfig:
     samples: int = 10
     seeds: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])
     video_seconds: int = 15
+    pickle_path: Optional[str] = None
+    pickled_states: Optional[Dict[str, Any]] = None
+
+
+def eval_pickled_env(
+    n_collections: int,
+    policy,
+    env,
+    exploration_type: ExplorationType,
+    pickled_states: Dict,
+    samples: int = 1,
+):
+    env_rewards = []
+    env_times = []
+    env_vsEFT = []
+    env_vsQuad = []
+    metrics = {}
+    last_env = None
+
+    for i in range(samples):
+        env.reset_for_evaluation()
+        env.disable_reward()
+        with set_exploration_type(exploration_type), torch.no_grad():
+            saved_loc = pickled_states["init_locs"][i % len(pickled_states["init_locs"])]
+            workload = pickled_states["workloads"][i % len(pickled_states["workloads"])]
+            env.reset_to_state(saved_loc, workload)
+            tensordict = env.rollout(
+                policy=policy,
+                max_steps=100000,
+            )
+
+        if "next" in tensordict and "reward" in tensordict["next"]:
+            rewards = tensordict["next", "reward"]
+            avg_reward = rewards.mean().item()
+            env_rewards.append(avg_reward)
+
+        if hasattr(env, "simulator") and hasattr(env.simulator, "time"):
+            completion_time = env.simulator.time
+            env_times.append(completion_time)
+            if n_collections == 0:
+                if pickled_states["eft_times"][i] != env._get_baseline("EFT"):
+                    training.warning(f"Environment {i} EFT time mismatch: {pickled_states['eft_times'][i]} " f"!= {env._get_baseline('EFT')}")
+                else:
+                    training.info(f"Environment {i} EFT time match: {pickled_states['eft_times'][i]} == {env._get_baseline('EFT')}")
+
+        env_vsEFT.append(pickled_states["eft_times"][i] / completion_time if completion_time > 0 else 0.0)
+        env_vsQuad.append(pickled_states["quad_times"][i] / completion_time if completion_time > 0 else 0.0)
+        env.enable_reward()
+
+    # time metrics
+    if samples > 1:
+        mean_time = sum(env_times) / len(env_times) if env_times else 0
+        std_time = torch.std(torch.tensor(env_times, dtype=torch.float64)).item() if env_times else 0.0
+        metrics["std_time"] = std_time
+    else:
+        mean_time = env_times[0] if env_times else 0.0
+        std_time = 0.0
+    metrics["mean_time"] = mean_time
+
+    # vsEFT / vsQuad metrics
+    if env_vsEFT:
+        metrics["mean_vsEFT"] = sum(env_vsEFT) / len(env_vsEFT)
+        metrics["std_vsEFT"] = torch.std(torch.tensor(env_vsEFT, dtype=torch.float64)).item()
+    else:
+        metrics["mean_vsEFT"] = 0.0
+        metrics["std_vsEFT"] = 0.0
+
+    if env_vsQuad:
+        metrics["mean_vsQuad"] = sum(env_vsQuad) / len(env_vsQuad)
+        metrics["std_vsQuad"] = torch.std(torch.tensor(env_vsQuad, dtype=torch.float64)).item()
+    else:
+        metrics["mean_vsQuad"] = 0.0
+        metrics["std_vsQuad"] = 0.0
+
+    training.info(f"Evaluation results: mean_time={mean_time}, " f"mean_vsEFT={metrics['mean_vsEFT']}, mean_vsQuad={metrics['mean_vsQuad']}")
+
+    last_env = env
+
+    return metrics, last_env
 
 
 def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType, samples: int = 1, seed: int = 0):
@@ -260,13 +342,11 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
         env.reset_for_evaluation(seed=seed)
         env.disable_reward()
         with set_exploration_type(exploration_type), torch.no_grad():
-            #check_env_specs(env)
+            # check_env_specs(env)
             tensordict = env.rollout(
                 policy=policy,
                 max_steps=100000,
             )
-
-
 
         if "next" in tensordict and "reward" in tensordict["next"]:
             rewards = tensordict["next", "reward"]
@@ -285,28 +365,19 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
     else:
         mean_time = env_times[0] if env_times else 0.0
         std_time = 0.0
-            
+
     metrics["mean_time"] = mean_time
 
-    training.info(
-        f"Evaluation results: mean_time={mean_time}"
-    )
+    training.info(f"Evaluation results: mean_time={mean_time}")
 
     last_env = env
 
-    return metrics, last_env 
+    return metrics, last_env
 
 
-def evaluate_policy(
-        n_collections: int,
-        policy, 
-        eval_envs: list[RuntimeEnv],
-        config: EvaluationConfig,
-        exploration_type: str,
-        metrics: dict
-) -> list[RuntimeEnv]:
-    
-    env = None 
+def evaluate_policy(n_collections: int, policy, eval_envs: list[RuntimeEnv], config: EvaluationConfig, exploration_type: str, metrics: dict) -> list[RuntimeEnv]:
+
+    env = None
     metrics[f"eval/{str(exploration_type)}"] = {}
 
     for i, env in enumerate(eval_envs):
@@ -324,9 +395,8 @@ def evaluate_policy(
             env.reset_for_evaluation(seed=config.seeds[0])
             title = f"workload_env_{i}.mp4"
             workload = env.get_graph().get_workload()
-            workload.animate_workload(title=title, show=False, bitrate=config.bitrate, video_seconds=config.video_seconds,
-                                      figsize=config.fig_size, dpi=config.dpi)
-            
+            workload.animate_workload(title=title, show=False, bitrate=config.bitrate, video_seconds=config.video_seconds, figsize=config.fig_size, dpi=config.dpi)
+
             if wandb is None or wandb.run is None or wandb.run.dir is None:
                 path = "."
             else:
@@ -334,40 +404,42 @@ def evaluate_policy(
 
             video_path = Path(path) / f"{title}"
             metrics[f"eval/env_{i}_workload"] = wandb.Video(
-            video_path,
-            caption=f"Env {i} Workload",
-            fps=len(workload.levels) / (config.max_frames/30),
-            format="mp4",
+                video_path,
+                caption=f"Env {i} Workload",
+                fps=len(workload.levels) / (config.max_frames / 30),
+                format="mp4",
             )
 
-
-        for seed in config.seeds:
-            metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = {}
+        if config.pickle_path is not None:
             if exploration_type == "RANDOM":
                 exploration_type_enum = ExplorationType.RANDOM
             elif exploration_type == "DETERMINISTIC":
                 exploration_type_enum = ExplorationType.DETERMINISTIC
-            else:
-                raise ValueError(f"Unknown exploration type: {exploration_type}")
-            
-            training.info(f"Evaluating environment {i, seed} with {str(exploration_type)} policy")
-            env_eval_metrics, output_env = eval_env(
-                n_collections,
-                policy,
-                env,
-                exploration_type_enum,
-                samples=config.samples if exploration_type == "RANDOM" else 1,
-                seed=seed
-            )
+            if config.pickled_states is None:
+                config.pickled_states = pickle.load(open(config.pickle_path, "rb"))
+            env_eval_metrics, output_env = eval_pickled_env(n_collections, policy, env, exploration_type_enum, samples=config.samples, pickled_states=config.pickled_states)
+            metrics[f"eval/{str(exploration_type)}"] = env_eval_metrics
+        else:
+            for seed in config.seeds:
+                metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = {}
+                if exploration_type == "RANDOM":
+                    exploration_type_enum = ExplorationType.RANDOM
+                elif exploration_type == "DETERMINISTIC":
+                    exploration_type_enum = ExplorationType.DETERMINISTIC
+                else:
+                    raise ValueError(f"Unknown exploration type: {exploration_type}")
 
-            metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = env_eval_metrics
+                training.info(f"Evaluating environment {i, seed} with {str(exploration_type)} policy")
+                env_eval_metrics, output_env = eval_env(n_collections, policy, env, exploration_type_enum, samples=config.samples if exploration_type == "RANDOM" else 1, seed=seed)
+
+                metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = env_eval_metrics
 
     return [output_env]
 
 
 def visualize_envs(n_collections: int, viz_envs: list[RuntimeEnv], config: EvaluationConfig, exploration_type: str, video_log: dict):
     for i, env in enumerate(viz_envs):
-        assert(env is not None)
+        assert env is not None
         training.info(f"Visualizing environment {i} with policy {exploration_type} at n_updates={n_collections}")
         title = f"network_eval_{exploration_type}_{n_collections}"
 
@@ -404,6 +476,7 @@ def visualize_envs(n_collections: int, viz_envs: list[RuntimeEnv], config: Evalu
             format="mp4",
         )
 
+
 def run_evaluation(
     policy,
     eval_envs: list[Callable],
@@ -414,7 +487,6 @@ def run_evaluation(
 ):
     metrics = {}
     video_log = {}
-    
 
     for exploration_type in config.exploration_types:
         viz_envs = evaluate_policy(n_collections, policy, eval_envs, config, exploration_type, metrics)
@@ -435,9 +507,7 @@ def run_evaluation(
     return metrics
 
 
-def save_checkpoint(
-    step, policy_module, value_module, optimizer, lr_scheduler=None, extras: Optional[Dict[str, Any]] = None
-):
+def save_checkpoint(step, policy_module, value_module, optimizer, lr_scheduler=None, extras: Optional[Dict[str, Any]] = None):
     try:
         state = dict(
             step=step,
@@ -445,9 +515,7 @@ def save_checkpoint(
             value_module=value_module.state_dict(),
             optimizer=optimizer.state_dict(),
             rng_torch=torch.get_rng_state(),
-            rng_cuda=torch.cuda.get_rng_state_all()
-            if torch.cuda.is_available()
-            else None,
+            rng_cuda=torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
             extras=extras or {},
             commit_hash=git.Repo(search_parent_directories=True).head.object.hexsha,
             commit_dirty=git.Repo(search_parent_directories=True).is_dirty(),

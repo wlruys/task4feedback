@@ -370,9 +370,28 @@ class RuntimeEnv(EnvBase):
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
+    def reset_to_state(self, cell_location, workload_state=None) -> TensorDict:
+        self.step_count = 0
+        graph = self.simulator_factory[self.active_idx].input.graph
+        graph.set_cell_locations([-1 for _ in range(graph.nx * graph.ny)])
+        graph.set_cell_locations(cell_location, step=0)
+
+        if workload_state is not None:
+            graph.load_workload(self.simulator_factory[self.active_idx].input.system, workload_state)
+
+        self.simulator = self.simulator_factory[self.active_idx].create()
+        self.simulator.observer.reset()
+
+        simulator_status = self.simulator.run_until_external_mapping()
+        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, f"Unexpected simulator status: {simulator_status}"
+        gc.collect()
+
+    def set_reset_counter(self, count):
+        self.resets = count
+
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         # start_t = perf_counter()
-        training.debug("Resetting environment (reset count: {})".format(self.resets))
+        training.info("Resetting environment (reset count: {})".format(self.resets))
         self.resets += 1
         self.step_count = 0
         current_priority_seed = self.simulator_factory[self.active_idx].pseed
@@ -390,13 +409,12 @@ class RuntimeEnv(EnvBase):
                 assert hasattr(graph, "randomize_locations"), "Graph does not have randomize_locations method."
 
                 if isinstance(graph, JacobiGraph):
-                    if isinstance(graph, DynamicJacobiGraph):
-                        graph.set_cell_locations([-1 for _ in range(graph.nx * graph.ny)])
+                    graph.set_cell_locations([-1 for _ in range(graph.nx * graph.ny)])
                     graph.randomize_locations(
                         self.location_randomness,
                         self.location_list,
                         verbose=False,
-                        step=0 if graph.dynamic else None,
+                        step=0,
                     )
                 else:
                     graph.randomize_locations(
