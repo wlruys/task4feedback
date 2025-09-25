@@ -1,7 +1,7 @@
 defaults:
-  - architecture/dilation_enc@layers.state
-  - architecture/dilation_dec@layers.actor
-  - architecture/rec_unet_output_head@layers.critic
+  - architecture/dilation_state@layers.state
+  - architecture/dilation_policy_head@layers.actor
+  - architecture/dilation_value_head@layers.critic
 layers:
   state:
     hidden_channels: 16

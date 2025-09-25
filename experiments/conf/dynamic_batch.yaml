@@ -50,10 +50,10 @@ optimizer:
 system:
   mem: 80e9
 
-feature:
-  observer:
-    prev_frames: 1
-    batched: true
+# feature:
+#   observer:
+#     prev_frames: 3
+#     batched: true
 
 network:
   layers:
@@ -64,7 +64,7 @@ network:
     actor:
       hidden_channels: 16
     critic:
-      hidden_channels: 128
+      hidden_channels: 16
 
 runtime:
   batch_size: 5

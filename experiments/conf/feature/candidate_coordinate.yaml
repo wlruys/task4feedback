@@ -5,10 +5,32 @@ observer:
     _target_: task4feedback.interface.create_graph_spec
     max_tasks: 1
     max_data: 1
-    max_devices: 1
+    max_devices: 5
     max_edges_tasks_tasks: 1
     max_edges_tasks_data: 1
     max_edges_data_devices: 1
     max_edges_tasks_devices: 1
     max_candidates: 1
   batched: false
+normalization:
+  enabled: true 
+  warmup: 20
+  specs:
+    - name: "tasks_attr"
+      in_keys: [ ["observation","nodes","tasks","attr"] ]
+      eps: 1e-4
+      standard_normal: true
+      reduce_dim: [0, 1]
+      cat_dim: 0
+    - name: "device_memory"
+      in_keys: [ ["observation","aux","device_memory"]]
+      eps: 1e-4
+      standard_normal: true
+      reduce_dim: [0]
+      cat_dim: 0
+    - name: "device_load"
+      in_keys: [ ["observation","aux","device_load"]]
+      eps: 1e-4
+      standard_normal: true
+      reduce_dim: [0]
+      cat_dim: 0

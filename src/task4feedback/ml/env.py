@@ -35,11 +35,11 @@ def rle_reward(f, z):
     return np.dot(f_norm, z)
 
 
-def sample_vector(d: int = 8):
-    G = np.random.randn(d)
-    # G /= np.linalg.norm(G)
-    G = G.astype(np.float32)
-    # G = np.zeros((d), dtype=np.float32)
+def sample_vector(d: int = 8, sample: bool = True):
+    if sample:
+        G = torch.randn(d, dtype=torch.float32)
+    else:
+        G = torch.zeros(d, dtype=torch.float32)
     return G
 
 
@@ -59,14 +59,14 @@ class RuntimeEnv(EnvBase):
         workload_seed=0,
         priority_seed=0,
         location_randomness=1,
-        network=Optional[None],
         location_list: Optional[List[int]] = None,
         max_samples_per_iter: int = 0,
         random_start: bool = False,
         verbose: bool = True,
+        sample_z: bool = False,
+        burn_in_resets: int = 10,
     ):
         super().__init__(device=device)
-        # print("Initializing environment")
         self.verbose = verbose
         self.max_samples_per_iter = max_samples_per_iter
         self.change_priority = change_priority
@@ -77,7 +77,8 @@ class RuntimeEnv(EnvBase):
         self.workload_seed = workload_seed
         self.location_randomness = location_randomness
         self.random_start = random_start
-        self.network = network
+        self.sample_z = sample_z
+        self.burn_in_resets = burn_in_resets
 
         if location_list is None:
             location_list = [i for i in range(int(only_gpu), len(simulator_factory.input.system))]
@@ -112,7 +113,9 @@ class RuntimeEnv(EnvBase):
         self.buffer_idx = 0
         self.resets = 0
         self.EFT_baseline = 1
-        self.vector = sample_vector()
+
+        self.z_spa = sample_vector(sample=self.sample_z)
+        self.z_ch = sample_vector(sample=self.sample_z)
 
         if self.change_location:
             graph = simulator_factory[self.active_idx].input.graph
@@ -159,7 +162,8 @@ class RuntimeEnv(EnvBase):
         self.baseline_key = ("aux", "baseline")
         self.improvement_key = ("aux", "improvement")
         self.vs_quad_key = ("aux", "vs_quad")
-        self.z_key = ("aux", "z")
+        self.z_ch_key = ("aux", "z_ch")
+        self.z_spa_key = ("aux", "z_spa")
         self.time_key = ("aux", "time")
         self.action_n = "action"
         self.reward_n = "reward"
@@ -191,14 +195,12 @@ class RuntimeEnv(EnvBase):
 
     def _get_baseline(self, policy="EFT"):
         if policy == "EFT":
-            # print("Calculating EFT baseline...")
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
             assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
-            # cprint("EFT baseline calculated.")
             return simulator_copy.time
         elif policy == "Cyclic":
             simulator_copy = self.simulator.fresh_copy()
@@ -242,7 +244,8 @@ class RuntimeEnv(EnvBase):
         return out
 
     def _create_reward_spec(self) -> TensorSpec:
-        return Unbounded(shape=[1], device=self.device, dtype=torch.float32)
+        spec = Unbounded(shape=[1], device=self.device, dtype=torch.float32)
+        return spec
 
     def _create_done_spec(self) -> TensorSpec:
         return Binary(n=1, device=self.device, dtype=torch.bool)
@@ -257,12 +260,32 @@ class RuntimeEnv(EnvBase):
         obs = self.observations[step_count % n_buffers].copy()
         obs.zero_()
 
-        if self.step_count % 20 == 0 or reset:
-            self.vector = sample_vector()
-            # print("Step Count", self.step_count)
-            # print("Reset", reset)
-            # print("Resampling z", self.vector)
-        obs.set(self.z_key, self.vector)
+        if not hasattr(self, "_rle_next_step"):
+            # Probability for geometric interval (expected interval = 1/p).
+            self._rle_p = getattr(self, "rle_p", 0.1)
+            self._rle_min = getattr(self, "rle_min_interval", 5)
+            self._rle_max = getattr(self, "rle_max_interval", 80)
+            self._rle_next_step = 0
+
+        def _sample_interval():
+            # Geometric draw; clamp to [min, max].
+            v = int(np.random.geometric(self._rle_p))
+            return max(self._rle_min, min(v, self._rle_max))
+
+        # On reset force re-sample immediately.
+        if reset:
+            self.z_ch = sample_vector(sample=self.sample_z)
+            self.z_spa = sample_vector(sample=self.sample_z)
+            self._rle_next_step = self.step_count + _sample_interval()
+
+        # Randomize when scheduled.
+        if self.step_count >= self._rle_next_step:
+            self.z_ch = sample_vector(sample=self.sample_z)
+            self.z_spa = sample_vector(sample=self.sample_z)
+            self._rle_next_step = self.step_count + _sample_interval()
+
+        obs.set(self.z_ch_key, self.z_ch)
+        obs.set(self.z_spa_key, self.z_spa)
 
         self.simulator.observer.get_observation(obs)
         n_tasks = len(self.simulator_factory[self.active_idx].input.graph)
@@ -279,7 +302,6 @@ class RuntimeEnv(EnvBase):
 
     def _handle_done(self, obs):
         time = obs[self.time_key].item()
-        # improvement = (self.EFT_baseline - time) / self.EFT_baseline
         improvement = (self.EFT_baseline) / (time)  # as speedup
         obs.set_at_(self.improvement_key, improvement, 0)
         obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
@@ -289,7 +311,6 @@ class RuntimeEnv(EnvBase):
                 f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
                 flush=True,
             )
-
         return obs, reward, time, improvement
 
     def max_length(self) -> int:
@@ -333,16 +354,11 @@ class RuntimeEnv(EnvBase):
 
         self.map_tasks(td[self.action_n])
 
-        reference_state = self.network(td)
-        # print("REFERENCE EVAL: ", reference_state.shape)
-
         reward = 0
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
-
-        # print(global_task_id, obs[("nodes", "tasks", "attr")])
 
         if done:
             obs, reward, time, improvement = self._handle_done(obs)
@@ -356,7 +372,6 @@ class RuntimeEnv(EnvBase):
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         # start_t = perf_counter()
-        # print("RESET", self.resets, flush=True)
         training.debug("Resetting environment (reset count: {})".format(self.resets))
         self.resets += 1
         self.step_count = 0
@@ -407,12 +422,9 @@ class RuntimeEnv(EnvBase):
         else:
             new_duration_seed = int(current_duration_seed)
 
-        # print("New seeds - Priority: {}, Duration: {}".format(new_priority_seed, new_duration_seed))
-
         self.simulator = self.simulator_factory[self.active_idx].create(priority_seed=new_priority_seed, duration_seed=new_duration_seed)
         self.simulator.observer.reset()
-
-        if self.resets < 10 and self.random_start:
+        if self.resets < self.burn_in_resets and self.random_start:
             # Run the simulator for a random number of steps
             n_steps = random.randint(1, self.size() - 1)
             self.simulator.disable_external_mapper()
@@ -479,11 +491,12 @@ class RuntimeEnv(EnvBase):
 
 class IncrementalEFT(RuntimeEnv):
 
-    def __init__(self, *args, gamma: float = 1.0, scaling_factor: float = 1.0, baseline_policy: str = "EFT", **kwargs):
+    def __init__(self, *args, gamma: float = 1.0, scaling_factor: float = 1.0, baseline_policy: str = "EFT", terminal_reward: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.scaling_factor = scaling_factor
         self.baseline_policy = baseline_policy
+        self.terminal_reward = terminal_reward
 
     def _handle_done(self, obs):
         time = obs[self.time_key].item()
@@ -535,8 +548,10 @@ class IncrementalEFT(RuntimeEnv):
         _reward = 0
         if done:
             obs, _reward, time, improvement = self._handle_done(obs)
-        reward += _reward
-        # print(reward, _reward)
+
+        if self.terminal_reward:
+            reward += _reward
+
         buf = td.empty()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
         buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
@@ -820,7 +835,17 @@ class IncrementalSchedule(RuntimeEnv):
         self.k = k
         self.chance = chance
         self.terminal_reward = terminal_reward
-        self.use_rle = True
+
+        self.interval_flags = torch.zeros(self.max_length(), dtype=torch.bool)
+        self.distance_to_last = torch.zeros(self.max_length(), dtype=torch.int32)
+        self.distance_to_next = torch.zeros(self.max_length(), dtype=torch.int32)
+
+        self._reinitialize_intervals()
+
+    def _reinitialize_intervals(self):
+        sample = torch.rand(self.max_length())
+        self.interval_flags = sample < self.chance
+        # TODO: Implement distance to last and next for gamma discounting.
 
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step", self.step_count)
@@ -830,14 +855,13 @@ class IncrementalSchedule(RuntimeEnv):
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
             self.previous_length = 0.0
+            self._reinitialize_intervals()
 
         self.step_count += 1
 
         self.map_tasks(td[self.action_n])
 
-        check_s = random.random() <= self.chance
-
-        if not self.disable_reward_flag and check_s:
+        if not self.disable_reward_flag and self.interval_flags[self.step_count - 1]:
             sim_current = self.simulator.copy()
             sim_current.disable_external_mapper()
 
@@ -867,11 +891,16 @@ class IncrementalSchedule(RuntimeEnv):
         buf = td.empty().clone()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
 
+        if self.network is not None and self.use_rle:
+            self.network(buf)
+            f = buf["reference_state"]
+            z = td["observation", "aux", "z"]
+            r_rle = rle_reward(f, z)
+            # print(f"r_rle", r_rle, reward)
+            reward = reward + 0.5 * r_rle
+
         buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
-
-        # print(buf)
-
         return buf
 
 

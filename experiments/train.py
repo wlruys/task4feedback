@@ -60,8 +60,6 @@ def configure_training(cfg: DictConfig):
     feature_config = FeatureDimConfig.from_observer(observer)
     model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
 
-    network = reference
-
     def env_fn(eval: bool = False):
         return make_env(
             graph_builder=graph_builder,
@@ -69,7 +67,6 @@ def configure_training(cfg: DictConfig):
             lstm=lstm,
             normalization=normalization,
             eval=eval,
-            network=network,
         )
 
     alg_config = instantiate(cfg.algorithm)

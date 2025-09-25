@@ -25,10 +25,6 @@ import time
 from torchrl.collectors.utils import split_trajectories
 from task4feedback.ml.util import log_parameter_and_gradient_norms
 
-from tensordict.nn import set_composite_lp_aggregate
-
-set_composite_lp_aggregate(True).set()
-
 
 def joint_stats(td, ppo):
     with torch.no_grad():
@@ -452,16 +448,14 @@ def run_ppo(
 
         tensordict_data = tensordict_data.to(ppo_config.update_device, non_blocking=True)
 
-        # print("Task obs", tensordict_data[0]["observation", "nodes", "tasks", "attr"])
-        # print("obs shape", tensordict_data.shape)
-
         adv_start_t = time.perf_counter()
         with torch.no_grad():
             # Redistribute Rewards
             if ppo_config.bagged_policy == "uniform":
                 redistribute_rewards_uniform(tensordict_data)
             # Compute advantages
-        advantage_module(tensordict_data)
+            advantage_module(tensordict_data)
+
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
         training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")

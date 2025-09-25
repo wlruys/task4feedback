@@ -1163,6 +1163,12 @@ class ExternalObserver:
         else:
             return global_ids[local_ids]
 
+    def get_device_memory(self, output: TensorDict):
+        self.graph_extractor.get_device_memory(output["aux"]["device_memory"])
+
+    def get_device_load(self, output: TensorDict):
+        self.graph_extractor.get_device_load(output["aux"]["device_load"])
+
     def _local_to_global2D(self, g1, g2, l, workspace=None):
         if workspace is not None:
             size = len(l[0, :])
@@ -1210,7 +1216,11 @@ class ExternalObserver:
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "vs_quad": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
-                "z": torch.zeros((8), dtype=torch.float32),
+                "baseline": torch.zeros((1), dtype=torch.float32),
+                "device_memory": torch.zeros(1 * (spec.max_devices), dtype=torch.float32),
+                "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
+                "z_ch": torch.zeros((8), dtype=torch.float32),
+                "z_spa": torch.zeros((8), dtype=torch.float32),
             }
         )
 
@@ -1577,8 +1587,11 @@ class CandidateObserver(ExternalObserver):
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.ones((1), dtype=torch.float32),
+                "device_memory": torch.zeros(1 * (spec.max_devices), dtype=torch.float32),
+                "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
+                "z_ch": torch.zeros((8), dtype=torch.float32),
+                "z_spa": torch.zeros((8), dtype=torch.float32),
                 "vs_quad": torch.zeros((1), dtype=torch.float32),
-                "z": torch.zeros((8), dtype=torch.float32),
             }
         )
 
@@ -1645,6 +1658,10 @@ class CnnSingleTaskObserver(ExternalObserver):
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.ones((1), dtype=torch.float32),
+                "device_memory": torch.zeros(1 * (spec.max_devices), dtype=torch.float32),
+                "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
+                "z_ch": torch.zeros((8), dtype=torch.float32),
+                "z_spa": torch.zeros((8), dtype=torch.float32),
             }
         )
 
@@ -1734,8 +1751,11 @@ class CnnBatchTaskObserver(ExternalObserver):
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.ones((1), dtype=torch.float32),
+                "device_memory": torch.zeros(1 * (spec.max_devices), dtype=torch.float32),
+                "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
+                "z_ch": torch.zeros((8), dtype=torch.float32),
                 "vs_quad": torch.zeros((1), dtype=torch.float32),
-                "z": torch.zeros((8), dtype=torch.float32),
+                "z_spa": torch.zeros((8), dtype=torch.float32),
             }
         )
 
@@ -1777,6 +1797,8 @@ class CnnBatchTaskObserver(ExternalObserver):
             self.task_ids[idx] = task_id.item()
 
         self.get_task_features(self.task_ids, output["nodes", "tasks", "attr"])
+        self.get_device_load(output)
+        self.get_device_memory(output)
 
         # Auxiliary observations
         output.set_at_(("aux", "progress"), -2.0, 0)

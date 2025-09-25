@@ -37,6 +37,14 @@ taskid_t min(taskid_t a, taskid_t b) {
   return a < b ? a : b;
 }
 
+f_t guarded_divide(double a, double b) {
+  if (b == 0) {
+    return static_cast<f_t>(a);
+  }
+  return static_cast<f_t>(a / b);
+}
+
+
 enum class NodeType : int8_t {
   ANY = -1,
   TASK = 0,
@@ -1127,14 +1135,78 @@ public:
     }
     return edge_count;
   }
-};
 
-f_t guarded_divide(double a, double b) {
-  if (b == 0) {
-    return static_cast<f_t>(a);
+  void get_device_load(TorchFloatArr1D &output){
+    const auto& s = state.get();
+    const auto& devices = s.get_devices();
+    const auto& device_manager = s.get_device_manager();
+
+    auto v = output.view();
+    auto n_devices = devices.size();
+    int64_t mapped_sum = 0.0;
+    const size_t vals_per_device = 2;
+
+    for(int i = 0; i < n_devices; i++){
+      auto mapped_load = static_cast<int64_t>(s.costs.get_mapped_time(i));
+      auto reserved_load = static_cast<int64_t>(s.costs.get_reserved_time(i));
+      mapped_sum += mapped_load;
+      v(i*vals_per_device + 0) = static_cast<f_t>(mapped_load);
+      v(i*vals_per_device + 1) = static_cast<f_t>(reserved_load);
+    }
+    
+    // std::cout << "UnDevice Load: [";
+    // for(int i = 0; i < n_devices * vals_per_device; i++){
+    //   std::cout << v(i);
+    //   if(i < n_devices * vals_per_device - 1){
+    //     std::cout << ", ";
+    //   }
+    // }
+
+    // // Normalize by total mapped load
+    for(int i = 0; i < n_devices; i++){
+      v(i*vals_per_device + 0) = guarded_divide(v(i*vals_per_device + 0), mapped_sum);
+      v(i*vals_per_device + 1) = guarded_divide(v(i*vals_per_device + 1), mapped_sum);
+    }
+
+    // std::cout << "Device Load: [";
+    // for(int i = 0; i < n_devices * vals_per_device; i++){
+    //   std::cout << v(i);
+    //   if(i < n_devices * vals_per_device - 1){
+    //     std::cout << ", ";
+    //   }
+    // }
+    // std::cout << "]" << std::endl;
+    // std::cout << "Total Mapped Load: " << mapped_sum << std::endl;
+    
   }
-  return static_cast<f_t>(a / b);
-}
+
+
+  void get_device_memory(TorchFloatArr1D &output){
+    const auto& s = state.get();
+    const auto& devices = s.get_devices();
+    const auto& device_manager = s.get_device_manager();
+
+    auto v = output.view();
+    auto n_devices = devices.size();
+    const size_t vals_per_device = 1;
+
+    for(int i = 0; i < n_devices; i++){
+      auto reserved_mem = static_cast<double>(device_manager.get_mem<TaskState::RESERVED>(i));
+      auto log_reserved_mem = std::log1p(1+reserved_mem);
+      v(i*vals_per_device + 0) = static_cast<f_t>(log_reserved_mem);
+    }
+
+    // std::cout << "Device Memory: [";
+    // for(int i = 0; i < n_devices * vals_per_device; i++){
+    //   std::cout << v(i);
+    //   if(i < n_devices * vals_per_device - 1){
+    //     std::cout << ", ";
+    //   }
+    // }
+    // std::cout << "]" << std::endl;
+
+  }
+};
 
 void one_hot(int index, std::span<f_t> output) {
   for (std::size_t i = 0; i < output.size(); i++) {

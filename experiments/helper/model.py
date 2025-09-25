@@ -20,9 +20,8 @@ def MultiHeadCategorical(**kwargs):
 
 
 def MultiHeadCategorical(**kwargs):
-    # kwargs will contain 'logits' read from the TensorDict by Probabilistic* module
-    base = torch.distributions.Categorical(**kwargs)  # batch_shape: [..., 64], event_shape: ()
-    return torch.distributions.Independent(base, 1)  # reinterpret the last batch dim as event -> joint log_prob
+    base = torch.distributions.Categorical(**kwargs)
+    return torch.distributions.Independent(base, 1)
 
 
 def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> nn.Module:
@@ -69,6 +68,8 @@ def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -
 def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
 
     graph_config = instantiate(cfg.graph.config)
+    batched = cfg.feature.observer.get("batched", False)
+    add_device_load = cfg.feature.get("add_device_load", False)
 
     lstm_mod = None
     layers = cfg.network.layers
@@ -82,6 +83,8 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
         policy_state_module = instantiate(
             state_layer,
             width=graph_config.n,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             length=get_length_from_config(graph_config),
             feature_config=feature_cfg,
             _recursive_=False,
@@ -89,6 +92,8 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
     else:
         policy_state_module = instantiate(
             state_layer,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             feature_config=feature_cfg,
             _recursive_=False,
         )
@@ -107,8 +112,6 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
     actor_layers.append(_td_policy_state)
     output_dim = policy_state_module.output_dim
     print(f"Policy state output dim: {output_dim}")
-
-    print(layers)
 
     if "lstm" in layers:
         print("Using LSTM layer for actor")
@@ -145,6 +148,8 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
     else:
         actor_input_keys = ["embed"]
 
+    actor_input_keys = ["observation"] + actor_input_keys
+
     _td_policy_output = td_nn.TensorDictModule(
         policy_output_module,
         in_keys=actor_input_keys,
@@ -168,21 +173,39 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
 
     if hasattr(state_layer, "width") and hasattr(state_layer, "length"):
         critic_state_module = instantiate(
-            state_layer, feature_config=feature_cfg, add_progress=cfg.network.critic.add_progress, _recursive_=False, width=graph_config.n, length=get_length_from_config(graph_config)
+            state_layer,
+            feature_config=feature_cfg,
+            add_progress=cfg.network.critic.add_progress,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            _recursive_=False,
+            width=graph_config.n,
+            length=get_length_from_config(graph_config),
         )
         reference_state_module = instantiate(
-            state_layer, feature_config=feature_cfg, add_progress=cfg.network.critic.add_progress, _recursive_=False, width=graph_config.n, length=get_length_from_config(graph_config)
+            state_layer,
+            feature_config=feature_cfg,
+            add_progress=cfg.network.critic.add_progress,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            _recursive_=False,
+            width=graph_config.n,
+            length=get_length_from_config(graph_config),
         )
     else:
         critic_state_module = instantiate(
             state_layer,
             feature_config=feature_cfg,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             add_progress=cfg.network.critic.add_progress,
             _recursive_=False,
         )
         reference_state_module = instantiate(
             state_layer,
             feature_config=feature_cfg,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
             add_progress=cfg.network.critic.add_progress,
             _recursive_=False,
         )
@@ -213,12 +236,18 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
     critic_output_module = instantiate(
         critic_layer,
         input_dim=output_dim,
+        add_device_load=add_device_load,
+        n_devices=cfg.system.n_devices,
+        add_progress=cfg.network.critic.add_progress,
         output_dim=1,
         _recursive_=False,
     )
     reference_output_module = instantiate(
         critic_layer,
         input_dim=output_dim,
+        add_device_load=add_device_load,
+        n_devices=cfg.system.n_devices,
+        add_progress=cfg.network.critic.add_progress,
         output_dim=8,
         _recursive_=False,
     )
@@ -228,6 +257,8 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
         print(f"Critic input keys: {critic_input_keys}")
     else:
         critic_input_keys = state_output_keys
+
+    critic_input_keys = ["observation"] + critic_input_keys
 
     _td_critic_output = td_nn.TensorDictModule(
         critic_output_module,

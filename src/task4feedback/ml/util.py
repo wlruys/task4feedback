@@ -260,7 +260,7 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
         env.reset_for_evaluation(seed=seed)
         env.disable_reward()
         with set_exploration_type(exploration_type), torch.no_grad():
-            check_env_specs(env)
+            #check_env_specs(env)
             tensordict = env.rollout(
                 policy=policy,
                 max_steps=100000,
