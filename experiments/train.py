@@ -125,7 +125,7 @@ def main(cfg: DictConfig):
             project=cfg.wandb.project,
             config=OmegaConf.to_container(cfg, resolve=True),
             name=cfg.wandb.name,
-            group=cfg.wandb.name,
+            group=cfg.wandb.group,
             # name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
             tags=cfg.wandb.tags,
