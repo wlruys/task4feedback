@@ -3,7 +3,9 @@ defaults:
   - initialization/orthogonal@initialization
 
 
-_target_: task4feedback.ml.models.CNNSingleStateNet
+_target_: task4feedback.ml.models.UnconditionedDilationState
 hidden_channels: 16
 width: NoNeedToChange
 length: NoNeedToChange
+minimum_resolution: 4
+debug: False

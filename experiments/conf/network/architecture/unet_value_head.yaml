@@ -1,0 +1,14 @@
+defaults:
+  - initialization/orthogonal@initialization.layer1
+  - initialization/orthogonal@initialization.layer2
+  - activation/leaky_relu@activation
+
+_target_: task4feedback.ml.models.OriginalUNetValueHead
+hidden_channels: 128
+layer_norm: true
+
+initialization:
+  layer1:
+    gain: 1.0
+  layer2:
+    gain: 1.0

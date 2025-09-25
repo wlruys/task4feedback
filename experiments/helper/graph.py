@@ -20,7 +20,7 @@ def make_graph_function(
     graph_cfg: GraphConfig, cfg: DictConfig
 ) -> Callable[[GraphConfig, DictConfig], Graph]:
     def make_graph(system: System):
-        mesh = instantiate(cfg.mesh, L=1, n=graph_cfg.n)
+        mesh = instantiate(cfg.mesh, L=1, n=graph_cfg.n, domain_ratio=graph_cfg.domain_ratio)
 
         if cfg.init.partitioner == "metis":
             partitioner = metis_geometry_partition
@@ -31,8 +31,24 @@ def make_graph_function(
 
         geom = build_geometry(mesh)
         graph = build_graph(geom, graph_cfg, system=system)
-        partition = partitioner(geom, nparts=cfg.init.nparts)
+        #partition = partitioner(geom, nparts=cfg.init.nparts)
         #partition = block_cyclic(geom)
+        partition = graph.initial_mincut_partition(
+            arch=DeviceType.GPU,
+            bandwidth=1000,
+            n_parts=4,
+            offset=0,
+        )
+        print(partition)
+
+        """ 
+        def initial_mincut_partition(
+        self,
+        arch: DeviceType = DeviceType.GPU,
+        bandwidth: int = 1000,
+        n_parts: int = 4,
+        offset: int = 1,  # 1 to ignore cpu
+    ):"""
 
         if cfg.init.gpu_only:
             partition = [x + 1 for x in partition]  # offset by 1 to ignore cpu

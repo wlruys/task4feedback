@@ -1,0 +1,14 @@
+defaults:
+  - architecture/rec_unet_state@layers.state
+  - architecture/rec_unet_policy_head@layers.actor
+  - architecture/rec_unet_value_head@layers.critic
+layers:
+  state:
+    hidden_channels: 16
+  actor:
+    hidden_channels: 16
+  critic:
+    hidden_channels: 128
+
+critic:
+  add_progress: True

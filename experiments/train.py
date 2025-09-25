@@ -58,7 +58,7 @@ def configure_training(cfg: DictConfig):
 
     observer = env.get_observer()
     feature_config = FeatureDimConfig.from_observer(observer)
-    model, lstm = create_td_actor_critic_models(cfg, feature_config)
+    model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
 
     def env_fn(eval: bool = False):
         return make_env(
@@ -76,6 +76,23 @@ def configure_training(cfg: DictConfig):
     logging_config = instantiate(cfg.logging)
 
     eval_config = instantiate(cfg.eval)
+
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    if cfg.wandb.enabled:
+        wandb.run.summary["model/parameters_total"] = int(total_params)
+        wandb.run.summary["model/parameters_trainable"] = int(trainable_params)
+        try:
+            arch_file = Path(HydraConfig.get().runtime.output_dir) / "model_arch.txt"
+            arch_file.write_text(str(model))
+            wandb.save(str(arch_file))
+        except Exception as e:
+            print(f"Failed to save model architecture: {e}")
+        try:
+            wandb.watch(model, log="all")
+        except Exception as e:
+            print(f"wandb.watch failed: {e}")
 
     if lstm is not None:
         run_ppo_lstm(
@@ -97,11 +114,11 @@ def configure_training(cfg: DictConfig):
             eval_config=eval_config,
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
-            seed=cfg.seed   ,
+            seed=cfg.seed
         )
 
 
-@hydra.main(config_path="conf", config_name="config.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
     if cfg.wandb.enabled:
         wandb.init(

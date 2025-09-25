@@ -1,7 +1,7 @@
 defaults:
   - architecture/vector_state_net@layers.state
-  - architecture/output_head@layers.actor
-  - architecture/output_head@layers.critic
+  - architecture/vector_policy_head@layers.actor
+  - architecture/vector_value_head@layers.critic
 
 layers:
   state:

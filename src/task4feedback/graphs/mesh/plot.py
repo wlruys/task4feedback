@@ -6,7 +6,7 @@ import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Literal 
 from .base import Cell, Edge
 from ..base import DataBlocks, DataKey
 from collections import defaultdict
@@ -14,22 +14,393 @@ from task4feedback.fastsim2 import TaskState
 import task4feedback.fastsim2 as fastsim
 import copy
 from ..base import EnvironmentState
-
+from dataclasses import dataclass, field
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 import wandb
 import os
+from pathlib import Path
 
-
-device_to_color = [
-    "black",
-    "red",
-    "green",
-    "blue",
-    "yellow",
-    "purple",
-    "orange",
-    "cyan",
+OKABE_ITO_COLORS = [
+    "#56B4E9",  
+    "#E69F00",  
+    "#009E73",  
+    "#0072B2",
+    "#CC79A7",    
+    "#D55E00",  
+    "#F0E442",  
+    "#000000",
 ]
 
+TRANSPARENT = np.array([0, 0, 0, 0], dtype=np.float32)
+WHITE = np.array([1, 1, 1, 1], dtype=np.float32)
+BLACK = np.array([0, 0, 0, 1], dtype=np.float32)
+
+device_to_color = OKABE_ITO_COLORS.copy()
+
+def create_okabe_ito_cmap():
+    return mcolors.ListedColormap(OKABE_ITO_COLORS, name='okabe_ito')
+
+def _auto_text_color(rgb: np.ndarray) -> np.ndarray:
+    lum = 0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2]
+    return np.where(lum > 0.55, "black", "white")
+
+@dataclass(slots=True)
+class ColorConfig:
+    # Device partition colors
+    device_colors: Optional[list[str]] = field(default_factory=lambda: OKABE_ITO_COLORS.copy())         
+    device_cmap: str | mcolors.Colormap = "tab20"     
+    unknown_color: str = "#8a8a8a"                     
+    running_color: str = "#808080"                     
+
+    # Duration shading
+    duration_cmap: str | mcolors.Colormap = "viridis" 
+    duration_mode: Literal["overlay", "to_white", "duration_only"] = "to_white"
+    duration_gamma: float = 0.4              
+    duration_alpha: float = 0.65                       
+    duration_percentile_max: float = 0.98             
+    ema_tau_frames: int = 5    
+
+@dataclass(slots=True)
+class PlotConfig:
+    fontsize: float = 25.0
+    use_labels: bool = False
+    use_blit: bool = False
+    use_duration_shading: bool = True
+    dpi: int = 300 
+    bitrate: int = 300 
+    figsize: tuple[float, float] = (8.0, 8.0)
+    video_seconds: int = 30
+    n_frames: int = 100
+
+
+class PercentileEMANormalizer:
+    def __init__(self, p: float = 0.98, tau: int = 30, eps: float = 1):
+        self.p = float(p)
+        self.tau = int(tau)
+        self.eps = float(eps)
+        self._vmax = None
+
+    def update_and_get(self, x: np.ndarray) -> float:
+        if x.size == 0:
+            return (self._vmax if self._vmax is not None else 1.0)
+        m = float(np.quantile(x, self.p)) if np.any(np.isfinite(x)) else 1.0
+        if self._vmax is None:
+            self._vmax = max(m, self.eps)
+        else:
+            self._vmax += (m - self._vmax) / max(self.tau, 1)
+            self._vmax = max(self._vmax, self.eps)
+        return self._vmax                
+
+def _get_cmap(name_or_obj) -> mcolors.Colormap:
+    return name_or_obj if isinstance(name_or_obj, mcolors.Colormap) else cm.get_cmap(name_or_obj)
+
+def _build_device_palette(n_devices: int, cfg: ColorConfig) -> np.ndarray:
+    unknown = np.array(mcolors.to_rgba(cfg.unknown_color), dtype=np.float32)
+    if cfg.device_colors is not None and len(cfg.device_colors) > 0:
+        listed = mcolors.ListedColormap(cfg.device_colors)
+        base = listed(np.linspace(0, 1, max(n_devices, len(cfg.device_colors)))).astype(np.float32)
+    else:
+        cmap = _get_cmap(cfg.device_cmap)
+        base = cmap(np.linspace(0, 1, max(n_devices, getattr(cmap, "N", n_devices)))).astype(np.float32)
+
+    palette = np.empty((n_devices + 1, 4), dtype=np.float32)
+    palette[0] = unknown
+    palette[1:1+n_devices] = base[:n_devices]
+    return palette
+
+@dataclass(slots=True)
+class EnvStaticState:
+    n_compute_tasks: int
+    n_data_tasks: int
+    ct_duration_us: np.ndarray
+    ct_device: np.ndarray
+    ct_cell: np.ndarray
+    ct_launch_time: np.ndarray
+    ct_complete_time: np.ndarray
+
+    dt_device: np.ndarray
+    dt_source: np.ndarray
+    dt_virtual: np.ndarray
+    dt_block: np.ndarray
+    dt_duration_us: np.ndarray
+
+@dataclass(slots=True)
+class EnvDynamicState:
+    ct_state: np.ndarray       
+    dt_state: np.ndarray
+    partition: np.ndarray 
+    last_duration: np.ndarray
+    last_label: list[str]
+    ct_running: np.ndarray 
+    ct_changed: np.ndarray 
+    time: int
+    last_time: int
+    last_cell_update: np.ndarray
+        
+
+def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
+    assert(env.simulator is not None)
+    sim = env.simulator
+    simulator_state = sim.state
+    task_runtime = simulator_state.get_task_runtime()
+    static_graph = simulator_state.get_tasks()
+
+    graph = env.get_graph()
+
+    n_compute_tasks = task_runtime.get_n_compute_tasks()
+    n_data_tasks = task_runtime.get_n_data_tasks()
+
+    ct_state = np.full((n_compute_tasks,), -1, dtype=np.int8)
+    dt_state = np.full((n_data_tasks,), -1, dtype=np.int8)
+
+    ct_device = np.full((n_compute_tasks,), -1, dtype=np.int32)
+    ct_duration_us = np.zeros((n_compute_tasks,), dtype=np.float32)
+    ct_launch_time = np.full((n_compute_tasks,), -1, dtype=np.int64)
+    ct_complete_time = np.full((n_compute_tasks,), -1, dtype=np.int64)
+
+    ct_cell = np.full((n_compute_tasks,), -1, dtype=np.int64)
+    ct_changed = np.zeros((n_compute_tasks,), dtype=bool)
+
+    dt_device = np.full((n_data_tasks,), -1, dtype=np.int32)
+    dt_source = np.full((n_data_tasks,), -1, dtype=np.int32)
+    dt_virtual = np.zeros((n_data_tasks,), dtype=bool)
+    dt_block = np.full((n_data_tasks,), -1, dtype=np.int64)
+    dt_duration_us = np.zeros((n_data_tasks,), dtype=np.float32)
+
+    for i in range(n_compute_tasks):
+        ct_device[i] = task_runtime.get_compute_task_mapped_device(i)
+        ct_duration_us[i] = task_runtime.get_compute_task_duration(i)
+        ct_cell[i] = graph.task_to_cell[i]
+        ct_launch_time[i] = task_runtime.get_compute_task_launched_time(i)
+        ct_complete_time[i] = task_runtime.get_compute_task_completed_time(i)
+
+    for i in range(n_data_tasks):
+        dt_device[i] = task_runtime.get_data_task_mapped_device(i)
+        dt_source[i] = task_runtime.get_data_task_source_device(i)
+        dt_virtual[i] = task_runtime.is_data_task_virtual(i)
+        dt_block[i] = static_graph.get_data_id(i)
+        dt_duration_us[i] = task_runtime.get_data_task_duration(i) if not dt_virtual[i] else 0.0
+
+    static_state = EnvStaticState(
+        n_compute_tasks=n_compute_tasks,
+        n_data_tasks=n_data_tasks,
+        ct_duration_us=ct_duration_us,
+        ct_cell=ct_cell,
+        ct_launch_time=ct_launch_time,
+        ct_complete_time=ct_complete_time,
+        ct_device=ct_device,
+        dt_device=dt_device,
+        dt_source=dt_source,
+        dt_virtual=dt_virtual,
+        dt_block=dt_block,    
+        dt_duration_us=dt_duration_us)
+
+    geom = env.get_graph().data.geometry
+    n_cells = len(geom.cells)
+    partition = np.full((n_cells,), -1, dtype=np.int32)
+    last_duration = np.full((n_cells,), 0.0, dtype=np.float32)
+    last_label = [""] * n_cells
+    ct_running = np.zeros((n_compute_tasks,), dtype=bool)
+
+    last_cell_update = np.full((n_cells,), -1, dtype=np.int64)
+
+    dynamic_state = EnvDynamicState(
+        last_time = -1,
+        time = 0,
+        ct_state=ct_state,
+        dt_state=dt_state,
+        partition=partition,
+        last_duration=last_duration,
+        last_label=last_label,
+        ct_running=ct_running,
+        ct_changed=ct_changed,
+        last_cell_update=last_cell_update,
+    )
+
+    return static_state, dynamic_state
+
+def _update_dynamic_state(env, time: int, static_state: EnvStaticState, dynamic_state: EnvDynamicState, gather_data_tasks: bool = True):
+    assert(env.simulator is not None)
+    sim = env.simulator
+    simulator_state = sim.state
+    task_runtime = simulator_state.get_task_runtime()
+    assert(time <= sim.time)
+
+    n_compute_tasks = static_state.n_compute_tasks
+    n_data_tasks = static_state.n_data_tasks
+
+    prev_state = dynamic_state.ct_state.copy()
+
+    dynamic_state.ct_state.fill(-1)
+    dynamic_state.ct_running.fill(0)
+
+    dynamic_state.last_time = dynamic_state.time
+    dynamic_state.time = time
+
+    for i in range(n_compute_tasks):
+        dynamic_state.ct_state[i] = task_runtime.get_compute_task_state_at_time(i, time)
+
+    if gather_data_tasks:
+        dynamic_state.dt_state.fill(-1)
+        for i in range(n_data_tasks):
+            dynamic_state.dt_state[i] = task_runtime.get_data_task_state_at_time(i, time)
+
+    dynamic_state.ct_changed.fill(False)
+    dynamic_state.ct_changed = (dynamic_state.ct_state != prev_state)
+    dynamic_state.ct_running = (dynamic_state.ct_state == fastsim.TaskState.LAUNCHED)
+
+    return dynamic_state
+
+
+def _update_initial_partition(env, current_time: int, static_state: EnvStaticState, dynamic_state: EnvDynamicState, *, labels: bool = False):
+    graph = env.get_graph()
+    cell_locations = np.asarray(graph.get_cell_locations(as_dict=False), dtype=np.int32)
+
+
+    if cell_locations is None or len(cell_locations) == 0:
+        print("No initial partition found, using default partition.")
+        dynamic_state.partition.fill(-1)
+        dynamic_state.last_duration.fill(0.0)
+        dynamic_state.last_label = [""] * len(dynamic_state.partition)
+        return dynamic_state.partition, dynamic_state.last_duration, dynamic_state.last_label, np.empty((0,), dtype=np.int64)
+
+    if len(cell_locations) != len(dynamic_state.partition):
+        raise ValueError(f"Cell locations length {len(cell_locations)} does not match partition length {len(dynamic_state.partition)}")
+    
+    dynamic_state.partition[:] = cell_locations
+
+    dynamic_state.last_duration.fill(0.0)
+    dynamic_state.last_label = [""] * len(dynamic_state.partition)
+    dynamic_state.last_cell_update.fill(current_time)
+    changed_cells = np.arange(len(dynamic_state.partition), dtype=np.int64)
+
+    if labels:
+        for i, cell in enumerate(dynamic_state.partition):
+            if 0 <= cell < len(graph.partitions):
+                level = graph.task_to_level.get(int(i), -1)
+                if hasattr(graph, "task_to_direction"):
+                    direction = graph.task_to_direction.get(int(i), -2)
+                    dynamic_state.last_label[i] = f"{level}:{direction}"
+                else:
+                    dynamic_state.last_label[i] = f"{level}"
+    else:
+        dynamic_state.last_label = [""] * len(dynamic_state.partition)
+
+    dynamic_state.ct_running.fill(False)
+    dynamic_state.ct_changed.fill(False)
+    dynamic_state.ct_state.fill(-1)
+    dynamic_state.dt_state.fill(-1)
+    dynamic_state.ct_running = (dynamic_state.ct_state == fastsim.TaskState.LAUNCHED)
+
+    return dynamic_state.partition, dynamic_state.last_duration, dynamic_state.last_label, changed_cells
+
+
+def _update_dynamic_paritition(env, current_time: int,
+                                    static_state: EnvStaticState,
+                                    dynamic_state: EnvDynamicState,
+                                    *,
+                                    labels: bool = False):
+    graph = env.get_graph()
+    dy = dynamic_state
+
+    changed_idx = np.where(
+        dy.ct_changed & (
+            (dy.ct_state == fastsim.TaskState.COMPLETED) |
+            (dy.ct_state == fastsim.TaskState.LAUNCHED)
+        )
+    )[0]
+    
+    if changed_idx.size == 0:
+        return dy.ct_running, dy.partition, dy.last_duration, dy.last_label, np.empty((0,), dtype=np.int64)
+
+    launch_time = static_state.ct_launch_time[changed_idx]
+    completed_time = static_state.ct_complete_time[changed_idx]
+    
+    valid_completed_mask = completed_time <= current_time
+    valid_launched_mask = launch_time <= current_time
+
+    launch_time[~valid_launched_mask] = -1
+    completed_time[~valid_completed_mask] = -1
+
+    changed_cells = static_state.ct_cell[changed_idx]
+    changed_devices = static_state.ct_device[changed_idx]
+    changed_durations = static_state.ct_duration_us[changed_idx]
+
+    order = np.lexsort((completed_time, launch_time))
+    changed_cells = changed_cells[order]
+    changed_devices = changed_devices[order]
+    changed_tasks = changed_idx[order]
+    changed_durations = changed_durations[order]
+
+    for cell, device, task, dur in zip(changed_cells, changed_devices, changed_tasks, changed_durations):
+        if 0 <= cell < dy.partition.size:
+            dy.partition[cell] = device
+            dy.last_duration[cell] = float(dur)
+            dy.last_cell_update[cell] = int(current_time)
+            if labels:
+                level = graph.task_to_level.get(int(task), -1)
+                if hasattr(graph, "task_to_direction"):
+                    direction = graph.task_to_direction.get(int(task), -2)
+                    dy.last_label[cell] = f"{level}:{direction}"
+                else:
+                    dy.last_label[cell] = f"{level}"
+
+    return dy.ct_running, dy.partition, dy.last_duration, dy.last_label, changed_cells
+
+def _create_axes(_geom, _figsize=(8,8), pad=0.05):
+    fig, ax = plt.subplots(figsize=_figsize)
+    pts = _geom.cell_points
+    xmin, ymin = np.min(pts, axis=0)
+    xmax, ymax = np.max(pts, axis=0)
+    dx, dy = xmax - xmin, ymax - ymin
+    ax.set_xlim(xmin - pad * dx, xmax + pad * dx)
+    ax.set_ylim(ymin - pad * dy, ymax + pad * dy)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    return fig, ax
+
+def _save_animation(ani, path: str, dpi: Optional[int] = None, bitrate: Optional[int] = None):
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        fps = getattr(ani, "_fps", 10)
+        writer = animation.FFMpegWriter(
+            fps=fps,
+            codec="libx264",
+            bitrate=bitrate if bitrate is not None else -1,
+            extra_args=[
+                "-preset", "veryfast",
+                "-crf", "23",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                "-g", "24",
+                "-threads", str(os.cpu_count() or 2),
+                "-bf", "2",
+                "-refs", "2",
+                "-x264-params", "sync-lookahead=0",
+            ],
+        )
+        ani.save(path, writer=writer, dpi=dpi)
+    finally:
+        try:
+            if hasattr(ani, "_disconnect"):
+                ani._disconnect()
+        except Exception:
+            pass
+        try:
+            if hasattr(ani, "event_source") and ani.event_source:
+                ani.event_source.stop()
+        except Exception:
+            pass
+        fig = getattr(ani, "_fig_ref", None)
+        try:
+            if fig is not None:
+                plt.close(fig)
+            else:
+                plt.close("all")
+        except Exception:
+            pass
+        del ani
 
 def plot_edges(ax, points, edge_array, color="k", linewidth=1, alpha=0.5):
     lines = points[edge_array]  # shape: (num_edges, 2, 2)
@@ -61,6 +432,183 @@ def plot_cells(
                 centroid[0], centroid[1], f"{i}", ha="center", va="center", zorder=4
             )
 
+
+def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = None, plot_cfg: Optional[PlotConfig] = None):
+    color_cfg = color_cfg if color_cfg is not None else ColorConfig()
+    plot_cfg = plot_cfg if plot_cfg is not None else PlotConfig()
+    video_seconds = plot_cfg.video_seconds
+    n_frames = plot_cfg.n_frames
+
+
+    static_state, dynamic_state = _build_state(env)
+    n_devices = int(max(0, static_state.ct_device.max() + 1))
+
+
+    device_palette_rgba = _build_device_palette(n_devices, color_cfg)
+    duration_cmap = _get_cmap(color_cfg.duration_cmap)
+    dur_norm = PercentileEMANormalizer(
+            p=color_cfg.duration_percentile_max,
+            tau=color_cfg.ema_tau_frames
+    )
+
+    _update_dynamic_state(env, env.simulator.time, static_state, dynamic_state)
+    _update_initial_partition(env, 0, static_state, dynamic_state, labels=plot_cfg.use_labels)
+
+    geom = env.get_graph().data.geometry
+
+    fig, ax = _create_axes(geom, _figsize=(8,8), pad=0.05)
+
+    points = geom.cell_points
+    cells = geom.cells 
+    edges = geom.edges
+    polys =  points[cells]
+
+    face_colors = np.zeros((len(polys), 4), dtype=np.float32)
+    edge_colors = np.zeros((len(edges), 4), dtype=np.float32)
+    line_width = np.zeros((len(edges),), dtype=np.float32)
+
+    part_index = (dynamic_state.partition.astype(np.int64) + 1).clip(0, device_palette_rgba.shape[0]-1)
+    base_colors = device_palette_rgba[part_index]                 
+    face_colors[:] = base_colors
+    edge_colors[:] = mcolors.to_rgba("black")
+    line_width[:] = 3.0
+    
+    interior_polys = PolyCollection(
+        polys, facecolors=face_colors, edgecolors=edge_colors, linewidths=line_width, zorder=9, alpha=1, antialiased=False,
+    )
+    interior_polys.set_animated(True)
+
+    centroids = polys.mean(axis=1)  # (n_cells, 2)
+    label_artists = None
+    if plot_cfg.use_labels:
+        label_artists = np.empty((len(polys),), dtype=object)
+        for i, (cx, cy) in enumerate(centroids):
+            t = ax.text(cx, cy, "", ha="center", va="center",
+                        fontsize=plot_cfg.fontsize, zorder=12, color="black", alpha=0.9)
+            t.set_animated(True)
+            label_artists[i] = t
+
+    ax.add_collection(interior_polys)
+
+    shade_fc = interior_polys.get_facecolors()
+    shade_ec = interior_polys.get_edgecolors()
+    shade_lw = interior_polys.get_linewidths()
+
+    fps = max(1, round(n_frames / max(1, video_seconds)))
+    
+
+    T = int(env.simulator.time)
+    if n_frames <= 1:
+        time_list = np.array([T], dtype=np.int64)
+    else:
+        time_list = np.rint(np.linspace(0, T, n_frames)).astype(np.int64)
+        time_list[-1] = T
+    time_interval = int(env.simulator.time / n_frames)
+
+    background = None 
+
+    def frame_builder(frame):
+        time = time_list[frame]
+        #print(f"Frame {frame+1}/{n_frames}, time={time:.2f}/{env.simulator.time:.2f}")
+        _update_dynamic_state(env, time, static_state, dynamic_state, gather_data_tasks=False)
+        _, _, _, _, changed_cells = _update_dynamic_paritition(env, time, static_state, dynamic_state, labels=plot_cfg.use_labels)
+
+        return dynamic_state.ct_running, dynamic_state.partition, dynamic_state.last_duration, dynamic_state.last_label, changed_cells
+
+    def _cache_bg(_event=None):
+        nonlocal background
+        fig.canvas.draw()
+        if plot_cfg.use_blit:
+            background = fig.canvas.copy_from_bbox(ax.bbox)
+
+    cid_resize = fig.canvas.mpl_connect("resize_event", _cache_bg)
+
+    def _init():
+        nonlocal background
+        fig.canvas.draw()
+        if plot_cfg.use_blit:
+            background = fig.canvas.copy_from_bbox(ax.bbox)
+
+        interior_polys.set_facecolors(shade_fc)
+
+        if plot_cfg.use_labels and label_artists is not None:
+            return tuple([interior_polys, *label_artists.tolist()])
+        return (interior_polys,)
+    
+    max_duration = 100
+
+    def _update(frame):
+        nonlocal background 
+        nonlocal shade_fc
+        nonlocal max_duration
+
+        ct_running, partition, last_duration, last_label, changed_cells = frame_builder(frame)
+
+        part_index = (partition.astype(np.int64) + 1).clip(0, device_palette_rgba.shape[0]-1)
+        base_colors = device_palette_rgba[part_index]                 
+        shade_fc[:] = base_colors                                      
+
+        if plot_cfg.use_duration_shading:
+            vmax = dur_norm.update_and_get(last_duration)
+            norm = np.clip((last_duration / vmax), 0.0, 1.0)
+            norm = norm[:, None]
+            
+            norm[last_duration <= 0.0] = 1.0
+
+            if frame<=1:
+                shade_fc[:, :3] = base_colors[:, :3]
+            else:
+                if color_cfg.duration_mode == "overlay":
+                    dur_colors = duration_cmap(norm.squeeze()).astype(np.float32)  
+                    a = (color_cfg.duration_alpha * norm).astype(np.float32)       
+                    shade_fc[:, :3] = (1.0 - a) * shade_fc[:, :3] + a * dur_colors[:, :3]
+                elif color_cfg.duration_mode == "to_white":
+                    WHITE = np.array([1, 1, 1], dtype=np.float32)
+                    a = norm ** float(color_cfg.duration_gamma)
+                    shade_fc[:, :3] = (a) * shade_fc[:, :3] + (1.0 - a) * WHITE[None, :]
+                elif color_cfg.duration_mode == "duration_only":
+                    dur_colors = duration_cmap(norm.squeeze()).astype(np.float32)
+                    shade_fc[:, :3] = dur_colors[:, :3]
+
+
+        running_task_idx = np.where(ct_running)[0]
+        if running_task_idx.size > 0:
+            running_cells = static_state.ct_cell[running_task_idx]
+            running_cells = running_cells[(running_cells >= 0) & (running_cells < shade_fc.shape[0])]
+            if running_cells.size > 0:
+                shade_fc[running_cells] = mcolors.to_rgba(color_cfg.running_color)
+
+        interior_polys.set_facecolors(shade_fc)
+
+        artists = [interior_polys]
+        if plot_cfg.use_labels and label_artists is not None and changed_cells.size > 0:
+            text_colors = _auto_text_color(shade_fc[:, :3])
+            for c in changed_cells:
+                new_txt = dynamic_state.last_label[c]
+                if new_txt is None:
+                    new_txt = ""
+                if label_artists[c].get_text() != new_txt:
+                    label_artists[c].set_text(new_txt)
+                label_artists[c].set_color(text_colors[c])
+                artists.append(label_artists[c])
+
+        return tuple(artists)
+
+    ani = animation.FuncAnimation(
+        fig, _update, init_func=_init, 
+        frames=n_frames, 
+        interval=time_interval, 
+        blit=bool(plot_cfg.use_blit),
+        repeat=False, 
+        cache_frame_data=False,
+    )
+
+    ani._fig_ref = fig 
+    ani._nframes = n_frames
+    ani._fps = fps 
+    ani._disconnect_resize = lambda: fig.canvas.mpl_disconnect(cid_resize)
+
+    _save_animation(ani, path=path, dpi=plot_cfg.dpi, bitrate=plot_cfg.bitrate)
 
 @dataclass
 class MeshPlotConfig:
@@ -215,58 +763,6 @@ def label_cells(ax, points, cells, cell_labels, z_order=8):
 
     return artists
 
-
-def highlight_cells_edges(
-    ax, points, cells, unique_edges, cell_highlights, edge_highlights, z_order=8
-):
-    """
-    Highlight cells and edges.
-
-    Parameters:
-      ax             : The matplotlib axis.
-      points         : Array of node coordinates.
-      cells          : NumPy array of cell connectivity.
-      unique_edges   : NumPy array of unique edge definitions (pairs of vertex indices).
-      cell_highlights: dict mapping color to list of cell indices.
-      edge_highlights: dict mapping color to list of edge indices.
-
-    Returns:
-      A list of matplotlib artist objects for later removal.
-    """
-    artists = []
-    # Highlight cells with custom colors (always drawn on top)
-    for color, cell_ids in cell_highlights.items():
-        for cid in cell_ids:
-            poly_coords = points[cells[cid]]
-            patch = Polygon(
-                poly_coords,
-                closed=True,
-                fill=False,
-                edgecolor=color,
-                linewidth=6,
-                alpha=0.8,
-                zorder=z_order,
-            )
-            ax.add_patch(patch)
-            artists.append(patch)
-
-    # Highlight edges with custom colors
-    for color, edge_ids in edge_highlights.items():
-        for eid in edge_ids:
-            # Each eid refers to an index in unique_edges
-            edge = unique_edges[eid]
-            v1, v2 = points[edge[0]], points[edge[1]]
-            (line,) = ax.plot(
-                [v1[0], v2[0]],
-                [v1[1], v2[1]],
-                color=color,
-                linewidth=3,
-                zorder=z_order - 1,
-            )
-            artists.append(line)
-    return artists
-
-
 def random_color(map: Optional[dict] = None):
     """
     Generate a random color string.
@@ -285,909 +781,31 @@ def random_color(map: Optional[dict] = None):
             map[color] = True
             return color
 
-
-def highlight_boundary(ax, geom, side_highlights, zorder=6, h=0.2):
-    """
-    Highlight each with different cell sides.
-
-    Parameters:
-      ax              : The matplotlib axis.
-      side_highlights : Dict mapping (edge, cell) index to color.
-      linewidth       : Line width for the highlighted segments.
-      zorder          : Drawing order for the highlighted segments.
-      h               : Width of the highlighted region.
-
-    Returns:
-      A list of matplotlib artist objects representing the drawn segments.
-    """
-    artists = []
-    color_list = []
-    points = geom.cell_points
-    edges = geom.edges
-    cells = geom.cells
-
-    # preallocate numpy array for all verts 
-    c = 0
-    for edge in side_highlights:
-        for cell in side_highlights[edge]:
-            c += 1
-    verts = np.zeros((c, 4, 2))
-    count = 0
-
-    for eid in side_highlights:
-        # Unpack vertex indices and cell ids
-        v1_idx, v2_idx = edges[eid]
-        v1 = points[int(v1_idx)]
-        v2 = points[int(v2_idx)]
-
-        for cell in side_highlights[eid]:
-            color = side_highlights[eid][cell]
-
-            # Shade a region parallel to the edge but closer to the center of the cell
-            mid_x = (v1[0] + v2[0]) / 2
-            mid_y = (v1[1] + v2[1]) / 2
-
-            centroid = np.mean(points[geom.cells[cell]][:, :2], axis=0)
-            diff = (centroid - np.array([mid_x, mid_y])) * h
-
-            p1 = np.array([v1[0] + diff[0], v1[1] + diff[1]])
-            p2 = np.array([v2[0] + diff[0], v2[1] + diff[1]])
-
-            verts[count][:] = np.array(
-                [[v1[0], v1[1]], [p1[0], p1[1]], [p2[0], p2[1]], [v2[0], v2[1]]]
-            )
-            color_list.append(color)
-            count += 1
-
-    collection = PolyCollection(verts, facecolors=color_list, alpha=0.8)
-    ax.add_collection(collection)
-    artists.append(collection)
-
-    return artists
-
-
-def animate_highlights(
-    fig,
-    ax,
-    geom,
-    highlight_sequence,
-    interval=None,
-    z_order=8,
-    device_to_color=None,
-    video_seconds=15,
-):
-    points, cells, unique_edges = geom.cell_points, geom.cells, geom.edges
-
-    polys = points[cells]
-    n_cells = len(cells)
-
-    if device_to_color is None:
-        cmap = plt.get_cmap("tab10")
-        device_rgba = [cmap(i / max(1, 9)) for i in range(10)]
-    elif isinstance(device_to_color, list):
-        device_rgba = [mcolors.to_rgba(c) for c in device_to_color]
-    else:  
-        cmap = device_to_color
-        device_rgba = [cmap(i / max(1, 9)) for i in range(10)]
-
-    shade_collection = PolyCollection(
-        polys,
-        facecolors=[(0, 0, 0, 0)] * n_cells,  # updated per frame
-        edgecolors="none",
-        alpha=0.5,
-        zorder=z_order - 1,
-    )
-    ax.add_collection(shade_collection)
-
-    active_outlines = []
-    for i in range(n_cells):
-        patch = Polygon(
-            polys[i],
-            closed=True,
-            fill=False,
-            edgecolor="none",
-            linewidth=6,
-            alpha=0.8,
-            zorder=z_order,
-        )
-        patch.set_visible(False)
-        ax.add_patch(patch)
-        active_outlines.append(patch)
-
-    pair_indices = {}
-    verts_list = []
-    colors_list = []
-
-    h = 0.2
-    for eid, cell_list in geom.edge_cell_dict.items():
-        v1_idx, v2_idx = unique_edges[eid]
-        v1 = points[int(v1_idx)]
-        v2 = points[int(v2_idx)]
-        mid = (v1 + v2) / 2.0
-        for cid in cell_list:
-            centroid = polys[cid].mean(axis=0)
-            diff = (centroid - mid) * h
-            p1 = v1 + diff
-            p2 = v2 + diff
-            verts_list.append(np.array([v1, p1, p2, v2]))
-            colors_list.append((0, 0, 0, 0))
-            pair_indices[(eid, cid)] = len(verts_list) - 1
-
-    if verts_list:
-        boundary_collection = PolyCollection(
-            np.array(verts_list),
-            facecolors=colors_list,
-            alpha=0.8, 
-            zorder=z_order + 6,
-        )
-        ax.add_collection(boundary_collection)
-    else:
-        boundary_collection = None
-
-    text_objects = []
-    for i in range(n_cells):
-        centroid = polys[i].mean(axis=0)
-        txt = ax.text(
-            centroid[0],
-            centroid[1],
-            "",
-            fontsize=25,
-            ha="center",
-            va="center",
-            color="black",
-            zorder=z_order,
-        )
-        txt.set_visible(False)
-        text_objects.append(txt)
-
-    def update(frame):
-        (
-            cell_highlights,
-            edge_highlights,
-            boundary_highlights,
-            cell_labels,
-            partition,
-        ) = highlight_sequence[frame % len(highlight_sequence)]
-
-        # 1) Update shaded partition colors (device of last task that used cell)
-        shade_colors = [device_rgba[partition[i]] for i in range(n_cells)]
-        shade_collection.set_facecolors(shade_colors)
-
-        for patch in active_outlines:
-            patch.set_visible(False)
-        for color, cell_ids in cell_highlights.items():
-            for cid in cell_ids:
-                if 0 <= cid < n_cells:
-                    patch = active_outlines[cid]
-                    patch.set_edgecolor(color)
-                    patch.set_visible(True)
-
-        #Update boundary transfer highlights as colored slanted quads
-        if boundary_collection is not None:
-            fc = boundary_collection.get_facecolors()
-            # set all to transparent
-            if len(fc) > 0:
-                fc[:] = (0, 0, 0, 0)
-            for eid, celldict in boundary_highlights.items():
-                for cid, color in celldict.items():
-                    idx = pair_indices.get((eid, cid))
-                    if idx is not None and 0 <= idx < len(fc):
-                        fc[idx] = mcolors.to_rgba(color)
-            boundary_collection.set_facecolors(fc)
-
-        #Update labels to show the label of the last task that used the cell
-        for txt in text_objects:
-            txt.set_visible(False)
-        for label, cell_ids in cell_labels.items():
-            for cid in cell_ids:
-                if 0 <= cid < n_cells:
-                    t = text_objects[cid]
-                    t.set_text(f"{label}")
-                    t.set_visible(True)
-
-        return [] 
-
-    if interval is None:
-        interval = int(video_seconds * 1000 / len(highlight_sequence))
-
-    ani = animation.FuncAnimation(
-        fig,
-        update,
-        frames=len(highlight_sequence),
-        interval=interval,
-        blit=False,
-        repeat=False,
-    )
-
-    return ani
-
-
-def animate_state_list(graph, state_list, figsize=(8, 8), video_seconds=15, durations: bool = False):
-    geom = graph.data.geometry
-    fig, ax = create_mesh_plot(geom, figsize=figsize)
-    highlight_sequence = []
-    last_level_label = {}
-    last_compute_duration = {}
-    last_data_duration = {}
-    last_partition = graph.get_cell_locations(as_dict=False)
-    s = 0
-
-    def fixed_scale(value, min=0.0, max=2000.0):
-        if max <= min:
-            return 0
-        v = np.clip(float(value), min, max)
-        return int(round((v - min) / (max - min) * 10))
-
-    for state in state_list:
-        cell_highlights = defaultdict(list)
-        cell_labels = defaultdict(list)
-
-        for state_type, tasks in state.compute_tasks_by_state.items():
-            for task in tasks:
-                cell_id = graph.task_to_cell[task]
-
-                if cell_id < len(graph.data.geometry.cells):
-
-                    if state_type == fastsim.TaskState.COMPLETED:
-                        label = graph.task_to_level[task]
-                        mapped_device = state.compute_task_mapping_dict[task]
-                        if hasattr(graph, "task_to_direction"):
-                            direction = graph.task_to_direction[task]
-                            label = f"{label} ({direction})"
-                        last_level_label[cell_id] = label
-                        last_partition[cell_id] = mapped_device
-                        last_compute_duration[cell_id] = state.compute_task_durations[task]
-                    elif state_type == fastsim.TaskState.LAUNCHED:
-                        mapped_device = state.compute_task_mapping_dict[task]
-                        cell_highlights[device_to_color[mapped_device]].append(cell_id)
-
-                        label = graph.task_to_level[task]
-                        if hasattr(graph, "task_to_direction"):
-                            direction = graph.task_to_direction[task]
-                            label = f"{label} ({direction})"
-
-                        last_level_label[cell_id] = label
-                        last_partition[cell_id] = mapped_device
-                        last_compute_duration[cell_id] = state.compute_task_durations[task]
-
-
-        edge_highlights = defaultdict(lambda: list())
-        boundary_highlights = defaultdict(lambda: dict())
-
-        for state_type, tasks in state.data_tasks_by_state.items():
-            for task in tasks:
-                if state_type == fastsim.TaskState.LAUNCHED:
-                    block_id = state.data_task_block[task]
-                    obj = graph.data.get_key(block_id)
-                    if isinstance(obj, Cell) or isinstance(obj, Edge):
-                        continue
-                    elif isinstance(obj, DataKey):
-                        edge = obj.object
-                        if isinstance(edge, Edge):
-                            cell = obj.id[0]
-                            edge_id = edge.id
-                            cell_id = cell.id
-                            target_device = state.data_task_mapping_dict[task]
-                            boundary_highlights[edge_id].update(
-                                {cell_id: device_to_color[target_device]}
-                            )
-
-
-        if durations:
-            for cellid, duration in last_compute_duration.items():
-                color_value = fixed_scale(duration, min=0.0, max=2000.0)
-                cell_labels[color_value].append(cellid)
-                #print(f"Cell {cellid} duration {duration} color value {color_value}")
-                #cell_highlights[f"#{color_value:02x}00{255 - color_value:02x}"].append(cellid)
-        else:
-            for cellid, level in last_level_label.items():
-                cell_labels[level].append(cellid)
-
-        highlight_sequence.append(
-            (
-                cell_highlights,
-                edge_highlights,
-                boundary_highlights,
-                cell_labels,
-                copy.deepcopy(last_partition),
-            )
-        )
-
-    # Update title with time information
-    def update_title():
-        # Create update_title.frame attribute if it doesn't exist
-        if not hasattr(update_title, "frame"):
-            update_title.frame = 0
-        update_title.frame += 1
-        update_title.frame %= len(state_list)
-        ax.set_title(f"Simulation Time: {state_list[update_title.frame].time}μs")
-
-    update_title.frame = 0
-    ani = animate_highlights(
-        fig, ax, geom, highlight_sequence, device_to_color=device_to_color, video_seconds=video_seconds
-    )
-    ani.event_source.add_callback(update_title)
-    return ani
-def animate_data_flow_durations_state_list(
-    graph,
-    state_list,
-    figsize=(8, 8),
-    video_seconds=15,
-    show_labels: bool = False,
-    inbound_cmap_name: str = "Blues",
-    outbound_cmap_name: str = "Oranges",
-    aggregate_cmap_name: str = "Greys",
-    # robust scaling
-    robust: bool = True,
-    robust_low: float = 5.0,
-    robust_high: float = 95.0,
-    # optional explicit bounds (microseconds); if None, inferred robustly
-    in_min_us: float | None = None,
-    in_max_us: float | None = None,
-    out_min_us: float | None = None,
-    out_max_us: float | None = None,
-    agg_min_us: float | None = None,
-    agg_max_us: float | None = None,
-    # diagnostics
-    warn_mismatch: bool = False,
-):
-    """
-    Visualize non-virtual data-task durations flowing INTO and OUT OF each cell.
-
-    Key fixes vs. earlier attempt:
-      - PERSISTENCE: edge highlights persist using the LAST-SEEN COMPLETED duration
-        per (edge_id, cell_id) pair; recolored every frame (no flicker).
-      - VALIDATION: only draw (edge_id, cell_id) pairs that actually exist in
-        geom.edge_cell_dict, ensuring animate_highlights pair indexing matches.
-      - DIRECTION RESOLUTION: if both inbound and outbound exist for a pair at
-        draw time, we render the direction with the larger duration deterministically.
-
-    Semantics per frame:
-      - Cell owner device = last device that has LAUNCHED or COMPLETED a compute task
-        on that cell; initialized from graph.get_cell_locations(as_dict=False).
-      - For each COMPLETED, non-virtual data task bound to a (edge, cell) block:
-          inbound  if target_device == owner_device
-          outbound if source_device == owner_device and target_device != owner_device
-      - For each cell, the interior fill encodes aggregate traffic intensity:
-          sum_over_edges( last_in(edge,cell) + last_out(edge,cell) )
-        via a grayscale (0..10 bins; 0 = no data).
-      - Boundary quads near edges encode the *directional* flow with a color:
-          inbound -> Blues, outbound -> Oranges, intensity scaled by duration.
-        If both exist for a pair, draw the larger.
-      - Optional labels show per-cell sums "in: Xμs / out: Yμs".
-
-    Returns
-    -------
-    matplotlib.animation.FuncAnimation
-    """
-    import numpy as _np
-    import matplotlib.pyplot as _plt
-    import matplotlib.colors as _mcolors
-    from collections import defaultdict as _dd
-
-    if not state_list:
-        raise ValueError("animate_data_flow_durations_state_list: state_list is empty.")
-
-    geom = graph.data.geometry
-    fig, ax = create_mesh_plot(geom, figsize=figsize)
-
-    n_cells = len(geom.cells)
-
-    # ---------- Helpers ----------
-
-    # Valid (edge, cell) pairs according to the geometry used by animate_highlights
-    valid_pairs = set()
-    for eid, cell_list in getattr(geom, "edge_cell_dict", {}).items():
-        for cid in cell_list:
-            if 0 <= cid < n_cells:
-                valid_pairs.add((eid, cid))
-
-    def _get_edge_cell_from_block(block_id):
-        """
-        Try to recover (edge_id, cell_id) from a data block.
-        Only return pairs that are valid according to geom.edge_cell_dict.
-        """
-        obj = graph.data.get_key(block_id)
-        # Match your prior convention: DataKey whose .object is Edge,
-        # and obj.id[0] is the Cell on the receiving side.
-        if isinstance(obj, DataKey):
-            edge = obj.object
-            if isinstance(edge, Edge):
-                cell = obj.id[0]
-                # cell may be an object or an int id
-                cid = getattr(cell, "id", cell)
-                eid = getattr(edge, "id", edge)
-                pair = (int(eid), int(cid))
-                return pair if pair in valid_pairs else None
-        return None
-
-    def _robust_bounds(arr, lo, hi):
-        if len(arr) == 0:
-            return (0.0, 1.0)
-        a = _np.asarray(arr, dtype=float)
-        if robust and len(a) >= 3:
-            return float(_np.percentile(a, lo)), float(_np.percentile(a, hi))
-        return float(_np.min(a)), float(_np.max(a))
-
-    def _fix(lo, hi):
-        if not _np.isfinite(lo): lo = 0.0
-        if not _np.isfinite(hi) or hi <= lo: hi = lo + 1.0
-        return lo, hi
-
-    def _bin(value, lo, hi, bins=10):
-        if value is None:
-            return 0
-        v = float(_np.clip(value, lo, hi))
-        x = (v - lo) / (hi - lo)
-        b = int(round(x * bins))
-        return max(1, min(b, bins))
-
-    # ---------- Pass 1: scan to establish scales ----------
-
-    # Track evolving owner per cell
-    owner = graph.get_cell_locations(as_dict=False).copy()
-
-    # Persistent last-seen durations per (edge, cell)
-    last_in_pair = {}   # (eid,cid) -> dur_us
-    last_out_pair = {}  # (eid,cid) -> dur_us
-
-    # For robust scaling across the timeline
-    seen_in, seen_out, seen_agg = [], [], []
-
-    mismatches = 0
-
-    for state in state_list:
-        # Update owners based on compute events
-        for stype, tasks in state.compute_tasks_by_state.items():
-            if stype in (fastsim.TaskState.LAUNCHED, fastsim.TaskState.COMPLETED):
-                for t in tasks:
-                    cid = graph.task_to_cell[t]
-                    if 0 <= cid < n_cells:
-                        owner[cid] = state.compute_task_mapping_dict[t]
-
-        # Update last-seen in/out per pair from COMPLETED, non-virtual data tasks
-        for stype, tasks in state.data_tasks_by_state.items():
-            if stype != fastsim.TaskState.COMPLETED:
-                continue
-            for dt in tasks:
-                if state.data_task_virtual.get(dt, False):
-                    continue
-                pr = _get_edge_cell_from_block(state.data_task_block.get(dt))
-                if pr is None:
-                    mismatches += 1
-                    continue
-                eid, cid = pr
-                own = owner[cid]
-                tgt = state.data_task_mapping_dict.get(dt)
-                src = state.data_task_source_device.get(dt)
-                dur = float(state.data_task_durations.get(dt, 0.0))
-
-                if tgt == own:
-                    last_in_pair[(eid, cid)] = dur
-                    seen_in.append(dur)
-                elif src == own and tgt != own:
-                    last_out_pair[(eid, cid)] = dur
-                    seen_out.append(dur)
-                # else: irrelevant to that cell's current owner
-
-        # Aggregate per cell for scale
-        cell_in = _dd(float)
-        cell_out = _dd(float)
-        for (eid, cid), dur in last_in_pair.items():
-            cell_in[cid] += dur
-        for (eid, cid), dur in last_out_pair.items():
-            cell_out[cid] += dur
-        for cid in range(n_cells):
-            agg = cell_in.get(cid, 0.0) + cell_out.get(cid, 0.0)
-            if agg > 0:
-                seen_agg.append(agg)
-
-    if warn_mismatch and mismatches > 0:
-        print(f"[animate_data_flow_durations_state_list] "
-              f"Skipped {mismatches} data blocks not mapping to valid (edge,cell) pairs.")
-
-    # Determine bounds
-    if in_min_us is None or in_max_us is None:
-        in_lo, in_hi = _robust_bounds(seen_in, robust_low, robust_high)
-    else:
-        in_lo, in_hi = float(in_min_us), float(in_max_us)
-
-    if out_min_us is None or out_max_us is None:
-        out_lo, out_hi = _robust_bounds(seen_out, robust_low, robust_high)
-    else:
-        out_lo, out_hi = float(out_min_us), float(out_max_us)
-
-    if agg_min_us is None or agg_max_us is None:
-        agg_lo, agg_hi = _robust_bounds(seen_agg, robust_low, robust_high)
-    else:
-        agg_lo, agg_hi = float(agg_min_us), float(agg_max_us)
-
-    in_lo, in_hi = _fix(in_lo, in_hi)
-    out_lo, out_hi = _fix(out_lo, out_hi)
-    agg_lo, agg_hi = _fix(agg_lo, agg_hi)
-
-    # Colormaps
-    inbound_cmap   = _plt.get_cmap(inbound_cmap_name)
-    outbound_cmap  = _plt.get_cmap(outbound_cmap_name)
-    aggregate_cmap = _plt.get_cmap(aggregate_cmap_name)
-
-    # Partition bins -> grayscale colors for aggregate (index 0 = no data)
-    agg_colors = ["#BFBFBF"] + [_mcolors.to_hex(aggregate_cmap(i / 9.0)) for i in range(10)]
-
-    # ---------- Pass 2: build highlight_sequence with persistence ----------
-
-    highlight_sequence = []
-
-    # Reset owner and pair states to re-simulate deterministically
-    owner = graph.get_cell_locations(as_dict=False).copy()
-    last_in_pair.clear()
-    last_out_pair.clear()
-
-    for state in state_list:
-        # Update owners
-        for stype, tasks in state.compute_tasks_by_state.items():
-            if stype in (fastsim.TaskState.LAUNCHED, fastsim.TaskState.COMPLETED):
-                for t in tasks:
-                    cid = graph.task_to_cell[t]
-                    if 0 <= cid < n_cells:
-                        owner[cid] = state.compute_task_mapping_dict[t]
-
-        # Update last-seen in/out per pair (persistent)
-        for stype, tasks in state.data_tasks_by_state.items():
-            if stype != fastsim.TaskState.COMPLETED:
-                continue
-            for dt in tasks:
-                if state.data_task_virtual.get(dt, False):
-                    continue
-                pr = _get_edge_cell_from_block(state.data_task_block.get(dt))
-                if pr is None:
-                    continue
-                eid, cid = pr
-                own = owner[cid]
-                tgt = state.data_task_mapping_dict.get(dt)
-                src = state.data_task_source_device.get(dt)
-                dur = float(state.data_task_durations.get(dt, 0.0))
-                if tgt == own:
-                    last_in_pair[(eid, cid)] = dur
-                elif src == own and tgt != own:
-                    last_out_pair[(eid, cid)] = dur
-
-        # Boundary highlights for ALL persisted pairs
-        boundary_highlights = _dd(dict)
-        # Choose direction by larger magnitude if both present
-        all_pairs = set(last_in_pair.keys()) | set(last_out_pair.keys())
-        for (eid, cid) in all_pairs:
-            din  = last_in_pair.get((eid, cid))
-            dout = last_out_pair.get((eid, cid))
-            if din is None and dout is None:
-                continue
-            if dout is None or (din is not None and din >= dout):
-                # inbound
-                frac = (min(max(din, in_lo), in_hi) - in_lo) / (in_hi - in_lo) if in_hi > in_lo else 0.0
-                boundary_highlights[eid][cid] = _mcolors.to_hex(inbound_cmap(frac))
-            else:
-                # outbound
-                frac = (min(max(dout, out_lo), out_hi) - out_lo) / (out_hi - out_lo) if out_hi > out_lo else 0.0
-                boundary_highlights[eid][cid] = _mcolors.to_hex(outbound_cmap(frac))
-
-        # Aggregate per cell for interior fill (sum over persisted pairs)
-        cell_in = _dd(float)
-        cell_out = _dd(float)
-        for (eid, cid), dur in last_in_pair.items():
-            cell_in[cid] += dur
-        for (eid, cid), dur in last_out_pair.items():
-            cell_out[cid] += dur
-
-        partition_bins = _np.zeros(n_cells, dtype=int)
-        for cid in range(n_cells):
-            agg = cell_in.get(cid, 0.0) + cell_out.get(cid, 0.0)
-            if agg > 0:
-                partition_bins[cid] = _bin(agg, agg_lo, agg_hi, bins=10)
-
-        # Optional labels
-        cell_labels = _dd(list)
-        if show_labels:
-            for cid in range(n_cells):
-                inv = cell_in.get(cid, 0.0)
-                outv = cell_out.get(cid, 0.0)
-                if inv > 0 or outv > 0:
-                    lbl = f"in:{inv:.0f}μs\nout:{outv:.0f}μs"
-                    cell_labels[lbl].append(cid)
-
-        # No extra outlines for cells; we rely on boundary and fill
-        cell_highlights = _dd(list)
-        edge_highlights = _dd(list)
-
-        highlight_sequence.append(
-            (
-                cell_highlights,
-                edge_highlights,
-                boundary_highlights,
-                cell_labels,
-                partition_bins.copy(),
-            )
-        )
-
-    # Title updater with calibrated scales
-    def _update_title():
-        if not hasattr(_update_title, "frame"):
-            _update_title.frame = 0
-        _update_title.frame = (_update_title.frame + 1) % len(state_list)
-        t_us = state_list[_update_title.frame].time
-        ax.set_title(
-            "Data Flow Durations (non-virtual, persistent) — time {}μs\n"
-            "Inbound scale: [{:.1f},{:.1f}] μs   "
-            "Outbound scale: [{:.1f},{:.1f}] μs   "
-            "Aggregate (fill) scale: [{:.1f},{:.1f}] μs".format(
-                t_us, in_lo, in_hi, out_lo, out_hi, agg_lo, agg_hi
-            )
-        )
-
-    _update_title.frame = 0
-
-    ani = animate_highlights(
-        fig,
-        ax,
-        geom,
-        highlight_sequence,
-        device_to_color=agg_colors,   # interior fill for aggregate bins
-        video_seconds=video_seconds,
-    )
-    ani.event_source.add_callback(_update_title)
-    return ani
-
-def animate_durations_state_list(
-    graph,
-    state_list,
-    figsize=(8, 8),
-    video_seconds=15,
-    cmap_name: str = "viridis",
-    min_ms: Optional[float] = None,
-    max_ms: Optional[float] = None,
-    robust: bool = True,
-    robust_low: float = 5.0,
-    robust_high: float = 95.0,
-):
-    """
-    Animate a mesh where each cell's fill color encodes the duration (in microseconds) of the
-    most recent *completed* compute task that finished there.
-
-    Design:
-      - We DO NOT modify any existing functions. We reuse `animate_highlights` by
-        mapping duration bins (0..10) into its 'partition' channel.
-      - Bin 0 is a neutral gray ("no data yet"). Bins 1..10 span the chosen duration range.
-      - Duration scaling defaults to robust percentiles (p5..p95) across all frames,
-        unless `min_ms`/`max_ms` are provided.
-
-    Parameters
-    ----------
-    graph : object
-        Must expose `data.geometry`, `task_to_cell`, and optionally `task_to_direction`, `task_to_level`.
-    state_list : list[EnvironmentState]
-        Sequence of states sampled over time (see `animate_mesh_graph`).
-    figsize : tuple
-        Figure size passed to `create_mesh_plot`.
-    video_seconds : int
-        Target animation duration in seconds (used to compute frame interval).
-    cmap_name : str
-        Matplotlib colormap name used for bins 1..10 (bin 0 is neutral gray).
-    min_ms, max_ms : Optional[float]
-        Explicit lower/upper bounds (in microseconds) for duration scaling.
-        If None, they are inferred (robust percentiles by default).
-    robust : bool
-        If True and bounds not provided, use percentiles.
-    robust_low, robust_high : float
-        Percentile bounds (in %) for robust scaling when `robust` is True.
-
-    Returns
-    -------
-    matplotlib.animation.FuncAnimation
-    """
-    import numpy as _np
-    import matplotlib.pyplot as _plt
-    from collections import defaultdict as _dd
-    import matplotlib.colors as _mcolors
-
-    geom = graph.data.geometry
-    fig, ax = create_mesh_plot(geom, figsize=figsize)
-
-    n_cells = len(geom.cells)
-
-    # 1) Collect most-recent completed durations per cell over time to estimate scale.
-    #    We'll also build the per-frame highlight payloads.
-    #    We'll track last known duration per cell (microseconds).
-    last_duration_us = {}  # cell_id -> duration_us
-    all_durations_us = []
-
-    # helper: pull completed duration updates from a frame
-    def _update_durations_from_state(state):
-        for state_type, tasks in state.compute_tasks_by_state.items():
-            if state_type == fastsim.TaskState.COMPLETED:
-                for task in tasks:
-                    cell_id = graph.task_to_cell[task]
-                    if 0 <= cell_id < n_cells:
-                        dur = state.compute_task_durations[task]
-                        # ensure float
-                        dur = float(dur)
-                        last_duration_us[cell_id] = dur
-                        all_durations_us.append(dur)
-
-    # Pre-scan to get robust bounds if needed
-    for st in state_list:
-        _update_durations_from_state(st)
-
-    # Determine scaling bounds
-    if min_ms is None or max_ms is None:
-        if len(all_durations_us) == 0:
-            # Fallback: arbitrary small range to avoid div-by-zero; everything will be "no data"
-            lo, hi = 0.0, 1.0
-        else:
-            arr = _np.asarray(all_durations_us, dtype=float)
-            if robust and len(arr) >= 3:
-                lo = _np.percentile(arr, robust_low)
-                hi = _np.percentile(arr, robust_high)
-            else:
-                lo, hi = float(_np.min(arr)), float(_np.max(arr))
-        # convert to microseconds limits already; variables are in microseconds throughout
-        min_us = lo if min_ms is None else float(min_ms)
-        max_us = hi if max_ms is None else float(max_ms)
-    else:
-        min_us = float(min_ms)
-        max_us = float(max_ms)
-
-    # Guard against degenerate bounds
-    if not _np.isfinite(min_us): min_us = 0.0
-    if not _np.isfinite(max_us) or max_us <= min_us:
-        max_us = min_us + 1.0
-
-    def _bin_duration_us(u: Optional[float], bins: int = 10) -> int:
-        """
-        Map duration (microseconds) to integer bin in [1..bins].
-        Return 0 for "no data".
-        """
-        if u is None:
-            return 0
-        # clip and scale
-        v = float(_np.clip(u, min_us, max_us))
-        # normalize to [0,1]
-        x = (v - min_us) / (max_us - min_us)
-        # map to 1..bins inclusive
-        b = int(round(x * bins))
-        b = max(1, min(b, bins))
-        return b
-
-    # Build colormap list: index 0 = neutral gray, 1..10 from the chosen cmap
-    base_cmap = _plt.get_cmap(cmap_name)
-    duration_colors = ["#BFBFBF"]  # bin 0 ("no data")
-    duration_colors.extend([_mcolors.to_hex(base_cmap(i / 9.0)) for i in range(10)])  # 1..10
-
-    # Re-initialize for per-frame construction
-    last_duration_us.clear()
-    highlight_sequence = []
-
-    # We'll render labels showing the *binned* value (optional); here we leave labels off by default
-    for state in state_list:
-        # update durations from COMPLETED tasks
-        _update_durations_from_state(state)
-
-        # cell_highlights: outline launched compute cells (optional); keep minimal
-        cell_highlights = _dd(list)
-        for state_type, tasks in state.compute_tasks_by_state.items():
-            if state_type == fastsim.TaskState.LAUNCHED:
-                for task in tasks:
-                    cell_id = graph.task_to_cell[task]
-                    if 0 <= cell_id < n_cells:
-                        # outline with a dim color (same neutral gray) to avoid fighting the fill
-                        cell_highlights[duration_colors[0]].append(cell_id)
-
-        # No edge-specific overlays for this animation (keep boundary highlights empty)
-        edge_highlights = _dd(list)
-        boundary_highlights = _dd(dict)
-
-        # Labels are optional/noisy; keep them empty by default.
-        # If you want labels, you could put the *binned* index or the raw duration here.
-        cell_labels = _dd(list)
-
-        # Build the 'partition' vector where each entry is the duration bin (0..10)
-        partition_bins = _np.zeros(n_cells, dtype=int)
-        for cid in range(n_cells):
-            d = last_duration_us.get(cid, None)
-            partition_bins[cid] = _bin_duration_us(d, bins=10)
-
-        # NOTE: We pass a *copy* because animate_highlights mutates the per-frame 'partition'
-        highlight_sequence.append(
-            (
-                cell_highlights,
-                edge_highlights,
-                boundary_highlights,
-                cell_labels,
-                partition_bins.copy(),
-            )
-        )
-
-    # Prepare title updater to show time and the scale mapping
-    def _update_title():
-        if not hasattr(_update_title, "frame"):
-            _update_title.frame = 0
-        _update_title.frame = (_update_title.frame + 1) % len(state_list)
-        t_us = state_list[_update_title.frame].time
-        ax.set_title(
-            f"Task Duration Heatmap — time {t_us}μs\n"
-            f"Scale: bin 1={min_us:.1f}μs → bin 10={max_us:.1f}μs (0 = no data)"
-        )
-
-    _update_title.frame = 0
-
-    ani = animate_highlights(
-        fig,
-        ax,
-        geom,
-        highlight_sequence,
-        device_to_color=duration_colors,  # <- drives duration colormap
-        video_seconds=video_seconds,
-    )
-    ani.event_source.add_callback(_update_title)
-    return ani
-
-def make_mesh_graph_animation(
-    graph,
-    state_list,
-    title="mesh_animation",
-    figsize=(8, 8),
-    show=True,
-    folder=None,
-    dpi=None,
-    bitrate=None,
-    video_seconds=15,
-):
-    if folder is None:
-        if wandb is None or wandb.run is None or wandb.run.dir is None:
-            folder = "."
-        else:
-            folder = wandb.run.dir
-
-    if not os.path.exists(folder):
-        os.makedirs(folder)
-    title = os.path.join(folder, title)
-
-    title = f"{title}.mp4"
-    ani = animate_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
-    #ani = animate_durations_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
-    #ani = animate_data_flow_durations_state_list(graph, state_list, figsize=figsize, video_seconds=video_seconds)
-    try:
-        ani.save(title, writer="ffmpeg", dpi=dpi, bitrate=bitrate)
-    except Exception as e:
-        print(f"Error saving animation: {e}")
-    if show:
-        plt.show()
-    return ani
-
-
 def animate_mesh_graph(
     env,
-    time_interval=500,
-    show=True,
-    title="mesh_animation",
-    folder=None,
-    figsize=(8, 8),
-    dpi=300,
-    bitrate=300,
-    video_seconds=15,
+    plot_cfg: Optional[PlotConfig] = None,
+    color_cfg: Optional[ColorConfig] = None,
+    folder: Optional[str] = None,
+    filename: str = "mesh_animation.mp4",
 ):
-    current_time = env.simulator.time
-    state_list = []
-    for t in range(0, current_time, time_interval):
-        state = EnvironmentState.from_env(env, t)
-        state_list.append(state)
+    if folder is None:
+        run_dir = getattr(getattr(wandb, "run", None), "dir", None) if "wandb" in globals() else None
+        folder_path = Path(run_dir) if run_dir else Path(".")
+    else:
+        folder_path = Path(folder)
 
-    return make_mesh_graph_animation(
-        env.simulator.input.graph,
-        state_list,
-        title=title,
-        show=show,
-        folder=folder,
-        figsize=figsize,
-        dpi=dpi,
-        bitrate=bitrate,
-        video_seconds=video_seconds,
+    folder_path.mkdir(parents=True, exist_ok=True)
+    out_path = folder_path / filename
+
+    if plot_cfg is None:
+        plot_cfg = PlotConfig()
+    if color_cfg is None:
+        color_cfg = ColorConfig()
+
+    animate_mesh_execution(
+        env=env,
+        path=str(out_path),
+        color_cfg=color_cfg,
+        plot_cfg=plot_cfg,
     )
+    return str(out_path)

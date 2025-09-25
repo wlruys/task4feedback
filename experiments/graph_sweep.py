@@ -422,7 +422,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         )
         
         # -------- Save Figures & Logs
-        file_name = f"GraphSweep_{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}"
+        file_name = f"GraphSweep_{cfg.graph.config.n}x{cfg.graph.config.domain_ratio}x{cfg.graph.config.steps}"
         try:
             file_name += f"_{cfg.graph.config.workload_args.scale}"
         except AttributeError:

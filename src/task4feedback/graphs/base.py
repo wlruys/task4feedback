@@ -938,7 +938,7 @@ class TrajectoryWorkload(DynamicWorkload):
         total_workload = np.sum(self.level_workload[start_step])
         assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
 
-        for j in range(start_step + 1, num_levels):
+        for j in range(start_step, num_levels):
             self.level_workload[j] = np.copy(self.level_workload[0])
 
             gaussian_workload = (
@@ -980,7 +980,7 @@ class BumpWorkload(DynamicWorkload):
         bumps = [] 
         bumps.append(create_bump_random_center(rng=rng, **kwargs['traj_specifics']))
 
-        for j in range(start_step + 1, num_levels):
+        for j in range(start_step, num_levels):
             self.level_workload[j] = np.copy(self.level_workload[0])
 
             for bump in bumps:

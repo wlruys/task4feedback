@@ -1,0 +1,14 @@
+defaults:
+  - architecture/cond_dilation_state@layers.state
+  - architecture/cond_dilation_policy_head@layers.actor
+  - architecture/cond_dilation_value_head@layers.critic
+layers:
+  state:
+    hidden_channels: 16
+  actor:
+    hidden_channels: 16
+  critic:
+    hidden_channels: 128
+
+critic:
+  add_progress: True

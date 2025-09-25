@@ -1,4 +1,4 @@
-project: task4feedback-experiments
+project: exploration-dev
 name: default
 enabled: true
 dir: ~/workspace/scheduling/logs

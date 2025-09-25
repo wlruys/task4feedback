@@ -7,7 +7,7 @@ from task4feedback.fastsim2 import ParMETIS_wrapper
 from mpi4py import MPI
 import torch
 import numpy as np
-
+from task4feedback.graphs.jacobi import get_length_from_config
 def run_parmetis(sim: SimulatorDriver,
                  cfg,
                  verbose=False,
@@ -18,7 +18,9 @@ def run_parmetis(sim: SimulatorDriver,
                  target_loads: list[float] = [0.25, 0.25, 0.25, 0.25],
                  n_compute_devices: int = 4) -> int:
     d2d_bandwidth = cfg.system.d2d_bw
-    width = cfg.graph.config.n
+    graph_config = hydra.utils.instantiate(cfg.graph.config)
+    width = graph_config.n 
+    length = get_length_from_config(graph_config)
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()

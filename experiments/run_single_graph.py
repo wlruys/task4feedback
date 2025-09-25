@@ -20,7 +20,7 @@ from task4feedback.graphs.jacobi import (
     BlockCyclicMapper,
     GraphMETISMapper,
 )
-
+# from task4feedback.graphs.mesh.plot_fast import * 
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -67,14 +67,14 @@ def configure_training(cfg: DictConfig):
             bandwidth=cfg.system.d2d_bw,
             mode="metis",
             offset=1,
-            level_chunks=5,
+            level_chunks=4,
         )
         graph.align_partitions()
         env.simulator.enable_external_mapper()
         env.simulator.external_mapper=LevelPartitionMapper(level_cell_mapping=graph.partitions)
     elif option == "BlockCyclic":
         env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices-1, block_size=1, offset=1)
+        env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices-1, block_size=2, offset=1)
     elif option == "GraphMETISMapper":
         env.simulator.enable_external_mapper()
         env.simulator.external_mapper = GraphMETISMapper(graph=graph, n_devices=cfg.system.n_devices-1, offset=1)
@@ -91,20 +91,14 @@ def configure_training(cfg: DictConfig):
     if rank==0:
         config = instantiate(cfg.eval)
         env.simulator.run()
-        # print(env.simulator.time, env._get_baseline("EFT"))
+        print(env.simulator.time, env._get_baseline("EFT"))
         print(f"Interval", int(env.simulator.time / config.max_frames))
-        animate_mesh_graph(
-            env,
-            show=False,
-            time_interval=int(env.simulator.time / config.max_frames),
-            title="outputs/partition_result",
-            figsize=config.fig_size,
-            dpi=config.dpi,
-            bitrate=config.bitrate,
-            video_seconds=config.video_seconds,
-        )
-    
-
+        start_t = time.perf_counter()
+        animate_mesh_graph(env=env, folder=Path("outputs/"))
+        end_t = time.perf_counter()
+        print("Plotting time:", end_t - start_t)
+        
+        #animate_mesh_graph(env=env)
 
 @hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
 def main(cfg: DictConfig):

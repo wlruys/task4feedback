@@ -1255,6 +1255,12 @@ class ExternalObserver:
         else:
             return global_ids[local_ids]
 
+    def get_device_memory(self, output: TensorDict):
+        self.graph_extractor.get_device_memory(output["aux"]["device_memory"])
+    
+    def get_device_load(self, output: TensorDict):
+        self.graph_extractor.get_device_load(output["aux"]["device_load"])
+
     def _local_to_global2D(self, g1, g2, l, workspace=None):
         if workspace is not None:
             size = len(l[0, :])
@@ -1315,6 +1321,11 @@ class ExternalObserver:
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
+                "baseline": torch.zeros((1), dtype=torch.float32),
+                "device_memory": torch.zeros(1*(spec.max_devices), dtype=torch.float32),
+                "device_load": torch.zeros(2*(spec.max_devices), dtype=torch.float32),
+                "z_ch": torch.zeros((8), dtype=torch.float32),
+                "z_spa": torch.zeros((8), dtype=torch.float32),
             }
         )
 
@@ -1716,6 +1727,10 @@ class CandidateObserver(ExternalObserver):
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.ones((1), dtype=torch.float32),
+                "device_memory": torch.zeros(1*(spec.max_devices), dtype=torch.float32),
+                "device_load": torch.zeros(2*(spec.max_devices), dtype=torch.float32),
+                "z_ch": torch.zeros((8), dtype=torch.float32),
+                "z_spa": torch.zeros((8), dtype=torch.float32),
             }
         )
 
@@ -1754,6 +1769,7 @@ class CandidateObserver(ExternalObserver):
 class CnnSingleTaskObserver(ExternalObserver):
     """
     Observer that collects 2d flattened grid of task features.
+    ONLY WORKS FOR graphs with rectangular structured meshes
     """
 
     def reset(self):
@@ -1762,7 +1778,11 @@ class CnnSingleTaskObserver(ExternalObserver):
             self.graph_spec.max_candidates == 1
         ), "CnnSingleTaskObserver only supports 1 candidate"
 
-        self.task_ids = torch.Tensor([-1 for _ in range(graph.config.n**2)])
+        assert(hasattr(graph, "nx"))
+        assert(hasattr(graph, "ny"))
+        assert(hasattr(graph, "xy_from_id"))
+
+        self.task_ids = torch.Tensor([-1 for _ in range(graph.nx * graph.ny)])
         for task in graph.level_to_task[0]:
             self.task_ids[graph.xy_from_id(task)] = task
         if -1 in self.task_ids:
@@ -1783,6 +1803,10 @@ class CnnSingleTaskObserver(ExternalObserver):
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.ones((1), dtype=torch.float32),
+                "device_memory": torch.zeros(1*(spec.max_devices), dtype=torch.float32),
+                "device_load": torch.zeros(2*(spec.max_devices), dtype=torch.float32),
+                "z_ch": torch.zeros((8), dtype=torch.float32),
+                "z_spa": torch.zeros((8), dtype=torch.float32),
             }
         )
 
@@ -1793,7 +1817,7 @@ class CnnSingleTaskObserver(ExternalObserver):
                         "tasks": TensorDict(
                             {
                                 "attr": torch.zeros(
-                                    (graph.config.n**2, self.task_features.feature_dim),
+                                    (graph.nx * graph.ny, self.task_features.feature_dim),
                                     dtype=torch.float32,
                                 )
                             }
@@ -1875,6 +1899,10 @@ class CnnBatchTaskObserver(ExternalObserver):
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.ones((1), dtype=torch.float32),
+                "device_memory": torch.zeros(1*(spec.max_devices), dtype=torch.float32),
+                "device_load": torch.zeros(2*(spec.max_devices), dtype=torch.float32),
+                "z_ch": torch.zeros((8), dtype=torch.float32),
+                "z_spa": torch.zeros((8), dtype=torch.float32),
             }
         )
 
@@ -1885,7 +1913,7 @@ class CnnBatchTaskObserver(ExternalObserver):
                         "tasks": TensorDict(
                             {
                                 "attr": torch.zeros(
-                                    (graph.config.n**2, self.task_features.feature_dim),
+                                    (graph.nx * graph.ny, self.task_features.feature_dim),
                                     dtype=torch.float32,
                                 )
                             }
@@ -1904,21 +1932,23 @@ class CnnBatchTaskObserver(ExternalObserver):
             output = self.new_observation_buffer(self.graph_spec)
             raise Warning("Allocating new observation buffer, this is not efficient!")
         if self.task_ids is None:
-            self.task_ids = torch.Tensor([-1 for _ in range(graph.config.n**2)])
+            self.task_ids = torch.Tensor([-1 for _ in range(graph.nx * graph.ny)])
 
         # Get mappable candidates
         self.candidate_observation(output)
         assert (
-            output["aux", "candidates", "count"][0] == graph.config.n**2
+            output["aux", "candidates", "count"][0] == graph.nx * graph.ny
             or output["aux", "candidates", "count"][0] == 0
         ), "CnnBatchTaskObserver expects {} candidates but got {}.".format(
-            graph.config.n**2, output["aux", "candidates", "count"][0].item()
+            graph.nx * graph.ny, output["aux", "candidates", "count"][0].item()
         )
         for task_id in output["aux", "candidates", "idx"]:
             idx = graph.xy_from_id(task_id.item())
             self.task_ids[idx] = task_id.item()
 
         self.get_task_features(self.task_ids, output["nodes", "tasks", "attr"])
+        self.get_device_load(output)
+        self.get_device_memory(output)
 
         # Auxiliary observations
         output.set_at_(("aux", "progress"), -2.0, 0)
@@ -2068,7 +2098,11 @@ class SimulatorDriver:
         external_mapper_t = type(self.external_mapper)
 
         internal_mapper_copy = internal_mapper_t()
-        external_mapper_copy = external_mapper_t()
+
+        try: 
+            external_mapper_copy = external_mapper_t()
+        except ValueError:
+            external_mapper_copy = external_mapper_t(geometry=self.external_mapper.geometry)
 
         observer_factory = self.observer_factory
 

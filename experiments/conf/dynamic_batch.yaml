@@ -1,9 +1,9 @@
 defaults:
-  - graph: dynamic_jacobi_circle
-  - reward: ieft
+  - graph: dynamic_jacobi_diag
+  - reward: incremental_schedule
   - system: h100
   - feature: cnn_batch
-  - network: cnn_batch_lstm
+  - network: cond_dilation_cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -22,54 +22,54 @@ seed: 256
 deterministic_torch: true
 
 reward:
-  verbose: True
+  verbose: False
   random_start: False
 
 graph:
   config:
       n: 8
-      steps: 60
+      domain_ratio: 1.0
+      steps: 120
       boundary_width: 1000
-      workload_args:
-        lower_bound: 0.5
-        upper_bound: 1.5
   env:
-    change_priority: True
-    change_location: True
+    change_priority: False
+    change_location: False
     change_duration: False
     seed: 1
 
 algorithm:
   num_collections: 10000
-  rollout_steps: 0
-  workers: 4
-  ent_coef: 0.001
-  sample_slices: True
+  rollout_steps: 30
+  workers: 12
+  graphs_per_collection: 12
+  ent_coef: 0
+  sample_slices: False
   slice_len: 16
-  gamma: 1 
-  lmbda: 0.7
+  gamma: 0.99
+  lmbda: 0.95
+  minibatch_size: 128
 
 optimizer:
-  lr: 2.5e-4
+  lr: 1e-3
 
 system:
   mem: 80000000000
 
-feature:
-  observer:
-    prev_frames: 5
-    batched: true
+# feature:
+#   observer:
+#     prev_frames: 3
+#     batched: true
 
 network:
   layers:
-    lstm:
-      hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
+    # lstm:
+    #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
     state:
       hidden_channels: 16
     actor:
       hidden_channels: 16
     critic:
-      hidden_channels: 128
+      hidden_channels: 16
 
 runtime:
   batch_size: 5
@@ -81,4 +81,6 @@ wandb:
 
 eval:
   eval_interval: 100
+  max_frames: 400
+  video_seconds: 15
 

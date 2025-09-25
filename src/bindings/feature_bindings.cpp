@@ -18,7 +18,7 @@ using namespace nb::literals;
 struct IFeature {
   virtual ~IFeature() = default;
   virtual size_t get_feature_dim() const = 0;
-  virtual void extract_feature(int32_t object_id, std::span<float> output) const = 0;
+  virtual void extract_feature(int32_t object_id, std::span<float> output) = 0;
 };
 
 template <typename Derived> struct FeatureAdapter : IFeature {
@@ -30,7 +30,7 @@ template <typename Derived> struct FeatureAdapter : IFeature {
     return feature.getFeatureDim();
   }
 
-  void extract_feature(int32_t object_id, std::span<float> output) const override {
+  void extract_feature(int32_t object_id, std::span<float> output) override {
     feature.extractFeature(object_id, output);
   }
 };
@@ -39,7 +39,7 @@ struct IEdgeFeature {
   virtual ~IEdgeFeature() = default;
   virtual size_t get_feature_dim() const = 0;
   virtual void extract_feature(int32_t source_id, int32_t target_id,
-                               std::span<float> output) const = 0;
+                               std::span<float> output) = 0;
 };
 
 template <typename Derived> struct EdgeFeatureAdapter : IEdgeFeature {
@@ -52,7 +52,7 @@ template <typename Derived> struct EdgeFeatureAdapter : IEdgeFeature {
   }
 
   void extract_feature(int32_t source_id, int32_t target_id,
-                       std::span<float> output) const override {
+                       std::span<float> output) override {
     feature.extractFeature(source_id, target_id, output);
   }
 };
@@ -70,10 +70,10 @@ struct RuntimeFeatureExtractor {
     return total;
   }
 
-  void getFeatures(int32_t object_id, std::span<float> arr) const {
+  void getFeatures(int32_t object_id, std::span<float> arr) {
     float *data = arr.data();
     size_t offset = 0;
-    for (const auto &f : features) {
+    for (auto &f : features) {
       size_t dim = f->get_feature_dim();
       std::span<float> sp(data + offset, dim);
       f->extract_feature(object_id, sp);
@@ -112,10 +112,10 @@ struct RuntimeEdgeFeatureExtractor {
     return total;
   }
 
-  void getFeatures(int32_t source_id, int32_t target_id, std::span<float> arr) const {
+  void getFeatures(int32_t source_id, int32_t target_id, std::span<float> arr) {
     float *data = arr.data();
     size_t offset = 0;
-    for (const auto &f : features) {
+    for (auto &f : features) {
       size_t dim = f->get_feature_dim();
       std::span<float> sp(data + offset, dim);
       f->extract_feature(source_id, target_id, sp);
@@ -139,7 +139,7 @@ struct RuntimeEdgeFeatureExtractor {
 };
 
 template <typename E>
-void get_features_batch(const E &extractor, const TorchInt64Arr1D &object_ids,
+void get_features_batch(E &extractor, const TorchInt64Arr1D &object_ids,
                         TorchFloatArr2D &tensor) {
   float *data = tensor.data();
   auto v = object_ids.view();
@@ -151,7 +151,7 @@ void get_features_batch(const E &extractor, const TorchInt64Arr1D &object_ids,
 }
 
 template <typename E>
-void get_edge_features_batch(const E &extractor, TorchInt64Arr2D &edges, TorchFloatArr2D &tensor) {
+void get_edge_features_batch(E &extractor, TorchInt64Arr2D &edges, TorchFloatArr2D &tensor) {
   float *data = tensor.data();
   int num_cols = extractor.getFeatureDim();
   auto v = edges.view();
@@ -166,7 +166,7 @@ template <typename FEType> void bind_int_feature(nb::module_ &m, const char *cla
       .def(nb::init<SchedulerState &, size_t>())
       .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
-           [](const FEType &self, int32_t task_id,
+           [](FEType &self, int32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
              float *data = arr.data();
              std::span<float> sp(data, self.getFeatureDim());
@@ -185,7 +185,7 @@ template <typename FEType> void bind_int_edge_feature(nb::module_ &m, const char
       .def(nb::init<SchedulerState &, size_t>())
       .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
-           [](const FEType &self, int32_t source_id, int32_t target_id,
+           [](FEType &self, int32_t source_id, int32_t target_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
              float *data = arr.data();
              std::span<float> sp(data, self.getFeatureDim());
@@ -204,7 +204,7 @@ template <typename FEType> void bind_state_feature(nb::module_ &m, const char *c
       .def(nb::init<SchedulerState &>())
       .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
-           [](const FEType &self, int32_t task_id,
+           [](FEType &self, int32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
              float *data = arr.data();
              std::span<float> sp(data, self.getFeatureDim());
@@ -223,7 +223,7 @@ template <typename FEType> void bind_state_edge_feature(nb::module_ &m, const ch
       .def(nb::init<SchedulerState &>())
       .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
-           [](const FEType &self, int32_t source_id, int32_t target_id,
+           [](FEType &self, int32_t source_id, int32_t target_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
              float *data = arr.data();
              std::span<float> sp(data, self.getFeatureDim());
@@ -244,7 +244,7 @@ void bind_feature_extractor(nb::module_ &m, const char *class_name) {
       .def(nb::init<Features...>())
       .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("get_features",
-           [](const FEType &self, int32_t task_id,
+           [](FEType &self, int32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
              float *data = arr.data();
              std::span<float> sp(data, self.getFeatureDim());
@@ -255,11 +255,11 @@ void bind_feature_extractor(nb::module_ &m, const char *class_name) {
 
 template <typename FEType> void bind_frame_feature(nb::module_ &m, const char *class_name) {
   nb::class_<FEType>(m, class_name)
-      .def(nb::init<SchedulerState &, int, bool, int>(), nb::arg("state"), nb::arg("width"),
+      .def(nb::init<SchedulerState &, int, int, bool, int>(), nb::arg("state"), nb::arg("width"), nb::arg("length"),
            nb::arg("add_current") = false, nb::arg("frames") = 3)
       .def_prop_ro("feature_dim", &FEType::getFeatureDim)
       .def("extract_feature",
-           [](const FEType &self, int32_t task_id,
+           [](FEType &self, int32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
              float *data = arr.data();
              std::span<float> sp(data, self.getFeatureDim());
@@ -267,10 +267,10 @@ template <typename FEType> void bind_frame_feature(nb::module_ &m, const char *c
            })
       .def_static(
           "create",
-          [](SchedulerState &state, int width, bool add_current,
+          [](SchedulerState &state, int width, int length, bool add_current,
              int frames) -> std::shared_ptr<IFeature> {
             return std::make_shared<FeatureAdapter<FEType>>(
-                FEType(state, width, add_current, frames));
+                FEType(state, width, length, add_current, frames));
           },
           nb::rv_policy::take_ownership);
 }
@@ -307,11 +307,14 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_feature<InputOutputTaskFeature>(m, "StandardizedInputOutputTaskFeature");
   bind_state_feature<DepthTaskFeature>(m, "DepthTaskFeature");
   bind_state_feature<TaskDeviceMappedTime>(m, "TaskDeviceMappedTimeFeature");
+  bind_state_feature<TaskCoordinates>(m, "TaskCoordinatesFeature");
   bind_state_feature<TaskDataMappedSize>(m, "TaskDataMappedSizeFeature");
   bind_state_feature<TaskDataMappedCoordinates>(m, "TaskDataMappedCoordinatesFeature");
   bind_state_feature<CandidateVector>(m, "CandidateVectorFeature");
   bind_frame_feature<PrevReadSizeFeature>(m, "PrevReadSizeFeature");
   bind_frame_feature<PrevMappedSizeFeature>(m, "PrevMappedSizeFeature");
+  bind_frame_feature<PrevMappedDevice>(m, "PrevMappedDeviceFeature");
+
   bind_state_feature<ReadDataLocationFeature>(m, "ReadDataLocationFeature");
   bind_state_feature<TaskMeanDurationFeature>(m, "TaskMeanDurationFeature");
 
@@ -368,7 +371,7 @@ void init_feature_ext(nb::module_ &m) {
            nb::keep_alive<1, 2>())
       .def_prop_ro("feature_dim", &RuntimeFeatureExtractor::getFeatureDim)
       .def("get_features",
-           [](const RuntimeFeatureExtractor &self, int32_t task_id,
+           []( RuntimeFeatureExtractor &self, int32_t task_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
              float *data = arr.data();
              std::span<float> sp(data, self.getFeatureDim());
@@ -383,7 +386,7 @@ void init_feature_ext(nb::module_ &m) {
            nb::keep_alive<1, 2>()) // Keep feature alive as long as extractor exists
       .def_prop_ro("feature_dim", &RuntimeEdgeFeatureExtractor::getFeatureDim)
       .def("get_features",
-           [](const RuntimeEdgeFeatureExtractor &self, int32_t source_id, int32_t target_id,
+           []( RuntimeEdgeFeatureExtractor &self, int32_t source_id, int32_t target_id,
               nb::ndarray<nb::pytorch, float, nb::device::cpu> arr) {
              float *data = arr.data();
              std::span<float> sp(data, self.getFeatureDim());
@@ -461,5 +464,7 @@ void init_feature_ext(nb::module_ &m) {
       .def("get_task_data_edges_read_mapped", &GraphExtractor::get_task_data_edges_read_mapped)
       .def("get_task_device_edges", &GraphExtractor::get_task_device_edges)
       .def("get_data_device_edges", &GraphExtractor::get_data_device_edges)
+      .def("get_device_load", &GraphExtractor::get_device_load)
+      .def("get_device_memory", &GraphExtractor::get_device_memory)
       .def("get_unique_data", &GraphExtractor::get_unique_data);
 }

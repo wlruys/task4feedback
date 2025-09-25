@@ -1,11 +1,8 @@
 defaults:
-  - architecture/unet_enc@layers.state
-  - architecture/unet_dec@layers.actor
-  - architecture/output_head@layers.critic
-  # - architecture/lstm@layers.lstm
+  - architecture/unet_state@layers.state
+  - architecture/unet_policy_head@layers.actor
+  - architecture/unet_value_head@layers.critic
 layers:
-  # lstm:
-  #   hidden_size: 32
   state:
     hidden_channels: 16
   actor:
@@ -14,4 +11,5 @@ layers:
     hidden_channels: 128
 
 critic:
-  add_progress: true
+  add_progress: True
+  input_keys: ["embed"]

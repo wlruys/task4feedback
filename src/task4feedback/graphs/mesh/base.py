@@ -199,6 +199,17 @@ class Geometry:
             normal = np.round(normal, round_out)
 
         return normal
+    
+    def get_edges_of_cells(self, cells: np.array) -> list[int]:
+        """
+        Get the unique edges of a list of cells.
+        """
+        edge_set = set()
+        for cell in cells:
+            edges = self.cell_edges[cell]
+            print(f"Cell {cell} has edges {edges}", type(edges))
+            edge_set.update(edges)
+        return np.array(list(edge_set), dtype=int)
 
 
 def initialize_gmsh():
@@ -216,19 +227,18 @@ def finalize_gmsh():
 
 def generate_quad_mesh(L: float = 1.0,
                        n: int = 4,
-                       W: float | None = None,
-                       nw: int | None = None,):
-    if W is None:
-        W = L
-
-    if nw is None:
-        nw = n
+                       domain_ratio: float = 1.0):
+    
+    W = 1.0 * domain_ratio
+    nw = int(np.ceil(n * domain_ratio))
 
     hx = L / n
     hy = W / nw
 
     nx = max(1, int(math.ceil(L / hx)))
     ny = max(1, int(math.ceil(W / hy)))
+
+    print(f"Generating quad mesh with {nx} x {ny} elements.")
 
     gmsh.option.set_number("Mesh.RecombineAll", 1)
     gmsh.option.set_number("Mesh.Algorithm", 8)
@@ -270,6 +280,8 @@ def get_cells(mesh):
     """
     for cell_block in mesh.cells:
         if cell_block.type in ["quad", "quad4"]:
+            print(f"Using quadrilateral cells.")
+            print(f"Number of quadrilateral cells: {len(cell_block.data)}")
             return np.array(cell_block.data)
 
     # Return non quadrilateral cells
