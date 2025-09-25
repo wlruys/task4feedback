@@ -1552,9 +1552,9 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
-        if version in "A":
+        if version in "AC":
             task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)  # MLP-A
-        elif version in "B":
+        elif version in "BD":
             task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)  # MLP-B
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)  # MLP-B
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)  # MLP-B
