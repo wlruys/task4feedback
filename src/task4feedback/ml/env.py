@@ -3,6 +3,7 @@ from task4feedback.interface import *
 import torch
 from typing import Optional, List
 import numpy as np
+import gc 
 
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import (
@@ -464,6 +465,7 @@ class RuntimeEnv(EnvBase):
         td.set(self.observation_n, obs)
         # end_t = perf_counter()
         # print("Reset took %.2f ms", (end_t - start_t) * 1000, flush=True)
+        gc.collect()
         return td
 
     @property
