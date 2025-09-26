@@ -3,6 +3,7 @@ from task4feedback.interface import *
 import torch
 from typing import Optional, List
 import numpy as np
+import gc
 
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import (
@@ -274,8 +275,12 @@ class RuntimeEnv(EnvBase):
         step_count = self.step_count
         n_buffers = len(self.observations)
 
-        obs = self.observations[step_count % n_buffers].copy()
-        obs.zero_()
+        if n_buffers == 1:
+            obs = self.observations[0].clone()
+            obs.zero_()
+        else:
+            obs = self.observations[step_count % n_buffers].clone()
+            obs.zero_()
 
         if not hasattr(self, "_rle_next_step"):
             # Probability for geometric interval (expected interval = 1/p).
@@ -477,7 +482,7 @@ class RuntimeEnv(EnvBase):
         else:
             td = td.empty()
 
-        obs = self._get_observation(reset=True).copy()
+        obs = self._get_observation(reset=True).clone()
 
         td.set(self.observation_n, obs)
         # end_t = perf_counter()

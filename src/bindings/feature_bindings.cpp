@@ -324,6 +324,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_feature<DataReservedLocations>(m, "DataReservedLocationsFeature");
   bind_state_feature<DataLaunchedLocations>(m, "DataLaunchedLocationsFeature");
   bind_state_feature<DataSizeFeature>(m, "DataSizeFeature");
+  bind_state_feature<DataCoordinate>(m, "DataCoordinateFeature");
 
   // Device Features
   bind_int_feature<EmptyDeviceFeature>(m, "EmptyDeviceFeature");
@@ -339,7 +340,8 @@ void init_feature_ext(nb::module_ &m) {
   bind_int_edge_feature<EmptyTaskDataFeature>(m, "EmptyTaskDataFeature");
   bind_state_edge_feature<TaskDataUsageFeature>(m, "TaskDataUsageFeature");
   bind_state_edge_feature<TaskDataDefaultEdgeFeature>(m, "TaskDataDefaultEdgeFeature");
-
+  bind_state_edge_feature<TaskDataMappedFeature>(m, "TaskDataMappedFeature");
+  
   // Task Device Features
   bind_state_edge_feature<TaskDeviceDefaultEdgeFeature>(m, "TaskDeviceDefaultEdgeFeature");
 
