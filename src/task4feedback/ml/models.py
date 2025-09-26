@@ -576,8 +576,8 @@ class GATStateNet(nn.Module):
             self.convs.append(hetero_conv)
 
         self.norms = nn.ModuleDict({
-            "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
-            "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
+            "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
+            "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
         })
 
 
@@ -680,16 +680,18 @@ class GATStateNet(nn.Module):
 
             for nt in x_dict.keys():
                 x_new[nt] = self.act(x_new[nt])
+
+            if self.film is not None:
+                x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
             
             for nt in x_dict.keys():
                 x_new[nt] = x_dict[nt] + x_new[nt] 
 
-            if self.film is not None:
-                x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
-
             for nt in x_dict.keys():
                 x_dict[nt] = x_new[nt]
 
+        for nt in x_dict.keys():
+            x_dict[nt] = self.norms[nt][self.num_layers](x_dict[nt], batch_dict[nt])
 
         if b_tasks is not None:
             idx = data["tasks"].ptr[:-1]

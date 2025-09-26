@@ -1,5 +1,5 @@
 defaults:
-  - graph: dynamic_jacobi_diag
+  - graph: static_jacobi
   - reward: incremental_schedule
   - system: h100
   - feature: gnn_single
@@ -27,9 +27,9 @@ reward:
 
 graph:
   config:
-      n: 8
+      n: 4
       domain_ratio: 1.0
-      steps: 120
+      steps: 16
       boundary_width: 1000
   env:
     change_priority: False
