@@ -57,8 +57,6 @@ def configure_training(cfg: DictConfig):
         if isinstance(graph, DynamicJacobiGraph):
             workload = graph.get_workload()
             # workload.animate_workload(show=False, title="outputs/workload_animation.mp4")
-        else:
-            raise ValueError("Graph is not a DynamicJacobiGraph")
         
     if option == "EFT" and rank == 0:
         env.simulator.disable_external_mapper()
