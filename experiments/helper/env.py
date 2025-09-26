@@ -190,7 +190,7 @@ def make_env(
         change_location=cfg.graph.env.change_location if hasattr(cfg.graph.env, "change_location") else False,
         change_duration=cfg.graph.env.change_duration if hasattr(cfg.graph.env, "change_duration") else False,
         change_workload=cfg.graph.env.change_workload if hasattr(cfg.graph.env, "change_workload") else False,
-        seed=cfg.graph.env.seed,
+        seed=cfg.seed,
         max_samples_per_iter=(
             (len(graph) // (graph.nx * graph.ny) + 1 if cfg.algorithm.rollout_steps == 0 else cfg.algorithm.rollout_steps + 1)
             if cfg.feature.observer.batched

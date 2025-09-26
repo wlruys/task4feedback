@@ -26,6 +26,8 @@ def MultiHeadCategorical(**kwargs):
 
 def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> nn.Module:
     layers = cfg.network.layers
+    add_device_load = cfg.feature.get("add_device_load", False)
+
 
     state_layer = layers.state
     actor_layer = layers.actor
@@ -34,7 +36,7 @@ def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -
     policy_state_module = instantiate(
         state_layer,
         feature_config=feature_cfg,
-        add_device_load=cfg.network.add_device_load,
+        add_device_load=add_device_load,
         _recursive_=False,
     )
 
@@ -51,7 +53,7 @@ def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -
         state_layer,
         feature_config=feature_cfg,
         add_progress=cfg.network.critic.add_progress,
-        add_device_load=cfg.network.add_device_load,
+        add_device_load=add_device_load,
         _recursive_=False,
     )
 

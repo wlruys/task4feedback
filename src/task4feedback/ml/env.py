@@ -876,7 +876,7 @@ class IncrementalSchedule(RuntimeEnv):
 
     def _reinitialize_intervals(self):
         sample = torch.rand(self.max_length())
-        self.interval_flags = sample < self.chance
+        self.interval_flags = sample <= self.chance
         # TODO: Implement distance to last and next for gamma discounting.
 
     def _step(self, td: TensorDict) -> TensorDict:
@@ -931,7 +931,7 @@ class IncrementalSchedule(RuntimeEnv):
             if self.terminal_reward:
                 reward = r - done_reward
 
-        buf = td.empty().clone()
+        buf = td.empty()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
 
         # if self.network is not None and self.use_rle:
@@ -997,7 +997,7 @@ class PBRS_EFT_Diff(RuntimeEnv):
         # if done and not self.disable_reward_flag:
         #     print(r, self.scaling_factor)
         #     exit()
-        buf = td.empty().clone()
+        buf = td.empty()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
 
         buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
