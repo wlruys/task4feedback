@@ -2,5 +2,5 @@ _target_: task4feedback.ml.env.IncrementalSchedule
 _partial_: true
 k: 2
 random_start: False
-terminal_reward: False
+terminal_reward: True
 chance: 1.0

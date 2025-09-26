@@ -93,6 +93,6 @@ eval:
   eval_interval: 25
   max_frames: 400
   video_seconds: 15
-  samples: 10
+  samples: 1
   pickle_path: ./8x8x128_diag_1:1:1.pkl
 

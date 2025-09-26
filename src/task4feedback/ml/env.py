@@ -21,7 +21,7 @@ from task4feedback.graphs.base import TaskGraph, DataBlocks, ComputeDataGraph
 import random
 from task4feedback.graphs.mesh.plot import *
 from task4feedback.legacy_graphs import *
-from task4feedback.graphs.jacobi import JacobiGraph, JacobiRoundRobinMapper, JacobiQuadrantMapper
+from task4feedback.graphs.jacobi import JacobiGraph, JacobiRoundRobinMapper, JacobiQuadrantMapper, LevelPartitionMapper
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from torch_geometric.data import HeteroData
 from torchrl.data import Categorical
@@ -220,6 +220,23 @@ class RuntimeEnv(EnvBase):
             final_state = simulator_copy.run()
             assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
             return simulator_copy.time
+        elif policy == "Oracle":
+            simulator_copy = self.simulator.fresh_copy()
+            simulator_copy.initialize()
+            simulator_copy.initialize_data()
+            simulator_copy.enable_external_mapper()
+            graph: DynamicJacobiGraph = simulator_copy.input.graph
+            graph.mincut_per_levels(
+                bandwidth=450e9,
+                level_chunks=32,
+                n_parts=self.n_compute_devices,
+                offset=1,
+            )
+            graph.align_partitions()
+            simulator_copy.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
+            final_state = simulator_copy.run()
+            assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
+            return simulator_copy.time
         return self.baseline_time
 
     def _create_observation_spec(self, td) -> TensorSpec:
@@ -302,15 +319,17 @@ class RuntimeEnv(EnvBase):
 
     def _handle_done(self, obs):
         time = obs[self.time_key].item()
-        improvement = (self.EFT_baseline) / (time)  # as speedup
+        improvement = (self.EFT_baseline) / (time)
         obs.set_at_(self.improvement_key, improvement, 0)
-        obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
-        reward = improvement
+        best_policy = self._get_baseline(policy="Oracle")
+        obs.set_at_(self.vs_quad_key, best_policy / time, 0)
+        reward = (self.EFT_baseline - time) / (self.EFT_baseline)
         if self.verbose:
             print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
+                f"Time: {time} / EFT: {self.EFT_baseline} / Best: {best_policy} Improvement: {improvement:.2f}",
                 flush=True,
             )
+
         return obs, reward, time, improvement
 
     def max_length(self) -> int:
@@ -516,19 +535,19 @@ class IncrementalEFT(RuntimeEnv):
         self.baseline_policy = baseline_policy
         self.terminal_reward = terminal_reward
 
-    def _handle_done(self, obs):
-        time = obs[self.time_key].item()
-        improvement = (self.EFT_baseline) / (time)
-        obs.set_at_(self.improvement_key, improvement, 0)
-        obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
-        reward = (self.EFT_baseline - time) / (self.EFT_baseline / self.scaling_factor)
-        if self.verbose:
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
-                flush=True,
-            )
+    # def _handle_done(self, obs):
+    #     time = obs[self.time_key].item()
+    #     improvement = (self.EFT_baseline) / (time)
+    #     obs.set_at_(self.improvement_key, improvement, 0)
+    #     obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
+    #     reward = (self.EFT_baseline - time) / (self.EFT_baseline / self.scaling_factor)
+    #     if self.verbose:
+    #         print(
+    #             f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
+    #             flush=True,
+    #         )
 
-        return obs, reward, time, improvement
+    #     return obs, reward, time, improvement
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
@@ -872,8 +891,17 @@ class IncrementalSchedule(RuntimeEnv):
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
-            self.previous_length = 0.0
-            self._reinitialize_intervals()
+            sim_current = self.simulator.copy()
+            sim_current.disable_external_mapper()
+
+            if self.k > 0:
+                sim_current.set_steps((self.k) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_current.run()
+            sim_current.start_drain()
+            sim_current.run()
+            self.previous_length = sim_current.time
+            if self.chance < 1.0:
+                self._reinitialize_intervals()
 
         self.step_count += 1
 
@@ -892,7 +920,8 @@ class IncrementalSchedule(RuntimeEnv):
             current_length = sim_current.time
 
             # Normalized in per-task time observed in global baseline.
-            reward = (self.previous_length - current_length) / (self.EFT_baseline / (self.size()))
+            done_reward = self.previous_length / self.EFT_baseline
+            reward = (self.previous_length - self.gamma * current_length) / (self.EFT_baseline)
             self.previous_length = current_length
         else:
             reward = 0.0
@@ -904,7 +933,7 @@ class IncrementalSchedule(RuntimeEnv):
         if done:
             obs, r, time, improvement = self._handle_done(obs)
             if self.terminal_reward:
-                reward = reward + r
+                reward = r - done_reward
 
         buf = td.empty().clone()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
@@ -930,19 +959,19 @@ class PBRS_EFT_Diff(RuntimeEnv):
         self.scaling_factor = scaling_factor
         print(f"PBRS Diff with gamma of {gamma}")
 
-    def _handle_done(self, obs):
-        time = obs[self.time_key].item()
-        improvement = (self.EFT_baseline) / (time)
-        obs.set_at_(self.improvement_key, improvement, 0)
-        obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
-        reward = (self.EFT_baseline - time) / (self.EFT_baseline / self.scaling_factor)
-        if self.verbose:
-            print(
-                f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
-                flush=True,
-            )
+    # def _handle_done(self, obs):
+    #     time = obs[self.time_key].item()
+    #     improvement = (self.EFT_baseline) / (time)
+    #     obs.set_at_(self.improvement_key, improvement, 0)
+    #     obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
+    #     reward = (self.EFT_baseline - time) / (self.EFT_baseline / self.scaling_factor)
+    #     if self.verbose:
+    #         print(
+    #             f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
+    #             flush=True,
+    #         )
 
-        return obs, reward, time, improvement
+    #     return obs, reward, time, improvement
 
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step", self.step_count)
