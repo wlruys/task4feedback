@@ -924,6 +924,7 @@ class IncrementalSchedule(RuntimeEnv):
             reward = (self.previous_length - self.gamma * current_length) / (self.EFT_baseline)
             self.previous_length = current_length
         else:
+            done_reward = 0.0
             reward = 0.0
 
         simulator_status = self.simulator.run_until_external_mapping()
