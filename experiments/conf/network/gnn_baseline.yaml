@@ -1,0 +1,7 @@
+defaults:
+  - architecture/gnn_state@layers.state
+  - architecture/gnn_policy_head@layers.actor
+  - architecture/gnn_value_head@layers.critic
+
+critic:
+  add_progress: true

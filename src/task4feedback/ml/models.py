@@ -4,18 +4,20 @@ import torch
 from typing import Optional, Self
 
 from torchrl.envs import EnvBase
-from task4feedback.interface.wrappers import observation_to_heterodata
+from task4feedback.interface.wrappers import observation_to_heterodata, observation_to_heterodata_truncate
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, List, Sequence
-
+from torch_geometric.nn.norm import GraphNorm 
 
 # from task4feedback.interface.wrappers import (
 #     observation_to_heterodata_truncate as observation_to_heterodata,
 # )
-
+from torch import Tensor
+from torch_geometric.data import HeteroData
+from torch_geometric.nn import HeteroConv, SAGEConv, Linear
 from torch.profiler import record_function
 
 from tensordict import TensorDict
@@ -29,6 +31,7 @@ from torch_geometric.nn import (
     EdgeConv,
     global_mean_pool,
     global_add_pool,
+    SAGPooling,
     HeteroConv,
     SAGEConv,
 )
@@ -147,9 +150,8 @@ class BatchWrapper(nn.Module):
 
 
 class HeteroDataWrapper(nn.Module):
-    def __init__(self, network: nn.Module, device: Optional[str] = "cpu"):
+    def __init__(self, device: Optional[str] = "cpu"):
         super(HeteroDataWrapper, self).__init__()
-        self.network = network
 
         self.register_parameter("dummy_param_0", nn.Parameter(torch.randn(1)))
 
@@ -168,9 +170,9 @@ class HeteroDataWrapper(nn.Module):
 
         if not is_batch:
             if actions is not None:
-                _obs = observation_to_heterodata(obs, actions=actions)
+                _obs = observation_to_heterodata_truncate(obs, actions=actions)
             else:
-                _obs = observation_to_heterodata(obs)
+                _obs = observation_to_heterodata_truncate(obs)
 
             task_count = obs["nodes", "tasks", "count"]
             data_count = obs["nodes", "data", "count"]
@@ -190,31 +192,19 @@ class HeteroDataWrapper(nn.Module):
 
         # flatten and save the batch size
         self.batch_size = obs.batch_size
-        # obs = obs.reshape(-1)
+        #print("1 BATCH SHAPE obs", obs.shape, obs.batch_size, self.batch_size)
+        obs = obs.reshape(-1)
 
         _h_data = []
 
-        print("obs", obs.shape, obs.batch_size)
+        #print("2 BATCH SHAPE obs", obs.shape, obs.batch_size, self.batch_size)
 
-        if is_cuda:
-            for i in range(obs.batch_size[0]):
-                if actions is not None:
-                    _obs = observation_to_heterodata(obs[i], actions=actions[i])
-                else:
-                    _obs = observation_to_heterodata(obs[i])
-
-                # _obs = _obs.to("cuda", non_blocking=True)
-
-                _h_data.append(_obs)
-        else:
-            for i in range(obs.batch_size[0]):
-                if actions is not None:
-                    _obs = observation_to_heterodata(obs[i], actions=actions[i])
-                else:
-                    print(i, len(obs))
-                    print(obs[i])
-                    _obs = observation_to_heterodata(obs[i])
-                _h_data.append(_obs)
+        for i in range(obs.batch_size[0]):
+            if actions is not None:
+                _obs = observation_to_heterodata_truncate(obs[i], actions=actions[i])
+            else:
+                _obs = observation_to_heterodata_truncate(obs[i])
+            _h_data.append(_obs)
 
         batch_obs = Batch.from_data_list(_h_data)
         task_count = obs["nodes", "tasks", "count"]
@@ -238,8 +228,7 @@ class HeteroDataWrapper(nn.Module):
                 obs, is_batch, actions=actions
             )
 
-        out = self.network(data, (task_count, data_count))
-        return out
+        return data, (task_count, data_count)
 
 
 @dataclass
@@ -492,6 +481,242 @@ class VectorStateNet(nn.Module):
         task_activations = self.layers(task_features)
 
         return task_activations
+
+
+class _FiLM(nn.Module):
+    def __init__(self, node_types: List[str], num_layers: int, cond_dim: int, hidden_dim: int):
+        super().__init__()
+        self.mod = nn.ModuleDict({
+            nt: nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(cond_dim, max(64, hidden_dim // 2)),
+                    nn.SiLU(),
+                    nn.Linear(max(64, hidden_dim // 2), 2 * hidden_dim)
+                )
+                for _ in range(num_layers)
+            ])
+            for nt in node_types
+        })
+
+    def forward(self, x_dict, batch_dict, g: Tensor, layer_idx: int):
+        if g.dim() == 1:
+            g = g.unsqueeze(0)  # [1, G]
+        B = g.size(0)
+        out = {}
+        for nt, x in x_dict.items():
+            if x is None:
+                out[nt] = None
+                continue
+            gb = self.mod[nt][layer_idx](g)       # [B, 2C]
+            gamma, beta = gb.chunk(2, dim=-1)     # [B,C], [B,C]
+            b = batch_dict.get(nt, None)
+            if b is None:
+                g_nodes = gamma[0].expand_as(x)
+                b_nodes = beta[0].expand_as(x)
+            else:
+                if b.max().item() >= B:
+                    raise ValueError("Global vector batch size mismatches node batch indices.")
+                g_nodes = gamma.index_select(0, b)
+                b_nodes = beta.index_select(0, b)
+            out[nt] = (1.0 + g_nodes) * x + b_nodes
+        return out
+
+class GATStateNet(nn.Module):
+
+    def __init__(self, 
+        feature_config: FeatureDimConfig, 
+        hidden_channels: int = 16,
+        num_layers: int = 3,
+        add_device_load: bool = False,
+        add_progress: bool = False,
+        n_devices: int = 5,
+        **_ignored):
+        super(GATStateNet, self).__init__()
+        self.feature_config = feature_config
+        self.hidden_channels = hidden_channels
+
+        self.convert_data = HeteroDataWrapper()
+
+        self.act = nn.SiLU()
+
+        g_dim = 0
+
+        if add_progress:
+            g_dim += 2
+
+        if add_device_load:
+            g_dim += 3 * n_devices
+
+        self.num_layers = int(num_layers)
+        self.g_dim = g_dim
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+        self.n_devices = int(n_devices)
+
+        self.stem_proj = nn.ModuleDict({
+            "tasks": Linear(int(feature_config.task_feature_dim), self.hidden_channels, bias=True),
+            "data":  Linear(int(feature_config.data_feature_dim),  self.hidden_channels, bias=True),
+        })
+        self.stem_norm = nn.ModuleDict({
+            "tasks": GraphNorm(self.hidden_channels),
+            "data":  GraphNorm(self.hidden_channels),
+        })
+
+        self.convs = nn.ModuleList()
+        for _ in range(num_layers):
+            conv_dict = {
+                ("tasks", "to", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='add'),
+                ("tasks", "from", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='add'),
+                ("tasks", "write", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='add'),
+                ("data", "write", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='add'),
+                ("tasks", "read", "data"): GATConv(hidden_channels, hidden_channels, concat=False, add_self_loops=False),
+                ("data", "read", "tasks"): GATConv(hidden_channels, hidden_channels, concat=False, add_self_loops=False),
+            }
+            hetero_conv = HeteroConv(conv_dict, aggr='sum')
+            self.convs.append(hetero_conv)
+
+        self.norms = nn.ModuleDict({
+            "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
+            "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
+        })
+
+
+        if self.add_device_load or self.add_progress:
+            self.film = _FiLM(node_types=["tasks","data"], num_layers=self.num_layers,
+                        cond_dim=int(self.g_dim), hidden_dim=self.hidden_channels)
+        else:
+            self.film = None # No FiLM conditioning
+
+        self.mlp_global_pool = nn.ModuleDict({
+            "tasks": nn.Sequential(
+                nn.Linear(self.hidden_channels, self.hidden_channels),
+                nn.SiLU(),
+                nn.Linear(self.hidden_channels, 8)
+            ),
+            "data": nn.Sequential(
+                nn.Linear(self.hidden_channels, self.hidden_channels),
+                nn.SiLU(),
+                nn.Linear(self.hidden_channels, 8)
+            ),
+        })
+
+        if self.add_device_load or self.add_progress:
+            self.mlp_side_info = nn.Sequential(
+                nn.Linear(self.g_dim, self.hidden_channels),
+                nn.SiLU(),
+                nn.Linear(self.hidden_channels, 8)
+            )
+        else:
+            self.mlp_side_info = None
+
+        self.output_dim = hidden_channels + 8
+
+        self.output_keys = ["embed"]
+
+
+    def forward(self, tensordict: TensorDict):
+        batch_size = tensordict.batch_size
+        data, (task_count, data_count) = self.convert_data(tensordict)
+
+        b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
+        b_data = data["data"].batch if isinstance(data, Batch) else None
+
+
+        x_tasks = self.stem_proj["tasks"](data["tasks"].x)
+        x_tasks = self.stem_norm["tasks"](x_tasks, b_tasks)
+        x_tasks = self.act(x_tasks)
+
+        x_data  = self.stem_proj["data"](data["data"].x)
+        x_data  = self.stem_norm["data"](x_data,  b_data)
+        x_data  = self.act(x_data)
+
+        x_dict = {"tasks": x_tasks, "data": x_data}
+        batch_dict = {"tasks": b_tasks, "data": b_data}
+
+        edge_index_dict = {
+            ("tasks", "to", "tasks"): data["tasks", "to", "tasks"].edge_index,
+            ("tasks", "from", "tasks"): data["tasks", "from", "tasks"].edge_index,
+            ("tasks", "write", "data"): data["tasks", "write", "data"].edge_index,
+            ("data", "write", "tasks"): data["data", "write", "tasks"].edge_index,
+            ("tasks", "read", "data"): data["tasks", "read", "data"].edge_index,
+            ("data", "read", "tasks"): data["data", "read", "tasks"].edge_index,
+        }
+
+        # edge_attr_dict = {
+        #     ("tasks", "read", "data"): data["tasks", "read", "data"].edge_attr,
+        #     ("data", "read", "tasks"): data["data", "read", "tasks"].edge_attr,
+        # }
+
+        per_edge_kwargs = {
+            ("tasks","read","data"): {"edge_attr": data["tasks","read","data"].edge_attr},
+            ("data","read","tasks"): {"edge_attr": data["data","read","tasks"].edge_attr},
+        }
+
+        if self.film is not None:
+            g = None
+            if self.add_progress:
+                time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+                time_feature = time_feature.reshape(-1, 1)
+                progress_feature = tensordict["aux", "progress"]
+                progress_feature = progress_feature.reshape(-1, 1)
+                g = torch.cat([time_feature, progress_feature], dim=-1)
+            
+            if self.add_device_load:
+                device_load = tensordict["aux","device_load"]
+                device_memory = tensordict["aux","device_memory"]
+                device_load = device_load.reshape(-1, 2*self.n_devices)
+                device_memory = device_memory.reshape(-1, 1*self.n_devices)
+
+                if g is None:
+                    g = torch.cat([device_load, device_memory], dim=-1)
+                else:
+                    g = torch.cat([g, device_load, device_memory], dim=-1)
+        else:
+            g = None
+
+        for l, conv in enumerate(self.convs):
+            x_in = {nt: self.norms[nt][l](x_dict[nt], batch_dict[nt]) for nt in x_dict.keys()}
+            x_new = conv(x_in, edge_index_dict=edge_index_dict)#, edge_attr_dict=edge_attr_dict)
+
+            for nt in x_dict.keys():
+                x_new[nt] = self.act(x_new[nt])
+            
+            for nt in x_dict.keys():
+                x_new[nt] = x_dict[nt] + x_new[nt] 
+
+            if self.film is not None:
+                x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
+
+            for nt in x_dict.keys():
+                x_dict[nt] = x_new[nt]
+
+
+        if b_tasks is not None:
+            idx = data["tasks"].ptr[:-1]
+            x = x_dict["tasks"][idx]
+        else:
+            x = x_dict["tasks"][0]
+
+        pooled_tasks = global_mean_pool(x_dict["tasks"], b_tasks)
+        pooled_data  = global_mean_pool(x_dict["data"],  b_data)
+
+        pt_f = self.mlp_global_pool["tasks"](pooled_tasks)
+        pd_f = self.mlp_global_pool["data"](pooled_data)
+
+        if self.mlp_side_info is not None:
+            g_f = self.mlp_side_info(g)
+            y = pt_f + pd_f + g_f
+        else:
+            y = pt_f + pd_f
+        
+        if b_tasks is None:
+            y = y.squeeze(0)
+
+        #print(f"x shape before cat: {x.shape}, y shape: {y.shape}, batch_size: {batch_size}")
+        x = torch.cat([x, y], dim=-1)
+        x = x.reshape(*batch_size, -1, x.shape[-1])
+        #print(f"x shape before return: {x.shape}")
+        return x.select(dim=-2, index=0)
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_ch, hidden_ch, kernel_size):

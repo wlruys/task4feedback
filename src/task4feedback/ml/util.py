@@ -15,6 +15,8 @@ from task4feedback.logging import training
 import os 
 import git 
 from task4feedback.ml.env import RuntimeEnv
+from torchrl.envs import step_mdp
+import math 
 
 def compute_advantage(td: TensorDict):
     with torch.no_grad():
@@ -261,10 +263,35 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
         env.disable_reward()
         with set_exploration_type(exploration_type), torch.no_grad():
             #check_env_specs(env)
+            # n_tasks = len(env.get_graph())
+            # decision_per_epoch = 100
+            # epochs = int(math.ceil(n_tasks / decision_per_epoch ))
+            # input_td = None
+            
+            # for epoch in range(epochs):
+            #     if input_td is None:
+            #         tensordict = env.rollout(
+            #             policy=policy,
+            #             max_steps=100,
+            #             return_contiguous=False,
+            #         )
+            #     else:
+            #         tensordict = env.rollout(
+            #             policy=policy,
+            #             max_steps=100,
+            #             return_contiguous=False,
+            #             auto_reset=False,
+            #             tensordict=input_td
+            #         )
+            #     input_td = step_mdp(tensordict[..., -1])
+            #     print(f"Eval epoch {epoch+1}/{epochs} completed")
+            start_t  = time.perf_counter()
             tensordict = env.rollout(
                 policy=policy,
                 max_steps=100000,
             )
+            end_t = time.perf_counter()
+            print(f"Eval rollout completed in {end_t - start_t:.4f} seconds")
 
 
 

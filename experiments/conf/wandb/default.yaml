@@ -1,4 +1,4 @@
-project: exploration-dev
+project: gnn-dev
 name: default
 enabled: true
 dir: ~/workspace/scheduling/logs

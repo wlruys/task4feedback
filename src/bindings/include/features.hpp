@@ -707,10 +707,7 @@ public:
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       const auto write = static_graph.get_write(task_id);
 
-      // std::cout << "Task ID: " << task_id << " Read size: " << read.size() << std::endl;
-
       for (int i = 0; i < write.size(); i++) {
-
         auto data_id = write[i];
         data_visited.insert(data_id);
         if (data_visited.size() >= max_data) {
@@ -823,9 +820,6 @@ public:
 
     std::size_t edge_count = 0;
     for (int64_t i = 0; i < data_ids_span.size(); i++) {
-      // if (data_index_map.find(static_cast<dataid_t>(data_ids_span[i])) == data_index_map.end()) {
-      //   data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
-      // }
       data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
     }
 
@@ -880,9 +874,6 @@ public:
 
     std::size_t edge_count = 0;
     for (int64_t i = 0; i < data_ids_span.size(); i++) {
-      // if (data_index_map.find(static_cast<dataid_t>(data_ids_span[i])) == data_index_map.end()) {
-      //   data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
-      // }
       data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
     }
 
@@ -936,10 +927,6 @@ public:
     const auto &static_graph = state.get().get_tasks();
     const auto &task_runtime = state.get().get_task_runtime();
 
-    // // The candidate task id is always the first task id in the list
-    // int64_t candidate_task_id = task_ids_span[0];
-    // std::cout << "Candidate Task ID: " << candidate_task_id << std::endl;
-
     std::size_t edge_count = 0;
     for (int64_t i = 0; i < data_ids_span.size(); i++) {
       data_index_map[static_cast<dataid_t>(data_ids_span[i])] = i;
@@ -955,12 +942,10 @@ public:
         taskid_t recent_writer_id = recent_writers[j];
 
         if (recent_writer_id != -1) {
-          // We are not the first writer, check to see if it is mapped w.r.t us
           const bool is_mapped = task_runtime.is_compute_mapped(recent_writer_id);
           if (!is_mapped) {
             continue;
           }
-          // TODO(wlr): This needs to support retire
         }
 
         auto it = data_index_map.find(data_id);
@@ -1032,16 +1017,12 @@ public:
     return edge_count;
   }
 
-  size_t get_data_device_edges_filtered(TorchInt64Arr1D &filtered_ids, TorchInt64Arr1D &data_ids,
+  size_t get_data_device_edges(TorchInt64Arr1D &data_ids,
                                         TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
 
-    if (output.shape(0) != 2) {
-      throw std::runtime_error("Edge output shape must be 2 x N");
-    }
-
-    std::span<int64_t> filtered_ids_span(filtered_ids.data(), filtered_ids.size());
-    ankerl::unordered_dense::set<int64_t> filtered_ids_set(filtered_ids_span.begin(),
-                                                           filtered_ids_span.end());
+    assert(output.shape(0) == 2);
+    assert(global_output.shape(0) == 2);
+    assert(data_ids.shape(0) == 1);
 
     auto v = output.view();
     auto gv = global_output.view();
@@ -1050,20 +1031,17 @@ public:
     std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
     const auto max_edges = output.shape(1);
-
     const auto &devices = state.get().get_devices();
     const auto &data_manager = state.get().get_data_manager();
 
     std::size_t edge_count = 0;
     for (int64_t i = 0; i < data_ids_span.size(); i++) {
 
-      if (filtered_ids_set.find(data_ids_span[i]) == filtered_ids_set.end()) {
-        continue;
-      }
+      const dataid_t data_id = static_cast<dataid_t>(data_ids_span[i]);
+      const uint8_t valid_flags = data_manager.get_mapped_location_flags(data_id);
 
-      for (int64_t j = 0; j < devices.size(); j++) {
-
-        if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
+      for (uint8_t j = 0; j < devices.size(); j++) {
+        if (valid_flags & (1 << j)) {
           v(0, i) = static_cast<int64_t>(i);
           v(1, i) = static_cast<int64_t>(j);
           gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
@@ -1089,17 +1067,21 @@ public:
     return edge_count;
   }
 
-  size_t get_data_device_edges(TorchInt64Arr1D &data_ids, TorchInt64Arr2D &output,
-                               TorchInt64Arr2D &global_output) {
 
-    if (output.shape(0) != 2) {
-      throw std::runtime_error("Edge output shape must be 2 x N");
-    }
+  size_t get_data_device_edges_filtered(TorchInt64Arr1D &filtered_lids, TorchInt64Arr1D &data_ids,
+                                        TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+
+    assert(output.shape(0) == 2);
+    assert(global_output.shape(0) == 2);
+    assert(filtered_lids.shape(0) == 1);
+    assert(data_ids.shape(0) == 1);
+
+    std::span<int64_t> filtered_ids_span(filtered_lids.data(), filtered_lids.size());
 
     auto v = output.view();
-
     auto gv = global_output.view();
     static bool has_warned = false;
+
     std::span<int64_t> data_ids_span(data_ids.data(), data_ids.size());
 
     const auto max_edges = output.shape(1);
@@ -1107,11 +1089,16 @@ public:
     const auto &data_manager = state.get().get_data_manager();
 
     std::size_t edge_count = 0;
-    for (int64_t i = 0; i < data_ids_span.size(); i++) {
-      for (int64_t j = 0; j < devices.size(); j++) {
+    for (int64_t i = 0; i < filtered_ids_span.size(); i++) {
 
-        if (data_manager.check_valid_mapped(static_cast<dataid_t>(data_ids_span[i]), j)) {
-          v(0, i) = static_cast<int64_t>(i);
+      const int64_t lid = filtered_ids_span[i];
+      const dataid_t data_id = static_cast<dataid_t>(data_ids_span[lid]);
+      const uint8_t valid_flags = data_manager.get_mapped_location_flags(data_id);
+
+      for (uint8_t j = 0; j < devices.size(); j++) {
+
+        if (valid_flags & (1 << j)) {
+          v(0, i) = static_cast<int64_t>(lid);
           v(1, i) = static_cast<int64_t>(j);
           gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
           gv(1, i) = static_cast<int64_t>(j);
@@ -1135,6 +1122,7 @@ public:
     }
     return edge_count;
   }
+
 
   void get_device_load(TorchFloatArr1D &output){
     const auto& s = state.get();
@@ -1965,6 +1953,23 @@ struct DataSizeFeature : public StateFeature<DataSizeFeature> {
   }
 };
 
+struct DataCoordinate : public StateFeature<DataCoordinate> {
+  DataCoordinate(const SchedulerState &state)
+      : StateFeature<DataCoordinate>(state, NodeType::DATA_BLOCK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 2;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID data_id, Span output) const {
+    const auto &data = state.get_data();
+    output[0] = static_cast<f_t>(data.get_x_pos(data_id));
+    output[1] = static_cast<f_t>(data.get_y_pos(data_id));
+  }
+};
+
+
 struct EmptyDeviceFeature : public IntFeature<EmptyDeviceFeature> {
   size_t dimension;
   EmptyDeviceFeature(SchedulerState &state, size_t dimension)
@@ -2105,6 +2110,34 @@ struct TaskDataUsageFeature : public StateEdgeFeature<TaskDataUsageFeature> {
     output[1] = static_cast<f_t>(is_write_access);
   }
 };
+
+struct TaskDataMappedFeature : public StateEdgeFeature<TaskDataMappedFeature> {
+  TaskDataMappedFeature(const SchedulerState &state)
+      : StateEdgeFeature<TaskDataMappedFeature>(state, EdgeType::TASK_DATA) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 2;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &task_runtime = state.get_task_runtime();
+
+    const auto read = static_graph.get_read(source_id);
+    const auto idx_in_read =
+        std::find(read.begin(), read.end(), target_id) - read.begin();
+    const auto &recent_writers = static_graph.get_most_recent_writers(source_id);
+    taskid_t recent_writer_task_id = recent_writers[idx_in_read];
+
+    const bool is_mapped = task_runtime.is_compute_mapped(recent_writer_task_id);
+
+    output[0] = static_cast<f_t>(is_mapped == true);
+    output[1] = static_cast<f_t>(is_mapped == false);
+  }
+};
+
 
 struct TaskDataDefaultEdgeFeature : public StateEdgeFeature<TaskDataDefaultEdgeFeature> {
   TaskDataDefaultEdgeFeature(const SchedulerState &state)
