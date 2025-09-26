@@ -1,0 +1,32 @@
+defaults:
+  - 4x4x16_static.yaml
+  - feature: cnn_batch
+  - network: dilation_cnn_batch
+  - _self_
+
+algorithm:
+  rollout_steps: 16
+  minibatch_size: 16
+
+feature:
+  observer:
+    prev_frames: 1
+    batched: true
+    version: A
+  normalization:
+    warmup: 20
+
+network:
+  layers:
+    state:
+      hidden_channels: 16
+    actor:
+      hidden_channels: 16
+    critic:
+      hidden_channels: 128
+  critic:
+    add_progress: True
+  add_device_load: True
+
+wandb:
+  name: CNN-A_IEFT

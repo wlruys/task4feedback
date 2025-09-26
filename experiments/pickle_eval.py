@@ -46,11 +46,14 @@ import pickle
 
 def configure_training(cfg: DictConfig):
     # start_logger()
-    eval_state = {"cfg": OmegaConf.to_yaml(cfg), "init_locs": [], "workloads": [], "eft_times": [], "quad_times": []}
+    eval_state = {"cfg": OmegaConf.to_yaml(cfg), "init_locs": [], "workloads": [], "eft_times": [], "policy_times": []}
     graph_builder = make_graph_builder(cfg)
     env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
     env.set_reset_counter(9999)
 
+    # saved_policy = "Quad"
+    saved_policy = "Oracle"
+    oracle_chunk_size = 32
     for i in range(20):
         env.reset()
         eval_state["init_locs"].append(env.get_graph().get_cell_locations(as_dict=False))
@@ -60,20 +63,23 @@ def configure_training(cfg: DictConfig):
         else:
             eval_state["workloads"].append(None)
         eval_state["eft_times"].append(env._get_baseline("EFT"))
-        # eval_state["quad_times"].append(env._get_baseline("Quad"))
-        graph.mincut_per_levels(
-            bandwidth=cfg.system.d2d_bw,
-            mode="metis",
-            offset=1,
-            level_chunks=32,
-        )
-        graph.align_partitions()
-        env.simulator.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
-        env.simulator.run()
-        eval_state["quad_times"].append(env.simulator.time)
+        if saved_policy == "Quad":
+            eval_state["policy_times"].append(env._get_baseline("Quad"))
+        elif saved_policy == "Oracle":
+            graph.mincut_per_levels(
+                bandwidth=cfg.system.d2d_bw,
+                mode="metis",
+                offset=1,
+                level_chunks=oracle_chunk_size,
+            )
+            graph.align_partitions()
+            env.simulator.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
+            env.simulator.run()
+            eval_state["policy_times"].append(env.simulator.time)
     # print(eval_state)
-    pickle.dump(eval_state, open("8x8x128_diag_1:1:1.pkl", "wb"))
-    print(eval_state["cfg"])
+    # pickle.dump(eval_state, open("4x4x16_static_1:1:1.pkl", "wb"))
+    # pickle.dump(eval_state, open("8x8x128_diag_1:1:1.pkl", "wb"))
+    print(eval_state)
     exit()
 
     # env._reset()
@@ -91,6 +97,7 @@ def configure_training(cfg: DictConfig):
 
 @hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
+    print(OmegaConf.to_yaml(cfg))
 
     torch.manual_seed(cfg.seed)
     numpy.random.seed(cfg.seed)

@@ -1,0 +1,37 @@
+defaults:
+  - 8x8x128_dynamic_diag.yaml
+  - feature: cnn_batch
+  - network: dilation_cnn_batch
+  - _self_
+
+algorithm:
+  rollout_steps: 32
+  minibatch_size: 32
+
+optimizer:
+  lr: 1e-3
+
+system:
+  mem: 80e9
+
+feature:
+  observer:
+    prev_frames: 1
+    batched: true
+    version: A
+  normalization:
+    warmup: 10
+
+network:
+  layers:
+    state:
+      hidden_channels: 16
+    actor:
+      hidden_channels: 16
+    critic:
+      hidden_channels: 128
+  critic:
+    add_progress: True
+
+wandb:
+  name: CNN-A_IEFT

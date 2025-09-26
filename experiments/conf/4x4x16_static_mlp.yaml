@@ -1,0 +1,31 @@
+defaults:
+  - 4x4x16_static.yaml
+  - feature: candidate_coordinate
+  - network: vector_baseline
+  - _self_
+
+algorithm:
+  rollout_steps: 256
+  minibatch_size: 256
+
+feature:
+  observer:
+    batched: False
+    version: A
+  normalization:
+    warmup: 20
+
+network:
+  layers:
+    state:
+      hidden_channels: [64, 32, 16, 32]
+    actor:
+      hidden_channels: 32
+    critic:
+      hidden_channels: 32
+  critic:
+    add_progress: True
+  add_device_load: True
+
+wandb:
+  name: MLP-A_IEFT

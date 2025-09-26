@@ -7,6 +7,8 @@ outputs/
 run.txt
 .aim
 wandb/
+# but allow the one under experiments/conf
+!experiments/conf/wandb/
 logs/
 log/
 .wandb/

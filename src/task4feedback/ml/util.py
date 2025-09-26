@@ -299,7 +299,7 @@ def eval_pickled_env(
                     training.info(f"Environment {i} EFT time match: {pickled_states['eft_times'][i]} == {env._get_baseline('EFT')}")
 
         env_vsEFT.append(pickled_states["eft_times"][i] / completion_time if completion_time > 0 else 0.0)
-        env_vsQuad.append(pickled_states["quad_times"][i] / completion_time if completion_time > 0 else 0.0)
+        env_vsQuad.append(pickled_states["policy_times"][i] / completion_time if completion_time > 0 else 0.0)
         env.enable_reward()
 
     # time metrics

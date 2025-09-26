@@ -1,0 +1,73 @@
+defaults:
+  - graph: static_jacobi
+  - reward: pbrs
+  - system: 4h100
+  - algorithm: ppo
+  - runtime: batch
+  - wandb: default
+  - logging: default
+  - lr_scheduler: none
+  - noise: none
+  - optimizer: adamw
+  - eval: default
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: train.GitInfo
+
+seed: 256
+deterministic_torch: true
+
+reward:
+  verbose: False
+  random_start: False
+  gamma: 0.99
+  extra_logging_policy: Quad # This is not what it is used for reward calculation. This is just for logging purpose.
+
+graph:
+  config:
+    n: 4
+    steps: 16
+    level_memory: 110e9
+  env:
+    change_priority: False
+    change_location: True
+    change_duration: False
+    seed: 1
+
+algorithm:
+  num_collections: 10000
+  rollout_steps: 16
+  workers: 4
+  graphs_per_collection: 4
+  ent_coef: 0.01
+  sample_slices: False
+  slice_len: 16 # only used if sample_slices is True (LSTM)
+  gamma: 0.99
+  lmbda: 0.95
+  minibatch_size: 16
+  collector: "multi_sync"
+
+optimizer:
+  lr: 1e-3
+
+system:
+  mem: 80e9
+
+runtime:
+  batch_size: 5
+  queue_threshold: 5
+  max_in_flight: 16
+
+wandb:
+  enabled: true
+  project: static_4x4x16_ipdps
+  name: 4x4x16_static_base
+
+eval:
+  animation_interval: 0
+  eval_interval: 25
+  samples: 10
+  pickle_path: ./4x4x16_static_1:1:1.pkl

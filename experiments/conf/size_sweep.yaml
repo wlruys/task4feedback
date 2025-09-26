@@ -16,12 +16,12 @@ defaults:
 
 
 sweep:
-  n_samples: 10
+  n_samples: 2
   task_th: 0.4
   level_size_step: 5e9
   exps: ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
-  interior_ratio: 2 # Interior / Compute time
-  boundary_ratio: 2 # Boundary / Compute time
+  interior_ratio: 1 # Interior / Compute time
+  boundary_ratio: 0.25 # Boundary / Compute time
 
 system:
   mem: 80e9
@@ -47,13 +47,13 @@ graph:
       arithmetic_intensity: 1000
       memory_intensity: 0
       n: 8
-      steps: 120
+      steps: 64
       workload_args:
         lower_bound: 1
         upper_bound: 5
   env:
-    change_priority: True
-    change_location: True
+    change_priority: False
+    change_location: False
     change_duration: False
     seed: 1
 

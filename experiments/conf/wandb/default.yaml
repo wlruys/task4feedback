@@ -2,6 +2,7 @@ project: gnn-dev
 name: default
 enabled: true
 dir: ~/workspace/scheduling/logs
+group: null
 tags:
   - ppo
   - default

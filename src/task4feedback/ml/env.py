@@ -66,6 +66,7 @@ class RuntimeEnv(EnvBase):
         verbose: bool = True,
         sample_z: bool = False,
         burn_in_resets: int = 10,
+        extra_logging_policy: str = "EFT",
     ):
         super().__init__(device=device)
         self.verbose = verbose
@@ -80,6 +81,7 @@ class RuntimeEnv(EnvBase):
         self.random_start = random_start
         self.sample_z = sample_z
         self.burn_in_resets = burn_in_resets
+        self.extra_logging_policy = extra_logging_policy
 
         if location_list is None:
             location_list = [i for i in range(int(only_gpu), len(simulator_factory.input.system))]
@@ -162,7 +164,7 @@ class RuntimeEnv(EnvBase):
         self.progress_key = ("aux", "progress")
         self.baseline_key = ("aux", "baseline")
         self.improvement_key = ("aux", "improvement")
-        self.vs_quad_key = ("aux", "vs_quad")
+        self.vs_policy_key = ("aux", "vs_policy")
         self.z_ch_key = ("aux", "z_ch")
         self.z_spa_key = ("aux", "z_spa")
         self.time_key = ("aux", "time")
@@ -221,7 +223,8 @@ class RuntimeEnv(EnvBase):
             final_state = simulator_copy.run()
             assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
             return simulator_copy.time
-        elif policy == "Oracle":
+        elif policy.startswith("Oracle(") and policy.endswith(")"):
+            k = int(policy[len("Oracle(") : -1])
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
@@ -229,7 +232,7 @@ class RuntimeEnv(EnvBase):
             graph: DynamicJacobiGraph = simulator_copy.input.graph
             graph.mincut_per_levels(
                 bandwidth=450e9,
-                level_chunks=32,
+                level_chunks=k,
                 n_parts=self.n_compute_devices,
                 offset=1,
             )
@@ -238,6 +241,8 @@ class RuntimeEnv(EnvBase):
             final_state = simulator_copy.run()
             assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
             return simulator_copy.time
+        else:
+            raise ValueError(f"Unknown baseline policy: {policy}")
         return self.baseline_time
 
     def _create_observation_spec(self, td) -> TensorSpec:
@@ -315,7 +320,7 @@ class RuntimeEnv(EnvBase):
         baseline = max(1.0, self.EFT_baseline)
         obs.set_at_(self.progress_key, progress, 0)
         obs.set_at_(self.baseline_key, baseline, 0)
-        obs.set_at_(self.vs_quad_key, -100, 0)
+        obs.set_at_(self.vs_policy_key, -100, 0)
         return obs
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -326,8 +331,8 @@ class RuntimeEnv(EnvBase):
         time = obs[self.time_key].item()
         improvement = (self.EFT_baseline) / (time)
         obs.set_at_(self.improvement_key, improvement, 0)
-        best_policy = self._get_baseline(policy="Oracle")
-        obs.set_at_(self.vs_quad_key, best_policy / time, 0)
+        best_policy = self._get_baseline(policy=self.extra_logging_policy)
+        obs.set_at_(self.vs_policy_key, best_policy / time, 0)
         reward = (self.EFT_baseline - time) / (self.EFT_baseline)
         if self.verbose:
             print(
@@ -533,30 +538,15 @@ class RuntimeEnv(EnvBase):
 
 class IncrementalEFT(RuntimeEnv):
 
-    def __init__(self, *args, gamma: float = 1.0, scaling_factor: float = 1.0, baseline_policy: str = "EFT", terminal_reward: bool = True, **kwargs):
+    def __init__(self, *args, gamma: float = 1.0, scaling_factor: float = 1.0, terminal_reward: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.scaling_factor = scaling_factor
-        self.baseline_policy = baseline_policy
         self.terminal_reward = terminal_reward
-
-    # def _handle_done(self, obs):
-    #     time = obs[self.time_key].item()
-    #     improvement = (self.EFT_baseline) / (time)
-    #     obs.set_at_(self.improvement_key, improvement, 0)
-    #     obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
-    #     reward = (self.EFT_baseline - time) / (self.EFT_baseline / self.scaling_factor)
-    #     if self.verbose:
-    #         print(
-    #             f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
-    #             flush=True,
-    #         )
-
-    #     return obs, reward, time, improvement
 
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(policy=self.baseline_policy)
+            self.EFT_baseline = self._get_baseline(policy="EFT")
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
@@ -964,20 +954,6 @@ class PBRS_EFT_Diff(RuntimeEnv):
         self.gamma = gamma
         self.scaling_factor = scaling_factor
         print(f"PBRS Diff with gamma of {gamma}")
-
-    # def _handle_done(self, obs):
-    #     time = obs[self.time_key].item()
-    #     improvement = (self.EFT_baseline) / (time)
-    #     obs.set_at_(self.improvement_key, improvement, 0)
-    #     obs.set_at_(self.vs_quad_key, self._get_baseline(policy="Quad") / time, 0)
-    #     reward = (self.EFT_baseline - time) / (self.EFT_baseline / self.scaling_factor)
-    #     if self.verbose:
-    #         print(
-    #             f"Time: {time} / Baseline: {self.EFT_baseline} Improvement: {improvement:.2f}",
-    #             flush=True,
-    #         )
-
-    #     return obs, reward, time, improvement
 
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step", self.step_count)

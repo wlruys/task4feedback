@@ -2,8 +2,6 @@ defaults:
   - graph: dynamic_jacobi_diag
   - reward: pbrs
   - system: 4h100
-  - feature: cnn_batch
-  - network: dilation_cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -18,6 +16,7 @@ hydra:
   callbacks:
     git_info:
       _target_: train.GitInfo
+
 seed: 256
 deterministic_torch: true
 
@@ -25,7 +24,7 @@ reward:
   verbose: False
   random_start: False
   gamma: 0.99
-  # scaling_factor: 1.0
+  extra_logging_policy: Oracle(32) # This is not what it is used for reward calculation. This is just for logging purpose.
 
 graph:
   config:
@@ -57,26 +56,6 @@ optimizer:
 
 system:
   mem: 80e9
-
-feature:
-  observer:
-    prev_frames: 1
-    batched: true
-  normalization:
-    warmup: 10
-
-network:
-  layers:
-    # lstm:
-    #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
-    state:
-      hidden_channels: 16
-    actor:
-      hidden_channels: 16
-    critic:
-      hidden_channels: 128
-  critic:
-    add_progress: True
 
 runtime:
   batch_size: 5

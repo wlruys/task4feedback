@@ -165,10 +165,10 @@ def log_training_metrics(
     with torch.no_grad():
         rewards = flattened_data["next", "reward"]
         improvements = flattened_data["next", "observation", "aux", "improvement"]
-        vs_quad = flattened_data["next", "observation", "aux", "vs_quad"]
+        vs_policy = flattened_data["next", "observation", "aux", "vs_policy"]
         valid_improvement_mask = torch.isfinite(improvements) & (improvements > -100)
         valid_improvements = improvements[valid_improvement_mask]
-        valid_quad = vs_quad[valid_improvement_mask]
+        valid_quad = vs_policy[valid_improvement_mask]
 
         # Calculate improvement metrics
         if valid_improvements.numel() > 0:
@@ -176,9 +176,9 @@ def log_training_metrics(
             max_improvement = valid_improvements.max().item()
             min_improvement = valid_improvements.min().item()
 
-            avg_vs_quad = valid_quad.mean().item()
-            max_vs_quad = valid_quad.max().item()
-            min_vs_quad = valid_quad.min().item()
+            avg_vs_policy = valid_quad.mean().item()
+            max_vs_policy = valid_quad.max().item()
+            min_vs_policy = valid_quad.min().item()
 
             if valid_improvements.numel() > 1:
                 std_improvement = valid_improvements.std().item()
@@ -247,9 +247,9 @@ def log_training_metrics(
                     "batch/mean_improvement": avg_improvement,
                     "batch/max_improvement": max_improvement,
                     "batch/min_improvement": min_improvement,
-                    "batch/mean_vs_quad": avg_vs_quad,
-                    "batch/max_vs_quad": max_vs_quad,
-                    "batch/min_vs_quad": min_vs_quad,
+                    "batch/mean_vs_policy": avg_vs_policy,
+                    "batch/max_vs_policy": max_vs_policy,
+                    "batch/min_vs_policy": min_vs_policy,
                 }
             )
             if std_improvement is not None:
