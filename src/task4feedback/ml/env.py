@@ -272,7 +272,7 @@ class RuntimeEnv(EnvBase):
             obs = self.observations[0].clone()
             obs.zero_()
         else:
-            obs = self.observations[step_count % n_buffers]#.clone()
+            obs = self.observations[step_count % n_buffers].clone()
             obs.zero_()
 
         if not hasattr(self, "_rle_next_step"):

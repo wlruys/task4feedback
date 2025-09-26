@@ -11,4 +11,4 @@ initialization:
   layer1:
     gain: 1.0
   layer2:
-    gain: 1.0
+    gain: 0.1

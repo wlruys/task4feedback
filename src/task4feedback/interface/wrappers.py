@@ -1651,7 +1651,7 @@ class ExternalObserver:
                 output["nodes", "data", "glb"][:ndata],
                 output["edges", "tasks_read_data", "idx"],
                 output["edges", "tasks_read_data", "glb"],
-                AccessType.READ,
+                AccessType.READ_MAPPED,
             )
             output.set_at_(("edges", "tasks_read_data", "count"), read_count, 0)
 

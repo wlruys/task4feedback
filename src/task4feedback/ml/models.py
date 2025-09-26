@@ -482,6 +482,17 @@ class VectorStateNet(nn.Module):
 
         return task_activations
 
+def _zero_last_linear(seq: nn.Sequential):
+    last = None
+    for m in reversed(seq):
+        if isinstance(m, nn.Linear):
+            last = m
+            break
+    assert last is not None
+    nn.init.zeros_(last.weight)
+    if last.bias is not None:
+        nn.init.zeros_(last.bias)
+
 
 class _FiLM(nn.Module):
     def __init__(self, node_types: List[str], num_layers: int, cond_dim: int, hidden_dim: int):
@@ -497,6 +508,13 @@ class _FiLM(nn.Module):
             ])
             for nt in node_types
         })
+
+        for nt in node_types:
+            for l in range(num_layers):
+                out_lin = self.mod[nt][l][-1]
+                nn.init.zeros_(out_lin.weight)
+                nn.init.zeros_(out_lin.bias)
+
 
     def forward(self, x_dict, batch_dict, g: Tensor, layer_idx: int):
         if g.dim() == 1:
@@ -526,7 +544,7 @@ class GATStateNet(nn.Module):
     def __init__(self, 
         feature_config: FeatureDimConfig, 
         hidden_channels: int = 16,
-        num_layers: int = 3,
+        num_layers: int = 1,
         add_device_load: bool = False,
         add_progress: bool = False,
         n_devices: int = 5,
@@ -565,20 +583,21 @@ class GATStateNet(nn.Module):
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             conv_dict = {
-                ("tasks", "to", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='add'),
-                ("tasks", "from", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='add'),
-                ("tasks", "write", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='add'),
-                ("data", "write", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='add'),
-                ("tasks", "read", "data"): GATConv(hidden_channels, hidden_channels, concat=False, add_self_loops=False),
-                ("data", "read", "tasks"): GATConv(hidden_channels, hidden_channels, concat=False, add_self_loops=False),
+                ("tasks", "to", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='mean'),
+                ("tasks", "from", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='mean'),
+                ("tasks", "write", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='mean'),
+                ("data", "write", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='mean'),
+                ("tasks", "read", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='mean'),
+                ("data", "read", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr='mean'),
             }
-            hetero_conv = HeteroConv(conv_dict, aggr='sum')
+            hetero_conv = HeteroConv(conv_dict, aggr='mean')
             self.convs.append(hetero_conv)
 
         self.norms = nn.ModuleDict({
             "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
             "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
         })
+
 
 
         if self.add_device_load or self.add_progress:
@@ -608,6 +627,16 @@ class GATStateNet(nn.Module):
             )
         else:
             self.mlp_side_info = None
+
+        self.mlp_norm = nn.LayerNorm(8)
+
+        _zero_last_linear(self.mlp_global_pool["tasks"])
+        _zero_last_linear(self.mlp_global_pool["data"])
+        if self.mlp_side_info is not None:
+            _zero_last_linear(self.mlp_side_info)
+
+        nn.init.zeros_(self.stem_proj["tasks"].bias)
+        nn.init.zeros_(self.stem_proj["data"].bias)
 
         self.output_dim = hidden_channels + 8
 
@@ -675,8 +704,8 @@ class GATStateNet(nn.Module):
             g = None
 
         for l, conv in enumerate(self.convs):
-            x_in = {nt: self.norms[nt][l](x_dict[nt], batch_dict[nt]) for nt in x_dict.keys()}
-            x_new = conv(x_in, edge_index_dict=edge_index_dict)#, edge_attr_dict=edge_attr_dict)
+            x_dict = {nt: self.norms[nt][l](x_dict[nt], batch_dict[nt]) for nt in x_dict.keys()}
+            x_new = conv(x_dict, edge_index_dict=edge_index_dict)
 
             for nt in x_dict.keys():
                 x_new[nt] = self.act(x_new[nt])
@@ -692,6 +721,7 @@ class GATStateNet(nn.Module):
 
         for nt in x_dict.keys():
             x_dict[nt] = self.norms[nt][self.num_layers](x_dict[nt], batch_dict[nt])
+            x_dict[nt] = self.act(x_dict[nt])
 
         if b_tasks is not None:
             idx = data["tasks"].ptr[:-1]
@@ -710,6 +740,9 @@ class GATStateNet(nn.Module):
             y = pt_f + pd_f + g_f
         else:
             y = pt_f + pd_f
+
+        y = self.mlp_norm(y)
+        y = self.act(y)
         
         if b_tasks is None:
             y = y.squeeze(0)
@@ -719,6 +752,100 @@ class GATStateNet(nn.Module):
         x = x.reshape(*batch_size, -1, x.shape[-1])
         #print(f"x shape before return: {x.shape}")
         return x.select(dim=-2, index=0)
+
+
+class OriginalGNNStateNet(nn.Module):
+
+    def __init__(
+            self,
+            feature_config: FeatureDimConfig,
+            hidden_channels: int = 16,
+            n_heads: int = 2,
+            **_ignored,
+    ):
+        super(OriginalGNNStateNet, self).__init__()
+
+        self.feature_config = feature_config
+        self.n_heads = n_heads
+        self.hidden_channels = hidden_channels
+
+        self.convert_data = HeteroDataWrapper()
+        
+
+        self.gnn_tasks_data = GATv2Conv(
+            (feature_config.data_feature_dim, feature_config.task_feature_dim),
+            hidden_channels,
+            heads=n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            add_self_loops=False,
+        )
+
+        self.gnn_tasks_tasks = GATv2Conv(
+            (feature_config.task_feature_dim, feature_config.task_feature_dim),
+            hidden_channels,
+            heads=n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            add_self_loops=False,
+        )
+
+        self.layer_norm1 = nn.LayerNorm(hidden_channels) 
+        self.layer_norm2 = nn.LayerNorm(hidden_channels) 
+        self.act = nn.LeakyReLU(negative_slope=0.01)
+
+        self.gat_output = hidden_channels * 2 + feature_config.task_feature_dim
+
+        self.output_dim = self.gat_output * 2
+        self.output_keys = ["embed"]
+
+    def forward(self, tensordict: TensorDict):
+        batch_size = tensordict.batch_size
+        data, (task_count, data_count) = self.convert_data(tensordict)
+
+        b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
+        b_data = data["data"].batch if isinstance(data, Batch) else None
+
+        x = data["tasks"].x
+
+        data_fused_tasks = self.gnn_tasks_data(
+            (data["data"].x, data["tasks"].x),
+            data["data", "read", "tasks"].edge_index,
+        )
+
+        tasks_fused_tasks = self.gnn_tasks_tasks(
+            (data["tasks"].x, data["tasks"].x),
+            data["tasks", "to", "tasks"].edge_index,
+        )
+
+      
+        x_data_updated = self.layer_norm1(data_fused_tasks)
+        x_data_updated = self.act(x_data_updated)
+
+        x_tasks_updated = self.layer_norm2(tasks_fused_tasks)
+        x_tasks_updated = self.act(x_tasks_updated)
+
+        x_fused = torch.cat([x, x_tasks_updated, x_data_updated], dim=-1)
+
+        global_fused = global_mean_pool(x_fused, b_tasks)
+
+        if b_tasks is None:
+            global_fused = global_fused.squeeze(0)
+
+        if b_tasks is not None:
+            idx = data["tasks"].ptr[:-1]
+            x = x_fused[idx]
+        else:
+            x = x_fused[0]
+
+        x = torch.cat([x, global_fused], dim=-1)
+
+        x = x.reshape(*batch_size, -1, x.shape[-1])
+        return x.select(dim=-2, index=0)
+
+
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_ch, hidden_ch, kernel_size):
