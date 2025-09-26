@@ -51,7 +51,7 @@ size = comm.Get_size()
 def configure_training(cfg: DictConfig):
     # start_logger()
 
-    option = "Quad"
+    option = "Oracle"
     if rank == 0:
         graph_builder = make_graph_builder(cfg)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
@@ -70,7 +70,7 @@ def configure_training(cfg: DictConfig):
             bandwidth=cfg.system.d2d_bw,
             mode="metis",
             offset=1,
-            level_chunks=4,
+            level_chunks=16,
         )
         graph.align_partitions()
         env.simulator.enable_external_mapper()
@@ -102,7 +102,8 @@ def configure_training(cfg: DictConfig):
         # start_logger()
         env.simulator.run()
         env.simulator.external_mapper = ExternalMapper()
-        print(env.simulator.time, env._get_baseline("EFT"))
+        eft = env._get_baseline("EFT")
+        print(env.simulator.time, env._get_baseline("EFT"), f"{eft/env.simulator.time:.2f}x")
         print("Interval: ", int(env.simulator.time / config.max_frames))
         start_t = time.perf_counter()
         # animate_mesh_graph(env=env, folder=Path("outputs/"))

@@ -1,0 +1,98 @@
+defaults:
+  - graph: dynamic_jacobi_diag
+  - reward: pbrs
+  - system: 4h100
+  - feature: cnn_batch
+  - network: dilation_cnn_batch
+  - algorithm: ppo
+  - runtime: batch
+  - wandb: default
+  - logging: default
+  - lr_scheduler: none 
+  - noise: none
+  - optimizer: adamw
+  - eval: default
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: train.GitInfo
+seed: 256
+deterministic_torch: true
+
+reward:
+  verbose: False
+  random_start: False
+  gamma: 0.99
+  # scaling_factor: 1.0
+
+graph:
+  config:
+    steps: 128
+    n: 8
+    level_memory: 40e9
+    boundary_width: 0.25
+  env:
+    change_priority: False
+    change_location: False
+    change_duration: False
+    seed: 1
+
+algorithm:
+  num_collections: 10000
+  rollout_steps: 32
+  workers: 4
+  graphs_per_collection: 4
+  ent_coef: 0.01
+  sample_slices: False
+  slice_len: 16
+  gamma: 0.99
+  lmbda: 0.95
+  minibatch_size: 32
+  collector: "multi_sync"
+
+optimizer:
+  lr: 1e-3
+
+system:
+  mem: 80e9
+
+feature:
+  observer:
+    prev_frames: 1
+    batched: true
+  normalization:
+    warmup: 10
+
+network:
+  layers:
+    # lstm:
+    #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
+    state:
+      hidden_channels: 16
+    actor:
+      hidden_channels: 16
+    critic:
+      hidden_channels: 128
+  critic:
+    add_progress: True
+
+runtime:
+  batch_size: 5
+  queue_threshold: 5
+  max_in_flight: 64
+
+wandb:
+  enabled: true
+  project: 8x8x128_diag
+  name: CNN-A_IEFT
+
+eval:
+  animation_interval: 0
+  eval_interval: 25
+  max_frames: 400
+  video_seconds: 15
+  samples: 10
+  pickle_path: ./8x8x128_diag_1:1:1.pkl
+

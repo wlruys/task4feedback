@@ -390,25 +390,25 @@ def evaluate_policy(n_collections: int, policy, eval_envs: list[RuntimeEnv], con
             training.warning(f"Environment {i} does not have reset_for_evaluation method, skipping evaluation.")
             continue
 
-        if n_collections == 0 and hasattr(env, "get_graph") and hasattr(env.get_graph(), "get_workload"):
-            training.info("Generating initial workload plot for environment {i}")
-            env.reset_for_evaluation(seed=config.seeds[0])
-            title = f"workload_env_{i}.mp4"
-            workload = env.get_graph().get_workload()
-            workload.animate_workload(title=title, show=False, bitrate=config.bitrate, video_seconds=config.video_seconds, figsize=config.fig_size, dpi=config.dpi)
+        # if n_collections == 0 and hasattr(env, "get_graph") and hasattr(env.get_graph(), "get_workload"):
+        #     training.info("Generating initial workload plot for environment {i}")
+        #     env.reset_for_evaluation(seed=config.seeds[0])
+        #     title = f"workload_env_{i}.mp4"
+        #     workload = env.get_graph().get_workload()
+        #     workload.animate_workload(title=title, show=False, bitrate=config.bitrate, video_seconds=config.video_seconds, figsize=config.fig_size, dpi=config.dpi)
 
-            if wandb is None or wandb.run is None or wandb.run.dir is None:
-                path = "."
-            else:
-                path = wandb.run.dir
+        #     if wandb is None or wandb.run is None or wandb.run.dir is None:
+        #         path = "."
+        #     else:
+        #         path = wandb.run.dir
 
-            video_path = Path(path) / f"{title}"
-            metrics[f"eval/env_{i}_workload"] = wandb.Video(
-                video_path,
-                caption=f"Env {i} Workload",
-                fps=len(workload.levels) / (config.max_frames / 30),
-                format="mp4",
-            )
+        #     video_path = Path(path) / f"{title}"
+        #     metrics[f"eval/env_{i}_workload"] = wandb.Video(
+        #         video_path,
+        #         caption=f"Env {i} Workload",
+        #         fps=len(workload.levels) / (config.max_frames / 30),
+        #         format="mp4",
+        #     )
 
         if config.pickle_path is not None:
             if exploration_type == "RANDOM":

@@ -36,7 +36,13 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
             n_parts=4,
             offset=0,
         )
+
         # print(partition)
+        # if isinstance(graph, DynamicJacobiGraph):
+        #     for x in range(graph.nx):
+        #         for y in range(graph.ny):
+        #             print(f"{partition[graph.xy_from_id(x * graph.ny + y)]}", end=" ")
+        #         print()
 
         """ 
         def initial_mincut_partition(

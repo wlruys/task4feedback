@@ -5,12 +5,12 @@ config:
   steps: 240
   n: 16
   domain_ratio: 1.0
-  arithmetic_intensity: 5.0
+  arithmetic_intensity: 595.5555555
   arithmetic_complexity: 1.0
-  boundary_width: 5.0
-  boundary_complexity: 0.5
-  memory_intensity: 2.0
-  level_memory: 10e9
+  boundary_width: 0.25
+  boundary_complexity: 1
+  memory_intensity: 0
+  level_memory: 40e9
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0
@@ -29,7 +29,7 @@ init:
   partitioner: metis
   nparts: 4
   gpu_only: True
-  randomize: True
+  randomize: False
 env:
   change_priority: False
   change_location: False

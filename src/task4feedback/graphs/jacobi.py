@@ -747,7 +747,7 @@ class JacobiGraph(ComputeDataGraph):
         n_parts: int = 4,
         offset: int = 1,  # 1 to ignore cpu
     ):
-        cell_graph = self.get_weighted_cell_graph(arch, bandwidth=bandwidth, levels=[0])
+        cell_graph = self.get_weighted_cell_graph(arch, bandwidth=bandwidth, levels=[0, 1])
         edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
         partition = [x + offset for x in partition]
         return partition

@@ -52,7 +52,7 @@ size = comm.Get_size()
 def configure_training(cfg: DictConfig):
     # start_logger()
     step = 5e9
-    start = 55e9
+    start = 5e9
     samples = 10
     mem_list = []
     const_policy_samples: list[list[float]] = []
@@ -67,7 +67,9 @@ def configure_training(cfg: DictConfig):
         cfg.graph.config.level_memory = start
         inf_cfg.graph.config.level_memory = start
         const_env = make_env(graph_builder=make_graph_builder(cfg), cfg=cfg, normalization=False)
+        const_env.disable_reward()
         inf_env = make_env(graph_builder=make_graph_builder(inf_cfg), cfg=inf_cfg, normalization=False)
+        inf_env.disable_reward()
         const_env.get_graph()
         inf_env.get_graph()
 
@@ -80,10 +82,39 @@ def configure_training(cfg: DictConfig):
             const_env._reset()
             inf_env._reset()
 
-            base = inf_env._get_baseline("Quad")
+            # base = inf_env._get_baseline("Quad")
+            # inf_samples_policy.append(1.0)
+            # inf_samples_eft.append(inf_env._get_baseline("EFT") / base)
+            # const_samples_policy.append(const_env._get_baseline("Quad") / base)
+            # const_samples_eft.append(const_env._get_baseline("EFT") / base)
+            inf_graph = inf_env.get_graph()
+            inf_graph.mincut_per_levels(
+                bandwidth=inf_cfg.system.d2d_bw,
+                mode="metis",
+                offset=1,
+                level_chunks=32,
+            )
+            inf_graph.align_partitions()
+            inf_sim = inf_env.simulator
+            inf_sim.external_mapper = LevelPartitionMapper(level_cell_mapping=inf_graph.partitions)
+            inf_sim.run()
+            base = inf_sim.time
+
+            const_graph = const_env.get_graph()
+            const_graph.mincut_per_levels(
+                bandwidth=cfg.system.d2d_bw,
+                mode="metis",
+                offset=1,
+                level_chunks=32,
+            )
+            const_graph.align_partitions()
+            const_sim = const_env.simulator
+            const_sim.external_mapper = LevelPartitionMapper(level_cell_mapping=const_graph.partitions)
+            const_sim.run()
+
             inf_samples_policy.append(1.0)
             inf_samples_eft.append(inf_env._get_baseline("EFT") / base)
-            const_samples_policy.append(const_env._get_baseline("Quad") / base)
+            const_samples_policy.append(const_sim.time / base)
             const_samples_eft.append(const_env._get_baseline("EFT") / base)
 
         const_policy_samples.append(const_samples_policy)
@@ -112,6 +143,20 @@ def configure_training(cfg: DictConfig):
         "EFT(Inf)": "tab:red",
     }
 
+    # show numbers for MinCut
+    for i, mem in enumerate(mem_list):
+        mean = numpy.mean(const_policy_samples[i])
+        std = numpy.std(const_policy_samples[i])
+        ax.text(
+            mem,
+            mean + 0.05,
+            f"{mean:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            color=colors["MinCut"],
+        )
+
     plot_with_uncertainty(mem_list, const_policy_samples, "MinCut", colors["MinCut"])
     plot_with_uncertainty(mem_list, const_eft_samples, "EFT", colors["EFT"])
     plot_with_uncertainty(mem_list, inf_policy_samples, "MinCut(Inf)", colors["MinCut(Inf)"])
@@ -126,7 +171,7 @@ def configure_training(cfg: DictConfig):
     # plt.show()
 
 
-@hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
 
     torch.manual_seed(cfg.seed)

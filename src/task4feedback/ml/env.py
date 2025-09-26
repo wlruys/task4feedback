@@ -909,13 +909,13 @@ class IncrementalSchedule(RuntimeEnv):
         buf = td.empty().clone()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
 
-        if self.network is not None and self.use_rle:
-            self.network(buf)
-            f = buf["reference_state"]
-            z = td["observation", "aux", "z"]
-            r_rle = rle_reward(f, z)
-            # print(f"r_rle", r_rle, reward)
-            reward = reward + 0.5 * r_rle
+        # if self.network is not None and self.use_rle:
+        #     self.network(buf)
+        #     f = buf["reference_state"]
+        #     z = td["observation", "aux", "z"]
+        #     r_rle = rle_reward(f, z)
+        #     # print(f"r_rle", r_rle, reward)
+        #     reward = reward + 0.5 * r_rle
 
         buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
