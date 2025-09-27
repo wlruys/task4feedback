@@ -1493,6 +1493,9 @@ class GATObserverFactory(GATExternalObserverFactory):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         task_feature_factory.add(fastsim.PrevReadSizeFeature, 1, 1, True, 1)
+        task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.DataCoordinateFeature)

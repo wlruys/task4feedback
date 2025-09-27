@@ -27,6 +27,7 @@ from torch_geometric.nn import (
     GATv2Conv,
     GATConv,
     GraphConv,
+    GCNConv,
     SimpleConv,
     EdgeConv,
     global_mean_pool,
@@ -547,20 +548,27 @@ class GATStateNet(nn.Module):
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             conv_dict = {
-                ("tasks", "to", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
-                ("tasks", "from", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
-                ("tasks", "write", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
-                ("data", "write", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
-                ("tasks", "read", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
-                ("data", "read", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
+                ("tasks", "to", "tasks"): GCNConv(hidden_channels, hidden_channels),
+                ("tasks", "from", "tasks"): GCNConv(hidden_channels, hidden_channels),
+                # ("tasks", "write", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
+                # ("data", "write", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
+                ("tasks", "read", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add"),
+                ("data", "read", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add"),
             }
             hetero_conv = HeteroConv(conv_dict, aggr="mean")
             self.convs.append(hetero_conv)
 
         self.norms = nn.ModuleDict(
             {
-                "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers + 1)]),
-                "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers + 1)]),
+                "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
+                "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
+            }
+        )
+
+        self.post_norms = nn.ModuleDict(
+            {
+                "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers )]),
+                "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
             }
         )
 
@@ -616,21 +624,16 @@ class GATStateNet(nn.Module):
         edge_index_dict = {
             ("tasks", "to", "tasks"): data["tasks", "to", "tasks"].edge_index,
             ("tasks", "from", "tasks"): data["tasks", "from", "tasks"].edge_index,
-            ("tasks", "write", "data"): data["tasks", "write", "data"].edge_index,
-            ("data", "write", "tasks"): data["data", "write", "tasks"].edge_index,
+            # ("tasks", "write", "data"): data["tasks", "write", "data"].edge_index,
+            # ("data", "write", "tasks"): data["data", "write", "tasks"].edge_index,
             ("tasks", "read", "data"): data["tasks", "read", "data"].edge_index,
             ("data", "read", "tasks"): data["data", "read", "tasks"].edge_index,
         }
 
-        # edge_attr_dict = {
-        #     ("tasks", "read", "data"): data["tasks", "read", "data"].edge_attr,
-        #     ("data", "read", "tasks"): data["data", "read", "tasks"].edge_attr,
+        # per_edge_kwargs = {
+        #     ("tasks", "read", "data"): {"edge_attr": data["tasks", "read", "data"].edge_attr},
+        #     ("data", "read", "tasks"): {"edge_attr": data["data", "read", "tasks"].edge_attr},
         # }
-
-        per_edge_kwargs = {
-            ("tasks", "read", "data"): {"edge_attr": data["tasks", "read", "data"].edge_attr},
-            ("data", "read", "tasks"): {"edge_attr": data["data", "read", "tasks"].edge_attr},
-        }
 
         if self.film is not None:
             g = None
@@ -655,24 +658,25 @@ class GATStateNet(nn.Module):
             g = None
 
         for l, conv in enumerate(self.convs):
-            x_dict = {nt: self.norms[nt][l](x_dict[nt], batch_dict[nt]) for nt in x_dict.keys()}
-            x_new = conv(x_dict, edge_index_dict=edge_index_dict)
 
-            for nt in x_dict.keys():
-                x_new[nt] = self.act(x_new[nt])
+            #pre-norm
+            x_pre = {nt: self.norms[nt][l](x_dict[nt], batch_dict[nt]) for nt in x_dict.keys()}
 
+            #conv
+            x_new = conv(x_pre, edge_index_dict=edge_index_dict)
+
+            #post-norm
+            x_new  = {nt: self.post_norms[nt][l](x_new[nt], batch_dict[nt]) for nt in x_new.keys()}
+
+            #film
             if self.film is not None:
                 x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
 
-            for nt in x_dict.keys():
-                x_new[nt] = x_dict[nt] + x_new[nt]
+            #activation
+            x_new = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
 
-            for nt in x_dict.keys():
-                x_dict[nt] = x_new[nt]
-
-        for nt in x_dict.keys():
-            x_dict[nt] = self.norms[nt][self.num_layers](x_dict[nt], batch_dict[nt])
-            x_dict[nt] = self.act(x_dict[nt])
+            #residual 
+            x_dict = {nt: x_dict[nt] + x_new[nt] for nt in x_dict.keys()}
 
         if b_tasks is not None:
             idx = data["tasks"].ptr[:-1]

@@ -1331,7 +1331,7 @@ class ExternalObserver:
                 #     spec.max_edges_data_devices, self.data_device_features.feature_dim
                 # ),
                 "tasks_read_data": _make_edge_tensor(spec.max_edges_tasks_data, self.task_read_data_features.feature_dim),
-                "tasks_write_data": _make_edge_tensor(spec.max_edges_tasks_data, self.task_write_data_features.feature_dim, edge_feature=False),
+                # "tasks_write_data": _make_edge_tensor(spec.max_edges_tasks_data, self.task_write_data_features.feature_dim, edge_feature=False),
             }
         )
 
@@ -1516,11 +1516,12 @@ class ExternalObserver:
                 output["edges", "tasks_read_data", "glb"] = t
                 output["edges", "tasks_read_data", "idx"] = _HASH_HOLDER.get(key, ("edges", "tasks_read_data", "idx"))
                 output["edges", "tasks_read_data", "count"] = _HASH_HOLDER.get(key, ("edges", "tasks_read_data", "count"))
-                output["edges", "tasks_write_data", "glb"] = _HASH_HOLDER.get(key, ("edges", "tasks_write_data", "glb"))
-                output["edges", "tasks_write_data", "idx"] = _HASH_HOLDER.get(key, ("edges", "tasks_write_data", "idx"))
-                output["edges", "tasks_write_data", "count"] = _HASH_HOLDER.get(key, ("edges", "tasks_write_data", "count"))
                 read_count = output["edges", "tasks_read_data", "count"][0]
-                write_count = output["edges", "tasks_write_data", "count"][0]
+
+                # output["edges", "tasks_write_data", "glb"] = _HASH_HOLDER.get(key, ("edges", "tasks_write_data", "glb"))
+                # output["edges", "tasks_write_data", "idx"] = _HASH_HOLDER.get(key, ("edges", "tasks_write_data", "idx"))
+                # output["edges", "tasks_write_data", "count"] = _HASH_HOLDER.get(key, ("edges", "tasks_write_data", "count"))
+                # write_count = output["edges", "tasks_write_data", "count"][0]
 
         if t is None:
             _, read_count = self.get_task_data_edges(
@@ -1532,22 +1533,22 @@ class ExternalObserver:
             )
             output.set_at_(("edges", "tasks_read_data", "count"), read_count, 0)
 
-            _, write_count = self.get_task_data_edges(
-                output["nodes", "tasks", "glb"][:ntasks],
-                output["nodes", "data", "glb"][:ndata],
-                output["edges", "tasks_write_data", "idx"],
-                output["edges", "tasks_write_data", "glb"],
-                AccessType.WRITE,
-            )
-            output.set_at_(("edges", "tasks_write_data", "count"), write_count, 0)
+            # _, write_count = self.get_task_data_edges(
+            #     output["nodes", "tasks", "glb"][:ntasks],
+            #     output["nodes", "data", "glb"][:ndata],
+            #     output["edges", "tasks_write_data", "idx"],
+            #     output["edges", "tasks_write_data", "glb"],
+            #     AccessType.WRITE,
+            # )
+            # output.set_at_(("edges", "tasks_write_data", "count"), write_count, 0)
 
             if self.cache:
                 _HASH_HOLDER.add(key, ("edges", "tasks_read_data", "glb"), output["edges", "tasks_read_data", "glb"].detach().clone())
                 _HASH_HOLDER.add(key, ("edges", "tasks_read_data", "idx"), output["edges", "tasks_read_data", "idx"].detach().clone())
                 _HASH_HOLDER.add(key, ("edges", "tasks_read_data", "count"), output["edges", "tasks_read_data", "count"].detach().clone())
-                _HASH_HOLDER.add(key, ("edges", "tasks_write_data", "glb"), output["edges", "tasks_write_data", "glb"].detach().clone())
-                _HASH_HOLDER.add(key, ("edges", "tasks_write_data", "idx"), output["edges", "tasks_write_data", "idx"].detach().clone())
-                _HASH_HOLDER.add(key, ("edges", "tasks_write_data", "count"), output["edges", "tasks_write_data", "count"].detach().clone())
+                # _HASH_HOLDER.add(key, ("edges", "tasks_write_data", "glb"), output["edges", "tasks_write_data", "glb"].detach().clone())
+                # _HASH_HOLDER.add(key, ("edges", "tasks_write_data", "idx"), output["edges", "tasks_write_data", "idx"].detach().clone())
+                # _HASH_HOLDER.add(key, ("edges", "tasks_write_data", "count"), output["edges", "tasks_write_data", "count"].detach().clone())
 
         if "attr" in output["edges", "tasks_read_data"]:
             self.get_task_read_data_features(
@@ -1555,11 +1556,11 @@ class ExternalObserver:
                 output["edges", "tasks_read_data", "attr"],
             )
 
-        if "attr" in output["edges", "tasks_write_data"]:
-            self.get_task_write_data_features(
-                output["edges", "tasks_write_data", "glb"][:, :write_count],
-                output["edges", "tasks_write_data", "attr"],
-            )
+        # if "attr" in output["edges", "tasks_write_data"]:
+        #     self.get_task_write_data_features(
+        #         output["edges", "tasks_write_data", "glb"][:, :write_count],
+        #         output["edges", "tasks_write_data", "attr"],
+        #     )
 
     def task_device_observation(self, output: TensorDict, use_all_tasks=False):
         # print("Task-Device observation")
