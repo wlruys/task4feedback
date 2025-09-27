@@ -672,11 +672,12 @@ class GATStateNet(nn.Module):
             if self.film is not None:
                 x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
 
-            #activation
-            x_new = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
-
             #residual 
-            x_dict = {nt: x_dict[nt] + x_new[nt] for nt in x_dict.keys()}
+            x_new = {nt: x_dict[nt] + x_new[nt] for nt in x_dict.keys()}
+
+            #activation
+            x_dict = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
+
 
         if b_tasks is not None:
             idx = data["tasks"].ptr[:-1]

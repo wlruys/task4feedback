@@ -939,7 +939,6 @@ class IncrementalSchedule(RuntimeEnv):
                 reward = self.dense_reward_scale*r 
                 if self.pbrs:
                     reward = reward - done_reward
-                print("Final reward:", reward, "Terminal reward:", r)
 
         buf = td.empty()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
