@@ -341,6 +341,8 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_edge_feature<TaskDataUsageFeature>(m, "TaskDataUsageFeature");
   bind_state_edge_feature<TaskDataDefaultEdgeFeature>(m, "TaskDataDefaultEdgeFeature");
   bind_state_edge_feature<TaskDataMappedFeature>(m, "TaskDataMappedFeature");
+  bind_state_edge_feature<TaskDataMappedOneHotFeature>(m, "TaskDataMappedOneHotFeature");
+  bind_state_edge_feature<TaskDataSizeFeature>(m, "TaskDataSizeFeature");
   
   // Task Device Features
   bind_state_edge_feature<TaskDeviceDefaultEdgeFeature>(m, "TaskDeviceDefaultEdgeFeature");

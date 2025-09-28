@@ -541,6 +541,14 @@ class _FiLM(nn.Module):
 
 class GATStateNet(nn.Module):
 
+
+    def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
+        mask = edge_mask.to(torch.bool)
+        edge_index_masked = edge_index[:, mask]
+        edge_attr_masked = edge_attr[mask] if edge_attr is not None else None
+        return edge_index_masked, edge_attr_masked
+
+
     def __init__(self, 
         feature_config: FeatureDimConfig, 
         hidden_channels: int = 16,
@@ -597,8 +605,6 @@ class GATStateNet(nn.Module):
             "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
             "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
         })
-
-
 
         if self.add_device_load or self.add_progress:
             self.film = _FiLM(node_types=["tasks","data"], num_layers=self.num_layers,
