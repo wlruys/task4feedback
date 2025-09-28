@@ -7,7 +7,7 @@ config:
   arithmetic_intensity: 1.0
   arithmetic_complexity: 1.0
   boundary_width: 5.0
-  boundary_complexity: 0.5
+  boundary_complexity: 1
   memory_intensity: 1.0
   level_memory: 10e9
   randomness: 0.0

@@ -1,9 +1,7 @@
 defaults:
-  - graph: dynamic_jacobi_bump
+  - graph: dynamic_jacobi_corners
   - reward: incremental_schedule
-  - system: h100
-  - feature: gnn_single
-  - network: gnn_baseline
+  - system: 4h100
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -18,58 +16,46 @@ hydra:
   callbacks:
     git_info:
       _target_: train.GitInfo
+
 seed: 256
 deterministic_torch: true
 
 reward:
   verbose: False
   random_start: False
+  gamma: 0.99
+  extra_logging_policy: Oracle(32) # This is not what it is used for reward calculation. This is just for logging purpose.
 
 graph:
   config:
-      n: 4
-      domain_ratio: 1.0
-      steps: 16
-      boundary_width: 1000
+    steps: 128
+    n: 8
+    level_memory: 40e9
+    boundary_width: 0.25
   env:
     change_priority: False
-    change_location: True
+    change_location: False
     change_duration: False
     seed: 1
 
 algorithm:
-  num_collections: 10000
-  rollout_steps: 30
+  num_collections: 100000
+  rollout_steps: 32
   workers: 4
   graphs_per_collection: 4
-  ent_coef: 0
+  ent_coef: 0.01
   sample_slices: False
   slice_len: 16
   gamma: 0.99
   lmbda: 0.95
-  minibatch_size: 128
+  minibatch_size: 32
+  collector: "multi_sync"
 
 optimizer:
   lr: 1e-3
 
 system:
   mem: 80e9
-
-# feature:
-#   observer:
-#     prev_frames: 3
-#     batched: true
-
-# network:
-#   layers:
-#     # lstm:
-#     #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
-#     state:
-#       hidden_channels: 16
-#     actor:
-#       hidden_channels: 16
-#     critic:
-#       hidden_channels: 16
 
 runtime:
   batch_size: 5
@@ -78,9 +64,14 @@ runtime:
 
 wandb:
   enabled: true
+  project: 8x8x128_corners
+  name: CNN-A_IEFT
 
 eval:
-  eval_interval: 100
+  animation_interval: 0
+  eval_interval: 50
   max_frames: 400
   video_seconds: 15
+  samples: 10
+  pickle_path: ./pickled_evaluation/8x8x128_corners_1:1:1.pkl
 

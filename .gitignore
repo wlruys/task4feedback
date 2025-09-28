@@ -17,7 +17,7 @@ multirun
 *.err
 sandbox/
 *.pt
-
+torchrl
 # C extensions
 *.so
 

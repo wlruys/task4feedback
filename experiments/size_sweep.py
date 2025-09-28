@@ -57,7 +57,7 @@ def seed_everything(seed: int = 0) -> None:
 def factorize(steps: int, include_one: bool) -> List[int]:
     f: List[int] = []
     start = 1 if include_one else 0
-    for i in range(start, steps // 3):
+    for i in range(start, steps):
         if steps % (i + 1) == 0:
             f.append(i + 1)
     return f
@@ -273,11 +273,11 @@ def run_host_experiments_and_plot(cfg: DictConfig):
     if rank == 0:
         sweep_list = []
 
-        cfg.graph.config.level_memory = 10e9
+        cfg.graph.config.level_memory = cfg.sweep.start_mem
         graph_builder = make_graph_builder(cfg, verbose=False)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
         data_stat = env.simulator_factory[0].input.graph.data.data_stat
-        cfg.graph.config.arithmetic_intensity = (data_stat["interior_average_comm"] / data_stat["compute_average"]) * cfg.graph.config.arithmetic_intensity / cfg.sweep.interior_ratio
+        # cfg.graph.config.arithmetic_intensity = (data_stat["interior_average_comm"] / data_stat["compute_average"]) * cfg.graph.config.arithmetic_intensity / cfg.sweep.interior_ratio
         # cfg.graph.config.boundary_width = data_stat["interior_average_comm"] / data_stat["boundary_average_comm"] * cfg.graph.config.boundary_width * cfg.sweep.boundary_ratio / cfg.sweep.interior_ratio
         cfg.graph.config.boundary_width = cfg.sweep.boundary_ratio
 

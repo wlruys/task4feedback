@@ -56,10 +56,12 @@ def configure_training(cfg: DictConfig):
         graph_builder = make_graph_builder(cfg)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
         env._reset()
+        env._reset()
         graph = env.get_graph()
         if isinstance(graph, DynamicJacobiGraph):
             workload = graph.get_workload()
-            # workload.animate_workload(show=False, title="outputs/workload_animation.mp4")
+            workload.animate_workload(show=False, title="outputs/workload_animation.mp4")
+        exit()
 
     if option == "EFT" and rank == 0:
         env.simulator.disable_external_mapper()

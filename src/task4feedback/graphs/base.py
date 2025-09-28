@@ -29,10 +29,11 @@ from typing import Protocol, Dict, Any, Callable, Iterable, Optional, Tuple, Lis
 from pathlib import Path
 from typing import Optional, Callable, Tuple, Dict, Any, Iterable
 import json
-import re 
-import io 
+import re
+import io
 import zipfile
-import tarfile 
+import tarfile
+
 
 def spring_layout(G):
     pos = nx.spring_layout(G, seed=5, scale=600)
@@ -163,12 +164,8 @@ class DataGeometry:
     blocks: DataBlocks = field(default_factory=DataBlocks)
     map: GeometryIDMap = field(default_factory=GeometryIDMap)
 
-    def add_block(
-        self, key: DataKey, size: int, location: int, x: float = 0, y: float = 0
-    ):
-        block = self.blocks.add_block(
-            name=str(key), size=size, location=location, x_pos=x, y_pos=y
-        )
+    def add_block(self, key: DataKey, size: int, location: int, x: float = 0, y: float = 0):
+        block = self.blocks.add_block(name=str(key), size=size, location=location, x_pos=x, y_pos=y)
         self.map.add_block(key, block.id)
 
     def get_object(self, block_id: int):
@@ -202,7 +199,7 @@ class ComputeDataGraph(TaskGraph):
 
     def get_shared_data(self, task_self: int, task_other: int):
         """
-         Total size of all shared data blocks from task_other to task_self
+        Total size of all shared data blocks from task_other to task_self
         """
 
         read_self = self.tasks[task_self].read
@@ -224,14 +221,14 @@ class ComputeDataGraph(TaskGraph):
 
     def get_read_data(self, task_id: int):
         # Get size of all data blocks that this task reads
-            read_self = self.tasks[task_id].read
-            total_size = 0
-            for block_id in read_self:
-                block = self.data.blocks.get_block(block_id)
-                size = block.size
-                total_size += size
-            return total_size
-    
+        read_self = self.tasks[task_id].read
+        total_size = 0
+        for block_id in read_self:
+            block = self.data.blocks.get_block(block_id)
+            size = block.size
+            total_size += size
+        return total_size
+
     def get_write_data(self, task_id: int):
         # Get size of all data blocks that this task writes
         write_self = self.tasks[task_id].write
@@ -242,9 +239,7 @@ class ComputeDataGraph(TaskGraph):
             total_size += size
         return total_size
 
-    def get_weighted_graph(
-        self, arch: DeviceType, bandwidth: int = 1000, task_ids: Optional[list] = None, symmetric: bool = False 
-    ):
+    def get_weighted_graph(self, arch: DeviceType, bandwidth: int = 1000, task_ids: Optional[list] = None, symmetric: bool = False):
         adjacency_list = []
         adj_starts = []
         vweights = []
@@ -300,8 +295,10 @@ class ComputeDataGraph(TaskGraph):
             weight_map = {tid: [] for tid in task_ids}
 
             for (a, b), w in undirected_max.items():
-                neighbor_map[a].append(b); weight_map[a].append(w)
-                neighbor_map[b].append(a); weight_map[b].append(w)
+                neighbor_map[a].append(b)
+                weight_map[a].append(w)
+                neighbor_map[b].append(a)
+                weight_map[b].append(w)
 
             for u in task_ids:
                 adj_starts.append(len(adjacency_list))
@@ -311,13 +308,14 @@ class ComputeDataGraph(TaskGraph):
                         adjacency_list.append(v)
                         eweights.append(w)
             adj_starts.append(len(adjacency_list))
-        
+
         adjacency_list = np.array(adjacency_list)
         adj_starts = np.array(adj_starts)
         vweights = np.array(vweights)
         eweights = np.array(eweights)
 
         return task_to_local, adjacency_list, adj_starts, vweights, eweights
+
 
 @dataclass
 class WeightedCellGraph:
@@ -359,9 +357,7 @@ def weighted_cell_partition(cell_graph: WeightedCellGraph, nparts: int):
     eweights = cell_graph.eweights
 
     # Call METIS to partition the graph
-    edgecuts, parts = weighted_partition(
-        nparts, adjacency_list, adj_starts, vweights, eweights
-    )
+    edgecuts, parts = weighted_partition(nparts, adjacency_list, adj_starts, vweights, eweights)
 
     return edgecuts, parts
 
@@ -378,15 +374,15 @@ class EnvironmentState:
     data_task_virtual: dict
     data_task_block: dict
 
-    compute_task_durations: dict 
+    compute_task_durations: dict
     data_task_durations: dict
 
     def parse_state(env, time: Optional[int] = None):
-        assert(env.simulator is not None)
+        assert env.simulator is not None
 
         if time is None:
             time = env.simulator.time
-        assert(time is not None)
+        assert time is not None
 
         sim = env.simulator
         simulator_state = sim.state
@@ -450,7 +446,7 @@ class EnvironmentState:
 
 class DynamicWorkload:
     def __init__(self):
-        self.random=False
+        self.random = False
 
     def set_geometry(self, geom: Geometry):
         self.geom = geom
@@ -470,9 +466,7 @@ class DynamicWorkload:
     def inital_mass(self) -> list:
         return self.level_workload[0]
 
-    def generate_initial_mass(
-        self, distribution: Optional[Callable[[int], float]] = None
-    ):
+    def generate_initial_mass(self, distribution: Optional[Callable[[int], float]] = None):
         if distribution is None:
             # Default distribution is uniform
             def distribution(x):
@@ -485,7 +479,7 @@ class DynamicWorkload:
 
     def get_workload(self, level: int) -> list:
         return self.level_workload[level]
-    
+
     def get_scaled_cell_workload(self, level: int, cell: int) -> float:
         return self.level_workload[level][cell] * self.num_cells
 
@@ -522,9 +516,7 @@ class DynamicWorkload:
 
         # Clip start step into the workload range
         start_step = max(start_step, 0)
-        self.level_workload[start_step] = np.clip(
-            self.level_workload[start_step], lower_bound, upper_bound
-        )
+        self.level_workload[start_step] = np.clip(self.level_workload[start_step], lower_bound, upper_bound)
 
         for i in range(start_step + 1, num_levels):
             z = np.random.normal(size=self.num_cells)
@@ -546,8 +538,6 @@ class DynamicWorkload:
     @property
     def levels(self) -> list:
         return sorted(self.level_workload.keys())
-    
-
 
     def animate_workload(
         self,
@@ -564,6 +554,7 @@ class DynamicWorkload:
         dpi=300,
     ):
         from .mesh.plot import create_mesh_plot
+
         if folder is None:
             if wandb is None or wandb.run is None or wandb.run.dir is None:
                 folder = "."
@@ -578,16 +569,12 @@ class DynamicWorkload:
 
         # Get domain size for scaling
         domain_width = self.geom.get_max_coordinate(0) - self.geom.get_min_coordinate(0)
-        domain_height = self.geom.get_max_coordinate(1) - self.geom.get_min_coordinate(
-            1
-        )
+        domain_height = self.geom.get_max_coordinate(1) - self.geom.get_min_coordinate(1)
         domain_size = min(domain_width, domain_height)
 
         # Find global max workload for normalization if required
         if normalize:
-            max_workload = max(
-                np.max(self.level_workload[level]) for level in self.levels
-            )
+            max_workload = max(np.max(self.level_workload[level]) for level in self.levels)
 
         patches_collection = None
 
@@ -618,25 +605,19 @@ class DynamicWorkload:
             for i, cell in enumerate(self.geom.cells):
                 centroid = self.geom.get_centroid(i)
 
-                radius = (
-                    (workload[i] / radius_scale) * domain_size * max_radius
-                    if radius_scale > 0
-                    else 0
-                )
+                radius = (workload[i] / radius_scale) * domain_size * max_radius if radius_scale > 0 else 0
 
                 if radius > 0:
                     circle = Circle((centroid[0], centroid[1]), radius)
                     patches.append(circle)
                     colors.append(cmap(workload[i] / radius_scale))
 
-            patches_collection = PatchCollection(
-                patches, facecolors=colors, edgecolors="black", alpha=0.7, zorder=10
-            )
+            patches_collection = PatchCollection(patches, facecolors=colors, edgecolors="black", alpha=0.7, zorder=10)
 
             ax.add_collection(patches_collection)
 
             return [patches_collection]
-        
+
         if interval is None:
             interval = int(video_seconds * 1000 / len(self.levels))
 
@@ -694,22 +675,16 @@ def make_random_walk_trajectory(
         new_location = trajectory[i - 1] + step
 
         if new_location[0] < geom.get_min_coordinate(0):
-            new_location[0] = geom.get_min_coordinate(0) + (
-                geom.get_min_coordinate(0) - new_location[0]
-            )
+            new_location[0] = geom.get_min_coordinate(0) + (geom.get_min_coordinate(0) - new_location[0])
         elif new_location[0] > geom.get_max_coordinate(0):
-            new_location[0] = geom.get_max_coordinate(0) - (
-                new_location[0] - geom.get_max_coordinate(0)
-            )
+            new_location[0] = geom.get_max_coordinate(0) - (new_location[0] - geom.get_max_coordinate(0))
 
         trajectory[i] = new_location
 
     return trajectory
 
 
-def make_circle_trajectory(
-    geom: Geometry, num_steps: int, radius: float = 0.5, center=None, max_angle=None
-):
+def make_circle_trajectory(geom: Geometry, num_steps: int, radius: float = 0.5, center=None, max_angle=None):
     if center is None:
         # Get center of mesh
         center = np.array(
@@ -786,9 +761,7 @@ def make_drifting_circle_trajectory(
         start_idx = rng.randint(0, len(geom.cells))
         center = np.copy(geom.get_centroid(start_idx))
 
-    angle = (
-        rng.uniform(-2 * np.pi, 2 * np.pi) if initial_angle is None else initial_angle
-    )
+    angle = rng.uniform(-2 * np.pi, 2 * np.pi) if initial_angle is None else initial_angle
     phase = 0.0
     traj = np.zeros((num_steps, 2))
 
@@ -817,33 +790,33 @@ def make_drifting_circle_trajectory(
     return traj
 
 
-
 def gaussian_pdf(x, mean, std):
     """
     Isotropic d-variate Gaussian PDF.
-    
+
     x     : array-like, shape (N, d) or (d,)
     mean  : array-like, shape (d,)
     std   : float or array-like (must be positive) — the standard deviation(s).
     """
-    x    = np.atleast_2d(x)             # ensure shape (N, d)
-    mu   = np.asarray(mean)
+    x = np.atleast_2d(x)  # ensure shape (N, d)
+    mu = np.asarray(mean)
     sigma = np.asarray(std)
     if np.any(sigma <= 0):
         raise ValueError("`std` must be positive")
-    
-    d    = x.shape[1]
-    var  = sigma**2                     # variance
-    sq_dist = np.sum((x - mu)**2, axis=1)
-    
+
+    d = x.shape[1]
+    var = sigma**2  # variance
+    sq_dist = np.sum((x - mu) ** 2, axis=1)
+
     # normalization: (2πσ²)^(-d/2) = (2π)^{-d/2} · σ^{-d}
     norm_const = (2 * np.pi * var) ** (-0.5 * d)
-    
+
     return norm_const * np.exp(-sq_dist / (2 * var))
 
 
 def gaussian_bump(x, mean, std, scale=1.0):
     return scale * gaussian_pdf(x, mean, std)
+
 
 def linear_growth_decay(start, end, num_steps, step):
     half = num_steps // 2
@@ -851,6 +824,7 @@ def linear_growth_decay(start, end, num_steps, step):
         return start + (end - start) * (step / half)
     else:
         return end - (end - start) * ((step - half) / (num_steps - half))
+
 
 def reverse_linear_growth_decay(start, end, num_steps, step):
     half = num_steps // 2
@@ -864,8 +838,9 @@ def gaussian_bump_at_t(x, mean, min_std=0.1, max_std=0.2, min_scale=0.1, max_sca
     std = reverse_linear_growth_decay(min_std, max_std, num_steps, t)
     scale = linear_growth_decay(min_scale, max_scale, num_steps, t)
     return gaussian_bump(x, mean, std, scale)
-    
-@dataclass 
+
+
+@dataclass
 class GaussianBump:
     center: np.ndarray
     min_std: float = 0.1
@@ -876,30 +851,23 @@ class GaussianBump:
     num_steps: int = 10
 
     def workload(self, x, t):
-        return gaussian_bump_at_t(
-            x, 
-            self.center, 
-            self.min_std, 
-            self.max_std, 
-            self.min_scale, 
-            self.max_scale, 
-            t, 
-            self.num_steps
-        )
-    
+        return gaussian_bump_at_t(x, self.center, self.min_std, self.max_std, self.min_scale, self.max_scale, t, self.num_steps)
+
     def get_workload_and_advance(self, x):
-        w =  self.workload(x, self.t)
+        w = self.workload(x, self.t)
         self.t += 1
-        return w 
-    
+        return w
+
     def is_alive(self):
         return self.t < self.num_steps
 
-def create_bump_random_center(rng: np.random.RandomState, min_std = 0.1, max_std: float = 0.3, min_scale: float = 0.05, max_scale: float  = 0.5, min_life = 25, max_life = 50):
+
+def create_bump_random_center(rng: np.random.RandomState, min_std=0.1, max_std: float = 0.3, min_scale: float = 0.05, max_scale: float = 0.5, min_life=25, max_life=50):
     x = rng.uniform(0, 1, size=2)
     life = rng.randint(min_life, max_life)
 
     return GaussianBump(x, min_std, max_std, min_scale, max_scale, t=0, num_steps=life)
+
 
 class TrajectoryWorkload(DynamicWorkload):
 
@@ -915,9 +883,7 @@ class TrajectoryWorkload(DynamicWorkload):
         traj_specifics: Optional[dict] = None,
     ):
         if traj_type == "circle":
-            trajectory = make_circle_trajectory(
-                self.geom, num_steps=num_levels, **traj_specifics
-            )
+            trajectory = make_circle_trajectory(self.geom, num_steps=num_levels, **traj_specifics)
             self.random = False
         elif traj_type == "drift":
             trajectory = make_drifting_circle_trajectory(
@@ -934,40 +900,28 @@ class TrajectoryWorkload(DynamicWorkload):
         for i, cell in enumerate(self.geom.cells):
             centroids[i] = np.copy(self.geom.get_centroid(i))
 
-        #Normalize starting step workload
+        # Normalize starting step workload
         total_workload = np.sum(self.level_workload[start_step])
-        assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
+        assert total_workload > 0, f"Total workload at level {start_step} is zero, cannot normalize."
 
         for j in range(start_step, num_levels):
             self.level_workload[j] = np.copy(self.level_workload[0])
 
-            gaussian_workload = (
-                gaussian_pdf(centroids, trajectory[j], scale) * upper_bound
-            )
+            gaussian_workload = gaussian_pdf(centroids, trajectory[j], scale) * upper_bound
 
             self.level_workload[j] = gaussian_workload
 
-            self.level_workload[j] = np.clip(
-                a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound
-            )
+            self.level_workload[j] = np.clip(a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound)
 
             # Keep total workload constant
             total_workload = np.sum(self.level_workload[j])
-            assert( total_workload > 0), f"Total workload at level {j} is zero, cannot normalize."
+            assert total_workload > 0, f"Total workload at level {j} is zero, cannot normalize."
             self.level_workload[j] /= total_workload
 
 
 class BumpWorkload(DynamicWorkload):
 
-    def generate_workload(
-            self, 
-            num_levels: int, 
-            start_step: int = 0,
-            lower_bound: float = 0.05,
-            upper_bound: float = 3,
-            seed: int = 0,
-            **kwargs
-    ):
+    def generate_workload(self, num_levels: int, start_step: int = 0, lower_bound: float = 0.05, upper_bound: float = 3, seed: int = 0, **kwargs):
         self.random = True
         rng = np.random.RandomState(seed)
         centroids = np.zeros((self.num_cells, 2))
@@ -975,10 +929,10 @@ class BumpWorkload(DynamicWorkload):
             centroids[i] = self.geom.get_centroid(i)
 
         total_workload = np.sum(self.level_workload[start_step])
-        assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
+        assert total_workload > 0, f"Total workload at level {start_step} is zero, cannot normalize."
 
-        bumps = [] 
-        bumps.append(create_bump_random_center(rng=rng, **kwargs['traj_specifics']))
+        bumps = []
+        bumps.append(create_bump_random_center(rng=rng, **kwargs["traj_specifics"]))
 
         for j in range(start_step, num_levels):
             self.level_workload[j] = np.copy(self.level_workload[0])
@@ -986,21 +940,20 @@ class BumpWorkload(DynamicWorkload):
             for bump in bumps:
                 workload = bump.get_workload_and_advance(centroids)
                 self.level_workload[j] += workload
-            
-            bumps = [b for b in bumps if b.is_alive()]
-                
-            #Create a new bump with probability 0.1
-            if len(bumps) == 0:
-                bumps.append(create_bump_random_center(rng=rng, **kwargs['traj_specifics']))
 
-            self.level_workload[j] = np.clip(
-                a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound
-            )
+            bumps = [b for b in bumps if b.is_alive()]
+
+            # Create a new bump with probability 0.1
+            if len(bumps) == 0:
+                bumps.append(create_bump_random_center(rng=rng, **kwargs["traj_specifics"]))
+
+            self.level_workload[j] = np.clip(a=self.level_workload[j], a_min=lower_bound, a_max=upper_bound)
 
             # Keep total workload constant
             total_workload = np.sum(self.level_workload[j])
-            assert( total_workload > 0), f"Total workload at level {j} is zero, cannot normalize."
+            assert total_workload > 0, f"Total workload at level {j} is zero, cannot normalize."
             self.level_workload[j] /= total_workload
+
 
 class DiagonalWorkload(DynamicWorkload):
 
@@ -1021,9 +974,7 @@ class DiagonalWorkload(DynamicWorkload):
             centroids[i] = self.geom.get_centroid(i)
 
         total_workload = np.sum(self.level_workload[start_step])
-        assert total_workload > 0, (
-            f"Total workload at level {start_step} is zero, cannot normalize."
-        )
+        assert total_workload > 0, f"Total workload at level {start_step} is zero, cannot normalize."
 
         x_min, x_max = self.geom.get_min_coordinate(0), self.geom.get_max_coordinate(0)
         y_min, y_max = self.geom.get_min_coordinate(1), self.geom.get_max_coordinate(1)
@@ -1046,7 +997,7 @@ class DiagonalWorkload(DynamicWorkload):
 
         # Start/End centers so the entire box stays inside domain
         start_center = np.array([x_min + half, y_min + half], dtype=float)
-        end_center   = np.array([x_max - half, y_max - half], dtype=float)
+        end_center = np.array([x_max - half, y_max - half], dtype=float)
 
         # Precompute denominator to avoid div-by-zero for degenerate cases
         travel_den = max(1, (num_levels - start_step - 1))
@@ -1064,9 +1015,9 @@ class DiagonalWorkload(DynamicWorkload):
             else:
                 pad = (1.0 - transition_frac) / 2.0
                 if raw_t < pad:
-                    t = 0.0          # dwell at start
+                    t = 0.0  # dwell at start
                 elif raw_t > 1.0 - pad:
-                    t = 1.0          # dwell at end
+                    t = 1.0  # dwell at end
                 else:
                     t = (raw_t - pad) / transition_frac  # re-normalize middle segment to 0..1
             center = (1.0 - t) * start_center + t * end_center
@@ -1080,7 +1031,7 @@ class DiagonalWorkload(DynamicWorkload):
             dx = np.abs(centroids[:, 0] - cx)
             dy = np.abs(centroids[:, 1] - cy)
             m = np.maximum(dx, dy)
-            d = (half - m)  # signed distance to the boundary: >=0 inside
+            d = half - m  # signed distance to the boundary: >=0 inside
 
             if blur > 0:
                 # Map d ∈ [-blur, 0] -> [0,1] smoothly; clamp elsewhere
@@ -1103,34 +1054,129 @@ class DiagonalWorkload(DynamicWorkload):
             self.level_workload[j] = level
 
 
-class DebugWorkload(DynamicWorkload):
+class RandomCornerWorkload(DynamicWorkload):
 
     def generate_workload(
-            self, 
-            num_levels: int, 
-            start_step: int = 0,
-            lower_bound: float = 0.05,
-            upper_bound: float = 3,
-            seed: int = 0,
-            **kwargs
+        self,
+        num_levels: int,
+        start_step: int = 0,
+        lower_bound: float = 0.05,
+        upper_bound: float = 3.0,
+        seed: int = 0,
+        **kwargs,
     ):
+        self.random = True
+        rng = np.random.default_rng(seed)
+
+        n_cells = self.num_cells
+        centroids = np.zeros((n_cells, 2))
+        for i, cell in enumerate(self.geom.cells):
+            centroids[i] = self.geom.get_centroid(i)
+
+        total_workload = np.sum(self.level_workload[start_step])
+        assert total_workload > 0, f"Total workload at level {start_step} is zero, cannot normalize."
+
+        x_min, x_max = self.geom.get_min_coordinate(0), self.geom.get_max_coordinate(0)
+        y_min, y_max = self.geom.get_min_coordinate(1), self.geom.get_max_coordinate(1)
+        width = x_max - x_min
+        height = y_max - y_min
+        domain_min_side = min(width, height)
+
+        # --- parameters ---
+        traj_specifics = kwargs["traj_specifics"]
+        side_frac = traj_specifics["width"]
+        blur_frac = traj_specifics["blur_frac"]
+
+        phase_length = traj_specifics["phase_length"]
+        transition_frac = traj_specifics["transition_frac"]
+
+        side = side_frac * domain_min_side
+        blur = blur_frac * side
+        half = 0.5 * side
+
+        # Define corners (center positions for the workload box)
+        corners = [
+            np.array([x_min + half, y_min + half], dtype=float),  # bottom-left
+            np.array([x_max - half, y_min + half], dtype=float),  # bottom-right
+            np.array([x_min + half, y_max - half], dtype=float),  # top-left
+            np.array([x_max - half, y_max - half], dtype=float),  # top-right
+        ]
+
+        # Pick random start and end corners
+        # start_corner = rng.choice(corners)
+        start_corner = np.array([x_min + half, y_min + half], dtype=float)
+        end_corner = rng.choice([c for c in corners if not np.allclose(c, start_corner)])
+
+        # Helper: smoothstep
+        def smoothstep01(t):
+            return t * t * (3.0 - 2.0 * t)
+
+        # --- generate workloads ---
+        for j in range(start_step, num_levels):
+            phase_idx = (j - start_step) // phase_length
+            phase_step = (j - start_step) % phase_length
+
+            # Choose new random end corner at each phase
+            if phase_step == 0 and j > start_step:
+                start_corner = end_corner
+                end_corner = rng.choice([c for c in corners if not np.allclose(c, start_corner)])
+
+            dwell_steps = int(round(phase_length * (1 - transition_frac)))
+            move_steps = max(1, phase_length - dwell_steps)  # avoid div-by-zero
+
+            if phase_step < dwell_steps:
+                # Stay at the start corner
+                center = start_corner
+            else:
+                # Move smoothly to end corner
+                t = (phase_step - dwell_steps) / move_steps  # 0..1
+                t = smoothstep01(t)
+                center = (1 - t) * start_corner + t * end_corner
+
+            # Defensive clamp
+            cx = float(np.clip(center[0], x_min + half, x_max - half))
+            cy = float(np.clip(center[1], y_min + half, y_max - half))
+
+            # Axis-aligned square with soft edges
+            dx = np.abs(centroids[:, 0] - cx)
+            dy = np.abs(centroids[:, 1] - cy)
+            m = np.maximum(dx, dy)
+            d = half - m
+
+            if blur > 0:
+                tt = np.clip((d + blur) / max(blur, 1e-12), 0.0, 1.0)
+                w = smoothstep01(tt)
+            else:
+                w = (d >= 0.0).astype(np.float64)
+
+            level = lower_bound + w * (upper_bound - lower_bound)
+            level = np.clip(level, a_min=lower_bound, a_max=upper_bound)
+            total = np.sum(level)
+            assert total > 0, f"Total workload at level {j} is zero, cannot normalize."
+            level /= total
+
+            self.level_workload[j] = level
+
+
+class DebugWorkload(DynamicWorkload):
+
+    def generate_workload(self, num_levels: int, start_step: int = 0, lower_bound: float = 0.05, upper_bound: float = 3, seed: int = 0, **kwargs):
         self.random = True
         rng = np.random.RandomState(seed)
 
         total_workload = np.sum(self.level_workload[start_step])
-        assert( total_workload > 0), f"Total workload at level {start_step} is zero, cannot normalize."
+        assert total_workload > 0, f"Total workload at level {start_step} is zero, cannot normalize."
 
         for j in range(start_step + 1, num_levels):
-            self.level_workload[j] = np.copy(self.level_workload[j-1])
+            self.level_workload[j] = np.copy(self.level_workload[j - 1])
             c = rng.randint(1, 10, 1)
             self.level_workload[j] *= c
-
 
 
 class WorkloadInterpolator:
 
     def __init__(self, geom):
-        self.geom = geom 
+        self.geom = geom
 
     def _get_cell_workload(self, workload, pts, cell_id) -> float:
         """
@@ -1164,10 +1210,9 @@ class WorkloadInterpolator:
         workload_anchors = np.column_stack([X.ravel(), Y.ravel()])
 
         for cell_id in range(n_cells):
-            level_workload[cell_id] = self._get_cell_workload(
-                workload, workload_anchors, cell_id
-            )
+            level_workload[cell_id] = self._get_cell_workload(workload, workload_anchors, cell_id)
         return level_workload
+
 
 def _read_index(bundle_path: str) -> Tuple[Dict[str, Any], str]:
     """
@@ -1188,6 +1233,7 @@ def _read_index(bundle_path: str) -> Tuple[Dict[str, Any], str]:
             with tf.extractfile(member) as f:
                 return json.loads(f.read().decode("utf-8")), "tar"
     raise FileNotFoundError(f"Could not find index.json in: {bundle_path}")
+
 
 def _infer_difficulty(item: Dict[str, Any]) -> Optional[int]:
     # Tag transform
@@ -1212,6 +1258,7 @@ def _infer_difficulty(item: Dict[str, Any]) -> Optional[int]:
     if m:
         return int(m.group(1))
     return None
+
 
 def _open_binary(bundle_path: str, rel_path: str, storage_kind: str):
     """
@@ -1238,12 +1285,14 @@ def _open_binary(bundle_path: str, rel_path: str, storage_kind: str):
         return io.BytesIO(data)
     raise RuntimeError(f"Unknown storage_kind {storage_kind}")
 
+
 def _read_text(bundle_path: str, rel_path: str, storage_kind: str) -> str:
     p = Path(bundle_path)
     if storage_kind == "dir":
         return (p / rel_path).read_text()
     bio = _open_binary(bundle_path, rel_path, storage_kind)
     return bio.read().decode("utf-8")
+
 
 def load_random_workload_by_difficulty(
     bundle_path: str,
@@ -1304,19 +1353,10 @@ def load_random_workload_by_difficulty(
 
     return C, meta, choice["paths"]
 
+
 class LoadedWorkload(DynamicWorkload):
 
-    def generate_workload(
-            self, 
-            num_levels: int,
-            bundle_path: str,
-            start_step: int = 0,
-            seed: int = 0,
-            difficulty: int = 10,
-            lower_bound: float = 0.5,
-            upper_bound: float = 1.5,
-            **kwargs
-    ):
+    def generate_workload(self, num_levels: int, bundle_path: str, start_step: int = 0, seed: int = 0, difficulty: int = 10, lower_bound: float = 0.5, upper_bound: float = 1.5, **kwargs):
         self.random = True
         interpolator = WorkloadInterpolator(self.geom)
 
@@ -1325,17 +1365,18 @@ class LoadedWorkload(DynamicWorkload):
             difficulty,
             rng_seed=seed,
         )
-        assert(data.shape[0] >= start_step + num_levels), f"Loaded workload has {data.shape[0]} levels, but need at least {start_step + num_levels}."
+        assert data.shape[0] >= start_step + num_levels, f"Loaded workload has {data.shape[0]} levels, but need at least {start_step + num_levels}."
 
         for j in range(start_step + 1, start_step + num_levels):
             workload = data[j]
             self.level_workload[j] = interpolator.workload_to_cells(workload)
             self.level_workload[j] = np.clip(
-                a = self.level_workload[j], a_min=lower_bound,
+                a=self.level_workload[j],
+                a_min=lower_bound,
                 a_max=upper_bound,
             )
             total_workload = np.sum(self.level_workload[j])
-            assert( total_workload > 0), f"Total workload at level {j} is zero, cannot normalize."
+            assert total_workload > 0, f"Total workload at level {j} is zero, cannot normalize."
             self.level_workload[j] /= total_workload
 
 
@@ -1357,9 +1398,7 @@ class GraphRegistry:
         return func
 
     @classmethod
-    def get(
-        cls, config: Type[GraphConfig]
-    ) -> Optional[Callable[[Geometry, GraphConfig, System], TaskGraph]]:
+    def get(cls, config: Type[GraphConfig]) -> Optional[Callable[[Geometry, GraphConfig, System], TaskGraph]]:
         return cls._registry.get(config)
 
     @classmethod
@@ -1372,6 +1411,7 @@ class GraphRegistry:
             return graph_builder(geometry, config, system=system)
         else:
             raise ValueError(f"Graph type '{config}' is not registered.")
+
 
 def register_graph(cls, cfg):
     GraphRegistry.register(cls, cfg)

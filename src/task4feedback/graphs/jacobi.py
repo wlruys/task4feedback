@@ -772,6 +772,7 @@ class JacobiGraph(ComputeDataGraph):
 
             if levels_per_chunk is not None:
                 level_size = levels_per_chunk
+                level_chunks = (len(levels)) // level_size  # ceil div
 
             for i in range(level_chunks):
                 start = i * level_size
@@ -1331,6 +1332,7 @@ class CandidateExternalObserverFactory(ExternalObserverFactory):
             data_device_feature_extractor,
         )
 
+
 @dataclass(kw_only=True)
 class GATExternalObserverFactory(ExternalObserverFactory):
     def create(self, simulator: SimulatorDriver):
@@ -1524,6 +1526,7 @@ class GATObserverFactory(GATExternalObserverFactory):
             task_read_data_feature_factory=task_read_data_feature_factory,
             task_write_data_feature_factory=task_write_data_feature_factory,
         )
+
 
 class CandidateObserverFactory(CandidateExternalObserverFactory):
     def __init__(self, spec: fastsim.GraphSpec):

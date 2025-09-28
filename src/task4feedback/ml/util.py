@@ -268,7 +268,7 @@ def eval_pickled_env(
     env_rewards = []
     env_times = []
     env_vsEFT = []
-    env_vsQuad = []
+    env_vsPolicy = []
     metrics = {}
     last_env = None
 
@@ -279,10 +279,7 @@ def eval_pickled_env(
             saved_loc = pickled_states["init_locs"][i % len(pickled_states["init_locs"])]
             workload = pickled_states["workloads"][i % len(pickled_states["workloads"])]
             env.reset_to_state(saved_loc, workload)
-            tensordict = env.rollout(
-                policy=policy,
-                max_steps=100000,
-            )
+            tensordict = env.rollout(policy=policy, max_steps=100000)
 
         if "next" in tensordict and "reward" in tensordict["next"]:
             rewards = tensordict["next", "reward"]
@@ -299,7 +296,7 @@ def eval_pickled_env(
                     training.info(f"Environment {i} EFT time match: {pickled_states['eft_times'][i]} == {env._get_baseline('EFT')}")
 
         env_vsEFT.append(pickled_states["eft_times"][i] / completion_time if completion_time > 0 else 0.0)
-        env_vsQuad.append(pickled_states["policy_times"][i] / completion_time if completion_time > 0 else 0.0)
+        env_vsPolicy.append(pickled_states["policy_times"][i] / completion_time if completion_time > 0 else 0.0)
         env.enable_reward()
 
     # time metrics
@@ -320,14 +317,14 @@ def eval_pickled_env(
         metrics["mean_vsEFT"] = 0.0
         metrics["std_vsEFT"] = 0.0
 
-    if env_vsQuad:
-        metrics["mean_vsQuad"] = sum(env_vsQuad) / len(env_vsQuad)
-        metrics["std_vsQuad"] = torch.std(torch.tensor(env_vsQuad, dtype=torch.float64)).item()
+    if env_vsPolicy:
+        metrics["mean_vsPolicy"] = sum(env_vsPolicy) / len(env_vsPolicy)
+        metrics["std_vsPolicy"] = torch.std(torch.tensor(env_vsPolicy, dtype=torch.float64)).item()
     else:
-        metrics["mean_vsQuad"] = 0.0
-        metrics["std_vsQuad"] = 0.0
+        metrics["mean_vsPolicy"] = 0.0
+        metrics["std_vsPolicy"] = 0.0
 
-    training.info(f"Evaluation results: mean_time={mean_time}, " f"mean_vsEFT={metrics['mean_vsEFT']}, mean_vsQuad={metrics['mean_vsQuad']}")
+    training.info(f"Evaluation results: mean_time={mean_time}, " f"mean_vsEFT={metrics['mean_vsEFT']}, mean_vsPolicy={metrics['mean_vsPolicy']}")
 
     last_env = env
 

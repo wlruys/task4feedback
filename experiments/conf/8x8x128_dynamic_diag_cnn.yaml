@@ -21,6 +21,7 @@ feature:
     version: A
   normalization:
     warmup: 10
+  add_device_load: True
 
 network:
   layers:
