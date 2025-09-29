@@ -1342,7 +1342,6 @@ class GATExternalObserverFactory(ExternalObserverFactory):
         device_feature_extractor = self.device_feature_factory.create(state)
         task_task_feature_extractor = self.task_task_feature_factory.create(state)
         task_read_data_feature_extractor = self.task_read_data_feature_factory.create(state)
-        task_write_data_feature_extractor = self.task_write_data_feature_factory.create(state)
 
         return ExternalObserver(
             simulator,
@@ -1353,7 +1352,7 @@ class GATExternalObserverFactory(ExternalObserverFactory):
             device_features=device_feature_extractor,
             task_task_features=task_task_feature_extractor,
             task_read_data_features=task_read_data_feature_extractor,
-            task_write_data_features=task_write_data_feature_extractor,
+            cache=False,
         )
 
 
@@ -1489,18 +1488,13 @@ class XYObserverFactory(XYExternalObserverFactory):
 
 
 class GATObserverFactory(GATExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, **_ignored):
+    def __init__(self, spec: fastsim.GraphSpec, version: str, **_ignored):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.PrevReadSizeFeature, 1, 1, True, 1)
-        task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-        task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-
         data_feature_factory = FeatureExtractorFactory()
-        data_feature_factory.add(fastsim.DataCoordinateFeature)
-        data_feature_factory.add(fastsim.DataSizeFeature)
-        data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+
+        #task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        #task_feature_factory.add(fastsim.OutDegreeTaskFeature)
 
         device_feature_factory = FeatureExtractorFactory()
         device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
@@ -1513,6 +1507,29 @@ class GATObserverFactory(GATExternalObserverFactory):
 
         task_write_data_feature_factory = EdgeFeatureExtractorFactory()
         task_write_data_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
+        if "A" in version:
+            task_feature_factory.add(fastsim.InputOutputTaskFeature)
+            data_feature_factory.add(fastsim.DataSizeFeature)
+        elif "B" in version:
+            task_feature_factory.add(fastsim.InputOutputTaskFeature)
+            data_feature_factory.add(fastsim.DataSizeFeature)
+            data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+        elif "C" in version:
+            task_feature_factory.add(fastsim.InputOutputTaskFeature)
+            data_feature_factory.add(fastsim.DataSizeFeature)
+            data_feature_factory.add(fastsim.DataCoordinateFeature)
+        elif "D" in version:
+            task_feature_factory.add(fastsim.InputOutputTaskFeature)
+            data_feature_factory.add(fastsim.DataSizeFeature)
+            data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+            data_feature_factory.add(fastsim.DataCoordinateFeature)
+        elif "E" in version:
+            task_feature_factory.add(fastsim.InputOutputTaskFeature)
+            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
+            data_feature_factory.add(fastsim.DataSizeFeature)
+            data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+            data_feature_factory.add(fastsim.DataCoordinateFeature)      
 
         super().__init__(
             spec,

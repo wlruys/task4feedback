@@ -67,6 +67,7 @@ class RuntimeEnv(EnvBase):
         sample_z: bool = False,
         burn_in_resets: int = 10,
         extra_logging_policy: str = "EFT",
+        **_ignored,
     ):
         super().__init__(device=device)
         self.verbose = verbose
@@ -938,7 +939,7 @@ class IncrementalSchedule(RuntimeEnv):
             if self.terminal_reward:
                 reward = self.dense_reward_scale*r 
                 if self.pbrs:
-                    reward = reward - done_reward
+                    reward = reward + done_reward
 
         buf = td.empty()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
