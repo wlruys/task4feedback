@@ -1,12 +1,18 @@
 defaults:
-  - 4x4x16_static.yaml
+  - 8x8x128_dynamic_corners.yaml
   - feature: cnn_batch
   - network: dilation_cnn_batch
   - _self_
 
 algorithm:
-  rollout_steps: 16
-  minibatch_size: 16
+  rollout_steps: 32
+  minibatch_size: 32
+
+optimizer:
+  lr: 1e-3
+
+system:
+  mem: 80e9
 
 feature:
   observer:
@@ -14,9 +20,8 @@ feature:
     batched: true
     version: A
   normalization:
-    warmup: 20
+    warmup: 10
   add_device_load: True
-  
 
 network:
   layers:

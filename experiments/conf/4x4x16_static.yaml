@@ -1,6 +1,6 @@
 defaults:
   - graph: static_jacobi
-  - reward: pbrs
+  - reward: incremental_schedule
   - system: 4h100
   - algorithm: ppo
   - runtime: batch
@@ -70,4 +70,4 @@ eval:
   animation_interval: 0
   eval_interval: 25
   samples: 10
-  pickle_path: ./4x4x16_static_1:1:1.pkl
+  pickle_path: ./pickled_evaluation/4x4x16_static_1:1:1.pkl

@@ -56,7 +56,7 @@ build-backend = "scikit_build_core.build"
 minimum-version = "0.11"
 wheel.packages = ["src/task4feedback"]
 install.components = ["python"]
-cmake.version = ">=3.29"
+cmake.version = ">=3.22"
 cmake.build-type = "RelWithDebInfo"
 build.verbose = true
 build-dir = "build/{wheel_tag}"

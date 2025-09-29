@@ -103,6 +103,7 @@ class RuntimeEnv(EnvBase):
     - Location Randomness: {self.location_randomness}
     - Location List: {self.location_list}
     - Max Samples per Iteration: {self.max_samples_per_iter}
+    - verbose: {self.verbose}
                 """
             )
 
@@ -332,12 +333,12 @@ class RuntimeEnv(EnvBase):
         time = obs[self.time_key].item()
         improvement = (self.EFT_baseline) / (time)
         obs.set_at_(self.improvement_key, improvement, 0)
-        best_policy = self._get_baseline(policy=self.extra_logging_policy)
-        obs.set_at_(self.vs_policy_key, best_policy / time, 0)
+        # best_policy = self._get_baseline(policy=self.extra_logging_policy)
+        # obs.set_at_(self.vs_policy_key, best_policy / time, 0)
         reward = (-time) / (self.EFT_baseline)
         if self.verbose:
             print(
-                f"Time: {time} / EFT: {self.EFT_baseline} / Best: {best_policy} Improvement: {improvement:.2f}",
+                f"Time: {time} / EFT: {self.EFT_baseline} Improvement: {improvement:.2f}",
                 flush=True,
             )
 
@@ -528,6 +529,7 @@ class RuntimeEnv(EnvBase):
         self._set_seed(seed)
         self.random_start = False  # Do not random start in evaluation
         self.change_location = False  # Do not change location in evaluation
+        self.change_workload = False  # Do not change workload in evaluation
         self.resets = 0
         self._reset()
 
@@ -862,27 +864,44 @@ class KStepIncrementalEFT(RuntimeEnv):
 
 class IncrementalSchedule(RuntimeEnv):
 
-    def __init__(self, *args, gamma: float = 1.0, pbrs: bool = True, k: int = 0, terminal_reward: bool = True, chance: float = 1.0, dense_reward_scale: float = 1, sparse_reward_scale: float = 1, **kwargs):
+    def __init__(
+        self,
+        *args,
+        gamma: float = 1.0,
+        pbrs: bool = True,
+        k: int = 0,
+        terminal_reward: bool = True,
+        chance: float = 1.0,
+        dense_reward_scale: float = 1,
+        sparse_reward_scale: float = 1,
+        uniform_reward_scale: float = 0,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.k = k
         self.chance = chance
         self.terminal_reward = terminal_reward
-        self.dense_reward_scale = dense_reward_scale
-        self.sparse_reward_scale = sparse_reward_scale
+        if uniform_reward_scale != 0:
+            print("Using uniform reward scale, overriding dense and sparse reward scales.")
+            self.dense_reward_scale = uniform_reward_scale
+            self.sparse_reward_scale = uniform_reward_scale
+        else:
+            self.dense_reward_scale = dense_reward_scale
+            self.sparse_reward_scale = sparse_reward_scale
         self.pbrs = pbrs
 
         self.interval_flags = torch.zeros(self.max_length(), dtype=torch.bool)
-        self.distance_to_last = torch.zeros(self.max_length(), dtype=torch.int32)
-        self.distance_to_next = torch.zeros(self.max_length(), dtype=torch.int32)
+        # self.distance_to_last = torch.zeros(self.max_length(), dtype=torch.int32)
+        # self.distance_to_next = torch.zeros(self.max_length(), dtype=torch.int32)
 
         self._reinitialize_intervals()
 
     def _reinitialize_intervals(self):
         if self.chance >= 1.0:
-            self.interval_flags = torch.ones(self.max_length()+1, dtype=torch.bool)
+            self.interval_flags = torch.ones(self.max_length() + 1, dtype=torch.bool)
             return
-        
+
         sample = torch.rand(self.max_length())
         self.interval_flags = sample <= self.chance
         # TODO: Implement distance to last and next for gamma discounting.
@@ -902,7 +921,9 @@ class IncrementalSchedule(RuntimeEnv):
                 sim_current.run()
             sim_current.start_drain()
             sim_current.run()
-            self.previous_length = sim_current.time
+
+            self.potential = [(-sim_current.time) / (self.EFT_baseline)]
+            self.potential_sum = 0.0
             if self.chance < 1.0:
                 self._reinitialize_intervals()
 
@@ -920,14 +941,15 @@ class IncrementalSchedule(RuntimeEnv):
             sim_current.start_drain()
             sim_current.run()
 
-            current_length = sim_current.time
+            self.potential.append((-sim_current.time) / (self.EFT_baseline))
 
             # Normalized in per-task time observed in global baseline.
-            done_reward = self.sparse_reward_scale * self.previous_length / (self.EFT_baseline)
-            reward = self.sparse_reward_scale * (self.previous_length - self.gamma * current_length) / (self.EFT_baseline)
-            self.previous_length = current_length
+            reward = self.sparse_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
+            # self.potential_sum += reward
+            if self.verbose:
+                print(f"Step {self.step_count} Reward: {reward:.4f} (P(s-1)={self.potential[-2]:.4f}, P(s)={self.potential[-1]:.4f})")
         else:
-            done_reward = 0.0
+            self.potential.append(0.0)
             reward = 0.0
 
         simulator_status = self.simulator.run_until_external_mapping()
@@ -935,11 +957,20 @@ class IncrementalSchedule(RuntimeEnv):
 
         obs = self._get_observation()
         if done:
+            self.potential_sum -= reward
             obs, r, time, improvement = self._handle_done(obs)
             if self.terminal_reward:
-                reward = self.dense_reward_scale*r 
+                reward = self.dense_reward_scale * r
                 if self.pbrs:
-                    reward = reward + done_reward
+                    reward = reward + self.sparse_reward_scale * (0 - self.potential[-2])
+                    # self.potential_sum += self.sparse_reward_scale * (0 - self.potential[-2])
+            if self.verbose:
+                # print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f} Sum(Potential): {self.potential_sum:.4f}")
+                print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f}")
+                deltas = []
+                for i in range(1, len(self.potential)):
+                    deltas.append(self.sparse_reward_scale * (self.gamma * self.potential[i] - self.potential[i - 1]))
+                print(f"Max pbrs: {max(deltas):.4f}, Min pbrs: {min(deltas):.4f}")
 
         buf = td.empty()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())

@@ -53,7 +53,7 @@ def configure_training(cfg: DictConfig):
 
     # saved_policy = "Quad"
     saved_policy = "Oracle"
-    oracle_chunk_size = 32
+    oracle_chunk_size = 64
     for i in range(20):
         env.reset()
         eval_state["init_locs"].append(env.get_graph().get_cell_locations(as_dict=False))
@@ -76,23 +76,27 @@ def configure_training(cfg: DictConfig):
             env.simulator.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
             env.simulator.run()
             eval_state["policy_times"].append(env.simulator.time)
+        print(f"{i}: EFT {eval_state['eft_times'][-1]:.4f}, {saved_policy} {eval_state['policy_times'][-1]:.4f} ({eval_state['eft_times'][-1]/eval_state['policy_times'][-1]:.2f}x)")
     # print(eval_state)
     # pickle.dump(eval_state, open("4x4x16_static_1:1:1.pkl", "wb"))
-    # pickle.dump(eval_state, open("8x8x128_diag_1:1:1.pkl", "wb"))
-    print(eval_state)
-    exit()
+    pickle.dump(eval_state, open("8x8x128_corners_1:1:1.pkl", "wb"))
+    # print(eval_state)
 
-    # env._reset()
+    env.set_reset_counter(0)
+    env._reset()
 
     # eval_state = pickle.load(open("dynamic_bump_eval.pkl", "rb"))
-    # for i in range(20):
-    #     saved_loc = eval_state["init_locs"][i]
-    #     workload = eval_state["workloads"][i]
-    #     env.reset_to_state(saved_loc, workload)
-    #     print(f"Eval {i}:")
-    #     print("EFT:", eval_state["eft_times"][i])
-    #     print("Sim EFT:", end=" ")
-    #     print(env._get_baseline("EFT"))
+    for i in range(20):
+        saved_loc = eval_state["init_locs"][i]
+        workload = eval_state["workloads"][i]
+        env.reset_to_state(saved_loc, workload)
+        print(f"Eval {i}:")
+        sim_time = env._get_baseline("EFT")
+        if eval_state["eft_times"][i] != sim_time:
+            print(f"  Warning: EFT time changed! {eval_state['eft_times'][i]} -> {sim_time}")
+        else:
+            print("EFT time matches.")
+        # print("EFT:", eval_state["eft_times"][i])
 
 
 @hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)

@@ -14,6 +14,7 @@ feature:
     version: A
   normalization:
     warmup: 20
+  add_device_load: True
 
 network:
   layers:
@@ -25,7 +26,6 @@ network:
       hidden_channels: 32
   critic:
     add_progress: True
-  add_device_load: True
 
 wandb:
   name: MLP-A_IEFT

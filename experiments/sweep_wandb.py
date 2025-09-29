@@ -69,7 +69,6 @@ def configure_training(cfg: DictConfig):
             lstm=lstm,
             normalization=normalization,
             eval=eval,
-            network=network,
         )
 
     alg_config = instantiate(cfg.algorithm)
@@ -121,11 +120,11 @@ def configure_training(cfg: DictConfig):
         )
 
 
-@hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="8x8x128_dynamic_diag_cnn.yaml", version_base=None)
 def main(cfg: DictConfig):
     if cfg.wandb.enabled:
         wandb.init(
-            project=cfg.wandb.project,
+            project="8x8x128_sweep",
             config=OmegaConf.to_container(cfg, resolve=True),
             name=make_run_name(cfg),
             # name=f"{cfg.wandb.name}",

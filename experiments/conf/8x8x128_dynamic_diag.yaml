@@ -1,6 +1,6 @@
 defaults:
   - graph: dynamic_jacobi_diag
-  - reward: pbrs
+  - reward: incremental_schedule
   - system: 4h100
   - algorithm: ppo
   - runtime: batch
@@ -73,5 +73,5 @@ eval:
   max_frames: 400
   video_seconds: 15
   samples: 1
-  pickle_path: ./8x8x128_diag_1:1:1.pkl
+  pickle_path: ./pickled_evaluation/8x8x128_diag_1:1:1.pkl
 

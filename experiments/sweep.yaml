@@ -3,6 +3,13 @@ command:
   - ${env}
   - ${interpreter}
   - ${program}
+  - --config-name
+  - 8x8x128_dynamic_diag_cnn
+  - reward=incremental_schedule
+  - eval.eval_interval=500
+  - algorithm.num_collections=1100
+  - eval.animation_interval=500
+
 method: bayes       # or grid, random
 metric:
   name: batch/mean_improvement   # <-- change to whatever metric you log
@@ -11,10 +18,9 @@ metric:
 parameters:
   algorithm.ent_coef:
     min: 0.0001
-    max: 0.1
-  algorithm.gamma:
-    min: 0.9
-    max: 0.9999
-  algorithm.lmbda:
-    min: 0.7
-    max: 1.0
+    max: 0.01
+  optimizer.lr:
+    min: 0.0001
+    max: 0.01
+  reward.k:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]

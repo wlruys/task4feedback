@@ -38,3 +38,4 @@ normalization:
       standard_normal: true
       reduce_dim: [0]
       cat_dim: 0
+add_device_load: true
