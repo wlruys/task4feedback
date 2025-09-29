@@ -945,9 +945,8 @@ class IncrementalSchedule(RuntimeEnv):
 
             # Normalized in per-task time observed in global baseline.
             reward = self.sparse_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
-            # self.potential_sum += reward
             if self.verbose:
-                print(f"Step {self.step_count} Reward: {reward:.4f} (P(s-1)={self.potential[-2]:.4f}, P(s)={self.potential[-1]:.4f})")
+                print(f"Step {self.step_count} Reward: {reward:.4f} (P(s)={self.potential[-2]:.4f}, P(s+1)={self.potential[-1]:.4f})")
         else:
             self.potential.append(0.0)
             reward = 0.0
@@ -963,10 +962,10 @@ class IncrementalSchedule(RuntimeEnv):
                 reward = self.dense_reward_scale * r
                 if self.pbrs:
                     reward = reward + self.sparse_reward_scale * (0 - self.potential[-2])
-                    # self.potential_sum += self.sparse_reward_scale * (0 - self.potential[-2])
+                    self.potential_sum += self.sparse_reward_scale * (0 - self.potential[-2])
             if self.verbose:
-                # print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f} Sum(Potential): {self.potential_sum:.4f}")
-                print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f}")
+                print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f} Sum(Potential): {self.potential_sum:.4f}")
+                # print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f}")
                 deltas = []
                 for i in range(1, len(self.potential)):
                     deltas.append(self.sparse_reward_scale * (self.gamma * self.potential[i] - self.potential[i - 1]))

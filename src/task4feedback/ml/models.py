@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, List, Sequence
-from torch_geometric.nn.norm import GraphNorm
+from torch_geometric.nn.norm import GraphNorm, MessageNorm
 
 # from task4feedback.interface.wrappers import (
 #     observation_to_heterodata_truncate as observation_to_heterodata,
@@ -169,19 +169,10 @@ class HeteroDataWrapper(nn.Module):
             else:
                 _obs = observation_to_heterodata_truncate(obs)
 
-            task_count = obs["nodes", "tasks", "count"]
-            data_count = obs["nodes", "data", "count"]
-
             if is_cuda:
                 _obs = _obs.to("cuda", non_blocking=True)
-                task_count = task_count.to("cuda", non_blocking=True)
-                data_count = data_count.to("cuda", non_blocking=True)
 
-            return (
-                _obs,
-                obs["nodes", "tasks", "count"],
-                obs["nodes", "data", "count"],
-            )
+            return _obs
 
         # Otherwise we're batching, possibly over multiple batch dimensions
 
@@ -202,26 +193,22 @@ class HeteroDataWrapper(nn.Module):
             _h_data.append(_obs)
 
         batch_obs = Batch.from_data_list(_h_data)
-        task_count = obs["nodes", "tasks", "count"]
-        data_count = obs["nodes", "data", "count"]
 
         if isinstance(batch_obs, tuple):
             batch_obs = batch_obs[0]
 
         if is_cuda:
-            task_count = task_count.to("cuda", non_blocking=True)
-            data_count = data_count.to("cuda", non_blocking=True)
             batch_obs = batch_obs.to("cuda", non_blocking=True)
 
-        return (batch_obs, task_count, data_count)
+        return batch_obs
 
     def forward(self, obs: TensorDict, actions: Optional[TensorDict] = None):
         is_batch = self._is_batch(obs)
 
         with torch.no_grad():
-            data, task_count, data_count = self._convert_to_heterodata(obs, is_batch, actions=actions)
+            data = self._convert_to_heterodata(obs, is_batch, actions=actions)
 
-        return data, (task_count, data_count)
+        return data
 
 
 @dataclass
@@ -467,6 +454,17 @@ def _zero_last_linear(seq: nn.Sequential):
         nn.init.zeros_(last.bias)
 
 
+def _tiny_last_linear(seq: nn.Sequential, std: float = 1e-4):
+    last = None
+    for m in reversed(seq):
+        if isinstance(m, nn.Linear):
+            last = m
+            break
+    assert last is not None
+    nn.init.normal_(last.weight, std=std)
+    if last.bias is not None:
+        nn.init.zeros_(last.bias)
+
 class _FiLM(nn.Module):
     def __init__(self, node_types: List[str], num_layers: int, cond_dim: int, hidden_dim: int):
         super().__init__()
@@ -479,9 +477,7 @@ class _FiLM(nn.Module):
 
         for nt in node_types:
             for l in range(num_layers):
-                out_lin = self.mod[nt][l][-1]
-                nn.init.zeros_(out_lin.weight)
-                nn.init.zeros_(out_lin.bias)
+                _tiny_last_linear(self.mod[nt][l], std=1e-4)
 
     def forward(self, x_dict, batch_dict, g: Tensor, layer_idx: int):
         if g.dim() == 1:
@@ -495,6 +491,9 @@ class _FiLM(nn.Module):
             gb = self.mod[nt][layer_idx](g)  # [B, 2C]
             gamma, beta = gb.chunk(2, dim=-1)  # [B,C], [B,C]
             b = batch_dict.get(nt, None)
+            gamma = 1.0 + 0.5 * torch.tanh(gamma)
+            beta = 0.5 * beta
+
             if b is None:
                 g_nodes = gamma[0].expand_as(x)
                 b_nodes = beta[0].expand_as(x)
@@ -503,24 +502,11 @@ class _FiLM(nn.Module):
                     raise ValueError("Global vector batch size mismatches node batch indices.")
                 g_nodes = gamma.index_select(0, b)
                 b_nodes = beta.index_select(0, b)
-            out[nt] = (1.0 + g_nodes) * x + b_nodes
+            out[nt] = (g_nodes) * x + b_nodes
         return out
-
 
 class GATStateNet(nn.Module):
 
-<<<<<<< HEAD
-    def __init__(self, feature_config: FeatureDimConfig, hidden_channels: int = 16, num_layers: int = 1, add_device_load: bool = False, add_progress: bool = False, n_devices: int = 5, **_ignored):
-||||||| 2b53111
-    def __init__(self, 
-        feature_config: FeatureDimConfig, 
-        hidden_channels: int = 16,
-        num_layers: int = 1,
-        add_device_load: bool = False,
-        add_progress: bool = False,
-        n_devices: int = 5,
-        **_ignored):
-=======
 
     def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
         mask = edge_mask.to(torch.bool)
@@ -529,15 +515,7 @@ class GATStateNet(nn.Module):
         return edge_index_masked, edge_attr_masked
 
 
-    def __init__(self, 
-        feature_config: FeatureDimConfig, 
-        hidden_channels: int = 16,
-        num_layers: int = 1,
-        add_device_load: bool = False,
-        add_progress: bool = False,
-        n_devices: int = 5,
-        **_ignored):
->>>>>>> wlruys/gnn-comparison
+    def __init__(self, feature_config: FeatureDimConfig, hidden_channels: int = 16, num_layers: int = 2, add_device_load: bool = False, add_progress: bool = False, n_devices: int = 5, **_ignored):
         super(GATStateNet, self).__init__()
         self.feature_config = feature_config
         self.hidden_channels = hidden_channels
@@ -568,52 +546,39 @@ class GATStateNet(nn.Module):
         )
         self.stem_norm = nn.ModuleDict(
             {
-                "tasks": GraphNorm(self.hidden_channels),
-                "data": GraphNorm(self.hidden_channels),
+                "tasks": nn.LayerNorm(self.hidden_channels),
+                "data": nn.LayerNorm(self.hidden_channels),
             }
         )
 
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             conv_dict = {
-                ("tasks", "to", "tasks"): GCNConv(hidden_channels, hidden_channels),
-                ("tasks", "from", "tasks"): GCNConv(hidden_channels, hidden_channels),
-                # ("tasks", "write", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
-                # ("data", "write", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean"),
-                ("tasks", "read", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add"),
-                ("data", "read", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add"),
+                ("tasks", "to", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
+                ("tasks", "from", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
+                ("tasks", "read", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
+                ("data", "read", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
             }
+            # conv_dict = {
+            #     ("tasks", "to", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
+            #     ("tasks", "from", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
+            #     ("tasks", "read", "data"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
+            #     ("data", "read", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
+            # }
             hetero_conv = HeteroConv(conv_dict, aggr="mean")
             self.convs.append(hetero_conv)
 
-<<<<<<< HEAD
-        self.norms = nn.ModuleDict(
-            {
-                "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
-                "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
-            }
-        )
-
-        self.post_norms = nn.ModuleDict(
-            {
-                "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers )]),
-                "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
-            }
-        )
-||||||| 2b53111
         self.norms = nn.ModuleDict({
-            "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
-            "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
+            "tasks": nn.ModuleList([nn.LayerNorm(self.hidden_channels) for _ in range(num_layers+1)]),
+            "data": nn.ModuleList([nn.LayerNorm(self.hidden_channels) for _ in range(num_layers+1)]),
         })
 
-
-
-=======
-        self.norms = nn.ModuleDict({
-            "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
-            "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
-        })
->>>>>>> wlruys/gnn-comparison
+        # self.post_norms = nn.ModuleDict(
+        #     {
+        #         "tasks": nn.ModuleList([MessageNorm(learn_scale=True) for _ in range(num_layers)]),
+        #         "data": nn.ModuleList([MessageNorm(learn_scale=True) for _ in range(num_layers)]),
+        #     }
+        # )
 
         if self.add_device_load or self.add_progress:
             self.film = _FiLM(node_types=["tasks", "data"], num_layers=self.num_layers, cond_dim=int(self.g_dim), hidden_dim=self.hidden_channels)
@@ -634,10 +599,10 @@ class GATStateNet(nn.Module):
 
         self.mlp_norm = nn.LayerNorm(8)
 
-        _zero_last_linear(self.mlp_global_pool["tasks"])
-        _zero_last_linear(self.mlp_global_pool["data"])
+        _tiny_last_linear(self.mlp_global_pool["tasks"])
+        _tiny_last_linear(self.mlp_global_pool["data"])
         if self.mlp_side_info is not None:
-            _zero_last_linear(self.mlp_side_info)
+            _tiny_last_linear(self.mlp_side_info)
 
         nn.init.zeros_(self.stem_proj["tasks"].bias)
         nn.init.zeros_(self.stem_proj["data"].bias)
@@ -648,38 +613,35 @@ class GATStateNet(nn.Module):
 
     def forward(self, tensordict: TensorDict):
         batch_size = tensordict.batch_size
-        data, (task_count, data_count) = self.convert_data(tensordict)
+        data = self.convert_data(tensordict)
 
         b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
         b_data = data["data"].batch if isinstance(data, Batch) else None
 
         x_tasks = self.stem_proj["tasks"](data["tasks"].x)
-        x_tasks = self.stem_norm["tasks"](x_tasks, b_tasks)
+        x_tasks = self.stem_norm["tasks"](x_tasks)
         x_tasks = self.act(x_tasks)
 
         x_data = self.stem_proj["data"](data["data"].x)
-        x_data = self.stem_norm["data"](x_data, b_data)
+        x_data = self.stem_norm["data"](x_data)
         x_data = self.act(x_data)
 
         x_dict = {"tasks": x_tasks, "data": x_data}
         batch_dict = {"tasks": b_tasks, "data": b_data}
 
+        tasks_read_data = data["tasks", "read", "data"].edge_index
+        mask = data["tasks", "read", "data"].edge_attr
+        masked_task_data, _ = self._mask_edges(edge_index=tasks_read_data, edge_mask=mask[:, 0])
+
         edge_index_dict = {
             ("tasks", "to", "tasks"): data["tasks", "to", "tasks"].edge_index,
             ("tasks", "from", "tasks"): data["tasks", "from", "tasks"].edge_index,
-            # ("tasks", "write", "data"): data["tasks", "write", "data"].edge_index,
-            # ("data", "write", "tasks"): data["data", "write", "tasks"].edge_index,
-            ("tasks", "read", "data"): data["tasks", "read", "data"].edge_index,
-            ("data", "read", "tasks"): data["data", "read", "tasks"].edge_index,
+            ("tasks", "read", "data"): masked_task_data,
+            ("data", "read", "tasks"): masked_task_data.flip(0),
         }
 
-        # per_edge_kwargs = {
-        #     ("tasks", "read", "data"): {"edge_attr": data["tasks", "read", "data"].edge_attr},
-        #     ("data", "read", "tasks"): {"edge_attr": data["data", "read", "tasks"].edge_attr},
-        # }
-
+        g = None
         if self.film is not None:
-            g = None
             if self.add_progress:
                 time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
                 time_feature = time_feature.reshape(-1, 1)
@@ -697,30 +659,30 @@ class GATStateNet(nn.Module):
                     g = torch.cat([device_load, device_memory], dim=-1)
                 else:
                     g = torch.cat([g, device_load, device_memory], dim=-1)
-        else:
-            g = None
 
         for l, conv in enumerate(self.convs):
 
             #pre-norm
-            x_pre = {nt: self.norms[nt][l](x_dict[nt], batch_dict[nt]) for nt in x_dict.keys()}
+            x_pre = {nt: self.norms[nt][l](x_dict[nt]) for nt in x_dict.keys()}
 
             #conv
             x_new = conv(x_pre, edge_index_dict=edge_index_dict)
 
-            #post-norm
-            x_new  = {nt: self.post_norms[nt][l](x_new[nt], batch_dict[nt]) for nt in x_new.keys()}
+            # #post-norm
+            # x_new  = {nt: self.post_norms[nt][l](x_dict[nt], x_new[nt]) for nt in x_new.keys()}
 
             #film
             if self.film is not None:
                 x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
 
-            #residual 
+            # residual 
             x_new = {nt: x_dict[nt] + x_new[nt] for nt in x_dict.keys()}
 
             #activation
             x_dict = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
 
+        # final norm
+        x_dict = {nt: self.norms[nt][-1](x_dict[nt]) for nt in x_dict.keys()}
 
         if b_tasks is not None:
             idx = data["tasks"].ptr[:-1]
@@ -752,14 +714,23 @@ class GATStateNet(nn.Module):
         # print(f"x shape before return: {x.shape}")
         return x.select(dim=-2, index=0)
 
-
 class OriginalGNNStateNet(nn.Module):
+
+    def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
+        mask = edge_mask.to(torch.bool)
+        edge_index_masked = edge_index[:, mask]
+        edge_attr_masked = edge_attr[mask] if edge_attr is not None else None
+        return edge_index_masked, edge_attr_masked
+
 
     def __init__(
         self,
         feature_config: FeatureDimConfig,
         hidden_channels: int = 16,
         n_heads: int = 2,
+        add_device_load: bool = False,
+        add_progress: bool = False,
+        n_devices: int = 5,
         **_ignored,
     ):
         super(OriginalGNNStateNet, self).__init__()
@@ -767,11 +738,44 @@ class OriginalGNNStateNet(nn.Module):
         self.feature_config = feature_config
         self.n_heads = n_heads
         self.hidden_channels = hidden_channels
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+        self.n_devices = int(n_devices)
+
+        self.g_dim = 0
+        if add_progress:
+            self.g_dim += 2
+        if add_device_load:
+            self.g_dim += 3 * n_devices
+
+        if self.g_dim > 0:
+            self.g_proj = nn.Linear(self.g_dim, hidden_channels)
+            self.g_norm = nn.LayerNorm(hidden_channels)
+            self.g_act = nn.LeakyReLU(negative_slope=0.01)
+
+        if self.g_dim == 0:
+            self.g_proj = None
+            self.g_norm = None
+            self.g_act = None
+
+        self.stem_prog = nn.ModuleDict(
+            {
+                "tasks": Linear(int(feature_config.task_feature_dim), hidden_channels, bias=True),
+                "data": Linear(int(feature_config.data_feature_dim), hidden_channels, bias=True),
+            }
+        )
+
+        self.stem_norm = nn.ModuleDict(
+            {
+                "tasks": nn.LayerNorm(hidden_channels),
+                "data": nn.LayerNorm(hidden_channels),
+            }
+        )        
 
         self.convert_data = HeteroDataWrapper()
 
         self.gnn_tasks_data = GATv2Conv(
-            (feature_config.data_feature_dim, feature_config.task_feature_dim),
+            (hidden_channels, hidden_channels),
             hidden_channels,
             heads=n_heads,
             concat=False,
@@ -781,7 +785,7 @@ class OriginalGNNStateNet(nn.Module):
         )
 
         self.gnn_tasks_tasks = GATv2Conv(
-            (feature_config.task_feature_dim, feature_config.task_feature_dim),
+            (hidden_channels, hidden_channels),
             hidden_channels,
             heads=n_heads,
             concat=False,
@@ -792,29 +796,36 @@ class OriginalGNNStateNet(nn.Module):
 
         self.layer_norm1 = nn.LayerNorm(hidden_channels)
         self.layer_norm2 = nn.LayerNorm(hidden_channels)
-        self.act = nn.LeakyReLU(negative_slope=0.01)
+        self.act = nn.LeakyReLU(negative_slope=0.01)        
 
-        self.gat_output = hidden_channels * 2 + feature_config.task_feature_dim
-
-        self.output_dim = self.gat_output * 2
+        self.output_dim = hidden_channels * 6 + (hidden_channels if self.g_dim > 0 else 0)
         self.output_keys = ["embed"]
 
     def forward(self, tensordict: TensorDict):
         batch_size = tensordict.batch_size
-        data, (task_count, data_count) = self.convert_data(tensordict)
+        data= self.convert_data(tensordict)
 
         b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
-        b_data = data["data"].batch if isinstance(data, Batch) else None
 
-        x = data["tasks"].x
+        x_tasks = self.stem_prog["tasks"](data["tasks"].x)
+        x_tasks = self.stem_norm["tasks"](x_tasks)
+        x_tasks = self.act(x_tasks)
+
+        x_data = self.stem_prog["data"](data["data"].x)
+        x_data = self.stem_norm["data"](x_data)
+        x_data = self.act(x_data)
+
+        data_read_tasks = data["data", "read", "tasks"].edge_index
+        mask = data["data", "read", "tasks"].edge_attr
+        read_edges_masked, _ = self._mask_edges(edge_index=data_read_tasks, edge_mask=mask[:, 0])
 
         data_fused_tasks = self.gnn_tasks_data(
-            (data["data"].x, data["tasks"].x),
-            data["data", "read", "tasks"].edge_index,
+            (x_data, x_tasks),
+            read_edges_masked,
         )
 
         tasks_fused_tasks = self.gnn_tasks_tasks(
-            (data["tasks"].x, data["tasks"].x),
+            (x_tasks, x_tasks),
             data["tasks", "to", "tasks"].edge_index,
         )
 
@@ -824,12 +835,41 @@ class OriginalGNNStateNet(nn.Module):
         x_tasks_updated = self.layer_norm2(tasks_fused_tasks)
         x_tasks_updated = self.act(x_tasks_updated)
 
-        x_fused = torch.cat([x, x_tasks_updated, x_data_updated], dim=-1)
+        x_fused = torch.cat([x_tasks, x_tasks_updated, x_data_updated], dim=-1)
 
         global_fused = global_mean_pool(x_fused, b_tasks)
 
+        g = None
+        if self.g_dim > 0:
+
+            if self.add_progress:
+                time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+                time_feature = time_feature.reshape(-1, 1)
+                progress_feature = tensordict["aux", "progress"]
+                progress_feature = progress_feature.reshape(-1, 1)
+                g = torch.cat([time_feature, progress_feature], dim=-1)
+
+            if self.add_device_load:
+                device_load = tensordict["aux", "device_load"]
+                device_memory = tensordict["aux", "device_memory"]
+                device_load = device_load.reshape(-1, 2 * self.n_devices)
+                device_memory = device_memory.reshape(-1, 1 * self.n_devices)
+
+                if g is None:
+                    g = torch.cat([device_load, device_memory], dim=-1)
+                else:
+                    g = torch.cat([g, device_load, device_memory], dim=-1)
+
+            g = self.g_proj(g)
+            g = self.g_norm(g)
+            g = self.g_act(g)
+
         if b_tasks is None:
             global_fused = global_fused.squeeze(0)
+            g = g.squeeze(0) if self.g_dim > 0 else None
+
+        if self.g_dim > 0:
+            global_fused = torch.cat([global_fused, g], dim=-1)
 
         if b_tasks is not None:
             idx = data["tasks"].ptr[:-1]

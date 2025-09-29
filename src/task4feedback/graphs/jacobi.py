@@ -1354,7 +1354,7 @@ class GATExternalObserverFactory(ExternalObserverFactory):
             device_features=device_feature_extractor,
             task_task_features=task_task_feature_extractor,
             task_read_data_features=task_read_data_feature_extractor,
-            cache=False,
+            cache=True,
         )
 
 
@@ -1490,7 +1490,7 @@ class XYObserverFactory(XYExternalObserverFactory):
 
 
 class GATObserverFactory(GATExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, version: str, **_ignored):
+    def __init__(self, spec: fastsim.GraphSpec, version: str = "E", **_ignored):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         data_feature_factory = FeatureExtractorFactory()

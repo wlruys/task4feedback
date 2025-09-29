@@ -1606,7 +1606,7 @@ class ExternalObserver:
         self.candidate_observation(output)
 
         # Node observations (all nodes must be processed before edges)
-        self.task_observation(output)
+        self.task_observation(output, k=2)
         self.data_observation(output)
 
         # Edge observations (edges depend on ids collected during node observation)
