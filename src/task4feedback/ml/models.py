@@ -509,7 +509,35 @@ class _FiLM(nn.Module):
 
 class GATStateNet(nn.Module):
 
+<<<<<<< HEAD
     def __init__(self, feature_config: FeatureDimConfig, hidden_channels: int = 16, num_layers: int = 1, add_device_load: bool = False, add_progress: bool = False, n_devices: int = 5, **_ignored):
+||||||| 2b53111
+    def __init__(self, 
+        feature_config: FeatureDimConfig, 
+        hidden_channels: int = 16,
+        num_layers: int = 1,
+        add_device_load: bool = False,
+        add_progress: bool = False,
+        n_devices: int = 5,
+        **_ignored):
+=======
+
+    def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
+        mask = edge_mask.to(torch.bool)
+        edge_index_masked = edge_index[:, mask]
+        edge_attr_masked = edge_attr[mask] if edge_attr is not None else None
+        return edge_index_masked, edge_attr_masked
+
+
+    def __init__(self, 
+        feature_config: FeatureDimConfig, 
+        hidden_channels: int = 16,
+        num_layers: int = 1,
+        add_device_load: bool = False,
+        add_progress: bool = False,
+        n_devices: int = 5,
+        **_ignored):
+>>>>>>> wlruys/gnn-comparison
         super(GATStateNet, self).__init__()
         self.feature_config = feature_config
         self.hidden_channels = hidden_channels
@@ -558,6 +586,7 @@ class GATStateNet(nn.Module):
             hetero_conv = HeteroConv(conv_dict, aggr="mean")
             self.convs.append(hetero_conv)
 
+<<<<<<< HEAD
         self.norms = nn.ModuleDict(
             {
                 "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
@@ -571,6 +600,20 @@ class GATStateNet(nn.Module):
                 "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
             }
         )
+||||||| 2b53111
+        self.norms = nn.ModuleDict({
+            "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
+            "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
+        })
+
+
+
+=======
+        self.norms = nn.ModuleDict({
+            "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
+            "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers+1)]),
+        })
+>>>>>>> wlruys/gnn-comparison
 
         if self.add_device_load or self.add_progress:
             self.film = _FiLM(node_types=["tasks", "data"], num_layers=self.num_layers, cond_dim=int(self.g_dim), hidden_dim=self.hidden_channels)
