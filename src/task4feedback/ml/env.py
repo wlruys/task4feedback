@@ -92,6 +92,7 @@ class RuntimeEnv(EnvBase):
             print(
                 f"""
     RuntimeEnv initialized with:
+    - Seed: {seed}
     - Random Start: {self.random_start}
     - Change Priority: {self.change_priority}
     - Change Duration: {self.change_duration}
@@ -454,11 +455,21 @@ class RuntimeEnv(EnvBase):
                     )
 
         if self.change_workload:
-            new_workload_seed = self.workload_seed + self.resets
             graph = self.simulator_factory[self.active_idx].input.graph
+            assert isinstance(graph, DynamicJacobiGraph), "Graph must be a DynamicJacobiGraph to randomize workload."
+            new_workload_seed = self.workload_seed + self.resets
             random.seed(new_workload_seed)
-            if isinstance(graph, DynamicJacobiGraph):
-                graph.randomize_workload(seed=new_workload_seed, system=self.simulator_factory[self.active_idx].input.system)
+            graph.randomize_workload(seed=new_workload_seed, system=self.simulator_factory[self.active_idx].input.system)
+            partition = graph.initial_mincut_partition(
+                arch=DeviceType.GPU,
+                bandwidth=450e9,
+                n_parts=self.n_compute_devices,
+                offset=0,
+            )
+            partition = graph.maximize_matches(partition)
+            partition = [p + 1 for p in partition]  # offset by 1 to ignore cpu
+            graph.set_cell_locations([-1 for _ in range(len(partition))])
+            graph.set_cell_locations(partition, step=0)
 
         if self.change_priority:
             new_priority_seed = int(current_priority_seed + self.resets)
@@ -501,9 +512,16 @@ class RuntimeEnv(EnvBase):
         return self.simulator.observer
 
     def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
+        if self.verbose:
+            print(
+                f"""
+            RuntimeEnv initialized with:
+            - Seed: {seed}"""
+            )
         torch.manual_seed(seed)
         np.random.seed(seed)
         random.seed(seed)
+        self.resets = 0
         if self.change_priority:
             self.simulator_factory[self.active_idx].set_seed(priority_seed=seed)
         if self.change_duration:
@@ -969,7 +987,8 @@ class IncrementalSchedule(RuntimeEnv):
                 deltas = []
                 for i in range(1, len(self.potential)):
                     deltas.append(self.sparse_reward_scale * (self.gamma * self.potential[i] - self.potential[i - 1]))
-                print(f"Max pbrs: {max(deltas):.4f}, Min pbrs: {min(deltas):.4f}")
+                if not self.disable_reward_flag:
+                    print(f"Max pbrs: {max(deltas):.4f}, Min pbrs: {min(deltas):.4f}")
 
         buf = td.empty()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
@@ -984,67 +1003,6 @@ class IncrementalSchedule(RuntimeEnv):
 
         buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
-        return buf
-
-
-class PBRS_EFT_Diff(RuntimeEnv):
-
-    def __init__(self, *args, gamma: float = 1.0, scaling_factor: float = 1.0, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.gamma = gamma
-        self.scaling_factor = scaling_factor
-        print(f"PBRS Diff with gamma of {gamma}")
-
-    def _step(self, td: TensorDict) -> TensorDict:
-        # print(f"Step", self.step_count)
-        if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(policy="EFT")
-
-            graph: JacobiGraph = self.simulator.input.graph
-            self.prev_potential = -self.scaling_factor
-
-        self.step_count += 1
-
-        self.map_tasks(td[self.action_n])
-
-        simulator_status = self.simulator.run_until_external_mapping()
-        done = simulator_status == fastsim.ExecutionState.COMPLETE
-
-        if not self.disable_reward_flag:
-            sim_current = self.simulator.copy()
-            sim_current.disable_external_mapper()
-
-            sim_current.run()
-
-            # Normalized in per-task time observed in global baseline.
-            current_time = sim_current.time
-            current_potential = -current_time / (self.EFT_baseline / (self.scaling_factor))
-            if not done:
-                reward = self.gamma * current_potential - self.prev_potential
-            else:
-                reward = 0 - self.prev_potential
-
-            self.prev_potential = current_potential
-        else:
-            reward = 0.0
-
-        obs = self._get_observation()
-        if done:
-            obs, r, time, improvement = self._handle_done(obs)
-            reward += r
-
-        # print(reward)
-        # if done and not self.disable_reward_flag:
-        #     print(r, self.scaling_factor)
-        #     exit()
-        buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
-        buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
-
-        # print(buf)
-
         return buf
 
 
