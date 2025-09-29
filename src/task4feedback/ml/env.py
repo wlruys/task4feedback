@@ -66,7 +66,6 @@ class RuntimeEnv(EnvBase):
         verbose: bool = True,
         sample_z: bool = False,
         burn_in_resets: int = 10,
-        extra_logging_policy: str = "EFT",
     ):
         super().__init__(device=device)
         self.verbose = verbose
@@ -81,7 +80,6 @@ class RuntimeEnv(EnvBase):
         self.random_start = random_start
         self.sample_z = sample_z
         self.burn_in_resets = burn_in_resets
-        self.extra_logging_policy = extra_logging_policy
 
         if location_list is None:
             location_list = [i for i in range(int(only_gpu), len(simulator_factory.input.system))]
@@ -333,7 +331,6 @@ class RuntimeEnv(EnvBase):
         time = obs[self.time_key].item()
         improvement = (self.EFT_baseline) / (time)
         obs.set_at_(self.improvement_key, improvement, 0)
-        # best_policy = self._get_baseline(policy=self.extra_logging_policy)
         # obs.set_at_(self.vs_policy_key, best_policy / time, 0)
         reward = (-time) / (self.EFT_baseline)
         if self.verbose:

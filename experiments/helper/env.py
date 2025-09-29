@@ -42,15 +42,17 @@ def create_observer_factory(cfg: DictConfig):
     graph_config = hydra.utils.instantiate(cfg.graph.config)
 
     if hasattr(cfg.feature.observer, "width") and hasattr(cfg.feature.observer, "prev_frames") and hasattr(cfg.feature.observer, "batched"):
+        width = graph_config.n
+        length = get_length_from_config(graph_config)
         if cfg.feature.observer.batched:
-            width = graph_config.n
-            length = get_length_from_config(graph_config)
             graph_spec.max_candidates = width * length
+        else:
+            graph_spec.max_candidates = 1
         observer_factory = hydra.utils.instantiate(
             cfg.feature.observer,
             spec=graph_spec,
             width=width,
-            length=get_length_from_config(graph_config),
+            length=length,
             prev_frames=cfg.feature.observer.prev_frames,
             batched=cfg.feature.observer.batched,
         )
@@ -145,6 +147,9 @@ def _setup_observation_norms(
                     norm.init_stats(num_iter=num_iter, key=in_keys[0], reduce_dim=reduce_dim, cat_dim=cat_dim)
                 except TypeError:
                     norm.init_stats(num_iter=num_iter, key=in_keys[0])
+                if cfg.feature.observer.version in "DFGH":
+                    norm.loc[-4:] = 0.0
+                    norm.scale[-4:] = 1.0
         finally:
             env.enable_reward()
         return NormalizationDetails(states={n: t.state_dict() for n, t in created.items()})

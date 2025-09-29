@@ -44,7 +44,6 @@ f_t guarded_divide(double a, double b) {
   return static_cast<f_t>(a / b);
 }
 
-
 enum class NodeType : int8_t {
   ANY = -1,
   TASK = 0,
@@ -1017,8 +1016,8 @@ public:
     return edge_count;
   }
 
-  size_t get_data_device_edges(TorchInt64Arr1D &data_ids,
-                                        TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
+  size_t get_data_device_edges(TorchInt64Arr1D &data_ids, TorchInt64Arr2D &output,
+                               TorchInt64Arr2D &global_output) {
 
     assert(output.shape(0) == 2);
     assert(global_output.shape(0) == 2);
@@ -1066,7 +1065,6 @@ public:
     }
     return edge_count;
   }
-
 
   size_t get_data_device_edges_filtered(TorchInt64Arr1D &filtered_lids, TorchInt64Arr1D &data_ids,
                                         TorchInt64Arr2D &output, TorchInt64Arr2D &global_output) {
@@ -1123,25 +1121,24 @@ public:
     return edge_count;
   }
 
-
-  void get_device_load(TorchFloatArr1D &output){
-    const auto& s = state.get();
-    const auto& devices = s.get_devices();
-    const auto& device_manager = s.get_device_manager();
+  void get_device_load(TorchFloatArr1D &output) {
+    const auto &s = state.get();
+    const auto &devices = s.get_devices();
+    const auto &device_manager = s.get_device_manager();
 
     auto v = output.view();
     auto n_devices = devices.size();
     int64_t mapped_sum = 0.0;
     const size_t vals_per_device = 2;
 
-    for(int i = 0; i < n_devices; i++){
+    for (int i = 0; i < n_devices; i++) {
       auto mapped_load = static_cast<int64_t>(s.costs.get_mapped_time(i));
       auto reserved_load = static_cast<int64_t>(s.costs.get_reserved_time(i));
       mapped_sum += mapped_load;
-      v(i*vals_per_device + 0) = static_cast<f_t>(mapped_load);
-      v(i*vals_per_device + 1) = static_cast<f_t>(reserved_load);
+      v(i * vals_per_device + 0) = static_cast<f_t>(mapped_load);
+      v(i * vals_per_device + 1) = static_cast<f_t>(reserved_load);
     }
-    
+
     // std::cout << "UnDevice Load: [";
     // for(int i = 0; i < n_devices * vals_per_device; i++){
     //   std::cout << v(i);
@@ -1151,9 +1148,9 @@ public:
     // }
 
     // // Normalize by total mapped load
-    for(int i = 0; i < n_devices; i++){
-      v(i*vals_per_device + 0) = guarded_divide(v(i*vals_per_device + 0), mapped_sum);
-      v(i*vals_per_device + 1) = guarded_divide(v(i*vals_per_device + 1), mapped_sum);
+    for (int i = 0; i < n_devices; i++) {
+      v(i * vals_per_device + 0) = guarded_divide(v(i * vals_per_device + 0), mapped_sum);
+      v(i * vals_per_device + 1) = guarded_divide(v(i * vals_per_device + 1), mapped_sum);
     }
 
     // std::cout << "Device Load: [";
@@ -1165,23 +1162,21 @@ public:
     // }
     // std::cout << "]" << std::endl;
     // std::cout << "Total Mapped Load: " << mapped_sum << std::endl;
-    
   }
 
-
-  void get_device_memory(TorchFloatArr1D &output){
-    const auto& s = state.get();
-    const auto& devices = s.get_devices();
-    const auto& device_manager = s.get_device_manager();
+  void get_device_memory(TorchFloatArr1D &output) {
+    const auto &s = state.get();
+    const auto &devices = s.get_devices();
+    const auto &device_manager = s.get_device_manager();
 
     auto v = output.view();
     auto n_devices = devices.size();
     const size_t vals_per_device = 1;
 
-    for(int i = 0; i < n_devices; i++){
+    for (int i = 0; i < n_devices; i++) {
       auto reserved_mem = static_cast<double>(device_manager.get_mem<TaskState::RESERVED>(i));
-      auto log_reserved_mem = std::log1p(1+reserved_mem);
-      v(i*vals_per_device + 0) = static_cast<f_t>(log_reserved_mem);
+      auto log_reserved_mem = std::log1p(1 + reserved_mem);
+      v(i * vals_per_device + 0) = static_cast<f_t>(log_reserved_mem);
     }
 
     // std::cout << "Device Memory: [";
@@ -1192,7 +1187,6 @@ public:
     //   }
     // }
     // std::cout << "]" << std::endl;
-
   }
 };
 
@@ -1211,11 +1205,11 @@ template <typename Derived> struct Feature {
   void extractFeature(int32_t object_id, TorchArr &output) {
 
     std::span<float> sp(output.data(), output.size());
-    static_cast< Derived *>(this)->extractFeatureImpl(object_id, sp);
+    static_cast<Derived *>(this)->extractFeatureImpl(object_id, sp);
   }
 
   template <typename Span> void extractFeature(int32_t object_id, Span output) {
-    static_cast< Derived *>(this)->extractFeatureImpl(object_id, output);
+    static_cast<Derived *>(this)->extractFeatureImpl(object_id, output);
   }
 };
 
@@ -1226,12 +1220,11 @@ template <typename Derived> struct EdgeFeature {
 
   void extractFeature(int32_t source_id, int32_t target_id, TorchArr &output) {
     std::span<float> sp(output.data(), output.size());
-    static_cast< Derived *>(this)->extractFeatureImpl(source_id, target_id, sp);
+    static_cast<Derived *>(this)->extractFeatureImpl(source_id, target_id, sp);
   }
 
-  template <typename Span>
-  void extractFeature(int32_t source_id, int32_t target_id, Span output) {
-    static_cast< Derived *>(this)->extractFeatureImpl(source_id, target_id, output);
+  template <typename Span> void extractFeature(int32_t source_id, int32_t target_id, Span output) {
+    static_cast<Derived *>(this)->extractFeatureImpl(source_id, target_id, output);
   }
 };
 
@@ -1461,7 +1454,8 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
   const int stride;
   const int frames;
   const bool add_current;
-  PrevReadSizeFeature(const SchedulerState &state, int width, int length, bool add_current, int frames)
+  PrevReadSizeFeature(const SchedulerState &state, int width, int length, bool add_current,
+                      int frames)
       : StateFeature<PrevReadSizeFeature>(state, NodeType::TASK), stride(width * length),
         add_current(add_current), frames(frames) {
   }
@@ -1480,10 +1474,14 @@ struct PrevReadSizeFeature : public StateFeature<PrevReadSizeFeature> {
     }
     int i = 0;
     while (task_id >= 0 && i < frames) {
-      output[i] =static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
-      //output[i] = static_cast<f_t>(std::log(static_cast<double>(1 + output[i])));
-      //output[i] = static_cast<f_t>(task_id);
+      output[i] = static_cast<f_t>(data.get_total_size(static_graph.get_read(task_id)));
+      // output[i] = static_cast<f_t>(std::log(static_cast<double>(1 + output[i])));
+      // output[i] = static_cast<f_t>(task_id);
       task_id -= stride;
+      ++i;
+    }
+    while (i < frames) {
+      output[i] = output[i - 1];
       ++i;
     }
   }
@@ -1494,14 +1492,14 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
   const int frames;
   const bool add_current;
   std::vector<f_t> history;
-  PrevMappedSizeFeature(const SchedulerState &state, int width, int length, bool add_current, int frames)
+  PrevMappedSizeFeature(const SchedulerState &state, int width, int length, bool add_current,
+                        int frames)
       : StateFeature<PrevMappedSizeFeature>(state, NodeType::TASK), stride(width * length),
         add_current(add_current), frames(frames) {
 
-        const auto &devices = this->state.get_devices();
-        auto grid_size = width * length;
-        history.resize(grid_size * (devices.size() - 1) * frames, 0.0);
-
+    const auto &devices = this->state.get_devices();
+    auto grid_size = width * length;
+    history.resize(grid_size * (devices.size() - 1) * frames, 0.0);
   }
 
   size_t getFeatureDimImpl() const {
@@ -1509,42 +1507,40 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
     return frames * (devices.size() - 1);
   }
 
-  template<typename ID> void shift_history_of_task(ID task_id){
+  template <typename ID> void shift_history_of_task(ID task_id) {
     const auto &devices = this->state.get_devices();
     auto n_devices = devices.size() - 1; // Exclude CPU
     auto grid_size = stride;
     auto offset = (task_id % grid_size) * n_devices * frames;
 
     std::cout << "Shifting history for task " << task_id << " at offset " << offset << std::endl;
-    std:: cout << "History before shift: ";
-    for(int f = 0; f < frames; f++){
-      for(int d = 0; d < n_devices; d++){
+    std::cout << "History before shift: ";
+    for (int f = 0; f < frames; f++) {
+      for (int d = 0; d < n_devices; d++) {
         std::cout << history[offset + f * n_devices + d] << " ";
       }
     }
     std::cout << std::endl;
 
-
-    for(int f = frames - 1; f > 0; f--){
-      for(int d = 0; d < n_devices; d++){
+    for (int f = frames - 1; f > 0; f--) {
+      for (int d = 0; d < n_devices; d++) {
         history[offset + f * n_devices + d] = history[offset + (f - 1) * n_devices + d];
       }
     }
-    for(int d = 0; d < n_devices; d++){
+    for (int d = 0; d < n_devices; d++) {
       history[offset + d] = 0.0;
     }
 
-    std:: cout << "History after shift: ";
-    for(int f = 0; f < frames; f++){
-      for(int d = 0; d < n_devices; d++){
+    std::cout << "History after shift: ";
+    for (int f = 0; f < frames; f++) {
+      for (int d = 0; d < n_devices; d++) {
         std::cout << history[offset + f * n_devices + d] << " ";
       }
     }
     std::cout << std::endl;
-    
   }
 
-  template<typename ID> void update_history_of_task(ID task_id){
+  template <typename ID> void update_history_of_task(ID task_id) {
     const auto &static_graph = state.get_tasks();
     const auto &data_manager = state.get_data_manager();
     const auto &data = state.get_data();
@@ -1563,17 +1559,16 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
       }
     }
 
-    std:: cout << "History after update: ";
-    for(int f = 0; f < frames; f++){
-      for(int d = 0; d < n_devices; d++){
+    std::cout << "History after update: ";
+    for (int f = 0; f < frames; f++) {
+      for (int d = 0; d < n_devices; d++) {
         std::cout << history[offset + f * n_devices + d] << " ";
       }
     }
     std::cout << std::endl;
-
   }
 
-  template<typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) {
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) {
     shift_history_of_task(task_id);
     update_history_of_task(task_id);
     const auto &devices = this->state.get_devices();
@@ -1582,20 +1577,19 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
     auto offset = (task_id % grid_size) * n_devices * frames;
     int i = 0;
     while (i < frames) {
-      for(int d = 0; d < n_devices; d++){
+      for (int d = 0; d < n_devices; d++) {
         output[i * n_devices + d] = history[offset + i * n_devices + d];
       }
       ++i;
     }
     std::cout << "Extracted feature for task " << task_id << ": ";
-    for(int f = 0; f < frames; f++){
-      for(int d = 0; d < n_devices; d++){
+    for (int f = 0; f < frames; f++) {
+      for (int d = 0; d < n_devices; d++) {
         std::cout << output[f * n_devices + d] << " ";
       }
     }
     std::cout << std::endl;
   }
-
 };
 
 struct PrevMappedDevice : public StateFeature<PrevMappedDevice> {
@@ -1616,17 +1610,52 @@ struct PrevMappedDevice : public StateFeature<PrevMappedDevice> {
     const auto &static_graph = state.get_tasks();
     const auto &task_runtime = state.get_task_runtime();
     auto n_devices = this->state.get_devices().size() - 1; // Exclude CPU
-    if (!add_current) {
-      task_id -= stride;
-    }
-    int i = 0;
-    while (task_id >= 0 && i < frames) {
-      devid_t mapped_device = task_runtime.get_compute_task_mapped_device(task_id);
-      for (devid_t d = 1; d <= n_devices; d++) {
-        output[i * n_devices + d - 1] = static_cast<f_t>(d == mapped_device);
+    if (task_id - stride < 0) {
+      // If there is no previous task, encode the device with the maximum read data size
+      const auto read = static_graph.get_read(task_id);
+      const auto &data = state.get_data();
+      const auto &devices = state.get_devices();
+      const auto &data_manager = state.get_data_manager();
+
+      // Track max datasize and corresponding device id
+      double max_data_size = -1.0;
+      int max_device_id = -1;
+
+      // accumulate data size per device
+      std::vector<double> device_data_sizes(devices.size(), 0.0);
+
+      for (int32_t i = 0; i < read.size(); i++) {
+        auto data_id = read[i];
+        const auto data_size = static_cast<double>(data.get_size(data_id));
+
+        for (int32_t j = 0; j < devices.size(); j++) {
+          if (data_manager.check_valid_mapped(data_id, j)) {
+            device_data_sizes[j] += data_size;
+          }
+        }
       }
-      task_id -= stride;
-      ++i;
+
+      // Find device with maximum accumulated size
+      for (int32_t j = 1; j < devices.size(); j++) {
+        if (device_data_sizes[j] > max_data_size) {
+          max_data_size = device_data_sizes[j];
+          max_device_id = j;
+        }
+      }
+      one_hot(max_device_id - 1, output); // -1 to exclude CPU from one-hot encoding
+    } else {
+      if (!add_current) {
+        task_id -= stride;
+      }
+      int i = 0;
+      while (task_id >= 0 && i < frames) {
+        devid_t mapped_device = task_runtime.get_compute_task_mapped_device(task_id);
+        for (devid_t d = 1; d <= n_devices; d++) {
+          output[i * n_devices + d - 1] = static_cast<f_t>(d == mapped_device);
+        }
+        task_id -= stride;
+        ++i;
+      }
     }
   }
 };
@@ -1652,12 +1681,12 @@ struct OneHotMappedDeviceTaskFeature : public StateFeature<OneHotMappedDeviceTas
 
   size_t getFeatureDimImpl() const {
     const auto &devices = this->state.get_devices();
-    return devices.size()-1;
+    return devices.size() - 1;
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &task_runtime = state.get_task_runtime();
-    one_hot(task_runtime.get_compute_task_mapped_device(task_id)-1, output);
+    one_hot(task_runtime.get_compute_task_mapped_device(task_id) - 1, output);
   }
 };
 
@@ -1762,7 +1791,6 @@ struct TaskDataMappedSize : public StateFeature<TaskDataMappedSize> {
   }
 };
 
-
 struct TaskCoordinates : public StateFeature<TaskCoordinates> {
   TaskCoordinates(const SchedulerState &state)
       : StateFeature<TaskCoordinates>(state, NodeType::TASK) {
@@ -1772,8 +1800,7 @@ struct TaskCoordinates : public StateFeature<TaskCoordinates> {
     return 2; // average x, average y
   }
 
-  template <typename ID, typename Span>
-  void extractFeatureImpl(ID task_id, Span output) const {
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
     const auto &static_graph = state.get_tasks();
     const auto &data = state.get_data();
     const auto read = static_graph.get_read(task_id);
@@ -1971,7 +1998,6 @@ struct DataCoordinate : public StateFeature<DataCoordinate> {
   }
 };
 
-
 struct EmptyDeviceFeature : public IntFeature<EmptyDeviceFeature> {
   size_t dimension;
   EmptyDeviceFeature(SchedulerState &state, size_t dimension)
@@ -2128,8 +2154,7 @@ struct TaskDataMappedFeature : public StateEdgeFeature<TaskDataMappedFeature> {
     const auto &task_runtime = state.get_task_runtime();
 
     const auto read = static_graph.get_read(source_id);
-    const auto idx_in_read =
-        std::find(read.begin(), read.end(), target_id) - read.begin();
+    const auto idx_in_read = std::find(read.begin(), read.end(), target_id) - read.begin();
     const auto &recent_writers = static_graph.get_most_recent_writers(source_id);
     taskid_t recent_writer_task_id = recent_writers[idx_in_read];
 
@@ -2139,7 +2164,6 @@ struct TaskDataMappedFeature : public StateEdgeFeature<TaskDataMappedFeature> {
     output[1] = static_cast<f_t>(is_mapped == false);
   }
 };
-
 
 struct TaskDataDefaultEdgeFeature : public StateEdgeFeature<TaskDataDefaultEdgeFeature> {
   TaskDataDefaultEdgeFeature(const SchedulerState &state)

@@ -1104,7 +1104,7 @@ class RandomCornerWorkload(DynamicWorkload):
 
         # Pick random start and end corners
         # start_corner = rng.choice(corners)
-        start_corner = np.array([x_min + half, y_min + half], dtype=float)
+        start_corner = corners[seed % len(corners)]  # deterministic start for reproducibility
         end_corner = rng.choice([c for c in corners if not np.allclose(c, start_corner)])
 
         # Helper: smoothstep
