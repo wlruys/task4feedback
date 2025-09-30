@@ -21,7 +21,7 @@ option(SIM_RECORD  "Enable resource-usage and data-location logging"  OFF)
 option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
 option(ENABLE_TRACY         "Enable Tracy profiler support"   OFF)
 option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" OFF)
-option(ENABLE_PARMETIS "Enable ParMETIS, everything needs to be installed in ~/local" ON)
+option(ENABLE_PARMETIS "Enable ParMETIS, everything needs to be installed in ~/local" OFF)
 
 
 if(ENABLE_CCACHE)
