@@ -1571,6 +1571,8 @@ class GATObserverFactory(GATExternalObserverFactory):
         task_write_data_feature_factory = EdgeFeatureExtractorFactory()
         task_write_data_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
 
+        # "DFGH" have removed [-4:0] normalization
+
         if "A" in version:
             task_feature_factory.add(fastsim.InputOutputTaskFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
@@ -1582,14 +1584,14 @@ class GATObserverFactory(GATExternalObserverFactory):
             task_feature_factory.add(fastsim.InputOutputTaskFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
             data_feature_factory.add(fastsim.DataCoordinateFeature)
-        elif "D" in version:
+        elif "L" in version:
             task_feature_factory.add(fastsim.InputOutputTaskFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
             data_feature_factory.add(fastsim.DataMappedLocationsFeature)
             data_feature_factory.add(fastsim.DataCoordinateFeature)
-        elif "E" in version:
+        elif "K" in version:
             task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
+            task_feature_factory.add(fastsim.TaskStateFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
             data_feature_factory.add(fastsim.DataMappedLocationsFeature)
             data_feature_factory.add(fastsim.DataCoordinateFeature)      

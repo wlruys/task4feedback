@@ -730,6 +730,477 @@ class GATStateNet(nn.Module):
         x = x.reshape(*batch_size, -1, x.shape[-1])
         # print(f"x shape before return: {x.shape}")
         return x.select(dim=-2, index=0)
+    
+
+class TaskIterationGNNStateNet(nn.Module):
+
+    def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
+        mask = edge_mask.to(torch.bool)
+        edge_index_masked = edge_index[:, mask]
+        edge_attr_masked = edge_attr[mask] if edge_attr is not None else None
+        return edge_index_masked, edge_attr_masked
+
+    def __init__(
+        self, 
+        feature_config: FeatureDimConfig,
+        hidden_channels: int = 16,
+        n_heads: int = 2,
+        add_device_load: bool = False,
+        add_progress: bool = False,
+        n_devices: int = 5,
+        num_layers: int = 1,
+        **_ignored,
+    ):
+
+        super(TaskIterationGNNStateNet, self).__init__()
+
+        self.feature_config = feature_config
+        self.n_heads = n_heads
+        self.hidden_channels = hidden_channels
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+        self.n_devices = int(n_devices)
+
+        self.g_dim = 0
+        if add_progress:
+            self.g_dim += 2
+        if add_device_load:
+            self.g_dim += 3 * n_devices
+
+        self.stem_prog = nn.ModuleDict(
+            {
+                "tasks": Linear(int(feature_config.task_feature_dim), hidden_channels, bias=True),
+                "data": Linear(int(feature_config.data_feature_dim), hidden_channels, bias=True),
+            }
+        )
+
+        self.stem_norm = nn.ModuleDict(
+            {
+                "tasks": nn.LayerNorm(hidden_channels),
+                "data": nn.LayerNorm(hidden_channels),
+            }
+        )        
+
+        self.convert_data = HeteroDataWrapper()
+
+        self.gnn_tasks_data = GATv2Conv(
+            (hidden_channels, hidden_channels),
+            hidden_channels,
+            heads=n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            add_self_loops=False,
+        )
+        self.norm_tasks_data = nn.LayerNorm(hidden_channels)
+
+        self.task_dependency_convs = nn.ModuleList()
+        self.task_dependency_norms = nn.ModuleList()
+        self.task_dependent_convs = nn.ModuleList()
+        self.task_dependent_norms = nn.ModuleList()
+        self.task_merge_mlps = nn.ModuleList()
+        
+
+        for _ in range(num_layers):
+            self.task_dependency_convs.append(
+                GATv2Conv(
+                    (hidden_channels, hidden_channels),
+                    hidden_channels,
+                    heads=n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0,
+                    add_self_loops=False,
+                )
+            )
+            self.task_dependency_norms.append(nn.LayerNorm(hidden_channels))
+
+            self.task_dependent_convs.append(
+                GATv2Conv(
+                    (hidden_channels, hidden_channels),
+                    hidden_channels,
+                    heads=n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0,
+                    add_self_loops=False,
+                )
+            )
+            self.task_dependent_norms.append(nn.LayerNorm(hidden_channels))
+
+            self.task_merge_mlps.append(
+                        nn.Sequential(
+                            nn.Linear(hidden_channels *2, hidden_channels),
+                            nn.LayerNorm(hidden_channels),
+                            nn.LeakyReLU(negative_slope=0.01),
+                            nn.Linear(hidden_channels, hidden_channels),
+                        )
+            )
+
+
+        self.act = nn.LeakyReLU(negative_slope=0.01) 
+
+        self.g_mlp = nn.Sequential(
+            nn.Linear(self.g_dim, hidden_channels),
+            nn.LayerNorm(hidden_channels),
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Linear(hidden_channels, hidden_channels),
+        ) if self.g_dim > 0 else None       
+
+        self.output_dim = hidden_channels * 2 + (hidden_channels if self.g_dim > 0 else 0)
+        self.output_keys = ["embed"]
+
+
+    def forward(self, tensordict: TensorDict):
+        batch_size = tensordict.batch_size
+        data= self.convert_data(tensordict)
+
+        b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
+
+        x_tasks = self.stem_prog["tasks"](data["tasks"].x)
+        #x_tasks = self.stem_norm["tasks"](x_tasks)
+        x_tasks = self.act(x_tasks)
+
+        x_data = self.stem_prog["data"](data["data"].x)
+        #x_data = self.stem_norm["data"](x_data)
+        x_data = self.act(x_data)
+
+        data_read_tasks = data["data", "read", "tasks"].edge_index
+        mask = data["data", "read", "tasks"].edge_attr
+        read_edges_masked, _ = self._mask_edges(edge_index=data_read_tasks, edge_mask=mask[:, 0])
+
+        tasks_w_data = self.gnn_tasks_data(
+            (x_data, x_tasks),
+            read_edges_masked,
+        )
+        tasks_w_data = self.norm_tasks_data(tasks_w_data)
+        tasks_w_data = self.act(tasks_w_data)
+
+        x_tasks= tasks_w_data
+
+        for l in range(len(self.task_dependency_convs)):
+
+            x_tasks_in = self.task_dependency_convs[l](
+                (x_tasks, x_tasks),
+                data["tasks", "to", "tasks"].edge_index,
+            )
+            x_tasks_in = self.task_dependency_norms[l](x_tasks_in)
+            x_tasks_in = self.act(x_tasks_in)
+
+            x_tasks_out = self.task_dependent_convs[l](
+                (x_tasks, x_tasks),
+                data["tasks", "from", "tasks"].edge_index,
+            )
+            x_tasks_out = self.task_dependent_norms[l](x_tasks_out)
+            x_tasks_out = self.act(x_tasks_out)
+
+            x_new = torch.cat([x_tasks_in, x_tasks_out], dim=-1)
+            x_new = self.task_merge_mlps[l](x_new)
+            x_new = self.act(x_new)
+            x_tasks = x_tasks + self.act(x_tasks)
+
+        tasks_global = global_mean_pool(x_tasks, b_tasks)
+
+        g = None 
+        if self.g_dim > 0:
+            if self.add_progress:
+                time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+                time_feature = time_feature.reshape(-1, 1)
+                progress_feature = tensordict["aux", "progress"]
+                progress_feature = progress_feature.reshape(-1, 1)
+                g = torch.cat([time_feature, progress_feature], dim=-1)
+
+            if self.add_device_load:
+                device_load = tensordict["aux", "device_load"]
+                device_memory = tensordict["aux", "device_memory"]
+                device_load = device_load.reshape(-1, 2 * self.n_devices)
+                device_memory = device_memory.reshape(-1, 1 * self.n_devices)
+
+                if g is None:
+                    g = torch.cat([device_load, device_memory], dim=-1)
+                else:
+                    g = torch.cat([g, device_load, device_memory], dim=-1)
+
+            g = self.g_mlp(g)
+            g = self.act(g)
+
+        if b_tasks is not None:
+            idx = data["tasks"].ptr[:-1]
+            x = x_tasks[idx]
+        else:
+            x = x_tasks[0]
+
+        if b_tasks is None:
+            tasks_global = tasks_global.squeeze(0)
+            if g is not None:
+                g = g.squeeze(0)
+
+        x = torch.cat([x, tasks_global], dim=-1)
+        if g is not None:
+            x = torch.cat([x, g], dim=-1)
+        
+        x = x.reshape(*batch_size, -1, x.shape[-1])
+        return x.select(dim=-2, index=0)
+
+
+
+class DataIterationGNNStateNet(nn.Module):
+
+    def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
+        mask = edge_mask.to(torch.bool)
+        edge_index_masked = edge_index[:, mask]
+        edge_attr_masked = edge_attr[mask] if edge_attr is not None else None
+        return edge_index_masked, edge_attr_masked
+
+    def __init__(
+        self, 
+        feature_config: FeatureDimConfig,
+        hidden_channels: int = 16,
+        n_heads: int = 2,
+        add_device_load: bool = False,
+        add_progress: bool = False,
+        n_devices: int = 5,
+        num_layers: int = 1,
+        conv_type: str = "SAGE", #"GATv2",
+        **_ignored,
+    ):
+
+        super(DataIterationGNNStateNet, self).__init__()
+
+        self.feature_config = feature_config
+        self.n_heads = n_heads
+        self.hidden_channels = hidden_channels
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+        self.n_devices = int(n_devices)
+
+        self.g_dim = 0
+        if add_progress:
+            self.g_dim += 2
+        if add_device_load:
+            self.g_dim += 3 * n_devices
+
+        self.stem_prog = nn.ModuleDict(
+            {
+                "tasks": Linear(int(feature_config.task_feature_dim), hidden_channels, bias=True),
+                "data": Linear(int(feature_config.data_feature_dim), hidden_channels, bias=True),
+            }
+        )
+
+        self.stem_norm = nn.ModuleDict(
+            {
+                "tasks": nn.LayerNorm(hidden_channels),
+                "data": nn.LayerNorm(hidden_channels),
+            }
+        )        
+
+        self.convert_data = HeteroDataWrapper()
+
+
+        self.gnn_tasks_read_data = GATv2Conv(
+            (hidden_channels, hidden_channels),
+            hidden_channels,
+            heads=n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            add_self_loops=False,
+        ) 
+
+        self.gnn_tasks_from_tasks = GATv2Conv(
+            (hidden_channels, hidden_channels),
+            hidden_channels,
+            heads=n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            add_self_loops=False,
+        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+
+        self.gnn_tasks_to_tasks = GATv2Conv(
+            (hidden_channels, hidden_channels),
+            hidden_channels,
+            heads=n_heads,
+            concat=False,
+            residual=True,
+            dropout=0,
+            add_self_loops=False,
+        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+
+        self.norm_tasks_to_tasks = nn.LayerNorm(hidden_channels)
+        self.norm_tasks_from_tasks = nn.LayerNorm(hidden_channels)
+        self.norm_task_read_data = nn.LayerNorm(hidden_channels)
+
+        self.task_merge_mlp = nn.Sequential(
+            nn.Linear(hidden_channels *2, hidden_channels),
+            nn.LayerNorm(hidden_channels),
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Linear(hidden_channels, hidden_channels),
+        )
+
+        self.task_data_convs = nn.ModuleList()
+        self.data_task_convs = nn.ModuleList()
+
+        for l in range(num_layers):
+            
+            self.task_data_convs.append(
+                GATv2Conv(
+                    (hidden_channels, hidden_channels),
+                    hidden_channels,
+                    heads=n_heads,
+                    concat=False,
+                    residual=False,
+                    dropout=0,
+                    add_self_loops=False,
+                )
+            ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False)
+
+
+            self.data_task_convs.append(
+                GATv2Conv(
+                    (hidden_channels, hidden_channels),
+                    hidden_channels,
+                    heads=n_heads,
+                    concat=False,
+                    residual=True,
+                    dropout=0,
+                    add_self_loops=False,
+                )
+            ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False)
+
+            self.task_data_norm = nn.LayerNorm(hidden_channels)
+            self.data_task_norm = nn.LayerNorm(hidden_channels)
+
+        self.act = nn.LeakyReLU(negative_slope=0.01) 
+
+        self.g_mlp = nn.Sequential(
+            nn.Linear(self.g_dim, hidden_channels),
+            nn.LayerNorm(hidden_channels),
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Linear(hidden_channels, hidden_channels),
+        ) if self.g_dim > 0 else None       
+
+        self.output_dim = hidden_channels * 2 + (hidden_channels if self.g_dim > 0 else 0)
+        self.output_keys = ["embed"]
+
+
+    def forward(self, tensordict: TensorDict):
+        batch_size = tensordict.batch_size
+        data= self.convert_data(tensordict)
+
+        b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
+        b_data = data["data"].batch if isinstance(data, Batch) else None
+
+        x_tasks = self.stem_prog["tasks"](data["tasks"].x)
+        #x_tasks = self.stem_norm["tasks"](x_tasks)
+        x_tasks = self.act(x_tasks)
+
+        x_data = self.stem_prog["data"](data["data"].x)
+        #x_data = self.stem_norm["data"](x_data)
+        x_data = self.act(x_data)
+
+        data_read_tasks = data["data", "read", "tasks"].edge_index
+        mask = data["data", "read", "tasks"].edge_attr
+        read_edges_masked, _ = self._mask_edges(edge_index=data_read_tasks, edge_mask=mask[:, 0])
+
+        tasks_read_data = self.gnn_tasks_read_data(
+            (x_data, x_tasks),
+            read_edges_masked,
+        )
+        tasks_read_data = self.norm_task_read_data(tasks_read_data)
+        tasks_read_data = self.act(tasks_read_data)
+
+        x_tasks= tasks_read_data
+
+        tasks_from_tasks = self.gnn_tasks_from_tasks(
+            (x_tasks, x_tasks),
+            data["tasks", "from", "tasks"].edge_index,
+        )
+        tasks_from_tasks = self.norm_tasks_from_tasks(tasks_from_tasks)
+        tasks_from_tasks = self.act(tasks_from_tasks)
+
+        tasks_to_tasks = self.gnn_tasks_to_tasks(
+            (x_tasks, x_tasks),
+            data["tasks", "to", "tasks"].edge_index,
+        )
+        tasks_to_tasks = self.norm_tasks_to_tasks(tasks_to_tasks)
+        tasks_to_tasks = self.act(tasks_to_tasks)
+
+        x_tasks = self.task_merge_mlp(torch.cat([tasks_from_tasks, tasks_to_tasks], dim=-1))
+        x_tasks = self.act(x_tasks)
+
+        for l in range(len(self.task_data_convs)):
+
+            x_data_new = self.data_task_convs[l](
+                (x_tasks, x_data),
+                read_edges_masked.flip(0),
+            )
+            x_data_new = self.data_task_norm(x_data_new)
+            x_data_new = self.act(x_data_new)
+
+            x_tasks_new = self.task_data_convs[l](
+                (x_data_new, x_tasks),
+                read_edges_masked,
+            )
+            x_tasks_new = self.task_data_norm(x_tasks_new)
+            x_tasks_new = self.act(x_tasks_new)
+
+            x_tasks = x_tasks + x_tasks_new
+            x_data = x_data + x_data_new
+
+        tasks_global = global_mean_pool(x_tasks, b_tasks)
+        data_global = global_mean_pool(x_data, b_data)
+
+        global_state = tasks_global + data_global
+
+        g = None 
+        if self.g_dim > 0:
+            if self.add_progress:
+                time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+                time_feature = time_feature.reshape(-1, 1)
+                progress_feature = tensordict["aux", "progress"]
+                progress_feature = progress_feature.reshape(-1, 1)
+                g = torch.cat([time_feature, progress_feature], dim=-1)
+
+            if self.add_device_load:
+                device_load = tensordict["aux", "device_load"]
+                device_memory = tensordict["aux", "device_memory"]
+                device_load = device_load.reshape(-1, 2 * self.n_devices)
+                device_memory = device_memory.reshape(-1, 1 * self.n_devices)
+
+                if g is None:
+                    g = torch.cat([device_load, device_memory], dim=-1)
+                else:
+                    g = torch.cat([g, device_load, device_memory], dim=-1)
+
+            g = self.g_mlp(g)
+            g = self.act(g)
+
+        if b_tasks is not None:
+            idx = data["tasks"].ptr[:-1]
+            x = x_tasks[idx]
+        else:
+            x = x_tasks[0]
+
+        if b_tasks is None:
+            global_state = global_state.squeeze(0)
+            if g is not None:
+                g = g.squeeze(0)
+
+        x = torch.cat([x, global_state], dim=-1)
+        if g is not None:
+            x = torch.cat([x, g], dim=-1)
+        
+        x = x.reshape(*batch_size, -1, x.shape[-1])
+        return x.select(dim=-2, index=0)
+
+
+
+
+
+
+        
+
 
 class OriginalGNNStateNet(nn.Module):
 
