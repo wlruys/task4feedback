@@ -977,6 +977,7 @@ class DataIterationGNNStateNet(nn.Module):
         self.add_progress = bool(add_progress)
         self.add_device_load = bool(add_device_load)
         self.n_devices = int(n_devices)
+        self.num_layers = int(num_layers)
 
         self.g_dim = 0
         if add_progress:
@@ -1044,8 +1045,10 @@ class DataIterationGNNStateNet(nn.Module):
 
         self.task_data_convs = nn.ModuleList()
         self.data_task_convs = nn.ModuleList()
+        self.data_task_norms = nn.ModuleList()
+        self.task_data_norms = nn.ModuleList()
 
-        for l in range(num_layers):
+        for l in range(self.num_layers):
             
             self.task_data_convs.append(
                 GATv2Conv(
@@ -1057,7 +1060,7 @@ class DataIterationGNNStateNet(nn.Module):
                     dropout=0,
                     add_self_loops=False,
                 )
-            ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False)
+            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
 
 
             self.data_task_convs.append(
@@ -1070,10 +1073,10 @@ class DataIterationGNNStateNet(nn.Module):
                     dropout=0,
                     add_self_loops=False,
                 )
-            ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False)
+            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
 
-            self.task_data_norm = nn.LayerNorm(hidden_channels)
-            self.data_task_norm = nn.LayerNorm(hidden_channels)
+            self.task_data_norms.append(nn.LayerNorm(hidden_channels))
+            self.data_task_norms.append(nn.LayerNorm(hidden_channels))
 
         self.act = nn.LeakyReLU(negative_slope=0.01) 
 
@@ -1133,7 +1136,7 @@ class DataIterationGNNStateNet(nn.Module):
         x_tasks = self.task_merge_mlp(torch.cat([tasks_from_tasks, tasks_to_tasks], dim=-1))
         x_tasks = self.act(x_tasks)
 
-        for l in range(len(self.task_data_convs)):
+        for l in range(self.num_layers):
 
             x_data_new = self.data_task_convs[l](
                 (x_tasks, x_data),

@@ -304,7 +304,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_feature<GPUDurationTaskFeature>(m, "DurationTaskFeature");
   bind_state_feature<OneHotMappedDeviceTaskFeature>(m, "OneHotMappedDeviceTaskFeature");
   bind_state_feature<TaskStateFeature>(m, "TaskStateFeature");
-  bind_state_feature<InputOutputTaskFeature>(m, "StandardizedInputOutputTaskFeature");
+  bind_state_feature<InputOutputTaskFeature>(m, "InputOutputTaskFeature");
   bind_state_feature<DepthTaskFeature>(m, "DepthTaskFeature");
   bind_state_feature<TaskDeviceMappedTime>(m, "TaskDeviceMappedTimeFeature");
   bind_state_feature<TaskCoordinates>(m, "TaskCoordinatesFeature");

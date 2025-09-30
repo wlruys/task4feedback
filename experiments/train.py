@@ -145,6 +145,8 @@ def main(cfg: DictConfig):
                 network = "CNN"
         elif "Vector" in cfg.network.layers.state._target_:
             network = "Vector"
+        elif "GNN" in cfg.network.layers.state._target_:
+            network = "GNN"
         else:
             print(cfg.network.layers.state._target_)
             raise ValueError("Unknown network type in cfg.network.layers.state._target_")
