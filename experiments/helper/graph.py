@@ -36,6 +36,7 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
             n_parts=4,
             offset=0,
         )
+        partition = graph.maximize_matches(partition)
 
         # print(partition)
         # if isinstance(graph, DynamicJacobiGraph):

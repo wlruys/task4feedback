@@ -23,13 +23,13 @@ def configure_training(cfg: DictConfig):
         cfg=cfg,
         normalization=False,
     )
-    env._reset()
-    env.rollout(max_steps=99999, auto_reset=False)
+    env.rollout(max_steps=99999)
 
 
 @hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
-
+    cfg.reward.verbose = True
+    cfg.reward.gamma = 1
     torch.manual_seed(cfg.seed)
     numpy.random.seed(cfg.seed)
     random.seed(cfg.seed)

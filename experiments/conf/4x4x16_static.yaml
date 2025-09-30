@@ -24,7 +24,6 @@ reward:
   verbose: False
   random_start: False
   gamma: 0.99
-  extra_logging_policy: Quad # This is not what it is used for reward calculation. This is just for logging purpose.
 
 graph:
   config:

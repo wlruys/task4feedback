@@ -252,6 +252,18 @@ class DynamicJacobiGraph(JacobiGraph):
         self.workload.generate_initial_mass(distribution=lambda x: 1.0)
         self.workload.generate_workload(config.steps, **config.workload_args)
         super(JacobiGraph, self).__init__()  # Call base ComputeDataGraph constructor (not JacobiGraph constructor)
+        self.reference_partition = []
+        half = config.n // 2
+        for j in range(config.n):  # column-wise unrolling
+            for i in range(config.n):
+                if i < half and j < half:
+                    self.reference_partition.append(0)  # top-left
+                elif i < half and j >= half:
+                    self.reference_partition.append(1)  # top-right
+                elif i >= half and j < half:
+                    self.reference_partition.append(2)  # bottom-left
+                else:
+                    self.reference_partition.append(3)  # bottom-right
         self.config = config
         self.data: DynamicJacobiData = DynamicJacobiData.from_mesh(geometry, config, self.workload, system=system)
 

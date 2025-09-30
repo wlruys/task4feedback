@@ -52,8 +52,9 @@ size = comm.Get_size()
 def configure_training(cfg: DictConfig):
     # start_logger()
     step = 5e9
-    start = 5e9
+    start = 30e9
     samples = 10
+    level_chunks = 64
     mem_list = []
     const_policy_samples: list[list[float]] = []
     const_eft_samples: list[list[float]] = []
@@ -92,7 +93,7 @@ def configure_training(cfg: DictConfig):
                 bandwidth=inf_cfg.system.d2d_bw,
                 mode="metis",
                 offset=1,
-                level_chunks=32,
+                level_chunks=level_chunks,
             )
             inf_graph.align_partitions()
             inf_sim = inf_env.simulator
@@ -105,7 +106,7 @@ def configure_training(cfg: DictConfig):
                 bandwidth=cfg.system.d2d_bw,
                 mode="metis",
                 offset=1,
-                level_chunks=32,
+                level_chunks=level_chunks,
             )
             const_graph.align_partitions()
             const_sim = const_env.simulator
@@ -168,6 +169,7 @@ def configure_training(cfg: DictConfig):
     plt.tight_layout()
     out_path = "outputs/const_vs_inf.png"
     fig.savefig(out_path, dpi=200)
+    print(f"Saved figure to {out_path}")
     # plt.show()
 
 

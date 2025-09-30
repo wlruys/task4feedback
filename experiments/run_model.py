@@ -14,6 +14,7 @@ from task4feedback.ml.models import *
 from task4feedback.ml.util import *
 from task4feedback.graphs.jacobi import JacobiRoundRobinMapper, LevelPartitionMapper
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
+
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
 
@@ -30,6 +31,7 @@ import numpy
 import random
 
 from torchrl.envs import set_exploration_type, ExplorationType
+
 
 class GitInfo(Callback):
     def on_job_start(self, config: DictConfig, **kwargs) -> None:
@@ -55,46 +57,70 @@ class GitInfo(Callback):
 
 def configure_training(cfg: DictConfig):
     # start_logger()
+    # Attempt to load policy weights from a local checkpoint next to this file
+    ckpt_path = Path(__file__).resolve().parent / "saved_models" / "8x8x128_corners_D.pt"
+    # if 8x8x128_corners_D_norm.pkl exists, load it
+    # else, create it and save it
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Could not find checkpoint at {ckpt_path}")
     graph_builder = make_graph_builder(cfg)
-    env, norm = make_env(graph_builder=graph_builder, cfg=cfg, eval=True)
-    
+    if ckpt_path.with_name(ckpt_path.stem + "_norm.pkl").exists():
+        print(f"Loading normalization from {ckpt_path.with_name(ckpt_path.stem + '_norm.pkl')}")
+        norm = pickle.load(open(ckpt_path.with_name(ckpt_path.stem + "_norm.pkl"), "rb"))
+        env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
+    else:
+        env, norm = make_env(graph_builder=graph_builder, cfg=cfg, eval=True)
+        pickle.dump(norm, open(ckpt_path.with_name(ckpt_path.stem + "_norm.pkl"), "wb"))
+
     observer = env.get_observer()
     feature_config = FeatureDimConfig.from_observer(observer)
-    model, lstm = create_td_actor_critic_models(cfg, feature_config)
+    model, _, _ = create_td_actor_critic_models(cfg, feature_config)
 
-    # Attempt to load policy weights from a local checkpoint next to this file
-    ckpt_path = Path(__file__).resolve().parent / "model.pt"
-    if ckpt_path.exists():
-        loaded = load_policy_from_checkpoint(model, ckpt_path)
-        if not loaded:
-            print(f"Found {ckpt_path}, but no compatible policy module to load into.")
-    else:
-        print(f"No model checkpoint found at {ckpt_path}; proceeding with randomly initialized policy.")
+    loaded = load_policy_from_checkpoint(model, ckpt_path)
+    if not loaded:
+        print(f"Found {ckpt_path}, but no compatible policy module to load into.")
 
-    eval_env= make_env(
-            graph_builder=graph_builder,
-            cfg=cfg,
-            normalization=norm,
-            eval=True,
-        )
+    eval_env = make_env(
+        graph_builder=graph_builder,
+        cfg=cfg,
+        normalization=norm,
+        eval=True,
+    )
+
     def rr_mapper() -> LevelPartitionMapper:
         return JacobiRoundRobinMapper(
             n_devices=4,
             setting=0,
         )
+
     model.eval()
     config = EvaluationConfig
     initloc: list[dict] = []
     with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
         for i in range(20):
             obs = eval_env.reset()
-            cyclic=eval_env._get_baseline("Cyclic")
-            
-            td = eval_env.rollout(policy=model.actor, max_steps=10000, auto_reset=False, tensordict=obs)
-            
-            print(eval_env.EFT_baseline, cyclic, eval_env.EFT_baseline/td['observation','aux','time'][-1].item(), cyclic/td['observation','aux','time'][-1].item())
+            eft_time = eval_env._get_baseline("EFT")
 
-    
+            policy_sim = eval_env.simulator.copy()
+            graph = eval_env.get_graph()
+            graph.mincut_per_levels(
+                bandwidth=cfg.system.d2d_bw,
+                mode="metis",
+                offset=1,
+                level_chunks=64,
+            )
+            graph.align_partitions()
+            policy_sim.enable_external_mapper()
+            policy_sim.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
+
+            policy_sim.run()
+
+            td = eval_env.rollout(policy=model.actor, max_steps=10000, auto_reset=False, tensordict=obs)
+
+            print(eft_time, td["observation", "aux", "time"][-1].item(), eft_time / td["observation", "aux", "time"][-1].item())
+            print(
+                f"EFT time: {eft_time}, Best policy time: {policy_sim.time} ML: {td['observation', 'aux', 'time'][-1].item()}, vsEFT: {eft_time / td['observation', 'aux', 'time'][-1].item():.2f}x vsBest: {policy_sim.time / td['observation', 'aux', 'time'][-1].item():.2f}x"
+            )
 
 
 @hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)

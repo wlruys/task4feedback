@@ -378,6 +378,18 @@ class JacobiGraph(ComputeDataGraph):
         self.config = config
         self._build_graph()
         self.dynamic = False
+        self.reference_partition = []
+        half = config.n // 2
+        for j in range(config.n):  # column-wise unrolling
+            for i in range(config.n):
+                if i < half and j < half:
+                    self.reference_partition.append(0)  # top-left
+                elif i < half and j >= half:
+                    self.reference_partition.append(1)  # top-right
+                elif i >= half and j < half:
+                    self.reference_partition.append(2)  # bottom-left
+                else:
+                    self.reference_partition.append(3)  # bottom-right
 
         if variant is not None:
             self.apply_variant(variant)
@@ -785,6 +797,8 @@ class JacobiGraph(ComputeDataGraph):
                 cell_graph = self.get_weighted_cell_graph(arch, bandwidth=bandwidth, levels=levels_to_compute)
 
                 edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
+                if i == 0:
+                    partition = self.maximize_matches(partition)
                 partition = [x + offset for x in partition]
                 partitions[(start, end)] = partition
         # Dynamic mode changes the partitions based on the current workload if certain thresholds are met
@@ -903,6 +917,53 @@ class JacobiGraph(ComputeDataGraph):
             self.partitions[k] = aligned[i]
 
         return aligned, perms, flips
+
+    def maximize_matches(self, list2):
+        """
+        Relabel `list2` to best match `self.reference_partition` using a Hungarian
+        assignment on the confusion matrix (maximizing agreement).
+
+        Returns
+        -------
+        aligned : list[int]
+            `list2` with labels permuted to best align with the reference.
+        perm : list[int]
+            Lookup array such that aligned = perm[list2]. Maps labels in `list2`
+            to labels in the reference.
+        flips : int
+            Number of positions where aligned != reference (mismatches after alignment).
+        """
+        ref = np.asarray(self.reference_partition, dtype=int).ravel()
+        cur = np.asarray(list2, dtype=int).ravel()
+
+        if ref.shape != cur.shape:
+            raise ValueError("Both membership vectors must have the same length.")
+        if ref.size == 0:
+            return [], [], 0
+        if ref.min() < 0 or cur.min() < 0:
+            raise ValueError("Labels must be non-negative integers (0..K-1).")
+
+        # Global K across both labelings
+        K = int(max(ref.max(), cur.max())) + 1
+
+        # Confusion matrix via bincount over flattened pair indices
+        idx = ref * K + cur
+        cm = np.bincount(idx, minlength=K * K).reshape(K, K)
+
+        # Max-agreement assignment
+        row_ind, col_ind = linear_sum_assignment(-cm)
+
+        # Build label mapping: map each label in `cur` (columns) -> label in `ref` (rows)
+        perm = np.arange(K, dtype=int)
+        perm[col_ind] = row_ind
+
+        # Apply mapping
+        aligned = perm[cur]
+
+        # Count mismatches ("flips" relative to ref)
+        flips = int((aligned != ref).sum())
+
+        return aligned.tolist()
 
 
 register_graph(JacobiGraph, JacobiConfig)
@@ -1404,7 +1465,7 @@ class XYObserverFactory(XYExternalObserverFactory):
     def __init__(self, spec: fastsim.GraphSpec):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+        task_feature_factory.add(fastsim.PrevMappedDeviceTaskFeature)
         task_feature_factory.add(fastsim.DepthTaskFeature)
         task_feature_factory.add(fastsim.TagTaskFeature)
         # task_feature_factory.add(fastsim.TaskStateFeature)
@@ -1448,7 +1509,7 @@ class XYObserverFactory(XYExternalObserverFactory):
 #         # task_feature_factory.add(fastsim.InDegreeTaskFeature)
 #         # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
 #         # task_feature_factory.add(fastsim.TaskStateFeature)
-#         # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+#         # task_feature_factory.add(fastsim.PrevMappedDeviceTaskFeature)
 #         task_feature_factory.add(
 #             fastsim.EmptyTaskFeature, 1
 #         )  # 2 for x, y position, last for whether it is mapped
@@ -1588,51 +1649,51 @@ class CandidateObserverFactory(CandidateExternalObserverFactory):
 
 
 class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, version: str = "E", batched: bool = False, **_ignored):
+    def __init__(self, spec: fastsim.GraphSpec, width: int, length: int, prev_frames: int, version: str = "E", batched: bool = False, **_ignored):
         self.batched = batched
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
         if "A" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "B" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "C" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "D" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "E" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "F" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "G" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "H" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, 1)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.EmptyDataFeature, 1)
@@ -1683,45 +1744,45 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         task_feature_factory = FeatureExtractorFactory()
 
         if "A" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, prev_frames)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "B" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, prev_frames)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "C" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, prev_frames)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "D" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, prev_frames)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "E" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, prev_frames)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "F" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, prev_frames)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "G" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, prev_frames)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "H" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, 0, 0, True, prev_frames)
+            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.OneHotMappedDeviceTaskFeature)
+            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
 
         # task_feature_factory.add(fastsim.TaskMeanDurationFeature)
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
