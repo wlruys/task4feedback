@@ -1142,14 +1142,14 @@ class DataIterationGNNStateNet(nn.Module):
                 (x_tasks, x_data),
                 read_edges_masked.flip(0),
             )
-            x_data_new = self.data_task_norm(x_data_new)
+            x_data_new = self.data_task_norms[l](x_data_new)
             x_data_new = self.act(x_data_new)
 
             x_tasks_new = self.task_data_convs[l](
                 (x_data_new, x_tasks),
                 read_edges_masked,
             )
-            x_tasks_new = self.task_data_norm(x_tasks_new)
+            x_tasks_new = self.task_data_norms[l](x_tasks_new)
             x_tasks_new = self.act(x_tasks_new)
 
             x_tasks = x_tasks + x_tasks_new
