@@ -573,6 +573,15 @@ class GATStateNet(nn.Module):
             "data": nn.ModuleList([nn.LayerNorm(self.hidden_channels) for _ in range(num_layers+1)]),
         })
 
+        self.beta = nn.ModuleDict({
+            "tasks": nn.ParameterList([nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]),
+            "data": nn.ParameterList([nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]),
+        })
+        for nt in self.beta.keys():
+            for b in self.beta[nt]:
+                #init to 0.5
+                nn.init.constant_(b, 0.5)
+
         # self.post_norms = nn.ModuleDict(
         #     {
         #         "tasks": nn.ModuleList([MessageNorm(learn_scale=True) for _ in range(num_layers)]),
@@ -619,11 +628,11 @@ class GATStateNet(nn.Module):
         b_data = data["data"].batch if isinstance(data, Batch) else None
 
         x_tasks = self.stem_proj["tasks"](data["tasks"].x)
-        x_tasks = self.stem_norm["tasks"](x_tasks)
+        #x_tasks = self.stem_norm["tasks"](x_tasks)
         x_tasks = self.act(x_tasks)
 
         x_data = self.stem_proj["data"](data["data"].x)
-        x_data = self.stem_norm["data"](x_data)
+        #x_data = self.stem_norm["data"](x_data)
         x_data = self.act(x_data)
 
         x_dict = {"tasks": x_tasks, "data": x_data}
@@ -663,26 +672,34 @@ class GATStateNet(nn.Module):
         for l, conv in enumerate(self.convs):
 
             #pre-norm
-            x_pre = {nt: self.norms[nt][l](x_dict[nt]) for nt in x_dict.keys()}
+            #x_pre = {nt: self.norms[nt][l](x_dict[nt]) for nt in x_dict.keys()}
 
             #conv
-            x_new = conv(x_pre, edge_index_dict=edge_index_dict)
+            x_new = conv(x_dict, edge_index_dict=edge_index_dict)
 
             # #post-norm
             # x_new  = {nt: self.post_norms[nt][l](x_dict[nt], x_new[nt]) for nt in x_new.keys()}
+
+            x_new = {nt: self.norms[nt][l](x_new[nt]) for nt in x_new.keys()}
 
             #film
             if self.film is not None:
                 x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
 
-            # residual 
-            x_new = {nt: x_dict[nt] + x_new[nt] for nt in x_dict.keys()}
-
             #activation
-            x_dict = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
+            x_new = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
+
+            # residual 
+            for nt in x_dict.keys():
+                beta = self.beta[nt][l]
+                beta = torch.sigmoid(beta)
+                x_new[nt] = (1 - beta) * x_dict[nt] + beta * x_new[nt]
+
+            #update for next layer
+            x_dict = {nt: x_new[nt] for nt in x_new.keys()}
 
         # final norm
-        x_dict = {nt: self.norms[nt][-1](x_dict[nt]) for nt in x_dict.keys()}
+        # x_dict = {nt: self.norms[nt][-1](x_dict[nt]) for nt in x_dict.keys()}
 
         if b_tasks is not None:
             idx = data["tasks"].ptr[:-1]
@@ -1309,7 +1326,7 @@ class DilationState(nn.Module):
         n_devices: int = 5,
         spatial_in_all_blocks: bool = False,
         film_in_all_blocks: bool = False,
-        spatial_last_k: int = 1,
+        spatial_last_k: int = 0,
         film_last_k: int = 2,
         init_gamma_c: float = 0.05,
         init_beta_c: float = 0.05,

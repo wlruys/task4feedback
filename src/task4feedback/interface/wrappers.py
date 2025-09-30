@@ -840,8 +840,6 @@ class CompiledDefaultObserverFactory:
 
 class DefaultObserverFactory(ExternalObserverFactory):
     def __init__(self, spec: fastsim.GraphSpec):
-
-        self.cache = True 
         # Enable edge/neighbor caching per taskid
         # NOTE: This only works if all graphs have exactly the same DAG and ids. 
         #       ALL OBSERVERS SHARE THE SAME CACHE. THIS IS A HACKED TOGETHER IMPL.

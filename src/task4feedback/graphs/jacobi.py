@@ -1490,7 +1490,7 @@ class XYObserverFactory(XYExternalObserverFactory):
 
 
 class GATObserverFactory(GATExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, version: str = "E", **_ignored):
+    def __init__(self, spec: fastsim.GraphSpec, version: str = "C", **_ignored):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         data_feature_factory = FeatureExtractorFactory()
@@ -1546,7 +1546,7 @@ class GATObserverFactory(GATExternalObserverFactory):
 
 
 class CandidateObserverFactory(CandidateExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec):
+    def __init__(self, spec: fastsim.GraphSpec, **_ignored):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         task_feature_factory.add(fastsim.CandidateVectorFeature)
@@ -1588,7 +1588,7 @@ class CandidateObserverFactory(CandidateExternalObserverFactory):
 
 
 class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, version: str, batched: bool = False):
+    def __init__(self, spec: fastsim.GraphSpec, version: str = "E", batched: bool = False, **_ignored):
         self.batched = batched
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
