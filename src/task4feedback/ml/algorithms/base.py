@@ -8,6 +8,7 @@ class LoggingConfig:
     save_interval: int = 100
     checkpoint_interval: int = 100
     best_policy_dir: str = None
+    best_policy_name: str = None
 
 
 @dataclass

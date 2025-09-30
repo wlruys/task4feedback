@@ -271,7 +271,6 @@ def eval_pickled_env(
     env_vsPolicy = []
     metrics = {}
     last_env = None
-
     for i in range(samples):
         env.reset_for_evaluation()
         env.disable_reward()
@@ -432,29 +431,32 @@ def evaluate_policy(n_collections: int, policy, eval_envs: list[RuntimeEnv], con
         #         format="mp4",
         #     )
 
-        if config.pickle_path is not None:
-            if exploration_type == "RANDOM":
-                exploration_type_enum = ExplorationType.RANDOM
-            elif exploration_type == "DETERMINISTIC":
-                exploration_type_enum = ExplorationType.DETERMINISTIC
-            if config.pickled_states is None:
-                config.pickled_states = pickle.load(open(config.pickle_path, "rb"))
-            env_eval_metrics, output_env = eval_pickled_env(n_collections, policy, env, exploration_type_enum, samples=config.samples, pickled_states=config.pickled_states)
-            metrics[f"eval/{str(exploration_type)}"] = env_eval_metrics
+        if exploration_type == "RANDOM":
+            exploration_type_enum = ExplorationType.RANDOM
+        elif exploration_type == "DETERMINISTIC":
+            exploration_type_enum = ExplorationType.DETERMINISTIC
         else:
-            for seed in config.seeds:
-                metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = {}
-                if exploration_type == "RANDOM":
-                    exploration_type_enum = ExplorationType.RANDOM
-                elif exploration_type == "DETERMINISTIC":
-                    exploration_type_enum = ExplorationType.DETERMINISTIC
-                else:
-                    raise ValueError(f"Unknown exploration type: {exploration_type}")
+            raise ValueError(f"Unknown exploration type: {exploration_type}")
 
-                training.info(f"Evaluating environment {i, seed} with {str(exploration_type)} policy")
-                env_eval_metrics, output_env = eval_env(n_collections, policy, env, exploration_type_enum, samples=config.samples if exploration_type == "RANDOM" else 1, seed=seed)
+        if config.pickle_path is not None:
+            if config.pickled_states is None:
+                try:
+                    with open(config.pickle_path, "rb") as f:
+                        config.pickled_states = pickle.load(f)
+                except FileNotFoundError:
+                    print(f"[ERROR] Pickle file not found: {config.pickle_path} - skipping pickled evaluation")
+                    config.pickle_path = None # disable for future calls
+                    config.pickled_states = None
+            if config.pickled_states is not None:
+                env_eval_metrics, output_env = eval_pickled_env(n_collections, policy, env, exploration_type_enum, samples=config.samples, pickled_states=config.pickled_states)
+                metrics[f"eval/{str(exploration_type)}"] = env_eval_metrics
+                return [output_env]
 
-                metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = env_eval_metrics
+        for seed in config.seeds:
+            metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = {}
+            training.info(f"Evaluating environment {i, seed} with {str(exploration_type)} policy")
+            env_eval_metrics, output_env = eval_env(n_collections, policy, env, exploration_type_enum, samples=config.samples if exploration_type == "RANDOM" else 1, seed=seed)
+            metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = env_eval_metrics
 
     return [output_env]
 

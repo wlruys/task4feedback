@@ -423,8 +423,9 @@ def run_ppo(
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
         metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0)
-        if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-            max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+        if eval_config.pickle_path is not None:
+            if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
+                max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
 
     training.info("Starting PPO training loop")
 
@@ -536,20 +537,20 @@ def run_ppo(
         if should_eval(n_collections, eval_config=eval_config):
             collector.policy.eval()
             metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
-            training.info(f"Evaluation metrics: {metrics}")
-            if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-                max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
-                training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
-                if logging_config.best_policy_dir is not None:
-                    save_checkpoint(
-                        n_collections,
-                        policy_module=collector.policy,
-                        value_module=loss_module.critic_network,
-                        optimizer=optimizer,
-                        lr_scheduler=lr_scheduler,
-                        filename=f"{max_performance:.3f}_{seed}.pt",
-                        checkpoint_dir=logging_config.best_policy_dir,
-                    )
+            if eval_config.pickle_path is not None:
+                if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
+                    max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+                    training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
+                    if logging_config.best_policy_dir is not None:
+                        save_checkpoint(
+                            n_collections,
+                            policy_module=collector.policy,
+                            value_module=loss_module.critic_network,
+                            optimizer=optimizer,
+                            lr_scheduler=lr_scheduler,
+                            filename=f"{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{max_performance:.3f}_{seed}.pt",
+                            checkpoint_dir=logging_config.best_policy_dir,
+                        )
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at collection {n_collections}")
