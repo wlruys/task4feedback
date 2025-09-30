@@ -2,30 +2,31 @@ mesh:
   _target_: task4feedback.graphs.mesh.generate_quad_mesh
 config:
   _target_: task4feedback.graphs.dynamic_jacobi.DynamicJacobiConfig
-  steps: 50
-  n: 5
+  steps: 240
+  n: 16
   domain_ratio: 1.0
-  arithmetic_intensity: 1.0
+  arithmetic_intensity: 595.5555555
   arithmetic_complexity: 1.0
-  boundary_width: 5.0
+  boundary_width: 0.25
   boundary_complexity: 1
-  level_memory: 4e9
+  memory_intensity: 0
+  level_memory: 44e9
   randomness: 0.0
   permute_idx: 0
-  vcu_usage: 0.25
+  vcu_usage: 1.0
   task_internal_memory: 0 
-  task_time: 1000 
-  boundary_time: 1000
-  interior_time: 1000 
+  # task_time: 1000 
+  # boundary_time: 1000
+  # interior_time: 1000 
   workload:
     _target_: task4feedback.graphs.base.TrajectoryWorkload
   workload_args:
     traj_type: circle
     lower_bound: 1
     upper_bound: 5
-    scale: 0.6
+    scale: 0.3
     traj_specifics:
-      radius: 0.3
+      radius: 0.5
       max_angle: 1
 init:
   partitioner: metis

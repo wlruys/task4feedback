@@ -155,6 +155,15 @@ def main(cfg: DictConfig):
             / "model_checkpoints"
             / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
         )
+        cfg.eval.pickle_path = f"./pickled_evaluation/{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{graph_name}_{interior_ratio}-{boundary_ratio}-1.pkl"
+        # find if the file exists
+        if not os.path.exists(cfg.eval.pickle_path):
+            # replace - with :
+            cfg.eval.pickle_path = cfg.eval.pickle_path.replace("-", ":")
+            if not os.path.exists(cfg.eval.pickle_path):
+                print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
+                cfg.eval.pickle_path = None
+
         # Make a dir if not exists
         checkpoint_path.mkdir(parents=True, exist_ok=True)
         cfg.logging.best_policy_dir = str(checkpoint_path)
