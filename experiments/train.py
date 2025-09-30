@@ -120,6 +120,44 @@ def configure_training(cfg: DictConfig):
 
 @hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
+    # cfg.graph.config.workload_args.traj_type exist
+    if cfg.graph.mesh._target_ == "task4feedback.graphs.mesh.generate_quad_mesh":
+
+        def closest_ratio_string(value: float) -> str:
+            mapping = {10: "10", 1: "1", 0.1: "0.1"}
+            closest = min(mapping.keys(), key=lambda x: abs(value - x))
+            return mapping[closest]
+
+        interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity + 1)
+        boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
+
+        interior_ratio = closest_ratio_string(interior_ratio)
+        boundary_ratio = closest_ratio_string(boundary_ratio)
+        checkpoint_path = Path(cfg.wandb.dir)
+        if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
+            graph_name = cfg.graph.config.workload_args.traj_type
+        else:
+            graph_name = "static"
+        if "Dilation" in cfg.network.layers.state._target_:
+            if "Uncond" in cfg.network.layers.state._target_:
+                network = "UncondCNN"
+            else:
+                network = "CNN"
+        elif "Vector" in cfg.network.layers.state._target_:
+            network = "Vector"
+        else:
+            print(cfg.network.layers.state._target_)
+            raise ValueError("Unknown network type in cfg.network.layers.state._target_")
+        checkpoint_path = (
+            checkpoint_path.parent
+            / "model_checkpoints"
+            / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}:{boundary_ratio}:1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}"
+        )
+        # Make a dir if not exists
+        checkpoint_path.mkdir(parents=True, exist_ok=True)
+        cfg.logging.best_policy_dir = str(checkpoint_path)
+        print(f"Best Policy dir: {cfg.logging.best_policy_dir}")
+
     if cfg.wandb.enabled:
         wandb.init(
             project=cfg.wandb.project,

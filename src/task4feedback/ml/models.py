@@ -567,7 +567,7 @@ class GATStateNet(nn.Module):
 
         self.post_norms = nn.ModuleDict(
             {
-                "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers )]),
+                "tasks": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
                 "data": nn.ModuleList([GraphNorm(self.hidden_channels) for _ in range(num_layers)]),
             }
         )
@@ -659,25 +659,24 @@ class GATStateNet(nn.Module):
 
         for l, conv in enumerate(self.convs):
 
-            #pre-norm
+            # pre-norm
             x_pre = {nt: self.norms[nt][l](x_dict[nt], batch_dict[nt]) for nt in x_dict.keys()}
 
-            #conv
+            # conv
             x_new = conv(x_pre, edge_index_dict=edge_index_dict)
 
-            #post-norm
-            x_new  = {nt: self.post_norms[nt][l](x_new[nt], batch_dict[nt]) for nt in x_new.keys()}
+            # post-norm
+            x_new = {nt: self.post_norms[nt][l](x_new[nt], batch_dict[nt]) for nt in x_new.keys()}
 
-            #film
+            # film
             if self.film is not None:
                 x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
 
-            #residual 
+            # residual
             x_new = {nt: x_dict[nt] + x_new[nt] for nt in x_dict.keys()}
 
-            #activation
+            # activation
             x_dict = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
-
 
         if b_tasks is not None:
             idx = data["tasks"].ptr[:-1]
@@ -1226,7 +1225,7 @@ class DilationState(nn.Module):
         n_devices: int = 5,
         spatial_in_all_blocks: bool = False,
         film_in_all_blocks: bool = False,
-        spatial_last_k: int = 1,
+        spatial_last_k: int = 0,
         film_last_k: int = 2,
         init_gamma_c: float = 0.05,
         init_beta_c: float = 0.05,
