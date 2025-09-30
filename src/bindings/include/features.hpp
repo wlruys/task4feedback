@@ -2145,6 +2145,57 @@ struct TaskDataMappedFeature : public StateEdgeFeature<TaskDataMappedFeature> {
   }
 
   size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &task_runtime = state.get_task_runtime();
+
+    const auto read = static_graph.get_read(source_id);
+    const auto idx_in_read =
+        std::find(read.begin(), read.end(), target_id) - read.begin();
+    const auto &recent_writers = static_graph.get_most_recent_writers(source_id);
+    taskid_t recent_writer_task_id = recent_writers[idx_in_read];
+
+    const bool is_mapped = task_runtime.is_compute_mapped(recent_writer_task_id);
+    output[0] = static_cast<f_t>(is_mapped == true);
+  }
+};
+
+
+struct TaskDataMappedOneHotFeature : public StateEdgeFeature<TaskDataMappedOneHotFeature> {
+  TaskDataMappedOneHotFeature(const SchedulerState &state)
+      : StateEdgeFeature<TaskDataMappedOneHotFeature>(state, EdgeType::TASK_DATA) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &task_runtime = state.get_task_runtime();
+
+    const auto read = static_graph.get_read(source_id);
+    const auto idx_in_read = std::find(read.begin(), read.end(), target_id) - read.begin();
+    const auto &recent_writers = static_graph.get_most_recent_writers(source_id);
+    taskid_t recent_writer_task_id = recent_writers[idx_in_read];
+
+    const bool is_mapped = task_runtime.is_compute_mapped(recent_writer_task_id);
+    output[0] = static_cast<f_t>(is_mapped == true);
+  }
+};
+
+
+struct TaskDataMappedOneHotFeature : public StateEdgeFeature<TaskDataMappedOneHotFeature> {
+  TaskDataMappedOneHotFeature(const SchedulerState &state)
+      : StateEdgeFeature<TaskDataMappedOneHotFeature>(state, EdgeType::TASK_DATA) {
+  }
+
+  size_t getFeatureDimImpl() const {
     return 2;
   }
 
@@ -2164,6 +2215,23 @@ struct TaskDataMappedFeature : public StateEdgeFeature<TaskDataMappedFeature> {
     output[1] = static_cast<f_t>(is_mapped == false);
   }
 };
+
+struct TaskDataSizeFeature : public StateEdgeFeature<TaskDataSizeFeature> {
+  TaskDataDefaultEdgeFeature(const SchedulerState &state)
+      : StateEdgeFeature<TaskDataSizeFeature>(state, EdgeType::TASK_DATA) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span>
+  void extractFeatureImpl(ID source_id, ID target_id, Span output) const {
+    const auto &data = state.get_data();
+    output[0] = static_cast<f_t>(data.get_size(target_id));
+  }
+};
+
 
 struct TaskDataDefaultEdgeFeature : public StateEdgeFeature<TaskDataDefaultEdgeFeature> {
   TaskDataDefaultEdgeFeature(const SchedulerState &state)
