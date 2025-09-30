@@ -863,7 +863,7 @@ class GaussianBump:
 
 
 def create_bump_random_center(rng: np.random.RandomState, min_std=0.1, max_std: float = 0.3, min_scale: float = 0.05, max_scale: float = 0.5, min_life=25, max_life=50):
-    x = rng.uniform(0, 1, size=2)
+    x = rng.uniform(0.2, 0.8, size=2)
     life = rng.randint(min_life, max_life)
 
     return GaussianBump(x, min_std, max_std, min_scale, max_scale, t=0, num_steps=life)

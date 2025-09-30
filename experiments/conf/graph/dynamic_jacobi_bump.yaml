@@ -4,11 +4,11 @@ config:
   _target_: task4feedback.graphs.dynamic_jacobi.DynamicJacobiConfig
   steps: 60
   n: 8
-  arithmetic_intensity: 1.0
+  arithmetic_intensity: 595.5555555
   arithmetic_complexity: 1.0
-  boundary_width: 5.0
+  boundary_width: 0.25
   boundary_complexity: 1
-  memory_intensity: 1.0
+  memory_intensity: 0.0
   level_memory: 10e9
   randomness: 0.0
   permute_idx: 0
@@ -18,16 +18,16 @@ config:
     _target_: task4feedback.graphs.base.BumpWorkload
   workload_args:
     traj_type: bump
-    lower_bound: 0.5 
-    upper_bound: 1.5
+    lower_bound: 1 
+    upper_bound: 5
     probability: 0.05
     traj_specifics:
-      min_std: 0.1
-      max_std: 0.2
-      min_scale: 0.1
-      max_scale: 0.4
-      min_life: 80
-      max_life: 100
+      min_std: 0.2
+      max_std: 0.4
+      min_scale: 0.3
+      max_scale: 1.2
+      min_life: 32
+      max_life: 64
 init:
   partitioner: metis
   nparts: 4

@@ -151,7 +151,7 @@ def main(cfg: DictConfig):
         checkpoint_path = (
             checkpoint_path.parent
             / "model_checkpoints"
-            / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}:{boundary_ratio}:1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}"
+            / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}:{boundary_ratio}:1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
         )
         # Make a dir if not exists
         checkpoint_path.mkdir(parents=True, exist_ok=True)
