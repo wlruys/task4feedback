@@ -29,7 +29,7 @@ graph:
   config:
     n: 4
     steps: 16
-    level_memory: 110e9
+    level_memory: 98e9
   env:
     change_priority: False
     change_location: True

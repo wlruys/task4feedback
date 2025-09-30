@@ -529,7 +529,9 @@ def run_evaluation(
     return metrics
 
 
-def save_checkpoint(step, policy_module, value_module, optimizer, lr_scheduler=None, extras: Optional[Dict[str, Any]] = None):
+def save_checkpoint(
+    step, policy_module, value_module, optimizer, lr_scheduler=None, extras: Optional[Dict[str, Any]] = None, checkpoint_dir: Optional[str] = None, filename: Optional[str] = None, wandb=None
+) -> Path:
     try:
         state = dict(
             step=step,
@@ -545,14 +547,19 @@ def save_checkpoint(step, policy_module, value_module, optimizer, lr_scheduler=N
         if lr_scheduler is not None:
             state["lr_scheduler"] = lr_scheduler.state_dict()
 
-        if wandb is not None and wandb.run is not None and wandb.run.dir is not None:
+        if checkpoint_dir is not None:
+            checkpoint_dir = Path(checkpoint_dir)
+        elif wandb is not None and wandb.run is not None and wandb.run.dir is not None:
             checkpoint_dir = Path(wandb.run.dir)
         else:
             checkpoint_dir = Path(os.environ.get("HYDRA_RUNTIME_OUTPUT_DIR", "."))
 
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        if filename is not None:
+            checkpoint_file = checkpoint_dir / filename
+        else:
+            checkpoint_file = checkpoint_dir / f"checkpoint_{step}.pt"
 
-        checkpoint_file = checkpoint_dir / f"checkpoint_{step}.pt"
         torch.save(state, checkpoint_file)
         training.info(f"Checkpoint saved to {checkpoint_file}")
 

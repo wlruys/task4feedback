@@ -465,6 +465,7 @@ def _tiny_last_linear(seq: nn.Sequential, std: float = 1e-4):
     if last.bias is not None:
         nn.init.zeros_(last.bias)
 
+
 class _FiLM(nn.Module):
     def __init__(self, node_types: List[str], num_layers: int, cond_dim: int, hidden_dim: int):
         super().__init__()
@@ -505,15 +506,14 @@ class _FiLM(nn.Module):
             out[nt] = (g_nodes) * x + b_nodes
         return out
 
-class GATStateNet(nn.Module):
 
+class GATStateNet(nn.Module):
 
     def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
         mask = edge_mask.to(torch.bool)
         edge_index_masked = edge_index[:, mask]
         edge_attr_masked = edge_attr[mask] if edge_attr is not None else None
         return edge_index_masked, edge_attr_masked
-
 
     def __init__(self, feature_config: FeatureDimConfig, hidden_channels: int = 16, num_layers: int = 2, add_device_load: bool = False, add_progress: bool = False, n_devices: int = 5, **_ignored):
         super(GATStateNet, self).__init__()
@@ -568,18 +568,22 @@ class GATStateNet(nn.Module):
             hetero_conv = HeteroConv(conv_dict, aggr="mean")
             self.convs.append(hetero_conv)
 
-        self.norms = nn.ModuleDict({
-            "tasks": nn.ModuleList([nn.LayerNorm(self.hidden_channels) for _ in range(num_layers+1)]),
-            "data": nn.ModuleList([nn.LayerNorm(self.hidden_channels) for _ in range(num_layers+1)]),
-        })
+        self.norms = nn.ModuleDict(
+            {
+                "tasks": nn.ModuleList([nn.LayerNorm(self.hidden_channels) for _ in range(num_layers + 1)]),
+                "data": nn.ModuleList([nn.LayerNorm(self.hidden_channels) for _ in range(num_layers + 1)]),
+            }
+        )
 
-        self.beta = nn.ModuleDict({
-            "tasks": nn.ParameterList([nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]),
-            "data": nn.ParameterList([nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]),
-        })
+        self.beta = nn.ModuleDict(
+            {
+                "tasks": nn.ParameterList([nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]),
+                "data": nn.ParameterList([nn.Parameter(torch.zeros(1)) for _ in range(self.num_layers)]),
+            }
+        )
         for nt in self.beta.keys():
             for b in self.beta[nt]:
-                #init to 0.5
+                # init to 0.5
                 nn.init.constant_(b, 0.5)
 
         # self.post_norms = nn.ModuleDict(
@@ -628,11 +632,11 @@ class GATStateNet(nn.Module):
         b_data = data["data"].batch if isinstance(data, Batch) else None
 
         x_tasks = self.stem_proj["tasks"](data["tasks"].x)
-        #x_tasks = self.stem_norm["tasks"](x_tasks)
+        # x_tasks = self.stem_norm["tasks"](x_tasks)
         x_tasks = self.act(x_tasks)
 
         x_data = self.stem_proj["data"](data["data"].x)
-        #x_data = self.stem_norm["data"](x_data)
+        # x_data = self.stem_norm["data"](x_data)
         x_data = self.act(x_data)
 
         x_dict = {"tasks": x_tasks, "data": x_data}
@@ -671,10 +675,10 @@ class GATStateNet(nn.Module):
 
         for l, conv in enumerate(self.convs):
 
-            #pre-norm
-            #x_pre = {nt: self.norms[nt][l](x_dict[nt]) for nt in x_dict.keys()}
+            # pre-norm
+            # x_pre = {nt: self.norms[nt][l](x_dict[nt]) for nt in x_dict.keys()}
 
-            #conv
+            # conv
             x_new = conv(x_dict, edge_index_dict=edge_index_dict)
 
             # #post-norm
@@ -682,20 +686,20 @@ class GATStateNet(nn.Module):
 
             x_new = {nt: self.norms[nt][l](x_new[nt]) for nt in x_new.keys()}
 
-            #film
+            # film
             if self.film is not None:
                 x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
 
-            #activation
+            # activation
             x_new = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
 
-            # residual 
+            # residual
             for nt in x_dict.keys():
                 beta = self.beta[nt][l]
                 beta = torch.sigmoid(beta)
                 x_new[nt] = (1 - beta) * x_dict[nt] + beta * x_new[nt]
 
-            #update for next layer
+            # update for next layer
             x_dict = {nt: x_new[nt] for nt in x_new.keys()}
 
         # final norm
@@ -1202,6 +1206,7 @@ class DataIterationGNNStateNet(nn.Module):
         
 
 
+
 class OriginalGNNStateNet(nn.Module):
 
     def _mask_edges(self, edge_index, edge_mask, edge_attr=None):
@@ -1209,7 +1214,6 @@ class OriginalGNNStateNet(nn.Module):
         edge_index_masked = edge_index[:, mask]
         edge_attr_masked = edge_attr[mask] if edge_attr is not None else None
         return edge_index_masked, edge_attr_masked
-
 
     def __init__(
         self,
@@ -1258,7 +1262,7 @@ class OriginalGNNStateNet(nn.Module):
                 "tasks": nn.LayerNorm(hidden_channels),
                 "data": nn.LayerNorm(hidden_channels),
             }
-        )        
+        )
 
         self.convert_data = HeteroDataWrapper()
 
@@ -1284,14 +1288,14 @@ class OriginalGNNStateNet(nn.Module):
 
         self.layer_norm1 = nn.LayerNorm(hidden_channels)
         self.layer_norm2 = nn.LayerNorm(hidden_channels)
-        self.act = nn.LeakyReLU(negative_slope=0.01)        
+        self.act = nn.LeakyReLU(negative_slope=0.01)
 
         self.output_dim = hidden_channels * 6 + (hidden_channels if self.g_dim > 0 else 0)
         self.output_keys = ["embed"]
 
     def forward(self, tensordict: TensorDict):
         batch_size = tensordict.batch_size
-        data= self.convert_data(tensordict)
+        data = self.convert_data(tensordict)
 
         b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
 

@@ -1,7 +1,7 @@
 defaults:
   - 8x8x128_dynamic_diag.yaml
   - feature: cnn_batch
-  - network: dilation_cnn_batch
+  - network: cond_dilation_cnn_batch
   - _self_
 
 algorithm:
