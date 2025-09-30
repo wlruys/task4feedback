@@ -1,3 +1,4 @@
+from enum import IntEnum
 from .base import Geometry
 from matplotlib import colors as mcolors
 from matplotlib.collections import PolyCollection, LineCollection
@@ -124,6 +125,8 @@ class EnvStaticState:
     dt_virtual: np.ndarray
     dt_block: np.ndarray
     dt_duration_us: np.ndarray
+    dt_launch_time: np.ndarray 
+    dt_complete_time: np.ndarray
 
 @dataclass(slots=True)
 class EnvDynamicState:
@@ -137,7 +140,225 @@ class EnvDynamicState:
     time: int
     last_time: int
     last_cell_update: np.ndarray
-        
+
+def get_total_work(static_state: EnvStaticState, device: int) -> float:
+    mask = (static_state.ct_device == device)
+    return float(np.sum(static_state.ct_duration_us[mask])) if np.any(mask) else 0.0
+
+def get_total_work_in_interval(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
+    mask = (static_state.ct_device == device) & (static_state.ct_launch_time >= start_time) & (static_state.ct_complete_time <= end_time)
+    return float(np.sum(static_state.ct_duration_us[mask])) if np.any(mask) else 0.0
+
+def get_instantaneous_work(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
+    mask = (static_state.ct_device == device) & (static_state.ct_launch_time < end_time) & (static_state.ct_complete_time > start_time)
+    total = 0.0
+    for launch, complete, duration in zip(static_state.ct_launch_time[mask], static_state.ct_complete_time[mask], static_state.ct_duration_us[mask]):
+        overlap_start = max(launch, start_time)
+        overlap_end = min(complete, end_time)
+        if overlap_start < overlap_end:
+            overlap_duration = (overlap_end - overlap_start) / (complete - launch) * duration
+            total += overlap_duration
+    return float(total)
+
+def get_total_in_communication(static_state: EnvStaticState, device: int) -> float:
+    mask = (static_state.dt_device == device) & (~static_state.dt_virtual)
+    return float(np.sum(static_state.dt_duration_us[mask])) if np.any(mask) else 0.0
+
+def get_total_in_communication_in_interval(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
+    mask = (static_state.dt_device == device) & (~static_state.dt_virtual) & (static_state.dt_launch_time >= start_time) & (static_state.dt_complete_time <= end_time)
+    return float(np.sum(static_state.dt_duration_us[mask])) if np.any(mask) else 0.0
+
+def get_instantaneous_in_communication(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
+    mask = (static_state.dt_device == device) & (~static_state.dt_virtual) & (static_state.dt_launch_time < end_time) & (static_state.dt_complete_time > start_time)
+    total = 0.0
+    for launch, complete, duration in zip(static_state.dt_launch_time[mask], static_state.dt_complete_time[mask], static_state.dt_duration_us[mask]):
+        overlap_start = max(launch, start_time)
+        overlap_end = min(complete, end_time)
+        if overlap_start < overlap_end:
+            overlap_duration = (overlap_end - overlap_start) / (complete - launch) * duration
+            total += overlap_duration
+    return float(total)
+
+def get_total_out_communication(static_state: EnvStaticState, device: int) -> float:
+    mask = (static_state.dt_source == device) & (~static_state.dt_virtual)
+    return float(np.sum(static_state.dt_duration_us[mask])) if np.any(mask) else 0.0
+
+def get_total_out_communication_in_interval(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
+    mask = (static_state.dt_source == device) & (~static_state.dt_virtual) & (static_state.dt_launch_time >= start_time) & (static_state.dt_complete_time <= end_time)
+    return float(np.sum(static_state.dt_duration_us[mask])) if np.any(mask) else 0.0
+
+
+def get_instantaneous_out_communication(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
+    mask = (static_state.dt_source == device) & (~static_state.dt_virtual) & (static_state.dt_launch_time < end_time) & (static_state.dt_complete_time > start_time)
+    total = 0.0
+    for launch, complete, duration in zip(static_state.dt_launch_time[mask], static_state.dt_complete_time[mask], static_state.dt_duration_us[mask]):
+        overlap_start = max(launch, start_time)
+        overlap_end = min(complete, end_time)
+        if overlap_start < overlap_end:
+            overlap_duration = (overlap_end - overlap_start) / (complete - launch) * duration
+            total += overlap_duration
+    return float(total)
+
+@dataclass(slots=True)
+class LoadBalanceResult:
+    load_balance: float
+    in_comm_balance: float
+    out_comm_balance: float
+    total_work: float
+    total_in_communication: float
+    total_out_communication: float
+
+def compute_load_balance(static_state: EnvStaticState, start_time: Optional[int] = None, end_time: Optional[int] = None) -> LoadBalanceResult:
+    
+    if start_time is None:
+        start_time = 0
+    if end_time is None:
+        end_time = max(np.max(static_state.ct_complete_time), np.max(static_state.dt_complete_time)) + 1
+
+    compute_devices = set(static_state.ct_device[static_state.ct_device >= 0])
+    data_devices = set(static_state.dt_device[static_state.dt_device >= 0]) | set(static_state.dt_source[static_state.dt_source >= 0])
+    n_compute_devices = len(compute_devices)
+    n_data_devices = len(data_devices)
+    n_devices = max(compute_devices | data_devices) + 1 if (compute_devices | data_devices) else 0
+
+    if n_devices <= 0:
+        return LoadBalanceResult(
+            load_balance=1.0,
+            in_comm_balance=1.0,
+            out_comm_balance=1.0,
+            total_work=0.0,
+            total_in_communication=0.0,
+            total_out_communication=0.0,
+        )
+    
+    work = np.zeros((n_devices,), dtype=np.float64)
+    in_comm = np.zeros((n_devices,), dtype=np.float64)
+    out_comm = np.zeros((n_devices,), dtype=np.float64)
+    for device in range(n_devices):
+        work[device] = get_instantaneous_work(static_state, device, start_time, end_time)
+        in_comm[device] = get_instantaneous_in_communication(static_state, device, start_time, end_time)
+        out_comm[device] = get_instantaneous_out_communication(static_state, device, start_time, end_time)
+
+    
+
+    avg_work = float(np.sum(work))/n_compute_devices if np.any(work) else 0.0
+    avg_in_comm = float(np.sum(in_comm))/n_data_devices if np.any(in_comm) else 0.0
+    avg_out_comm = float(np.sum(out_comm))/n_data_devices if np.any(out_comm) else 0.0
+    max_work = float(np.max(work)) if np.any(work) else 0.0
+    max_in_comm = float(np.max(in_comm)) if np.any(in_comm) else 0.0
+    max_out_comm = float(np.max(out_comm)) if np.any(out_comm) else 0.0
+
+    load_balance = (avg_work / max_work) if max_work > 0 else 1.0
+    in_comm_balance = (avg_in_comm / max_in_comm) if max_in_comm > 0 else 1.0
+    out_comm_balance = (avg_out_comm / max_out_comm) if max_out_comm > 0 else 1.0
+    total_work = float(np.sum(work))
+    total_in_communication = float(np.sum(in_comm))
+    total_out_communication = float(np.sum(out_comm))
+
+    return LoadBalanceResult(
+        load_balance=load_balance,
+        in_comm_balance=in_comm_balance,
+        out_comm_balance=out_comm_balance,
+        total_work=total_work,
+        total_in_communication=total_in_communication,
+        total_out_communication=total_out_communication,
+    )
+
+def load_balance_over_time(static_state: EnvStaticState, interval: int) -> list[LoadBalanceResult]:
+    n_devices = max(np.max(static_state.ct_device), np.max(static_state.dt_device), np.max(static_state.dt_source)) + 1
+
+    if n_devices <= 0:
+        return []
+
+    start_time = 0
+    end_time = max(np.max(static_state.ct_complete_time), np.max(static_state.dt_complete_time)) + 1
+    results = []
+    for t in range(start_time, end_time, interval):
+        lb = compute_load_balance(static_state, t, min(t + interval, end_time))
+        results.append(lb)
+    return results
+
+def plot_load_balance_over_time(env, interval: int):
+    static_state, dynamic_state = _build_state(env)
+    results = load_balance_over_time(static_state, interval)
+
+    times = [i * interval for i in range(len(results))]
+    load_balances = [r.load_balance for r in results]
+    in_comm_balances = [r.in_comm_balance for r in results]
+    out_comm_balances = [r.out_comm_balance for r in results]
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(times, load_balances, label='Load Balance', color='blue')
+    plt.plot(times, in_comm_balances, label='In Communication Balance', color='orange')
+    plt.plot(times, out_comm_balances, label='Out Communication Balance', color='green')
+    plt.xlabel('Time (us)')
+    plt.ylabel('Balance Ratio')
+    plt.title('Load Balance Over Time')
+    plt.ylim(0, 1.05)
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+@dataclass(slots=True)
+class IdleType:
+    compute: bool = True
+    in_comm: bool = True
+    out_comm: bool = True
+    
+
+
+def get_total_idle_time(static_state: EnvStaticState, idle_type: Optional[IdleType]=None, simulation_end_time: Optional[int] = None) -> np.ndarray:
+    def _collect(device_count: int, idle_type: IdleType) -> list[list[tuple[int, int]]]:
+        intervals = [[] for _ in range(device_count)]
+        if idle_type.compute:
+            for launch, finish, device in zip(static_state.ct_launch_time, static_state.ct_complete_time, static_state.ct_device):
+                if device >= 0 and launch >= 0 and finish > launch:
+                    intervals[device].append((int(launch), int(finish)))
+        if idle_type.in_comm:
+            for launch, finish, device, is_virtual in zip(static_state.dt_launch_time, static_state.dt_complete_time, static_state.dt_device, static_state.dt_virtual):
+                if device >= 0 and not is_virtual and launch >= 0 and finish > launch:
+                    intervals[device].append((int(launch), int(finish)))
+        if idle_type.out_comm:
+            for launch, finish, device, is_virtual in zip(static_state.dt_launch_time, static_state.dt_complete_time, static_state.dt_source, static_state.dt_virtual):
+                if device >= 0 and not is_virtual and launch >= 0 and finish > launch:
+                    intervals[device].append((int(launch), int(finish)))
+        return intervals
+    
+    if idle_type is None:
+        idle_type = IdleType(compute=True, in_comm=True, out_comm=True)
+    
+    compute_devices = set(static_state.ct_device[static_state.ct_device >= 0])
+    data_devices = set(static_state.dt_device[static_state.dt_device >= 0]) | set(static_state.dt_source[static_state.dt_source >= 0])
+    n_devices = max(compute_devices | data_devices) + 1 if (compute_devices | data_devices) else 0
+
+    if n_devices <= 0:
+        return np.zeros(0, dtype=np.float64)
+
+    busy_intervals = _collect(n_devices, idle_type)
+    total_end = int(simulation_end_time) if simulation_end_time is not None else max((end for dev in busy_intervals for _, end in dev), default=0)
+    idle = np.full(n_devices, float(total_end), dtype=np.float64)
+
+    for device, intervals in enumerate(busy_intervals):
+        if not intervals:
+            continue
+        intervals.sort()
+        busy = 0
+        cur_start, cur_end = intervals[0]
+        for start, end in intervals[1:]:
+            if start <= cur_end:
+                cur_end = max(cur_end, end)
+            else:
+                busy += cur_end - cur_start
+                cur_start, cur_end = start, end
+        busy += cur_end - cur_start
+        idle[device] = max(0.0, float(total_end - busy))
+    return idle
+
+def get_idle_from_env(env) -> np.ndarray:
+    static_state, _ = _build_state(env)
+    return get_total_idle_time(static_state, simulation_end_time=env.simulator.time if env.simulator is not None else None)
+
 
 def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
     assert(env.simulator is not None)
@@ -167,6 +388,8 @@ def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
     dt_virtual = np.zeros((n_data_tasks,), dtype=bool)
     dt_block = np.full((n_data_tasks,), -1, dtype=np.int64)
     dt_duration_us = np.zeros((n_data_tasks,), dtype=np.float32)
+    dt_launch_time = np.full((n_data_tasks,), -1, dtype=np.int64)
+    dt_complete_time = np.full((n_data_tasks,), -1, dtype=np.int64)
 
     for i in range(n_compute_tasks):
         ct_device[i] = task_runtime.get_compute_task_mapped_device(i)
@@ -181,6 +404,8 @@ def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
         dt_virtual[i] = task_runtime.is_data_task_virtual(i)
         dt_block[i] = static_graph.get_data_id(i)
         dt_duration_us[i] = task_runtime.get_data_task_duration(i) if not dt_virtual[i] else 0.0
+        dt_launch_time[i] = task_runtime.get_data_task_launched_time(i)
+        dt_complete_time[i] = task_runtime.get_data_task_completed_time(i)
 
     static_state = EnvStaticState(
         n_compute_tasks=n_compute_tasks,
@@ -193,6 +418,8 @@ def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
         dt_device=dt_device,
         dt_source=dt_source,
         dt_virtual=dt_virtual,
+        dt_launch_time=dt_launch_time,
+        dt_complete_time=dt_complete_time,
         dt_block=dt_block,    
         dt_duration_us=dt_duration_us)
 
