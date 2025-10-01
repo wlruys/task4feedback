@@ -128,7 +128,7 @@ def main(cfg: DictConfig):
             closest = min(mapping.keys(), key=lambda x: abs(value - x))
             return mapping[closest]
 
-        interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity + 1)
+        interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
         boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
 
         interior_ratio = closest_ratio_string(interior_ratio)

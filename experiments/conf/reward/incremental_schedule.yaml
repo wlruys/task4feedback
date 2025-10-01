@@ -7,6 +7,6 @@ chance: 1.0
 pbrs: True
 sparse_reward_scale: 1
 dense_reward_scale: 1
-uniform_reward_scale: 1 # This overrides both sparse and dense reward scale if > 0
+uniform_reward_scale: 0 # This overrides both sparse and dense reward scale if > 0
 gamma: 1.0
 verbose: False

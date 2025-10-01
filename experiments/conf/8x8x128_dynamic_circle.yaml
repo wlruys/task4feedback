@@ -74,3 +74,10 @@ eval:
   samples: 1
   pickle_path: ./pickled_evaluation/8x8x128_circle_1:1:1.pkl
 
+sweep:
+  n_samples: 10
+  task_th: 0.4
+  level_size_step: 1e9
+  start_mem: 1e9
+  end_mem: 200e9
+  exps: ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
