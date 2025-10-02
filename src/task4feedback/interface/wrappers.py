@@ -1369,7 +1369,7 @@ class ExternalObserver:
         output: TensorDict,
         task_ids: Optional[torch.Tensor] = None,
         k: int = 1,
-        neighborhood_type: NeighborhoodType = NeighborhoodType.BIDIRECTIONAL,
+        neighborhood_type: NeighborhoodType = NeighborhoodType.ITERATIVE,
     ):
         # print("Task observation")
         if task_ids is None:

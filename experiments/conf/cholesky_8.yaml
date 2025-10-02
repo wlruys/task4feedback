@@ -1,0 +1,74 @@
+defaults:
+  - graph: cholesky
+  - reward: incremental_schedule
+  - system: 4h100
+  - algorithm: ppo
+  - runtime: batch
+  - wandb: default
+  - logging: default
+  - lr_scheduler: none
+  - noise: none
+  - optimizer: adamw
+  - eval: default
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: train.GitInfo
+
+seed: 256
+deterministic_torch: true
+
+reward:
+  verbose: False
+  random_start: False
+  gamma: 0.99
+
+graph:
+  config:
+    n: 8
+    level_memory: 98e9
+    block_time: 10000
+    task_time: 10000
+  env:
+    change_priority: True
+    change_location: False
+    change_duration: False
+    seed: 1
+
+algorithm:
+  num_collections: 10000
+  rollout_steps: 16
+  workers: 4
+  graphs_per_collection: 4
+  ent_coef: 0.001
+  sample_slices: False
+  slice_len: 16 # only used if sample_slices is True (LSTM)
+  gamma: 0.99
+  lmbda: 0.95
+  minibatch_size: 16
+  collector: "multi_sync"
+
+optimizer:
+  lr: 1e-3
+
+system:
+  mem: 9999e9
+
+runtime:
+  batch_size: 5
+  queue_threshold: 5
+  max_in_flight: 16
+
+wandb:
+  enabled: true
+  project: cholesky_8_ipdps
+  name: cholesky_8_ipdps
+  tags: ["cholesky", "8", "ipdps", "1:1:1"]
+
+eval:
+  animation_interval: 0
+  eval_interval: 25
+  samples: 10
+  pickle_path: ./pickled_evaluation/8_cholesky_1:1:1.pkl

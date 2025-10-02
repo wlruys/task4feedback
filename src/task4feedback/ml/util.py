@@ -329,7 +329,6 @@ def eval_pickled_env(
 
     return metrics, last_env
 
-
 def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType, samples: int = 1, seed: int = 0):
     env_rewards = []
     env_times = []
@@ -394,6 +393,7 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
     last_env = env
 
     return metrics, last_env
+
 
 
 def evaluate_policy(n_collections: int, policy, eval_envs: list[RuntimeEnv], config: EvaluationConfig, exploration_type: str, metrics: dict) -> list[RuntimeEnv]:

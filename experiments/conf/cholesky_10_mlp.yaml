@@ -1,0 +1,32 @@
+defaults:
+  - cholesky_10.yaml
+  - feature: candidate_coordinate
+  - network: vector_baseline
+  - _self_
+
+algorithm:
+  rollout_steps: 128
+  minibatch_size: 128
+
+feature:
+  observer:
+    batched: False
+    version: "E"
+    add_degree: True
+  normalization:
+    warmup: 20
+  add_device_load: True
+
+network:
+  layers:
+    state:
+      hidden_channels: [64, 32]
+    actor:
+      hidden_channels: 64
+    critic:
+      hidden_channels: 64
+  critic:
+    add_progress: True
+
+wandb:
+  name: MLP-E_IS

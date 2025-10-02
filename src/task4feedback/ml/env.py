@@ -931,6 +931,7 @@ class IncrementalSchedule(RuntimeEnv):
             self.eft_time = self.EFT_baseline
             sim_current = self.simulator.copy()
             sim_current.disable_external_mapper()
+            self.bias = 0.0
 
             if self.k > 0:
                 sim_current.set_steps((self.k) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
@@ -961,6 +962,7 @@ class IncrementalSchedule(RuntimeEnv):
 
             # Normalized in per-task time observed in global baseline.
             reward = self.sparse_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
+            reward = reward - self.sparse_reward_scale*self.bias 
             if self.verbose:
                 print(f"Step {self.step_count} Reward: {reward:.4f} (P(s)={self.potential[-2]:.4f}, P(s+1)={self.potential[-1]:.4f})")
         else:
@@ -978,6 +980,7 @@ class IncrementalSchedule(RuntimeEnv):
                 reward = self.dense_reward_scale * r
                 if self.pbrs:
                     reward = reward + self.sparse_reward_scale * (0 - self.potential[-2])
+                    reward = reward - self.sparse_reward_scale*self.bias
                     self.potential_sum += self.sparse_reward_scale * (0 - self.potential[-2])
             if self.verbose:
                 print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f} Sum(Potential): {self.potential_sum:.4f}")

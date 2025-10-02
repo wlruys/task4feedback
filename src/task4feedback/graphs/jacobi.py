@@ -1,5 +1,5 @@
 from .mesh.base import Geometry, Cell, Edge
-from .mesh.partition import block_cyclic
+from .mesh.partition import block_cyclic, row_cyclic, col_cyclic 
 from ..interface import DataBlocks, DeviceType, TaskTuple, VariantTuple
 from .base import (
     DataGeometry,
@@ -200,7 +200,7 @@ class JacobiData(DataGeometry):
                 for i in id_list:
                     self.blocks.set_location(i, location)
 
-    def set_locations_from_list(self, location_list: list[int], step: Optional[int] = None):
+    def  set_locations_from_list(self, location_list: list[int], step: Optional[int] = None):
         for i, location in enumerate(location_list):
             self.set_location(Cell(i), location, step)
 
@@ -1096,8 +1096,10 @@ class PartitionMapper:
             global_task_id = candidates[i].item()
             local_id = i
             graph = simulator.input.graph
-            assert isinstance(graph, JacobiGraph)
-            level = graph.task_to_level[global_task_id]
+            if not isinstance(graph, JacobiGraph):
+                level = 0 
+            else:
+                level = graph.task_to_level[global_task_id]
             cell_id = graph.task_to_cell[global_task_id]
             device = self.cell_to_mapping[cell_id]
             if level < self.level_start:
@@ -1126,6 +1128,37 @@ class BlockCyclicMapper(PartitionMapper):
         else:
             raise ValueError("Either mapper or geometry must be provided for BlockCyclicMapper")
 
+class RowCylicMapper(PartitionMapper):
+
+    def __init__(self, mapper: Optional[Self] = None, geometry: Optional[Geometry] = None, n_devices: int = 4, offset: int = 1):
+        self.level_start = 0
+        self.offset = offset
+        self.geometry = geometry
+        if mapper is not None:
+            assert isinstance(mapper, RowCylicMapper), "Mapper must be of type RowCylicMapper, is " + str(type(mapper))
+            self.cell_to_mapping = mapper.cell_to_mapping
+        elif geometry is not None:
+            n_cells = len(geometry.cells)
+            partition = row_cyclic(geometry, n_parts=n_devices)
+            self.cell_to_mapping = {cell: device + self.offset for cell, device in enumerate(partition)}
+        else:
+            raise ValueError("Either mapper or geometry must be provided for RowCyclicMapper")
+
+class ColCyclicMapper(PartitionMapper):
+    
+    def __init__(self, mapper: Optional[Self] = None, geometry: Optional[Geometry] = None, n_devices: int = 4, offset: int = 1):
+        self.level_start = 0
+        self.offset = offset
+        self.geometry = geometry
+        if mapper is not None:
+            assert isinstance(mapper, ColCyclicMapper), "Mapper must be of type ColCyclicMapper, is " + str(type(mapper))
+            self.cell_to_mapping = mapper.cell_to_mapping
+        elif geometry is not None:
+            n_cells = len(geometry.cells)
+            partition = col_cyclic(geometry, n_parts=n_devices)
+            self.cell_to_mapping = {cell: device + self.offset for cell, device in enumerate(partition)}
+        else:
+            raise ValueError("Either mapper or geometry must be provided for ColCyclicMapper")
 
 class LevelPartitionMapper:
     def __init__(
@@ -1140,6 +1173,8 @@ class LevelPartitionMapper:
             self.level_cell_mapping = level_cell_mapping
         else:
             self.level_cell_mapping = {}
+
+        print(f"LevelPartitionMapper initialized with mapping: {self.level_cell_mapping}")
 
     def set_mapping_dict(self, level_cell_mapping):
         self.level_cell_mapping = level_cell_mapping
@@ -1395,7 +1430,7 @@ class CandidateExternalObserverFactory(ExternalObserverFactory):
 
 
 @dataclass(kw_only=True)
-class GATExternalObserverFactory(ExternalObserverFactory):
+class GNNExternalObserverFactory(ExternalObserverFactory):
     def create(self, simulator: SimulatorDriver):
         state = simulator.get_state()
         graph_spec = self.graph_spec
@@ -1550,14 +1585,15 @@ class XYObserverFactory(XYExternalObserverFactory):
 #         )
 
 
-class GATObserverFactory(GATExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, version: str = "C", **_ignored):
+class GNNObserverFactory(GNNExternalObserverFactory):
+    def __init__(self, spec: fastsim.GraphSpec, version: str = "C", add_degree: bool = False, **_ignored):
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         data_feature_factory = FeatureExtractorFactory()
 
-        #task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        #task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        if add_degree:
+            task_feature_factory.add(fastsim.InDegreeTaskFeature)
+            task_feature_factory.add(fastsim.OutDegreeTaskFeature)
 
         device_feature_factory = FeatureExtractorFactory()
         device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
@@ -1576,20 +1612,17 @@ class GATObserverFactory(GATExternalObserverFactory):
         if "A" in version:
             task_feature_factory.add(fastsim.InputOutputTaskFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
+            data_feature_factory.add(fastsim.DataMappedLocationsFeature)
         elif "B" in version:
             task_feature_factory.add(fastsim.InputOutputTaskFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
-            data_feature_factory.add(fastsim.DataMappedLocationsFeature)
+            data_feature_factory.add(fastsim.DataCoordinateFeature)
         elif "C" in version:
             task_feature_factory.add(fastsim.InputOutputTaskFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
-            data_feature_factory.add(fastsim.DataCoordinateFeature)
-        elif "L" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            data_feature_factory.add(fastsim.DataSizeFeature)
             data_feature_factory.add(fastsim.DataMappedLocationsFeature)
             data_feature_factory.add(fastsim.DataCoordinateFeature)
-        elif "K" in version:
+        elif "D" in version:
             task_feature_factory.add(fastsim.InputOutputTaskFeature)
             task_feature_factory.add(fastsim.TaskStateFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
@@ -1651,10 +1684,16 @@ class CandidateObserverFactory(CandidateExternalObserverFactory):
 
 
 class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, width: int, length: int, prev_frames: int, version: str = "E", batched: bool = False, **_ignored):
+    def __init__(self, spec: fastsim.GraphSpec, width: int, length: int, prev_frames: int, version: str = "E", batched: bool = False, add_degree: bool = False, **_ignored):
         self.batched = batched
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
+        self.add_degree = add_degree
+
+        if add_degree:
+            task_feature_factory.add(fastsim.InDegreeTaskFeature)
+            task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
         if "A" in version:
             task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)

@@ -4,3 +4,4 @@ from .nonuniform_jacobi import *
 from .sweeps import *
 from .dynamic_sweeps import *
 from .base import *
+from .cholesky import * 

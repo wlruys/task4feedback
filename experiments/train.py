@@ -121,7 +121,7 @@ def configure_training(cfg: DictConfig):
 @hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
     # cfg.graph.config.workload_args.traj_type exist
-    if cfg.graph.mesh._target_ == "task4feedback.graphs.mesh.generate_quad_mesh":
+    if cfg.graph.type == "jacobi":
 
         def closest_ratio_string(value: float) -> str:
             mapping = {10: "10", 1: "1", 0.1: "0.1"}

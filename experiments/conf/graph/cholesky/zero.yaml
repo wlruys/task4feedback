@@ -1,0 +1,12 @@
+graph:
+  config:
+    block_time: 1
+    task_time: 10000
+
+wandb:
+  tags: ["cholesky", "ipdps", "1:0"]
+
+eval:
+  animation_interval: 0
+  eval_interval: 25
+  samples: 10

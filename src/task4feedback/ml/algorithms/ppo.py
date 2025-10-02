@@ -284,6 +284,7 @@ def run_ppo(
 
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
+    max_graph_size = max_tasks 
     max_candidates = max([env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs])
 
     if ppo_config.rollout_steps > 0:
@@ -419,6 +420,9 @@ def run_ppo(
         f"{n_batch} batches per epoch, "
         f"{ppo_config.workers} workers."
     )
+
+    training.info(f"Max tasks per graph: {max_graph_size}, max candidates per task: {max_candidates}")
+
     max_performance = 0.0
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")

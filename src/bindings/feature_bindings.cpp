@@ -459,6 +459,7 @@ void init_feature_ext(nb::module_ &m) {
       .def("get_k_hop_dependencies", &GraphExtractor::get_k_hop_dependencies)
       .def("get_k_hop_dependents", &GraphExtractor::get_k_hop_dependents)
       .def("get_k_hop_bidirectional", &GraphExtractor::get_k_hop_bidirectional)
+      .def("get_k_hop_neighborhood", &GraphExtractor::get_k_hop_neighborhood)
       .def("get_active_tasks", &GraphExtractor::get_active_tasks)
       .def("get_task_task_edges", &GraphExtractor::get_task_task_edges)
       .def("get_task_task_edges_reverse", &GraphExtractor::get_task_task_edges_reverse)

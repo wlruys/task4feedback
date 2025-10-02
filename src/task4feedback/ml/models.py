@@ -1010,7 +1010,7 @@ class DataIterationGNNStateNet(nn.Module):
             residual=True,
             dropout=0,
             add_self_loops=False,
-        ) 
+        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=False, aggr="add", root_weight=True)
 
         self.gnn_tasks_from_tasks = GATv2Conv(
             (hidden_channels, hidden_channels),
@@ -1020,7 +1020,7 @@ class DataIterationGNNStateNet(nn.Module):
             residual=True,
             dropout=0,
             add_self_loops=False,
-        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=False, aggr="add", root_weight=True)
 
         self.gnn_tasks_to_tasks = GATv2Conv(
             (hidden_channels, hidden_channels),
@@ -1030,7 +1030,7 @@ class DataIterationGNNStateNet(nn.Module):
             residual=True,
             dropout=0,
             add_self_loops=False,
-        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=False, aggr="add", root_weight=True)
 
         self.norm_tasks_to_tasks = nn.LayerNorm(hidden_channels)
         self.norm_tasks_from_tasks = nn.LayerNorm(hidden_channels)
@@ -1042,6 +1042,14 @@ class DataIterationGNNStateNet(nn.Module):
             nn.LeakyReLU(negative_slope=0.01),
             nn.Linear(hidden_channels, hidden_channels),
         )
+
+        self.global_merge_mlp = nn.Sequential(
+            nn.Linear(hidden_channels *2, hidden_channels),
+            nn.LayerNorm(hidden_channels),
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Linear(hidden_channels, hidden_channels),
+        )
+        self.global_merge_norm = nn.LayerNorm(hidden_channels)
 
         self.task_data_convs = nn.ModuleList()
         self.data_task_convs = nn.ModuleList()
@@ -1056,11 +1064,11 @@ class DataIterationGNNStateNet(nn.Module):
                     hidden_channels,
                     heads=n_heads,
                     concat=False,
-                    residual=False,
+                    residual=True,
                     dropout=0,
                     add_self_loops=False,
                 )
-            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
+            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=False, aggr="mean", root_weight=False))
 
 
             self.data_task_convs.append(
@@ -1073,7 +1081,7 @@ class DataIterationGNNStateNet(nn.Module):
                     dropout=0,
                     add_self_loops=False,
                 )
-            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
+            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=False, aggr="mean", root_weight=False))
 
             self.task_data_norms.append(nn.LayerNorm(hidden_channels))
             self.data_task_norms.append(nn.LayerNorm(hidden_channels))
@@ -1085,7 +1093,9 @@ class DataIterationGNNStateNet(nn.Module):
             nn.LayerNorm(hidden_channels),
             nn.LeakyReLU(negative_slope=0.01),
             nn.Linear(hidden_channels, hidden_channels),
-        ) if self.g_dim > 0 else None       
+        ) if self.g_dim > 0 else None      
+
+        self.g_norm = nn.LayerNorm(hidden_channels) if self.g_dim > 0 else None 
 
         self.output_dim = hidden_channels * 2 + (hidden_channels if self.g_dim > 0 else 0)
         self.output_keys = ["embed"]
@@ -1144,6 +1154,7 @@ class DataIterationGNNStateNet(nn.Module):
             )
             x_data_new = self.data_task_norms[l](x_data_new)
             x_data_new = self.act(x_data_new)
+            #x_data = x_data + x_data_new
 
             x_tasks_new = self.task_data_convs[l](
                 (x_data_new, x_tasks),
@@ -1152,13 +1163,14 @@ class DataIterationGNNStateNet(nn.Module):
             x_tasks_new = self.task_data_norms[l](x_tasks_new)
             x_tasks_new = self.act(x_tasks_new)
 
-            x_tasks = x_tasks + x_tasks_new
-            x_data = x_data + x_data_new
+            #x_tasks = x_tasks + x_tasks_new
 
         tasks_global = global_mean_pool(x_tasks, b_tasks)
         data_global = global_mean_pool(x_data, b_data)
 
-        global_state = tasks_global + data_global
+        global_state = self.global_merge_mlp(torch.cat([tasks_global, data_global], dim=-1))
+        global_state = self.global_merge_norm(global_state)
+        global_state = self.act(global_state)
 
         g = None 
         if self.g_dim > 0:
@@ -1181,6 +1193,7 @@ class DataIterationGNNStateNet(nn.Module):
                     g = torch.cat([g, device_load, device_memory], dim=-1)
 
             g = self.g_mlp(g)
+            g = self.g_norm(g)
             g = self.act(g)
 
         if b_tasks is not None:

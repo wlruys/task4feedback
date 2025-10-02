@@ -31,3 +31,4 @@ env:
   change_duration: False
   change_workload: True
   seed: 1
+type: "jacobi"
