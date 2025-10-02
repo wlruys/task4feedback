@@ -38,7 +38,7 @@ import numpy
 import random
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from task4feedback.fastsim2 import ParMETIS_wrapper
-from task4feedback.graphs.mesh.plot import animate_mesh_graph
+from task4feedback.graphs.mesh.plot import *
 from task4feedback.ml.util import EvaluationConfig
 from helper.parmetis import run_parmetis
 from mpi4py import MPI
@@ -61,7 +61,6 @@ def configure_training(cfg: DictConfig):
         if isinstance(graph, DynamicJacobiGraph):
             workload = graph.get_workload()
             workload.animate_workload(show=False, title="outputs/workload_animation.mp4")
-        exit()
 
     if option == "EFT" and rank == 0:
         env.simulator.disable_external_mapper()
@@ -70,7 +69,7 @@ def configure_training(cfg: DictConfig):
             bandwidth=cfg.system.d2d_bw,
             mode="metis",
             offset=1,
-            level_chunks=16,
+            level_chunks=1,
         )
         graph.align_partitions()
         env.simulator.enable_external_mapper()
@@ -106,14 +105,15 @@ def configure_training(cfg: DictConfig):
         print(env.simulator.time, env._get_baseline("EFT"), f"{eft/env.simulator.time:.2f}x")
         print("Interval: ", int(env.simulator.time / config.max_frames))
         start_t = time.perf_counter()
-        # animate_mesh_graph(env=env, folder=Path("outputs/"))
+        animate_mesh_graph(env=env, folder=Path("outputs/"))
         end_t = time.perf_counter()
         print("Plotting time:", end_t - start_t)
 
+        plot_load_balance_over_time(env, interval=1000)
         # animate_mesh_graph(env=env)
 
 
-@hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
 
     torch.manual_seed(cfg.seed)

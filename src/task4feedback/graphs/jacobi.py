@@ -1096,10 +1096,14 @@ class PartitionMapper:
             global_task_id = candidates[i].item()
             local_id = i
             graph = simulator.input.graph
+
+            print("HERE")
+
             if not isinstance(graph, JacobiGraph):
                 level = 0 
             else:
                 level = graph.task_to_level[global_task_id]
+                
             cell_id = graph.task_to_cell[global_task_id]
             device = self.cell_to_mapping[cell_id]
             if level < self.level_start:

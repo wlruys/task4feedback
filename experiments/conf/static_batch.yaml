@@ -33,7 +33,7 @@ graph:
     level_memory: 110e9
   env:
     change_priority: False
-    change_location: True
+    change_location: False
     change_duration: False
     seed: 1
 
