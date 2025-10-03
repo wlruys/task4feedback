@@ -33,13 +33,13 @@ graph:
     block_time: 10000
     task_time: 10000
   env:
-    change_priority: True
-    change_location: False
+    change_priority: False
+    change_location: True
     change_duration: False
     seed: 1
 
 algorithm:
-  num_collections: 10
+  num_collections: 1000
   rollout_steps: 16
   workers: 4
   graphs_per_collection: 4
@@ -64,11 +64,10 @@ runtime:
 
 wandb:
   enabled: true
-  project: cholesky_4_ipdps
-  name: cholesky_4_ipdps
+  project: cholesky_4
+  name: cholesky_4
 
 eval:
   animation_interval: 0
   eval_interval: 25
   samples: 10
-  # pickle_path: ./pickled_evaluation/4_cholesky_1:1:1.pkl
