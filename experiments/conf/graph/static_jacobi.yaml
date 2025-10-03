@@ -19,7 +19,7 @@ config:
   # boundary_time: 1000
   # compute_time: 1000
 init:
-  partitioner: metis
+  partitioner: mincut
   nparts: 4
   gpu_only: True
   randomize: False
