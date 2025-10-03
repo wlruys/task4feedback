@@ -1,5 +1,5 @@
 defaults:
-  - graph: dynamic_jacobi_corners
+  - graph: dynamic_jacobi_circle
   - reward: incremental_schedule
   - system: 4h100
   - algorithm: ppo
@@ -29,7 +29,7 @@ graph:
   config:
     steps: 128
     n: 8
-    level_memory: 40e9
+    level_memory: 44e9
     boundary_width: 0.25
   env:
     change_priority: False
@@ -42,7 +42,7 @@ algorithm:
   rollout_steps: 32
   workers: 4
   graphs_per_collection: 4
-  ent_coef: 0.01
+  ent_coef: 0.00025
   sample_slices: False
   slice_len: 16
   gamma: 0.99
@@ -63,16 +63,16 @@ runtime:
 
 wandb:
   enabled: true
-  project: 8x8x128_corners
+  project: 8x8x128_bump
   name: CNN-A_IEFT
 
 eval:
   animation_interval: 0
-  eval_interval: 50
+  eval_interval: 25
   max_frames: 400
   video_seconds: 15
-  samples: 10
-  pickle_path: ./pickled_evaluation/8x8x128_corners_1:1:1.pkl
+  samples: 1
+  pickle_path: ./pickled_evaluation/8x8x128_circle_1:1:1.pkl
 
 sweep:
   n_samples: 10

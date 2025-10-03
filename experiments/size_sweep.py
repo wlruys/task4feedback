@@ -28,7 +28,7 @@ from task4feedback.ml.models import FeatureDimConfig
 from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
 
 from helper.graph import make_graph_builder, GraphBuilder
-from helper.env import make_env
+from helper.env import make_env, create_system
 from helper.parmetis import run_parmetis
 import math
 
@@ -41,7 +41,10 @@ size = comm.Get_size()
 
 ParMETIS = ParMETIS_wrapper()
 
-MetricKeys = ("time", "mem_usage", "total_mem_movement", "eviction_movement", "time_history")
+MetricKeys = ("time", "mem_usage", "total_mem_movement", "eviction_movement", "time_history", "vsInf")
+
+ITR_UB = []
+INF_SYSTEM = None
 
 
 def seed_everything(seed: int = 0) -> None:
@@ -159,6 +162,32 @@ def append_zero_row(metrics: Dict[str, Dict[str, List[float]]], names: Iterable[
                 metrics[n][k].append(0.0)
 
 
+def run_inf_mem_sim(sim: "SimulatorDriver") -> "SimulatorDriver":
+    sim.input.system = INF_SYSTEM
+    task_runtime = sim.get_state().get_task_runtime()
+    sim.external_mapper = ExternalMapper()
+    inf_sim = sim.fresh_copy()
+    inf_sim.initialize()
+    inf_sim.initialize_data()
+    inf_sim.enable_external_mapper()
+    candidates = torch.zeros((sim.observer.graph_spec.max_candidates), dtype=torch.int64)
+
+    state = inf_sim.run_until_external_mapping()
+    while state != fastsim.ExecutionState.COMPLETE:
+        inf_sim.get_mappable_candidates(candidates)
+        actions = []
+        for i, id in enumerate(candidates):
+            task_id = id.item()
+            mapping_priority = inf_sim.get_mapping_priority(task_id)
+            actions.append(fastsim.Action(i, task_runtime.get_compute_task_mapped_device(task_id), mapping_priority, mapping_priority))
+        inf_sim.simulator.map_tasks(actions)
+        state = inf_sim.run_until_external_mapping()
+    return inf_sim
+
+
+skip_inf = []
+
+
 def add_metric_row(metrics: Dict[str, Dict[str, List[float]]], name: str, sim: "SimulatorDriver", idx: int = -1) -> None:
     if "time" in metrics[name]:
         metrics[name]["time"][idx] += sim.time
@@ -170,6 +199,15 @@ def add_metric_row(metrics: Dict[str, Dict[str, List[float]]], name: str, sim: "
         metrics[name]["total_mem_movement"][idx] += sum(list(sim.total_data_movement())[1:]) / 4
     if "eviction_movement" in metrics[name]:
         metrics[name]["eviction_movement"][idx] += sum(list(sim.total_eviction_movement())[1:]) / 4
+    if "vsInf" in metrics[name]:
+        if name not in skip_inf:
+            inf_sim = run_inf_mem_sim(sim)
+            slowdown = sim.time / inf_sim.time
+            metrics[name]["vsInf"][idx] += slowdown
+            if slowdown > 2:
+                skip_inf.append(name)
+        else:
+            metrics[name]["vsInf"][idx] += 99999.0
 
 
 def average_metric(metrics: Dict[str, Dict[str, List[float]]], names: Iterable[str], keys: Iterable[str], num_samples: int, idx: int = -1) -> None:
@@ -204,15 +242,15 @@ def run_parmetis_distributed(
         # Find best ITR using recommended ub = 1.05
         best_cfg = (None, None, float("inf"))  # (itr, ub, time)
 
-        for itr in [1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4]:
+        for itr in [0.000111, 0.00025, 0.0005, 0.00075, 0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1]:
             if rank == 0:
                 temp = env.simulator.copy()
-            run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, unbalance=1.05, itr=itr)
+            run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, unbalance=1.019, itr=itr)
             if rank == 0 and temp.time < best_cfg[2]:
-                best_cfg = (itr, 1.05, temp.time)
+                best_cfg = (itr, 1.019, temp.time)
                 print(f"New best ITR {itr} with time {temp.time}", flush=True)
         best_cfg = comm.bcast(best_cfg, root=0)
-        ub_lo, ub_hi = 1.01, 2.0
+        ub_lo, ub_hi = 1.00, 1.10
         min_step = 1e-3  # stop when step size shrinks below this
         max_runs = 50  # hard cap on total ParMETIS runs for this phase
 
@@ -252,6 +290,7 @@ def run_parmetis_distributed(
             direction = comm.bcast(direction, root=0)
             step = comm.bcast(step, root=0)
         best_cfg = comm.bcast(best_cfg, root=0)
+        ITR_UB.append(best_cfg)
 
         for _ in range(cfg.sweep.n_samples):
             if rank == 0:
@@ -260,8 +299,7 @@ def run_parmetis_distributed(
                 eft_sim.disable_external_mapper()
                 eft_sim.run()
                 add_metric_row(metrics, "EFT", eft_sim, sweep_idx)
-
-            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, unbalance=cfg.parmetis.unbalance, itr=cfg.parmetis.itr)
+            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, unbalance=best_cfg[1], itr=best_cfg[0])
 
             if rank == 0:
                 add_metric_row(metrics, "ParMETIS", env.simulator, sweep_idx)
@@ -270,6 +308,14 @@ def run_parmetis_distributed(
 
 def run_host_experiments_and_plot(cfg: DictConfig):
     d2d_bandwidth = cfg.system.d2d_bw
+    before_inf_sim = cfg.system.mem
+    cfg.system.mem = 999999e9
+    global INF_SYSTEM
+    INF_SYSTEM = create_system(cfg)
+    cfg.system.mem = before_inf_sim
+
+    if not cfg.graph.env.change_priority and not cfg.graph.env.change_location and not cfg.graph.env.change_workload and not cfg.graph.env.change_duration:
+        cfg.sweep.n_samples = 1
     if rank == 0:
         sweep_list = []
 
@@ -277,14 +323,20 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         graph_builder = make_graph_builder(cfg, verbose=False)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
         data_stat = env.simulator_factory[0].input.graph.data.data_stat
-        # cfg.graph.config.arithmetic_intensity = (data_stat["interior_average_comm"] / data_stat["compute_average"]) * cfg.graph.config.arithmetic_intensity / cfg.sweep.interior_ratio
-        # cfg.graph.config.boundary_width = data_stat["interior_average_comm"] / data_stat["boundary_average_comm"] * cfg.graph.config.boundary_width * cfg.sweep.boundary_ratio / cfg.sweep.interior_ratio
-        cfg.graph.config.boundary_width = cfg.sweep.boundary_ratio
 
         cnt = 0
         while True:
             graph_builder = make_graph_builder(cfg, verbose=False)
             env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
+            graph = env.simulator_factory[0].input.graph
+            if isinstance(graph, DynamicJacobiGraph):
+                if graph.data.data_stat["average_step_data"] < 100e9:
+                    print("Average step data too small (<100GB), skipping...")
+                    cfg.graph.config.level_memory += cfg.sweep.level_size_step
+                    continue
+                elif graph.data.data_stat["average_step_data"] > 120e9:
+                    print("Average step data too large (>120GB), stopping...")
+                    break
             max_mem = 0
             for i in range(3):
                 env.reset()
@@ -300,19 +352,17 @@ def run_host_experiments_and_plot(cfg: DictConfig):
 
             sweep_list.append((cfg.graph.config.level_memory, data_stat["average_step_data"], cfg.graph.config.boundary_width, env.simulator.max_mem_usage))
 
-            prev_level_memory = cfg.graph.config.level_memory
             cfg.graph.config.level_memory += cfg.sweep.level_size_step
-            # cfg.graph.config.boundary_width = cfg.graph.config.boundary_width / ((prev_level_memory / cfg.graph.config.level_memory) ** cfg.graph.config.boundary_complexity)
             if max_mem > cfg.system.mem * 0.99:
                 if cnt == 0 and len(sweep_list) > 5:
                     sweep_list = sweep_list[len(sweep_list) - 5 :]
                 cnt += 1
-            if env.simulator_factory[0].input.graph.max_requirement / cfg.system.mem > cfg.sweep.task_th or cnt >= 5:
+            if env.simulator_factory[0].input.graph.max_requirement / cfg.system.mem > cfg.sweep.task_th or cnt >= 5 or sweep_list[-1][0] > cfg.sweep.end_mem:
                 break
 
     sweep_list = comm.bcast(sweep_list if rank == 0 else None, root=0)
 
-    experiment_names = cfg.sweep.exps
+    experiment_names = ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
     mem_keys = experiment_names.copy()
     speedup_keys = experiment_names.copy()
     speedup_keys.remove("EFT")
@@ -490,39 +540,54 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         # Directory layout
         base = Path("outputs") / file_name
 
+        def closest_ratio_string(value: float) -> str:
+            mapping = {10: "10", 1: "1", 0.1: "0.1"}
+            closest = min(mapping.keys(), key=lambda x: abs(value - x))
+            return mapping[closest]
+
+        interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
+        boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
+
+        interior_ratio_str = closest_ratio_string(interior_ratio)
+        boundary_ratio_str = closest_ratio_string(boundary_ratio)
+
         print(f"Saving results to {base}")
         base.mkdir(parents=True, exist_ok=True)
         # add time stamp
         ts = datetime.now().strftime("%m%d%H%M")  # mmddhhmm
-        log_file = f"result_{cfg.sweep.interior_ratio}I_{cfg.sweep.boundary_ratio}B.txt"
-        fig_file = f"figure_{cfg.sweep.interior_ratio}I_{cfg.sweep.boundary_ratio}B.png"
+        log_file = f"result_{interior_ratio_str}I_{boundary_ratio_str}B.txt"
+        fig_file = f"figure_{interior_ratio_str}I_{boundary_ratio_str}B.png"
         # Save results text
         with open(base / log_file, "w") as ftxt:
-            ftxt.write(OmegaConf.to_yaml(cfg))
             ftxt.write("Sweep,TotalMem/ProblemSize," + ",".join([str(i) for i in metrics.keys()]) + "\n")
             for idx in range(len(metrics["EFT"]["time"])):
                 ftxt.write(f"level_mem: {sweep_list[idx][0]} step_mem: {sweep_list[idx][1]} boundary_width: {sweep_list[idx][2]}\n")
                 for k in metrics.keys():
-                    if k != "Oracle":
-                        line = f"{k},"
-                    else:
+                    if k == "Oracle":
                         line = f"{k}({dynamic_metis_k_best[idx]}),"
+                    elif k == "ParMETIS":
+                        line = f"{k}(ub={ITR_UB[idx][1]:.3f},ITR={ITR_UB[idx][0]:.3f}),"
+                    else:
+                        line = f"{k},"
                     for times in metrics[k]["time_history"][idx]:
                         line += f"{times},"
+                    line += f"{metrics[k]['vsInf'][idx]:.3f}"
                     ftxt.write(line + "\n")
                 ftxt.write("\n\n")
             ftxt.write("\n")
             ftxt.write("\n\n BELOW LINES FOR REPLOTTING \n\n")
             ftxt.write(saved_lines)
+            ftxt.write("\n\n CONFIGURATION \n\n")
+            ftxt.write(OmegaConf.to_yaml(cfg))
 
         offset = 0
         xslice = slice(offset, None)  # Adjust this slice as needed
         fig, axes = plt.subplots(1, 4, figsize=(26, 6), sharex=True)
         # Interior, Boundary vs Compute
-        interior_ratio = [cfg.sweep.interior_ratio for _ in sweep_list]
-        boundary_ratio = [cfg.sweep.boundary_ratio for _ in sweep_list]
+        interior_ratio = [interior_ratio for _ in sweep_list]
+        boundary_ratio = [boundary_ratio for _ in sweep_list]
 
-        xaxis = [i[1] / 1e9 for i in sweep_list]
+        xaxis = [i[0] / 1e9 for i in sweep_list]
 
         axes[0].plot(xaxis, interior_ratio[xslice], label="Interior", color="tab:blue", linewidth=4)
         axes[0].plot(xaxis, boundary_ratio[xslice], label="Boundary", color="tab:orange", linewidth=4)

@@ -71,6 +71,14 @@ eval:
   eval_interval: 25
   max_frames: 400
   video_seconds: 15
-  samples: 1
+  samples: 10
   pickle_path: ./pickled_evaluation/8x8x128_bump_1:1:1.pkl
 
+
+sweep:
+  n_samples: 10
+  task_th: 0.4
+  level_size_step: 1e9
+  start_mem: 1e9
+  end_mem: 200e9
+  exps: ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
