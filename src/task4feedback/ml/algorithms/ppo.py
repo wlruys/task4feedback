@@ -169,12 +169,16 @@ def log_training_metrics(
         valid_improvement_mask = torch.isfinite(improvements) & (improvements > -100)
         valid_improvements = improvements[valid_improvement_mask]
         valid_quad = vs_policy[valid_improvement_mask]
+        valid_times = flattened_data["next", "observation", "aux", "time"][valid_improvement_mask]
 
         # Calculate improvement metrics
         if valid_improvements.numel() > 0:
             avg_improvement = valid_improvements.mean().item()
             max_improvement = valid_improvements.max().item()
             min_improvement = valid_improvements.min().item()
+            avg_time = valid_times.mean().item()
+            min_time = valid_times.min().item()
+            max_time = valid_times.max().item()
 
             avg_vs_policy = valid_quad.mean().item()
             max_vs_policy = valid_quad.max().item()
@@ -250,6 +254,9 @@ def log_training_metrics(
                     "batch/mean_vs_policy": avg_vs_policy,
                     "batch/max_vs_policy": max_vs_policy,
                     "batch/min_vs_policy": min_vs_policy,
+                    "batch/mean_time": avg_time,
+                    "batch/max_time": max_time,
+                    "batch/min_time": min_time,
                 }
             )
             if std_improvement is not None:
