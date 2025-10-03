@@ -684,7 +684,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--nodes", type=int, default=1)
     ps.add_argument("--ntasks-per-node", type=int, default=1)
     ps.add_argument("--cpus-per-task", type=int, default=16)
-    ps.add_argument("--partition", help="SLURM partition")
+    ps.add_argument("--partition", help="SLURM partition", default="skx")
     ps.add_argument("--gres", help="SLURM GRES, e.g., gpu:1")
     ps.add_argument("--account", help="SLURM account")
     ps.add_argument("--qos", help="SLURM QoS")
