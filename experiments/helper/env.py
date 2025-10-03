@@ -147,15 +147,40 @@ def _setup_observation_norms(
                     norm.init_stats(num_iter=num_iter, key=in_keys[0], reduce_dim=reduce_dim, cat_dim=cat_dim)
                 except TypeError:
                     norm.init_stats(num_iter=num_iter, key=in_keys[0])
-                if cfg.feature.observer.version in "DFGH":
-                    norm.loc[-4:] = 0.0
-                    norm.scale[-4:] = 1.0
+                # if cfg.feature.observer.version in "DFGH":
+                #     norm.loc[-4:] = 0.0
+                #     norm.scale[-4:] = 1.0
         finally:
             env.enable_reward()
         return NormalizationDetails(states={n: t.state_dict() for n, t in created.items()})
 
     return None
 
+def _plot_graph_with_networkx(g):
+    import matplotlib.pyplot as plt
+
+    dag = nx.DiGraph()
+    dag.add_nodes_from((task.id, {"label": task.name}) for task in g.tasks.values())
+    dag.add_edges_from((dep_id, task.id) for task in g for dep_id in g.get_task_dependencies(task.id))
+    try:
+
+        coords = graphviz_layout(dag, prog="dot")
+    except (ImportError, nx.NetworkXException):
+        coords = nx.spring_layout(dag, seed=getattr(cfg, "seed", None))
+    labels = {node_id: data["label"] for node_id, data in dag.nodes(data=True)}
+    nx.draw_networkx(
+        dag,
+        coords,
+        labels=labels,
+        node_size=700,
+        node_color="#74add1",
+        edge_color="#4c72b0",
+        arrows=True,
+        font_size=8,
+    )
+    plt.title("Task dependency graph")
+    plt.tight_layout()
+    plt.show()
 
 def make_env(
     graph_builder: GraphBuilder,
@@ -165,6 +190,8 @@ def make_env(
     eval=False,
 ) -> RuntimeEnv | tuple[RuntimeEnv, NormalizationDetails]:
     from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
+    import networkx as nx
+    from networkx.drawing.nx_pydot import graphviz_layout
 
     gmsh.initialize()
 
