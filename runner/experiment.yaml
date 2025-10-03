@@ -1,0 +1,93 @@
+cli_base: "python experiments/train.py --config-name cholesky_4_mlp.yaml"
+
+packs:
+  - name: arthitecture
+    options:
+        - feature:
+            observer:
+              version: "E"
+              add_degree: True
+          tag: "MLP-E-Degree"
+        - feature:
+            observer:
+              version: "A"
+              add_degree: True
+          tag: "MLP-A-Degree"
+        - feature:
+            observer:
+              version: "B"
+              add_degree: True
+          tag: "MLP-B-Degree"
+        - feature:
+            observer:
+              version: "C"
+              add_degree: True
+          tag: "MLP-C-Degree"
+        - feature:
+            observer:
+              version: "E"
+              add_degree: False
+          tag: "MLP-E"
+        - feature:
+            observer:
+              version: "A"
+              add_degree: False
+          tag: "MLP-A"
+        - feature:
+            observer:
+              version: "B"
+              add_degree: False
+          tag: "MLP-B"
+        - feature:
+            observer:
+              version: "C"
+              add_degree: False
+          tag: "MLP-C"
+  - name: reward
+    options:
+      - reward:
+          pbrs: True
+          sparse_reward_scale: 1
+          dense_reward_scale: 1
+        tag: "pbrs"
+      - reward:
+          pbrs: False
+          sparse_reward_scale: 0
+          dense_reward_scale: 1
+        tag: "sparse_reward"
+  - name: block_time
+    options:
+      - graph:
+          config:
+            block_time: 0
+            task_time: 30000
+        tag: "1:0"
+      - graph:
+          config:
+            block_time: 5000
+            task_time: 30000
+        tag: "2:1"
+      - graph:
+          config:
+            block_time: 10000
+            task_time: 30000
+        tag: "1:1"
+      - graph:
+          config:
+            block_time: 40000
+            task_time: 30000
+        tag: "1:4"
+  - name: seed
+    options:
+      - seed: 42
+        tag: "seed42"
+      - seed: 256
+        tag: "seed256"
+      - seed: 1024
+        tag: "seed1024"
+      - seed: 2024
+        tag: "seed2024"
+      - seed: 4096
+        tag: "seed4096"
+
+    
