@@ -144,7 +144,8 @@ public:
 
   virtual void generate_priority(StaticTaskInfo &task_info) {
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
-      // set_priority(task_id, sample_priority(task_id));
+      //set_priority(task_id, sample_priority(task_id));
+      //TODO(wlr, jae): RESTORE THIS, add external load and save of priorities to override it
       set_priority(task_id, task_id);
     }
   }
