@@ -165,11 +165,10 @@ def log_training_metrics(
     with torch.no_grad():
         rewards = flattened_data["next", "reward"]
         improvements = flattened_data["next", "observation", "aux", "improvement"]
-        vs_policy = flattened_data["next", "observation", "aux", "vs_policy"]
         valid_improvement_mask = torch.isfinite(improvements) & (improvements > -100)
         valid_improvements = improvements[valid_improvement_mask]
-        valid_quad = vs_policy[valid_improvement_mask]
         valid_times = flattened_data["next", "observation", "aux", "time"][valid_improvement_mask]
+        valid_times = valid_times.to(torch.float32)
 
         # Calculate improvement metrics
         if valid_improvements.numel() > 0:
@@ -179,10 +178,6 @@ def log_training_metrics(
             avg_time = valid_times.mean().item()
             min_time = valid_times.min().item()
             max_time = valid_times.max().item()
-
-            avg_vs_policy = valid_quad.mean().item()
-            max_vs_policy = valid_quad.max().item()
-            min_vs_policy = valid_quad.min().item()
 
             if valid_improvements.numel() > 1:
                 std_improvement = valid_improvements.std().item()
@@ -251,9 +246,6 @@ def log_training_metrics(
                     "batch/mean_improvement": avg_improvement,
                     "batch/max_improvement": max_improvement,
                     "batch/min_improvement": min_improvement,
-                    "batch/mean_vs_policy": avg_vs_policy,
-                    "batch/max_vs_policy": max_vs_policy,
-                    "batch/min_vs_policy": min_vs_policy,
                     "batch/mean_time": avg_time,
                     "batch/max_time": max_time,
                     "batch/min_time": min_time,
@@ -277,6 +269,7 @@ def run_ppo(
     optimizer: Optional[torch.optim.Optimizer] = None,
     lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
     seed: int = 0,
+    eval_location = None,
 ):
     if logging_config is not None and (logging_frequency := logging_config.stats_interval):
         wandb.define_metric("batch/n_updates")
@@ -433,10 +426,7 @@ def run_ppo(
     max_performance = 0.0
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
-        metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0)
-        if eval_config.pickle_path is not None:
-            if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-                max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+        metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0, eval_location=eval_location)
 
     training.info("Starting PPO training loop")
 
@@ -547,7 +537,7 @@ def run_ppo(
 
         if should_eval(n_collections, eval_config=eval_config):
             collector.policy.eval()
-            metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+            metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
             if eval_config.pickle_path is not None:
                 if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
                     max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
@@ -581,7 +571,7 @@ def run_ppo(
 
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
-        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
 
     save_checkpoint(n_collections, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
@@ -597,6 +587,7 @@ def run_ppo_lstm(
     optimizer: Optional[torch.optim.Optimizer] = None,
     lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
     seed: int = 0,
+    eval_location = None,
 ):
     if logging_config is not None and (logging_frequency := logging_config.stats_interval):
         wandb.define_metric("batch/n_updates")
@@ -781,7 +772,7 @@ def run_ppo_lstm(
     # Initial evaluation
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
-        run_evaluation(collector.policy, eval_envs, eval_config, 0, 0, 0)
+        run_evaluation(collector.policy, eval_envs, eval_config, 0, 0, 0, eval_location=eval_location)
 
     start_t = time.perf_counter()
 
@@ -858,7 +849,7 @@ def run_ppo_lstm(
             lr_scheduler.step()
 
         if should_eval(n_collections, eval_config=eval_config):
-            run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+            run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at update: {n_updates}")
@@ -872,7 +863,7 @@ def run_ppo_lstm(
 
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
-        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
 
     save_checkpoint(
         n_collections,

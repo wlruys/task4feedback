@@ -142,6 +142,22 @@ public:
     }
   }
 
+  virtual std::vector<timecount_t> get_duration_vector() {
+    return task_durations;
+  }
+
+  virtual void set_duration_vector(const std::vector<timecount_t> &durations) {
+    task_durations = durations;
+  }
+
+  virtual std::vector<priority_t> get_priority_vector() {
+    return mapping_priority;
+  }
+
+  virtual void set_priority_vector(const std::vector<priority_t> &priorities) {
+    mapping_priority = priorities;
+  }
+
   virtual void generate_priority(StaticTaskInfo &task_info) {
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
       //set_priority(task_id, sample_priority(task_id));

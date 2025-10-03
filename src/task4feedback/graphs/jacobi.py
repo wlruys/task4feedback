@@ -1097,8 +1097,6 @@ class PartitionMapper:
             local_id = i
             graph = simulator.input.graph
 
-            print("HERE")
-
             if not isinstance(graph, JacobiGraph):
                 level = 0 
             else:
@@ -1132,14 +1130,14 @@ class BlockCyclicMapper(PartitionMapper):
         else:
             raise ValueError("Either mapper or geometry must be provided for BlockCyclicMapper")
 
-class RowCylicMapper(PartitionMapper):
+class RowCyclicMapper(PartitionMapper):
 
     def __init__(self, mapper: Optional[Self] = None, geometry: Optional[Geometry] = None, n_devices: int = 4, offset: int = 1):
         self.level_start = 0
         self.offset = offset
         self.geometry = geometry
         if mapper is not None:
-            assert isinstance(mapper, RowCylicMapper), "Mapper must be of type RowCylicMapper, is " + str(type(mapper))
+            assert isinstance(mapper, RowCyclicMapper), "Mapper must be of type RowCylicMapper, is " + str(type(mapper))
             self.cell_to_mapping = mapper.cell_to_mapping
         elif geometry is not None:
             n_cells = len(geometry.cells)

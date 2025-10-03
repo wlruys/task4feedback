@@ -25,6 +25,10 @@ void init_task_noise_ext(nb::module_ &m) {
            nb::rv_policy::reference_internal)
       .def("get_durations", nb::overload_cast<>(&TaskNoise::get_durations, nb::const_),
            nb::rv_policy::reference_internal)
+      .def("get_priority_vector", &TaskNoise::get_priority_vector)
+      .def("set_priority_vector", &TaskNoise::set_priority_vector, "priorities"_a)
+      .def("get_duration_vector", &TaskNoise::get_duration_vector)
+      .def("set_duration_vector", &TaskNoise::set_duration_vector, "durations"_a)     
       .def("randomize_duration", &TaskNoise::generate_duration)
       .def("randomize_priority", &TaskNoise::generate_priority);
 

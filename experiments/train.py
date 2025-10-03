@@ -7,6 +7,7 @@ from helper.graph import make_graph_builder
 from helper.env import make_env
 from helper.model import create_td_actor_critic_models
 from helper.algorithm import create_optimizer, create_lr_scheduler
+from helper.eval import * 
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
@@ -28,6 +29,7 @@ import torch
 import numpy
 import random
 
+from helper.eval import EvalLocation, lookup_eval_location
 
 class GitInfo(Callback):
     def on_job_start(self, config: DictConfig, **kwargs) -> None:
@@ -77,6 +79,13 @@ def configure_training(cfg: DictConfig):
 
     eval_config = instantiate(cfg.eval)
 
+    eval_location = lookup_eval_location(cfg)
+    if eval_location is None:
+        create_evals(cfg)
+        eval_location = lookup_eval_location(cfg)
+    else:
+        print("Loading evaluations from ", eval_location)
+
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -104,6 +113,7 @@ def configure_training(cfg: DictConfig):
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             seed=cfg.seed,
+            eval_location=eval_location,
         )
     else:
         run_ppo(
@@ -115,61 +125,62 @@ def configure_training(cfg: DictConfig):
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             seed=cfg.seed,
+            eval_location=eval_location,
         )
 
 
-@hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="4x4x16_static_cnn.yaml", version_base=None)
 def main(cfg: DictConfig):
     # cfg.graph.config.workload_args.traj_type exist
-    if cfg.graph.type == "jacobi":
+    # if cfg.graph.type == "jacobi":
 
-        def closest_ratio_string(value: float) -> str:
-            mapping = {10: "10", 1: "1", 0.1: "0.1"}
-            closest = min(mapping.keys(), key=lambda x: abs(value - x))
-            return mapping[closest]
+    #     def closest_ratio_string(value: float) -> str:
+    #         mapping = {10: "10", 1: "1", 0.1: "0.1"}
+    #         closest = min(mapping.keys(), key=lambda x: abs(value - x))
+    #         return mapping[closest]
 
-        interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
-        boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
+    #     interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
+    #     boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
 
-        interior_ratio = closest_ratio_string(interior_ratio)
-        boundary_ratio = closest_ratio_string(boundary_ratio)
-        checkpoint_path = Path(cfg.wandb.dir)
-        if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
-            graph_name = cfg.graph.config.workload_args.traj_type
-        else:
-            graph_name = "static"
-        if "Dilation" in cfg.network.layers.state._target_:
-            if "Uncond" in cfg.network.layers.state._target_:
-                network = "UncondCNN"
-            else:
-                network = "CNN"
-        elif "Vector" in cfg.network.layers.state._target_:
-            network = "Vector"
-        elif "GNN" in cfg.network.layers.state._target_:
-            network = "GNN"
-        else:
-            print(cfg.network.layers.state._target_)
-            raise ValueError("Unknown network type in cfg.network.layers.state._target_")
-        checkpoint_path = (
-            checkpoint_path.parent
-            / "model_checkpoints"
-            / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
-        )
-        cfg.eval.pickle_path = f"./pickled_evaluation/{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{graph_name}_{interior_ratio}-{boundary_ratio}-1.pkl"
-        # find if the file exists
-        if not os.path.exists(cfg.eval.pickle_path):
-            # replace - with :
-            cfg.eval.pickle_path = cfg.eval.pickle_path.replace("-", ":")
-            if not os.path.exists(cfg.eval.pickle_path):
-                print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
-                cfg.eval.pickle_path = None
+    #     interior_ratio = closest_ratio_string(interior_ratio)
+    #     boundary_ratio = closest_ratio_string(boundary_ratio)
+    #     checkpoint_path = Path(cfg.wandb.dir)
+    #     if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
+    #         graph_name = cfg.graph.config.workload_args.traj_type
+    #     else:
+    #         graph_name = "static"
+    #     if "Dilation" in cfg.network.layers.state._target_:
+    #         if "Uncond" in cfg.network.layers.state._target_:
+    #             network = "UncondCNN"
+    #         else:
+    #             network = "CNN"
+    #     elif "Vector" in cfg.network.layers.state._target_:
+    #         network = "Vector"
+    #     elif "GNN" in cfg.network.layers.state._target_:
+    #         network = "GNN"
+    #     else:
+    #         print(cfg.network.layers.state._target_)
+    #         raise ValueError("Unknown network type in cfg.network.layers.state._target_")
+    #     checkpoint_path = (
+    #         checkpoint_path.parent
+    #         / "model_checkpoints"
+    #         / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
+    #     )
+    #     cfg.eval.pickle_path = f"./pickled_evaluation/{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{graph_name}_{interior_ratio}-{boundary_ratio}-1.pkl"
+    #     # find if the file exists
+    #     if not os.path.exists(cfg.eval.pickle_path):
+    #         # replace - with :
+    #         cfg.eval.pickle_path = cfg.eval.pickle_path.replace("-", ":")
+    #         if not os.path.exists(cfg.eval.pickle_path):
+    #             print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
+    #             cfg.eval.pickle_path = None
 
-        # Make a dir if not exists
-        checkpoint_path.mkdir(parents=True, exist_ok=True)
-        cfg.logging.best_policy_dir = str(checkpoint_path)
-        print(f"Best Policy dir: {cfg.logging.best_policy_dir}")
-        cfg.logging.best_policy_name = f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
-        print(f"Best Policy name: {cfg.logging.best_policy_name}")
+    #     # Make a dir if not exists
+    #     checkpoint_path.mkdir(parents=True, exist_ok=True)
+    #     cfg.logging.best_policy_dir = str(checkpoint_path)
+    #     print(f"Best Policy dir: {cfg.logging.best_policy_dir}")
+    #     cfg.logging.best_policy_name = f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
+    #     print(f"Best Policy name: {cfg.logging.best_policy_name}")
 
     if cfg.wandb.enabled:
         wandb.init(
@@ -177,7 +188,6 @@ def main(cfg: DictConfig):
             config=OmegaConf.to_container(cfg, resolve=True),
             name=cfg.wandb.name,
             group=cfg.wandb.group,
-            # name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
             tags=cfg.wandb.tags,
         )

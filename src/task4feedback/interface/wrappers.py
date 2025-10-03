@@ -1344,7 +1344,6 @@ class ExternalObserver:
                 "candidates": _make_index_tensor(spec.max_candidates),
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
-                "vs_policy": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.zeros((1), dtype=torch.float32),
                 "device_memory": torch.zeros(1 * (spec.max_devices), dtype=torch.float32),
@@ -1615,7 +1614,6 @@ class ExternalObserver:
         output.set_at_(("aux", "progress"), -2.0, 0)
         output.set_at_(("aux", "time"), self.simulator.time, 0)
         output.set_at_(("aux", "improvement"), -100.0, 0)
-        output.set_at_(("aux", "vs_policy"), -100.0, 0)
         # output["hetero_data"] = observation_to_heterodata(output)
 
         return output
@@ -1651,7 +1649,6 @@ class CandidateObserver(ExternalObserver):
                 "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
                 "z_ch": torch.zeros((8), dtype=torch.float32),
                 "z_spa": torch.zeros((8), dtype=torch.float32),
-                "vs_policy": torch.zeros((1), dtype=torch.float32),
             }
         )
 
@@ -1814,7 +1811,6 @@ class CnnBatchTaskObserver(ExternalObserver):
                 "device_memory": torch.zeros(1 * (spec.max_devices), dtype=torch.float32),
                 "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
                 "z_ch": torch.zeros((8), dtype=torch.float32),
-                "vs_policy": torch.zeros((1), dtype=torch.float32),
                 "z_spa": torch.zeros((8), dtype=torch.float32),
             }
         )

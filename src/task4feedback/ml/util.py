@@ -18,6 +18,10 @@ from task4feedback.ml.env import RuntimeEnv
 import pickle
 from torchrl.envs import step_mdp
 import math
+import pathlib
+from collections import defaultdict
+from types import MappingProxyType
+from typing import Any, Mapping
 
 
 def compute_advantage(td: TensorDict):
@@ -262,21 +266,30 @@ def eval_pickled_env(
     policy,
     env,
     exploration_type: ExplorationType,
-    pickled_states: Dict,
+    eval_location = None,
     samples: int = 1,
 ):
     env_rewards = []
     env_times = []
-    env_vsEFT = []
-    env_vsPolicy = []
     metrics = {}
     last_env = None
+
+    eval_state = pickle.load(open(eval_location.file_path, "rb"))
+    
+    eft_policy_str = "EFT"
+
+    workloads = eval_state.workloads[eft_policy_str]
+    locations = eval_state.init_locs[eft_policy_str]
+
+    vsPolicy = defaultdict(list)
+
+
     for i in range(samples):
         env.reset_for_evaluation()
         env.disable_reward()
         with set_exploration_type(exploration_type), torch.no_grad():
-            saved_loc = pickled_states["init_locs"][i % len(pickled_states["init_locs"])]
-            workload = pickled_states["workloads"][i % len(pickled_states["workloads"])]
+            saved_loc = locations[i % len(locations)]
+            workload = workloads[i % len(workloads)]
             env.reset_to_state(saved_loc, workload)
             tensordict = env.rollout(policy=policy, max_steps=100000)
 
@@ -288,14 +301,13 @@ def eval_pickled_env(
         if hasattr(env, "simulator") and hasattr(env.simulator, "time"):
             completion_time = env.simulator.time
             env_times.append(completion_time)
-            if n_collections == 0:
-                if pickled_states["eft_times"][i] != env._get_baseline("EFT"):
-                    training.warning(f"Environment {i} EFT time mismatch: {pickled_states['eft_times'][i]} " f"!= {env._get_baseline('EFT')}")
-                else:
-                    training.info(f"Environment {i} EFT time match: {pickled_states['eft_times'][i]} == {env._get_baseline('EFT')}")
 
-        env_vsEFT.append(pickled_states["eft_times"][i] / completion_time if completion_time > 0 else 0.0)
-        env_vsPolicy.append(pickled_states["policy_times"][i] / completion_time if completion_time > 0 else 0.0)
+            saved_eft_time = eval_state.policy_times[eft_policy_str][i % len(workloads)]
+            observed_eft_time = env._get_baseline("EFT")
+            if not math.isclose(saved_eft_time, observed_eft_time, rel_tol=1e-2):
+                training.warning(f"Environment {i} EFT time mismatch: {saved_eft_time} " f"!= {observed_eft_time}")
+                raise ValueError("EFT time mismatch! Aborting evaluation.")
+
         env.enable_reward()
 
     # time metrics
@@ -308,22 +320,12 @@ def eval_pickled_env(
         std_time = 0.0
     metrics["mean_time"] = mean_time
 
-    # vsEFT / vsQuad metrics
-    if env_vsEFT:
-        metrics["mean_vsEFT"] = sum(env_vsEFT) / len(env_vsEFT)
-        metrics["std_vsEFT"] = torch.std(torch.tensor(env_vsEFT, dtype=torch.float64)).item()
-    else:
-        metrics["mean_vsEFT"] = 0.0
-        metrics["std_vsEFT"] = 0.0
+    for policy_str, policy_times in eval_state.policy_times.items():
+        sum_env_times = sum(env_times)
+        sum_policy_times = sum([policy_times[i % len(policy_times)] for i in range(len(env_times))])
+        metrics[f"mean_vs_{policy_str}"] = sum_policy_times / sum_env_times if sum_env_times > 0 else 0.0
 
-    if env_vsPolicy:
-        metrics["mean_vsPolicy"] = sum(env_vsPolicy) / len(env_vsPolicy)
-        metrics["std_vsPolicy"] = torch.std(torch.tensor(env_vsPolicy, dtype=torch.float64)).item()
-    else:
-        metrics["mean_vsPolicy"] = 0.0
-        metrics["std_vsPolicy"] = 0.0
-
-    training.info(f"Evaluation results: mean_time={mean_time}, " f"mean_vsEFT={metrics['mean_vsEFT']}, mean_vsPolicy={metrics['mean_vsPolicy']}")
+    training.info(f"Evaluation results: mean_time={mean_time} +/- {std_time}" + ", ".join([f"{k}={v:.2f}" for k, v in metrics.items() if k.startswith("mean_vs_")]))
 
     last_env = env
 
@@ -340,28 +342,6 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
         env.disable_reward()
         with set_exploration_type(exploration_type), torch.no_grad():
             # check_env_specs(env)
-            # n_tasks = len(env.get_graph())
-            # decision_per_epoch = 100
-            # epochs = int(math.ceil(n_tasks / decision_per_epoch ))
-            # input_td = None
-
-            # for epoch in range(epochs):
-            #     if input_td is None:
-            #         tensordict = env.rollout(
-            #             policy=policy,
-            #             max_steps=100,
-            #             return_contiguous=False,
-            #         )
-            #     else:
-            #         tensordict = env.rollout(
-            #             policy=policy,
-            #             max_steps=100,
-            #             return_contiguous=False,
-            #             auto_reset=False,
-            #             tensordict=input_td
-            #         )
-            #     input_td = step_mdp(tensordict[..., -1])
-            #     print(f"Eval epoch {epoch+1}/{epochs} completed")
             start_t = time.perf_counter()
             tensordict = env.rollout(
                 policy=policy,
@@ -388,7 +368,11 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
 
     metrics["mean_time"] = mean_time
 
-    training.info(f"Evaluation results: mean_time={mean_time}")
+    eft_baseline = env._get_baseline("EFT") if hasattr(env, "_get_baseline") else None
+    if eft_baseline is not None and eft_baseline > 0:
+        metrics["mean_vs_EFT"] = eft_baseline / mean_time if mean_time > 0 else 0.0
+
+    training.info(f"Evaluation results: mean_time={mean_time} +/- {std_time}, "f"mean_vs_EFT={metrics.get('mean_vs_EFT', 'N/A')}")
 
     last_env = env
 
@@ -396,7 +380,7 @@ def eval_env(n_collections: int, policy, env, exploration_type: ExplorationType,
 
 
 
-def evaluate_policy(n_collections: int, policy, eval_envs: list[RuntimeEnv], config: EvaluationConfig, exploration_type: str, metrics: dict) -> list[RuntimeEnv]:
+def evaluate_policy(n_collections: int, policy, eval_envs: list[RuntimeEnv], config: EvaluationConfig, exploration_type: str, metrics: dict, eval_location=None) -> list[RuntimeEnv]:
 
     env = None
     metrics[f"eval/{str(exploration_type)}"] = {}
@@ -438,19 +422,11 @@ def evaluate_policy(n_collections: int, policy, eval_envs: list[RuntimeEnv], con
         else:
             raise ValueError(f"Unknown exploration type: {exploration_type}")
 
-        if config.pickle_path is not None:
-            if config.pickled_states is None:
-                try:
-                    with open(config.pickle_path, "rb") as f:
-                        config.pickled_states = pickle.load(f)
-                except FileNotFoundError:
-                    print(f"[ERROR] Pickle file not found: {config.pickle_path} - skipping pickled evaluation")
-                    config.pickle_path = None # disable for future calls
-                    config.pickled_states = None
-            if config.pickled_states is not None:
-                env_eval_metrics, output_env = eval_pickled_env(n_collections, policy, env, exploration_type_enum, samples=config.samples, pickled_states=config.pickled_states)
-                metrics[f"eval/{str(exploration_type)}"] = env_eval_metrics
-                return [output_env]
+        if eval_location is not None:
+            print("Evaluating pickled environment from ", eval_location)
+            env_eval_metrics, output_env = eval_pickled_env(n_collections, policy, env, exploration_type_enum, samples=config.samples, eval_location=eval_location)
+            metrics[f"eval/{str(exploration_type)}"] = env_eval_metrics
+            return [output_env]
 
         for seed in config.seeds:
             metrics[f"eval/{str(exploration_type)}"][f"env_{i}_{seed}"] = {}
@@ -508,12 +484,13 @@ def run_evaluation(
     n_collections: int = 0,
     n_updates: int = 0,
     n_samples: int = 0,
+    eval_location = None,
 ):
     metrics = {}
     video_log = {}
 
     for exploration_type in config.exploration_types:
-        viz_envs = evaluate_policy(n_collections, policy, eval_envs, config, exploration_type, metrics)
+        viz_envs = evaluate_policy(n_collections, policy, eval_envs, config, exploration_type, metrics, eval_location=eval_location)
 
         if (config.animation_interval > 0) and (n_collections % config.animation_interval == 0):
             visualize_envs(n_collections, viz_envs, config, exploration_type, video_log)

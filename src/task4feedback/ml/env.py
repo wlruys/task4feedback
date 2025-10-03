@@ -122,6 +122,13 @@ class RuntimeEnv(EnvBase):
         self.z_spa = sample_vector(sample=self.sample_z)
         self.z_ch = sample_vector(sample=self.sample_z)
 
+        print("cell locations", self.get_graph().get_cell_locations(as_dict=False))
+
+        graph = self.get_graph()
+        locs = self.get_graph().get_cell_locations(as_dict=False)
+        self.get_graph().set_cell_locations([-1 for _ in range(graph.nx * graph.ny)])
+        self.get_graph().set_cell_locations(locs, step=0)
+
         if self.change_location:
             graph = simulator_factory[self.active_idx].input.graph
             if self.only_gpu and (0 in self.location_list):
@@ -166,7 +173,6 @@ class RuntimeEnv(EnvBase):
         self.progress_key = ("aux", "progress")
         self.baseline_key = ("aux", "baseline")
         self.improvement_key = ("aux", "improvement")
-        self.vs_policy_key = ("aux", "vs_policy")
         self.z_ch_key = ("aux", "z_ch")
         self.z_spa_key = ("aux", "z_spa")
         self.time_key = ("aux", "time")
@@ -322,7 +328,6 @@ class RuntimeEnv(EnvBase):
         baseline = max(1.0, self.EFT_baseline)
         obs.set_at_(self.progress_key, progress, 0)
         obs.set_at_(self.baseline_key, baseline, 0)
-        obs.set_at_(self.vs_policy_key, -100, 0)
         return obs
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -333,7 +338,6 @@ class RuntimeEnv(EnvBase):
         time = obs[self.time_key].item()
         improvement = (self.EFT_baseline) / (time)
         obs.set_at_(self.improvement_key, improvement, 0)
-        # obs.set_at_(self.vs_policy_key, best_policy / time, 0)
         reward = (-time) / (self.EFT_baseline)
         if self.verbose:
             print(
