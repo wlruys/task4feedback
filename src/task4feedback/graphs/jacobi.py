@@ -353,6 +353,9 @@ class JacobiGraph(ComputeDataGraph):
                 # Raise a warning if data_req exceeds half of maxmem
                 if system is not None and data_req > system.arch_to_maxmem[DeviceType.GPU] / 2:
                     print(f"Warning: Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds half of the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB")
+                elif system is not None and data_req > system.arch_to_maxmem[DeviceType.GPU]:
+                    print(f"Error: Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB")
+                    exit()
                 self.max_requirement = max(self.max_requirement, data_req)
                 # if data_req > 80e9:
                 #     print(f"Task {task_id} requires {data_req/1e9} GB of data")
@@ -1556,8 +1559,8 @@ class GATObserverFactory(GATExternalObserverFactory):
         task_feature_factory = FeatureExtractorFactory()
         data_feature_factory = FeatureExtractorFactory()
 
-        #task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        #task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        # task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
 
         device_feature_factory = FeatureExtractorFactory()
         device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
@@ -1594,7 +1597,7 @@ class GATObserverFactory(GATExternalObserverFactory):
             task_feature_factory.add(fastsim.TaskStateFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
             data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-            data_feature_factory.add(fastsim.DataCoordinateFeature)      
+            data_feature_factory.add(fastsim.DataCoordinateFeature)
 
         super().__init__(
             spec,

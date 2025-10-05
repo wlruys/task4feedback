@@ -1,3 +1,4 @@
+import glob
 from pathlib import Path
 from ..models import *
 from ..util import *
@@ -259,6 +260,7 @@ def log_training_metrics(
 
         training.info(f"Average entropy {loss['entropy'].item()}")
         wandb.log(log_payload)
+        return log_payload
 
 
 def run_ppo(
@@ -513,9 +515,8 @@ def run_ppo(
                 batch = replay_buffer.sample(ppo_config.minibatch_size)
                 batch.to(ppo_config.update_device, non_blocking=True)
                 loss = update(batch, loss_module, optimizer, ppo_config)
-
                 if should_log(n_updates, logging_config):
-                    log_training_metrics(
+                    wandb_log = log_training_metrics(
                         flattened_data,
                         tensordict_data,
                         loss,
@@ -525,6 +526,30 @@ def run_ppo(
                         i,
                         n_samples,
                     )
+                    if wandb_log.get("batch/mean_improvement", -1) > max_performance:
+                        max_performance = wandb_log["batch/mean_improvement"]
+                        filename = f"{max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
+                        checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
+                        # Remove all old checkpoints with the same seed
+                        pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
+                        for old_file in glob.glob(pattern):
+                            if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
+                                try:
+                                    os.remove(old_file)
+                                    training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
+                                except OSError as e:
+                                    training.warning(f"Failed to remove {old_file}: {e}")
+                        training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
+                        if logging_config.best_policy_dir is not None:
+                            save_checkpoint(
+                                n_collections,
+                                policy_module=collector.policy,
+                                value_module=loss_module.critic_network,
+                                optimizer=optimizer,
+                                lr_scheduler=lr_scheduler,
+                                filename=filename,
+                                checkpoint_dir=logging_config.best_policy_dir,
+                            )
 
         collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
         update_end_t = time.perf_counter()
@@ -537,20 +562,32 @@ def run_ppo(
         if should_eval(n_collections, eval_config=eval_config):
             collector.policy.eval()
             metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
-            if eval_config.pickle_path is not None:
-                if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-                    max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
-                    training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
-                    if logging_config.best_policy_dir is not None:
-                        save_checkpoint(
-                            n_collections,
-                            policy_module=collector.policy,
-                            value_module=loss_module.critic_network,
-                            optimizer=optimizer,
-                            lr_scheduler=lr_scheduler,
-                            filename=f"{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{max_performance:.3f}_{seed}.pt",
-                            checkpoint_dir=logging_config.best_policy_dir,
-                        )
+            # if eval_config.pickle_path is not None:
+            #     if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
+            #         max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+
+            #         filename = f"{max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
+            #         checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
+            #         # Remove all old checkpoints with the same seed
+            #         pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
+            #         for old_file in glob.glob(pattern):
+            #             if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
+            #                 try:
+            #                     os.remove(old_file)
+            #                     training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
+            #                 except OSError as e:
+            #                     training.warning(f"Failed to remove {old_file}: {e}")
+            #         training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
+            #         if logging_config.best_policy_dir is not None:
+            #             save_checkpoint(
+            #                 n_collections,
+            #                 policy_module=collector.policy,
+            #                 value_module=loss_module.critic_network,
+            #                 optimizer=optimizer,
+            #                 lr_scheduler=lr_scheduler,
+            #                 filename=filename,
+            #                 checkpoint_dir=logging_config.best_policy_dir,
+            #             )
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at collection {n_collections}")

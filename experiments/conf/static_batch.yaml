@@ -3,7 +3,7 @@ defaults:
   - reward: ieft
   - system: 4h100
   - feature: cnn_batch
-  - network: dilation_cnn_batch
+  - network: cond_dilation_cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -87,6 +87,6 @@ wandb:
 
 eval:
   animation_interval: 0
-  eval_interval: 25
+  eval_interval: 0
   samples: 10
 

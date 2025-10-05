@@ -51,10 +51,10 @@ size = comm.Get_size()
 
 def configure_training(cfg: DictConfig):
     # start_logger()
-    step = 5e9
-    start = 30e9
+    step = 1e9
+    start = 40e9
     samples = 10
-    level_chunks = 64
+    level_chunks = 32
     mem_list = []
     const_policy_samples: list[list[float]] = []
     const_eft_samples: list[list[float]] = []
@@ -125,7 +125,7 @@ def configure_training(cfg: DictConfig):
 
         mem_list.append(start / 1e9)
         start += step
-        if float(numpy.mean(const_samples_policy)) > 1.5:
+        if float(numpy.mean(const_samples_policy)) > 1.1:
             break
 
     fig, ax = plt.subplots()
@@ -151,7 +151,7 @@ def configure_training(cfg: DictConfig):
         ax.text(
             mem,
             mean + 0.05,
-            f"{mean:.1f}",
+            f"{mean:.2f}",
             ha="center",
             va="bottom",
             fontsize=10,

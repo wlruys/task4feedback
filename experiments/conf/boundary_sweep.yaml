@@ -18,7 +18,7 @@ defaults:
 sweep:
   n_samples: 10
   list: [0.0078125, 0.015625, 0.03125, 0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
-  exps: ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
+  exps: ["EFT", "BlockCyclic(2x2)","BlockCyclic(1x1)", "ParMETIS", "ColWise"]
   interior_ratio: 1 # Interior / Compute time
 
 parmetis:

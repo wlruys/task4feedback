@@ -68,7 +68,7 @@ wandb:
 
 eval:
   animation_interval: 0
-  eval_interval: 25
+  eval_interval: 0
   max_frames: 400
   video_seconds: 15
   samples: 10
@@ -81,4 +81,5 @@ sweep:
   level_size_step: 1e9
   start_mem: 1e9
   end_mem: 200e9
-  exps: ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
+  exps: ["EFT", "BlockCyclic(2x2)","BlockCyclic(1x1)", "ParMETIS", "ColWise"]
+  policy: "Oracle(32)"

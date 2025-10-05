@@ -124,7 +124,7 @@ def main(cfg: DictConfig):
     if cfg.graph.mesh._target_ == "task4feedback.graphs.mesh.generate_quad_mesh":
 
         def closest_ratio_string(value: float) -> str:
-            mapping = {10: "10", 1: "1", 0.1: "0.1"}
+            mapping = {100: "100", 10: "10", 1: "1", 0.1: "0.1"}
             closest = min(mapping.keys(), key=lambda x: abs(value - x))
             return mapping[closest]
 
@@ -150,12 +150,13 @@ def main(cfg: DictConfig):
         else:
             print(cfg.network.layers.state._target_)
             raise ValueError("Unknown network type in cfg.network.layers.state._target_")
-        checkpoint_path = (
-            checkpoint_path.parent
-            / "model_checkpoints"
-            / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
-        )
-        cfg.eval.pickle_path = f"./pickled_evaluation/{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{graph_name}_{interior_ratio}-{boundary_ratio}-1.pkl"
+        if cfg.graph.env.change_duration:
+            graph_name = "noise"
+
+        run_name = f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{int(float(cfg.system.mem)/1e9)}GB"
+
+        checkpoint_path = checkpoint_path.parent / "model_checkpoints" / f"{run_name}"
+        cfg.eval.pickle_path = f"./pickled_evaluation/{run_name}.pkl"
         # find if the file exists
         if not os.path.exists(cfg.eval.pickle_path):
             # replace - with :
@@ -168,7 +169,7 @@ def main(cfg: DictConfig):
         checkpoint_path.mkdir(parents=True, exist_ok=True)
         cfg.logging.best_policy_dir = str(checkpoint_path)
         print(f"Best Policy dir: {cfg.logging.best_policy_dir}")
-        cfg.logging.best_policy_name = f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
+        cfg.logging.best_policy_name = f"{cfg.feature.observer.version}"
         print(f"Best Policy name: {cfg.logging.best_policy_name}")
 
     if cfg.wandb.enabled:

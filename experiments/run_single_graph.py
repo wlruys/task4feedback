@@ -51,66 +51,87 @@ size = comm.Get_size()
 def configure_training(cfg: DictConfig):
     # start_logger()
 
-    option = "Oracle"
-    if rank == 0:
-        graph_builder = make_graph_builder(cfg)
-        env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
-        env._reset()
-        env._reset()
-        graph = env.get_graph()
-        if isinstance(graph, DynamicJacobiGraph):
-            workload = graph.get_workload()
-            workload.animate_workload(show=False, title="outputs/workload_animation.mp4")
-        exit()
+    option = "EFT"
+    for i in range(1):
+        if rank == 0:
+            graph_builder = make_graph_builder(cfg)
+            env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
+            graph = env.get_graph()
+            env.reset()
 
-    if option == "EFT" and rank == 0:
-        env.simulator.disable_external_mapper()
-    elif option == "Oracle" and rank == 0:
-        graph.mincut_per_levels(
-            bandwidth=cfg.system.d2d_bw,
-            mode="metis",
-            offset=1,
-            level_chunks=16,
-        )
-        graph.align_partitions()
-        env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
-    elif option == "BlockCyclic":
-        env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=2, offset=1)
-    elif option == "GraphMETISMapper":
-        env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = GraphMETISMapper(graph=graph, n_devices=cfg.system.n_devices - 1, offset=1)
-    elif option == "Quad":
-        env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = JacobiQuadrantMapper(n_devices=cfg.system.n_devices - 1, graph=graph, offset=1)
-    elif option == "Cyclic":
-        env.simulator.enable_external_mapper()
-        env.simulator.external_mapper = JacobiRoundRobinMapper(n_devices=cfg.system.n_devices - 1, offset=1, setting=0)
-    elif option == "ParMETIS":
-        run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg)
-    else:
-        raise ValueError(f"Unknown option: {option}")
+            inf_cfg = cfg.copy()
+            inf_cfg.system.mem = 999999e9
+            inf_env = make_env(graph_builder=graph_builder, cfg=inf_cfg, normalization=False)
+            inf_env.reset()
+            # if isinstance(graph, DynamicJacobiGraph):
+            #     workload = graph.get_workload()
+            #     workload.animate_workload(show=False, title="outputs/workload_animation.mp4")
+            # exit()
 
-    # Added to check priority of each task
-    sim: SimulatorDriver = env.simulator
-    # for i in range(16 * 4):
-    #     print(f"Task ID: {i} Mapping Priority: {sim.get_mapping_priority(i)}")
+        if option == "EFT" and rank == 0:
+            env.simulator.disable_external_mapper()
+            env.simulator.run()
+            inf_env.simulator.disable_external_mapper()
+            inf_env.simulator.run()
+        elif option == "Oracle" and rank == 0:
+            graph.mincut_per_levels(
+                bandwidth=cfg.system.d2d_bw,
+                mode="metis",
+                offset=1,
+                level_chunks=1,
+            )
+            graph.align_partitions()
+            env.simulator.enable_external_mapper()
+            env.simulator.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
+        elif option == "BlockCyclic":
+            env.simulator.enable_external_mapper()
+            env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=1, offset=1)
+            env.simulator.run()
+            inf_env.simulator.enable_external_mapper()
+            inf_env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=1, offset=1)
+            inf_env.simulator.run()
+        elif option == "GraphMETISMapper":
+            env.simulator.enable_external_mapper()
+            env.simulator.external_mapper = GraphMETISMapper(graph=graph, n_devices=cfg.system.n_devices - 1, offset=1)
+        elif option == "Quad":
+            env.simulator.enable_external_mapper()
+            env.simulator.external_mapper = JacobiQuadrantMapper(n_devices=cfg.system.n_devices - 1, graph=graph, offset=1)
+        elif option == "Cyclic":
+            env.simulator.enable_external_mapper()
+            env.simulator.external_mapper = JacobiRoundRobinMapper(n_devices=cfg.system.n_devices - 1, offset=1, setting=0)
+        elif option == "ParMETIS":
+            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, itr=0.0001001, ub=1.04)
+            run_parmetis(sim=inf_env.simulator if rank == 0 else None, cfg=cfg, itr=0.0001001, ub=1.04)
+        else:
+            raise ValueError(f"Unknown option: {option}")
 
-    if rank == 0:
-        config = instantiate(cfg.eval)
-        # start_logger()
-        env.simulator.run()
-        env.simulator.external_mapper = ExternalMapper()
-        eft = env._get_baseline("EFT")
-        print(env.simulator.time, env._get_baseline("EFT"), f"{eft/env.simulator.time:.2f}x")
-        print("Interval: ", int(env.simulator.time / config.max_frames))
-        start_t = time.perf_counter()
-        # animate_mesh_graph(env=env, folder=Path("outputs/"))
-        end_t = time.perf_counter()
-        print("Plotting time:", end_t - start_t)
+        if rank == 0:
+            const_time = env.simulator.time
+            inf_time = inf_env.simulator.time
+            print(f"{option} Time: {const_time}, Inf Time: {inf_time}, diff factor: {const_time/inf_time:.2f}")
+            print(env.simulator.max_mem_usage / 1e9, inf_env.simulator.max_mem_usage / 1e9)
+            if const_time < inf_time:
+                print("Warning: inf time is greater than Inf time!")
 
-        # animate_mesh_graph(env=env)
+    # # Added to check priority of each task
+    # sim: SimulatorDriver = env.simulator
+    # # for i in range(16 * 4):
+    # #     print(f"Task ID: {i} Mapping Priority: {sim.get_mapping_priority(i)}")
+
+    # if rank == 0:
+    #     config = instantiate(cfg.eval)
+    #     # start_logger()
+    #     env.simulator.run()
+    #     env.simulator.external_mapper = ExternalMapper()
+    #     eft = env._get_baseline("EFT")
+    #     print(env.simulator.time, env._get_baseline("EFT"), f"{eft/env.simulator.time:.2f}x")
+    #     print("Interval: ", int(env.simulator.time / config.max_frames))
+    #     start_t = time.perf_counter()
+    #     animate_mesh_graph(env=env, folder=Path("outputs/"))
+    #     end_t = time.perf_counter()
+    #     print("Plotting time:", end_t - start_t)
+
+    #     # animate_mesh_graph(env=env)
 
 
 @hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
