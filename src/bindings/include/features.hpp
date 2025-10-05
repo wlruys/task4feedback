@@ -1328,6 +1328,23 @@ template <typename Derived> struct IntEdgeFeature : StateEdgeFeature<Derived> {
   }
 };
 
+struct ReadDegreeTaskFeature : public StateFeature<ReadDegreeTaskFeature> {
+  ReadDegreeTaskFeature(const SchedulerState &state)
+      : StateFeature<ReadDegreeTaskFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &read = static_graph.get_read(task_id);
+    auto degree = static_cast<f_t>(read.size());
+    output[0] = 1 / (std::sqrt(1 + degree));
+  }
+};
+
 struct InDegreeTaskFeature : public StateFeature<InDegreeTaskFeature> {
   InDegreeTaskFeature(const SchedulerState &state)
       : StateFeature<InDegreeTaskFeature>(state, NodeType::TASK) {

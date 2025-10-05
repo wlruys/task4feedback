@@ -16,6 +16,7 @@ observer:
   prev_frames: 1
   batched: true
   version: A
+  add_degree: False
 normalization:
   enabled: true 
   warmup: 20

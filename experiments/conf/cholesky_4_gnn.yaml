@@ -1,7 +1,7 @@
 defaults:
   - cholesky_4.yaml
   - feature: gnn_single
-  - network: gnn_baseline
+  - network: original_gnn_baseline
   - _self_
 
 algorithm:
@@ -11,7 +11,7 @@ algorithm:
 feature:
   observer:
     batched: False
-    version: "K"
+    version: "C"
     add_degree: True
   normalization:
     warmup: 20
@@ -22,7 +22,7 @@ network:
     state:
       hidden_channels: 16
     actor:
-      hidden_channels: 64
+      hidden_channels: 32
     critic:
       hidden_channels: 64
   critic:
@@ -30,3 +30,5 @@ network:
 
 wandb:
   name: GNN-E_IS
+  enabled: true
+  project: chol_deb

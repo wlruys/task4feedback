@@ -960,17 +960,20 @@ class DataIterationGNNStateNet(nn.Module):
         self, 
         feature_config: FeatureDimConfig,
         hidden_channels: int = 16,
-        n_heads: int = 2,
+        n_heads: int = 1,
         add_device_load: bool = False,
         add_progress: bool = False,
         n_devices: int = 5,
         num_layers: int = 1,
-        conv_type: str = "SAGE", #"GATv2",
+        conv_type: str = "GATv2",
+        use_norm: bool = False,
         **_ignored,
     ):
 
         super(DataIterationGNNStateNet, self).__init__()
+        print("INITIALIZING DataIterationGNNStateNet")
 
+        self.use_norm = bool(use_norm)
         self.feature_config = feature_config
         self.n_heads = n_heads
         self.hidden_channels = hidden_channels
@@ -1068,7 +1071,7 @@ class DataIterationGNNStateNet(nn.Module):
                     dropout=0,
                     add_self_loops=False,
                 )
-            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=False, aggr="mean", root_weight=False))
+            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
 
 
             self.data_task_convs.append(
@@ -1081,7 +1084,7 @@ class DataIterationGNNStateNet(nn.Module):
                     dropout=0,
                     add_self_loops=False,
                 )
-            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=False, aggr="mean", root_weight=False))
+            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
 
             self.task_data_norms.append(nn.LayerNorm(hidden_channels))
             self.data_task_norms.append(nn.LayerNorm(hidden_channels))
@@ -1107,7 +1110,6 @@ class DataIterationGNNStateNet(nn.Module):
 
         b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
         b_data = data["data"].batch if isinstance(data, Batch) else None
-
         x_tasks = self.stem_prog["tasks"](data["tasks"].x)
         #x_tasks = self.stem_norm["tasks"](x_tasks)
         x_tasks = self.act(x_tasks)
@@ -1124,7 +1126,8 @@ class DataIterationGNNStateNet(nn.Module):
             (x_data, x_tasks),
             read_edges_masked,
         )
-        tasks_read_data = self.norm_task_read_data(tasks_read_data)
+        if self.use_norm:
+            tasks_read_data = self.norm_task_read_data(tasks_read_data)
         tasks_read_data = self.act(tasks_read_data)
 
         x_tasks= tasks_read_data
@@ -1140,7 +1143,8 @@ class DataIterationGNNStateNet(nn.Module):
             (x_tasks, x_tasks),
             data["tasks", "to", "tasks"].edge_index,
         )
-        tasks_to_tasks = self.norm_tasks_to_tasks(tasks_to_tasks)
+        if self.use_norm:
+            tasks_to_tasks = self.norm_tasks_to_tasks(tasks_to_tasks)
         tasks_to_tasks = self.act(tasks_to_tasks)
 
         x_tasks = self.task_merge_mlp(torch.cat([tasks_from_tasks, tasks_to_tasks], dim=-1))
@@ -1152,7 +1156,8 @@ class DataIterationGNNStateNet(nn.Module):
                 (x_tasks, x_data),
                 read_edges_masked.flip(0),
             )
-            x_data_new = self.data_task_norms[l](x_data_new)
+            if self.use_norm:
+                x_data_new = self.data_task_norms[l](x_data_new)
             x_data_new = self.act(x_data_new)
             #x_data = x_data + x_data_new
 
@@ -1160,7 +1165,8 @@ class DataIterationGNNStateNet(nn.Module):
                 (x_data_new, x_tasks),
                 read_edges_masked,
             )
-            x_tasks_new = self.task_data_norms[l](x_tasks_new)
+            if self.use_norm:
+                x_tasks_new = self.task_data_norms[l](x_tasks_new)
             x_tasks_new = self.act(x_tasks_new)
 
             #x_tasks = x_tasks + x_tasks_new
@@ -1169,7 +1175,8 @@ class DataIterationGNNStateNet(nn.Module):
         data_global = global_mean_pool(x_data, b_data)
 
         global_state = self.global_merge_mlp(torch.cat([tasks_global, data_global], dim=-1))
-        global_state = self.global_merge_norm(global_state)
+        if self.use_norm:
+            global_state = self.global_merge_norm(global_state)
         global_state = self.act(global_state)
 
         g = None 
@@ -1193,7 +1200,8 @@ class DataIterationGNNStateNet(nn.Module):
                     g = torch.cat([g, device_load, device_memory], dim=-1)
 
             g = self.g_mlp(g)
-            g = self.g_norm(g)
+            if self.use_norm:
+                g = self.g_norm(g)
             g = self.act(g)
 
         if b_tasks is not None:

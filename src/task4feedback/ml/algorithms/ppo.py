@@ -389,6 +389,12 @@ def run_ppo(
         loss_vals = loss_module(batch)
         loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
 
+        if loss_vals["kl_approx"] > 0.8:
+            training.warning(f"High KL divergence detected: {loss_vals['kl_approx'].item()}")
+            training.warning("Skipping gradient update to maintain training stability.")
+            optimizer.zero_grad()
+            return loss_vals
+
         # joint_stats(batch, loss_module)
 
         optimizer.zero_grad()
@@ -735,6 +741,12 @@ def run_ppo_lstm(
 
         loss_vals = loss_module(batch)
         loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
+
+        if loss_vals["kl_approx"] > 0.8:
+            training.warning(f"High KL divergence detected: {loss_vals['kl_approx'].item()}")
+            training.warning("Skipping gradient update to maintain training stability.")
+            optimizer.zero_grad()
+            return loss_vals
 
         optimizer.zero_grad()
         loss_value.backward()

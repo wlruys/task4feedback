@@ -2,7 +2,7 @@ _target_: task4feedback.ml.algorithms.PPOConfig
 implementation: torchrl
 workers: 6
 graphs_per_collection: 6
-states_per_collection: 10000
+states_per_collection: 512
 num_collections: 10000
 collect_device: cpu
 update_device: cpu

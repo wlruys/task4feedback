@@ -301,6 +301,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_int_feature<EmptyTaskFeature>(m, "EmptyTaskFeature");
   bind_state_feature<InDegreeTaskFeature>(m, "InDegreeTaskFeature");
   bind_state_feature<OutDegreeTaskFeature>(m, "OutDegreeTaskFeature");
+  bind_state_feature<ReadDegreeTaskFeature>(m, "ReadDegreeTaskFeature");
   bind_state_feature<GPUDurationTaskFeature>(m, "DurationTaskFeature");
   bind_state_feature<OneHotMappedDeviceTaskFeature>(m, "OneHotMappedDeviceTaskFeature");
   bind_state_feature<TaskStateFeature>(m, "TaskStateFeature");

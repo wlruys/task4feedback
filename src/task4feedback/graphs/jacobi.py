@@ -1596,6 +1596,7 @@ class GNNObserverFactory(GNNExternalObserverFactory):
         if add_degree:
             task_feature_factory.add(fastsim.InDegreeTaskFeature)
             task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+            task_feature_factory.add(fastsim.ReadDegreeTaskFeature)
 
         device_feature_factory = FeatureExtractorFactory()
         device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)

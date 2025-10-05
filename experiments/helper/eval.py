@@ -40,7 +40,7 @@ from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from task4feedback.fastsim2 import ParMETIS_wrapper
 from task4feedback.graphs.mesh.plot import animate_mesh_graph
 from task4feedback.ml.util import EvaluationConfig
-from helper.parmetis import run_parmetis
+# from helper.parmetis import run_parmetis
 from helper.run_name import cfg_hash
 from dataclasses import dataclass, field
 from task4feedback.graphs.jacobi import *
@@ -54,15 +54,15 @@ from collections import defaultdict
 from types import MappingProxyType
 from typing import Any, Mapping
 
-try:
-    from mpi4py import MPI
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
-except ImportError:
-    comm = None
-    rank = 0
-    size = 1
+# try:
+#     from mpi4py import MPI
+#     comm = MPI.COMM_WORLD
+#     rank = comm.Get_rank()
+#     size = comm.Get_size()
+# except ImportError:
+comm = None
+rank = 0
+size = 1
 
 @dataclass(slots=True)
 class EvalLocation:
@@ -226,7 +226,8 @@ def evaluate_and_save(policy: PolicyType, cfg: DictConfig, eval_state: EvalState
                 env.simulator.enable_external_mapper()
                 env.simulator.external_mapper = JacobiRoundRobinMapper(n_devices=cfg.system.n_devices - 1, offset=1, setting=0)
             elif policy.name == "ParMETIS":
-                run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg)
+                pass
+                # run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg)
             else:
                 raise ValueError(f"Unknown option: {policy.name}")
             

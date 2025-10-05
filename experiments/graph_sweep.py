@@ -11,7 +11,7 @@ import torch
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from mpi4py import MPI
+#from mpi4py import MPI
 import wandb  # kept because original imports it
 
 from hydra.experimental.callbacks import Callback
