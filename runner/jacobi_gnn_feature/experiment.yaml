@@ -9,8 +9,8 @@ packs:
   - name: collections
     options:
       - algorithm:
-          num_collections: 5000
-        tag: "nc5k"
+          num_collections: 4000
+        tag: "nc4k"
   - name: entropy
     options:
       - algorithm:
@@ -27,6 +27,12 @@ packs:
       - graph:
           config:
             n: 4
+            steps: 16
+        tag: "b4"
+      - graph:
+          config:
+            n: 4
+            steps: 32
         tag: "b4"
   - name: arthitecture
     options:
