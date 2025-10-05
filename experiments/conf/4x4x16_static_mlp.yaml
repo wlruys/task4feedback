@@ -19,11 +19,11 @@ feature:
 network:
   layers:
     state:
-      hidden_channels: [64, 32, 16, 32]
+      hidden_channels: [64, 32]
     actor:
-      hidden_channels: 32
+      hidden_channels: 64
     critic:
-      hidden_channels: 32
+      hidden_channels: 64
   critic:
     add_progress: True
 

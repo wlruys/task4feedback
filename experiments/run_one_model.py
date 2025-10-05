@@ -31,7 +31,7 @@ import random
 import pickle
 from torchrl.envs import set_exploration_type, ExplorationType
 from helper.parmetis import run_parmetis
-from mpi4py import MPI
+#from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()

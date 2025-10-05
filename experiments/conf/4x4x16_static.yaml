@@ -30,9 +30,12 @@ graph:
     n: 4
     steps: 16
     level_memory: 98e9
+    boundary_time: 1
+    interior_time: 1
+    task_time: 1
   env:
     change_priority: False
-    change_location: True
+    change_location: False
     change_duration: False
     seed: 1
 
@@ -41,7 +44,7 @@ algorithm:
   rollout_steps: 16
   workers: 4
   graphs_per_collection: 4
-  ent_coef: 0.01
+  ent_coef: 0.001
   sample_slices: False
   slice_len: 16 # only used if sample_slices is True (LSTM)
   gamma: 0.99
@@ -53,7 +56,7 @@ optimizer:
   lr: 1e-3
 
 system:
-  mem: 80e9
+  mem: 99999e9
 
 runtime:
   batch_size: 5
@@ -69,7 +72,6 @@ eval:
   animation_interval: 0
   eval_interval: 25
   samples: 10
-  pickle_path: ./pickled_evaluation/4x4x16_static_1:1:1.pkl
 
 sweep:
   n_samples: 10

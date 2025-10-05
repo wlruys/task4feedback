@@ -41,7 +41,7 @@ from task4feedback.fastsim2 import ParMETIS_wrapper
 from task4feedback.graphs.mesh.plot import *
 from task4feedback.ml.util import EvaluationConfig
 from helper.parmetis import run_parmetis
-from mpi4py import MPI
+#from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()

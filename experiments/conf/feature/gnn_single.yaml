@@ -13,6 +13,7 @@ observer:
     max_candidates: 1
   batched: false
   version: "E"
+  add_degree: false
 normalization:
   enabled: true 
   warmup: 1

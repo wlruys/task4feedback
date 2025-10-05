@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
@@ -174,7 +175,7 @@ class Config:
 
 class ConfigSpace:
     """Cartesian product over packs with conflict checking."""
-    def __init__(self, packs: Sequence[Pack], strict: bool = True):
+    def __init__(self, packs: Sequence[Pack], strict: bool = False):
         self._packs: List[Pack] = list(packs)
         self._strict = bool(strict)
 
@@ -191,29 +192,143 @@ class ConfigSpace:
         for combo in itertools.product(*option_lists):
             merged: Dict[str, Any] = {}
             tags: List[str] = []
-            provenance: Dict[str, Tuple[str, int, Dict[str, Any]]] = {}
+            provenance: Dict[Tuple[str, ...], Tuple[str, int, Dict[str, Any]]] = {}
 
             for pack_idx, opt in enumerate(combo):
                 if opt.tag:
                     tags.append(opt.tag)
-                opt_params = opt.params()
-                for k, v in opt_params.items():
-                    if k in merged:
-                        if self._strict or merged[k] != v:
-                            prev_pack, prev_i, prev_payload = provenance[k]
-                            curr_pack, curr_i = pack_names[pack_idx], self._option_index(option_lists[pack_idx], opt)
-                            raise ConfigError(
-                                "Parameter conflict detected:\n"
-                                f"  key: {k}\n"
-                                f"  previous: value={merged[k]!r} from pack='{prev_pack}' option_index={prev_i} option={prev_payload}\n"
-                                f"  current : value={v!r} from pack='{curr_pack}' option_index={curr_i} option={opt.payload}\n"
-                                "Resolve by adjusting packs/options or disable strict mode if values are identical."
-                            )
-                    else:
-                        merged[k] = v
-                        provenance[k] = (pack_names[pack_idx], self._option_index(option_lists[pack_idx], opt), opt.payload)
+                self._merge_params(
+                    merged,
+                    opt.params(),
+                    provenance,
+                    pack_names[pack_idx],
+                    self._option_index(option_lists[pack_idx], opt),
+                    opt.payload,
+                )
 
             yield Config(merged, tags)
+
+    def _merge_params(
+        self,
+        merged: Dict[str, Any],
+        new_params: Dict[str, Any],
+        provenance: Dict[Tuple[str, ...], Tuple[str, int, Dict[str, Any]]],
+        pack_name: str,
+        option_idx: int,
+        option_payload: Dict[str, Any],
+    ) -> None:
+        if not new_params:
+            return
+        self._merge_dicts(
+            merged,
+            new_params,
+            provenance,
+            pack_name,
+            option_idx,
+            option_payload,
+            strict=self._strict,
+            path=(),
+        )
+
+    @staticmethod
+    def _merge_dicts(
+        target: Dict[str, Any],
+        updates: Dict[str, Any],
+        provenance: Dict[Tuple[str, ...], Tuple[str, int, Dict[str, Any]]],
+        pack_name: str,
+        option_idx: int,
+        option_payload: Dict[str, Any],
+        *,
+        strict: bool,
+        path: Tuple[str, ...],
+    ) -> None:
+        for key, value in updates.items():
+            current_path = path + (key,)
+            if key not in target:
+                target[key] = deepcopy(value)
+                ConfigSpace._register_provenance(
+                    value,
+                    provenance,
+                    current_path,
+                    pack_name,
+                    option_idx,
+                    option_payload,
+                )
+                continue
+
+            existing = target[key]
+            if isinstance(existing, dict) and isinstance(value, dict):
+                ConfigSpace._merge_dicts(
+                    existing,
+                    value,
+                    provenance,
+                    pack_name,
+                    option_idx,
+                    option_payload,
+                    strict=strict,
+                    path=current_path,
+                )
+                continue
+
+            if strict or existing != value:
+                prev_pack, prev_idx, prev_payload = ConfigSpace._lookup_provenance(provenance, current_path)
+                path_str = ConfigSpace._format_path(current_path)
+                raise ConfigError(
+                    "Parameter conflict detected:\n"
+                    f"  path: {path_str}\n"
+                    f"  previous: value={existing!r} from pack='{prev_pack}' option_index={prev_idx} option={prev_payload}\n"
+                    f"  current : value={value!r} from pack='{pack_name}' option_index={option_idx} option={option_payload}\n"
+                    "Resolve by adjusting packs/options or disable strict mode if values are identical."
+                )
+
+            ConfigSpace._register_provenance(
+                value,
+                provenance,
+                current_path,
+                pack_name,
+                option_idx,
+                option_payload,
+            )
+
+    @staticmethod
+    def _register_provenance(
+        value: Any,
+        provenance: Dict[Tuple[str, ...], Tuple[str, int, Dict[str, Any]]],
+        path: Tuple[str, ...],
+        pack_name: str,
+        option_idx: int,
+        option_payload: Dict[str, Any],
+    ) -> None:
+        if path not in provenance:
+            provenance[path] = (pack_name, option_idx, option_payload)
+        if isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                ConfigSpace._register_provenance(
+                    sub_value,
+                    provenance,
+                    path + (sub_key,),
+                    pack_name,
+                    option_idx,
+                    option_payload,
+                )
+
+    @staticmethod
+    def _lookup_provenance(
+        provenance: Dict[Tuple[str, ...], Tuple[str, int, Dict[str, Any]]],
+        path: Tuple[str, ...],
+    ) -> Tuple[str, int, Dict[str, Any]]:
+        current = path
+        while current:
+            if current in provenance:
+                return provenance[current]
+            current = current[:-1]
+        if () in provenance:
+            return provenance[()]
+        raise ConfigError(f"Missing provenance for path '{ConfigSpace._format_path(path)}'")
+
+    @staticmethod
+    def _format_path(path: Tuple[str, ...]) -> str:
+        return ".".join(path) if path else "<root>"
 
     @staticmethod
     def _option_index(options: List[Option], target: Option) -> int:
@@ -653,7 +768,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--out", required=True, help="Output directory.")
     common.add_argument("--batch-size", type=int, required=True, help="Commands per batch file.")
     common.add_argument("--no-csv", action="store_true", help="Do not write manifest.csv (only JSONL).")
-    common.add_argument("--nonstrict", action="store_true", help="Allow equal-value overlaps (fail on unequal).")
+    common.add_argument("--nonstrict", action="store_true", help="Allow equal-value overlaps (fail on unequal).", default=True)
 
     # build
     pb = sub.add_parser("build", parents=[common], help="Generate batches + manifest.")

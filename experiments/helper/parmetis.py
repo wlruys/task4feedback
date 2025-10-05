@@ -4,7 +4,7 @@ from task4feedback.graphs.base import weighted_cell_partition
 from task4feedback.interface.wrappers import DeviceType, SimulatorDriver
 import task4feedback.fastsim2 as fastsim
 from task4feedback.fastsim2 import ParMETIS_wrapper
-from mpi4py import MPI
+#from mpi4py import MPI
 import torch
 import numpy as np
 from task4feedback.graphs.jacobi import get_length_from_config
