@@ -429,7 +429,7 @@ set -euo pipefail
 
 ########## micromamba bootstrap ##########
 # Honors MICROMAMBA_EXE or MAMBA_EXE if you’ve set them; falls back to `micromamba` on PATH.
-MICROMAMBA="${{MICROMAMBA_EXE:-${MAMBA_EXE:-micromamba}}}"
+MICROMAMBA="micromamba"
 if command -v "$MICROMAMBA" >/dev/null 2>&1; then
   # Initialize the shell integration for bash in a non-interactive context
   eval "$("$MICROMAMBA" shell hook -s bash)"

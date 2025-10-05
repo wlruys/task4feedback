@@ -64,8 +64,8 @@ runtime:
 
 wandb:
   enabled: true
-  project: cholesky_4
-  name: cholesky_4
+  project: debug
+  name: debug
 
 eval:
   animation_interval: 0
