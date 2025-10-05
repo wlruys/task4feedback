@@ -69,5 +69,5 @@ wandb:
 
 eval:
   animation_interval: 0
-  eval_interval: 25
+  eval_interval: 100
   samples: 10

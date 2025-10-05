@@ -4,7 +4,7 @@ packs:
   - name: wbconfig
     options:
       - wandb:
-          project: jac_mlp_scale
+          project: jac_mlp_scale_ipdps
         tag: "ScaleTest"
   - name: collections
     options:
@@ -30,10 +30,6 @@ packs:
           rollout_steps: 128
           minibatch_size: 128
         tag: "r128"
-      - algorithm:
-          rollout_steps: 256
-          minibatch_size: 128
-        tag: "r256"
       - algorithm:
           rollout_steps: 512
           minibatch_size: 128

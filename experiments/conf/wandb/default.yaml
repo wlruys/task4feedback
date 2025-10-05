@@ -1,7 +1,7 @@
 project: gnn-dev
 name: default
 enabled: true
-dir: ~/workspace/scheduling/logs
+dir: /scratch/06081/wlruys/workspace/scheduling/logs
 group: null
 tags:
   - ppo

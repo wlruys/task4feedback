@@ -1,16 +1,12 @@
-rm -rf runner/jacobi_gnn_feature/outputs
-rm -rf runner/jacobi_gnn_feature/logs
+rm -rf runner/jacobi_gnn_feature_2/outputs
+rm -rf runner/jacobi_gnn_feature_2/logs
+rm -rf runner/jacobi_gnn_feature_2/slurm_logs
 
 python runner/expgen.py build \
 --yaml runner/jacobi_gnn_feature/experiment.yaml \
---out runner/jacobi_gnn_feature/outputs \
---batch-size 24 --nonstrict
+--out runner/jacobi_gnn_feature_2/outputs \
+--batch-size 12 --nonstrict
 
-python runner/expgen.py local \
-  --yaml runner/jacobi_gnn_feature/experiment.yaml \
-  --out runner/jacobi_gnn_feature/outputs \
-  --batch-size 4 \
-  --launcher "$PWD/runner/run_tmux_launcher.sh" \
-  --k-per-session 3 \
-  --job-name mylocal \
-  --log-dir runner/jacobi_gnn_feature/logs/
+
+python runner/expgen.py slurm --yaml runner/jacobi_gnn_feature/experiment.yaml --out runner/jacobi_gnn_feature_2/outputs --launcher '$PWD/runner/run_tmux_launcher.sh' --k-per-session 4 --job-name jacobi_gnn_feature_ipdps --batch-size 12 --slurm-logs runner/jacobi_gnn_feature_2/slurm_logs --partition skx --time "12:00:00"
+

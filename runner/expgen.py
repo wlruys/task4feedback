@@ -544,12 +544,12 @@ set -euo pipefail
 
 ########## micromamba bootstrap ##########
 # Honors MICROMAMBA_EXE or MAMBA_EXE if you’ve set them; falls back to `micromamba` on PATH.
-MICROMAMBA="micromamba"
+MICROMAMBA="/scratch/06081/wlruys/micromamba/micromamba"
 if command -v "$MICROMAMBA" >/dev/null 2>&1; then
   # Initialize the shell integration for bash in a non-interactive context
-  eval "$("$MICROMAMBA" shell hook -s bash)"
+  eval "$("$MICROMAMBA" shell hook -s bash --root-prefix /scratch/06081/wlruys/micromamba_prefix)"
   # Activate your env; change "py313" to your actual env name if different
-  micromamba activate py313 || micromamba activate base
+  micromamba activate pyt4f
 else
   echo "[WARN] micromamba not found (MICROMAMBA_EXE/MAMBA_EXE not set and 'micromamba' not on PATH)." >&2
 fi
@@ -801,7 +801,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--cpus-per-task", type=int, default=16)
     ps.add_argument("--partition", help="SLURM partition", default="skx")
     ps.add_argument("--gres", help="SLURM GRES, e.g., gpu:1")
-    ps.add_argument("--account", help="SLURM account")
+    ps.add_argument("--account", help="SLURM account", default="PHY21005")
     ps.add_argument("--qos", help="SLURM QoS")
     ps.add_argument("--slurm-logs", default="slurm_logs", help="Directory for SLURM stdout/err and script.")
     ps.add_argument("--launcher", default="run_tmux_launcher.sh", help="Path to tmux launcher script.")
