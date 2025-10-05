@@ -4,8 +4,8 @@ packs:
   - name: wbconfig
     options:
       - wandb:
-          project: jac_mlp_scale
-        tag: "ScaleTest"
+          project: test_dir
+        tag: "TEST"
   - name: collections
     options:
       - algorithm:
