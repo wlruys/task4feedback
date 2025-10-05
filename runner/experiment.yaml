@@ -1,6 +1,37 @@
 cli_base: "python experiments/train.py --config-name cholesky_4_mlp.yaml"
 
 packs:
+  - name: entropy
+    options:
+      - algorithm:
+          ent_coef: 0.001
+        tag: "e0.001"
+      # - algorithm:
+      #     ent_coef: 0.01
+      #   tag: "e0.01"
+      # - algorithm:
+      #     ent_coef: 0.1
+      #   tag: "e0.1"
+  - name: rollout
+    options:
+      - algorithm:
+          rollout_steps: 128
+          minibatch_size: 128
+        tag: "r128"
+      # - algorithm:
+      #     rollout_steps: 256
+      #     minibatch_size: 256
+      #   tag: "r256"
+  - name: size
+    options:
+      - graph:
+          config:
+            n: 8
+        tag: "b8"
+      - graph:
+          config:
+            n: 4
+        tag: "b4"
   - name: arthitecture
     options:
         - feature:
@@ -72,6 +103,11 @@ packs:
             block_time: 10000
             task_time: 30000
         tag: "1:1"
+      - graph:
+          config:
+            block_time: 20000
+            task_time: 30000
+        tag: "1:2"
       - graph:
           config:
             block_time: 40000

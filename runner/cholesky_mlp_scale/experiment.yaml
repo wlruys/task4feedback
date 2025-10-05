@@ -9,8 +9,8 @@ packs:
   - name: collections
     options:
       - algorithm:
-          num_collections: 10000
-        tag: "nc10k"
+          num_collections: 7000
+        tag: "nc7k"
   - name: entropy
     options:
       - algorithm:
@@ -97,7 +97,3 @@ packs:
         tag: "seed42"
       - seed: 256
         tag: "seed256"
-      - seed: 1024
-        tag: "seed1024"
-      - seed: 2024
-        tag: "seed2024"
