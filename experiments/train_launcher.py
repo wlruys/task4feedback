@@ -65,8 +65,8 @@ running_jobs = []  # (proc, allocated_cores)
 jobs = []
 
 for v in ["D"]:
-    for dmem in [56e9, 64e9, 72e9, 80e9, 88e9, 96e9, 104e9]:
-        for k in run_dict.keys():
+    for k in run_dict.keys():
+        for dmem in [56e9, 64e9, 72e9, 80e9, 88e9, 96e9, 104e9]:
             for interior, boundary, mem, _, _ in run_dict[k]:
                 ib = param[(interior, boundary)]
                 prj_name = f"8x8x128_{k}_{interior}-{boundary}-1_IPDPS_LAST"
