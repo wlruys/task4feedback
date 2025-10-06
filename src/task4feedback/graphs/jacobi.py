@@ -1780,6 +1780,7 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         prev_frames: int,
         version: str,
         batched: bool = False,
+        **_ignored,
     ):
         self.batched = batched
         assert (not batched and spec.max_candidates == 1) or (
