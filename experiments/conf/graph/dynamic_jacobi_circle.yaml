@@ -27,7 +27,7 @@ config:
     scale: 0.3
     traj_specifics:
       radius: 0.5
-      max_angle: 1
+      max_angle: 2
 init:
   partitioner: metis
   nparts: 4

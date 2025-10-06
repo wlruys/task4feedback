@@ -27,7 +27,7 @@ reward:
 
 graph:
   config:
-    steps: 128
+    steps: 256
     n: 8
     level_memory: 40e9
     boundary_width: 0.25
@@ -39,15 +39,15 @@ graph:
 
 algorithm:
   num_collections: 10000
-  rollout_steps: 32
+  rollout_steps: 64
   workers: 4
   graphs_per_collection: 4
-  ent_coef: 0.01
+  ent_coef: 0.00025
   sample_slices: False
   slice_len: 16
   gamma: 0.99
   lmbda: 0.95
-  minibatch_size: 32
+  minibatch_size: 64
   collector: "multi_sync"
 
 optimizer:
