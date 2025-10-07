@@ -151,7 +151,10 @@ def main(cfg: DictConfig):
             print(cfg.network.layers.state._target_)
             raise ValueError("Unknown network type in cfg.network.layers.state._target_")
         if cfg.graph.env.change_duration:
-            graph_name = "noise"
+            if cfg.graph.config.workload_args.traj_type == "circle":
+                graph_name = "ncircle"
+            elif cfg.graph.config.workload_args.traj_type == "corners":
+                graph_name = "noise"
 
         run_name = f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{int(float(cfg.system.mem)/1e9)}GB"
 
@@ -164,7 +167,8 @@ def main(cfg: DictConfig):
             if not os.path.exists(cfg.eval.pickle_path):
                 print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
                 cfg.eval.pickle_path = None
-
+        else:
+            print(f"Using pickle path {cfg.eval.pickle_path}")
         # Make a dir if not exists
         checkpoint_path.mkdir(parents=True, exist_ok=True)
         cfg.logging.best_policy_dir = str(checkpoint_path)

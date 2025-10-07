@@ -23,12 +23,12 @@ print(param)
 
 run_dict = {"corners": [], "circle": [], "noise": [], "bump": [], "ncircle": []}
 # Interior, Boundary, Mem order
-# run_dict["circle"].append((0.1, 0.1, "35e9", "ParMETIS(1.05,1)", "ColWise"))
-# run_dict["circle"].append((1, 0.1, "100e9", "ParMETIS(1.0001,0.0001001)", "EFT"))
-# run_dict["circle"].append((1, 1, "35e9", "ParMETIS(1.01,1)", "ColWise"))
-# run_dict["circle"].append((10, 0.1, "105e9", "ParMETIS(1.01,1)", "Block(1x1)"))
-# run_dict["circle"].append((10, 1, "100e9", "ParMETIS(1.0001,0.0001001)", "Block(1x1)"))
-# run_dict["circle"].append((100, 10, "90e9", "ParMETIS(1.01,10)", "Block(1x1)"))
+run_dict["circle"].append((0.1, 0.1, "35e9", "ParMETIS(1.05,1)", "ColWise"))
+run_dict["circle"].append((1, 0.1, "100e9", "ParMETIS(1.0001,0.0001001)", "EFT"))
+run_dict["circle"].append((1, 1, "35e9", "ParMETIS(1.01,1)", "ColWise"))
+run_dict["circle"].append((10, 0.1, "105e9", "ParMETIS(1.01,1)", "Block(1x1)"))
+run_dict["circle"].append((10, 1, "100e9", "ParMETIS(1.0001,0.0001001)", "Block(1x1)"))
+run_dict["circle"].append((100, 10, "90e9", "ParMETIS(1.01,10)", "Block(1x1)"))
 
 run_dict["ncircle"].append((0.1, 0.1, "35e9", "ParMETIS(1.05,1)", "ColWise"))
 run_dict["ncircle"].append((1, 0.1, "100e9", "ParMETIS(1.0001,0.0001001)", "EFT"))
@@ -37,19 +37,19 @@ run_dict["ncircle"].append((10, 0.1, "105e9", "ParMETIS(1.01,1)", "Block(1x1)"))
 run_dict["ncircle"].append((10, 1, "100e9", "ParMETIS(1.0001,0.0001001)", "Block(1x1)"))
 run_dict["ncircle"].append((100, 10, "90e9", "ParMETIS(1.01,10)", "Block(1x1)"))
 
-# run_dict["corners"].append((0.1, 0.1, "35e9", "BlockCyclic(2x2)", "Oracle(64)"))
-# run_dict["corners"].append((1, 0.1, "100e9", "ParMETIS(1.03,0.0001001)", "EFT"))
-# run_dict["corners"].append((1, 1, "35e9", "BlockCyclic(2x2)", "Colwise"))
-# run_dict["corners"].append((10, 0.1, "105e9", "ParMETIS(1.05,0.0001001)", "BlockCyclic(2x2)"))
-# run_dict["corners"].append((10, 1, "95e9", "BlockCyclic(2x2)", "ParMETIS(1.04,10)"))
-# run_dict["corners"].append((100, 10, "95e9", "ParMETIS(1.04,10)", "BlockCyclic(2x2)"))
+run_dict["corners"].append((0.1, 0.1, "35e9", "BlockCyclic(2x2)", "Oracle(64)"))
+run_dict["corners"].append((1, 0.1, "100e9", "ParMETIS(1.03,0.0001001)", "EFT"))
+run_dict["corners"].append((1, 1, "35e9", "BlockCyclic(2x2)", "Colwise"))
+run_dict["corners"].append((10, 0.1, "105e9", "ParMETIS(1.05,0.0001001)", "BlockCyclic(2x2)"))
+run_dict["corners"].append((10, 1, "95e9", "BlockCyclic(2x2)", "ParMETIS(1.04,10)"))
+run_dict["corners"].append((100, 10, "95e9", "ParMETIS(1.04,10)", "BlockCyclic(2x2)"))
 
-# run_dict["noise"].append((0.1, 0.1, "35e9", "BlockCyclic(2x2)", "Oracle(64)"))
-# run_dict["noise"].append((1, 0.1, "100e9", "ParMETIS(1.03,0.0001001)", "EFT"))
-# run_dict["noise"].append((1, 1, "35e9", "BlockCyclic(2x2)", "Colwise"))
-# run_dict["noise"].append((10, 0.1, "105e9", "ParMETIS(1.05,0.0001001)", "BlockCyclic(2x2)"))
-# run_dict["noise"].append((10, 1, "95e9", "BlockCyclic(2x2)", "ParMETIS(1.04,10)"))
-# run_dict["noise"].append((100, 10, "95e9", "ParMETIS(1.04,10)", "BlockCyclic(2x2)"))
+run_dict["noise"].append((0.1, 0.1, "35e9", "BlockCyclic(2x2)", "Oracle(64)"))
+run_dict["noise"].append((1, 0.1, "100e9", "ParMETIS(1.03,0.0001001)", "EFT"))
+run_dict["noise"].append((1, 1, "35e9", "BlockCyclic(2x2)", "Colwise"))
+run_dict["noise"].append((10, 0.1, "105e9", "ParMETIS(1.05,0.0001001)", "BlockCyclic(2x2)"))
+run_dict["noise"].append((10, 1, "95e9", "BlockCyclic(2x2)", "ParMETIS(1.04,10)"))
+run_dict["noise"].append((100, 10, "95e9", "ParMETIS(1.04,10)", "BlockCyclic(2x2)"))
 
 # run_dict["bump"].append((0.1, 0.1, "45e9", "BlockCyclic(1x1)", "ColWise"))
 # run_dict["bump"].append((1, 0.1, "105e9", "BlockCyclic(1x1)", "ParMETIS(1.03, 0.0001001)"))
@@ -72,12 +72,12 @@ running_jobs = []  # (proc, allocated_cores)
 
 jobs = []
 
-for v in ["D"]:
+for v in ["H"]:
     for k in run_dict.keys():
         for dmem in [64e9, 72e9, 80e9, 88e9, 96e9, 9999e9]:
             for interior, boundary, mem, _, _ in run_dict[k]:
                 ib = param[(interior, boundary)]
-                prj_name = f"8x8x256_{k}_{interior}-{boundary}-1_IPDPS_FINALLAST"
+                prj_name = f"8x8x256_{k}_{interior}-{boundary}-1_IPDPS_HHH"
                 n_cores = 4
                 cmd = [
                     "python3",
@@ -97,6 +97,9 @@ for v in ["D"]:
                     f"graph.config.arithmetic_intensity={ib[0]}",
                     f"graph.config.boundary_width={ib[1]}",
                     "eval.eval_interval=0",
+                    "algorithm.rollout_steps=64",
+                    "algorithm.minibatch_size=64",
+                    "algorithm.num_collections=5000",
                 ]
                 jobs.append((n_cores, cmd))
                 print(f"Prepared job with {n_cores} cores: {' '.join(cmd)}")
