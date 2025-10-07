@@ -556,7 +556,7 @@ class GATStateNet(nn.Module):
             conv_dict = {
                 ("tasks", "to", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
                 ("tasks", "from", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
-                ("tasks", "read", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
+                ("tasks", "read", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=False),
                 ("data", "read", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
             }
             # conv_dict = {
@@ -600,13 +600,13 @@ class GATStateNet(nn.Module):
 
         self.mlp_global_pool = nn.ModuleDict(
             {
-                "tasks": nn.Sequential(nn.Linear(self.hidden_channels, self.hidden_channels), nn.SiLU(), nn.Linear(self.hidden_channels, 8)),
-                "data": nn.Sequential(nn.Linear(self.hidden_channels, self.hidden_channels), nn.SiLU(), nn.Linear(self.hidden_channels, 8)),
+                "tasks": nn.Sequential(nn.Linear(self.hidden_channels, 8)),
+                "data": nn.Sequential(nn.Linear(self.hidden_channels, 8)),
             }
         )
 
         if self.add_device_load or self.add_progress:
-            self.mlp_side_info = nn.Sequential(nn.Linear(self.g_dim, self.hidden_channels), nn.SiLU(), nn.Linear(self.hidden_channels, 8))
+            self.mlp_side_info = nn.Sequential(nn.Linear(self.g_dim, 8))
         else:
             self.mlp_side_info = None
 
@@ -1041,16 +1041,10 @@ class DataIterationGNNStateNet(nn.Module):
 
         self.task_merge_mlp = nn.Sequential(
             nn.Linear(hidden_channels *2, hidden_channels),
-            nn.LayerNorm(hidden_channels),
-            nn.LeakyReLU(negative_slope=0.01),
-            nn.Linear(hidden_channels, hidden_channels),
         )
 
         self.global_merge_mlp = nn.Sequential(
             nn.Linear(hidden_channels *2, hidden_channels),
-            nn.LayerNorm(hidden_channels),
-            nn.LeakyReLU(negative_slope=0.01),
-            nn.Linear(hidden_channels, hidden_channels),
         )
         self.global_merge_norm = nn.LayerNorm(hidden_channels)
 
@@ -1093,9 +1087,6 @@ class DataIterationGNNStateNet(nn.Module):
 
         self.g_mlp = nn.Sequential(
             nn.Linear(self.g_dim, hidden_channels),
-            nn.LayerNorm(hidden_channels),
-            nn.LeakyReLU(negative_slope=0.01),
-            nn.Linear(hidden_channels, hidden_channels),
         ) if self.g_dim > 0 else None      
 
         self.g_norm = nn.LayerNorm(hidden_channels) if self.g_dim > 0 else None 
