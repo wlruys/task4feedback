@@ -554,14 +554,14 @@ class GATStateNet(nn.Module):
         self.convs = nn.ModuleList()
         for _ in range(num_layers):
             conv_dict = {
-                ("tasks", "to", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
-                ("tasks", "from", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
+                ("tasks", "to", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=False),
+                ("tasks", "from", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=False),
                 ("tasks", "read", "data"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=False),
-                ("data", "read", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False),
+                ("data", "read", "tasks"): SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=False),
             }
             # conv_dict = {
             #     ("tasks", "to", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
-            #     ("tasks", "from", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
+            #     # ("tasks", "from", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
             #     ("tasks", "read", "data"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
             #     ("data", "read", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
             # }
@@ -600,13 +600,13 @@ class GATStateNet(nn.Module):
 
         self.mlp_global_pool = nn.ModuleDict(
             {
-                "tasks": nn.Sequential(nn.Linear(self.hidden_channels, 8)),
-                "data": nn.Sequential(nn.Linear(self.hidden_channels, 8)),
+                "tasks": nn.Sequential(nn.Linear(self.hidden_channels, self.hidden_channels)),
+                "data": nn.Sequential(nn.Linear(self.hidden_channels, self.hidden_channels)),
             }
         )
 
         if self.add_device_load or self.add_progress:
-            self.mlp_side_info = nn.Sequential(nn.Linear(self.g_dim, 8))
+            self.mlp_side_info = nn.Sequential(nn.Linear(self.g_dim, self.hidden_channels))
         else:
             self.mlp_side_info = None
 
@@ -620,7 +620,7 @@ class GATStateNet(nn.Module):
         nn.init.zeros_(self.stem_proj["tasks"].bias)
         nn.init.zeros_(self.stem_proj["data"].bias)
 
-        self.output_dim = hidden_channels + 8
+        self.output_dim = hidden_channels*4 if self.g_dim > 0 else hidden_channels*3
 
         self.output_keys = ["embed"]
 
@@ -714,22 +714,24 @@ class GATStateNet(nn.Module):
         pooled_tasks = global_mean_pool(x_dict["tasks"], b_tasks)
         pooled_data = global_mean_pool(x_dict["data"], b_data)
 
-        pt_f = self.mlp_global_pool["tasks"](pooled_tasks)
-        pd_f = self.mlp_global_pool["data"](pooled_data)
+        pt_f = pooled_tasks
+        pd_f = pooled_data
 
         if self.mlp_side_info is not None:
-            g_f = self.mlp_side_info(g)
-            y = pt_f + pd_f + g_f
+            side_f = self.mlp_side_info(g)
+            side_f = self.act(side_f)
+            y = torch.cat([pt_f, pd_f, side_f], dim=-1)
         else:
-            y = pt_f + pd_f
+            y = torch.cat([pt_f, pd_f], dim=-1)
 
-        y = self.mlp_norm(y)
-        y = self.act(y)
+        # y = self.mlp_norm(y)
+        # y = self.act(y)
 
         if b_tasks is None:
             y = y.squeeze(0)
 
         # print(f"x shape before cat: {x.shape}, y shape: {y.shape}, batch_size: {batch_size}")
+
         x = torch.cat([x, y], dim=-1)
         x = x.reshape(*batch_size, -1, x.shape[-1])
         # print(f"x shape before return: {x.shape}")
