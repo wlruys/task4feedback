@@ -129,7 +129,7 @@ def should_log(
     """Check if we should log based on the current update count and logging configuration."""
     if logging_config is None:
         return False
-    return n_updates % logging_config.stats_interval == 0
+    return logging_config.stats_interval > 0 and n_updates % logging_config.stats_interval == 0
 
 
 def should_eval(
@@ -149,7 +149,7 @@ def should_checkpoint(
     """Check if we should checkpoint based on the current update count and logging configuration."""
     if logging_config is None:
         return False
-    return n_updates % logging_config.checkpoint_interval == 0
+    return logging_config.checkpoint_interval > 0 and n_updates % logging_config.checkpoint_interval == 0
 
 
 def log_training_metrics(
@@ -526,7 +526,7 @@ def run_ppo(
                         i,
                         n_samples,
                     )
-                    if wandb_log.get("batch/mean_improvement", -1) > max_performance:
+                    if logging_config.log_best_policy and wandb_log.get("batch/mean_improvement", -1) > max_performance:
                         max_performance = wandb_log["batch/mean_improvement"]
                         filename = f"{max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
                         checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
