@@ -1,0 +1,97 @@
+defaults:
+  - graph: dynamic_jacobi_corners
+  - reward: incremental_schedule
+  - system: 4h100
+  - algorithm: ppo
+  - runtime: batch
+  - wandb: default
+  - logging: default
+  - lr_scheduler: none 
+  - noise: none
+  - optimizer: adamw
+  - eval: default
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: train.GitInfo
+
+seed: 256
+deterministic_torch: true
+
+logging:
+  checkpoint_interval: 0
+  stats_interval: 16
+
+reward:
+  verbose: False
+  random_start: False
+  gamma: 1
+  baseline_policy: BlockCyclic(2x2)
+  uniform_reward_scale: 100
+
+graph:
+  config:
+    steps: 1024
+    n: 8
+    level_memory: 95e9
+    arithmetic_intensity: 595.5555555
+    boundary_width: 0.25
+    workload_args:
+      traj_specifics:
+        transition_frac: 1.0
+        blur_frac: 0.10
+        width: 0.5
+        phase_length: 512
+  env:
+    change_priority: False
+    change_location: False
+    change_duration: False
+    seed: 1
+
+algorithm:
+  num_collections: 100000
+  rollout_steps: 256
+  minibatch_size: 256
+  workers: 4
+  graphs_per_collection: 4
+  ent_coef: 0.001
+  sample_slices: False
+  slice_len: 16
+  gamma: 1
+  lmbda: 0.95
+  collector: "multi_sync"
+
+optimizer:
+  lr: 1e-3
+
+system:
+  mem: 80e9
+
+runtime:
+  batch_size: 5
+  queue_threshold: 5
+  max_in_flight: 64
+
+wandb:
+  enabled: true
+  project: 8x8x1024_lcorners
+  name: CNN-A_IEFT
+
+eval:
+  animation_interval: 0
+  eval_interval: 0
+  max_frames: 400
+  video_seconds: 15 
+  samples: 1
+  pickle_path: ./pickled_evaluation/8x8x1024_lcorners_1:1:1.pkl
+
+sweep:
+  n_samples: 10
+  task_th: 0.4
+  level_size_step: 1e9
+  start_mem: 1e9
+  end_mem: 200e9
+  exps: ["EFT", "BlockCyclic(2x2)","BlockCyclic(1x1)", "ParMETIS", "ColWise"]
+  policy: "Oracle(32)"

@@ -22,7 +22,7 @@ from task4feedback.graphs.base import TaskGraph, DataBlocks, ComputeDataGraph
 import random
 from task4feedback.graphs.mesh.plot import *
 from task4feedback.legacy_graphs import *
-from task4feedback.graphs.jacobi import JacobiGraph, JacobiRoundRobinMapper, JacobiQuadrantMapper, LevelPartitionMapper
+from task4feedback.graphs.jacobi import JacobiGraph, JacobiRoundRobinMapper, JacobiQuadrantMapper, LevelPartitionMapper, BlockCyclicMapper
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from torch_geometric.data import HeteroData
 from torchrl.data import Categorical
@@ -204,6 +204,23 @@ class RuntimeEnv(EnvBase):
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
+            final_state = simulator_copy.run()
+            assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
+            return simulator_copy.time
+        elif "BlockCyclic" in policy:
+            parts = policy.split("(")
+            if len(parts) != 2 or not parts[1].endswith(")"):
+                raise ValueError(f"Invalid BlockCyclic policy format: {policy}")
+            setting_str = parts[1][0]
+            try:
+                setting = int(setting_str)
+            except ValueError:
+                raise ValueError(f"Invalid BlockCyclic setting: {setting_str}")
+            simulator_copy = self.simulator.fresh_copy()
+            simulator_copy.initialize()
+            simulator_copy.initialize_data()
+            simulator_copy.enable_external_mapper()
+            simulator_copy.external_mapper = BlockCyclicMapper(geometry=simulator_copy.input.graph.data.geometry, n_devices=self.n_compute_devices, block_size=setting, offset=int(self.only_gpu))
             final_state = simulator_copy.run()
             assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
             return simulator_copy.time
@@ -891,6 +908,7 @@ class IncrementalSchedule(RuntimeEnv):
         dense_reward_scale: float = 1,
         sparse_reward_scale: float = 1,
         uniform_reward_scale: float = 0,
+        baseline_policy: str = "EFT",
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -898,6 +916,7 @@ class IncrementalSchedule(RuntimeEnv):
         self.k = k
         self.chance = chance
         self.terminal_reward = terminal_reward
+        self.baseline_policy = baseline_policy
         if uniform_reward_scale != 0:
             print("Using uniform reward scale, overriding dense and sparse reward scales.")
             self.dense_reward_scale = uniform_reward_scale
@@ -925,7 +944,7 @@ class IncrementalSchedule(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step", self.step_count)
         if self.step_count == 0:
-            self.EFT_baseline = self._get_baseline(policy="EFT")
+            self.EFT_baseline = self._get_baseline(policy=self.baseline_policy)
             self.prev_makespan = self.EFT_baseline
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
@@ -961,6 +980,7 @@ class IncrementalSchedule(RuntimeEnv):
 
             # Normalized in per-task time observed in global baseline.
             reward = self.sparse_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
+            self.potential_sum += reward
             if self.verbose:
                 print(f"Step {self.step_count} Reward: {reward:.4f} (P(s)={self.potential[-2]:.4f}, P(s+1)={self.potential[-1]:.4f})")
         else:

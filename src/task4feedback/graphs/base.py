@@ -641,6 +641,94 @@ class DynamicWorkload:
 
         return ani
 
+    def snapshot_workload_levels_to_individual_pdfs(
+        self,
+        levels_to_save: list[int],
+        base_filename: str = "workload_level",
+        folder: Optional[str] = None,
+        colormap: str = "viridis",
+        normalize: bool = True,
+        max_radius: float = 0.1,
+        figsize: tuple = (8, 8),
+        dpi: int = 300,
+        noise_sigma: Optional[float] = None,  # <-- NEW PARAM
+    ):
+        """
+        Save snapshots of specific workload levels into individual PDF files.
+        Optionally adds lognormal noise to workload sizes.
+        """
+
+        from .mesh.plot import create_mesh_plot
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle
+        from matplotlib.collections import PatchCollection
+
+        # Determine output folder
+        if folder is None:
+            if wandb is not None and wandb.run is not None and wandb.run.dir is not None:
+                folder = wandb.run.dir
+            else:
+                folder = "."
+
+        os.makedirs(folder, exist_ok=True)
+
+        # Filter only valid levels
+        levels_to_save = [lvl for lvl in levels_to_save if lvl in self.level_workload]
+        if not levels_to_save:
+            print("⚠️ No valid levels found to save.")
+            return
+
+        # Normalize if requested
+        if normalize:
+            max_workload = max(np.max(self.level_workload[lvl]) for lvl in levels_to_save)
+        else:
+            max_workload = None
+
+        # Geometry domain for scaling
+        domain_width = self.geom.get_max_coordinate(0) - self.geom.get_min_coordinate(0)
+        domain_height = self.geom.get_max_coordinate(1) - self.geom.get_min_coordinate(1)
+        domain_size = min(domain_width, domain_height)
+
+        cmap = plt.get_cmap(colormap)
+
+        for level in levels_to_save:
+            workload = self.level_workload[level].copy()
+
+            # --- ADD STOCHASTIC PERTURBATION ---
+            if noise_sigma is not None and noise_sigma > 0:
+                sigma = noise_sigma
+                mu = np.log(workload**2 / np.sqrt(workload**2 + (sigma * workload) ** 2))
+                var = np.log(1 + sigma**2)
+                noise = np.exp(np.random.normal(mu, np.sqrt(var)))
+                workload = noise  # replace workload with noisy values
+
+            radius_scale = max_workload if normalize else np.max(workload)
+
+            fig, ax = create_mesh_plot(self.geom, figsize=figsize)
+            ax.set_title("")
+            ax.axis("off")
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+
+            patches, colors = [], []
+            for i, cell in enumerate(self.geom.cells):
+                centroid = self.geom.get_centroid(i)
+                radius = (workload[i] / radius_scale) * domain_size * max_radius if radius_scale > 0 else 0
+                if radius > 0:
+                    patches.append(Circle((centroid[0], centroid[1]), radius))
+                    colors.append(cmap(workload[i] / radius_scale if radius_scale > 0 else 0))
+
+            if patches:
+                pcoll = PatchCollection(patches, facecolors=colors, edgecolors="black", alpha=0.7, zorder=10)
+                ax.add_collection(pcoll)
+
+            filename = os.path.join(folder, f"{base_filename}_{level}.pdf")
+            fig.savefig(filename, dpi=dpi, bbox_inches="tight", pad_inches=0)
+            plt.close(fig)
+            print(f"✅ Saved noisy workload snapshot: {filename}")
+
+        print(f"🎯 Done. Saved {len(levels_to_save)} PDFs to {os.path.abspath(folder)}")
+
 
 @dataclass
 class Trajectory:

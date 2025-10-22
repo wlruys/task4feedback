@@ -10,3 +10,4 @@ dense_reward_scale: 1
 uniform_reward_scale: 0 # This overrides both sparse and dense reward scale if > 0
 gamma: 1.0
 verbose: False
+baseline_policy: EFT

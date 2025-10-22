@@ -1175,6 +1175,7 @@ class JacobiRoundRobinMapper:
     def __init__(self, n_devices: int = 4, setting: int = 0, offset: int = 1, mapper: Optional[Self] = None):
         """
         Initialize the JacobiRoundRobinMapper.
+        setting == 2 : Column cyclic
         setting == 1 : Row cyclic
         setting == 0 : Checker board
         """
@@ -1210,9 +1211,12 @@ class JacobiRoundRobinMapper:
                 else:
                     # General fallback: diagonal stripes that still alternate locally
                     device = (row + col) % self.n_devices
-            else:
+            elif self.setting == 1:
                 # Previous round-robin behavior (row-major)
                 device = (row * nx + col) % self.n_devices
+            elif self.setting == 2:
+                # Column-major round-robin
+                device = (col * ny + row) % self.n_devices
             mapping_priority = simulator.simulator.get_state().get_mapping_priority(global_task_id)
             mapping_result.append(fastsim.Action(i, device + self.offset, mapping_priority, mapping_priority))
         return mapping_result
