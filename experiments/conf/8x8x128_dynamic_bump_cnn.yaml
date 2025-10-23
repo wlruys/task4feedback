@@ -18,7 +18,7 @@ feature:
   observer:
     prev_frames: 1
     batched: true
-    version: A
+    version: D
   normalization:
     warmup: 10
   add_device_load: True
