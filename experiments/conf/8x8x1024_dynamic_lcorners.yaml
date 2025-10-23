@@ -27,7 +27,7 @@ logging:
 reward:
   verbose: False
   random_start: False
-  gamma: 1
+  gamma: 0.999
   baseline_policy: BlockCyclic(2x2)
   uniform_reward_scale: 100
 
@@ -59,7 +59,7 @@ algorithm:
   ent_coef: 0.001
   sample_slices: False
   slice_len: 16
-  gamma: 1
+  gamma: 0.999
   lmbda: 0.95
   collector: "multi_sync"
 
