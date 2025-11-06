@@ -59,6 +59,7 @@ def configure_training(cfg: DictConfig):
     env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
 
     observer = env.get_observer()
+    print("Observer Graph Spec:", observer.graph_spec)
     feature_config = FeatureDimConfig.from_observer(observer)
     model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
 
@@ -129,7 +130,7 @@ def configure_training(cfg: DictConfig):
         )
 
 
-@hydra.main(config_path="conf", config_name="4x4x16_static_cnn.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="4x4x16_static_mlp.yaml", version_base=None)
 def main(cfg: DictConfig):
     # cfg.graph.config.workload_args.traj_type exist
     # if cfg.graph.type == "jacobi":

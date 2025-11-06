@@ -5,13 +5,14 @@ defaults:
   - _self_
 
 algorithm:
-  rollout_steps: 256
-  minibatch_size: 256
+  rollout_steps: 128
+  minibatch_size: 128
 
 feature:
   observer:
-    batched: False
-    version: A
+    grid_override: False
+    n_candidates: 32
+    version: E
   normalization:
     warmup: 20
   add_device_load: True
@@ -19,11 +20,11 @@ feature:
 network:
   layers:
     state:
-      hidden_channels: [64, 32]
+      hidden_channels: [16, 16]
     actor:
-      hidden_channels: 64
+      hidden_channels: 16
     critic:
-      hidden_channels: 64
+      hidden_channels: 128
   critic:
     add_progress: True
 

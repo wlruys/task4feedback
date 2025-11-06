@@ -1,8 +1,8 @@
 from task4feedback import fastsim2 as fastsim
 from task4feedback.interface import *
 import torch
-from typing import Optional, Self
-
+from typing import Optional, Self, Any
+from typing import Optional, Callable, Union
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import observation_to_heterodata, observation_to_heterodata_truncate
 from dataclasses import dataclass
@@ -43,6 +43,16 @@ import math
 from hydra.utils import instantiate, call
 from omegaconf import DictConfig, OmegaConf
 
+def _tiny_last_linear(seq: nn.Sequential, std: float = 1e-4):
+    last = None
+    for m in reversed(seq):
+        if isinstance(m, nn.Linear):
+            last = m
+            break
+    assert last is not None
+    nn.init.normal_(last.weight, std=std)
+    if last.bias is not None:
+        nn.init.zeros_(last.bias)
 
 def kaiming_init(layer, a=0.01, mode="fan_in", nonlinearity="leaky_relu"):
     """
@@ -92,6 +102,23 @@ def orthogonal_init(layer, gain=1.0):
     return layer
 
 
+def masked_softmax(scores: torch.Tensor, mask: torch.Tensor | None, dim: int = -1):
+    if mask is None:
+        return F.softmax(scores, dim=dim)
+    mask_f = mask.to(dtype=scores.dtype)
+    weights = torch.softmax(scores.masked_fill(~mask, torch.finfo(scores.dtype).min), dim=dim)
+    weights = weights * mask_f
+    Z = weights.sum(dim=dim, keepdim=True).clamp_min(1e-8)
+    return weights / Z  #
+
+def masked_mean(x: torch.Tensor, mask: torch.Tensor | None, dim: int = 1, keepdim: bool = False):
+    if mask is None:
+        return x.mean(dim=dim, keepdim=keepdim)
+    m = mask.to(dtype=x.dtype).unsqueeze(-1)
+    num = (x * m).sum(dim=dim, keepdim=keepdim)
+    den = m.sum(dim=dim, keepdim=keepdim).clamp_min(1.0)
+    return num / den
+
 def init_weights(m):
     """
     Initializes LayerNorm layers.
@@ -99,6 +126,12 @@ def init_weights(m):
     if isinstance(m, nn.LayerNorm):
         nn.init.constant_(m.weight, 1.0)
         nn.init.constant_(m.bias, 0.0)
+
+def select_active_candidates(tasks: torch.Tensor, active_per_batch: torch.Tensor, max_candidates: int) -> torch.Tensor:
+    N, C = tasks.shape 
+    print("select_active_candidates: tasks shape", tasks.shape)
+    #TODO: Reimplement 
+
 
 
 class BatchWrapper(nn.Module):
@@ -343,21 +376,150 @@ class LogitsOutputHead(OutputHead):
         logits = self.logit_stabilizer(logits)
         return logits
 
+    
 
-class ValueOutputHead(OutputHead):
-    def __init__(self, *args, **kwargs):
-        super(ValueOutputHead, self).__init__(*args, **kwargs)
+class VectorValueHead(nn.Module):
+    def __init__(
+            self,
+            input_dim: int,
+            hidden_channels: int = 64,
+            output_dim: int = 1,
+            proj_dim: int = 32,
+            activation: DictConfig = None,
+            initialiation: DictConfig = None,
+            layer_norm: bool = True,
+            debug: bool = False,
+            add_progress: bool = True,
+            add_device_load: bool = True,
+            n_devices: int = 5,
+            **_ignored
+        ):
+
+        super(VectorValueHead, self).__init__()
+
+        self.add_progress = add_progress
+        self.add_device_load = add_device_load
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.hidden_channels = hidden_channels
+        self.side_info_dim = 0
+
+        if self.add_progress:
+            self.side_info_dim += 2
+
+        if self.add_device_load:
+            self.side_info_dim += 3 * n_devices
+
+        if self.side_info_dim > 0:
+            self.side_info_mlp = nn.Sequential(
+                nn.Linear(self.side_info_dim, self.side_info_dim),
+                nn.LeakyReLU(negative_slope=0.01),
+            )
+        else:
+            self.side_info_mlp = nn.Identity()
+
+        self.attn_in_dim = input_dim + self.side_info_dim 
+        # self.ln = nn.LayerNorm(self.attn_in_dim)
+        # self.gate_W = nn.Linear(self.attn_in_dim, proj_dim, bias=True)
+        # self.gate_v = nn.Linear(proj_dim, 1, bias=False)
+
+        pooled_dim = self.attn_in_dim
+
+
+        self.value_mlp = OutputHead(
+            input_dim=pooled_dim,
+            hidden_channels=hidden_channels,
+            output_dim=output_dim,
+            activation=activation,
+            initialization=initialiation,
+            layer_norm=layer_norm,
+            debug=debug,
+        )
 
     def forward(self, obs, emb):
-        return super().forward(emb)
+        *batch, C, k = emb.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        emb = emb.reshape(B, C, k)
 
+        mask = obs["aux", "candidate_mask"]
+        mask = mask.reshape(B, C)
 
-class PolicyOutputHead(OutputHead):
+        side_info = None 
+        if self.add_device_load:
+            device_load = obs["aux", "device_load"]
+            device_memory = obs["aux", "device_memory"]
+            device_feat = torch.cat([device_load, device_memory], dim=-1)  # [B, 3*n_devices]
+            device_feat = device_feat.reshape(-1, device_feat.size(-1))  # [B, 3*n_devices]
+            side_info = device_feat
+
+        if self.add_progress:
+            time_feature = obs["aux", "time"] / obs["aux", "baseline"]
+            progress_feature = obs["aux", "progress"]
+            time_feature = time_feature.reshape(-1, 1)  # [B, 1]
+            progress_feature = progress_feature.reshape(-1, 1)  # [B, 1]
+            prog_feats = torch.cat([time_feature, progress_feature], dim=-1)  # [B, 2]
+            if side_info is None:
+                side_info = prog_feats
+            else:
+                side_info = torch.cat([side_info, prog_feats], dim=-1)  # [B, side_info_dim]
+
+        if side_info is not None:
+            side_info_emb = self.side_info_mlp(side_info)  # [B, side_info_dim]
+            side_info_emb = side_info_emb.unsqueeze(1).expand(-1, C, -1)  # [B, C, side_info_dim]
+            emb = torch.cat([emb, side_info_emb], dim=-1)  # [B, C, k + side_info_dim]
+
+        # m_pooled = masked_mean(emb, mask=mask, dim=1)  # [B, k + side_info_dim]
+        # m_pooled = m_pooled.view(*batch, -1)
+
+        # h = torch.tanh(self.gate_W(self.ln(emb)))  # [B, C, proj_dim]
+        # scores = self.gate_v(h).squeeze(-1)  # [B, C]
+        # attn_weights = masked_softmax(scores, mask=mask, dim=-1)  # [B, C]
+        # attn_pooled = torch.einsum("bc, bcd -> bd", attn_weights, emb)  # [B, k + side_info_dim]
+        # attn_pooled = attn_pooled.view(*batch, -1)
+
+        # pooled = torch.cat([m_pooled, attn_pooled], dim=-1)  # [B, 2*(k + side_info_dim)]
+
+        weights = mask.to(dtype=emb.dtype).unsqueeze(-1)  # [B, C, 1]
+        pooled = (emb * weights).sum(dim=1)
+        pooled = pooled.view(*batch, -1)
+        out = self.value_mlp(pooled)
+        return out
+
+class VectorPolicyHead(OutputHead):
     def __init__(self, *args, **kwargs):
-        super(PolicyOutputHead, self).__init__(*args, **kwargs)
+        super(VectorPolicyHead, self).__init__(*args, **kwargs)
 
     def forward(self, obs, emb):
-        return super().forward(emb)
+        mask = obs["aux", "candidate_mask"]
+        *batch, C, k = emb.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        emb = emb.reshape(B, C, k)
+        mask = mask.reshape(B, C)
+
+        out = super().forward(emb)
+        out = out.view(*batch, C, -1)
+        return out
+    
+class GNNValueHead(OutputHead):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+    def forward(self, obs, emb):
+        mask = obs["aux", "candidate_mask"]
+        print(f"GNNValueHead forward: emb shape {emb.shape}, mask shape {mask.shape}")
+        out = super().forward(emb)
+        return out
+    
+class GNNPolicyHead(OutputHead):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, obs, emb):
+        mask = obs["aux", "candidate_mask"]
+        print(f"GNNPolicyHead forward: emb shape {emb.shape}, mask shape {mask.shape}")
+        out = super().forward(emb)
+        return out 
 
 
 class VectorStateNet(nn.Module):
@@ -372,6 +534,7 @@ class VectorStateNet(nn.Module):
         layer_norm: bool = True,
         add_device_load: bool = True,
         n_devices: int = 5,
+        **_ignored,
     ):
         super(VectorStateNet, self).__init__()
         self.feature_config = feature_config
@@ -416,54 +579,423 @@ class VectorStateNet(nn.Module):
 
     def forward(self, tensordict: TensorDict):
         task_features = tensordict["nodes", "tasks", "attr"]
-        if task_features.ndim == 2 and task_features.shape[0] == 1:
-            # case [1, k] -> [k]
-            task_features = task_features.squeeze(0)
-        elif task_features.ndim == 3 and task_features.shape[1] == 1:
-            # case [b, 1, k] -> [b, k]
-            task_features = task_features.squeeze(1)
-        elif task_features.ndim == 4 and task_features.shape[2] == 1:
-            # case [b1, b2, 1, k] -> [b1, b2, k]
-            task_features = task_features.squeeze(2)
-        else:
-            raise ValueError(f"Unexpected shape {task_features.shape}")
+        candidate_counts = tensordict["aux", "candidates", "count"]
+        *batch, C, k = task_features.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        task_features = task_features.reshape(B, C, k)
+
+        if self.add_device_load:
+            device_load = tensordict["aux", "device_load"]
+            device_memory = tensordict["aux", "device_memory"]
+            device_feat = torch.cat([device_load, device_memory], dim=-1)  # [B, 3*n_devices]
+            device_feat = device_feat.reshape(-1, device_feat.size(-1))  # [B, 3*n_devices]
+            # expand to match task features
+            device_feat = device_feat.unsqueeze(1).expand(-1, C, -1)  # [B, C, 3*n_devices]
+            task_features = torch.cat([task_features, device_feat], dim=-1)  # [B, C, k + 3*n_devices]
 
         if self.add_progress:
             time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
             progress_feature = tensordict["aux", "progress"]
-            task_features = torch.cat([task_features, time_feature, progress_feature], dim=-1)
-        if self.add_device_load:
-            device_load = tensordict["aux", "device_load"]
-            device_memory = tensordict["aux", "device_memory"]
-            task_features = torch.cat([task_features, device_load, device_memory], dim=-1)
+            time_feature = time_feature.reshape(-1, 1)  # [B, 1]
+            progress_feature = progress_feature.reshape(-1, 1)  # [B, 1]
+            prog_feats = torch.cat([time_feature, progress_feature], dim=-1)  # [B, 2]
+            prog_feats = prog_feats.unsqueeze(1).expand(-1, C, -1)  # [B, C, 2]
+            task_features = torch.cat([task_features, prog_feats], dim=-1)  # [B, C, k + 2]
 
         task_activations = self.layers(task_features)
+        task_activations = task_activations.view(*batch, C, self.hidden_channels[-1])
 
         return task_activations
 
 
-def _zero_last_linear(seq: nn.Sequential):
-    last = None
-    for m in reversed(seq):
-        if isinstance(m, nn.Linear):
-            last = m
-            break
-    assert last is not None
-    nn.init.zeros_(last.weight)
-    if last.bias is not None:
-        nn.init.zeros_(last.bias)
+class VectorFiLMStateNet(nn.Module):
 
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        hidden_channels: list[int] | int,
+        add_progress: bool = False,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+        layer_norm: bool = True,
+        add_device_load: bool = True,
+        n_devices: int = 5,
+        pool_film: bool = True,
+        **_ignored,
+    ):
+        super().__init__()
 
-def _tiny_last_linear(seq: nn.Sequential, std: float = 1e-4):
-    last = None
-    for m in reversed(seq):
-        if isinstance(m, nn.Linear):
-            last = m
-            break
-    assert last is not None
-    nn.init.normal_(last.weight, std=std)
-    if last.bias is not None:
-        nn.init.zeros_(last.bias)
+        self.feature_config = feature_config
+        if isinstance(hidden_channels, int):
+            hidden_channels = [hidden_channels]
+        self.hidden_channels = hidden_channels
+        self.k = len(self.hidden_channels)
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+        self.pool_film = bool(pool_film)
+
+        layer_init = call(initialization if initialization else kaiming_init)
+        input_dim = feature_config.task_feature_dim
+
+        g_dim = 0
+
+        if add_progress:
+            g_dim += 2
+
+        if add_device_load:
+            g_dim += 3 * n_devices
+
+        # Build per-layer modules so we can do: Linear -> (LN) -> FiLM -> Act
+        self.linears = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        self.act = instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01)
+        self.film_generators = nn.ModuleList() if g_dim > 0 else None
+
+        self.rezeros = nn.ParameterList()
+        self.gamma_ranges = nn.ParameterList()
+
+        if self.k == 0:
+            self.layers = nn.Identity()
+            self.output_dim = input_dim
+        else:
+            in_ch = input_dim
+            for i in range(self.k):
+                out_ch = hidden_channels[i]
+                self.linears.append(layer_init(nn.Linear(in_ch, out_ch)))
+                self.norms.append(nn.LayerNorm(out_ch))
+
+                if self.film_generators is not None:
+                    mlp = nn.Sequential(layer_init(nn.Linear(g_dim, out_ch)),
+                        nn.SiLU(),
+                        layer_init(nn.Linear(out_ch, 2 * out_ch))
+                    )
+                    _tiny_last_linear(mlp, std=1e-4)
+                    self.film_generators.append(mlp)
+                    self.rezeros.append(nn.Parameter(torch.tensor(0.0)))
+                    self.gamma_ranges.append(nn.Parameter(torch.full((out_ch,), 0.05)))
+                in_ch = out_ch
+            self.output_dim = in_ch
+            self.output_keys = ["embed"]
+
+            self.gate_mlp = nn.Sequential(
+                nn.Linear(out_ch, out_ch),
+                nn.SiLU(),
+                nn.Linear(out_ch, 2 * out_ch),
+            )
+            self.gate_rezero = nn.Parameter(torch.tensor(0.0))
+            self.gate_gamma_range = nn.Parameter(torch.full((out_ch,), 0.05))
+            self.gate_norm = nn.LayerNorm(out_ch, elementwise_affine=False)
+            _tiny_last_linear(self.gate_mlp, std=1e-4)
+
+    def forward(self, tensordict: TensorDict):
+        task_features = tensordict["nodes", "tasks", "attr"]
+        candidate_counts = tensordict["aux", "candidates", "count"]
+        *batch, C, k = task_features.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        x = task_features.reshape(B, C, k)
+
+        cand_mask = tensordict["aux", "candidate_mask"].reshape(B, C).to(torch.bool)
+
+        # Build conditioning tensor g per candidate (B, C, g_dim) if enabled
+        g = None
+        if self.add_device_load:
+            device_load = tensordict["aux", "device_load"]
+            device_memory = tensordict["aux", "device_memory"]
+            device_feat = torch.cat([device_load, device_memory], dim=-1)  # [B, 3*n_devices]
+            device_feat = device_feat.reshape(-1, device_feat.size(-1)).unsqueeze(1).expand(-1, C, -1)  # [B, C, 3*n_devices]
+            g = device_feat
+        if self.add_progress:
+            time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+            progress_feature = tensordict["aux", "progress"]
+            prog_feats = torch.stack([time_feature.reshape(-1), progress_feature.reshape(-1)], dim=-1)  # [B, 2]
+            prog_feats = prog_feats.unsqueeze(1).expand(-1, C, -1)  # [B, C, 2]
+            g = prog_feats if g is None else torch.cat([g, prog_feats], dim=-1)  # [B, C, g_dim]
+
+        if self.k == 0:
+            return x.view(*batch, C, self.output_dim)
+
+        for i in range(self.k):
+            x = self.linears[i](x) # (B, C, H_i)
+            nx = self.norms[i](x)  # (B, C, H_i)
+
+            if g is not None:
+                H_i = x.size(-1)
+                gb = self.film_generators[i](g.reshape(-1, g.size(-1)))  # (B*C, 2*H_i)
+                gamma_raw, beta = gb.chunk(2, dim=-1)
+                gamma = self.gamma_ranges[i] * (2*torch.sigmoid(gamma_raw) - 1)
+                gamma = gamma.view(B, C, H_i)
+                beta = beta.view(B, C, H_i)
+                u = (1.0 + gamma) * nx + beta
+                x = x + self.rezeros[i] * u
+
+            x = cand_mask.unsqueeze(-1)*x
+            x = self.act(x)
+
+        if self.pool_film:
+            pooled = (x * cand_mask.unsqueeze(-1)).sum(dim=1) / cand_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+
+            H = x.size(-1)
+            xn = self.gate_norm(x)
+            gb = self.gate_mlp(pooled)  # (B, 2H)
+            gamma_raw, beta = gb.chunk(2, dim=-1)  # (B,H), (B,H)
+            gamma = self.gate_gamma_range * (2*torch.sigmoid(gamma_raw) - 1)
+            gamma = gamma.view(B, H)
+            beta = beta.view(B, H)
+            u = (1.0 + gamma).unsqueeze(1) * xn + beta.unsqueeze(1)
+            x = x + self.gate_rezero * u
+            x = cand_mask.unsqueeze(-1)*x
+
+        task_activations = x.view(*batch, C, self.output_dim)
+        return task_activations
+
+class VectorAttnStateNet(nn.Module):
+
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        hidden_channels: list[int] | int,
+        add_progress: bool = False,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+        layer_norm: bool = True,
+        add_device_load: bool = True,
+        n_devices: int = 5,
+        coord_layers: int = 1,
+        num_heads: int = 4,
+        attn_dropout: float = 0.0,
+        ffn_multiplier: float = 2.0,
+        **_ignored,
+    ):
+        super(VectorAttnStateNet, self).__init__()
+        self.feature_config = feature_config
+        if isinstance(hidden_channels, int):
+            hidden_channels = [hidden_channels]
+        self.hidden_channels = hidden_channels
+        self.k = len(self.hidden_channels)
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+
+        self.coord_layers = int(coord_layers)
+        self.num_heads = int(num_heads)
+        self.attn_dropout = float(attn_dropout)
+        self.ffn_multiplier = float(ffn_multiplier)
+
+        def make_activation(activation_config):
+            return instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01)
+
+        layer_init = call(initialization if initialization else kaiming_init)
+        input_dim = feature_config.task_feature_dim
+
+        if add_progress:
+            input_dim += 2
+
+        if add_device_load:
+            input_dim += 3 * n_devices
+
+        if self.k == 0:
+            self.layers = nn.Identity()
+            self.output_dim = input_dim
+        else:
+            layers = []
+            layer_channels = input_dim
+            for i in range(self.k):
+                layer_channels = hidden_channels[i]
+                layers.append(layer_init(nn.Linear(input_dim, layer_channels)))
+                if layer_norm:
+                    layers.append(nn.LayerNorm(layer_channels))
+                layers.append(make_activation(activation))
+                input_dim = layer_channels
+
+            self.layers = nn.Sequential(*layers)
+            self.output_dim = layer_channels
+
+        if self.coord_layers > 0:
+            d = self.output_dim
+            self._sab_blocks = nn.ModuleList()
+            for _ in range(self.coord_layers):
+                block = nn.ModuleDict({
+                    "prenorm": nn.LayerNorm(d),
+                    "attn": nn.MultiheadAttention(
+                        embed_dim=d, num_heads=self.num_heads,
+                        dropout=self.attn_dropout, batch_first=True
+                    ),
+                    "norm1": nn.LayerNorm(d),
+                    "ffn": nn.Sequential(
+                        layer_init(nn.Linear(d, int(self.ffn_multiplier * d))),
+                        make_activation(activation),
+                        layer_init(nn.Linear(int(self.ffn_multiplier * d), d)),
+                    ),
+                    "norm2": nn.LayerNorm(d),
+                })
+                self._sab_blocks.append(block)
+
+        self.output_keys = ["embed"]
+
+    def forward(self, tensordict: TensorDict):
+        task_features = tensordict["nodes", "tasks", "attr"]
+        candidate_counts = tensordict["aux", "candidates", "count"]
+        *batch, C, k = task_features.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        task_features = task_features.reshape(B, C, k)
+
+        if self.add_device_load:
+            device_load = tensordict["aux", "device_load"]
+            device_memory = tensordict["aux", "device_memory"]
+            device_feat = torch.cat([device_load, device_memory], dim=-1)  # [B, 3*n_devices]
+            device_feat = device_feat.reshape(-1, device_feat.size(-1)).unsqueeze(1).expand(-1, C, -1)
+            task_features = torch.cat([task_features, device_feat], dim=-1)
+
+        if self.add_progress:
+            time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+            progress_feature = tensordict["aux", "progress"]
+            prog_feats = torch.stack([time_feature.reshape(-1), progress_feature.reshape(-1)], dim=-1)
+            prog_feats = prog_feats.unsqueeze(1).expand(-1, C, -1)
+            task_features = torch.cat([task_features, prog_feats], dim=-1)
+
+        x = self.layers(task_features)  # (B, C, D=self.output_dim)
+
+        cand_mask = tensordict["aux", "candidate_mask"].reshape(B, C).to(torch.bool)  # [B, C]
+
+        x = x * cand_mask.unsqueeze(-1)  # Mask out non-candidates
+
+        if self.coord_layers > 0:
+            for blk in self._sab_blocks:
+                # Self-attention with residual + norm
+                ax = blk["prenorm"](x)
+                attn_out, _ = blk["attn"](
+                    ax, ax, x,
+                    need_weights=False,
+                )  # (B, C, D)
+                x = blk["norm1"](x + attn_out)
+                ffn_out = blk["ffn"](x)
+                x = blk["norm2"](x + ffn_out)
+
+        task_activations = x
+        task_activations = task_activations.view(*batch, C, self.output_dim)
+        return task_activations
+
+class VectorDCGStateNet(nn.Module):
+
+    def __init__(
+        self,
+        feature_config: FeatureDimConfig,
+        hidden_channels: list[int] | int,
+        add_progress: bool = False,
+        activation: DictConfig = None,
+        initialization: DictConfig = None,
+        layer_norm: bool = True,
+        add_device_load: bool = True,
+        n_devices: int = 5,
+        dcg_layers: int = 3,      # message-passing rounds
+        dcg_rank: int = 8,       # rank for pair weights w_ij
+        **_ignored,
+    ):
+        super(VectorDCGStateNet, self).__init__()
+        self.feature_config = feature_config
+        if isinstance(hidden_channels, int):
+            hidden_channels = [hidden_channels]
+        self.hidden_channels = hidden_channels
+        self.k = len(self.hidden_channels)
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+
+        def make_activation(activation_config):
+            return nn.SiLU()
+
+        layer_init = call(initialization if initialization else kaiming_init)
+        input_dim = feature_config.task_feature_dim
+        if add_progress:
+            input_dim += 2
+        if add_device_load:
+            input_dim += 3 * n_devices
+
+        if self.k == 0:
+            self.layers = nn.Identity()
+            self.output_dim = input_dim
+        else:
+            layers = []
+            layer_channels = input_dim
+            for i in range(self.k):
+                layer_channels = hidden_channels[i]
+                layers.append(layer_init(nn.Linear(input_dim, layer_channels)))
+                if layer_norm:
+                    layers.append(nn.LayerNorm(layer_channels))
+                layers.append(make_activation(activation))
+                input_dim = layer_channels
+            self.layers = nn.Sequential(*layers)
+            self.output_dim = layer_channels
+
+        self.dcg_layers = int(dcg_layers)
+        self.dcg_rank = int(dcg_rank)
+        d = self.output_dim
+        R = self.dcg_rank
+        self._dcg_blocks = nn.ModuleList()
+        for _ in range(self.dcg_layers):
+            self._dcg_blocks.append(nn.ModuleDict({
+                "prenorm": nn.LayerNorm(d),                   
+                "proj_i":  layer_init(nn.Linear(d, R, bias=False)),
+                "proj_j":  layer_init(nn.Linear(d, R, bias=False)),
+                "msg":     nn.Sequential(
+                                layer_init(nn.Linear(d, 2*d)),
+                                nn.SiLU(),
+                                layer_init(nn.Linear(2*d, d))),
+                "local":   nn.Sequential(
+                                layer_init(nn.Linear(d, 2*d)),
+                                nn.SiLU(),
+                                layer_init(nn.Linear(2*d, d))),
+                "norm":    nn.LayerNorm(d),
+            }))
+        self._dcg_scale = (self.dcg_rank ** -0.5)
+
+        self.output_keys = ["embed"]
+
+    def forward(self, tensordict: TensorDict):
+        task_features = tensordict["nodes", "tasks", "attr"]
+        candidate_counts = tensordict["aux", "candidates", "count"]
+        *batch, C, k = task_features.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        task_features = task_features.reshape(B, C, k)
+
+        if self.add_device_load:
+            device_load = tensordict["aux", "device_load"]
+            device_memory = tensordict["aux", "device_memory"]
+            device_feat = torch.cat([device_load, device_memory], dim=-1)  # [B, 3*n_devices]
+            device_feat = device_feat.reshape(-1, device_feat.size(-1)).unsqueeze(1).expand(-1, C, -1)
+            task_features = torch.cat([task_features, device_feat], dim=-1)
+
+        if self.add_progress:
+            time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+            progress_feature = tensordict["aux", "progress"]
+            prog_feats = torch.stack([time_feature.reshape(-1), progress_feature.reshape(-1)], dim=-1)
+            prog_feats = prog_feats.unsqueeze(1).expand(-1, C, -1)
+            task_features = torch.cat([task_features, prog_feats], dim=-1)
+
+        x = self.layers(task_features)  # (B, C, D)
+        cand_mask = tensordict["aux", "candidate_mask"].reshape(B, C).to(torch.bool)  # (B, C)
+
+        adj = tensordict.get(("aux", "candidate_adj"), None)
+        if adj is None:
+            eye = torch.eye(C, dtype=torch.bool, device=x.device).unsqueeze(0)  # (1, C, C)
+            adj = cand_mask.unsqueeze(1) & cand_mask.unsqueeze(2) & (~eye)     # (B, C, C)
+
+        if self.dcg_layers > 0:
+            for blk in self._dcg_blocks:
+                x_n = blk["prenorm"](x)
+                Pi = blk["proj_i"](x_n)                     # (B,C,R)
+                Pj = blk["proj_j"](x_n)                     # (B,C,R)
+                scores = torch.einsum("bir,bjr->bij", Pi, Pj) * self._dcg_scale
+                w = F.softplus(scores) * adj.to(scores.dtype)
+
+                deg = w.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+                w = w / deg
+
+                m_j = blk["msg"](x_n)                       # (B,C,D)
+                agg = torch.einsum("bij,bjd->bid", w, m_j)  # (B,C,D)
+
+                x = blk["norm"](x + blk["local"](x_n) + agg)
+
+        task_activations = x.view(*batch, C, self.output_dim)
+        return task_activations
 
 
 class _FiLM(nn.Module):
@@ -516,6 +1048,7 @@ class GATStateNet(nn.Module):
         return edge_index_masked, edge_attr_masked
 
     def __init__(self, feature_config: FeatureDimConfig, hidden_channels: int = 16, num_layers: int = 2, add_device_load: bool = False, add_progress: bool = False, n_devices: int = 5, **_ignored):
+        print("Initializing GATStateNet")
         super(GATStateNet, self).__init__()
         self.feature_config = feature_config
         self.hidden_channels = hidden_channels
@@ -622,9 +1155,10 @@ class GATStateNet(nn.Module):
 
         self.output_dim = hidden_channels*4 if self.g_dim > 0 else hidden_channels*3
 
-        self.output_keys = ["embed"]
+        self.output_keys = ["embed", "task_embed", "data_embed", "ptr"]
 
     def forward(self, tensordict: TensorDict):
+        print("GATStateNet forward called")
         batch_size = tensordict.batch_size
         data = self.convert_data(tensordict)
 
@@ -687,7 +1221,7 @@ class GATStateNet(nn.Module):
             x_new = {nt: self.norms[nt][l](x_new[nt]) for nt in x_new.keys()}
 
             # film
-            if self.film is not None:
+            if self.film is not None: 
                 x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
 
             # activation
@@ -705,10 +1239,16 @@ class GATStateNet(nn.Module):
         # final norm
         # x_dict = {nt: self.norms[nt][-1](x_dict[nt]) for nt in x_dict.keys()}
 
+        task_counts = tensordict["aux", "candidates", "count"]
+        max_candidates = tensordict["aux", "candidates", "idx"].size(-1)
+        print(f"max_candidates: {max_candidates}, task_counts: {task_counts}")
+
         if b_tasks is not None:
+            ptr = data["tasks"].ptr
             idx = data["tasks"].ptr[:-1]
             x = x_dict["tasks"][idx]
         else:
+            ptr = None 
             x = x_dict["tasks"][0]
 
         pooled_tasks = global_mean_pool(x_dict["tasks"], b_tasks)
@@ -735,7 +1275,7 @@ class GATStateNet(nn.Module):
         x = torch.cat([x, y], dim=-1)
         x = x.reshape(*batch_size, -1, x.shape[-1])
         # print(f"x shape before return: {x.shape}")
-        return x.select(dim=-2, index=0)
+        return x.select(dim=-2, index=0), 
     
 
 class TaskIterationGNNStateNet(nn.Module):

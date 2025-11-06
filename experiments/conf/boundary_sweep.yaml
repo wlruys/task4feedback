@@ -67,7 +67,8 @@ optimizer:
 feature:
   observer:
     prev_frames: 5
-    batched: true
+    grid_override: False
+    n_candidates: 1
 
 network:
   layers:

@@ -5,4 +5,4 @@ defaults:
 
 _target_: task4feedback.ml.models.GATStateNet
 hidden_channels: 16
-layer_norm: true
+layer_norm: false 

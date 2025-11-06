@@ -58,7 +58,8 @@ system:
 # feature:
 #   observer:
 #     prev_frames: 3
-#     batched: true
+#     grid_override: True
+#     n_candidates: 1
 
 # network:
 #   layers:

@@ -11,7 +11,8 @@ algorithm:
 feature:
   observer:
     prev_frames: 1
-    batched: false
+    grid_override: false
+    n_candidates: 1
     version: "C"
     add_degree: True
   normalization:

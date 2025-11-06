@@ -100,16 +100,18 @@ def to_pickable_policy(policy: PolicyType):
 def eval_location(cfg):
     graph_config = cfg.graph
     system_config = cfg.system
+    runtime_config = cfg.runtime
 
     seed = cfg.get("seed", 0)
 
     graph_type = graph_config.type if "type" in graph_config else "Unknown"
     graph_config_hash = cfg_hash(graph_config)
     system_config_hash = cfg_hash(system_config)
+    runtime_config_hash = cfg_hash(runtime_config)
 
 
     target_dir = Path("saved_evals") / graph_type / f"{system_config_hash}" 
-    target_file_name = f"{graph_config_hash}_{seed}.pkl"
+    target_file_name = f"{graph_config_hash}_{runtime_config_hash}_{seed}.pkl"
     target_file = target_dir / target_file_name
     if target_file.exists():
         print(f"Warning: Eval file {target_file} already exists and will be overwritten.")
@@ -123,21 +125,22 @@ def eval_location(cfg):
     with open(target_dir / f"graph_config_{graph_config_hash}.yaml", "w") as f:
         f.write(OmegaConf.to_yaml(graph_config))
 
-    return EvalLocation(folder=target_dir, file_path=target_file, name=f"evaluation_{graph_config_hash}_{seed}.pkl")
+    return EvalLocation(folder=target_dir, file_path=target_file, name=f"evaluation_{graph_config_hash}_{runtime_config_hash}_{seed}.pkl")
 
 def lookup_eval_location(cfg, raise_if_missing=False):
     graph_config = cfg.graph
     system_config = cfg.system
+    runtime_config = cfg.runtime 
 
     seed = cfg.get("seed", 0)
 
     graph_type = graph_config.type if "type" in graph_config else "Unknown"
     graph_config_hash = cfg_hash(graph_config)
     system_config_hash = cfg_hash(system_config)
+    runtime_config_hash = cfg_hash(runtime_config)
 
-
-    target_dir = Path("saved_evals") / graph_type / f"{system_config_hash}" 
-    target_file_name = f"{graph_config_hash}_{seed}.pkl"
+    target_dir = Path("saved_evals") / graph_type / f"{system_config_hash}"
+    target_file_name = f"{graph_config_hash}_{runtime_config_hash}_{seed}.pkl"
     target_file = target_dir / target_file_name
     if not target_file.exists() and raise_if_missing:
         raise FileNotFoundError(f"Eval file {target_file} does not exist.")
@@ -145,7 +148,7 @@ def lookup_eval_location(cfg, raise_if_missing=False):
         print(f"Warning: Eval file {target_file} does not exist.")
         return None 
 
-    return EvalLocation(folder=target_dir, file_path=target_file, name=f"evaluation_{graph_config_hash}_{seed}.pkl")
+    return EvalLocation(folder=target_dir, file_path=target_file, name=f"evaluation_{graph_config_hash}_{runtime_config_hash}_{seed}.pkl")
 
 def get_time(eval_state: EvalState, policy: PolicyType, idx: int):
     policy_str = policy_to_str(policy)

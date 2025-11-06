@@ -25,7 +25,7 @@ Use the Oracle chunk and level size to pickle eval.
 Move pickled file to pickled_evaluation folder.
 Don't forget to change base yaml file to point to the pickle file.
 
-`python3 do_rollout.py --config-name 8x8x128_dynamic_corners_cnn reward.verbose=True reward.gamma=1 reward.uniform_reward_scale=10`
+`python3 do_rollout.py --config-name 8x8x128_dynamic_corners_cnn reward.verbose=True reward.gamma=1`
 
 
 
@@ -43,7 +43,7 @@ for i in range(1):
                     if core < 72 and core + step > 72:
                         core = 72
                     print(
-                        f"taskset -c {core}-{core+step-1} python3 train.py --config-name 8x8x128_dynamic_corners_cnn reward.verbose=False feature.add_device_load={device_load} feature.observer.version={v} wandb.project={prj_name} algorithm.ent_coef={ent} reward.gamma={gamma} reward.uniform_reward_scale={scale} wandb.name={gamma}_{scale}_{ent}_{v} > /dev/null 2>&1 & sleep {30 if core==0 else 10}s"
+                        f"taskset -c {core}-{core+step-1} python3 train.py --config-name 8x8x128_dynamic_corners_cnn reward.verbose=False feature.add_device_load={device_load} feature.observer.version={v} wandb.project={prj_name} algorithm.ent_coef={ent} reward.gamma={gamma} wandb.name={gamma}_{scale}_{ent}_{v} > /dev/null 2>&1 & sleep {30 if core==0 else 10}s"
                     )
 
                     core += step

@@ -106,13 +106,22 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     nanobind_strip(fastsim2)
 endif()
 
+# add_custom_command(TARGET fastsim2 POST_BUILD
+#   COMMAND ${CMAKE_COMMAND} -E echo "Clearing quarantine on: $<TARGET_FILE_DIR:fastsim2>"
+#   COMMAND xattr -dr com.apple.quarantine "$<TARGET_FILE_DIR:fastsim2>" || true
+#   COMMAND xattr -dr com.apple.quarantine "${CMAKE_BINARY_DIR}" || true
+#   # Now sign the built module (ad-hoc signature is fine for local dev)
+#   COMMAND codesign -s - --force --timestamp=none "$<TARGET_FILE:fastsim2>"
+#   VERBATIM)
 
-nanobind_add_stub(fastsim2_stub
-    MODULE fastsim2
-    OUTPUT fastsim2.pyi
-    MARKER_FILE py.typed
-    DEPENDS fastsim2)
+# nanobind_add_stub(fastsim2_stub
+#     MODULE fastsim2
+#     OUTPUT fastsim2.pyi
+#     MARKER_FILE py.typed
+#     DEPENDS fastsim2)
+
 
 install(TARGETS fastsim2
         COMPONENT python
         LIBRARY DESTINATION task4feedback)
+

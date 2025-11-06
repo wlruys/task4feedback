@@ -5,8 +5,7 @@ random_start: False
 terminal_reward: True
 chance: 1.0
 pbrs: True
-sparse_reward_scale: 1
-dense_reward_scale: 1
-uniform_reward_scale: 0 # This overrides both sparse and dense reward scale if > 0
+sparse_reward_scale: 1.0
+dense_reward_scale: 1.0
 gamma: 1.0
 verbose: False

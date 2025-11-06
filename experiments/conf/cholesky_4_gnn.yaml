@@ -1,7 +1,7 @@
 defaults:
   - cholesky_4.yaml
   - feature: gnn_single
-  - network: original_gnn_baseline
+  - network: gnn_baseline
   - _self_
 
 algorithm:
@@ -10,11 +10,12 @@ algorithm:
 
 feature:
   observer:
-    batched: False
+    grid_override: false
+    n_candidates: 1
     version: "C"
     add_degree: True
   normalization:
-    warmup: 20
+    warmup: 1
   add_device_load: True
 
 network:

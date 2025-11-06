@@ -10,7 +10,8 @@ algorithm:
 
 feature:
   observer:
-    batched: False
+    grid_override: False
+    n_candidates: 1
     version: "E"
     add_degree: True
   normalization:

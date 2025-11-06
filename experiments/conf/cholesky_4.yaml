@@ -23,13 +23,17 @@ deterministic_torch: true
 reward:
   verbose: False
   random_start: False
-  gamma: 0.99
-  uniform_reward_scale: 0 # This overrides both sparse and dense reward scale if > 0
+  gamma: 0.999
+  terminal_reward: True
+  chance: 1.0
+  pbrs: True
+  sparse_reward_scale: 1.0
+  dense_reward_scale: 1.0
 
 graph:
   config:
-    n: 4
-    level_memory: 98e9
+    n: 20
+    level_memory: 99e9
     block_time: 10000
     task_time: 10000
   env:
@@ -39,14 +43,14 @@ graph:
     seed: 1
 
 algorithm:
-  num_collections: 1000
+  num_collections: 10000
   rollout_steps: 16
   workers: 4
   graphs_per_collection: 4
   ent_coef: 0.001
   sample_slices: False
   slice_len: 16 # only used if sample_slices is True (LSTM)
-  gamma: 0.99
+  gamma: 0.999
   lmbda: 0.95
   minibatch_size: 16
   collector: "multi_sync"
@@ -60,7 +64,7 @@ system:
 runtime:
   batch_size: 5
   queue_threshold: 5
-  max_in_flight: 16
+  max_in_flight: 64
 
 wandb:
   enabled: true
@@ -70,4 +74,4 @@ wandb:
 eval:
   animation_interval: 0
   eval_interval: 100
-  samples: 10
+  samples: 1

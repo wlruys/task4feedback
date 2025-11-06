@@ -1687,8 +1687,8 @@ class CandidateObserverFactory(CandidateExternalObserverFactory):
 
 
 class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, width: int, length: int, prev_frames: int, version: str = "E", batched: bool = False, add_degree: bool = False, **_ignored):
-        self.batched = batched
+    def __init__(self, spec: fastsim.GraphSpec, width: int, length: int, prev_frames: int, version: str = "E", graph_override: bool = False, add_degree: bool = False, **_ignored):
+        self.graph_override = graph_override
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         self.add_degree = add_degree
@@ -1697,47 +1697,35 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
             task_feature_factory.add(fastsim.InDegreeTaskFeature)
             task_feature_factory.add(fastsim.OutDegreeTaskFeature)
 
+        print(f"CandidateCoordinateObserverFactory: version {version}")
+        print(f"CandidateCoordinateObserverFactory: graph_override {self.graph_override}")
+        print(f"CandidateCoordinateObserverFactory: width {width}, length {length}")
+        print(f"Max candidates: {spec.max_candidates}")
+
+
+
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
         if "A" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            pass 
+            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "B" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "C" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "D" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
-            # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "E" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "F" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "G" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
-            # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "H" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.EmptyDataFeature, 1)
@@ -1779,13 +1767,14 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         length: int,
         prev_frames: int,
         version: str,
-        batched: bool = False,
+        graph_override: bool = False,
         **_ignored,
     ):
-        self.batched = batched
-        assert (not batched and spec.max_candidates == 1) or (
-            spec.max_candidates == width * length
-        ), f"Batched {self.batched} CNN observer requires max_candidates to be {width*length if self.batched else 1}, but got {spec.max_candidates}"
+        self.graph_override = graph_override
+
+        if self.graph_override and not (spec.max_candidates == width * length):
+            raise ValueError(f"When graph_override is True, max_candidates must be {width*length}, but got {spec.max_candidates}")
+        
         task_feature_factory = FeatureExtractorFactory()
 
         if "A" in version:
@@ -1887,7 +1876,7 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         task_data_feature_extractor = self.task_data_feature_factory.create(state)
         task_device_feature_extractor = self.task_device_feature_factory.create(state) if self.task_device_feature_factory is not None else None
         data_device_feature_extractor = self.data_device_feature_factory.create(state) if self.data_device_feature_factory is not None else None
-        if self.batched:
+        if self.graph_override:
             return CnnBatchTaskObserver(
                 simulator,
                 graph_spec,

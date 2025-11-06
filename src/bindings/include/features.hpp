@@ -1175,8 +1175,8 @@ public:
 
     for (int i = 0; i < n_devices; i++) {
       auto reserved_mem = static_cast<double>(device_manager.get_mem<TaskState::RESERVED>(i));
-      auto log_reserved_mem = std::log1p(1 + reserved_mem);
-      v(i * vals_per_device + 0) = static_cast<f_t>(log_reserved_mem);
+      //auto log_reserved_mem = std::log1p(1 + reserved_mem);
+      v(i * vals_per_device + 0) = static_cast<f_t>(reserved_mem);
     }
 
     // std::cout << "Device Memory: [";
