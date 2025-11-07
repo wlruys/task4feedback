@@ -349,15 +349,17 @@ public:
     return count;
   }
 
-  void _get_k_hop_task_neighborhood(TaskSet &visited, taskid_t task_id, int k, size_t max_tasks) {
+  void _get_k_hop_task_neighborhood(TaskSet &visited, std::span<int64_t> initial_tasks, int k, size_t max_tasks) {
 
     const auto &static_graph = state.get().get_tasks();
     static bool has_warned = false;
     local_visited.clear();
 
     std::queue<taskid_t> q;
-    q.push(task_id);
-    visited.insert(task_id);
+    for (auto task_id : initial_tasks) {
+      q.push(task_id);
+      visited.insert(task_id);
+    }
 
     int current_hop = 0;
 
@@ -413,17 +415,7 @@ public:
     size_t max_tasks = output.size();
     std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
     static bool has_warned = false;
-    for (const auto &task_id_64_bit : initial_tasks_span) {
-      taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
-      _get_k_hop_task_neighborhood(visited, task_id, k, max_tasks);
-      if (visited.size() >= max_tasks) {
-        if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
-          has_warned = true;
-        }
-        break;
-      }
-    }
+    _get_k_hop_task_neighborhood(visited, initial_tasks_span, k, max_tasks);
 
     auto count = min(max_tasks, visited.size());
 
@@ -1691,6 +1683,20 @@ struct EmptyTaskFeature : public IntFeature<EmptyTaskFeature> {
   }
 };
 
+struct TaskIDFeature : public StateFeature<TaskIDFeature> {
+  TaskIDFeature(const SchedulerState &state)
+      : StateFeature<TaskIDFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    output[0] = static_cast<f_t>(task_id);
+  }
+}; 
+
 struct OneHotMappedDeviceTaskFeature : public StateFeature<OneHotMappedDeviceTaskFeature> {
   OneHotMappedDeviceTaskFeature(const SchedulerState &state)
       : StateFeature<OneHotMappedDeviceTaskFeature>(state, NodeType::TASK) {
@@ -2175,7 +2181,7 @@ struct TaskDataMappedFeature : public StateEdgeFeature<TaskDataMappedFeature> {
     const auto &recent_writers = static_graph.get_most_recent_writers(source_id);
     taskid_t recent_writer_task_id = recent_writers[idx_in_read];
 
-    const bool is_mapped = task_runtime.is_compute_mapped(recent_writer_task_id);
+    const bool is_mapped = (recent_writer_task_id == -1) || task_runtime.is_compute_mapped(recent_writer_task_id);
     output[0] = static_cast<f_t>(is_mapped == true);
   }
 };
@@ -2199,7 +2205,7 @@ struct TaskDataMappedOneHotFeature : public StateEdgeFeature<TaskDataMappedOneHo
     const auto &recent_writers = static_graph.get_most_recent_writers(source_id);
     taskid_t recent_writer_task_id = recent_writers[idx_in_read];
 
-    const bool is_mapped = task_runtime.is_compute_mapped(recent_writer_task_id);
+    const bool is_mapped = (recent_writer_task_id == -1) || task_runtime.is_compute_mapped(recent_writer_task_id);
 
     output[0] = static_cast<f_t>(is_mapped == true);
     output[1] = static_cast<f_t>(is_mapped == false);

@@ -1452,7 +1452,7 @@ class GNNExternalObserverFactory(ExternalObserverFactory):
             device_features=device_feature_extractor,
             task_task_features=task_task_feature_extractor,
             task_read_data_features=task_read_data_feature_extractor,
-            cache=True,
+            cache=False,
         )
 
 
@@ -1593,10 +1593,10 @@ class GNNObserverFactory(GNNExternalObserverFactory):
         task_feature_factory = FeatureExtractorFactory()
         data_feature_factory = FeatureExtractorFactory()
 
-        if add_degree:
-            task_feature_factory.add(fastsim.InDegreeTaskFeature)
-            task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-            task_feature_factory.add(fastsim.ReadDegreeTaskFeature)
+        # if add_degree:
+        #     task_feature_factory.add(fastsim.InDegreeTaskFeature)
+        #     task_feature_factory.add(fastsim.OutDegreeTaskFeature)
+        #     task_feature_factory.add(fastsim.ReadDegreeTaskFeature)
 
         device_feature_factory = FeatureExtractorFactory()
         device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
@@ -1613,21 +1613,24 @@ class GNNObserverFactory(GNNExternalObserverFactory):
         # "DFGH" have removed [-4:0] normalization
 
         if "A" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
+            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
             data_feature_factory.add(fastsim.DataMappedLocationsFeature)
         elif "B" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
+            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
             data_feature_factory.add(fastsim.DataCoordinateFeature)
         elif "C" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
+            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
             data_feature_factory.add(fastsim.DataMappedLocationsFeature)
             data_feature_factory.add(fastsim.DataCoordinateFeature)
         elif "D" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            task_feature_factory.add(fastsim.TaskStateFeature)
+            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
+            # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
+            # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
+            # task_feature_factory.add(fastsim.TaskStateFeature)
+            task_feature_factory.add(fastsim.TaskIDFeature)
             data_feature_factory.add(fastsim.DataSizeFeature)
             data_feature_factory.add(fastsim.DataMappedLocationsFeature)
             data_feature_factory.add(fastsim.DataCoordinateFeature)      
@@ -1876,7 +1879,7 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         task_data_feature_extractor = self.task_data_feature_factory.create(state)
         task_device_feature_extractor = self.task_device_feature_factory.create(state) if self.task_device_feature_factory is not None else None
         data_device_feature_extractor = self.data_device_feature_factory.create(state) if self.data_device_feature_factory is not None else None
-        if self.graph_override:
+        if True:
             return CnnBatchTaskObserver(
                 simulator,
                 graph_spec,

@@ -3,17 +3,20 @@ observer:
   _target_: task4feedback.graphs.jacobi.GNNObserverFactory
   spec:
     _target_: task4feedback.interface.create_graph_spec
-    max_tasks: 30
-    max_data: 120
+    max_tasks: 400
+    max_data: 1000
     max_devices: 5
-    max_edges_tasks_tasks: 100
-    max_edges_tasks_data: 150
+    max_edges_tasks_tasks: 600
+    max_edges_tasks_data: 3000
     max_edges_data_devices: 1
     max_edges_tasks_devices: 1
+  width: NoNeedToChange
+  length: NoNeedToChange
   version: "E"
-  add_degree: false
+  prev_frames: 1
+  add_degree: False
   n_candidates: 1
-  grid_override: false
+  grid_override: False
 normalization:
   enabled: true 
   warmup: 1

@@ -315,6 +315,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_frame_feature<PrevReadSizeFeature>(m, "PrevReadSizeFeature");
   bind_frame_feature<PrevMappedSizeFeature>(m, "PrevMappedSizeFeature");
   bind_frame_feature<PrevMappedDevice>(m, "PrevMappedDeviceFeature");
+  bind_state_feature<TaskIDFeature>(m, "TaskIDFeature");
 
   bind_state_feature<ReadDataLocationFeature>(m, "ReadDataLocationFeature");
   bind_state_feature<TaskMeanDurationFeature>(m, "TaskMeanDurationFeature");

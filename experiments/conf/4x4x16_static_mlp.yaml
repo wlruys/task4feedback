@@ -5,13 +5,13 @@ defaults:
   - _self_
 
 algorithm:
-  rollout_steps: 128
-  minibatch_size: 128
+  rollout_steps: 16
+  minibatch_size: 16
 
 feature:
   observer:
     grid_override: False
-    n_candidates: 32
+    n_candidates: 64
     version: E
   normalization:
     warmup: 20
@@ -29,4 +29,5 @@ network:
     add_progress: True
 
 wandb:
-  name: MLP-A_IEFT
+  name: independent-mlp-E_IS
+  project: jacobi_deb

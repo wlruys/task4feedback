@@ -28,7 +28,7 @@ reward:
 
 graph:
   config:
-    n: 16
+    n: 4
     steps: 16
     level_memory: 98e9
     boundary_time: 2500
@@ -45,7 +45,7 @@ algorithm:
   rollout_steps: 16
   workers: 4
   graphs_per_collection: 4
-  ent_coef: 0.01
+  ent_coef: 0.001
   sample_slices: False
   slice_len: 16 # only used if sample_slices is True (LSTM)
   gamma: 1.0

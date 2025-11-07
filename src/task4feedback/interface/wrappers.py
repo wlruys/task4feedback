@@ -1412,6 +1412,9 @@ class ExternalObserver:
 
             output.set_at_(("nodes", "tasks", "count"), count, 0)
 
+            #print("Task count", count)
+            #print("Task ids", output["nodes", "tasks", "glb"][:count])
+
             if self.cache:
                 _HASH_HOLDER.add(key, ("nodes", "tasks", "glb"), output["nodes", "tasks", "glb"].detach().clone())
                 _HASH_HOLDER.add(key, ("nodes", "tasks", "count"), output["nodes", "tasks", "count"].detach().clone())
@@ -1540,7 +1543,7 @@ class ExternalObserver:
                 output["nodes", "data", "glb"][:ndata],
                 output["edges", "tasks_read_data", "idx"],
                 output["edges", "tasks_read_data", "glb"],
-                AccessType.READ_MAPPED,
+                AccessType.READ,
             )
             output.set_at_(("edges", "tasks_read_data", "count"), read_count, 0)
 
@@ -1613,6 +1616,8 @@ class ExternalObserver:
         count = self.simulator.simulator.get_mappable_candidates(output["aux", "candidates", "idx"])
         output.set_at_(("aux", "candidates", "count"), count, 0)
 
+        print(output["aux", "candidates", "idx"])
+
         # Mark valid candidates out of max_candidates
         output[("aux", "candidate_mask")][:count] = True 
 
@@ -1633,6 +1638,10 @@ class ExternalObserver:
         # Edge observations (edges depend on ids collected during node observation)
         self.task_task_observation(output)
         self.task_data_observation(output)
+
+        # Load device information
+        self.get_device_load(output)
+        self.get_device_memory(output)
 
         # Auxiliary observations
         output.set_at_(("aux", "progress"), -2.0, 0)
@@ -1662,8 +1671,6 @@ class CandidateObserver(ExternalObserver):
 
         node_tensor = TensorDict({"tasks": _make_node_tensor(spec.max_candidates, self.task_features.feature_dim)})
         mapping_size = spec.max_candidates if self.remapped_candidates else 1
-
-        print(f"MAX CANDIDATES: {spec.max_candidates}, MAPPING SIZE: {mapping_size}")
 
         aux_tensor = TensorDict(
             {

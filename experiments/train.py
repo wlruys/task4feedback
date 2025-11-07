@@ -130,7 +130,7 @@ def configure_training(cfg: DictConfig):
         )
 
 
-@hydra.main(config_path="conf", config_name="4x4x16_static_mlp.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="4x4x16_static_gnn.yaml", version_base=None)
 def main(cfg: DictConfig):
     # cfg.graph.config.workload_args.traj_type exist
     # if cfg.graph.type == "jacobi":

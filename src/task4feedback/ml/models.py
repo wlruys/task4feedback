@@ -35,6 +35,7 @@ from torch_geometric.nn import (
     SAGPooling,
     HeteroConv,
     SAGEConv,
+    CGConv,
 )
 import numpy as np
 import time
@@ -127,10 +128,53 @@ def init_weights(m):
         nn.init.constant_(m.weight, 1.0)
         nn.init.constant_(m.bias, 0.0)
 
-def select_active_candidates(tasks: torch.Tensor, active_per_batch: torch.Tensor, max_candidates: int) -> torch.Tensor:
-    N, C = tasks.shape 
-    print("select_active_candidates: tasks shape", tasks.shape)
-    #TODO: Reimplement 
+
+def gather_candidates(
+    tasks: torch.Tensor,                   
+    candidates_per_batch: torch.Tensor,
+    node_info,
+    is_batch: bool = False,
+) -> torch.Tensor:
+    N, C = tasks.shape
+    device = tasks.device
+
+    candidates_per_batch = candidates_per_batch.to(device=device, dtype=torch.long)
+    k = candidates_per_batch.reshape(-1)
+
+    if not is_batch:
+        if k.numel() == 0:
+            return tasks.new_zeros((0, C))
+        k0 = int(k[0].item())
+        return tasks[:k0]
+
+    ptr   = node_info.ptr.to(device)     # [B+1]
+    batch = node_info.batch.to(device)   # [N]
+
+    B = ptr.numel() - 1
+    node_ids      = torch.arange(N, device=device)     # [N]
+    local_node_ids = node_ids - ptr[batch]             # [N]
+    keep = local_node_ids < k[batch]                   # [N] bool
+    idx_concat = keep.nonzero(as_tuple=False).flatten()  # [sum_b k_b]
+    candidates = tasks.index_select(0, idx_concat)  # [sum_b k_b, C]
+    return candidates
+
+def scatter_candidates(candidates: torch.Tensor, candidates_per_batch: torch.Tensor, max_candidates: torch.Tensor, node_info, is_batch: bool = False) -> torch.Tensor:
+    
+    N, C = candidates.shape
+    device = candidates.device
+    candidates_per_batch = candidates_per_batch.to(device=device, dtype=torch.long)
+    k = candidates_per_batch.reshape(-1)
+    B = k.numel()
+
+    ar = torch.arange(max_candidates, device=device)
+    mask = ar.unsqueeze(0) < k.unsqueeze(1)
+    #print("mask", mask.shape)
+    #print("ar", ar.shape)
+
+    padded = candidates.new_full((B, max_candidates, C), 0.0)
+    padded[mask] = candidates
+    #print("padded", padded.shape)
+    return padded 
 
 
 
@@ -506,9 +550,21 @@ class GNNValueHead(OutputHead):
         super().__init__(*args, **kwargs)
         
     def forward(self, obs, emb):
+        *batch, C, k = emb.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        emb = emb.reshape(B, C, k)
+
         mask = obs["aux", "candidate_mask"]
-        print(f"GNNValueHead forward: emb shape {emb.shape}, mask shape {mask.shape}")
-        out = super().forward(emb)
+        mask = mask.reshape(B, C)
+
+        pooled = emb.sum(dim=1)
+
+
+        
+        #print(f"GNNValueHead forward: pooled shape {pooled.shape}, mask shape {mask.shape}")
+        out = super().forward(pooled)
+        out = out.view(*batch, -1)
+        #print(f"GNNValueOut", out.shape)
         return out
     
 class GNNPolicyHead(OutputHead):
@@ -517,8 +573,14 @@ class GNNPolicyHead(OutputHead):
 
     def forward(self, obs, emb):
         mask = obs["aux", "candidate_mask"]
-        print(f"GNNPolicyHead forward: emb shape {emb.shape}, mask shape {mask.shape}")
+        *batch, C, k = emb.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        emb = emb.reshape(B, C, k)
+        mask = mask.reshape(B, C)
+        
+        #print(f"GNNPolicyHead forward: emb shape {emb.shape}, mask shape {mask.shape}")
         out = super().forward(emb)
+        out = out.view(*batch, C, -1)
         return out 
 
 
@@ -645,7 +707,6 @@ class VectorFiLMStateNet(nn.Module):
         if add_device_load:
             g_dim += 3 * n_devices
 
-        # Build per-layer modules so we can do: Linear -> (LN) -> FiLM -> Act
         self.linears = nn.ModuleList()
         self.norms = nn.ModuleList()
         self.act = instantiate(activation) if activation else nn.LeakyReLU(negative_slope=0.01)
@@ -665,7 +726,7 @@ class VectorFiLMStateNet(nn.Module):
                 self.norms.append(nn.LayerNorm(out_ch))
 
                 if self.film_generators is not None:
-                    mlp = nn.Sequential(layer_init(nn.Linear(g_dim, out_ch)),
+                    mlp = nn.Sequential(layer_init(nn.Linear(g_dim+out_ch, out_ch)),
                         nn.SiLU(),
                         layer_init(nn.Linear(out_ch, 2 * out_ch))
                     )
@@ -696,7 +757,6 @@ class VectorFiLMStateNet(nn.Module):
 
         cand_mask = tensordict["aux", "candidate_mask"].reshape(B, C).to(torch.bool)
 
-        # Build conditioning tensor g per candidate (B, C, g_dim) if enabled
         g = None
         if self.add_device_load:
             device_load = tensordict["aux", "device_load"]
@@ -720,7 +780,8 @@ class VectorFiLMStateNet(nn.Module):
 
             if g is not None:
                 H_i = x.size(-1)
-                gb = self.film_generators[i](g.reshape(-1, g.size(-1)))  # (B*C, 2*H_i)
+                cat_g = torch.cat([g.reshape(-1, g.size(-1)), nx.reshape(-1, nx.size(-1))], dim=-1)
+                gb = self.film_generators[i](cat_g)  # (B*C, 2*H_i)
                 gamma_raw, beta = gb.chunk(2, dim=-1)
                 gamma = self.gamma_ranges[i] * (2*torch.sigmoid(gamma_raw) - 1)
                 gamma = gamma.view(B, C, H_i)
@@ -1094,10 +1155,17 @@ class GATStateNet(nn.Module):
             }
             # conv_dict = {
             #     ("tasks", "to", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
-            #     # ("tasks", "from", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
+            #     ("tasks", "from", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
             #     ("tasks", "read", "data"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
             #     ("data", "read", "tasks"): GATv2Conv((self.hidden_channels, self.hidden_channels), self.hidden_channels, heads=1, concat=False, dropout=0.0, add_self_loops=False),
             # }
+            # conv_dict = {
+            #     ("tasks", "to", "tasks"): CGConv((self.hidden_channels, self.hidden_channels), dim=0, aggr="add"),
+            #     ("tasks", "from", "tasks"): CGConv((self.hidden_channels, self.hidden_channels), dim=0, aggr="add"),
+            #     ("tasks", "read", "data"): CGConv((self.hidden_channels, self.hidden_channels), dim=2, aggr="add"),
+            #     ("data", "read", "tasks"): CGConv((self.hidden_channels, self.hidden_channels), dim=2, aggr="add"),
+            # }
+
             hetero_conv = HeteroConv(conv_dict, aggr="mean")
             self.convs.append(hetero_conv)
 
@@ -1153,129 +1221,185 @@ class GATStateNet(nn.Module):
         nn.init.zeros_(self.stem_proj["tasks"].bias)
         nn.init.zeros_(self.stem_proj["data"].bias)
 
-        self.output_dim = hidden_channels*4 if self.g_dim > 0 else hidden_channels*3
+        self.output_dim = hidden_channels
 
-        self.output_keys = ["embed", "task_embed", "data_embed", "ptr"]
+        out_ch = hidden_channels
+
+        self.gate_mlp = nn.Sequential(
+            nn.Linear(out_ch, out_ch),
+            nn.SiLU(),
+            nn.Linear(out_ch, 2 * out_ch),
+        )
+        self.gate_rezero = nn.Parameter(torch.tensor(0.0))
+        self.gate_gamma_range = nn.Parameter(torch.full((out_ch,), 0.05))
+        self.gate_norm = nn.LayerNorm(out_ch, elementwise_affine=False)
+        _tiny_last_linear(self.gate_mlp, std=1e-4)
+
+        self.output_keys = ["embed"]
 
     def forward(self, tensordict: TensorDict):
-        print("GATStateNet forward called")
+        #print("GATStateNet forward called")
         batch_size = tensordict.batch_size
         data = self.convert_data(tensordict)
 
-        b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
-        b_data = data["data"].batch if isinstance(data, Batch) else None
+        is_batch = isinstance(data, Batch)
+        # b_tasks = data["tasks"].batch if is_batch else None
+        # b_data = data["data"].batch if is_batch else None
 
-        x_tasks = self.stem_proj["tasks"](data["tasks"].x)
-        # x_tasks = self.stem_norm["tasks"](x_tasks)
-        x_tasks = self.act(x_tasks)
+        # x_tasks = self.stem_proj["tasks"](data["tasks"].x)
+        # # x_tasks = self.stem_norm["tasks"](x_tasks)
+        # x_tasks = self.act(x_tasks)
 
-        x_data = self.stem_proj["data"](data["data"].x)
-        # x_data = self.stem_norm["data"](x_data)
-        x_data = self.act(x_data)
+        # x_data = self.stem_proj["data"](data["data"].x)
+        # # x_data = self.stem_norm["data"](x_data)
+        # x_data = self.act(x_data)
 
+        x_tasks = data["tasks"].x
+        x_data = data["data"].x
         x_dict = {"tasks": x_tasks, "data": x_data}
-        batch_dict = {"tasks": b_tasks, "data": b_data}
 
-        tasks_read_data = data["tasks", "read", "data"].edge_index
-        mask = data["tasks", "read", "data"].edge_attr
-        masked_task_data, _ = self._mask_edges(edge_index=tasks_read_data, edge_mask=mask[:, 0])
+        # batch_dict = {"tasks": b_tasks, "data": b_data}
 
-        edge_index_dict = {
-            ("tasks", "to", "tasks"): data["tasks", "to", "tasks"].edge_index,
-            ("tasks", "from", "tasks"): data["tasks", "from", "tasks"].edge_index,
-            ("tasks", "read", "data"): masked_task_data,
-            ("data", "read", "tasks"): masked_task_data.flip(0),
-        }
+        # tasks_read_data = data["tasks", "read", "data"].edge_index
+        # mask = data["tasks", "read", "data"].edge_attr
+        # masked_task_data, _ = self._mask_edges(edge_index=tasks_read_data, edge_mask=mask[:, 0])
 
-        g = None
-        if self.film is not None:
-            if self.add_progress:
-                time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
-                time_feature = time_feature.reshape(-1, 1)
-                progress_feature = tensordict["aux", "progress"]
-                progress_feature = progress_feature.reshape(-1, 1)
-                g = torch.cat([time_feature, progress_feature], dim=-1)
+        # edge_index_dict = {
+        #     ("tasks", "to", "tasks"): data["tasks", "to", "tasks"].edge_index,
+        #     ("tasks", "from", "tasks"): data["tasks", "from", "tasks"].edge_index,
+        #     ("tasks", "read", "data"): masked_task_data,
+        #     ("data", "read", "tasks"): masked_task_data.flip(0),
+        # }
 
-            if self.add_device_load:
-                device_load = tensordict["aux", "device_load"]
-                device_memory = tensordict["aux", "device_memory"]
-                device_load = device_load.reshape(-1, 2 * self.n_devices)
-                device_memory = device_memory.reshape(-1, 1 * self.n_devices)
+        # for l, conv in enumerate(self.convs):
 
-                if g is None:
-                    g = torch.cat([device_load, device_memory], dim=-1)
-                else:
-                    g = torch.cat([g, device_load, device_memory], dim=-1)
+        #     # pre-norm
+        #     # x_pre = {nt: self.norms[nt][l](x_dict[nt]) for nt in x_dict.keys()}
 
-        for l, conv in enumerate(self.convs):
+        #     # conv
+        #     x_new = conv(x_dict, edge_index_dict=edge_index_dict)
 
-            # pre-norm
-            # x_pre = {nt: self.norms[nt][l](x_dict[nt]) for nt in x_dict.keys()}
+        #     # #post-norm
+        #     # x_new  = {nt: self.post_norms[nt][l](x_dict[nt], x_new[nt]) for nt in x_new.keys()}
 
-            # conv
-            x_new = conv(x_dict, edge_index_dict=edge_index_dict)
+        #     x_new = {nt: self.norms[nt][l](x_new[nt]) for nt in x_new.keys()}
 
-            # #post-norm
-            # x_new  = {nt: self.post_norms[nt][l](x_dict[nt], x_new[nt]) for nt in x_new.keys()}
+        #     # film
+        #     # if self.film is not None: 
+        #     #     x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
 
-            x_new = {nt: self.norms[nt][l](x_new[nt]) for nt in x_new.keys()}
+        #     # activation
+        #     x_new = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
 
-            # film
-            if self.film is not None: 
-                x_new = self.film(x_new, batch_dict, g=g, layer_idx=l)
+        #     # residual
+        #     for nt in x_dict.keys():
+        #         beta = self.beta[nt][l]
+        #         beta = torch.sigmoid(beta)
+        #         x_new[nt] = (1 - beta) * x_dict[nt] + beta * x_new[nt]
 
-            # activation
-            x_new = {nt: self.act(x_new[nt]) for nt in x_new.keys()}
+        #     # update for next layer
+        #     x_dict = {nt: x_new[nt] for nt in x_new.keys()}
 
-            # residual
-            for nt in x_dict.keys():
-                beta = self.beta[nt][l]
-                beta = torch.sigmoid(beta)
-                x_new[nt] = (1 - beta) * x_dict[nt] + beta * x_new[nt]
-
-            # update for next layer
-            x_dict = {nt: x_new[nt] for nt in x_new.keys()}
-
-        # final norm
-        # x_dict = {nt: self.norms[nt][-1](x_dict[nt]) for nt in x_dict.keys()}
+        # # final norm
+        # # x_dict = {nt: self.norms[nt][-1](x_dict[nt]) for nt in x_dict.keys()}
 
         task_counts = tensordict["aux", "candidates", "count"]
         max_candidates = tensordict["aux", "candidates", "idx"].size(-1)
-        print(f"max_candidates: {max_candidates}, task_counts: {task_counts}")
+        task_activations = x_dict["tasks"]
+        # data_activations = x_dict["data"]
 
-        if b_tasks is not None:
-            ptr = data["tasks"].ptr
-            idx = data["tasks"].ptr[:-1]
-            x = x_dict["tasks"][idx]
-        else:
-            ptr = None 
-            x = x_dict["tasks"][0]
+        # #print(task_counts)
 
-        pooled_tasks = global_mean_pool(x_dict["tasks"], b_tasks)
-        pooled_data = global_mean_pool(x_dict["data"], b_data)
+        print("Task Activations")
+        print(task_activations)
 
-        pt_f = pooled_tasks
-        pd_f = pooled_data
+        candidate_activations = gather_candidates(task_activations, task_counts, data["tasks"], is_batch)
 
-        if self.mlp_side_info is not None:
-            side_f = self.mlp_side_info(g)
-            side_f = self.act(side_f)
-            y = torch.cat([pt_f, pd_f, side_f], dim=-1)
-        else:
-            y = torch.cat([pt_f, pd_f], dim=-1)
+        print("Candidate Activations")
+        print(candidate_activations)
 
-        # y = self.mlp_norm(y)
-        # y = self.act(y)
+        # if is_batch:
+        #     ptr = data["tasks"].ptr
+        #     idx = data["tasks"].ptr[:-1]
+        #     x = x_dict["tasks"][idx]
+        # else:
+        #     ptr = None 
+        #     x = x_dict["tasks"][0]
 
-        if b_tasks is None:
-            y = y.squeeze(0)
+        # pooled_tasks = global_mean_pool(x_dict["tasks"], b_tasks)
+        # pooled_data = global_mean_pool(x_dict["data"], b_data)
+
+        # pt_f = pooled_tasks
+        # pd_f = pooled_data
+
+        # if self.mlp_side_info is not None:
+        #     side_f = self.mlp_side_info(g)
+        #     side_f = self.act(side_f)
+        #     y = torch.cat([pt_f, pd_f, side_f], dim=-1)
+        # else:
+        #     y = torch.cat([pt_f, pd_f], dim=-1)
+
+        # # y = self.mlp_norm(y)
+        # # y = self.act(y)
+
+        # if b_tasks is None:
+        #     y = y.squeeze(0)
 
         # print(f"x shape before cat: {x.shape}, y shape: {y.shape}, batch_size: {batch_size}")
 
-        x = torch.cat([x, y], dim=-1)
-        x = x.reshape(*batch_size, -1, x.shape[-1])
-        # print(f"x shape before return: {x.shape}")
-        return x.select(dim=-2, index=0), 
+        #x = x.reshape(*batch_size, -1, x.shape[-1])
+        #print(f"x shape before return: {x.shape}")
+        #candidate_activations = x.select(dim=-2, index=0)
+
+        candidate_activations = scatter_candidates(candidate_activations, task_counts, max_candidates, data["tasks"], is_batch)
+        candidate_activations = candidate_activations.reshape(*batch_size, -1, candidate_activations.shape[-1])
+        print("Candidate Activations")
+        print(candidatae_activations)
+
+        *batch, C, k = candidate_activations.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        x = candidate_activations.reshape(B, C, k)
+        cand_mask = tensordict["aux", "candidate_mask"].reshape(B, C).to(torch.bool)
+
+        g = None
+        if self.add_device_load:
+            device_load = tensordict["aux", "device_load"]
+            device_memory = tensordict["aux", "device_memory"]
+            device_feat = torch.cat([device_load, device_memory], dim=-1)  # [B, 3*n_devices]
+            device_feat = device_feat.reshape(-1, device_feat.size(-1)).unsqueeze(1).expand(-1, C, -1)  # [B, C, 3*n_devices]
+            g = device_feat
+        if self.add_progress:
+            time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+            progress_feature = tensordict["aux", "progress"]
+            prog_feats = torch.stack([time_feature.reshape(-1), progress_feature.reshape(-1)], dim=-1)  # [B, 2]
+            prog_feats = prog_feats.unsqueeze(1).expand(-1, C, -1)  # [B, C, 2]
+            g = prog_feats if g is None else torch.cat([g, prog_feats], dim=-1)  # [B, C, g_dim]
+
+
+        pooled = (x * cand_mask.unsqueeze(-1)).sum(dim=1) / cand_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+
+        H = x.size(-1)
+        xn = self.gate_norm(x)
+        gb = self.gate_mlp(pooled)  # (B, 2H)
+        gamma_raw, beta = gb.chunk(2, dim=-1)  # (B,H), (B,H)
+        gamma = self.gate_gamma_range * (2*torch.sigmoid(gamma_raw) - 1)
+        gamma = gamma.view(B, H)
+        beta = beta.view(B, H)
+        u = (1.0 + gamma).unsqueeze(1) * xn + beta.unsqueeze(1)
+        x = x + self.gate_rezero * u
+        x = cand_mask.unsqueeze(-1)*x
+
+
+        #print(f"candidate_activations shape before reshape: {candidate_activations.shape}")
+
+        #candidate_activations = candidate_activations.reshape(*batch_size, -1, candidate_activations.shape[-1])
+
+        #print(f"candidate_activations shape: {candidate_activations.shape}")
+
+        #print(candidate_activations)
+
+        candidate_activations = x.view(*batch, C, self.output_dim)
+        return candidate_activations
     
 
 class TaskIterationGNNStateNet(nn.Module):

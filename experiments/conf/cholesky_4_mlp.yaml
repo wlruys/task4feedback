@@ -5,13 +5,13 @@ defaults:
   - _self_
 
 algorithm:
-  rollout_steps: 64
-  minibatch_size: 64
+  rollout_steps: 128
+  minibatch_size: 128
 
 feature:
   observer:
     grid_override: False
-    n_candidates: 64
+    n_candidates: 10
     version: "E"
     add_degree: True
   normalization:
@@ -21,14 +21,14 @@ feature:
 network:
   layers:
     state:
-      hidden_channels: [16, 16]
+      hidden_channels: [16]
     actor:
-      hidden_channels: 16
+      hidden_channels: 32
     critic:
-      hidden_channels: 128
+      hidden_channels: 64
   critic:
     add_progress: True
 
 wandb:
-  name: MLP-E_IS
-  project: chol_exp
+  name: 1layer-MLP-E_IS
+  project: chol_deb

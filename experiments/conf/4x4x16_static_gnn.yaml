@@ -1,24 +1,22 @@
 defaults:
   - 4x4x16_static.yaml
   - feature: gnn_single
-  - network: original_gnn_baseline
+  - network: gnn_baseline
   - _self_
 
 algorithm:
-  rollout_steps: 128
-  minibatch_size: 128
+  rollout_steps: 16
+  minibatch_size: 16
 
 feature:
   observer:
-    prev_frames: 1
-    grid_override: false
-    n_candidates: 1
-    version: "C"
+    grid_override: False
+    n_candidates: 16
+    version: "D"
     add_degree: True
   normalization:
-    warmup: 20
+    warmup: 1
   add_device_load: True
-  
 
 network:
   layers:
@@ -32,5 +30,5 @@ network:
     add_progress: True
 
 wandb:
-  name: CNN-E_IS
+  name: lowentGNN-E_IS
   project: jacobi_deb
