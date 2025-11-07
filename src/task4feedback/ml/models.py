@@ -1354,40 +1354,40 @@ class GATStateNet(nn.Module):
         candidate_activations = scatter_candidates(candidate_activations, task_counts, max_candidates, data["tasks"], is_batch)
         candidate_activations = candidate_activations.reshape(*batch_size, -1, candidate_activations.shape[-1])
         print("Candidate Activations")
-        print(candidatae_activations)
+        print(candidate_activations)
 
         *batch, C, k = candidate_activations.shape
-        B = int(torch.tensor(batch).prod().item()) if batch else 1
-        x = candidate_activations.reshape(B, C, k)
-        cand_mask = tensordict["aux", "candidate_mask"].reshape(B, C).to(torch.bool)
+        # B = int(torch.tensor(batch).prod().item()) if batch else 1
+        # x = candidate_activations.reshape(B, C, k)
+        # cand_mask = tensordict["aux", "candidate_mask"].reshape(B, C).to(torch.bool)
 
-        g = None
-        if self.add_device_load:
-            device_load = tensordict["aux", "device_load"]
-            device_memory = tensordict["aux", "device_memory"]
-            device_feat = torch.cat([device_load, device_memory], dim=-1)  # [B, 3*n_devices]
-            device_feat = device_feat.reshape(-1, device_feat.size(-1)).unsqueeze(1).expand(-1, C, -1)  # [B, C, 3*n_devices]
-            g = device_feat
-        if self.add_progress:
-            time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
-            progress_feature = tensordict["aux", "progress"]
-            prog_feats = torch.stack([time_feature.reshape(-1), progress_feature.reshape(-1)], dim=-1)  # [B, 2]
-            prog_feats = prog_feats.unsqueeze(1).expand(-1, C, -1)  # [B, C, 2]
-            g = prog_feats if g is None else torch.cat([g, prog_feats], dim=-1)  # [B, C, g_dim]
+        # g = None
+        # if self.add_device_load:
+        #     device_load = tensordict["aux", "device_load"]
+        #     device_memory = tensordict["aux", "device_memory"]
+        #     device_feat = torch.cat([device_load, device_memory], dim=-1)  # [B, 3*n_devices]
+        #     device_feat = device_feat.reshape(-1, device_feat.size(-1)).unsqueeze(1).expand(-1, C, -1)  # [B, C, 3*n_devices]
+        #     g = device_feat
+        # if self.add_progress:
+        #     time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
+        #     progress_feature = tensordict["aux", "progress"]
+        #     prog_feats = torch.stack([time_feature.reshape(-1), progress_feature.reshape(-1)], dim=-1)  # [B, 2]
+        #     prog_feats = prog_feats.unsqueeze(1).expand(-1, C, -1)  # [B, C, 2]
+        #     g = prog_feats if g is None else torch.cat([g, prog_feats], dim=-1)  # [B, C, g_dim]
 
 
-        pooled = (x * cand_mask.unsqueeze(-1)).sum(dim=1) / cand_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        # pooled = (x * cand_mask.unsqueeze(-1)).sum(dim=1) / cand_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
 
-        H = x.size(-1)
-        xn = self.gate_norm(x)
-        gb = self.gate_mlp(pooled)  # (B, 2H)
-        gamma_raw, beta = gb.chunk(2, dim=-1)  # (B,H), (B,H)
-        gamma = self.gate_gamma_range * (2*torch.sigmoid(gamma_raw) - 1)
-        gamma = gamma.view(B, H)
-        beta = beta.view(B, H)
-        u = (1.0 + gamma).unsqueeze(1) * xn + beta.unsqueeze(1)
-        x = x + self.gate_rezero * u
-        x = cand_mask.unsqueeze(-1)*x
+        # H = x.size(-1)
+        # xn = self.gate_norm(x)
+        # gb = self.gate_mlp(pooled)  # (B, 2H)
+        # gamma_raw, beta = gb.chunk(2, dim=-1)  # (B,H), (B,H)
+        # gamma = self.gate_gamma_range * (2*torch.sigmoid(gamma_raw) - 1)
+        # gamma = gamma.view(B, H)
+        # beta = beta.view(B, H)
+        # u = (1.0 + gamma).unsqueeze(1) * xn + beta.unsqueeze(1)
+        # x = x + self.gate_rezero * u
+        # x = cand_mask.unsqueeze(-1)*x
 
 
         #print(f"candidate_activations shape before reshape: {candidate_activations.shape}")
@@ -1398,7 +1398,9 @@ class GATStateNet(nn.Module):
 
         #print(candidate_activations)
 
-        candidate_activations = x.view(*batch, C, self.output_dim)
+        candidate_activations = self.stem_proj["tasks"](candidate_activations)
+
+        candidate_activations = candidate_activations.view(*batch, C, self.output_dim)
         return candidate_activations
     
 
