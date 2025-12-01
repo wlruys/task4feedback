@@ -38,10 +38,11 @@ import numpy
 import random
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from task4feedback.fastsim2 import ParMETIS_wrapper
-from task4feedback.graphs.mesh.plot import animate_mesh_graph
+from task4feedback.graphs.mesh.plot import *
 from task4feedback.ml.util import EvaluationConfig
 from helper.parmetis import run_parmetis
-from mpi4py import MPI
+
+# from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -105,36 +106,29 @@ def configure_training(cfg: DictConfig):
         else:
             raise ValueError(f"Unknown option: {option}")
 
-        if rank == 0:
-            const_time = env.simulator.time
-            inf_time = inf_env.simulator.time
-            print(f"{option} Time: {const_time}, Inf Time: {inf_time}, diff factor: {const_time/inf_time:.2f}")
-            print(env.simulator.max_mem_usage / 1e9, inf_env.simulator.max_mem_usage / 1e9)
-            if const_time < inf_time:
-                print("Warning: inf time is greater than Inf time!")
+    # Added to check priority of each task
+    sim: SimulatorDriver = env.simulator
+    # for i in range(16 * 4):
+    #     print(f"Task ID: {i} Mapping Priority: {sim.get_mapping_priority(i)}")
 
-    # # Added to check priority of each task
-    # sim: SimulatorDriver = env.simulator
-    # # for i in range(16 * 4):
-    # #     print(f"Task ID: {i} Mapping Priority: {sim.get_mapping_priority(i)}")
+    if rank == 0:
+        config = instantiate(cfg.eval)
+        # start_logger()
+        env.simulator.run()
+        env.simulator.external_mapper = ExternalMapper()
+        eft = env._get_baseline("EFT")
+        print(env.simulator.time, env._get_baseline("EFT"), f"{eft/env.simulator.time:.2f}x")
+        print("Interval: ", int(env.simulator.time / config.max_frames))
+        start_t = time.perf_counter()
+        animate_mesh_graph(env=env, folder=Path("outputs/"))
+        end_t = time.perf_counter()
+        print("Plotting time:", end_t - start_t)
 
-    # if rank == 0:
-    #     config = instantiate(cfg.eval)
-    #     # start_logger()
-    #     env.simulator.run()
-    #     env.simulator.external_mapper = ExternalMapper()
-    #     eft = env._get_baseline("EFT")
-    #     print(env.simulator.time, env._get_baseline("EFT"), f"{eft/env.simulator.time:.2f}x")
-    #     print("Interval: ", int(env.simulator.time / config.max_frames))
-    #     start_t = time.perf_counter()
-    #     animate_mesh_graph(env=env, folder=Path("outputs/"))
-    #     end_t = time.perf_counter()
-    #     print("Plotting time:", end_t - start_t)
-
+        plot_load_balance_over_time(env, interval=1000)
     #     # animate_mesh_graph(env=env)
 
 
-@hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
 
     torch.manual_seed(cfg.seed)

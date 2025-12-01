@@ -166,20 +166,19 @@ def log_training_metrics(
     with torch.no_grad():
         rewards = flattened_data["next", "reward"]
         improvements = flattened_data["next", "observation", "aux", "improvement"]
-        vs_policy = flattened_data["next", "observation", "aux", "vs_policy"]
         valid_improvement_mask = torch.isfinite(improvements) & (improvements > -100)
         valid_improvements = improvements[valid_improvement_mask]
-        valid_quad = vs_policy[valid_improvement_mask]
+        valid_times = flattened_data["next", "observation", "aux", "time"][valid_improvement_mask]
+        valid_times = valid_times.to(torch.float32)
 
         # Calculate improvement metrics
         if valid_improvements.numel() > 0:
             avg_improvement = valid_improvements.mean().item()
             max_improvement = valid_improvements.max().item()
             min_improvement = valid_improvements.min().item()
-
-            avg_vs_policy = valid_quad.mean().item()
-            max_vs_policy = valid_quad.max().item()
-            min_vs_policy = valid_quad.min().item()
+            avg_time = valid_times.mean().item()
+            min_time = valid_times.min().item()
+            max_time = valid_times.max().item()
 
             if valid_improvements.numel() > 1:
                 std_improvement = valid_improvements.std().item()
@@ -248,9 +247,9 @@ def log_training_metrics(
                     "batch/mean_improvement": avg_improvement,
                     "batch/max_improvement": max_improvement,
                     "batch/min_improvement": min_improvement,
-                    "batch/mean_vs_policy": avg_vs_policy,
-                    "batch/max_vs_policy": max_vs_policy,
-                    "batch/min_vs_policy": min_vs_policy,
+                    "batch/mean_time": avg_time,
+                    "batch/max_time": max_time,
+                    "batch/min_time": min_time,
                 }
             )
             if std_improvement is not None:
@@ -272,6 +271,7 @@ def run_ppo(
     optimizer: Optional[torch.optim.Optimizer] = None,
     lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
     seed: int = 0,
+    eval_location=None,
 ):
     if logging_config is not None and (logging_frequency := logging_config.stats_interval):
         wandb.define_metric("batch/n_updates")
@@ -286,6 +286,7 @@ def run_ppo(
 
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
+    max_graph_size = max_tasks
     max_candidates = max([env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs])
 
     if ppo_config.rollout_steps > 0:
@@ -390,6 +391,12 @@ def run_ppo(
         loss_vals = loss_module(batch)
         loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
 
+        if loss_vals["kl_approx"] > 0.8:
+            training.warning(f"High KL divergence detected: {loss_vals['kl_approx'].item()}")
+            training.warning("Skipping gradient update to maintain training stability.")
+            optimizer.zero_grad()
+            return loss_vals
+
         # joint_stats(batch, loss_module)
 
         optimizer.zero_grad()
@@ -421,13 +428,13 @@ def run_ppo(
         f"{n_batch} batches per epoch, "
         f"{ppo_config.workers} workers."
     )
+
+    training.info(f"Max tasks per graph: {max_graph_size}, max candidates per task: {max_candidates}")
+
     max_performance = 0.0
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
-        metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0)
-        if eval_config.pickle_path is not None:
-            if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-                max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+        metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0, eval_location=eval_location)
 
     training.info("Starting PPO training loop")
 
@@ -562,32 +569,32 @@ def run_ppo(
         if should_eval(n_collections, eval_config=eval_config):
             collector.policy.eval()
             metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
-            # if eval_config.pickle_path is not None:
-            #     if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-            #         max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+            if eval_config.pickle_path is not None:
+                if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
+                    max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
 
-            #         filename = f"{max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
-            #         checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
-            #         # Remove all old checkpoints with the same seed
-            #         pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
-            #         for old_file in glob.glob(pattern):
-            #             if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
-            #                 try:
-            #                     os.remove(old_file)
-            #                     training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
-            #                 except OSError as e:
-            #                     training.warning(f"Failed to remove {old_file}: {e}")
-            #         training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
-            #         if logging_config.best_policy_dir is not None:
-            #             save_checkpoint(
-            #                 n_collections,
-            #                 policy_module=collector.policy,
-            #                 value_module=loss_module.critic_network,
-            #                 optimizer=optimizer,
-            #                 lr_scheduler=lr_scheduler,
-            #                 filename=filename,
-            #                 checkpoint_dir=logging_config.best_policy_dir,
-            #             )
+                    filename = f"{max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
+                    checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
+                    # Remove all old checkpoints with the same seed
+                    pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
+                    for old_file in glob.glob(pattern):
+                        if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
+                            try:
+                                os.remove(old_file)
+                                training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
+                            except OSError as e:
+                                training.warning(f"Failed to remove {old_file}: {e}")
+                    training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
+                    if logging_config.best_policy_dir is not None:
+                        save_checkpoint(
+                            n_collections,
+                            policy_module=collector.policy,
+                            value_module=loss_module.critic_network,
+                            optimizer=optimizer,
+                            lr_scheduler=lr_scheduler,
+                            filename=filename,
+                            checkpoint_dir=logging_config.best_policy_dir,
+                        )
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at collection {n_collections}")
@@ -607,7 +614,7 @@ def run_ppo(
 
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
-        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
 
     save_checkpoint(n_collections, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
@@ -623,6 +630,7 @@ def run_ppo_lstm(
     optimizer: Optional[torch.optim.Optimizer] = None,
     lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
     seed: int = 0,
+    eval_location=None,
 ):
     if logging_config is not None and (logging_frequency := logging_config.stats_interval):
         wandb.define_metric("batch/n_updates")
@@ -771,6 +779,12 @@ def run_ppo_lstm(
         loss_vals = loss_module(batch)
         loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
 
+        if loss_vals["kl_approx"] > 0.8:
+            training.warning(f"High KL divergence detected: {loss_vals['kl_approx'].item()}")
+            training.warning("Skipping gradient update to maintain training stability.")
+            optimizer.zero_grad()
+            return loss_vals
+
         optimizer.zero_grad()
         loss_value.backward()
 
@@ -807,7 +821,7 @@ def run_ppo_lstm(
     # Initial evaluation
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
-        run_evaluation(collector.policy, eval_envs, eval_config, 0, 0, 0)
+        run_evaluation(collector.policy, eval_envs, eval_config, 0, 0, 0, eval_location=eval_location)
 
     start_t = time.perf_counter()
 
@@ -884,7 +898,7 @@ def run_ppo_lstm(
             lr_scheduler.step()
 
         if should_eval(n_collections, eval_config=eval_config):
-            run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+            run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at update: {n_updates}")
@@ -898,7 +912,7 @@ def run_ppo_lstm(
 
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
-        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
+        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
 
     save_checkpoint(
         n_collections,

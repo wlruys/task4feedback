@@ -122,6 +122,13 @@ class RuntimeEnv(EnvBase):
         self.z_spa = sample_vector(sample=self.sample_z)
         self.z_ch = sample_vector(sample=self.sample_z)
 
+        print("cell locations", self.get_graph().get_cell_locations(as_dict=False))
+
+        graph = self.get_graph()
+        locs = self.get_graph().get_cell_locations(as_dict=False)
+        self.get_graph().set_cell_locations([-1 for _ in range(graph.nx * graph.ny)])
+        self.get_graph().set_cell_locations(locs, step=0)
+
         if self.change_location:
             graph = simulator_factory[self.active_idx].input.graph
             if self.only_gpu and (0 in self.location_list):
@@ -166,7 +173,6 @@ class RuntimeEnv(EnvBase):
         self.progress_key = ("aux", "progress")
         self.baseline_key = ("aux", "baseline")
         self.improvement_key = ("aux", "improvement")
-        self.vs_policy_key = ("aux", "vs_policy")
         self.z_ch_key = ("aux", "z_ch")
         self.z_spa_key = ("aux", "z_spa")
         self.time_key = ("aux", "time")
@@ -266,6 +272,9 @@ class RuntimeEnv(EnvBase):
             device=self.device,
             dtype=torch.int64,
         )
+        # print("Action spec:", out.shape)
+        # import sys
+        # sys.exit()
         return out
 
     def _create_reward_spec(self) -> TensorSpec:
@@ -322,7 +331,6 @@ class RuntimeEnv(EnvBase):
         baseline = max(1.0, self.EFT_baseline)
         obs.set_at_(self.progress_key, progress, 0)
         obs.set_at_(self.baseline_key, baseline, 0)
-        obs.set_at_(self.vs_policy_key, -100, 0)
         return obs
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -333,8 +341,9 @@ class RuntimeEnv(EnvBase):
         time = obs[self.time_key].item()
         improvement = (self.EFT_baseline) / (time)
         obs.set_at_(self.improvement_key, improvement, 0)
-        # obs.set_at_(self.vs_policy_key, best_policy / time, 0)
         reward = (-time) / (self.EFT_baseline)
+        
+        print(f"EFT Baseline: {self.EFT_baseline}, Time: {time}, R: {reward:.2f}")
         if self.verbose:
             print(
                 f"Time: {time} / EFT: {self.EFT_baseline} Improvement: {improvement:.2f}",
@@ -346,34 +355,85 @@ class RuntimeEnv(EnvBase):
     def max_length(self) -> int:
         return max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
 
-    def map_tasks(self, actions: torch.Tensor):
-        candidate_workspace = self.candidate_workspace
-        num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
-        graph = self.simulator_factory[self.active_idx].input.graph
-        if num_candidates > 1:
-            mapping_result = []
-            assert isinstance(graph, JacobiGraph), "Graph must be a JacobiGraph for batched mapping."
+    def map_tasks(self, td: TensorDict = None):
+        actions = td[self.action_n]
+
+        candidates = td["observation", "aux", "candidates", "idx"]
+        candidate_mask = td["observation", "aux", "candidate_mask"]
+        candidate_action_map = td["observation", "aux", "candidate_action_map"]
+        num_candidates = td["observation", "aux", "candidates", "count"][0].item()
+        remapped_candidates = self.observer.remapped_candidates
+
+        #candidate_workspace = self.candidate_workspace
+        #num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
+        if num_candidates == 0:
+            return # Nothing to map
+        
+        candidates = candidates[:num_candidates]
+        mapping_result = []
+        # print("n:", num_candidates)
+        # print("Candidates", candidates)
+        # print("Actions", actions)
+        # print("Candidate Action Map", candidate_action_map)
+        # print("Candidate Mask", candidate_mask)
+
+        if remapped_candidates:
             for i in range(num_candidates):
-                global_task_id = candidate_workspace[i].item()
-
-                idx = graph.xy_from_id(global_task_id)
+                idx = candidate_action_map[i].item()
+                global_task_id = candidates[i].item()
                 chosen_device = actions[idx].item() + int(self.only_gpu)
-
                 mapping_priority = self.simulator.get_mapping_priority(global_task_id)
-                mapping_result.append(
-                    fastsim.Action(
-                        i,
-                        chosen_device,
-                        mapping_priority,
-                        mapping_priority,
-                    )
+                old_idx = self.simulator.input.graph.xy_from_id(global_task_id)
+                #print(f"Idx ({idx}), Global Task ID ({global_task_id}), Old Idx ({old_idx}), Chosen Device ({chosen_device}), Mapping Priority ({mapping_priority})")
+                action = fastsim.Action(
+                    i,
+                    chosen_device,
+                    mapping_priority,
+                    mapping_priority,
                 )
-            self.simulator.simulator.map_tasks(mapping_result)
+                mapping_result.append(action)
         else:
-            chosen_device = actions.item() + int(self.only_gpu)
-            global_task_id = candidate_workspace[0].item()
-            mapping_priority = self.simulator.get_mapping_priority(global_task_id)
-            self.simulator.simulator.map_tasks([fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)])
+            for i in range(num_candidates):
+                global_task_id = candidates[i].item()
+                chosen_device = actions[i].item() + int(self.only_gpu)
+                mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+                old_idx = self.simulator.input.graph.xy_from_id(global_task_id)
+                #print(f"Idx ({i}), Global Task ID ({global_task_id}), Old Idx ({old_idx}), Chosen Device ({chosen_device}), Mapping Priority ({mapping_priority})")
+                action = fastsim.Action(
+                    i,
+                    chosen_device,
+                    mapping_priority,
+                    mapping_priority,
+                )
+                mapping_result.append(action)
+
+        self.simulator.simulator.map_tasks(mapping_result)
+
+        # graph = self.simulator_factory[self.active_idx].input.graph
+        # if num_candidates > 1:
+        #     mapping_result = []
+        #     assert isinstance(graph, JacobiGraph), "Graph must be a JacobiGraph for batched mapping."
+        #     for i in range(num_candidates):
+        #         global_task_id = candidate_workspace[i].item()
+
+        #         idx = graph.xy_from_id(global_task_id)
+        #         chosen_device = actions[idx].item() + int(self.only_gpu)
+
+        #         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+        #         mapping_result.append(
+        #             fastsim.Action(
+        #                 i,
+        #                 chosen_device,
+        #                 mapping_priority,
+        #                 mapping_priority,
+        #             )
+        #         )
+        #     self.simulator.simulator.map_tasks(mapping_result)
+        # else:
+        #     chosen_device = actions.item() + int(self.only_gpu)
+        #     global_task_id = candidate_workspace[0].item()
+        #     mapping_priority = self.simulator.get_mapping_priority(global_task_id)
+        #     self.simulator.simulator.map_tasks([fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)])
 
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step {self.step_count+1}/{self.size()}", flush=True)
@@ -382,7 +442,7 @@ class RuntimeEnv(EnvBase):
 
         self.step_count += 1
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         reward = 0
         simulator_status = self.simulator.run_until_external_mapping()
@@ -572,7 +632,7 @@ class IncrementalEFT(RuntimeEnv):
 
         self.step_count += 1
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         if not self.disable_reward_flag:
 
@@ -642,7 +702,7 @@ class LookbackKStep(RuntimeEnv):
             sim_k_step.run()
             self.kstep_record[self.step_count] = sim_k_step.time
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         if not self.disable_reward_flag:
 
@@ -717,7 +777,7 @@ class SparseLookbackKStep(RuntimeEnv):
             self.kstep_record[self.step_count] = sim_k_step.time
             # print("Recording", self.step_count, "Looking at", self.step_count + self.reference_steps)
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         if not self.disable_reward_flag and flag_check:
 
@@ -789,7 +849,7 @@ class LookaheadKStep(RuntimeEnv):
             sim_k_step.run()
             self.kstep_record[self.step_count] = sim_k_step.time
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         if not self.disable_reward_flag and check_s:
 
@@ -846,7 +906,7 @@ class KStepIncrementalEFT(RuntimeEnv):
 
         self.step_count += 1
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         if not self.disable_reward_flag:
             sim_ml = self.simulator.copy()
@@ -890,7 +950,6 @@ class IncrementalSchedule(RuntimeEnv):
         chance: float = 1.0,
         dense_reward_scale: float = 1,
         sparse_reward_scale: float = 1,
-        uniform_reward_scale: float = 0,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -898,13 +957,8 @@ class IncrementalSchedule(RuntimeEnv):
         self.k = k
         self.chance = chance
         self.terminal_reward = terminal_reward
-        if uniform_reward_scale != 0:
-            print("Using uniform reward scale, overriding dense and sparse reward scales.")
-            self.dense_reward_scale = uniform_reward_scale
-            self.sparse_reward_scale = uniform_reward_scale
-        else:
-            self.dense_reward_scale = dense_reward_scale
-            self.sparse_reward_scale = sparse_reward_scale
+        self.dense_reward_scale = dense_reward_scale
+        self.sparse_reward_scale = sparse_reward_scale
         self.pbrs = pbrs
 
         self.interval_flags = torch.zeros(self.max_length(), dtype=torch.bool)
@@ -931,6 +985,7 @@ class IncrementalSchedule(RuntimeEnv):
             self.eft_time = self.EFT_baseline
             sim_current = self.simulator.copy()
             sim_current.disable_external_mapper()
+            self.bias = 0.0
 
             if self.k > 0:
                 sim_current.set_steps((self.k) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
@@ -945,7 +1000,7 @@ class IncrementalSchedule(RuntimeEnv):
 
         self.step_count += 1
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         if not self.disable_reward_flag and self.interval_flags[self.step_count - 1]:
             sim_current = self.simulator.copy()
@@ -959,8 +1014,13 @@ class IncrementalSchedule(RuntimeEnv):
 
             self.potential.append((-sim_current.time) / (self.EFT_baseline))
 
+            #print("Potential:", self.potential[-2], "->", self.potential[-1])
+            #print("Delta Potential:", self.gamma * self.potential[-1] - self.potential[-2])
+            #print("Time:", sim_current.time, "Baseline:", self.EFT_baseline)
+
             # Normalized in per-task time observed in global baseline.
-            reward = self.sparse_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
+            reward = self.dense_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
+            reward = reward - self.dense_reward_scale*self.bias 
             if self.verbose:
                 print(f"Step {self.step_count} Reward: {reward:.4f} (P(s)={self.potential[-2]:.4f}, P(s+1)={self.potential[-1]:.4f})")
         else:
@@ -975,16 +1035,17 @@ class IncrementalSchedule(RuntimeEnv):
             self.potential_sum -= reward
             obs, r, time, improvement = self._handle_done(obs)
             if self.terminal_reward:
-                reward = self.dense_reward_scale * r
+                reward = self.sparse_reward_scale * r
                 if self.pbrs:
-                    reward = reward + self.sparse_reward_scale * (0 - self.potential[-2])
-                    self.potential_sum += self.sparse_reward_scale * (0 - self.potential[-2])
+                    reward = reward + self.dense_reward_scale * (0 - self.potential[-2])
+                    reward = reward - self.dense_reward_scale*self.bias
+                    self.potential_sum += self.dense_reward_scale * (0 - self.potential[-2])
             if self.verbose:
                 print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f} Sum(Potential): {self.potential_sum:.4f}")
                 # print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f}")
                 deltas = []
                 for i in range(1, len(self.potential)):
-                    deltas.append(self.sparse_reward_scale * (self.gamma * self.potential[i] - self.potential[i - 1]))
+                    deltas.append(self.dense_reward_scale * (self.gamma * self.potential[i] - self.potential[i - 1]))
                 if not self.disable_reward_flag:
                     print(f"Max pbrs: {max(deltas):.4f}, Min pbrs: {min(deltas):.4f}")
 
@@ -1030,7 +1091,7 @@ class DelayIncrementalEFT(IncrementalEFT):
 
         self.step_count += 1
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         if flag == 0:
             sim_ml = self.simulator.copy()
@@ -1076,7 +1137,7 @@ class BaselineImprovementEFT(RuntimeEnv):
 
         self.step_count += 1
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         if flag == 0:
             sim_ml = self.simulator.copy()
@@ -1129,7 +1190,7 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
             self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_log[self.step_count] = self.EFT_baseline
 
-        self.map_tasks(td[self.action_n])
+        self.map_tasks(td)
 
         sim_ml = self.simulator.copy()
         sim_ml.disable_external_mapper()

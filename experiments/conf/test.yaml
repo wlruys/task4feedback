@@ -33,7 +33,7 @@ graph:
     change_location: True
     change_duration: False
     seed: 1
-    warmup: 1
+    warmup: 20
 
 algorithm:
   num_collections: 10000
@@ -57,7 +57,8 @@ system:
 feature:
   observer:
     prev_frames: 1
-    batched: true
+    grid_override: True
+    n_candidates: 1
 
 network:
   layers:

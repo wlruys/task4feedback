@@ -13,16 +13,109 @@ from torchrl.envs import ExplorationType
 from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
 from pathlib import Path
 from task4feedback.graphs.jacobi import get_length_from_config
+from torch.distributions import Categorical, Independent, constraints  
 
 
-def MultiHeadCategorical(**kwargs):
-    return torch.distributions.Categorical(**kwargs).to_event(1)  # equivalent to Independent(base, 1)
+
+class MultiHeadCategoricalMasked(Independent):
+    arg_constraints = {"probs": constraints.simplex, "logits": constraints.real_vector}
+    has_rsample = False
+
+    def __init__(self, *, logits=None, probs=None, head_mask=None, inactive_action: int = -2, validate_args=None):
+        base = Categorical(logits=logits, probs=probs, validate_args=validate_args)
+        super().__init__(base, reinterpreted_batch_ndims=1, validate_args=validate_args)
+
+        device = base.logits.device if base.logits is not None else base.probs.device
+        self._inactive_action = int(inactive_action)
+
+        D = base.logits.shape[-1]
+
+        #print("NEW MultiHeadCategoricalMasked")
+        #print(f"HEAD MASK", head_mask)
+
+        if head_mask is None:
+            head_mask = torch.ones(base.batch_shape, dtype=torch.bool, device=device)
+        else:
+            head_mask = head_mask.to(device).to(torch.bool)
+            try:
+                head_mask = head_mask.expand(base.batch_shape)
+            except RuntimeError as e:
+                raise ValueError(f"head_mask with shape {head_mask.shape} cannot be broadcast to distribution batch shape {base.batch_shape}") from e
+        self._head_mask = head_mask
+
+    def _broadcast_to(self, t: torch.Tensor, target_shape) -> torch.Tensor:
+        #print("MASKED MULTIHEAD CATEGORICAL SAMPLE")
+        #print(self._head_mask)
+        mask = self._head_mask
+        lead = len(target_shape) - len(mask.shape)
+        if lead < 0:
+            raise RuntimeError("Target has fewer dims than head_mask.")
+        return mask.view((1,) * lead + mask.shape).expand(target_shape)
+
+    def sample(self, sample_shape=torch.Size()):
+        out = self.base_dist.sample(sample_shape)
+        mask = self._broadcast_to(out, out.shape)       
+        if mask.dtype is not torch.bool:
+            mask = mask.to(torch.bool)
+        #print(f"Mask Shape: {mask.shape}, Output Shape: {out.shape}")
+        #print(f"Sample Mask: {mask}")
+        out = torch.where(mask, out, torch.full_like(out, self._inactive_action))
+        #print(f"MultiHeadCategoricalMasked sample: {out}")
+        return out
+    
+    @property
+    def mode(self):
+        m = self.base_dist.logits.argmax(dim=-1)
+        mask = self._broadcast_to(m, m.shape)
+        out = torch.where(mask, m, torch.full_like(m, self._inactive_action))
+        #print(f"MultiHeadCategoricalMasked mode: {out}")
+        #print(f"Mode Mask: {mask}")
+        return out
+    
+    @property
+    def mean(self):
+        mean = self.base_dist.mean
+        mask = self._broadcast_to(mean, mean.shape)
+        return torch.where(mask, mean, torch.full_like(mean, self._inactive_action))
+    
+    @property
+    def deterministic_sample(self):
+        return self.mode
+    
+    def log_prob(self, value):
+        mask = self._broadcast_to(value, value.shape)      
+        if mask.dtype is not torch.bool:
+            mask = mask.to(torch.bool)
+        value = torch.where(mask, value, torch.full_like(value, self._inactive_action))
+        per_head = self.base_dist.log_prob(value)
+        return (per_head * mask.to(per_head.dtype)).sum(dim=-1)
+    
+    def entropy(self):
+        per_head = self.base_dist.entropy()                
+        mask = self._broadcast_to(per_head, per_head.shape)
+        return (per_head * mask.to(per_head.dtype)).sum(dim=-1)
+    
+
+    def with_mask(self, head_mask: torch.Tensor):
+        logits = getattr(self.base_dist, "logits", None)
+        probs  = getattr(self.base_dist, "probs", None)
+        kwargs = {}
+        if logits is not None:
+            kwargs["logits"] = logits
+        elif probs is not None:
+            kwargs["probs"] = probs
+        return type(self)(head_mask=head_mask,
+                          inactive_action=self._inactive_action,
+                          **kwargs)
 
 
-def MultiHeadCategorical(**kwargs):
-    base = torch.distributions.Categorical(**kwargs)
-    return torch.distributions.Independent(base, 1)
+def MultiHeadCategorical(*, head_mask=None, inactive_action: int = -2, **kwargs):
+    return MultiHeadCategoricalMasked(head_mask=head_mask,
+                                      inactive_action=inactive_action, **kwargs)
 
+# def MultiHeadCategorical(**kwargs):
+#     base = torch.distributions.Categorical(**kwargs)
+#     return torch.distributions.Independent(base, 1)
 
 def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> nn.Module:
     layers = cfg.network.layers
@@ -72,7 +165,6 @@ def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -
 def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
 
     graph_config = instantiate(cfg.graph.config)
-    batched = cfg.feature.observer.get("batched", False)
     add_device_load = cfg.feature.get("add_device_load", False)
 
     lstm_mod = None
@@ -163,12 +255,12 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
 
     policy_module = td_nn.TensorDictSequential(*actor_layers, inplace=True)
 
-    batched = cfg.feature.observer.get("batched", False)
     probabilistic_policy = ProbabilisticActor(
         module=policy_module,
-        in_keys=["logits"],
+        in_keys={"logits" : "logits", "head_mask" : ("observation", "aux", "candidate_mask")},
         out_keys=["action"],
-        distribution_class=MultiHeadCategorical if batched else torch.distributions.Categorical,
+        distribution_class=MultiHeadCategoricalMasked,
+        distribution_kwargs={"inactive_action": 0},
         return_log_prob=True,
     )
 

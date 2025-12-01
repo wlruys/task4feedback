@@ -41,23 +41,25 @@ def create_observer_factory(cfg: DictConfig):
     graph_spec = hydra.utils.instantiate(cfg.feature.observer.spec)
     graph_config = hydra.utils.instantiate(cfg.graph.config)
 
-    if hasattr(cfg.feature.observer, "width") and hasattr(cfg.feature.observer, "prev_frames") and hasattr(cfg.feature.observer, "batched"):
+    if cfg.feature.observer.get("grid_override", False):
         width = graph_config.n
         length = get_length_from_config(graph_config)
-        if cfg.feature.observer.batched:
-            graph_spec.max_candidates = width * length
-        else:
-            graph_spec.max_candidates = 1
+        graph_spec.max_candidates = width * length 
+
         observer_factory = hydra.utils.instantiate(
             cfg.feature.observer,
             spec=graph_spec,
             width=width,
             length=length,
             prev_frames=cfg.feature.observer.prev_frames,
-            batched=cfg.feature.observer.batched,
+            grid_override=True,
         )
     else:
+        graph_spec.max_candidates = cfg.feature.observer.get("n_candidates", 1)
+        print(f"Setting max candidates to {graph_spec.max_candidates}")
         observer_factory = hydra.utils.instantiate(cfg.feature.observer)
+        observer_factory.set_graph_spec(graph_spec)
+        print(observer_factory.graph_spec)
     return observer_factory, graph_spec
 
 
@@ -147,15 +149,44 @@ def _setup_observation_norms(
                     norm.init_stats(num_iter=num_iter, key=in_keys[0], reduce_dim=reduce_dim, cat_dim=cat_dim)
                 except TypeError:
                     norm.init_stats(num_iter=num_iter, key=in_keys[0])
-                if cfg.feature.observer.version in "DFGH":
-                    norm.loc[-4:] = 0.0
-                    norm.scale[-4:] = 1.0
+                # if cfg.feature.observer.version in "DFGH":
+                #     norm.loc[-4:] = 0.0
+                #     norm.scale[-4:] = 1.0
+                print(norm.loc)
+                print(norm.scale)
+                # import sys 
+                # sys.exit(0)
         finally:
             env.enable_reward()
         return NormalizationDetails(states={n: t.state_dict() for n, t in created.items()})
 
     return None
 
+def _plot_graph_with_networkx(g):
+    import matplotlib.pyplot as plt
+
+    dag = nx.DiGraph()
+    dag.add_nodes_from((task.id, {"label": task.name}) for task in g.tasks.values())
+    dag.add_edges_from((dep_id, task.id) for task in g for dep_id in g.get_task_dependencies(task.id))
+    try:
+
+        coords = graphviz_layout(dag, prog="dot")
+    except (ImportError, nx.NetworkXException):
+        coords = nx.spring_layout(dag, seed=getattr(cfg, "seed", None))
+    labels = {node_id: data["label"] for node_id, data in dag.nodes(data=True)}
+    nx.draw_networkx(
+        dag,
+        coords,
+        labels=labels,
+        node_size=700,
+        node_color="#74add1",
+        edge_color="#4c72b0",
+        arrows=True,
+        font_size=8,
+    )
+    plt.title("Task dependency graph")
+    plt.tight_layout()
+    plt.show()
 
 def make_env(
     graph_builder: GraphBuilder,
@@ -165,6 +196,8 @@ def make_env(
     eval=False,
 ) -> RuntimeEnv | tuple[RuntimeEnv, NormalizationDetails]:
     from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
+    import networkx as nx
+    from networkx.drawing.nx_pydot import graphviz_layout
 
     gmsh.initialize()
 
@@ -179,14 +212,20 @@ def make_env(
     observer_factory, graph_spec = create_observer_factory(cfg)
 
     task_noise = create_task_noise(cfg, graph.static_graph)
+    top_k_candidates = graph_spec.max_candidates
 
-    if cfg.feature.observer.batched:
-        assert hasattr(graph, "nx") and hasattr(graph, "ny")
-        top_k_candidates = graph.nx * graph.ny
-    else:
-        top_k_candidates = 1
+    print(f"Using top_k_candidates = {top_k_candidates}")
 
     input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise, top_k_candidates=top_k_candidates)
+
+
+    if cfg.algorithm.rollout_steps <= 0:
+        rollout_steps = len(graph) // top_k_candidates
+    else:
+        rollout_steps = cfg.algorithm.rollout_steps
+    
+    #Og én til javanissen
+    rollout_steps = rollout_steps + 1
 
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),
@@ -196,11 +235,7 @@ def make_env(
         change_duration=cfg.graph.env.change_duration if hasattr(cfg.graph.env, "change_duration") else False,
         change_workload=cfg.graph.env.change_workload if hasattr(cfg.graph.env, "change_workload") else False,
         seed=cfg.seed,
-        max_samples_per_iter=(
-            (len(graph) // (graph.nx * graph.ny) + 1 if cfg.algorithm.rollout_steps == 0 else cfg.algorithm.rollout_steps + 1)
-            if cfg.feature.observer.batched
-            else (len(graph) + 1 if cfg.algorithm.rollout_steps == 0 else cfg.algorithm.rollout_steps + 1)
-        ),
+        max_samples_per_iter=rollout_steps,
     )
     env = TransformedEnv(env, StepCounter())
     env.append_transform(TrajCounter())

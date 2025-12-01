@@ -19,13 +19,14 @@ config:
   # boundary_time: 1000
   # compute_time: 1000
 init:
-  partitioner: metis
+  partitioner: mincut
   nparts: 4
   gpu_only: True
-  randomize: True
+  randomize: False
 env:
   change_priority: False
-  change_location: True
+  change_location: False
   change_duration: False 
   warmup: 20
   seed: 1
+type: "jacobi"

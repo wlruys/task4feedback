@@ -42,11 +42,11 @@ from task4feedback.fastsim2 import ParMETIS_wrapper
 from task4feedback.graphs.mesh.plot import animate_mesh_graph
 from task4feedback.ml.util import EvaluationConfig
 from helper.parmetis import run_parmetis
-from mpi4py import MPI
+#from mpi4py import MPI
 
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-size = comm.Get_size()
+comm = None 
+rank = 0
+size = 1
 
 
 def configure_training(cfg: DictConfig):

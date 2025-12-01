@@ -33,8 +33,9 @@ graph:
     level_memory: 110e9
   env:
     change_priority: False
-    change_location: True
+    change_location: False
     change_duration: False
+    change_workload: False
     seed: 1
 
 algorithm:
@@ -60,7 +61,8 @@ system:
 feature:
   observer:
     prev_frames: 1
-    batched: true
+    grid_override: True
+    n_candidates: 1
 
 network:
   layers:

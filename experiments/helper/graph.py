@@ -21,22 +21,43 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
     def make_graph(system: System):
         mesh = instantiate(cfg.graph.mesh, L=1, n=graph_cfg.n, domain_ratio=graph_cfg.domain_ratio)
 
-        if cfg.graph.init.partitioner == "metis":
-            partitioner = metis_geometry_partition
-        else:
-            raise NotImplementedError(f"Partitioner {cfg.graph.init.partitioner} is not implemented.")
-
         geom = build_geometry(mesh)
         graph = build_graph(geom, graph_cfg, system=system)
+
+
+        if cfg.graph.init.partitioner == "metis":
+            partitioner = metis_geometry_partition
+            partition = partitioner(geom, nparts=cfg.graph.init.nparts)
+        elif cfg.graph.init.partitioner == "block_cyclic":
+            partitioner = block_cyclic
+            partition = block_cyclic(geom)
+        elif cfg.graph.init.partitioner == "column_cyclic":
+            partitioner = col_cyclic
+            partition = col_cyclic(geom)
+        elif cfg.graph.init.partitioner == "row_cyclic":
+            partitioner = row_cyclic
+            partition = row_cyclic(geom)
+        elif cfg.graph.init.partitioner == "mincut":
+            partitioner = None  # use built-in mincut partitioning
+            partition = graph.initial_mincut_partition(
+                arch=DeviceType.GPU,
+                bandwidth=cfg.system.d2d_bw,
+                n_parts=4,
+                offset=0,
+            )
+            partition = graph.maximize_matches(partition)
+            print(f"Mincut partition: {partition}")
+        else:
+            raise NotImplementedError(f"Partitioner {cfg.graph.init.partitioner} is not implemented.")
         # partition = partitioner(geom, nparts=cfg.graph.init.nparts)
         # partition = block_cyclic(geom)
-        partition = graph.initial_mincut_partition(
-            arch=DeviceType.GPU,
-            bandwidth=cfg.system.d2d_bw,
-            n_parts=4,
-            offset=0,
-        )
-        partition = graph.maximize_matches(partition)
+        # partition = graph.initial_mincut_partition(
+        #     arch=DeviceType.GPU,
+        #     bandwidth=cfg.system.d2d_bw,
+        #     n_parts=4,
+        #     offset=0,
+        # )
+        # partition = graph.maximize_matches(partition)
 
         # print(partition)
         # if isinstance(graph, DynamicJacobiGraph):
@@ -44,15 +65,6 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
         #         for y in range(graph.ny):
         #             print(f"{partition[graph.xy_from_id(x * graph.ny + y)]}", end=" ")
         #         print()
-
-        """ 
-        def initial_mincut_partition(
-        self,
-        arch: DeviceType = DeviceType.GPU,
-        bandwidth: int = 1000,
-        n_parts: int = 4,
-        offset: int = 1,  # 1 to ignore cpu
-    ):"""
 
         if cfg.graph.init.gpu_only:
             partition = [x + 1 for x in partition]  # offset by 1 to ignore cpu
@@ -64,6 +76,9 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
             graph.set_cell_locations([-1 for _ in range(len(partition))])
             graph.set_cell_locations(partition, step=0)
         elif isinstance(graph, JacobiGraph):
+            print(f"Setting cell locations with partition: {partition}")
+            graph.set_cell_locations(partition)
+        elif isinstance(graph, CholeskyGraph):
             graph.set_cell_locations(partition)
 
         if cfg.graph.init.randomize:

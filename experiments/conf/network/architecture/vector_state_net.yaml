@@ -3,6 +3,6 @@ defaults:
   - initialization/orthogonal@initialization
 
 
-_target_: task4feedback.ml.models.VectorStateNet
+_target_: task4feedback.ml.models.VectorFiLMStateNet
 hidden_channels: []
-layer_norm: true
+layer_norm: false

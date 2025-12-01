@@ -38,7 +38,6 @@ endif()
 
 
 # Make martinus/unordered_dense ankerl::unordered_map available
-#TODO(wlr): This fails if offlien 
 FetchContent_Declare(
     ankerl_unordered_dense
     GIT_REPOSITORY https://github.com/martinus/unordered_dense.git
@@ -129,11 +128,11 @@ if(fmt_FOUND)
     message(STATUS "Using system-installed fmt ${fmt_VERSION}")
 else()
     FetchContent_Declare(
-      fmt
-      GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-      GIT_TAG        10.2.1
-      GIT_SHALLOW    TRUE
-      GIT_PROGRESS   TRUE
+        fmt
+        GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+        GIT_TAG        10.2.1
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
     )
     # build fmt as static with PIC by default
     set(FMT_DOC OFF CACHE BOOL "" FORCE)

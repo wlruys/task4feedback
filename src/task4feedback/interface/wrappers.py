@@ -754,6 +754,9 @@ class ExternalObserverFactory:
     task_read_data_feature_factory: Optional[EdgeFeatureExtractorFactory] = None
     task_write_data_feature_factory: Optional[EdgeFeatureExtractorFactory] = None
 
+    def set_graph_spec(self, spec: fastsim.GraphSpec):
+        self.graph_spec = spec
+
     def create(self, simulator: Simulator):
         state = simulator.get_state()
         graph_spec = self.graph_spec
@@ -1040,6 +1043,7 @@ class ExternalObserver:
     data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
     truncate: bool = True
     cache: bool = False
+    remapped_candidates: bool = False
 
     def store_feature_types(self):
         """
@@ -1338,13 +1342,16 @@ class ExternalObserver:
                 # "tasks_write_data": _make_edge_tensor(spec.max_edges_tasks_data, self.task_write_data_features.feature_dim, edge_feature=False),
             }
         )
+        
+        mapping_size = spec.max_candidates if self.remapped_candidates else 1
 
         aux_tensor = TensorDict(
             {
                 "candidates": _make_index_tensor(spec.max_candidates),
+                "candidate_mask": torch.zeros((spec.max_candidates), dtype=torch.bool),
+                "candidate_action_map": torch.zeros((mapping_size), dtype=torch.int64),
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
-                "vs_policy": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
                 "baseline": torch.zeros((1), dtype=torch.float32),
                 "device_memory": torch.zeros(1 * (spec.max_devices), dtype=torch.float32),
@@ -1369,7 +1376,7 @@ class ExternalObserver:
         output: TensorDict,
         task_ids: Optional[torch.Tensor] = None,
         k: int = 1,
-        neighborhood_type: NeighborhoodType = NeighborhoodType.BIDIRECTIONAL,
+        neighborhood_type: NeighborhoodType = NeighborhoodType.ITERATIVE,
     ):
         # print("Task observation")
         if task_ids is None:
@@ -1590,11 +1597,27 @@ class ExternalObserver:
             output["edges", "tasks_devices", "attr"],
         )
 
+    def get_candidate_action_map(self, output: TensorDict):
+        if not self.remapped_candidates:
+            return # No remapping needed
+        
+        n_candidates = output["aux", "candidates", "count"][0]
+        action_map = output["aux", "candidate_action_map"]
+        action_map.fill_(-1)
+        torch.arange(n_candidates, dtype=torch.int64, out=action_map[:n_candidates])
+
+
     def candidate_observation(self, output: TensorDict):
         # print("Candidate observation")
         # print("Candidate observation", type(self))
         count = self.simulator.simulator.get_mappable_candidates(output["aux", "candidates", "idx"])
         output.set_at_(("aux", "candidates", "count"), count, 0)
+
+        # Mark valid candidates out of max_candidates
+        output[("aux", "candidate_mask")][:count] = True 
+
+        #Get ordering of NN output for this observer
+        self.get_candidate_action_map(output)
 
     def get_observation(self, output: Optional[TensorDict] = None):
         if output is None:
@@ -1615,7 +1638,6 @@ class ExternalObserver:
         output.set_at_(("aux", "progress"), -2.0, 0)
         output.set_at_(("aux", "time"), self.simulator.time, 0)
         output.set_at_(("aux", "improvement"), -100.0, 0)
-        output.set_at_(("aux", "vs_policy"), -100.0, 0)
         # output["hetero_data"] = observation_to_heterodata(output)
 
         return output
@@ -1638,11 +1660,16 @@ class CandidateObserver(ExternalObserver):
         if spec is None:
             spec = self.graph_spec
 
-        node_tensor = TensorDict({"tasks": _make_node_tensor(1, self.task_features.feature_dim)})
+        node_tensor = TensorDict({"tasks": _make_node_tensor(spec.max_candidates, self.task_features.feature_dim)})
+        mapping_size = spec.max_candidates if self.remapped_candidates else 1
+
+        print(f"MAX CANDIDATES: {spec.max_candidates}, MAPPING SIZE: {mapping_size}")
 
         aux_tensor = TensorDict(
             {
                 "candidates": _make_index_tensor(spec.max_candidates),
+                "candidate_mask": torch.zeros((spec.max_candidates), dtype=torch.bool),
+                "candidate_action_map": torch.zeros((mapping_size), dtype=torch.int64),
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
@@ -1651,7 +1678,6 @@ class CandidateObserver(ExternalObserver):
                 "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
                 "z_ch": torch.zeros((8), dtype=torch.float32),
                 "z_spa": torch.zeros((8), dtype=torch.float32),
-                "vs_policy": torch.zeros((1), dtype=torch.float32),
             }
         )
 
@@ -1671,13 +1697,20 @@ class CandidateObserver(ExternalObserver):
 
         # Get mappable candidates
         self.candidate_observation(output)
+        #print("Candidate ids:", output["aux", "candidates", "idx"])
+        #print("Candidate count:", output["aux", "candidates", "count"][0])
+
 
         output.set_(("nodes", "tasks", "glb"), output["aux", "candidates", "idx"])
-        output.set_at_(("nodes", "tasks", "count"), 1, 0)
+        output.set_at_(("nodes", "tasks", "count"), output["aux", "candidates", "count"][0], 0)
 
         self.get_task_features(output["nodes", "tasks", "glb"], output["nodes", "tasks", "attr"])
 
         # Auxiliary observations
+
+        self.get_device_load(output)
+        self.get_device_memory(output)
+
         output.set_at_(("aux", "progress"), -2.0, 0)
         output.set_at_(("aux", "time"), self.simulator.time, 0)
         output.set_at_(("aux", "improvement"), -100.0, 0)
@@ -1711,9 +1744,13 @@ class CnnSingleTaskObserver(ExternalObserver):
             spec = self.graph_spec
         graph = self.simulator.input.graph
 
+        mapping_size = spec.max_candidates if self.remapped_candidates else 1
+
         aux_tensor = TensorDict(
             {
                 "candidates": _make_index_tensor(spec.max_candidates),
+                "candidate_mask": torch.zeros((spec.max_candidates), dtype=torch.bool),
+                "candidate_action_map": torch.zeros((mapping_size), dtype=torch.int64),
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
@@ -1799,14 +1836,23 @@ class CnnBatchTaskObserver(ExternalObserver):
 
     task_ids = None
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Always remap candidates for CNN batch observer to grid order
+        self.remapped_candidates = True 
+
     def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
         if spec is None:
             spec = self.graph_spec
         graph = self.simulator.input.graph
 
+        mapping_size = spec.max_candidates if self.remapped_candidates else 1
+
         aux_tensor = TensorDict(
             {
                 "candidates": _make_index_tensor(spec.max_candidates),
+                "candidate_mask": torch.zeros((spec.max_candidates), dtype=torch.bool),
+                "candidate_action_map": torch.zeros((mapping_size), dtype=torch.int64),
                 "time": torch.zeros((1), dtype=torch.int64),
                 "improvement": torch.zeros((1), dtype=torch.float32),
                 "progress": torch.zeros((1), dtype=torch.float32),
@@ -1814,7 +1860,6 @@ class CnnBatchTaskObserver(ExternalObserver):
                 "device_memory": torch.zeros(1 * (spec.max_devices), dtype=torch.float32),
                 "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
                 "z_ch": torch.zeros((8), dtype=torch.float32),
-                "vs_policy": torch.zeros((1), dtype=torch.float32),
                 "z_spa": torch.zeros((8), dtype=torch.float32),
             }
         )
@@ -1838,6 +1883,14 @@ class CnnBatchTaskObserver(ExternalObserver):
         )
 
         return obs_tensor
+    
+    def get_candidate_action_map(self, output):
+        n_candidates = output["aux", "candidates", "count"][0]
+        candidate_ids = output["aux", "candidates", "idx"][:n_candidates]
+
+        for i, task_id in enumerate(candidate_ids):
+            idx = self.simulator.input.graph.xy_from_id(task_id.item())
+            output["aux", "candidate_action_map"][i] = idx
 
     def get_observation(self, output: Optional[TensorDict] = None):
         graph = self.simulator.input.graph
@@ -1849,6 +1902,8 @@ class CnnBatchTaskObserver(ExternalObserver):
 
         # Get mappable candidates
         self.candidate_observation(output)
+        print("Candidates:", output["aux", "candidates", "idx"])
+        print("Candidate count:", output["aux", "candidates", "count"][0].item())
         assert output["aux", "candidates", "count"][0] == graph.nx * graph.ny or output["aux", "candidates", "count"][0] == 0, "CnnBatchTaskObserver expects {} candidates but got {}.".format(
             graph.nx * graph.ny, output["aux", "candidates", "count"][0].item()
         )

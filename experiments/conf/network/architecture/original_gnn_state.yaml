@@ -3,6 +3,10 @@ defaults:
   - initialization/orthogonal@initialization
 
 
-_target_: task4feedback.ml.models.OriginalGNNStateNet
+_target_: task4feedback.ml.models.DataIterationGNNStateNet
 hidden_channels: 16
 layer_norm: true
+n_heads: 1
+num_layers: 0
+conv_type: "SAGE"
+use_norm: false

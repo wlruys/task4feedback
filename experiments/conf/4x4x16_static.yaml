@@ -23,13 +23,17 @@ deterministic_torch: true
 reward:
   verbose: False
   random_start: False
-  gamma: 0.99
+  gamma: 1.0
+  terminal_reward: True
 
 graph:
   config:
-    n: 4
+    n: 16
     steps: 16
     level_memory: 98e9
+    boundary_time: 2500
+    interior_time: 10000
+    task_time: 10000
   env:
     change_priority: False
     change_location: True
@@ -44,7 +48,7 @@ algorithm:
   ent_coef: 0.01
   sample_slices: False
   slice_len: 16 # only used if sample_slices is True (LSTM)
-  gamma: 0.99
+  gamma: 1.0
   lmbda: 0.95
   minibatch_size: 16
   collector: "multi_sync"
@@ -53,23 +57,22 @@ optimizer:
   lr: 1e-3
 
 system:
-  mem: 80e9
+  mem: 99999e9
 
 runtime:
   batch_size: 5
   queue_threshold: 5
-  max_in_flight: 16
+  max_in_flight: 64
 
 wandb:
   enabled: true
-  project: static_4x4x16_ipdps
-  name: 4x4x16_static_base
+  project: test
+  name: test
 
 eval:
-  animation_interval: 0
-  eval_interval: 0
-  samples: 10
-  pickle_path: ./pickled_evaluation/4x4x16_static_1:1:1.pkl
+  animation_interval: 100
+  eval_interval: 100
+  samples: 1
 
 sweep:
   n_samples: 10

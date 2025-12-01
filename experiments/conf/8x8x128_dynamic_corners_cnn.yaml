@@ -17,7 +17,8 @@ system:
 feature:
   observer:
     prev_frames: 1
-    batched: true
+    grid_override: False
+    n_candidates: 1
     version: A
   normalization:
     warmup: 10

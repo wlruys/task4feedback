@@ -1,0 +1,77 @@
+defaults:
+  - graph: cholesky
+  - reward: incremental_schedule
+  - system: 4h100
+  - algorithm: ppo
+  - runtime: batch
+  - wandb: default
+  - logging: default
+  - lr_scheduler: none
+  - noise: none
+  - optimizer: adamw
+  - eval: default
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: train.GitInfo
+
+seed: 256
+deterministic_torch: true
+
+reward:
+  verbose: False
+  random_start: False
+  gamma: 0.999
+  terminal_reward: True
+  chance: 1.0
+  pbrs: True
+  sparse_reward_scale: 1.0
+  dense_reward_scale: 1.0
+
+graph:
+  config:
+    n: 20
+    level_memory: 99e9
+    block_time: 10000
+    task_time: 10000
+  env:
+    change_priority: False
+    change_location: True
+    change_duration: False
+    seed: 1
+
+algorithm:
+  num_collections: 10000
+  rollout_steps: 16
+  workers: 4
+  graphs_per_collection: 4
+  ent_coef: 0.001
+  sample_slices: False
+  slice_len: 16 # only used if sample_slices is True (LSTM)
+  gamma: 0.999
+  lmbda: 0.95
+  minibatch_size: 16
+  collector: "multi_sync"
+
+optimizer:
+  lr: 1e-3
+
+system:
+  mem: 9999e9
+
+runtime:
+  batch_size: 5
+  queue_threshold: 5
+  max_in_flight: 64
+
+wandb:
+  enabled: true
+  project: debug
+  name: debug
+
+eval:
+  animation_interval: 0
+  eval_interval: 100
+  samples: 1
