@@ -34,6 +34,7 @@ import pickle
 from torchrl.envs import set_exploration_type, ExplorationType
 from helper.parmetis import run_parmetis
 from mpi4py import MPI
+from datetime import datetime
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -85,6 +86,12 @@ def configure_training(cfg: DictConfig):
     else:
         graph_name = "static"
 
+    if cfg.graph.env.change_duration:
+        if cfg.graph.config.workload_args.traj_type == "circle":
+            graph_name = "ncircle"
+        elif cfg.graph.config.workload_args.traj_type == "corners":
+            graph_name = "noise"
+
     proceed = False
     # saved_models/8x8x128_10-1-1_corners_74GB/5.286_D.pt
     if rank == 0:
@@ -93,46 +100,119 @@ def configure_training(cfg: DictConfig):
             / "saved_models"
             / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{int(cfg.system.mem/1e9)}GB"
         )
-
         files = list(root_dir.rglob("*.pt"))
-        if len(files) == 0:
+        log_file = root_dir / "model_usage.log"
+        results_file = root_dir / "model_eval_results.csv"
+        final_file = root_dir / "results.csv"
+
+        if not files:
             print(f"No saved models found in {root_dir}, exiting.")
             proceed = False
-        elif len(files) > 1:
-            print(f"Multiple saved models found in {root_dir}, please specify a more specific policy or second_best. Found:")
-            proceed = False
-
-        ckpt_path = root_dir / f"{list(files)[0].name}"
-
-    if rank == 0:
-        cfg.feature.add_device_load = True
-        cfg.feature.observer.prev_frames = 1
-        norm_file = root_dir / f"norm.pkl"
-
-        graph_builder = make_graph_builder(cfg)
-        if norm_file.exists():
-            print(f"Loading normalization from {norm_file}")
-            norm = pickle.load(open(norm_file, "rb"))
-            env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
         else:
-            print(f"Normalization file {norm_file} not found, creating new normalization")
-            env, norm = make_env(graph_builder=graph_builder, cfg=cfg, eval=True)
-            pickle.dump(norm, open(norm_file, "wb"))
+            print(f"Found {len(files)} models. Beginning empirical evaluation...", flush=True)
 
-        observer = env.get_observer()
-        feature_config = FeatureDimConfig.from_observer(observer)
-        model, _, _ = create_td_actor_critic_models(cfg, feature_config)
+            model_scores = []
+            logged_models = {}
+            best_time_from_log = float("inf")
+            best_model_from_log = None
 
-        loaded = load_policy_from_checkpoint(model, ckpt_path)
-        if not loaded:
-            print(f"Found {ckpt_path}, but not a compatible policy module to load into.")
-            proceed = False
-        else:
-            proceed = True
+            # Step 1: Try to recover past evaluations
+            if log_file.exists():
+                with open(log_file, "r") as f:
+                    for line in f:
+                        if "Evaluated model:" in line:
+                            try:
+                                # Example line: 2025-10-06T17:20:43.794698 - Evaluated model: 1.007_D.pt, mean_time=46334451.0000
+                                parts = line.strip().split("Evaluated model:")[1].split(", mean_time=")
+                                model_name = parts[0].strip()
+                                mean_time = float(parts[1])
+                                logged_models[model_name] = mean_time
+                                if mean_time < best_time_from_log:
+                                    best_time_from_log = mean_time
+                                    best_model_from_log = model_name
+                            except Exception:
+                                continue
+                print(f"Loaded {len(logged_models)} logged models from log. Best so far: {best_model_from_log} ({best_time_from_log:.2f})", flush=True)
+            else:
+                print("No previous evaluation log found.", flush=True)
+
+            # Step 2: Set up normalization once
+            graph_builder = make_graph_builder(cfg)
+            norm_file = root_dir / f"norm.pkl"
+            if norm_file.exists():
+                print(f"Loading normalization from {norm_file}")
+                norm = pickle.load(open(norm_file, "rb"))
+            else:
+                print(f"Normalization file {norm_file} not found, creating new normalization")
+                env, norm = make_env(graph_builder=graph_builder, cfg=cfg, eval=True)
+                pickle.dump(norm, open(norm_file, "wb"))
+
+            # Step 3: Evaluate only *new* models
+            new_evals = []
+            for ckpt_path in files:
+                model_name = ckpt_path.name
+                if model_name in logged_models:
+                    print(f"Skipping {model_name}: already logged.")
+                    continue
+
+                print(f"Evaluating new model {model_name}...", flush=True)
+                feature_config = FeatureDimConfig.from_observer(make_env(graph_builder, cfg, normalization=norm, eval=True).get_observer())
+                model, _, _ = create_td_actor_critic_models(cfg, feature_config)
+                loaded = load_policy_from_checkpoint(model, ckpt_path)
+                if not loaded:
+                    print(f"Could not load policy from {model_name}, skipping.")
+                    continue
+
+                model.eval()
+                eval_times = []
+                eval_env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
+                for i in range(3 if n_samples > 1 else 1):
+                    with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+                        eval_env.rollout(max_steps=100000, policy=model.actor, auto_reset=True)
+                        eval_times.append(eval_env.simulator.time)
+
+                mean_time = float(np.mean(eval_times))
+                print(f"→ {model_name}: mean time = {mean_time:.2f}", flush=True)
+
+                # Store result in memory and append to log
+                logged_models[model_name] = mean_time
+                new_evals.append((model_name, ckpt_path, mean_time))
+
+                with open(log_file, "a") as f:
+                    f.write(f"{datetime.now().isoformat()} - Evaluated model: {model_name}, mean_time={mean_time:.4f}\n")
+                gc.collect()
+
+            # Step 4: Update or create results CSV
+            with open(results_file, "w") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Model", "MeanTime"])
+                for name, t in logged_models.items():
+                    writer.writerow([name, t])
+
+            # Step 5: Pick the best overall model (old or new)
+            best_model_name, best_time = min(logged_models.items(), key=lambda x: x[1])
+            best_file = next((f for f in files if f.name == best_model_name), None)
+
+            if best_file is None:
+                print(f"Best model file {best_model_name} not found on disk, exiting.")
+                proceed = False
+            else:
+                print(f"✅ Selected best model: {best_model_name} (mean time={best_time:.2f})", flush=True)
+                ckpt_path = best_file
+                if best_model_name == best_model_from_log:
+                    print(f"Note: Best model is same as previously best logged model {best_model_from_log} ({best_time_from_log:.2f}), no new best found.")
+                    proceed = False
+                    if not final_file.exists():
+                        proceed = True
+
+                else:
+                    with open(log_file, "a") as f:
+                        f.write(f"{datetime.now().isoformat()} - Best model: {best_model_name}, mean_time={best_time:.4f}\n")
+                    proceed = True
 
     proceed = comm.bcast(proceed, root=0)
     if not proceed:
-        print("No compatible model found, exiting.")
+        print("Model already evaluated or no valid model found.")
         exit()
 
     if rank == 0:
@@ -142,8 +222,16 @@ def configure_training(cfg: DictConfig):
             normalization=norm,
             eval=True,
         )
-
-        model.eval()
+        for ckpt_path in files:
+            if best_model_name == ckpt_path.name:
+                feature_config = FeatureDimConfig.from_observer(eval_env.get_observer())
+                model, _, _ = create_td_actor_critic_models(cfg, feature_config)
+                loaded = load_policy_from_checkpoint(model, ckpt_path)
+                if not loaded:
+                    print(f"Could not load policy from {best_model_name}, exiting.")
+                    comm.Abort(1)
+                model.eval()
+                break
 
     results = {}
     for policy in ["ParMETIS", "BlockCyclic(2x2)", "BlockCyclic(1x1)", "EFT", "RowCyclic", "RL"]:
@@ -157,6 +245,7 @@ def configure_training(cfg: DictConfig):
     for itr in [0.0001001, 0.001, 0.01, 0.1, 1, 10, 100, 1000]:
         if rank == 0:
             temp = eval_env.simulator.copy()
+        comm.barrier()
         run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, unbalance=ub_cur, itr=itr)
         if rank == 0 and temp.time < best_cfg[2]:
             best_cfg = (itr, ub_cur, temp.time)
@@ -167,6 +256,7 @@ def configure_training(cfg: DictConfig):
     for ub in [1.0001, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9]:
         if rank == 0:
             temp = eval_env.simulator.copy()
+        comm.barrier()
         run_parmetis(sim=(temp if rank == 0 else None), cfg=cfg, unbalance=ub, itr=best_cfg[0])
         if rank == 0:
             print(f"Tried ub {ub:.2f} with time {temp.time}", flush=True)
@@ -203,7 +293,7 @@ def configure_training(cfg: DictConfig):
                 copy_sim.enable_external_mapper()
                 copy_sim.run_until_external_mapping()
                 graph: DynamicJacobiGraph = copy_sim.input.graph
-                copy_sim.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=4, block_size=1, offset=0)
+                copy_sim.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=4, block_size=1, offset=1)
                 copy_sim.run()
                 results["BlockCyclic(1x1)"]["times"].append(copy_sim.time)
                 copy_sim = eval_env.simulator.copy()
@@ -240,8 +330,8 @@ def configure_training(cfg: DictConfig):
                     graph_name,
                     f"{int(cfg.system.mem/1e9)}GB",
                     best_policy,
-                    f"{np.mean(results['EFT']['times'])/np.mean(results[best_policy]['times']):.2f}",
-                    f"{np.mean(results['EFT']['times'])/np.mean(results['RL']['times']):.2f}",
+                    f"{int(np.mean(results[best_policy]['times']))}",
+                    f"{int(np.mean(results['RL']['times']))}",
                 ]
             )
 

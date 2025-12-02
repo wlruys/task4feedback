@@ -13,7 +13,7 @@ import hydra
 
 def run_parmetis(
     sim: SimulatorDriver, cfg, verbose=False, offset=1, future_levels=0, itr: float = 1000, unbalance: float = 1.225, target_loads: list[float] = [0.25, 0.25, 0.25, 0.25], n_compute_devices: int = 4
-) -> int:
+) -> bool:
     d2d_bandwidth = cfg.system.d2d_bw
     graph_config = hydra.utils.instantiate(cfg.graph.config)
     width = graph_config.n
@@ -103,7 +103,7 @@ def run_parmetis(
         ubvec = np.array([unbalance], dtype=np.float32)
         part = np.array([-1 for _ in range(width**2)], dtype=np.int32)
         comm.Barrier()
-        ParMETIS.callParMETIS(
+        status = ParMETIS.callParMETIS(
             vtxdist,
             xadj,
             adjncy,
@@ -119,6 +119,11 @@ def run_parmetis(
             part,
         )
         parts = comm.gather(part, root=0)
+
+        if not status:
+            if rank == 0:
+                print("ParMETIS failed!", flush=True)
+            return False
 
         if rank == 0:
             for i, p in enumerate(parts):
@@ -146,3 +151,117 @@ def run_parmetis(
                     print(loc, end=" ")
                     if (i + 1) % 8 == 0:
                         print()
+    return True
+
+
+def query_parmetis(
+    ParMETIS,
+    env: RuntimeEnv,
+    cfg,
+    prev_mapping=None,
+    verbose=False,
+    first_call=False,
+    offset=1,
+    future_levels=0,
+    itr: float = 1000,
+    unbalance: float = 1.225,
+    target_loads: list[float] = [0.25, 0.25, 0.25, 0.25],
+    n_compute_devices: int = 4,
+) -> bool:
+    d2d_bandwidth = cfg.system.d2d_bw
+    graph_config = hydra.utils.instantiate(cfg.graph.config)
+    width = graph_config.n
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    partitioned_tasks, vtxdist, xadj, adjncy, vwgt, adjwgt, vsize = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
+
+    if rank == 0 and first_call:
+        graph = env.simulator.input.graph
+        assert isinstance(graph, JacobiGraph), "Graph must be a JacobiGraph"
+        cell_graph = graph.get_weighted_cell_graph(
+            DeviceType.GPU,
+            bandwidth=d2d_bandwidth,
+            levels=[0, 1],
+        )
+        edge_cut, partition = weighted_cell_partition(cell_graph, nparts=(cfg.system.n_devices - 1))
+        cell_to_device = [x + offset for x in partition]
+        return cell_to_device, True
+    elif rank != 0 and first_call:
+        return None, True
+    else:
+        if rank == 0:
+            assert prev_mapping is not None, "prev_mapping must be provided after the first step"
+            graph = env.simulator.input.graph
+            candidates = torch.zeros((env.simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+            partition = [-1 for _ in range(env.simulator.observer.graph_spec.max_candidates)]
+            env.simulator.get_mappable_candidates(candidates)
+            for i, id in enumerate(candidates):
+                partition[i] = prev_mapping[graph.task_to_cell[id.item()]] - offset
+            partitioned_tasks, vtxdist, xadj, adjncy, vwgt, adjwgt, vsize = graph.get_distributed_weighted_graph(
+                bandwidth=d2d_bandwidth,
+                task_ids=candidates.tolist(),
+                partition=partition,
+                future_levels=future_levels,
+                width=width,
+                n_compute_devices=n_compute_devices,
+            )
+        vtxdist = comm.bcast(vtxdist, root=0)
+        xadj = comm.bcast(xadj, root=0)
+        adjncy = comm.bcast(adjncy, root=0)
+        vwgt = comm.bcast(vwgt, root=0)
+        adjwgt = comm.bcast(adjwgt, root=0)
+        vsize = comm.bcast(vsize, root=0)
+
+        xadj = xadj[rank]
+        adjncy = adjncy[rank]
+        vwgt = vwgt[rank]
+        adjwgt = adjwgt[rank]
+        vsize = vsize[rank]
+        wgtflag = 3
+        numflag = 0
+        ncon = 1
+        tpwgts = np.array(target_loads, dtype=np.float32)
+        ubvec = np.array([unbalance], dtype=np.float32)
+        part = np.array([-1 for _ in range(width**2)], dtype=np.int32)
+        comm.Barrier()
+        status = ParMETIS.callParMETIS(
+            vtxdist,
+            xadj,
+            adjncy,
+            vwgt,
+            vsize,
+            adjwgt,
+            wgtflag,
+            numflag,
+            ncon,
+            tpwgts,
+            ubvec,
+            itr,
+            part,
+        )
+        parts = comm.gather(part, root=0)
+
+        if not status:
+            if rank == 0:
+                print("ParMETIS failed!", flush=True)
+            return False
+
+        if rank == 0:
+            for i, p in enumerate(parts):
+                for j, dev in enumerate(p):
+                    if dev == -1:
+                        break
+                    task_id = partitioned_tasks[i][j]
+                    prev_mapping[graph.task_to_cell[task_id]] = int(dev) + offset  # Offset by 1 to ignore CPU
+            return prev_mapping, status
+        else:
+            return None, status

@@ -22,10 +22,10 @@ void init_parmetis_ext(nb::module_ &m) {
              nb::ndarray<int32_t> adjncy, nb::ndarray<int32_t> vwgt, nb::ndarray<int32_t> vsize,
              nb::ndarray<int32_t> adjwgt, int32_t wgtflag, int32_t numflag, int32_t ncon,
              nb::ndarray<float> tpwgts, nb::ndarray<float> ubvec, float itr,
-             nb::ndarray<int32_t> part) {
-            self.callParMETIS(vtxdist.data(), xadj.data(), adjncy.data(), vwgt.data(), vsize.data(),
-                              adjwgt.data(), wgtflag, numflag, ncon, tpwgts.data(), ubvec.data(),
-                              itr, part.data());
+             nb::ndarray<int32_t> part) -> bool {
+            return self.callParMETIS(vtxdist.data(), xadj.data(), adjncy.data(), vwgt.data(),
+                                     vsize.data(), adjwgt.data(), wgtflag, numflag, ncon,
+                                     tpwgts.data(), ubvec.data(), itr, part.data());
           },
           "vtxdist"_a, "xadj"_a, "adjncy"_a, "vwgt"_a, "vsize"_a, "adjwgt"_a, "wgtflag"_a,
           "numflag"_a, "ncon"_a, "tpwgts"_a, "ubvec"_a, "itr"_a, "part"_a);

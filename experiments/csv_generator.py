@@ -23,8 +23,6 @@ def merge_csvs_in_dir(base_dir: str):
     for file in csv_files:
         try:
             df = pd.read_csv(file)
-            if "RL" in df.columns and "BestPolicy" in df.columns:
-                df["vsBest"] = df["RL"] / df["BestPolicy"]
             dfs.append(df)
         except Exception as e:
             print(f"Skipping {file}: {e}")
@@ -38,7 +36,7 @@ def merge_csvs_in_dir(base_dir: str):
     # ------------------------
     # Custom sorting sequence
     # ------------------------
-    graph_order = {"circle": 0, "corners": 1, "bump": 2}
+    graph_order = {"circle": 0, "ncircle": 1, "corners": 2, "noise": 3, "bump": 4, "lcorners": 5}
 
     # Ensure Memory sort numerically (strip “GB” and convert)
     def parse_mem(x):
@@ -84,7 +82,7 @@ def expand_from_flat_csv(csv_path: str):
     # ------------------------
     # Apply same ordering logic as merge_csvs_in_dir
     # ------------------------
-    graph_order = {"circle": 0, "corners": 1, "bump": 2}
+    graph_order = {"circle": 0, "ncircle": 1, "corners": 2, "noise": 3, "bump": 4, "lcorners": 5}
 
     def parse_mem(mem):
         try:
@@ -120,11 +118,36 @@ def expand_from_flat_csv(csv_path: str):
         # Sort memory values numerically within the group
         group = group.sort_values("MemoryVal")
 
+        # Fill in memory columns
         for _, r in group.iterrows():
             mem = str(r["Memory"]).strip()
             rl_val = r.get("RL", "")
             best_val = r.get("BestPolicy", "")
             row_dict[mem] = f"{rl_val}({best_val})"
+
+        # ------------------------
+        # Normalization step
+        # ------------------------
+        try:
+            # Find largest-memory column
+            largest_mem = max(group["MemoryVal"])
+            ref_best = float(group.loc[group["MemoryVal"] == largest_mem, "BestPolicy"].values[0])
+        except Exception:
+            ref_best = None
+
+        if ref_best and ref_best != 0:
+            for mem in group["Memory"]:
+                mem_str = str(mem).strip()
+                if mem_str in row_dict and "(" in row_dict[mem_str]:
+                    val_str = row_dict[mem_str]
+                    try:
+                        rl_val, best_val = val_str.strip(")").split("(")
+                        norm_rl = ref_best / float(rl_val)
+                        norm_best = ref_best / float(best_val)
+                        row_dict[mem_str] = f"{norm_rl:.4f}({norm_best:.4f})"
+                    except Exception:
+                        pass
+
         rows.append(row_dict)
 
     expanded_df = pd.DataFrame(rows)
@@ -154,8 +177,15 @@ def csv_to_latex_table(csv_path: str):
     # ------------------------
     # Helpers
     # ------------------------
-    graph_order = {"circle": 0, "corners": 1, "bump": 2}
-    display_graph = {"circle": "Circle", "corners": "Diagonal", "bump": "Bump"}
+    graph_order = {"circle": 0, "ncircle": 1, "corners": 2, "noise": 3, "bump": 4}
+    display_graph = {
+        "circle": "Circle",
+        "ncircle": "\\begin{tabular}[c]{@{}l@{}}Circle\\\\  +\\\\ Noise\end{tabular}",
+        "corners": "Corners",
+        "noise": "\\begin{tabular}[c]{@{}l@{}}Corners\\\\  +\\\\ Noise\end{tabular}",
+        "bump": "Bump",
+        "lcorners": "\\begin{tabular}[c]{@{}l@{}}Corners\\\\  +\\\\ Long\end{tabular}",
+    }
 
     allowed_vals = [0.1, 1.0, 10.0, 100.0]
     EPS = 1e-6
@@ -183,13 +213,13 @@ def csv_to_latex_table(csv_path: str):
 
     def fmt_ib(v: float) -> str:
         if abs(v - 0.1) <= EPS:
-            return "0.1"
+            return "$\\frac{1}{10}$"
         if abs(v - 1.0) <= EPS:
-            return "1.0"
+            return "$\\small{1}$"
         if abs(v - 10.0) <= EPS:
-            return "10"
+            return "$\\small{10}$"
         if abs(v - 100.0) <= EPS:
-            return "100"
+            return "$\\small{100}$"
         return f"{v:g}"
 
     def two_dec(x):
@@ -233,23 +263,40 @@ def csv_to_latex_table(csv_path: str):
     )
 
     # ------------------------
-    # Build LaTeX lines
+    # Build LaTeX lines (sorted graph order)
     # ------------------------
     latex_lines = []
 
-    for graph_key in ["circle", "corners", "bump"]:
+    # Use same order as everywhere else
+    graph_order = {"circle": 0, "ncircle": 1, "corners": 2, "noise": 3, "bump": 4, "lcorners": 5}
+
+    for graph_key in sorted(df["Graph"].unique(), key=lambda g: graph_order.get(g, 999)):
         gdf = df[df["Graph"] == graph_key]
         if gdf.empty:
             continue
 
         unique_pairs = gdf[["InteriorVal", "BoundaryVal"]].drop_duplicates()
         n_rows = len(unique_pairs)
-
+        print(display_graph)
         latex_lines.append(f"\\multirow{{{n_rows}}}{{*}}{{{display_graph[graph_key]}}} ")
 
         for idx, (ival, bval) in enumerate(unique_pairs.itertuples(index=False, name=None)):
             sub = gdf[(gdf["InteriorVal"] == ival) & (gdf["BoundaryVal"] == bval)]
             sub = sub.sort_values("MemoryVal")
+            # reverse so largest memory is last
+            sub = sub.iloc[::-1]
+
+            # Normalization (same as before)
+            try:
+                largest_mem = max(sub["MemoryVal"])
+                ref_best = float(sub.loc[sub["MemoryVal"] == largest_mem, "BestPolicy"].values[0])
+            except Exception:
+                ref_best = None
+
+            if ref_best and ref_best != 0:
+                sub = sub.copy()
+                sub["RL"] = sub["RL"].apply(lambda v: float(v) / ref_best if pd.notna(v) else v)
+                sub["BestPolicy"] = sub["BestPolicy"].apply(lambda v: float(v) / ref_best if pd.notna(v) else v)
 
             values = []
             for _, r in sub.iterrows():
@@ -257,13 +304,22 @@ def csv_to_latex_table(csv_path: str):
                 best_val = two_dec(r["BestPolicy"])
                 sup = get_superscript(r.get("BestPolicyName", ""))
 
-                # Highlight if RL is 0.05 less than BestPolicy
+                # Highlight logic (same)
                 cell_prefix = ""
+                cell_postfix = ""
                 if isinstance(rl_val, float) and isinstance(best_val, float):
-                    if rl_val + 0.05 < best_val:
+                    if rl_val / best_val > 1.03:
                         cell_prefix = r"\cellcolor{gray!25} "
+                    if rl_val <= best_val:
+                        cell_prefix = r"\textbf{"
+                        cell_postfix = "}"
+                    # if best_val < 1.0:
+                    #     rl_val = rl_val * (1.0 / best_val)
+                    #     best_val = 1.0
+                    rl_val = 1 / rl_val  # Invert for "speedup" display
+                    best_val = 1 / best_val
 
-                formatted = f"{cell_prefix}{rl_val:.2f} ({best_val:.2f}{sup})"
+                formatted = f"{cell_prefix}{rl_val:.2f}{cell_postfix} ({best_val:.2f}{sup})"
                 values.append(formatted)
 
             row = f"& {fmt_ib(ival)} & {fmt_ib(bval)} & " + " & ".join(values) + " \\\\"
