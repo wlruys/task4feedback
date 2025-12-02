@@ -32,7 +32,7 @@
 #define INITIAL_DEVICE_BUFFER_SIZE 10
 #define INITIAL_EVENT_BUFFER_SIZE 5000
 
-//using MappableTaskQueue = ContainerQueue<taskid_t, TopKQueueHelper<1>::queue_type>;
+// using MappableTaskQueue = ContainerQueue<taskid_t, TopKQueueHelper<1>::queue_type>;
 using MappableTaskQueue = ContainerQueue<taskid_t, DynamicTopKQueue>;
 using TaskQueue = ContainerQueue<taskid_t, std::priority_queue>;
 using DeviceQueue = ActiveQueueIterator<TaskQueue>;
@@ -97,6 +97,7 @@ protected:
 
 public:
   SchedulerQueues() = default;
+  priority_t data_queue_count = 0;
 
   SchedulerQueues(Devices &devices)
       : reservable(devices.size()), launchable(devices.size()), data_launchable(devices.size()),
@@ -118,14 +119,21 @@ public:
 
   void push_reservable(taskid_t id, priority_t p, devid_t device) {
     reservable[device].push(id, p);
+    SPDLOG_DEBUG("Pushing reservable compute task {} with priority {} on device {} top {}", id, p,
+                 device, reservable[device].top_element().value);
   }
 
   void push_launchable(taskid_t id, priority_t p, devid_t device) {
+    SPDLOG_DEBUG("Pushing launchable compute task {} with priority {} on device {}", id, p, device);
     launchable[device].push(id, p);
   }
 
   void push_launchable_data(taskid_t id, priority_t p, devid_t device) {
-    data_launchable[device].push(id, p);
+    // TODO: change this to normal queue if needed keeping priority queue semantics for now
+    data_launchable[device].push(id, data_queue_count++);
+    SPDLOG_DEBUG("Pushing launchable data task {} with priority {} on device {} data_queue_count "
+                 "{} current_top {}",
+                 id, p, device, data_queue_count - 1, data_launchable[device].top_element().value);
   }
 
   void push_launchable_eviction(taskid_t id, priority_t p, devid_t device) {
@@ -1151,8 +1159,6 @@ public:
 
   void push_reservable(taskid_t compute_task_id, devid_t device) {
     priority_t p = state.task_runtime.get_compute_task_reserve_priority(compute_task_id);
-    SPDLOG_DEBUG("Time:{} Pushing reservable compute task {} with priority {} on device {}",
-                 state.get_global_time(), compute_task_id, p, device);
     queues.push_reservable(compute_task_id, p, device);
   }
 
@@ -1168,8 +1174,6 @@ public:
 
   void push_launchable(taskid_t compute_task_id, devid_t device) {
     const priority_t p = state.task_runtime.get_compute_task_launch_priority(compute_task_id);
-    SPDLOG_DEBUG("Time:{} Pushing launchable compute task {} with priority {} on device {}",
-                 state.get_global_time(), compute_task_id, p, device);
     queues.push_launchable(compute_task_id, p, device);
   }
 
@@ -1177,8 +1181,6 @@ public:
     for (auto id : compute_task_ids) {
       const priority_t p = state.task_runtime.get_compute_task_launch_priority(id);
       const devid_t device = state.task_runtime.get_compute_task_mapped_device(id);
-      SPDLOG_DEBUG("Time:{} Pushing launchable compute task {} with priority {} on device {}",
-                   state.get_global_time(), id, p, device);
       queues.push_launchable(id, p, device);
     }
   }
@@ -1186,8 +1188,7 @@ public:
   void push_launchable_data(taskid_t data_task_id) {
     const priority_t p = state.task_runtime.get_data_task_launch_priority(data_task_id);
     const devid_t device = state.task_runtime.get_data_task_mapped_device(data_task_id);
-    SPDLOG_DEBUG("Time:{} Pushing launchable data task {} with priority {} on device {}",
-                 state.get_global_time(), data_task_id, p, device);
+
     queues.push_launchable_data(data_task_id, p, device);
   }
 
@@ -1195,8 +1196,6 @@ public:
     for (auto data_task_id : data_task_ids) {
       const priority_t p = state.task_runtime.get_data_task_launch_priority(data_task_id);
       const devid_t device = state.task_runtime.get_data_task_mapped_device(data_task_id);
-      SPDLOG_DEBUG("Time:{} Pushing launchable data task {} with priority {} on device {}",
-                   state.get_global_time(), data_task_id, p, device);
       queues.push_launchable_data(data_task_id, p, device);
     }
   }
