@@ -35,7 +35,7 @@ public:
     std::cout << "ParMETIS_wrapper - npes: " << npes << ", mype: " << mype << std::endl;
   }
 
-  void callParMETIS(int32_t *vtxdist, int32_t *xadj, int32_t *adjncy, int32_t *vwgt, int32_t *vsize,
+  bool callParMETIS(int32_t *vtxdist, int32_t *xadj, int32_t *adjncy, int32_t *vwgt, int32_t *vsize,
                     int32_t *adjwgt, int32_t wgtflag, int32_t numflag, int32_t ncon, float *tpwgts,
                     float *ubvec, float itr, int32_t *part) {
     int npes = 0;
@@ -53,7 +53,9 @@ public:
 
     if (status != METIS_OK) {
       std::cout << "ParMETIS error on rank " << mype << std::endl;
+      return false;
     }
+    return true;
   }
 #else
 class ParMETIS_wrapper {
@@ -67,8 +69,9 @@ public:
   static void print_info() {
     std::cerr << "[ParMETIS] error: support was disabled at compile time\n";
   }
-  static void callParMETIS(...) {
+  static bool callParMETIS(...) {
     std::cerr << "[ParMETIS] error: support was disabled at compile time\n";
+    return false;
   }
 #endif
 };
