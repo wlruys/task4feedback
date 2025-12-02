@@ -224,6 +224,8 @@ void Scheduler::enqueue_data_tasks(taskid_t compute_task_id) {
 
   for (auto data_task_id : data_dependencies) {
     task_runtime.data_notify_reserved(data_task_id, mapped_device, current_time, static_graph);
+    task_runtime.set_data_task_launch_priority(
+        data_task_id, task_runtime.get_compute_task_launch_priority(compute_task_id));
     s.update_data_reserved_cost(data_task_id, mapped_device);
     if (task_runtime.is_data_launchable(data_task_id)) {
       SPDLOG_DEBUG("Time:{} Data task {}:{} is launchable", current_time,
