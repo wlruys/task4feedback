@@ -29,21 +29,21 @@ reward:
   random_start: False
   gamma: 0.999
   baseline_policy: BlockCyclic(2x2)
-  uniform_reward_scale: 100
+  uniform_reward_scale: 1
 
 graph:
   config:
-    steps: 1024
+    steps: 256
     n: 8
-    level_memory: 95e9
-    arithmetic_intensity: 595.5555555
-    boundary_width: 0.25
+    level_memory: 102e9
+    arithmetic_intensity: 5.9555555
+    boundary_width: 0.025
     workload_args:
       traj_specifics:
         transition_frac: 1.0
         blur_frac: 0.10
         width: 0.5
-        phase_length: 512
+        phase_length: 128
   env:
     change_priority: False
     change_location: False
@@ -52,8 +52,8 @@ graph:
 
 algorithm:
   num_collections: 100000
-  rollout_steps: 256
-  minibatch_size: 256
+  rollout_steps: 64
+  minibatch_size: 64
   workers: 4
   graphs_per_collection: 4
   ent_coef: 0.001
@@ -64,28 +64,29 @@ algorithm:
   collector: "multi_sync"
 
 optimizer:
-  lr: 1e-3
+  lr: 1e-4
 
 system:
   mem: 80e9
 
 runtime:
-  batch_size: 5
+  batch_size: 64
   queue_threshold: 5
   max_in_flight: 64
 
 wandb:
   enabled: true
-  project: 8x8x1024_lcorners
+  project: 8x8x256_lcorners
   name: CNN-A_IEFT
 
 eval:
   animation_interval: 0
-  eval_interval: 0
+  eval_interval: 50
   max_frames: 400
   video_seconds: 15 
-  samples: 1
-  pickle_path: ./pickled_evaluation/8x8x1024_lcorners_1:1:1.pkl
+  samples: 4
+  pickle_path: ./pickled_evaluation/8x8x256_lcorners_1:1:1.pkl
+  expert_path: ./expert_evaluation/8x8x128_bump_1:1:1.pkl
 
 sweep:
   n_samples: 10

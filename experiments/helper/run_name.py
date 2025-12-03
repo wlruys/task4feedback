@@ -17,6 +17,7 @@ def cfg_hash(cfg: DictConfig, *, n=8) -> str:
     as_json = json.dumps(OmegaConf.to_container(cfg, resolve=True), sort_keys=True)
     return hashlib.blake2b(as_json.encode(), digest_size=n).hexdigest()
 
+
 def make_run_name(cfg: DictConfig) -> str:
     slug = slugify(
         [
@@ -29,3 +30,45 @@ def make_run_name(cfg: DictConfig) -> str:
     h = cfg_hash(cfg)
     date = datetime.datetime.now().strftime("%m%d-%H%M%S")
     return f"{slug}-{date}-{h}"
+
+
+def make_folder_name(cfg: DictConfig):
+    """
+    Create a folder name based on configuration.
+    Returns:
+    - folder_name: str
+    - graph_name: str
+    - interior_ratio: str
+    - boundary_ratio: str
+    """
+
+    def closest_ratio_string(value: float) -> str:
+        mapping = {100: "100", 10: "10", 1: "1", 0.1: "0.1"}
+        closest = min(mapping.keys(), key=lambda x: abs(value - x))
+        return mapping[closest]
+
+    interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
+    boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
+
+    interior_ratio = closest_ratio_string(interior_ratio)
+    boundary_ratio = closest_ratio_string(boundary_ratio)
+
+    if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
+        graph_name = cfg.graph.config.workload_args.traj_type
+    else:
+        graph_name = "static"
+
+    if cfg.graph.env.change_duration:
+        if cfg.graph.config.workload_args.traj_type == "circle":
+            graph_name = "ncircle"
+        elif cfg.graph.config.workload_args.traj_type == "corners":
+            graph_name = "noise"
+    if cfg.graph.config.steps > 256:
+        graph_name = "l" + graph_name
+
+    return (
+        f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{int(cfg.system.mem/1e9)}GB",
+        graph_name,
+        interior_ratio,
+        boundary_ratio,
+    )

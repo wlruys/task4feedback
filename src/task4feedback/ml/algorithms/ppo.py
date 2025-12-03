@@ -235,6 +235,14 @@ def log_training_metrics(
             "batch/lr": optimizer.param_groups[0]["lr"],
         }
 
+        for k, v in loss.items():
+            if k not in ["loss_objective", "loss_critic", "loss_entropy", "entropy", "kl_approx", "clip_fraction", "ESS"]:
+                try:
+                    # v may be a tensor or float
+                    log_payload[f"batch/{k}"] = v.item() if hasattr(v, "item") else float(v)
+                except Exception:
+                    pass
+
         if std_reward is not None:
             log_payload["batch/std_reward"] = std_reward
 
@@ -258,9 +266,38 @@ def log_training_metrics(
 
             training.info(f"Average training improvement: {avg_improvement}")
 
-        training.info(f"Average entropy {loss['entropy'].item()}")
+        msg_parts = []
+        for key, value in loss.items():
+            try:
+                scalar = value.item() if hasattr(value, "item") else float(value)
+                msg_parts.append(f"{key}={scalar:.4f}")
+            except Exception:
+                # skip non-numeric items safely
+                continue
+
+        msg = " | ".join(msg_parts)
+        training.info(f"[LOSS] {msg}")
         wandb.log(log_payload)
         return log_payload
+
+
+def compute_disagreement(actor, dataset, sample_size=2048):
+    """Compute disagreement between actor predictions and expert actions."""
+    obs = dataset["observation"]
+    expert_actions = dataset["action"].long()
+
+    N = obs.shape[0]
+    if N > sample_size:
+        idx = torch.randint(0, N, (sample_size,))
+        obs = obs[idx]
+        expert_actions = expert_actions[idx]
+
+    td = TensorDict({"observation": obs}, batch_size=[obs.shape[0]])
+    td = actor(td)
+    pred = td["logits"].argmax(-1)
+
+    disagree = (pred != expert_actions).float().mean().item()
+    return disagree
 
 
 def run_ppo(
@@ -272,6 +309,7 @@ def run_ppo(
     optimizer: Optional[torch.optim.Optimizer] = None,
     lr_scheduler: Optional[torch.optim.lr_scheduler.LambdaLR] = None,
     seed: int = 0,
+    expert_demonstration: Optional[TensorDict] = None,
 ):
     if logging_config is not None and (logging_frequency := logging_config.stats_interval):
         wandb.define_metric("batch/n_updates")
@@ -281,6 +319,9 @@ def run_ppo(
         wandb.define_metric("grad_norm/*", step_metric="batch/n_updates")
         wandb.define_metric("param_norm/*", step_metric="batch/n_updates")
         wandb.define_metric("eval/*", step_metric="batch/n_updates")
+        wandb.define_metric("batch/bc_loss", step_metric="batch/n_updates")
+        wandb.define_metric("batch/bc_coef", step_metric="batch/n_updates")
+        wandb.define_metric("batch/expert_disagreement", step_metric="batch/n_updates")
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
 
@@ -386,16 +427,34 @@ def run_ppo(
     loss_module = loss_module.to(ppo_config.update_device)
     advantage_module = advantage_module.to(ppo_config.update_device)
 
-    def update(batch, loss_module, optimizer, ppo_config):
+    def update_policy(batch, loss_module, optimizer, ppo_config, bc_coef: float = 0.0, expert_demonstration=None):
         loss_vals = loss_module(batch)
         loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
 
-        # joint_stats(batch, loss_module)
+        if expert_demonstration is not None and bc_coef > 0:
+            # Sample random expert mini-batch
+            idx = torch.randint(0, expert_demonstration.shape[0], (ppo_config.minibatch_size,))
+            exp_obs = expert_demonstration["observation"][idx]
+            exp_act = expert_demonstration["action"][idx].long()
+
+            td_exp = TensorDict({"observation": exp_obs}, batch_size=[ppo_config.minibatch_size])
+            td_exp = loss_module.actor_network(td_exp)
+            logits_exp = td_exp["logits"]
+
+            logp = torch.nn.functional.log_softmax(logits_exp, dim=-1)
+            bc_loss = -logp.gather(-1, exp_act.unsqueeze(-1)).squeeze(-1).mean()
+
+            # Add to PPO loss
+            loss_value = loss_value + bc_coef * bc_loss
+        else:
+            bc_loss = torch.tensor(0.0, device=loss_value.device)
 
         optimizer.zero_grad()
         loss_value.backward()
 
         torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_norm=ppo_config.max_grad_norm)
+        loss_vals["bc_loss"] = bc_loss
+        loss_vals["bc_coef"] = torch.tensor(bc_coef)
 
         optimizer.step()
 
@@ -426,8 +485,8 @@ def run_ppo(
         training.info("Running initial evaluation before training")
         metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0)
         if eval_config.pickle_path is not None:
-            if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-                max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+            if metrics[f"eval/DETERMINISTIC"]["mean_vsPolicy"] > max_performance:
+                max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsPolicy"]
 
     training.info("Starting PPO training loop")
 
@@ -435,6 +494,7 @@ def run_ppo(
     n_updates = 0
     n_samples = 0
     n_collections = 0
+    bc_coef = 1.0
     for i, tensordict_data in enumerate(collector):
         n_collections += 1
         replay_buffer.empty()
@@ -509,13 +569,28 @@ def run_ppo(
         update_start_t = time.perf_counter()
         loss_module.actor_network.train()
         loss_module.critic_network.train()
+
+        # Determine BC coefficient based on minimum improvement over baseline in the batch
+        improvements = flattened_data["next", "observation", "aux", "improvement"]
+        valid_improvement_mask = torch.isfinite(improvements) & (improvements > -100)
+        valid_improvements = improvements[valid_improvement_mask]
+        if max_performance > 0:
+            bc_coef = max(1 - max_performance, 0)
+        elif valid_improvements.numel() > 0:
+            bc_coef = max(1 - valid_improvements.min().item(), 0)
+
         for j in range(ppo_config.epochs_per_collection):
             for k in range(n_batch):
                 n_updates += 1
                 batch = replay_buffer.sample(ppo_config.minibatch_size)
                 batch.to(ppo_config.update_device, non_blocking=True)
-                loss = update(batch, loss_module, optimizer, ppo_config)
+                loss = update_policy(batch, loss_module, optimizer, ppo_config, bc_coef=bc_coef, expert_demonstration=expert_demonstration)
                 if should_log(n_updates, logging_config):
+                    if expert_demonstration is not None:
+                        disagree = compute_disagreement(loss_module.actor_network, expert_demonstration)
+                        loss["batch/expert_disagreement"] = torch.tensor(disagree)
+                    else:
+                        loss["batch/expert_disagreement"] = torch.tensor(-1.0)
                     wandb_log = log_training_metrics(
                         flattened_data,
                         tensordict_data,
@@ -526,30 +601,31 @@ def run_ppo(
                         i,
                         n_samples,
                     )
-                    if logging_config.log_best_policy and wandb_log.get("batch/mean_improvement", -1) > max_performance:
-                        max_performance = wandb_log["batch/mean_improvement"]
-                        filename = f"{max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
-                        checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
-                        # Remove all old checkpoints with the same seed
-                        pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
-                        for old_file in glob.glob(pattern):
-                            if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
-                                try:
-                                    os.remove(old_file)
-                                    training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
-                                except OSError as e:
-                                    training.warning(f"Failed to remove {old_file}: {e}")
-                        training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
-                        if logging_config.best_policy_dir is not None:
-                            save_checkpoint(
-                                n_collections,
-                                policy_module=collector.policy,
-                                value_module=loss_module.critic_network,
-                                optimizer=optimizer,
-                                lr_scheduler=lr_scheduler,
-                                filename=filename,
-                                checkpoint_dir=logging_config.best_policy_dir,
-                            )
+                    # Save best policy based on mean improvement of the batch
+                    # if logging_config.log_best_policy and wandb_log.get("batch/mean_improvement", -1) > max_performance:
+                    #     max_performance = wandb_log["batch/mean_improvement"]
+                    #     filename = f"{max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
+                    #     checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
+                    #     # Remove all old checkpoints with the same seed
+                    #     pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
+                    #     for old_file in glob.glob(pattern):
+                    #         if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
+                    #             try:
+                    #                 os.remove(old_file)
+                    #                 training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
+                    #             except OSError as e:
+                    #                 training.warning(f"Failed to remove {old_file}: {e}")
+                    #     training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
+                    #     if logging_config.best_policy_dir is not None:
+                    #         save_checkpoint(
+                    #             n_collections,
+                    #             policy_module=collector.policy,
+                    #             value_module=loss_module.critic_network,
+                    #             optimizer=optimizer,
+                    #             lr_scheduler=lr_scheduler,
+                    #             filename=filename,
+                    #             checkpoint_dir=logging_config.best_policy_dir,
+                    #         )
 
         collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
         update_end_t = time.perf_counter()
@@ -562,32 +638,33 @@ def run_ppo(
         if should_eval(n_collections, eval_config=eval_config):
             collector.policy.eval()
             metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples)
-            # if eval_config.pickle_path is not None:
-            #     if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-            #         max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+            # Save best policy based on evaluation performance
+            if eval_config.pickle_path is not None:
+                if metrics[f"eval/DETERMINISTIC"]["mean_vsPolicy"] > max_performance:
+                    max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsPolicy"]
 
-            #         filename = f"{max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
-            #         checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
-            #         # Remove all old checkpoints with the same seed
-            #         pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
-            #         for old_file in glob.glob(pattern):
-            #             if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
-            #                 try:
-            #                     os.remove(old_file)
-            #                     training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
-            #                 except OSError as e:
-            #                     training.warning(f"Failed to remove {old_file}: {e}")
-            #         training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
-            #         if logging_config.best_policy_dir is not None:
-            #             save_checkpoint(
-            #                 n_collections,
-            #                 policy_module=collector.policy,
-            #                 value_module=loss_module.critic_network,
-            #                 optimizer=optimizer,
-            #                 lr_scheduler=lr_scheduler,
-            #                 filename=filename,
-            #                 checkpoint_dir=logging_config.best_policy_dir,
-            #             )
+                    filename = f"{max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
+                    checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
+                    # Remove all old checkpoints with the same seed
+                    pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
+                    for old_file in glob.glob(pattern):
+                        if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
+                            try:
+                                os.remove(old_file)
+                                training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
+                            except OSError as e:
+                                training.warning(f"Failed to remove {old_file}: {e}")
+                    training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
+                    if logging_config.best_policy_dir is not None:
+                        save_checkpoint(
+                            n_collections,
+                            policy_module=collector.policy,
+                            value_module=loss_module.critic_network,
+                            optimizer=optimizer,
+                            lr_scheduler=lr_scheduler,
+                            filename=filename,
+                            checkpoint_dir=logging_config.best_policy_dir,
+                        )
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at collection {n_collections}")
@@ -762,7 +839,7 @@ def run_ppo_lstm(
         lr_scheduler = lr_scheduler(optimizer)
         print(f"Using learning rate scheduler: {lr_scheduler}")
 
-    def update(batch, i, j, k):
+    def update_policy(batch, i, j, k):
 
         if ppo_config.sample_slices:
             batch = batch.reshape(num_slices, -1)
@@ -861,7 +938,7 @@ def run_ppo_lstm(
                 batch, info = replay_buffer.sample(ppo_config.minibatch_size, return_info=True)
 
                 batch.to(ppo_config.update_device, non_blocking=True)
-                loss = update(batch, i, j, k)
+                loss = update_policy(batch, i, j, k)
 
                 if should_log(n_updates, logging_config):
                     log_training_metrics(
