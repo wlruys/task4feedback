@@ -28,35 +28,25 @@ run_dict = {"corners": [], "circle": [], "noise": [], "bump": [], "ncircle": []}
 # run_dict["circle"].append((1, 1, "35e9", "ParMETIS(1.01,1)", "ColWise"))
 # run_dict["circle"].append((10, 0.1, "105e9", "ParMETIS(1.01,1)", "Block(1x1)"))
 # run_dict["circle"].append((10, 1, "100e9", "ParMETIS(1.0001,0.0001001)", "Block(1x1)"))
-run_dict["circle"].append((100, 10, "54e9", "ParMETIS(1.01,10)", "Block(1x1)"))
 
 # run_dict["ncircle"].append((0.1, 0.1, "35e9", "ParMETIS(1.05,1)", "ColWise"))
 # run_dict["ncircle"].append((1, 0.1, "100e9", "ParMETIS(1.0001,0.0001001)", "EFT"))
 # run_dict["ncircle"].append((1, 1, "35e9", "ParMETIS(1.01,1)", "ColWise"))
 # run_dict["ncircle"].append((10, 0.1, "105e9", "ParMETIS(1.01,1)", "Block(1x1)"))
 # run_dict["ncircle"].append((10, 1, "100e9", "ParMETIS(1.0001,0.0001001)", "Block(1x1)"))
-run_dict["ncircle"].append((100, 10, "54e9", "ParMETIS(1.01,10)", "Block(1x1)"))
+run_dict["ncircle"].append((10, 1, "95e9", "ParMETIS(1.0001,0.0001001)", "Block(1x1)"))
 
 # run_dict["corners"].append((0.1, 0.1, "35e9", "BlockCyclic(2x2)", "Oracle(64)"))
 # run_dict["corners"].append((1, 0.1, "100e9", "ParMETIS(1.03,0.0001001)", "EFT"))
 # run_dict["corners"].append((1, 1, "35e9", "BlockCyclic(2x2)", "Colwise"))
 # run_dict["corners"].append((10, 0.1, "105e9", "ParMETIS(1.05,0.0001001)", "BlockCyclic(2x2)"))
-# run_dict["corners"].append((10, 1, "95e9", "BlockCyclic(2x2)", "ParMETIS(1.04,10)"))
-run_dict["corners"].append((100, 10, "51e9", "ParMETIS(1.04,10)", "BlockCyclic(2x2)"))
+run_dict["corners"].append((10, 1, "95e9", "BlockCyclic(2x2)", "ParMETIS(1.04,10)"))
 
 # run_dict["noise"].append((0.1, 0.1, "35e9", "BlockCyclic(2x2)", "Oracle(64)"))
 # run_dict["noise"].append((1, 0.1, "100e9", "ParMETIS(1.03,0.0001001)", "EFT"))
-# run_dict["noise"].append((1, 1, "35e9", "BlockCyclic(2x2)", "Colwise"))
-# run_dict["noise"].append((10, 0.1, "105e9", "ParMETIS(1.05,0.0001001)", "BlockCyclic(2x2)"))
-# run_dict["noise"].append((10, 1, "95e9", "BlockCyclic(2x2)", "ParMETIS(1.04,10)"))
-run_dict["noise"].append((100, 10, "51e9", "ParMETIS(1.04,10)", "BlockCyclic(2x2)"))
-
-# run_dict["bump"].append((0.1, 0.1, "45e9", "BlockCyclic(1x1)", "ColWise"))
-# run_dict["bump"].append((1, 0.1, "105e9", "BlockCyclic(1x1)", "ParMETIS(1.03, 0.0001001)"))
-# run_dict["bump"].append((1, 1, "35e9", "BlockCyclic(1x1)", "EFT"))
-# run_dict["bump"].append((10, 0.1, "100e9", "ParMETIS(1.03,0.0001001)", "BlockCyclic(1x1)"))
-# run_dict["bump"].append((10, 1, "105e9", "ParMETIS(1.0001,0.0001001)", "EFT"))
-run_dict["bump"].append((100, 10, "45e9", "ParMETIS(1.01,10)", "BlockCyclic(1x1)"))
+run_dict["noise"].append((1, 1, "35e9", "BlockCyclic(2x2)", "Colwise"))
+run_dict["noise"].append((10, 0.1, "105e9", "ParMETIS(1.05,0.0001001)", "BlockCyclic(2x2)"))
+run_dict["noise"].append((10, 1, "95e9", "BlockCyclic(2x2)", "ParMETIS(1.04,10)"))
 
 # --- Core pool setup ---
 node0_cores = list(range(0, 72))  # even = NUMA node0
@@ -73,34 +63,34 @@ running_jobs = []  # (proc, allocated_cores)
 
 jobs = []
 
-for v in ["D"]:
-    for k in run_dict.keys():
-        for dmem in [64e9, 72e9, 80e9, 88e9, 96e9, 9999e9]:
-            for interior, boundary, mem, _, _ in run_dict[k]:
-                ib = param[(interior, boundary)]
-                prj_name = f"8x8x256_{k}_{interior}-{boundary}-1_IPDPS_Calibrate"
-                n_cores = 4
-                cmd = [
-                    "python3",
-                    "train.py",
-                    "--config-name",
-                    f"8x8x128_dynamic_{k}_cnn",
-                    f"feature.observer.version={v}",
-                    f"wandb.project={prj_name}",
-                    "algorithm.ent_coef=0.00025",
-                    "reward.gamma=0.99",
-                    f"graph.config.level_memory={mem}",
-                    "reward.uniform_reward_scale=10",
-                    f"wandb.name={v}_{int(dmem/1e9)}",
-                    f"wandb.group={v}_{int(dmem/1e9)}",
-                    f"seed={(seed+10)*100000000}",
-                    f"system.mem={dmem}",
-                    f"graph.config.arithmetic_intensity={ib[0]}",
-                    f"graph.config.boundary_width={ib[1]}",
-                    "eval.eval_interval=0",
-                ]
-                jobs.append((n_cores, cmd))
-                print(f"Prepared job with {n_cores} cores: {' '.join(cmd)}")
+for k in run_dict.keys():
+    for dmem in [64e9, 72e9, 80e9, 88e9, 96e9, 9999e9]:
+        for interior, boundary, mem, _, _ in run_dict[k]:
+            if dmem != 72e9 and (interior, boundary) != (10, 1):
+                continue
+            ib = param[(interior, boundary)]
+            prj_name = f"8x8x256_{k}_{interior}-{boundary}-1_fixed"
+            n_cores = 4
+            cmd = [
+                "python3",
+                "train.py",
+                "--config-name",
+                f"8x8x128_dynamic_{k}_cnn",
+                f"wandb.project={prj_name}",
+                "reward.gamma=0.99",
+                f"graph.config.level_memory={mem}",
+                "reward.uniform_reward_scale=10",
+                f"wandb.name=D_{int(dmem/1e9)}",
+                f"wandb.group=D_{int(dmem/1e9)}",
+                f"seed={(seed+10)*100000000}",
+                f"system.mem={dmem}",
+                f"graph.config.arithmetic_intensity={ib[0]}",
+                f"graph.config.boundary_width={ib[1]}",
+                "eval.eval_interval=50",
+                "eval.exploration_types=['DETERMINISTIC']",
+            ]
+            jobs.append((n_cores, cmd))
+            print(f"Prepared job with {n_cores} cores: {' '.join(cmd)}")
 
 
 # --- Scheduler helpers ---

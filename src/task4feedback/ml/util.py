@@ -290,11 +290,11 @@ def eval_pickled_env(
         if hasattr(env, "simulator") and hasattr(env.simulator, "time"):
             completion_time = env.simulator.time
             env_times.append(completion_time)
-            if n_collections == 0:
-                if pickled_states["eft_times"][i] != env._get_baseline("EFT"):
-                    training.warning(f"Environment {i} EFT time mismatch: {pickled_states['eft_times'][i]} " f"!= {env._get_baseline('EFT')}")
-                else:
-                    training.info(f"Environment {i} EFT time match: {pickled_states['eft_times'][i]} == {env._get_baseline('EFT')}")
+            # if n_collections == 0:
+            #     if pickled_states["eft_times"][i] != env._get_baseline("EFT"):
+            #         training.warning(f"Environment {i} EFT time mismatch: {pickled_states['eft_times'][i]} " f"!= {env._get_baseline('EFT')}")
+            #     else:
+            #         training.info(f"Environment {i} EFT time match: {pickled_states['eft_times'][i]} == {env._get_baseline('EFT')}")
 
         env_vsEFT.append(pickled_states["eft_times"][i] / completion_time if completion_time > 0 else 0.0)
         env_vsPolicy.append(pickled_states["policy_times"][i] / completion_time if completion_time > 0 else 0.0)
