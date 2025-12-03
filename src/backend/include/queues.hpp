@@ -149,12 +149,10 @@ private:
       //   return lhs.priority < rhs.priority;
       // }
       // return value_compare(lhs.value, rhs.value);
-      // if (lhs.priority == rhs.priority) {
-      //   return value_compare(lhs.value, rhs.value);
-      // }
-      // return value_compare(rhs.priority, lhs.priority);
-      return lhs < rhs;
-      // return rhs < lhs;
+      if (lhs.value == rhs.value) {
+        return value_compare(rhs.priority, lhs.priority);
+      }
+      return value_compare(rhs.value, lhs.value);
     }
   };
 
