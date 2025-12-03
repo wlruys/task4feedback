@@ -495,7 +495,7 @@ def run_ppo(
     n_updates = 0
     n_samples = 0
     n_collections = 0
-    bc_coef = 1.0
+    bc_coef = 0
     for i, tensordict_data in enumerate(collector):
         n_collections += 1
         replay_buffer.empty()
@@ -610,28 +610,34 @@ def run_ppo(
                         _ = evaluate_policy(n_collections, collector.policy, eval_envs, eval_config, "DETERMINISTIC", metrics)
                         if metrics[f"eval/DETERMINISTIC"]["mean_vsPolicy"] > eval_max_performance:
                             eval_max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsPolicy"]
-                        filename = f"{eval_max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
-                        checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
-                        # Remove all old checkpoints with the same seed
-                        pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
-                        for old_file in glob.glob(pattern):
-                            if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
-                                try:
-                                    os.remove(old_file)
-                                    training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
-                                except OSError as e:
-                                    training.warning(f"Failed to remove {old_file}: {e}")
-                        training.info(f"New max performance: {eval_max_performance:.4f}. Saving checkpoint.")
-                        if logging_config.best_policy_dir is not None:
-                            save_checkpoint(
-                                n_collections,
-                                policy_module=collector.policy,
-                                value_module=loss_module.critic_network,
-                                optimizer=optimizer,
-                                lr_scheduler=lr_scheduler,
-                                filename=filename,
-                                checkpoint_dir=logging_config.best_policy_dir,
+                            filename = f"{eval_max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
+                            checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
+                            # Remove all old checkpoints with the same seed
+                            pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
+                            for old_file in glob.glob(pattern):
+                                if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
+                                    try:
+                                        os.remove(old_file)
+                                        training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
+                                    except OSError as e:
+                                        training.warning(f"Failed to remove {old_file}: {e}")
+                            training.info(f"New max performance: {eval_max_performance:.4f}. Saving checkpoint.")
+                            if logging_config.best_policy_dir is not None:
+                                save_checkpoint(
+                                    n_collections,
+                                    policy_module=collector.policy,
+                                    value_module=loss_module.critic_network,
+                                    optimizer=optimizer,
+                                    lr_scheduler=lr_scheduler,
+                                    filename=filename,
+                                    checkpoint_dir=logging_config.best_policy_dir,
+                                )
+                        else:
+                            training.info(
+                                f"Skipping checkpoint save, eval max performance {metrics[f"eval/DETERMINISTIC"]["mean_vsPolicy"]:.2f} did not exceed previous best of {eval_max_performance:.2f}."
                             )
+                    else:
+                        training.info(f"Skipping env check, batch mean improvement {wandb_log.get('batch/mean_improvement', -1):.2f} did not exceed threshold of {batch_max_performance:.2f}.")
                     #     filename = f"{batch_max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
                     #     checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
                     #     # Remove all old checkpoints with the same seed
