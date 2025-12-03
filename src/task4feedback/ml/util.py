@@ -255,6 +255,7 @@ class EvaluationConfig:
     video_seconds: int = 15
     pickle_path: Optional[str] = None
     pickled_states: Optional[Dict[str, Any]] = None
+    expert_path: Optional[str] = None
 
 
 def eval_pickled_env(
@@ -272,7 +273,8 @@ def eval_pickled_env(
     metrics = {}
     last_env = None
     for i in range(samples):
-        env.reset_for_evaluation()
+        # env.reset_for_evaluation()
+        env.set_reset_counter(pickled_states["reset_counter"][i % len(pickled_states["reset_counter"])])
         env.disable_reward()
         with set_exploration_type(exploration_type), torch.no_grad():
             saved_loc = pickled_states["init_locs"][i % len(pickled_states["init_locs"])]
@@ -445,7 +447,7 @@ def evaluate_policy(n_collections: int, policy, eval_envs: list[RuntimeEnv], con
                         config.pickled_states = pickle.load(f)
                 except FileNotFoundError:
                     print(f"[ERROR] Pickle file not found: {config.pickle_path} - skipping pickled evaluation")
-                    config.pickle_path = None # disable for future calls
+                    config.pickle_path = None  # disable for future calls
                     config.pickled_states = None
             if config.pickled_states is not None:
                 env_eval_metrics, output_env = eval_pickled_env(n_collections, policy, env, exploration_type_enum, samples=config.samples, pickled_states=config.pickled_states)

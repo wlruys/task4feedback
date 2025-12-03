@@ -5,8 +5,9 @@ from hydra.utils import instantiate
 
 from helper.graph import make_graph_builder
 from helper.env import make_env
-from helper.model import create_td_actor_critic_models
+from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
 from helper.algorithm import create_optimizer, create_lr_scheduler
+from helper.run_name import make_folder_name
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
@@ -27,6 +28,7 @@ from helper.run_name import make_run_name, cfg_hash
 import torch
 import numpy
 import random
+import pickle
 
 
 class GitInfo(Callback):
@@ -59,6 +61,17 @@ def configure_training(cfg: DictConfig):
     observer = env.get_observer()
     feature_config = FeatureDimConfig.from_observer(observer)
     model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
+
+    # ckpt_path = Path("/home/cc/task4feedback_torchrl/experiments/saved_models_test")
+    # folder_name, _, _, _ = make_folder_name(cfg)
+    # model_path = Path("./") / folder_name
+    # files = list(model_path.glob("*.pt"))
+    # assert len(files) <= 1, f"Multiple checkpoint files found in {model_path}"
+    # if len(files) == 1:
+    #     ckpt_path = files[0]
+    #     print(f"Loading policy from checkpoint: {ckpt_path}")
+    #     loaded = load_policy_from_checkpoint(model, ckpt_path)
+    #     assert loaded, f"Failed to load model from {ckpt_path}"
 
     def env_fn(eval: bool = False):
         return make_env(
@@ -94,6 +107,11 @@ def configure_training(cfg: DictConfig):
         except Exception as e:
             print(f"wandb.watch failed: {e}")
 
+    if cfg.eval.expert_path is not None:
+        expert_demonstration = pickle.load(open(cfg.eval.expert_path, "rb"))
+    else:
+        expert_demonstration = None
+
     if lstm is not None:
         run_ppo_lstm(
             actor_critic_module=model,
@@ -115,60 +133,53 @@ def configure_training(cfg: DictConfig):
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             seed=cfg.seed,
+            expert_demonstration=expert_demonstration,
         )
 
 
 @hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
 def main(cfg: DictConfig):
     # cfg.graph.config.workload_args.traj_type exist
+    if "Dilation" in cfg.network.layers.state._target_:
+        if "Uncond" in cfg.network.layers.state._target_:
+            network = "UncondCNN"
+        else:
+            network = "CNN"
+    elif "Vector" in cfg.network.layers.state._target_:
+        network = "Vector"
+    elif "GNN" in cfg.network.layers.state._target_:
+        network = "GNN"
+    else:
+        print(cfg.network.layers.state._target_)
+        raise ValueError("Unknown network type in cfg.network.layers.state._target_")
+
     if cfg.graph.mesh._target_ == "task4feedback.graphs.mesh.generate_quad_mesh":
 
-        def closest_ratio_string(value: float) -> str:
-            mapping = {100: "100", 10: "10", 1: "1", 0.1: "0.1"}
-            closest = min(mapping.keys(), key=lambda x: abs(value - x))
-            return mapping[closest]
+        run_name, _, _, _ = make_folder_name(cfg)
 
-        interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
-        boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
-
-        interior_ratio = closest_ratio_string(interior_ratio)
-        boundary_ratio = closest_ratio_string(boundary_ratio)
-        checkpoint_path = Path(cfg.wandb.dir)
-        if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
-            graph_name = cfg.graph.config.workload_args.traj_type
-        else:
-            graph_name = "static"
-        if "Dilation" in cfg.network.layers.state._target_:
-            if "Uncond" in cfg.network.layers.state._target_:
-                network = "UncondCNN"
-            else:
-                network = "CNN"
-        elif "Vector" in cfg.network.layers.state._target_:
-            network = "Vector"
-        elif "GNN" in cfg.network.layers.state._target_:
-            network = "GNN"
-        else:
-            print(cfg.network.layers.state._target_)
-            raise ValueError("Unknown network type in cfg.network.layers.state._target_")
-        if cfg.graph.env.change_duration:
-            if cfg.graph.config.workload_args.traj_type == "circle":
-                graph_name = "ncircle"
-            elif cfg.graph.config.workload_args.traj_type == "corners":
-                graph_name = "noise"
-
-        run_name = f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{int(float(cfg.system.mem)/1e9)}GB"
-
-        checkpoint_path = checkpoint_path.parent / "model_checkpoints" / f"{run_name}"
+        checkpoint_path = Path(cfg.wandb.dir).parent / "model_checkpoints" / f"{run_name}"
         cfg.eval.pickle_path = f"./pickled_evaluation/{run_name}.pkl"
+        cfg.eval.expert_path = f"./expert_evaluation/{run_name}.pkl"
+
         # find if the file exists
         if not os.path.exists(cfg.eval.pickle_path):
-            # replace - with :
+            # replace - with : and check again
             cfg.eval.pickle_path = cfg.eval.pickle_path.replace("-", ":")
             if not os.path.exists(cfg.eval.pickle_path):
                 print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
                 cfg.eval.pickle_path = None
         else:
             print(f"Using pickle path {cfg.eval.pickle_path}")
+
+        if not os.path.exists(cfg.eval.expert_path):
+            # replace - with : and check again
+            cfg.eval.expert_path = cfg.eval.expert_path.replace("-", ":")
+            if not os.path.exists(cfg.eval.expert_path):
+                print(f"Expert path {cfg.eval.expert_path} does not exist.")
+                cfg.eval.expert_path = None
+        else:
+            print(f"Using expert path {cfg.eval.expert_path}")
+
         # Make a dir if not exists
         checkpoint_path.mkdir(parents=True, exist_ok=True)
         cfg.logging.best_policy_dir = str(checkpoint_path)

@@ -8,6 +8,7 @@ from helper.graph import make_graph_builder
 from helper.env import make_env
 from helper.model import create_td_actor_critic_models
 from helper.algorithm import create_optimizer, create_lr_scheduler
+from helper.run_name import make_folder_name
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
@@ -81,27 +82,37 @@ def parse_policy(policy_str: str):
 
 def configure_training(cfg: DictConfig):
     # start_logger()
-    eval_state = {"cfg": OmegaConf.to_yaml(cfg), "init_locs": [], "workloads": [], "eft_times": [], "policy_times": []}
+    extend = 2
+    num_samples = cfg.eval.samples
+
+    eval_state = {"cfg": OmegaConf.to_yaml(cfg), "init_locs": [], "workloads": [], "eft_times": [], "policy_times": [], "reset_counter": []}
     if rank == 0:
         graph_builder = make_graph_builder(cfg)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
         env.set_reset_counter(9999)
 
-    def closest_ratio_string(value: float) -> str:
-        mapping = {100: "100", 10: "10", 1: "1", 0.1: "0.1"}
-        closest = min(mapping.keys(), key=lambda x: abs(value - x))
-        return mapping[closest]
+    # def closest_ratio_string(value: float) -> str:
+    #     mapping = {100: "100", 10: "10", 1: "1", 0.1: "0.1"}
+    #     closest = min(mapping.keys(), key=lambda x: abs(value - x))
+    #     return mapping[closest]
 
-    interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
-    boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
+    # interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
+    # boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
 
-    interior_str = closest_ratio_string(interior_ratio)
-    boundary_str = closest_ratio_string(boundary_ratio)
+    # interior_str = closest_ratio_string(interior_ratio)
+    # boundary_str = closest_ratio_string(boundary_ratio)
+
+    folder_name, graph_name, interior_str, boundary_str = make_folder_name(cfg)
 
     saved_policy, meta_data = parse_policy(cfg.sweep.policy)
 
-    for i in range(20):
+    cfg.graph.config.steps *= extend
+    if cfg.graph.config.workload_args.traj_type == "circle":
+        cfg.graph.config.workload_args.traj_specifics.max_angle *= extend
+
+    for i in range(num_samples):
         if rank == 0:
+            eval_state["reset_counter"].append(env.resets)
             env.reset()
             eval_state["init_locs"].append(env.get_graph().get_cell_locations(as_dict=False))
             graph = env.get_graph()
@@ -114,6 +125,8 @@ def configure_training(cfg: DictConfig):
             eval_state["policy_times"].append(env._get_baseline("EFT"))
         elif saved_policy == "Quad" and rank == 0:
             eval_state["policy_times"].append(env._get_baseline("Quad"))
+        elif saved_policy == "RowCyclic" and rank == 0:
+            eval_state["policy_times"].append(env._get_baseline("Cyclic"))
         elif saved_policy == "BlockCyclic" and rank == 0:
             env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=4, block_size=int(meta_data[0][0]), offset=1)
             env.simulator.run()
@@ -130,7 +143,7 @@ def configure_training(cfg: DictConfig):
             env.simulator.run()
             eval_state["policy_times"].append(env.simulator.time)
         elif saved_policy == "ParMETIS":
-            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, unbalance=meta_data[0], itr=meta_data[1])
+            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, unbalance=meta_data[1], itr=meta_data[0])
             if rank == 0:
                 eval_state["policy_times"].append(env.simulator.time)
 
@@ -139,7 +152,7 @@ def configure_training(cfg: DictConfig):
     # print(eval_state)
     # pickle.dump(eval_state, open("4x4x16_static_1:1:1.pkl", "wb"))
     if rank == 0:
-        file_name = f"./pickled_evaluation/8x8x128_{interior_str}-{boundary_str}-1_{cfg.graph.config.workload_args.traj_type}_{int(float(cfg.system.mem)/1e9)}GB"
+        file_name = f"./pickled_evaluation/{folder_name}"
         pickle.dump(eval_state, open(f"{file_name}.pkl", "wb"))
         # print(eval_state)
 
@@ -147,10 +160,12 @@ def configure_training(cfg: DictConfig):
         env._reset()
 
         # eval_state = pickle.load(open("dynamic_bump_eval.pkl", "rb"))
-        for i in range(20):
+        for i in range(num_samples):
             saved_loc = eval_state["init_locs"][i]
             workload = eval_state["workloads"][i]
-            env.reset_to_state(saved_loc, workload)
+            env.set_reset_counter(eval_state["reset_counter"][i])
+            env.reset()
+            # env.reset_to_state(saved_loc, workload)
             print(f"Eval {i}:")
             sim_time = env._get_baseline("EFT")
             if eval_state["eft_times"][i] != sim_time:

@@ -11,6 +11,7 @@ from helper.graph import make_graph_builder
 from helper.env import make_env
 from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
 from helper.algorithm import create_optimizer, create_lr_scheduler
+from helper.run_name import make_folder_name
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
@@ -100,177 +101,153 @@ def count_flips(sim: SimulatorDriver, cfg):
 
 
 def configure_training(cfg: DictConfig):
-    n_samples = 20
+    n_samples = 5
+    extend = 2  # Multiplied by 256
+    root_dir = Path("./saved_models_test")
     if not cfg.graph.env.change_priority and not cfg.graph.env.change_location and not cfg.graph.env.change_workload and not cfg.graph.env.change_duration:
         n_samples = 1
 
-    def closest_ratio_string(value: float) -> str:
-        mapping = {100: "100", 10: "10", 1: "1", 0.1: "0.1"}
-        closest = min(mapping.keys(), key=lambda x: abs(value - x))
-        return mapping[closest]
-
-    interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
-    boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
-
-    interior_ratio = closest_ratio_string(interior_ratio)
-    boundary_ratio = closest_ratio_string(boundary_ratio)
-
-    if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
-        graph_name = cfg.graph.config.workload_args.traj_type
-    else:
-        graph_name = "static"
-
-    if cfg.graph.env.change_duration:
-        if cfg.graph.config.workload_args.traj_type == "circle":
-            graph_name = "ncircle"
-        elif cfg.graph.config.workload_args.traj_type == "corners":
-            graph_name = "noise"
-    if cfg.graph.config.steps > 256:
-        graph_name = "l" + graph_name
+    folder_name, graph_name, interior_ratio, boundary_ratio = make_folder_name(cfg)
 
     proceed = False
-    if OmegaConf.select(cfg, "skipRL"):
-        skipRL = True
-    else:
-        skipRL = False
-    # saved_models/8x8x128_10-1-1_corners_74GB/5.286_D.pt
+    # check if useRL key is in cfg
+    # if OmegaConf.select(cfg, "skipRL"):
+    #     skipRL = True
+    # else:
+    #     skipRL = False
+    skipRL = False
     if rank == 0:
-        # check if useRL key is in cfg
-        if skipRL:
-            print("Skipping RL evaluation as per configuration.", flush=True)
-            proceed = True
-            files = []
-            original_steps = cfg.graph.config.steps
-            norm = False
-            root_dir = Path(f"./{interior_ratio}-{boundary_ratio}-{graph_name}/")
-            root_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            skipRL = False
-            original_steps = cfg.graph.config.steps
-            root_dir = (
-                Path(__file__).resolve().parent
-                / "saved_models"
-                / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{int(cfg.system.mem/1e9)}GB"
-            )
-            files = list(root_dir.rglob("*.pt"))
-            log_file = root_dir / "model_usage.log"
-            results_file = root_dir / "model_eval_results.csv"
-            final_file = root_dir / "results.csv"
+        # if skipRL:
+        #     print("Skipping RL evaluation as per configuration.", flush=True)
+        #     proceed = True
+        #     files = []
+        #     original_steps = cfg.graph.config.steps
+        #     norm = False
+        #     root_dir = Path(f"./{interior_ratio}-{boundary_ratio}-{graph_name}/")
+        #     root_dir.mkdir(parents=True, exist_ok=True)
+        original_steps = cfg.graph.config.steps
+        root_dir = root_dir / folder_name
+        files = list(root_dir.rglob("*.pt"))
+        model_usage_log = root_dir / "model_usage.log"
+        model_eval_file = root_dir / "model_eval_results.csv"
+        final_file = root_dir / "results.csv"
 
-            if not files:
-                print(f"No saved models found in {root_dir}, exiting.")
+        if not files:
+            print(f"No saved models found in {root_dir}, exiting.")
+            proceed = False
+        else:
+            print(f"Found {len(files)} models. Beginning empirical evaluation...", flush=True)
+
+            model_scores = []
+            logged_models = {}
+            best_time_from_log = float("inf")
+            best_model_from_log = None
+
+            # Step 1: Try to recover past evaluations
+            if model_usage_log.exists():
+                with open(model_usage_log, "r") as f:
+                    for line in f:
+                        if "Evaluated model:" in line:
+                            try:
+                                # Example line: 2025-10-06T17:20:43.794698 - Evaluated model: 1.007_D.pt, mean_time=46334451.0000
+                                parts = line.strip().split("Evaluated model:")[1].split(", mean_time=")
+                                model_name = parts[0].strip()
+                                mean_time = float(parts[1])
+                                logged_models[model_name] = mean_time
+                                if mean_time < best_time_from_log:
+                                    best_time_from_log = mean_time
+                                    best_model_from_log = model_name
+                            except Exception:
+                                continue
+                print(f"Loaded {len(logged_models)} logged models from log. Best so far: {best_model_from_log} ({best_time_from_log:.2f})", flush=True)
+            else:
+                print("No previous evaluation log found.", flush=True)
+
+            # Step 2: Set up normalization once
+            graph_builder = make_graph_builder(cfg)
+            norm_file = root_dir / f"norm.pkl"
+            if norm_file.exists():
+                print(f"Loading normalization from {norm_file}")
+                norm = pickle.load(open(norm_file, "rb"))
+            else:
+                print(f"Normalization file {norm_file} not found, creating new normalization")
+                env, norm = make_env(graph_builder=graph_builder, cfg=cfg, eval=True)
+                pickle.dump(norm, open(norm_file, "wb"))
+
+            # Step 3: Evaluate only *new* models
+            new_evals = []
+            for ckpt_path in files:
+                model_name = ckpt_path.name
+                if model_name in logged_models:
+                    print(f"Skipping {model_name}: already logged.")
+                    continue
+
+                print(f"Evaluating new model {model_name}...", flush=True)
+
+                # Longer graphs
+                cfg.graph.config.steps = 256 * extend
+                if cfg.graph.config.workload_args.traj_type == "circle":
+                    cfg.graph.config.workload_args.traj_specifics.max_angle = cfg.graph.config.steps // 128
+                graph_builder = make_graph_builder(cfg)
+
+                eval_times = []
+                graph_builder = make_graph_builder(cfg)
+                eval_env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
+
+                feature_config = FeatureDimConfig.from_observer(eval_env.get_observer())
+                model, _, _ = create_td_actor_critic_models(cfg, feature_config)
+                loaded = load_policy_from_checkpoint(model, ckpt_path)
+                if not loaded:
+                    print(f"Could not load policy from {model_name}, skipping.")
+                    continue
+
+                model.eval()
+
+                for i in range(1):
+                    with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+                        eval_env.rollout(max_steps=1000000, policy=model.actor, auto_reset=True)
+                        eval_times.append(eval_env.simulator.time)
+
+                mean_time = float(np.mean(eval_times))
+                print(f"→ {model_name}: mean time = {mean_time:.2f}", flush=True)
+
+                # Store result in memory and append to log
+                logged_models[model_name] = mean_time
+                new_evals.append((model_name, ckpt_path, mean_time))
+
+                with open(model_usage_log, "a") as f:
+                    f.write(f"{datetime.now().isoformat()} - Evaluated model: {model_name}, mean_time={mean_time:.4f}\n")
+                gc.collect()
+
+            # Step 4: Update or create results CSV
+            with open(model_eval_file, "w") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Model", "MeanTime"])
+                for name, t in logged_models.items():
+                    writer.writerow([name, t])
+
+            # Step 5: Pick the best overall model (old or new)
+            best_model_name, best_time = min(logged_models.items(), key=lambda x: x[1])
+            best_file = next((f for f in files if f.name == best_model_name), None)
+
+            if best_file is None:
+                print(f"Best model file {best_model_name} not found on disk, exiting.")
                 proceed = False
             else:
-                print(f"Found {len(files)} models. Beginning empirical evaluation...", flush=True)
-
-                model_scores = []
-                logged_models = {}
-                best_time_from_log = float("inf")
-                best_model_from_log = None
-
-                # Step 1: Try to recover past evaluations
-                if log_file.exists():
-                    with open(log_file, "r") as f:
-                        for line in f:
-                            if "Evaluated model:" in line:
-                                try:
-                                    # Example line: 2025-10-06T17:20:43.794698 - Evaluated model: 1.007_D.pt, mean_time=46334451.0000
-                                    parts = line.strip().split("Evaluated model:")[1].split(", mean_time=")
-                                    model_name = parts[0].strip()
-                                    mean_time = float(parts[1])
-                                    logged_models[model_name] = mean_time
-                                    if mean_time < best_time_from_log:
-                                        best_time_from_log = mean_time
-                                        best_model_from_log = model_name
-                                except Exception:
-                                    continue
-                    print(f"Loaded {len(logged_models)} logged models from log. Best so far: {best_model_from_log} ({best_time_from_log:.2f})", flush=True)
-                else:
-                    print("No previous evaluation log found.", flush=True)
-
-                # Step 2: Set up normalization once
-                graph_builder = make_graph_builder(cfg)
-                norm_file = root_dir / f"norm.pkl"
-                if norm_file.exists():
-                    print(f"Loading normalization from {norm_file}")
-                    norm = pickle.load(open(norm_file, "rb"))
-                else:
-                    print(f"Normalization file {norm_file} not found, creating new normalization")
-                    env, norm = make_env(graph_builder=graph_builder, cfg=cfg, eval=True)
-                    pickle.dump(norm, open(norm_file, "wb"))
-
-                # Step 3: Evaluate only *new* models
-                new_evals = []
-                for ckpt_path in files:
-                    model_name = ckpt_path.name
-                    if model_name in logged_models:
-                        print(f"Skipping {model_name}: already logged.")
-                        continue
-
-                    print(f"Evaluating new model {model_name}...", flush=True)
-
-                    # Longer graphs
-                    cfg.graph.config.steps = 256
-                    if cfg.graph.config.workload_args.traj_type == "circle":
-                        cfg.graph.config.workload_args.traj_specifics.max_angle = 20
-                    graph_builder = make_graph_builder(cfg)
-
-                    eval_times = []
-                    graph_builder = make_graph_builder(cfg)
-                    eval_env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
-
-                    feature_config = FeatureDimConfig.from_observer(eval_env.get_observer())
-                    model, _, _ = create_td_actor_critic_models(cfg, feature_config)
-                    loaded = load_policy_from_checkpoint(model, ckpt_path)
-                    if not loaded:
-                        print(f"Could not load policy from {model_name}, skipping.")
-                        continue
-
-                    model.eval()
-
-                    for i in range(1):
-                        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-                            eval_env.rollout(max_steps=1000000, policy=model.actor, auto_reset=True)
-                            eval_times.append(eval_env.simulator.time)
-
-                    mean_time = float(np.mean(eval_times))
-                    print(f"→ {model_name}: mean time = {mean_time:.2f}", flush=True)
-
-                    # Store result in memory and append to log
-                    logged_models[model_name] = mean_time
-                    new_evals.append((model_name, ckpt_path, mean_time))
-
-                    with open(log_file, "a") as f:
-                        f.write(f"{datetime.now().isoformat()} - Evaluated model: {model_name}, mean_time={mean_time:.4f}\n")
-                    gc.collect()
-
-                # Step 4: Update or create results CSV
-                with open(results_file, "w") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["Model", "MeanTime"])
-                    for name, t in logged_models.items():
-                        writer.writerow([name, t])
-
-                # Step 5: Pick the best overall model (old or new)
-                best_model_name, best_time = min(logged_models.items(), key=lambda x: x[1])
-                best_file = next((f for f in files if f.name == best_model_name), None)
-
-                if best_file is None:
-                    print(f"Best model file {best_model_name} not found on disk, exiting.")
+                print(f"✅ Selected best model: {best_model_name} (mean time={best_time:.2f})", flush=True)
+                ckpt_path = best_file
+                if best_model_name == best_model_from_log:
+                    print(f"Note: Best model is same as previously best logged model {best_model_from_log} ({best_time_from_log:.2f}), no new best found.")
                     proceed = False
-                else:
-                    print(f"✅ Selected best model: {best_model_name} (mean time={best_time:.2f})", flush=True)
-                    ckpt_path = best_file
-                    if best_model_name == best_model_from_log:
-                        print(f"Note: Best model is same as previously best logged model {best_model_from_log} ({best_time_from_log:.2f}), no new best found.")
-                        proceed = False
-                        if not final_file.exists():
-                            proceed = True
-
-                    else:
-                        with open(log_file, "a") as f:
-                            f.write(f"{datetime.now().isoformat()} - Best model: {best_model_name}, mean_time={best_time:.4f}\n")
+                    if not final_file.exists():
                         proceed = True
+                    else:
+                        proceed = True
+
+                else:
+                    with open(model_usage_log, "a") as f:
+                        f.write(f"{datetime.now().isoformat()} - Best model: {best_model_name}, mean_time={best_time:.4f}\n")
+                    proceed = True
 
     proceed = comm.bcast(proceed, root=0)
     if not proceed:
@@ -318,14 +295,14 @@ def configure_training(cfg: DictConfig):
         if rank == 0:
             temp = eval_env.simulator.copy()
         comm.barrier()
-        run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, unbalance=ub_cur, itr=itr)
+        status = run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, unbalance=ub_cur, itr=itr)
         if rank == 0 and temp.time < best_cfg[2]:
             best_cfg = (itr, ub_cur, temp.time)
             print(f"New best ITR {itr} with time {temp.time}", flush=True)
 
     best_cfg = comm.bcast(best_cfg, root=0)
-    # ub_list = [1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
-    ub_list = [1.05, 1.1, 1.15, 1.2]
+    ub_list = [1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
+    # ub_list = [1.05, 1.1, 1.15, 1.2]
     for ub in ub_list:
         if rank == 0:
             temp = eval_env.simulator.copy()
@@ -345,9 +322,9 @@ def configure_training(cfg: DictConfig):
 
     with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
         if rank == 0:
-            cfg.graph.config.steps = 256
+            cfg.graph.config.steps = 256 * extend
             if cfg.graph.config.workload_args.traj_type == "circle":
-                cfg.graph.config.workload_args.traj_specifics.max_angle = 1 * 8
+                cfg.graph.config.workload_args.traj_specifics.max_angle = cfg.graph.config.steps // 128
             graph_builder = make_graph_builder(cfg)
             eval_env = make_env(
                 graph_builder=graph_builder,
@@ -421,7 +398,7 @@ def configure_training(cfg: DictConfig):
                     results["RL"]["flips"].append(count_flips(eval_env.simulator, cfg))
                     results["RL"]["evictions"].append(sum(list(eval_env.simulator.total_eviction_movement())[1:]) / 1e9)
                 for k, v in results.items():
-                    print(f"Policy {k}:\tmean {np.mean(v['times'])}, std {np.std(v['times'])}", flush=True)
+                    print(f"Policy {k}:\t{v['times'][-1]}", flush=True)
 
     if rank == 0:
         # Find the policy with the best mean time

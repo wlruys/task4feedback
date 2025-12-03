@@ -229,7 +229,7 @@ class RuntimeEnv(EnvBase):
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.enable_external_mapper()
-            simulator_copy.external_mapper = JacobiRoundRobinMapper(n_devices=self.n_compute_devices, setting=0, offset=int(self.only_gpu))
+            simulator_copy.external_mapper = JacobiRoundRobinMapper(n_devices=self.n_compute_devices, setting=1, offset=int(self.only_gpu))
             final_state = simulator_copy.run()
             assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
             return simulator_copy.time

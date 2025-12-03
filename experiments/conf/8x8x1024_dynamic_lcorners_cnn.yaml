@@ -5,7 +5,7 @@ defaults:
   - _self_
 
 optimizer:
-  lr: 1e-3
+  lr: 1e-4
 
 system:
   mem: 80e9
@@ -16,7 +16,7 @@ feature:
     batched: true
     version: D
   normalization:
-    warmup: 1
+    warmup: 10
   add_device_load: True
 
 network:
@@ -31,5 +31,5 @@ network:
     add_progress: True
 
 wandb:
-  name: CNN-A_IEFT
-  project: test
+  name: cnn
+  project: PPO_expert
