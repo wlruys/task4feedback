@@ -481,7 +481,7 @@ def run_ppo(
         f"{ppo_config.workers} workers."
     )
     eval_max_performance = 0.0
-    batch_max_performance = 1.0
+    batch_max_performance = 0.0
     if should_eval(0, eval_config):
         training.info("Running initial evaluation before training")
         metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0)
@@ -495,7 +495,7 @@ def run_ppo(
     n_updates = 0
     n_samples = 0
     n_collections = 0
-    bc_coef = 0
+    bc_coef = 1.0
     for i, tensordict_data in enumerate(collector):
         n_collections += 1
         replay_buffer.empty()
@@ -603,7 +603,7 @@ def run_ppo(
                         n_samples,
                     )
                     # Save best policy based on mean improvement of the batch
-                    if logging_config.log_best_policy and wandb_log.get("batch/mean_improvement", -1) > batch_max_performance:
+                    if logging_config.log_best_policy and round(wandb_log.get("batch/mean_improvement", -1), 2) > round(batch_max_performance, 2):
                         batch_max_performance = wandb_log["batch/mean_improvement"]
                         metrics = {}
                         # Check with evaluation envs to avoid overfitting to training envs
@@ -636,8 +636,10 @@ def run_ppo(
                             training.info(
                                 f"Skipping checkpoint save, eval max performance {metrics[f'eval/DETERMINISTIC']['mean_vsPolicy']:.2f} did not exceed previous best of {eval_max_performance:.2f}."
                             )
-                    else:
-                        training.info(f"Skipping env check, batch mean improvement {wandb_log.get('batch/mean_improvement', -1):.2f} did not exceed threshold of {batch_max_performance:.2f}.")
+                    elif logging_config.log_best_policy and wandb_log.get("batch/mean_improvement", -1) > 0.0:
+                        training.info(
+                            f"Skipping env check and checkpointing, batch mean improvement {wandb_log.get('batch/mean_improvement', -1):.2f} did not exceed threshold of {batch_max_performance:.2f}."
+                        )
                     #     filename = f"{batch_max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
                     #     checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
                     #     # Remove all old checkpoints with the same seed
