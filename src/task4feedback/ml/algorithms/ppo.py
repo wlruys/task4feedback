@@ -634,7 +634,7 @@ def run_ppo(
                                 )
                         else:
                             training.info(
-                                f"Skipping checkpoint save, eval max performance {metrics[f"eval/DETERMINISTIC"]["mean_vsPolicy"]:.2f} did not exceed previous best of {eval_max_performance:.2f}."
+                                f"Skipping checkpoint save, eval max performance {metrics[f'eval/DETERMINISTIC']['mean_vsPolicy']:.2f} did not exceed previous best of {eval_max_performance:.2f}."
                             )
                     else:
                         training.info(f"Skipping env check, batch mean improvement {wandb_log.get('batch/mean_improvement', -1):.2f} did not exceed threshold of {batch_max_performance:.2f}.")
