@@ -10,6 +10,7 @@ defaults:
   - noise: none
   - optimizer: adamw
   - eval: default
+  - timing: default
   - _self_
 
 hydra:
@@ -27,7 +28,7 @@ reward:
 
 graph:
   config:
-    n: 4
+    n: 8
     steps: 16
     level_memory: 98e9
     boundary_time: 1

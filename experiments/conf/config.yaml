@@ -5,6 +5,7 @@ defaults:
   - system: uniform
   - feature: candidate_coordinate
   - network: vector_baseline
+  - timing: default
   - algorithm: ppo
   - runtime: batch
   - noise: none 

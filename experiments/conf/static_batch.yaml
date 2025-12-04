@@ -12,6 +12,7 @@ defaults:
   - noise: none
   - optimizer: adamw
   - eval: default
+  - timing: default
   - _self_
 
 hydra:
@@ -90,4 +91,3 @@ eval:
   animation_interval: 0
   eval_interval: 25
   samples: 10
-

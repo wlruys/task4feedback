@@ -12,6 +12,7 @@ defaults:
   - noise: none
   - optimizer: adamw
   - eval: default
+  - timing: default
   - _self_
 
 hydra:

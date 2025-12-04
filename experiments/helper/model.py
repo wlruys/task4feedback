@@ -24,6 +24,20 @@ def MultiHeadCategorical(**kwargs):
     return torch.distributions.Independent(base, 1)
 
 
+def _timing_options(cfg: DictConfig) -> dict:
+    return {
+        "logits": OmegaConf.select(cfg, "timing.logits", default=False),
+        "actions": OmegaConf.select(cfg, "timing.actions", default=False),
+        "logit_key": OmegaConf.select(cfg, "timing.logit_key", default="logit_inference_time_s"),
+        "action_key": OmegaConf.select(cfg, "timing.action_key", default="action_inference_time_s"),
+        "store_in_td": OmegaConf.select(cfg, "timing.store_in_tensordict", default=True),
+        "sync_cuda": OmegaConf.select(cfg, "timing.sync_cuda", default=False),
+        "log": OmegaConf.select(cfg, "timing.log", default=False),
+        "conversion_key": OmegaConf.select(cfg, "timing.conversion_key", default="data_conversion_time_s"),
+        "subtract_conversion": OmegaConf.select(cfg, "timing.subtract_conversion", default=True),
+    }
+
+
 def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> nn.Module:
     layers = cfg.network.layers
     add_device_load = cfg.feature.get("add_device_load", False)
@@ -162,15 +176,35 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
     actor_layers.append(_td_policy_output)
 
     policy_module = td_nn.TensorDictSequential(*actor_layers, inplace=True)
+    timing_cfg = _timing_options(cfg)
+    if timing_cfg["logits"]:
+        policy_module = LogitInferenceTimingWrapper(
+            policy_module,
+            timing_key=timing_cfg["logit_key"],
+            store_in_tensordict=timing_cfg["store_in_td"],
+            sync_cuda=timing_cfg["sync_cuda"],
+            log_timing=timing_cfg["log"],
+            conversion_timing_key=timing_cfg["conversion_key"],
+            subtract_conversion_time=timing_cfg["subtract_conversion"],
+        )
 
     batched = cfg.feature.observer.get("batched", False)
-    probabilistic_policy = ProbabilisticActor(
+    actor_cls = InferenceTimingProbabilisticActor if timing_cfg["actions"] else ProbabilisticActor
+    actor_kwargs = dict(
         module=policy_module,
         in_keys=["logits"],
         out_keys=["action"],
         distribution_class=MultiHeadCategorical if batched else torch.distributions.Categorical,
         return_log_prob=True,
     )
+    if timing_cfg["actions"]:
+        actor_kwargs.update(
+            timing_key=timing_cfg["action_key"],
+            store_in_tensordict=timing_cfg["store_in_td"],
+            sync_cuda=timing_cfg["sync_cuda"],
+            log_timing=timing_cfg["log"],
+        )
+    probabilistic_policy = actor_cls(**actor_kwargs)
 
     critic_layers = []
     reference_layers = []

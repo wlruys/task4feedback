@@ -12,6 +12,7 @@ defaults:
   - noise: none
   - optimizer: adamw
   - eval: default
+  - timing: default
   - _self_
 
 hydra:
@@ -83,4 +84,3 @@ eval:
   eval_interval: 100
   max_frames: 400
   video_seconds: 15
-
