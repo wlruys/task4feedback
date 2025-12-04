@@ -52,10 +52,7 @@ def bin_partition(geometry: Geometry, round=2, direction=None, n_parts=2):
     for i in range(len(geometry.cells)):
         projection = projection[i]
         for j in range(n_parts):
-            if (
-                projection >= min_val + j * delta
-                and projection < min_val + (j + 1) * delta
-            ):
+            if projection >= min_val + j * delta and projection < min_val + (j + 1) * delta:
                 partition_vector[i] = j
                 break
     return partition_vector
@@ -168,6 +165,7 @@ def block_cyclic(
     n_col_parts=2,
     parts_per_column=2,
     parts_per_row=2,
+    n_devices=4,
 ):
     # With default parameters this partitions the mesh into 4 blocks of size 2x2
 
@@ -194,6 +192,6 @@ def block_cyclic(
             # Assign the partition ID to all cells in this (i,j) position
             cells = ij_map[(rv, cv)]
             for c in cells:
-                partition_vector[c] = part_id
+                partition_vector[c] = part_id % n_devices
 
     return partition_vector

@@ -1124,7 +1124,7 @@ class BlockCyclicMapper(PartitionMapper):
             if x_dev + y_dev != n_devices:
                 x_dev += 1
             n_cells = len(geometry.cells)
-            partition = block_cyclic(geometry, n_row_parts=x_dev, n_col_parts=y_dev, parts_per_column=block_size, parts_per_row=block_size)
+            partition = block_cyclic(geometry, n_row_parts=x_dev, n_col_parts=y_dev, parts_per_column=block_size, parts_per_row=block_size, n_devices=n_devices)
             self.cell_to_mapping = {cell: device + self.offset for cell, device in enumerate(partition)}
         else:
             raise ValueError("Either mapper or geometry must be provided for BlockCyclicMapper")

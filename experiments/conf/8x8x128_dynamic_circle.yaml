@@ -71,7 +71,7 @@ eval:
   eval_interval: 50
   max_frames: 400
   video_seconds: 15
-  samples: 4
+  samples: 1
   pickle_path: ./pickled_evaluation/8x8x128_circle_1:1:1.pkl
   expert_path: ./expert_evaluation/8x8x128_bump_1:1:1.pkl
 
