@@ -282,6 +282,7 @@ def eval_pickled_env(
     locations = eval_state.init_locs[eft_policy_str]
 
     vsPolicy = defaultdict(list)
+    policy = torch.compile(policy)
 
 
     for i in range(samples):
