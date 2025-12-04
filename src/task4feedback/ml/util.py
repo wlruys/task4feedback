@@ -287,7 +287,7 @@ def eval_pickled_env(
     for i in range(samples):
         env.reset_for_evaluation()
         env.disable_reward()
-        with set_exploration_type(exploration_type), torch.no_grad():
+        with set_exploration_type(exploration_type), torch.inference_mode():
             saved_loc = locations[i % len(locations)]
             workload = workloads[i % len(workloads)]
             env.reset_to_state(saved_loc, workload)
