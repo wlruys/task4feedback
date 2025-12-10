@@ -270,7 +270,7 @@ def main():
 
     if args.dry_run:
         for n, cmd in jobs:
-            print(f"Dry Run: {' '.join(cmd)}")
+            print(f"{' '.join(cmd)}")
         return
 
     # Use args.no_pinning to toggle behavior
