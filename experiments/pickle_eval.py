@@ -1,28 +1,20 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
-
 from task4feedback.experiment_helper.graph import make_graph_builder
 from task4feedback.experiment_helper.env import make_env
 from task4feedback.experiment_helper.run_name import make_folder_name
 
-from task4feedback.interface.wrappers import *
-from task4feedback.ml.models import *
 from task4feedback.graphs.jacobi import (
-    JacobiGraph,
-    LevelPartitionMapper,
     JacobiRoundRobinMapper,
-    JacobiQuadrantMapper,
     BlockCyclicMapper,
-    GraphMETISMapper,
 )
-
 import torch
 import numpy
 import random
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from task4feedback.experiment_helper.parmetis import run_parmetis
 import pickle
-import re
+import os  # Added import
 
 from mpi4py import MPI
 
@@ -37,9 +29,42 @@ def configure_training(cfg: DictConfig):
     num_samples = cfg.eval.samples
 
     folder_name, graph_name, interior_str, boundary_str = make_folder_name(cfg)
+
+    # Define the file path consistently
+    file_path = f"./pickled_evaluation/{folder_name}.pkl"
+
     cfg.graph.config.steps *= extend
     if cfg.graph.config.workload_args.traj_type == "circle":
         cfg.graph.config.workload_args.traj_specifics.max_angle *= extend
+
+    # --- Start: Check for existing file and matching config ---
+    skip_execution = False
+    if rank == 0:
+        if os.path.exists(file_path):
+            try:
+                print(f"Found existing file at {file_path}. Checking config...", flush=True)
+                with open(file_path, "rb") as f:
+                    saved_state = pickle.load(f)
+
+                # specific check: Compare current cfg YAML with saved cfg YAML
+                current_cfg_yaml = OmegaConf.to_yaml(cfg)
+                saved_cfg_yaml = saved_state.get("cfg", "")
+
+                if current_cfg_yaml == saved_cfg_yaml:
+                    print("Configuration matches exactly. Skipping computation.", flush=True)
+                    skip_execution = True
+                else:
+                    print("Configuration mismatch (file exists but cfg differs). Overwriting.", flush=True)
+            except Exception as e:
+                print(f"Error reading existing pickle (will overwrite): {e}", flush=True)
+
+    # Broadcast decision to all ranks to ensure no rank hangs at a barrier
+    skip_execution = comm.bcast(skip_execution, root=0)
+
+    if skip_execution:
+        return
+    # --- End: Check for existing file ---
+
     eval_state = {"cfg": OmegaConf.to_yaml(cfg), "init_locs": [], "workloads": [], "eft_times": [], "policy_times": [], "reset_counter": []}
     if rank == 0:
         graph_builder = make_graph_builder(cfg)
@@ -156,8 +181,8 @@ def configure_training(cfg: DictConfig):
                 print("EFT time matches.")
             # print("EFT:", eval_state["eft_times"][i])
         else:
-            file_name = f"./pickled_evaluation/{folder_name}"
-            pickle.dump(eval_state, open(f"{file_name}.pkl", "wb"))
+            # Modified to use the file_path variable defined earlier
+            pickle.dump(eval_state, open(file_path, "wb"))
 
 
 @hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
