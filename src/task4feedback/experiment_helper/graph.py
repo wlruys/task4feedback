@@ -1,10 +1,10 @@
-from task4feedback.graphs import *
-from task4feedback.graphs.mesh import (
+from ..graphs import *
+from ..graphs.mesh import (
     build_geometry,
     generate_quad_mesh,
     generate_tri_mesh,
 )
-from task4feedback.graphs.mesh.partition import *
+from ..graphs.mesh.partition import *
 from typing import Callable
 import hydra
 from omegaconf import DictConfig, OmegaConf

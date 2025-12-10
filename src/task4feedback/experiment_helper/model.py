@@ -1,5 +1,5 @@
-from task4feedback.ml.models import *
-from task4feedback.ml import ActorCriticModule
+from ..ml.models import *
+from ..ml import ActorCriticModule
 from typing import Callable
 import hydra
 import torch
@@ -12,7 +12,7 @@ from rich import print as rprint
 from torchrl.envs import ExplorationType
 from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUModule
 from pathlib import Path
-from task4feedback.graphs.jacobi import get_length_from_config
+from ..graphs.jacobi import get_length_from_config
 
 
 def MultiHeadCategorical(**kwargs):
@@ -27,7 +27,6 @@ def MultiHeadCategorical(**kwargs):
 def create_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> nn.Module:
     layers = cfg.network.layers
     add_device_load = cfg.feature.get("add_device_load", False)
-
 
     state_layer = layers.state
     actor_layer = layers.actor

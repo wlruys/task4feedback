@@ -193,5 +193,5 @@ cython_debug/
 test/run_tests.sh
 
 *.mp4
-*saved_models
 *.pkl
+dump/

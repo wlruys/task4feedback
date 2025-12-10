@@ -1,19 +1,17 @@
-from task4feedback.ml.env import RuntimeEnv
-from task4feedback.graphs.jacobi import JacobiGraph
-from task4feedback.graphs.base import weighted_cell_partition
-from task4feedback.interface.wrappers import DeviceType, SimulatorDriver
+from ..ml.env import RuntimeEnv
+from ..graphs.jacobi import JacobiGraph
+from ..graphs.base import weighted_cell_partition
+from ..interface.wrappers import DeviceType, SimulatorDriver
 import task4feedback.fastsim2 as fastsim
 from task4feedback.fastsim2 import ParMETIS_wrapper
 from mpi4py import MPI
 import torch
 import numpy as np
-from task4feedback.graphs.jacobi import get_length_from_config
+from ..graphs.jacobi import get_length_from_config
 import hydra
 
 
-def run_parmetis(
-    sim: SimulatorDriver, cfg, verbose=False, offset=1, future_levels=0, itr: float = 1000, unbalance: float = 1.225, target_loads: list[float] = [0.25, 0.25, 0.25, 0.25], n_compute_devices: int = 4
-) -> bool:
+def run_parmetis(sim: SimulatorDriver, cfg, verbose=False, offset=1, future_levels=0, itr: float = 1000, unbalance: float = 1.225, n_compute_devices: int = 4) -> bool:
     d2d_bandwidth = cfg.system.d2d_bw
     graph_config = hydra.utils.instantiate(cfg.graph.config)
     width = graph_config.n
@@ -21,8 +19,9 @@ def run_parmetis(
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
-    if size != 4:
-        raise ValueError(f"Expected 4 ranks, but got {size}. Please run with 4 ranks.")
+    target_loads = [1.0 / n_compute_devices for _ in range(n_compute_devices)]
+    if size != n_compute_devices:
+        raise ValueError(f"Expected {n_compute_devices} ranks, but got {size}. Please run with {n_compute_devices} ranks.")
     partitioned_tasks, vtxdist, xadj, adjncy, vwgt, adjwgt, vsize = (
         [],
         [],

@@ -32,6 +32,30 @@ def make_run_name(cfg: DictConfig) -> str:
     return f"{slug}-{date}-{h}"
 
 
+def calculate_ratio(interior, boundary):
+    """
+    Given interior and boundary ratios wrt computation time, calculate the corresponding
+    arithmetic intensity and boundary width.
+    Returns:
+    - arithmetic_intensity: str
+    - boundary_width: str
+
+    """
+    if interior < boundary:
+        raise ValueError("Interior must be greater than or equal to Boundary")
+
+    if interior not in [100, 10, 1, 0.1] or boundary not in [100, 10, 1, 0.1]:
+        raise ValueError("Interior and Boundary must be one of [100, 10, 1, 0.1]")
+
+    val_intensity = 595.5555555 / interior
+    arithmetic_intensity = f"{val_intensity:.7f}"[:-1]
+
+    val_boundary = 0.25 / (interior / boundary)
+    boundary_width = f"{val_boundary}"
+
+    return arithmetic_intensity, boundary_width
+
+
 def make_folder_name(cfg: DictConfig):
     """
     Create a folder name based on configuration.
@@ -67,7 +91,7 @@ def make_folder_name(cfg: DictConfig):
         graph_name = "l" + graph_name
 
     return (
-        f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{int(cfg.system.mem/1e9)}GB",
+        f"{cfg.graph.config.n}w_{cfg.graph.config.steps}lvl_{cfg.system.n_devices-1}gpu_{graph_name}_{interior_ratio}-{boundary_ratio}_{int(cfg.system.mem/1e9)}GB",
         graph_name,
         interior_ratio,
         boundary_ratio,

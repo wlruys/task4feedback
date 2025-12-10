@@ -1,11 +1,11 @@
-from task4feedback.interface import SimulatorFactory, SimulatorInput, create_graph_spec
-from task4feedback.interface import TaskNoise
-from task4feedback.graphs.jacobi import get_length_from_config
+from ..interface import SimulatorFactory, SimulatorInput, create_graph_spec
+from ..interface import TaskNoise
+from ..graphs.jacobi import get_length_from_config
 from typing import Callable, Dict, Any, Optional, Tuple, List, Sequence
 from .graph import GraphBuilder
 import hydra
 from omegaconf import DictConfig, OmegaConf, ListConfig
-from task4feedback.ml.env import RuntimeEnv
+from ..ml.env import RuntimeEnv
 from torchrl.envs import (
     TransformedEnv,
     Compose,

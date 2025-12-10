@@ -7,10 +7,11 @@ from omegaconf import DictConfig, OmegaConf
 import wandb
 from hydra.utils import instantiate
 
-from helper.graph import make_graph_builder
-from helper.env import make_env
-from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
-from helper.algorithm import create_optimizer, create_lr_scheduler
+from task4feedback.experiment_helper.graph import make_graph_builder
+from task4feedback.experiment_helper.env import make_env
+from task4feedback.experiment_helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
+from task4feedback.experiment_helper.algorithm import create_optimizer, create_lr_scheduler
+from task4feedback.experiment_helper.run_name import make_folder_name
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
@@ -26,13 +27,13 @@ from pathlib import Path
 import git
 import os
 from hydra.core.hydra_config import HydraConfig
-from helper.run_name import make_run_name, cfg_hash
+from task4feedback.experiment_helper.run_name import make_run_name, cfg_hash
 import torch
 import numpy as np
 import random
 import pickle
 from torchrl.envs import set_exploration_type, ExplorationType
-from helper.parmetis import run_parmetis
+from task4feedback.experiment_helper.parmetis import run_parmetis
 from mpi4py import MPI
 from datetime import datetime
 
@@ -40,72 +41,57 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
+import multiprocessing
+import time
 
-class GitInfo(Callback):
-    def on_job_start(self, config: DictConfig, **kwargs) -> None:
-        try:
-            repo = git.Repo(search_parent_directories=True)
-            outdir = Path(config.hydra.runtime.output_dir)
-            outdir.mkdir(parents=True, exist_ok=True)
-            (outdir / "git_sha.txt").write_text(repo.head.commit.hexsha)
-            (outdir / "git_dirty.txt").write_text(str(repo.is_dirty()))
-            diff = repo.git.diff(None)
-            (outdir / "git_diff.patch").write_text(diff)
 
-            print(
-                "Git SHA:",
-                repo.head.commit.hexsha,
-                " (dirty)" if repo.is_dirty() else " (clean)",
-                flush=True,
-            )
-
-        except Exception as e:
-            print(f"GitInfo callback failed: {e}")
+def count_flips(sim: SimulatorDriver, cfg):
+    rt = sim.state.get_task_runtime()
+    flips = 0
+    for tid in range(64):
+        for step in range(cfg.graph.config.steps):
+            if step == 0:
+                prev = rt.get_compute_task_mapped_device(tid)
+            else:
+                curr = rt.get_compute_task_mapped_device(tid + step * 64)
+                if curr != prev:
+                    flips += 1
+                prev = curr
+    return flips
 
 
 def configure_training(cfg: DictConfig):
-    # start_logger()
-    # Attempt to load policy weights from a local checkpoint next to this file
-    n_samples = 20
+    n_samples = cfg.n_samples
+    extend = cfg.extend
+    root_dir = Path("./evaluate")
     if not cfg.graph.env.change_priority and not cfg.graph.env.change_location and not cfg.graph.env.change_workload and not cfg.graph.env.change_duration:
         n_samples = 1
 
-    def closest_ratio_string(value: float) -> str:
-        mapping = {100: "100", 10: "10", 1: "1", 0.1: "0.1"}
-        closest = min(mapping.keys(), key=lambda x: abs(value - x))
-        return mapping[closest]
-
-    interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
-    boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
-
-    interior_ratio = closest_ratio_string(interior_ratio)
-    boundary_ratio = closest_ratio_string(boundary_ratio)
-
-    if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
-        graph_name = cfg.graph.config.workload_args.traj_type
-    else:
-        graph_name = "static"
-
-    if cfg.graph.env.change_duration:
-        if cfg.graph.config.workload_args.traj_type == "circle":
-            graph_name = "ncircle"
-        elif cfg.graph.config.workload_args.traj_type == "corners":
-            graph_name = "noise"
+    folder_name, graph_name, interior_ratio, boundary_ratio = make_folder_name(cfg)
 
     proceed = False
-    # saved_models/8x8x128_10-1-1_corners_74GB/5.286_D.pt
+    # check if useRL key is in cfg
+    # if OmegaConf.select(cfg, "skipRL"):
+    #     skipRL = True
+    # else:
+    #     skipRL = False
+    skipRL = False
     if rank == 0:
-        root_dir = (
-            Path(__file__).resolve().parent
-            / "saved_models"
-            / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{int(cfg.system.mem/1e9)}GB"
-        )
+        if skipRL:
+            print("Skipping RL evaluation as per configuration.", flush=True)
+            files = []
+            norm = False
+        original_steps = cfg.graph.config.steps
+        root_dir = root_dir / folder_name
+        root_dir.mkdir(parents=True, exist_ok=True)
         files = list(root_dir.rglob("*.pt"))
-        log_file = root_dir / "model_usage.log"
-        results_file = root_dir / "model_eval_results.csv"
+        model_usage_log = root_dir / "model_usage.log"
+        model_eval_file = root_dir / "model_eval_results.csv"
         final_file = root_dir / "results.csv"
 
-        if not files:
+        if skipRL:
+            proceed = True
+        elif not files:
             print(f"No saved models found in {root_dir}, exiting.")
             proceed = False
         else:
@@ -117,8 +103,8 @@ def configure_training(cfg: DictConfig):
             best_model_from_log = None
 
             # Step 1: Try to recover past evaluations
-            if log_file.exists():
-                with open(log_file, "r") as f:
+            if model_usage_log.exists():
+                with open(model_usage_log, "r") as f:
                     for line in f:
                         if "Evaluated model:" in line:
                             try:
@@ -156,7 +142,18 @@ def configure_training(cfg: DictConfig):
                     continue
 
                 print(f"Evaluating new model {model_name}...", flush=True)
-                feature_config = FeatureDimConfig.from_observer(make_env(graph_builder, cfg, normalization=norm, eval=True).get_observer())
+
+                # Longer graphs
+                cfg.graph.config.steps = 256 * extend
+                if cfg.graph.config.workload_args.traj_type == "circle":
+                    cfg.graph.config.workload_args.traj_specifics.max_angle = cfg.graph.config.steps // 128
+                graph_builder = make_graph_builder(cfg)
+
+                eval_times = []
+                graph_builder = make_graph_builder(cfg)
+                eval_env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
+
+                feature_config = FeatureDimConfig.from_observer(eval_env.get_observer())
                 model, _, _ = create_td_actor_critic_models(cfg, feature_config)
                 loaded = load_policy_from_checkpoint(model, ckpt_path)
                 if not loaded:
@@ -164,11 +161,10 @@ def configure_training(cfg: DictConfig):
                     continue
 
                 model.eval()
-                eval_times = []
-                eval_env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
-                for i in range(3 if n_samples > 1 else 1):
+
+                for i in range(1):
                     with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-                        eval_env.rollout(max_steps=100000, policy=model.actor, auto_reset=True)
+                        eval_env.rollout(max_steps=1000000, policy=model.actor, auto_reset=True)
                         eval_times.append(eval_env.simulator.time)
 
                 mean_time = float(np.mean(eval_times))
@@ -178,12 +174,12 @@ def configure_training(cfg: DictConfig):
                 logged_models[model_name] = mean_time
                 new_evals.append((model_name, ckpt_path, mean_time))
 
-                with open(log_file, "a") as f:
+                with open(model_usage_log, "a") as f:
                     f.write(f"{datetime.now().isoformat()} - Evaluated model: {model_name}, mean_time={mean_time:.4f}\n")
                 gc.collect()
 
             # Step 4: Update or create results CSV
-            with open(results_file, "w") as f:
+            with open(model_eval_file, "w") as f:
                 writer = csv.writer(f)
                 writer.writerow(["Model", "MeanTime"])
                 for name, t in logged_models.items():
@@ -204,9 +200,10 @@ def configure_training(cfg: DictConfig):
                     proceed = False
                     if not final_file.exists():
                         proceed = True
+                    proceed = True
 
                 else:
-                    with open(log_file, "a") as f:
+                    with open(model_usage_log, "a") as f:
                         f.write(f"{datetime.now().isoformat()} - Best model: {best_model_name}, mean_time={best_time:.4f}\n")
                     proceed = True
 
@@ -216,48 +213,62 @@ def configure_training(cfg: DictConfig):
         exit()
 
     if rank == 0:
+        cfg.graph.config.steps = original_steps
+        if cfg.graph.config.workload_args.traj_type == "circle":
+            cfg.graph.config.workload_args.traj_specifics.max_angle = original_steps // 128
+        graph_builder = make_graph_builder(cfg)
         eval_env = make_env(
             graph_builder=graph_builder,
             cfg=cfg,
             normalization=norm,
             eval=True,
         )
-        for ckpt_path in files:
-            if best_model_name == ckpt_path.name:
-                feature_config = FeatureDimConfig.from_observer(eval_env.get_observer())
-                model, _, _ = create_td_actor_critic_models(cfg, feature_config)
-                loaded = load_policy_from_checkpoint(model, ckpt_path)
-                if not loaded:
-                    print(f"Could not load policy from {best_model_name}, exiting.")
-                    comm.Abort(1)
-                model.eval()
-                break
+        if not skipRL:
+            for ckpt_path in files:
+                if best_model_name == ckpt_path.name:
+                    feature_config = FeatureDimConfig.from_observer(eval_env.get_observer())
+                    model, _, _ = create_td_actor_critic_models(cfg, feature_config)
+                    loaded = load_policy_from_checkpoint(model, ckpt_path)
+                    if not loaded:
+                        print(f"Could not load policy from {best_model_name}, exiting.")
+                        comm.Abort(1)
+                    model.eval()
+                    break
 
     results = {}
-    for policy in ["ParMETIS", "BlockCyclic(2x2)", "BlockCyclic(1x1)", "EFT", "RowCyclic", "RL"]:
+    candidates = ["ParMETIS", "BlockCyclic(4x4)", "BlockCyclic(2x2)", "BlockCyclic(1x1)", "EFT", "RowCyclic"]
+    if not skipRL:
+        candidates.append("RL")
+
+    for policy in candidates:
         results[policy] = {
             "times": [],
+            "evictions": [],
+            "flips": [],
         }
 
     # First find the best configuration for parmetis
     best_cfg = (None, None, float("inf"))  # (itr, ub, time)
-    ub_cur = 1.01
-    for itr in [0.0001001, 0.001, 0.01, 0.1, 1, 10, 100, 1000]:
+    ub_cur = 1.0001
+    for itr in [0.0001001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000]:
         if rank == 0:
             temp = eval_env.simulator.copy()
         comm.barrier()
-        run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, unbalance=ub_cur, itr=itr)
+        status = run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, unbalance=ub_cur, itr=itr, n_compute_devices=cfg.system.n_devices - 1)
         if rank == 0 and temp.time < best_cfg[2]:
             best_cfg = (itr, ub_cur, temp.time)
             print(f"New best ITR {itr} with time {temp.time}", flush=True)
 
     best_cfg = comm.bcast(best_cfg, root=0)
-
-    for ub in [1.0001, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9]:
+    ub_list = [1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
+    # ub_list = [1.05, 1.1, 1.15, 1.2]
+    for ub in ub_list:
         if rank == 0:
             temp = eval_env.simulator.copy()
         comm.barrier()
-        run_parmetis(sim=(temp if rank == 0 else None), cfg=cfg, unbalance=ub, itr=best_cfg[0])
+        status = run_parmetis(sim=(temp if rank == 0 else None), cfg=cfg, unbalance=ub, itr=best_cfg[0], n_compute_devices=cfg.system.n_devices - 1)
+        if not status:
+            break
         if rank == 0:
             print(f"Tried ub {ub:.2f} with time {temp.time}", flush=True)
             if temp.time < best_cfg[2]:
@@ -269,45 +280,92 @@ def configure_training(cfg: DictConfig):
     best_cfg = comm.bcast(best_cfg, root=0)
 
     with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
+        if rank == 0:
+            cfg.graph.config.steps = 256 * extend
+            if cfg.graph.config.workload_args.traj_type == "circle":
+                cfg.graph.config.workload_args.traj_specifics.max_angle = cfg.graph.config.steps // 128
+            graph_builder = make_graph_builder(cfg)
+            eval_env = make_env(
+                graph_builder=graph_builder,
+                cfg=cfg,
+                normalization=norm,
+                eval=True,
+            )
+            print("Graph and environment re-initialized for final evaluation.", flush=True)
+
         for i in range(n_samples):
-            gc.collect()
             if rank == 0:
-                td = eval_env.reset()
-                eft_time = eval_env._get_baseline("EFT")
-                results["EFT"]["times"].append(eft_time)
+                print(f"--- Sample {i+1}/{n_samples} ---", flush=True)
+                td = eval_env._reset()
+                print("Environment reset.", flush=True)
+                copy_sim = eval_env.simulator.copy()
+                copy_sim.disable_external_mapper()
+                copy_sim.run()
+                results["EFT"]["times"].append(copy_sim.time)
+                results["EFT"]["flips"].append(count_flips(copy_sim, cfg))
+                results["EFT"]["evictions"].append(sum(list(copy_sim.total_eviction_movement())[1:]) / 1e9)
+                print(f"Policy EFT:\t{results['EFT']['times'][-1]}", flush=True)
                 copy_sim = eval_env.simulator.copy()
                 copy_sim.enable_external_mapper()
                 copy_sim.run_until_external_mapping()
-
-            run_parmetis(sim=copy_sim if rank == 0 else None, cfg=cfg, unbalance=best_cfg[1], itr=best_cfg[0])
+            comm.barrier()
+            run_parmetis(sim=copy_sim if rank == 0 else None, cfg=cfg, unbalance=best_cfg[1], itr=best_cfg[0], n_compute_devices=cfg.system.n_devices - 1)
             if rank == 0:
                 results["ParMETIS"]["times"].append(copy_sim.time)
+                results["ParMETIS"]["flips"].append(count_flips(copy_sim, cfg))
+                results["ParMETIS"]["evictions"].append(sum(list(copy_sim.total_eviction_movement())[1:]) / 1e9)
+                print(f"Policy ParMETIS:\t{results['ParMETIS']['times'][-1]}", flush=True)
                 copy_sim = eval_env.simulator.copy()
                 copy_sim.enable_external_mapper()
                 copy_sim.run_until_external_mapping()
                 graph: DynamicJacobiGraph = copy_sim.input.graph
-                copy_sim.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=4, block_size=2, offset=1)
+                copy_sim.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=4, offset=1)
+                copy_sim.run()
+                results["BlockCyclic(4x4)"]["times"].append(copy_sim.time)
+                results["BlockCyclic(4x4)"]["flips"].append(0)
+                results["BlockCyclic(4x4)"]["evictions"].append(sum(list(copy_sim.total_eviction_movement())[1:]) / 1e9)
+                print(f"Policy BlockCyclic(4x4):\t{results['BlockCyclic(4x4)']['times'][-1]}", flush=True)
+
+                copy_sim = eval_env.simulator.copy()
+                copy_sim.enable_external_mapper()
+                copy_sim.run_until_external_mapping()
+                graph: DynamicJacobiGraph = copy_sim.input.graph
+                copy_sim.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=2, offset=1)
                 copy_sim.run()
                 results["BlockCyclic(2x2)"]["times"].append(copy_sim.time)
+                results["BlockCyclic(2x2)"]["flips"].append(0)
+                results["BlockCyclic(2x2)"]["evictions"].append(sum(list(copy_sim.total_eviction_movement())[1:]) / 1e9)
+                print(f"Policy BlockCyclic(2x2):\t{results['BlockCyclic(2x2)']['times'][-1]}", flush=True)
+
                 copy_sim = eval_env.simulator.copy()
                 copy_sim.enable_external_mapper()
                 copy_sim.run_until_external_mapping()
                 graph: DynamicJacobiGraph = copy_sim.input.graph
-                copy_sim.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=4, block_size=1, offset=1)
+                copy_sim.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=1, offset=1)
                 copy_sim.run()
                 results["BlockCyclic(1x1)"]["times"].append(copy_sim.time)
+                results["BlockCyclic(1x1)"]["flips"].append(0)
+                results["BlockCyclic(1x1)"]["evictions"].append(sum(list(copy_sim.total_eviction_movement())[1:]) / 1e9)
+                print(f"Policy BlockCyclic(1x1):\t{results['BlockCyclic(1x1)']['times'][-1]}", flush=True)
+
                 copy_sim = eval_env.simulator.copy()
                 copy_sim.enable_external_mapper()
                 copy_sim.run_until_external_mapping()
                 graph: DynamicJacobiGraph = copy_sim.input.graph
-                copy_sim.external_mapper = JacobiRoundRobinMapper(n_devices=4, setting=1, offset=1)
+                copy_sim.external_mapper = JacobiRoundRobinMapper(n_devices=cfg.system.n_devices - 1, setting=1, offset=1)
                 copy_sim.run()
                 results["RowCyclic"]["times"].append(copy_sim.time)
+                results["RowCyclic"]["flips"].append(0)
+                results["RowCyclic"]["evictions"].append(sum(list(copy_sim.total_eviction_movement())[1:]) / 1e9)
+                print(f"Policy RowCyclic:\t{results['RowCyclic']['times'][-1]}", flush=True)
 
-                td = eval_env.rollout(max_steps=100000, policy=model.actor, auto_reset=False, tensordict=td)
-                results["RL"]["times"].append(eval_env.simulator.time)
-                # for k, v in results.items():
-                #     print(f"Policy {k}: times {v['times']}, mean {np.mean(v['times'])}, std {np.std(v['times'])}", flush=True)
+                if not skipRL:
+                    td = eval_env.rollout(max_steps=1000000, policy=model.actor, auto_reset=False, tensordict=td)
+                    results["RL"]["times"].append(eval_env.simulator.time)
+                    results["RL"]["flips"].append(count_flips(eval_env.simulator, cfg))
+                    results["RL"]["evictions"].append(sum(list(eval_env.simulator.total_eviction_movement())[1:]) / 1e9)
+                for k, v in results.items():
+                    print(f"Policy {k}:\t{v['times'][-1]}", flush=True)
 
     if rank == 0:
         # Find the policy with the best mean time
@@ -320,6 +378,8 @@ def configure_training(cfg: DictConfig):
             if mean_time < best_mean:
                 best_mean = mean_time
                 best_policy = k
+        if best_policy == "ParMETIS":
+            best_policy = f"ParMETIS({best_cfg[0]},{best_cfg[1]})"
         with open(root_dir / "results.csv", "w") as f:
             writer = csv.writer(f)
             writer.writerow(["Interior", "Boundary", "Graph", "Memory", "BestPolicyName", "BestPolicy", "RL"])
@@ -330,10 +390,23 @@ def configure_training(cfg: DictConfig):
                     graph_name,
                     f"{int(cfg.system.mem/1e9)}GB",
                     best_policy,
-                    f"{int(np.mean(results[best_policy]['times']))}",
-                    f"{int(np.mean(results['RL']['times']))}",
+                    f"{int(np.mean(results['ParMETIS' if 'ParMETIS' in best_policy else best_policy]['times']))}",
+                    f"{int(np.mean(results.get('RL', {}).get('times', [])))}" if not skipRL and "RL" in results else "N/A",
                 ]
             )
+
+        with open(root_dir / "detailed_results.csv", "a") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Policy", "Time", "Evictions(GB)", "Flips"])
+            for k, v in results.items():
+                writer.writerow(
+                    [
+                        f"ParMETIS({best_cfg[0]},{best_cfg[1]})" if "ParMETIS" in k else k,
+                        f"{np.mean(v['times']):.2f}",
+                        f"{np.mean(v['evictions']):.2f}",
+                        f"{np.mean(v['flips']):.2f}",
+                    ]
+                )
 
 
 @hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
