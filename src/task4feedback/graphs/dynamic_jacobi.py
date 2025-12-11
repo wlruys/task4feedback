@@ -176,7 +176,7 @@ class DynamicJacobiData(JacobiData):
         """
         interior_data = []
         boundary_data = []
-        step_data_sum = [0 for _ in range(self.config.steps)]
+        step_data_sum = [0 for _ in range(self.config.steps + 1)]
         compute_time = []
 
         for cell in range(len(self.geometry.cells)):

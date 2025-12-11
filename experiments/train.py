@@ -73,14 +73,23 @@ def configure_training(cfg: DictConfig):
     #     loaded = load_policy_from_checkpoint(model, ckpt_path)
     #     assert loaded, f"Failed to load model from {ckpt_path}"
 
-    def env_fn(eval: bool = False):
-        return make_env(
-            graph_builder=graph_builder,
-            cfg=cfg,
-            lstm=lstm,
-            normalization=normalization,
-            eval=eval,
-        )
+    def env_fn(eval: bool = False, imported_cfg: DictConfig = None):
+        if imported_cfg is not None:
+            return make_env(
+                graph_builder=make_graph_builder(imported_cfg),
+                cfg=imported_cfg,
+                lstm=lstm,
+                normalization=normalization,
+                eval=eval,
+            )
+        else:
+            return make_env(
+                graph_builder=graph_builder,
+                cfg=cfg,
+                lstm=lstm,
+                normalization=normalization,
+                eval=eval,
+            )
 
     alg_config = instantiate(cfg.algorithm)
 

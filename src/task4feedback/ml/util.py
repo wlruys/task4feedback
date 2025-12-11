@@ -18,6 +18,7 @@ from task4feedback.ml.env import RuntimeEnv
 import pickle
 from torchrl.envs import step_mdp
 import math
+from omegaconf import OmegaConf, DictConfig
 
 
 def compute_advantage(td: TensorDict):
@@ -235,12 +236,6 @@ def log_parameter_and_gradient_norms(model):
     }
 
 
-def make_eval_envs(
-    eval_env_fn: list[Callable],
-):
-    return [eval_env_fn(eval=True) for eval_env_fn in eval_env_fn]
-
-
 @dataclass
 class EvaluationConfig:
     eval_interval: int = 100
@@ -256,6 +251,22 @@ class EvaluationConfig:
     pickle_path: Optional[str] = None
     pickled_states: Optional[Dict[str, Any]] = None
     expert_path: Optional[str] = None
+
+
+def make_eval_envs(
+    eval_env_fn: list[Callable],
+    eval_config: EvaluationConfig,
+):
+    cfg = None
+    if eval_config.pickle_path is not None:
+        with open(eval_config.pickle_path, "rb") as f:
+            pickled_states = pickle.load(f)
+        cfg = pickled_states.get("cfg", None)
+        assert cfg is not None, "Pickled states must contain 'cfg' key."
+        # if cfg is string change to DictConfig
+        if not isinstance(cfg, DictConfig):
+            cfg = OmegaConf.create(cfg)
+    return [eval_env_fn(eval=True, imported_cfg=cfg) for eval_env_fn in eval_env_fn]
 
 
 def eval_pickled_env(
@@ -276,6 +287,7 @@ def eval_pickled_env(
         # env.reset_for_evaluation()
         env.set_reset_counter(pickled_states["reset_counter"][i % len(pickled_states["reset_counter"])])
         env.disable_reward()
+
         with set_exploration_type(exploration_type), torch.no_grad():
             saved_loc = pickled_states["init_locs"][i % len(pickled_states["init_locs"])]
             workload = pickled_states["workloads"][i % len(pickled_states["workloads"])]

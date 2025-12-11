@@ -325,7 +325,7 @@ def run_ppo(
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
 
-    eval_envs = make_eval_envs(env_constructors)
+    eval_envs = make_eval_envs(env_constructors, eval_config)
     max_tasks = max([env.size() for env in eval_envs])
     max_candidates = max([env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs])
 
@@ -748,7 +748,7 @@ def run_ppo_lstm(
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
 
-    eval_envs = make_eval_envs(env_constructors)
+    eval_envs = make_eval_envs(env_constructors, eval_config)
     max_tasks = max([env.size() for env in eval_envs])
     max_candidates = max([env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs])
 
