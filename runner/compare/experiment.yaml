@@ -1,0 +1,54 @@
+cli_base: "python experiments/train.py --config-name 8x8x128_dynamic.yaml"
+
+packs:
+  - name: wbconfig
+    options:
+      - wandb:
+          project: compare_batched
+        tag: "CompareTest"
+  - name: collections
+    options:
+      - algorithm:
+          num_collections: 5000
+        tag: "nc5k"
+  - name: entropy
+    options:
+      - algorithm:
+          ent_coef: 0.001
+        tag: "e0.001"
+  - name: model
+    options:
+      - models: cnn
+        feature: cnn
+        tag: "cnn"
+      - models: mlp
+        feature: mlp
+        tag: "mlp"
+      - models: mlp_film
+        feature: mlp
+        tag: "mlp_film"
+  - name: block_time
+    options:
+      - graph:
+          config:
+            interior_time: 100
+            boundary_time: 25
+            task_time: 100
+        tag: "4:2:4"
+      - graph:
+          config:
+            interior_time: 200
+            boundary_time: 25
+            task_time: 100
+        tag: "8:2:4"
+  - name: seed
+    options:
+      - seed: 42
+        tag: "seed42"
+      - seed: 256
+        tag: "seed256"
+      - seed: 1024
+        tag: "seed1024"
+      - seed: 2024
+        tag: "seed2024"
+    

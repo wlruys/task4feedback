@@ -476,7 +476,7 @@ def write_slurm_script(
     body = f"""
 set -euo pipefail
 
-# Activate your environment here if needed (module load / conda activate / etc.)
+micromamba activate pyt4f
 
 SLURM_JOB_ID="${{SLURM_JOB_ID:-nojid}}"
 SLURM_ARRAY_TASK_ID="${{SLURM_ARRAY_TASK_ID:-0}}"
