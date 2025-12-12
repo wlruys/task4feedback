@@ -1,0 +1,6 @@
+# @package env.randomize.task_duration
+enabled: true
+config:
+  _target_: task4feedback.trip.LognormalTaskNoise
+  _partial_: true
+  scale: 0.5

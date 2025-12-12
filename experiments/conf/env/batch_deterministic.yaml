@@ -1,0 +1,10 @@
+# @package env
+defaults:
+  - action: batched
+  - randomize/data_location: disabled
+  - randomize/task_duration: disabled
+  - randomize/task_priority: disabled
+  - randomize/workload: disabled
+  - reward: incremental_makespan
+  - runtime: batch
+  

@@ -1,0 +1,5 @@
+# @package env.runtime
+_target_: task4feedback.trip.RangeTransitionConditions
+mapped_reserved_gap: 5
+reserved_launched_gap: 5
+total_in_flight: 16

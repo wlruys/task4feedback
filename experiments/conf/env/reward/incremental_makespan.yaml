@@ -1,0 +1,12 @@
+# @package env.reward
+_target_: task4feedback.ml.env.IncrementalMakespan
+_partial_: true
+k: 0
+random_start: False
+terminal_reward: True
+chance: 1.0
+pbrs: True
+sparse_reward_scale: 1
+dense_reward_scale: 1
+gamma: 0.999
+verbose: False

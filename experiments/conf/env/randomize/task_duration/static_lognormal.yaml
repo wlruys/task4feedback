@@ -1,0 +1,6 @@
+# @package env.randomize.task_duration
+enabled: true
+config:
+  _target_: task4feedback.trip.StaticLognormalTaskNoise
+  stddev: 1000
+  _partial_: true

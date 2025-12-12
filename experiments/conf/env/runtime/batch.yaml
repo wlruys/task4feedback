@@ -1,0 +1,5 @@
+# @package env.runtime
+_target_: task4feedback.trip.BatchTransitionConditions
+batch_size: 5
+queue_threshold: 5
+max_in_flight: 16
