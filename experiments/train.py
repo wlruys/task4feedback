@@ -118,6 +118,20 @@ def configure_training(cfg: DictConfig):
 
     if cfg.eval.expert_path is not None:
         expert_demonstration = pickle.load(open(cfg.eval.expert_path, "rb"))
+        if isinstance(expert_demonstration, list):
+            if len(expert_demonstration) == 0:
+                raise ValueError("Loaded empty expert demonstration list")
+
+            if isinstance(expert_demonstration[0], TensorDict):
+                expert_demonstration = torch.cat(
+                    [ep.reshape(-1) for ep in expert_demonstration],
+                    dim=0,
+                )
+            else:
+                expert_demonstration = torch.cat(
+                    [ep.reshape(ep.shape[0], -1) if hasattr(ep, "shape") else ep for ep in expert_demonstration],
+                    dim=0,
+                )
     else:
         expert_demonstration = None
 
@@ -168,24 +182,17 @@ def main(cfg: DictConfig):
 
         checkpoint_path = Path(cfg.wandb.dir).parent / "model_checkpoints" / f"{run_name}"
         cfg.eval.pickle_path = f"./pickled_evaluation/{run_name}.pkl"
-        cfg.eval.expert_path = f"./expert_evaluation/{run_name}.pkl"
+        cfg.eval.expert_path = f"./dataset/{run_name}/{cfg.eval.expert_path}.pkl" if cfg.eval.expert_path is not None else None
 
-        # find if the file exists
         if not os.path.exists(cfg.eval.pickle_path):
-            # replace - with : and check again
-            cfg.eval.pickle_path = cfg.eval.pickle_path.replace("-", ":")
-            if not os.path.exists(cfg.eval.pickle_path):
-                print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
-                cfg.eval.pickle_path = None
+            print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
+            cfg.eval.pickle_path = None
         else:
             print(f"Using pickle path {cfg.eval.pickle_path}")
 
         if not os.path.exists(cfg.eval.expert_path):
-            # replace - with : and check again
-            cfg.eval.expert_path = cfg.eval.expert_path.replace("-", ":")
-            if not os.path.exists(cfg.eval.expert_path):
-                print(f"Expert path {cfg.eval.expert_path} does not exist.")
-                cfg.eval.expert_path = None
+            print(f"Expert path {cfg.eval.expert_path} does not exist.")
+            cfg.eval.expert_path = None
         else:
             print(f"Using expert path {cfg.eval.expert_path}")
 

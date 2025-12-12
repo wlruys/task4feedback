@@ -10,14 +10,23 @@ SLURM_TEMPLATE = """#!/bin/bash
 #SBATCH -p gg
 #SBATCH -N 1
 #SBATCH -n 144
-#SBATCH -t 12:00:00
+#SBATCH -t {hh}:00:00
 #SBATCH --mail-type=all
 #SBATCH --mail-user=jaeyoung@utexas.edu
 
 source /scratch/09611/jaeyoung/set_nano.sh
 cd /scratch/09611/jaeyoung/task4feedback/experiments
 
-# Commands follow
+# ---- concurrency-limited launcher ----
+run_cmd() {{
+    while [ "$(jobs -p | wc -l)" -ge {max_concurrent} ]; do
+        sleep 1
+    done
+    echo "[START] $1"
+    bash -c "$1" &
+}}
+
+# ---- commands start here ----
 {commands}
 
 wait
@@ -27,58 +36,66 @@ exit
 
 def chunk_list(lst, n):
     """Split list lst into n chunks as evenly as possible."""
-    avg = math.ceil(len(lst) / n)
-    return [lst[i : i + avg] for i in range(0, len(lst), avg)]
+    size = math.ceil(len(lst) / n)
+    return [lst[i : i + size] for i in range(0, len(lst), size)]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate SLURM job scripts by splitting commands across nodes and auto-submit.")
-    parser.add_argument("cmdfile", help="Text file with one command per line.")
-    parser.add_argument("--nodes", type=int, required=True, help="Number of nodes to use.")
-    parser.add_argument("--outdir", default="jobs", help="Directory for job scripts.")
-    parser.add_argument("--submit", action="store_true", help="Automatically submit the jobs with sbatch.")
+    parser = argparse.ArgumentParser(description="Generate SLURM job scripts with per-node concurrency-limited execution.")
+    parser.add_argument("cmdfile", help="Text file containing commands (one per line).")
+    parser.add_argument("--nodes", type=int, required=True, help="Number of nodes (scripts) to create.")
+    parser.add_argument("--hh", type=int, required=True, help="Hours for each SLURM job.")
+    parser.add_argument("--max-concurrent", type=int, default=30, help="Maximum number of commands running concurrently per node.")
+    parser.add_argument("--outdir", default="jobs", help="Directory to write SLURM scripts.")
+    parser.add_argument("--submit", action="store_true", help="Automatically run sbatch on generated scripts.")
 
     args = parser.parse_args()
 
-    # Read commands
+    # Load command list
     with open(args.cmdfile, "r") as f:
         commands = [line.strip() for line in f if line.strip()]
 
-    # Split into N chunks
+    # Split commands across nodes
     chunks = chunk_list(commands, args.nodes)
 
     # Ensure output directory exists
     os.makedirs(args.outdir, exist_ok=True)
 
-    submitted_jobs = []
+    submitted = []
 
+    # Generate each node's script
     for i, cmdlist in enumerate(chunks, start=1):
-        cmd_block = "\n".join(cmd + " ;" for cmd in cmdlist)
-        job_script = SLURM_TEMPLATE.format(id=i, commands=cmd_block)
 
-        outpath = os.path.join(args.outdir, f"job_{i}.slurm")
-        with open(outpath, "w") as f:
-            f.write(job_script)
+        # Build command block using run_cmd
+        cmd_block = ""
+        for cmd in cmdlist:
+            cmd_block += f'run_cmd "{cmd}"\n'
 
-        print(f"Generated {outpath} with {len(cmdlist)} commands.")
+        script_text = SLURM_TEMPLATE.format(id=i, hh=args.hh, max_concurrent=args.max_concurrent, commands=cmd_block)
 
-        # Auto-submit job
+        script_path = os.path.join(args.outdir, f"job_{i}.slurm")
+        with open(script_path, "w") as f:
+            f.write(script_text)
+
+        print(f"Generated {script_path} containing {len(cmdlist)} commands.")
+
+        # Optionally submit
         if args.submit:
             print(f"Submitting job_{i}.slurm...")
-            result = subprocess.run(["sbatch", outpath], capture_output=True, text=True)
+            res = subprocess.run(["sbatch", script_path], capture_output=True, text=True)
 
-            if result.returncode == 0:
-                print("  → Submitted:", result.stdout.strip())
-                submitted_jobs.append(result.stdout.strip())
+            if res.returncode == 0:
+                print("  → Submitted:", res.stdout.strip())
+                submitted.append(res.stdout.strip())
             else:
-                print("  → Error submitting job:", result.stderr.strip())
+                print("  → ERROR:", res.stderr.strip())
 
     if args.submit:
         print("\n✓ All jobs submitted:")
-        for job in submitted_jobs:
-            print("   ", job)
+        for line in submitted:
+            print("   ", line)
     else:
-        print("\n✓ Done! Submit manually using:")
+        print("\n✓ Done. Submit with:")
         print(f"  sbatch {args.outdir}/job_1.slurm")
 
 

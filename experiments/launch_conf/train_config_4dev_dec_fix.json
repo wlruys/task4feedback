@@ -125,7 +125,7 @@
         "train.py",
         "--config-name",
         "8x8x128_dynamic_{exp_name}_cnn",
-        "wandb.project=8x8x256_{exp_name}_{interior}-{boundary}_4dev",
+        "wandb.project=8x8x256_{exp_name}_{interior}-{boundary}_4dev_dec_fix",
         "reward.gamma=0.99",
         "graph.config.level_memory={mem}",
         "reward.uniform_reward_scale=10",

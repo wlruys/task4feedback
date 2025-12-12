@@ -11,7 +11,7 @@ from ..graphs.jacobi import get_length_from_config
 import hydra
 
 
-def run_parmetis(sim: SimulatorDriver, cfg, verbose=False, offset=1, future_levels=0, itr: float = 1000, unbalance: float = 1.225, n_compute_devices: int = 4) -> bool:
+def run_parmetis(sim: SimulatorDriver, cfg, verbose=False, offset=1, future_levels=0, itr: float = 1000, unbalance: float = 1.225, n_compute_devices: int = 4, ParMETIS=None) -> bool:
     d2d_bandwidth = cfg.system.d2d_bw
     graph_config = hydra.utils.instantiate(cfg.graph.config)
     width = graph_config.n
@@ -31,7 +31,8 @@ def run_parmetis(sim: SimulatorDriver, cfg, verbose=False, offset=1, future_leve
         [],
         [],
     )
-    ParMETIS = ParMETIS_wrapper()
+    if ParMETIS is None:
+        ParMETIS = ParMETIS_wrapper()
     done = False
 
     if rank == 0:
@@ -252,7 +253,7 @@ def query_parmetis(
         if not status:
             if rank == 0:
                 print("ParMETIS failed!", flush=True)
-            return False
+            return None, False
 
         if rank == 0:
             for i, p in enumerate(parts):

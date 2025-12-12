@@ -224,7 +224,7 @@ def main():
     cores_per_job = config.get("cores_per_job", 4)
     global_params = config.get("global_params", {})
 
-    print(f"Generating jobs from {args.config}...")
+    # print(f"Generating jobs from {args.config}...")
 
     # Iterate over experiments
     for exp_name, run_list in config["experiments"].items():
@@ -266,7 +266,7 @@ def main():
 
                 jobs.append((cores_per_job, formatted_cmd))
 
-    print(f"Total jobs prepared: {len(jobs)}")
+    # print(f"Total jobs prepared: {len(jobs)}")
 
     if args.dry_run:
         for n, cmd in jobs:
