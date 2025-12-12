@@ -1,0 +1,3 @@
+_target_: task4feedback.ml.models.nn_utils.xavier_init
+_partial_: true
+gain: 1.0

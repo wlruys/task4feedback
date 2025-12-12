@@ -27,14 +27,14 @@ from task4feedback.graphs.jacobi import (
     GraphMETISMapper
 )
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
-from task4feedback.fastsim2 import ParMETIS_wrapper
+from task4feedback.trip import ParMETIS_wrapper
 from task4feedback.graphs.mesh.partition import * 
 from task4feedback.graphs.base import weighted_cell_partition
 from task4feedback.graphs.mesh.plot import animate_mesh_graph
 
-from helper.graph import make_graph_builder, GraphBuilder
-from helper.env import make_env
-from helper.parmetis import run_parmetis
+from task4feedback.exp_utils.graph import make_graph_builder, GraphBuilder
+from task4feedback.exp_utils.env import make_env
+from task4feedback.exp_utils.parmetis import run_parmetis
 
 font_scale = 1.75
 mpl.rcParams["font.size"] = mpl.rcParams["font.size"] * font_scale
@@ -257,7 +257,7 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         
         if "RL" in experiment_names:
             from task4feedback.ml.models import FeatureDimConfig
-            from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
+            from task4feedback.exp_utils.model import create_td_actor_critic_models, load_policy_from_checkpoint
             graph_builder = make_graph_builder(cfg, verbose=False)
             env = make_env(graph_builder=graph_builder, cfg=cfg, eval=True, normalization=False)
             observer = env.get_observer()

@@ -1,0 +1,21 @@
+# @package feature.observer
+_target_: task4feedback.observers.cnn.GridObserverFactory
+
+# CNN-specific parameters
+width: ${graph.config.width}
+length: ${graph.config.length}
+prev_frames: 1
+
+# Features will be provided by feature set configs
+features: ???
+
+spec:
+  _target_: task4feedback.interface.create_graph_spec
+  max_tasks: 64
+  max_data: 1
+  max_devices: 5
+  max_edges_tasks_tasks: 1
+  max_edges_tasks_data: 1
+  max_edges_data_devices: 1
+  max_edges_tasks_devices: 1
+  max_candidates: ${mul:${graph.config.width},${graph.config.length}}

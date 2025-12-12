@@ -20,16 +20,16 @@ from omegaconf import DictConfig, OmegaConf
 from task4feedback.interface.wrappers import *  # noqa: F401,F403
 from task4feedback.graphs.jacobi import JacobiGraph, LevelPartitionMapper, JacobiRoundRobinMapper, JacobiQuadrantMapper, BlockCyclicMapper, GraphMETISMapper
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
-from task4feedback.fastsim2 import ParMETIS_wrapper
+from task4feedback.trip import ParMETIS_wrapper
 from task4feedback.graphs.mesh.partition import *
 from task4feedback.graphs.base import weighted_cell_partition
 from task4feedback.graphs.mesh.plot import animate_mesh_graph
 from task4feedback.ml.models import FeatureDimConfig
-from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
+from task4feedback.exp_utils.model import create_td_actor_critic_models, load_policy_from_checkpoint
 
-from helper.graph import make_graph_builder, GraphBuilder
-from helper.env import make_env
-from helper.parmetis import run_parmetis
+from task4feedback.exp_utils.graph import make_graph_builder, GraphBuilder
+from task4feedback.exp_utils.env import make_env
+from task4feedback.exp_utils.parmetis import run_parmetis
 import math
 
 font_scale = 1.75

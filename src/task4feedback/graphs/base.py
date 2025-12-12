@@ -5,9 +5,9 @@ from collections import defaultdict
 import networkx as nx
 import os
 from typing import List, Optional, Callable, Self
-from .. import fastsim2 as fastsim
+from .. import trip as trip
 import numpy as np
-from task4feedback.fastsim2 import DeviceType
+from task4feedback.trip import DeviceType
 import pymetis
 import inspect
 from typing import Type

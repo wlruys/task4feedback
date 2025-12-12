@@ -3,8 +3,8 @@ defaults:
   - graph: dynamic_jacobi_bump
   - reward: incremental_schedule
   - system: uniform
-  - feature: candidate_coordinate
-  - network: vector_baseline
+  - feature: mlp
+  - models: mlp_baseline
   - timing: default
   - algorithm: ppo
   - runtime: batch
@@ -18,6 +18,6 @@ defaults:
 hydra:
   callbacks:
     git_info:
-      _target_: train.GitInfo
+      _target_: task4feedback.exp_utils.gitinfo.GitInfo
 seed: 101
 deterministic_torch: true

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, Type, Self
 from .types import DeviceTuple, TaskTuple, DataBlockTuple, VariantTuple, ConnectionTuple
-from task4feedback.fastsim2 import DeviceType
+from task4feedback.trip import DeviceType
 
 
 class VariantBuilder:

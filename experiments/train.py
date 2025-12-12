@@ -1,186 +1,65 @@
+
 import hydra
-from omegaconf import DictConfig, OmegaConf
 import wandb
-from hydra.utils import instantiate
+import os
+from omegaconf import DictConfig, OmegaConf, open_dict
+from task4feedback.exp_utils.training import (
+    build_graph_builder,
+    initialize_env_and_model,
+    load_normalization,
+    maybe_log_model_to_wandb,
+    parameter_counts,
+    persist_config_and_normalization,
+    prepare_logging_config,
+    prepare_training_components,
+    select_runner,
+    set_global_seeds,
+)
 
-from helper.graph import make_graph_builder
-from helper.env import make_env
-from helper.model import create_td_actor_critic_models
-from helper.algorithm import create_optimizer, create_lr_scheduler
-from helper.eval import * 
-
-from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
 from task4feedback.ml.models import *
 
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
 
-from hydra.experimental.callbacks import Callback
-from hydra.core.utils import JobReturn
-from omegaconf import DictConfig, open_dict
 from pathlib import Path
-import git
-import os
 from hydra.core.hydra_config import HydraConfig
-from helper.run_name import make_run_name, cfg_hash
-
-import torch
-import numpy
-import random
-
-from helper.eval import EvalLocation, lookup_eval_location
-
-class GitInfo(Callback):
-    def on_job_start(self, config: DictConfig, **kwargs) -> None:
-        try:
-            repo = git.Repo(search_parent_directories=True)
-            outdir = Path(config.hydra.runtime.output_dir)
-            outdir.mkdir(parents=True, exist_ok=True)
-            (outdir / "git_sha.txt").write_text(repo.head.commit.hexsha)
-            (outdir / "git_dirty.txt").write_text(str(repo.is_dirty()))
-            diff = repo.git.diff(None)
-            (outdir / "git_diff.patch").write_text(diff)
-
-            print(
-                "Git SHA:",
-                repo.head.commit.hexsha,
-                " (dirty)" if repo.is_dirty() else " (clean)",
-                flush=True,
-            )
-
-        except Exception as e:
-            print(f"GitInfo callback failed: {e}")
 
 
 def configure_training(cfg: DictConfig):
-    # start_logger()
-    graph_builder = make_graph_builder(cfg)
-    env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
+    logging_config, _best_policy_path, _model_ctx = prepare_logging_config(cfg)
 
-    observer = env.get_observer()
-    feature_config = FeatureDimConfig.from_observer(observer)
-    model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
+    normalization, _norm_ctx = load_normalization(cfg)
+    graph_builder = build_graph_builder(cfg)
+    _, normalization, env_fn, model_bundle = initialize_env_and_model(cfg, graph_builder, normalization)
 
-    def env_fn(eval: bool = False):
-        return make_env(
-            graph_builder=graph_builder,
-            cfg=cfg,
-            lstm=lstm,
-            normalization=normalization,
-            eval=eval,
-        )
+    alg_config, optimizer, lr_scheduler, eval_config, eval_location = prepare_training_components(cfg)
+    persist_config_and_normalization(cfg, normalization)
 
-    alg_config = instantiate(cfg.algorithm)
+    total_params, trainable_params = parameter_counts(model_bundle.model)
+    maybe_log_model_to_wandb(cfg, logging_config, model_bundle.model, total_params, trainable_params)
 
-    optimizer = create_optimizer(cfg)
-    lr_scheduler = create_lr_scheduler(cfg)
-    logging_config = instantiate(cfg.logging)
-
-    eval_config = instantiate(cfg.eval)
-
-    eval_location = lookup_eval_location(cfg)
-    if eval_location is None:
-        create_evals(cfg)
-        eval_location = lookup_eval_location(cfg)
-    else:
-        print("Loading evaluations from ", eval_location)
-
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-    if cfg.wandb.enabled:
-        wandb.run.summary["model/parameters_total"] = int(total_params)
-        wandb.run.summary["model/parameters_trainable"] = int(trainable_params)
-        try:
-            arch_file = Path(HydraConfig.get().runtime.output_dir) / "model_arch.txt"
-            arch_file.write_text(str(model))
-            wandb.save(str(arch_file))
-        except Exception as e:
-            print(f"Failed to save model architecture: {e}")
-        try:
-            wandb.watch(model, log="all")
-        except Exception as e:
-            print(f"wandb.watch failed: {e}")
-
-    if lstm is not None:
-        run_ppo_lstm(
-            actor_critic_module=model,
-            env_constructors=[env_fn],
-            logging_config=logging_config,
-            ppo_config=alg_config,
-            eval_config=eval_config,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-            seed=cfg.seed,
-            eval_location=eval_location,
-        )
-    else:
-        run_ppo(
-            actor_critic_module=model,
-            env_constructors=[env_fn],
-            logging_config=logging_config,
-            ppo_config=alg_config,
-            eval_config=eval_config,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-            seed=cfg.seed,
-            eval_location=eval_location,
-        )
+    runner = select_runner(model_bundle.lstm is not None)
+    runner(
+        actor_critic_module=model_bundle.model,
+        env_constructors=[env_fn],
+        logging_config=logging_config,
+        ppo_config=alg_config,
+        eval_config=eval_config,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        seed=cfg.seed,
+        eval_location=eval_location,
+    )
 
 
-@hydra.main(config_path="conf", config_name="4x4x16_static_cnn.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="8x8x128_dynamic.yaml", version_base=None)
 def main(cfg: DictConfig):
-    # cfg.graph.config.workload_args.traj_type exist
-    # if cfg.graph.type == "jacobi":
-
-    #     def closest_ratio_string(value: float) -> str:
-    #         mapping = {10: "10", 1: "1", 0.1: "0.1"}
-    #         closest = min(mapping.keys(), key=lambda x: abs(value - x))
-    #         return mapping[closest]
-
-    #     interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
-    #     boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
-
-    #     interior_ratio = closest_ratio_string(interior_ratio)
-    #     boundary_ratio = closest_ratio_string(boundary_ratio)
-    #     checkpoint_path = Path(cfg.wandb.dir)
-    #     if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
-    #         graph_name = cfg.graph.config.workload_args.traj_type
-    #     else:
-    #         graph_name = "static"
-    #     if "Dilation" in cfg.network.layers.state._target_:
-    #         if "Uncond" in cfg.network.layers.state._target_:
-    #             network = "UncondCNN"
-    #         else:
-    #             network = "CNN"
-    #     elif "Vector" in cfg.network.layers.state._target_:
-    #         network = "Vector"
-    #     elif "GNN" in cfg.network.layers.state._target_:
-    #         network = "GNN"
-    #     else:
-    #         print(cfg.network.layers.state._target_)
-    #         raise ValueError("Unknown network type in cfg.network.layers.state._target_")
-    #     checkpoint_path = (
-    #         checkpoint_path.parent
-    #         / "model_checkpoints"
-    #         / f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
-    #     )
-    #     cfg.eval.pickle_path = f"./pickled_evaluation/{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{graph_name}_{interior_ratio}-{boundary_ratio}-1.pkl"
-    #     # find if the file exists
-    #     if not os.path.exists(cfg.eval.pickle_path):
-    #         # replace - with :
-    #         cfg.eval.pickle_path = cfg.eval.pickle_path.replace("-", ":")
-    #         if not os.path.exists(cfg.eval.pickle_path):
-    #             print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
-    #             cfg.eval.pickle_path = None
-
-    #     # Make a dir if not exists
-    #     checkpoint_path.mkdir(parents=True, exist_ok=True)
-    #     cfg.logging.best_policy_dir = str(checkpoint_path)
-    #     print(f"Best Policy dir: {cfg.logging.best_policy_dir}")
-    #     cfg.logging.best_policy_name = f"{cfg.graph.config.n}x{cfg.graph.config.n}x{cfg.graph.config.steps}_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
-    #     print(f"Best Policy name: {cfg.logging.best_policy_name}")
+    try:
+        hydra_output_dir = Path(HydraConfig.get().runtime.output_dir)
+        os.environ["HYDRA_RUNTIME_OUTPUT_DIR"] = str(hydra_output_dir)
+    except Exception:
+        pass
 
     if cfg.wandb.enabled:
         wandb.init(
@@ -200,11 +79,7 @@ def main(cfg: DictConfig):
                 if git_file.exists():
                     wandb.save(str(git_file))
 
-    torch.manual_seed(cfg.seed)
-    numpy.random.seed(cfg.seed)
-    random.seed(cfg.seed)
-    torch.use_deterministic_algorithms(cfg.deterministic_torch)
-
+    set_global_seeds(cfg.seed, cfg.deterministic_torch)
     configure_training(cfg)
 
     if cfg.wandb.enabled:

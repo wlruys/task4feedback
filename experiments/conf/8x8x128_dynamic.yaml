@@ -1,0 +1,48 @@
+defaults:
+  - graph: dynamic_jacobi
+  - env: batch_deterministic
+  - system: 4h100
+  - algorithm: ppo
+  - wandb: default
+  - logging: default
+  - optimizer: adamw
+  - eval: default
+  - timing: default
+  - feature: cnn
+  - models: cnn
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: task4feedback.exp_utils.gitinfo.GitInfo
+
+seed: 256
+deterministic_torch: true
+
+graph:
+  config:
+    width: 8
+    length: 8
+    steps: 128
+    level_memory: 98e9
+    boundary_time: 2500
+    interior_time: 10000
+    task_time: 10000
+
+system:
+  mem: 99999e9
+
+env:
+  runtime:
+    max_in_flight: ${env.action.max_candidates}
+
+wandb:
+  enabled: true
+  project: 4x4x16_static_ipdps
+  name: 4x4x16_static_base
+
+eval:
+  animation_interval: 10
+  eval_interval: 100
+  samples: 1

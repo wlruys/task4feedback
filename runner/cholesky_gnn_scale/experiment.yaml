@@ -54,7 +54,7 @@ packs:
             observer:
               version: "C"
               add_degree: True
-          network:
+          models:
             layers:
               state:
                 num_layers: 0

@@ -1,4 +1,4 @@
-_target_: task4feedback.ml.util.EvaluationConfig
+_target_: task4feedback.ml.eval.EvaluationConfig
 eval_interval: 50 
 animation_interval: 50
 max_frames: 400
@@ -11,5 +11,3 @@ exploration_types:
     - DETERMINISTIC
 samples: 10
 seeds: [0]
-pickle_path: null
-

@@ -4,10 +4,9 @@ from omegaconf import DictConfig, OmegaConf
 import wandb
 from hydra.utils import instantiate
 
-from helper.graph import make_graph_builder
-from helper.env import make_env
-from helper.model import create_td_actor_critic_models
-from helper.algorithm import create_optimizer, create_lr_scheduler
+from task4feedback.exp_utils.graph import make_graph_builder
+from task4feedback.exp_utils.env import make_env
+from task4feedback.exp_utils.model import create_td_actor_critic_models
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
@@ -32,15 +31,15 @@ from pathlib import Path
 import git
 import os
 from hydra.core.hydra_config import HydraConfig
-from helper.run_name import make_run_name, cfg_hash
+from task4feedback.exp_utils.run_name import make_run_name, cfg_hash
 import torch
 import numpy
 import random
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
-from task4feedback.fastsim2 import ParMETIS_wrapper
+from task4feedback.trip import ParMETIS_wrapper
 from task4feedback.graphs.mesh.plot import *
 from task4feedback.ml.util import EvaluationConfig
-from helper.parmetis import run_parmetis
+from task4feedback.exp_utils.parmetis import run_parmetis
 #from mpi4py import MPI
 
 comm = MPI.COMM_WORLD

@@ -1,0 +1,8 @@
+# @package feature
+defaults:
+  - normalization/task_normalization
+  - observer: mlp_observer
+  - sets/mlp/io_data_coords
+  - _self_
+
+add_device_load: true

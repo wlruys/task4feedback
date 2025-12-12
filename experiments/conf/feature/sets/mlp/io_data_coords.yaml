@@ -1,0 +1,6 @@
+# @package feature.observer.features
+
+task:
+  - InputOutputTaskFeature
+  - TaskDataMappedSizeFeature
+  - TaskCoordinatesFeature

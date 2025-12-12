@@ -193,3 +193,14 @@ cython_debug/
 test/run_tests.sh
 
 *.mp4
+
+saved_evals/
+saved_models/
+saved_norms/
+cached_evals/
+cached_models/
+cached_norms/
+best_policies/
+
+*.pkl
+*.json

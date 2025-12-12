@@ -1,0 +1,6 @@
+# @package feature.observer.features
+
+task:
+  - name: PrevReadSizeFeature
+    args: ["$width", "$length", true, "$prev_frames"]
+  - TaskDataMappedSizeFeature

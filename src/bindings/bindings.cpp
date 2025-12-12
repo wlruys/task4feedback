@@ -20,7 +20,7 @@ extern void init_feature_ext(nb::module_ &);
 extern void init_simulator_ext(nb::module_ &);
 extern void init_parmetis_ext(nb::module_ &);
 
-NB_MODULE(fastsim2, m) {
+NB_MODULE(trip, m) {
   // nb::set_leak_warnings(false);
   m.def("test", []() { return "Module loaded successfully!"; });
   nb::bind_vector<std::vector<uint32_t>>(m, "UInt32Vector");

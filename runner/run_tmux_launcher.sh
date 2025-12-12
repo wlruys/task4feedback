@@ -94,7 +94,7 @@ append_manifest() {
     set -e
     mf=$1; ln=$2
     if [[ ! -s "$mf" ]]; then
-      printf "%s\n" "node,session,cores,command,stdout,stderr,start_time,pid" > "$mf"
+      printf "%s\n" "node,session,cores,command,stdout,stderr,status,start_time,pid" > "$mf"
     fi
     printf "%s\n" "$ln" >> "$mf"
   ' bash "$manifest" "$line"
@@ -170,22 +170,36 @@ trap terminate INT TERM
 
 # --------------- Execution wrapper per session ---------------
 write_wrapper_and_launch() {
-  local session="$1" core_csv="$2" full_cmd="$3" log_file="$4" err_file="$5"
+  local session="$1" core_csv="$2" full_cmd="$3" log_file="$4" err_file="$5" status_file="$6" start_time="$7"
   local wrapper="${state_dir}/run_${session}.sh"
   {
     echo '#!/usr/bin/env bash'
-    echo 'set -euo pipefail'
+    echo 'set -u'
+    echo 'set -o pipefail'
+    printf 'START_TIME=%s\n' "$(sq "$start_time")"
+    printf 'STATUS_FILE=%s\n' "$(sq "$status_file")"
     if [[ "$OS" == "Linux" ]] && command -v taskset >/dev/null 2>&1; then
-      printf 'exec bash -lc %s > %s 2> %s\n' \
+      printf 'bash -lc %s > %s 2> %s\n' \
         "$(sq "taskset -c ${core_csv} bash -lc $(sq "$full_cmd")")" \
         "$(sq "$log_file")" \
         "$(sq "$err_file")"
     else
-      printf 'exec bash -lc %s > %s 2> %s\n' \
+      printf 'bash -lc %s > %s 2> %s\n' \
         "$(sq "$full_cmd")" \
         "$(sq "$log_file")" \
         "$(sq "$err_file")"
     fi
+    echo 'RC=$?'
+    echo 'END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")'
+    echo '{'
+    printf '  echo "node=%s"\n' "$(sq "$NODE")"
+    printf '  echo "session=%s"\n' "$(sq "$session")"
+    printf '  echo "cores={%s}"\n' "$core_csv"
+    echo '  echo "start_time=$START_TIME"'
+    echo '  echo "end_time=$END_TIME"'
+    echo '  echo "exit_code=$RC"'
+    echo '} > "$STATUS_FILE"'
+    echo 'exit "$RC"'
   } > "$wrapper"
   chmod +x "$wrapper"
   tmux new-session -d -s "$session" "$wrapper"
@@ -216,6 +230,7 @@ launch_one() {
   local start_time; start_time=$(now_utc)
   local log_file="${log_dir}/${session}.log"
   local err_file="${log_dir}/${session}.err"
+  local status_file="${log_dir}/${session}.status"
 
   local full_cmd
   if [[ -n "$preamble_cmd" ]]; then
@@ -228,10 +243,10 @@ launch_one() {
 
   { for c in "${picked_arr[@]}"; do echo "$c"; done; } > "${state_dir}/${session}.cores"
 
-  write_wrapper_and_launch "$session" "$core_csv" "$full_cmd" "$log_file" "$err_file"
+  write_wrapper_and_launch "$session" "$core_csv" "$full_cmd" "$log_file" "$err_file" "$status_file" "$start_time"
 
   local line
-  line="$(csv_escape "$NODE"),$(csv_escape "$session"),$(csv_escape "{$core_csv}"),$(csv_escape "$cmd"),$(csv_escape "$log_file"),$(csv_escape "$err_file"),$(csv_escape "$start_time"),$(csv_escape "$PID")"
+  line="$(csv_escape "$NODE"),$(csv_escape "$session"),$(csv_escape "{$core_csv}"),$(csv_escape "$cmd"),$(csv_escape "$log_file"),$(csv_escape "$err_file"),$(csv_escape "$status_file"),$(csv_escape "$start_time"),$(csv_escape "$PID")"
   append_manifest "$line" "$log_dir/manifest.csv"
 
   RUNNING+=("$session")
@@ -275,3 +290,21 @@ while (( next_cmd < total_cmds || ${#RUNNING[@]} > 0 )); do
 done
 
 echo "All sessions finished."
+
+# ---------------------------- Summary ----------------------------
+failed=0
+missing=0
+for ((i=0; i<total_cmds; i++)); do
+  sf="${log_dir}/${prefix}_${i}.status"
+  if [[ ! -f "$sf" ]]; then
+    ((missing++))
+    continue
+  fi
+  rc=$(awk -F= '/^exit_code=/{print $2}' "$sf" | tr -d "'\"[:space:]")
+  if [[ -n "$rc" && "$rc" != "0" ]]; then
+    ((failed++))
+  fi
+done
+ok=$(( total_cmds - failed - missing ))
+echo "Summary: ok=$ok failed=$failed missing_status=$missing"
+echo "Manifests: $log_dir/manifest.csv and per-job .status files"

@@ -225,32 +225,32 @@ def finalize_gmsh():
     GMSH_INITIALIZED = False
 
 
-def generate_quad_mesh(L: float = 1.0,
-                       n: int = 4,
-                       domain_ratio: float = 1.0):
-    
-    W = 1.0 * domain_ratio
-    nw = int(np.ceil(n * domain_ratio))
-
-    hx = L / n
-    hy = W / nw
-
-    nx = max(1, int(math.ceil(L / hx)))
-    ny = max(1, int(math.ceil(W / hy)))
-
-    print(f"Generating quad mesh with {nx} x {ny} elements.")
+def generate_quad_mesh(
+    width: float = 1.0,   # physical width in x
+    height: float = 1.0,  # physical height in y
+    nx: int = 4,          # number of elements in x
+    ny: int = 4           # number of elements in y
+):
+    print(f"Generating quad mesh with {nx} x {ny} elements "
+          f"on a {width} x {height} rectangle.")
 
     gmsh.option.set_number("Mesh.RecombineAll", 1)
     gmsh.option.set_number("Mesh.Algorithm", 8)
 
     with pygmsh.geo.Geometry() as geom:
-        rect = geom.add_rectangle(0.0, L, 0.0, W, 0.0)
+        rect = geom.add_rectangle(0.0, width, 0.0, height, 0.0)
         c0, c1, c2, c3 = rect.curves
-        geom.set_transfinite_curve(c0, nx + 1, "Progression", 1.0)  
-        geom.set_transfinite_curve(c2, nx + 1, "Progression", 1.0)  
-        geom.set_transfinite_curve(c1, ny + 1, "Progression", 1.0) 
-        geom.set_transfinite_curve(c3, ny + 1, "Progression", 1.0)  
+
+        # x-direction
+        geom.set_transfinite_curve(c0, nx + 1, "Progression", 1.0)
+        geom.set_transfinite_curve(c2, nx + 1, "Progression", 1.0)
+
+        # y-direction
+        geom.set_transfinite_curve(c1, ny + 1, "Progression", 1.0)
+        geom.set_transfinite_curve(c3, ny + 1, "Progression", 1.0)
+
         geom.set_transfinite_surface(rect.surface, "Left", tuple(rect.curves))
+
         mesh = geom.generate_mesh(dim=2)
 
     return mesh

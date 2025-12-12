@@ -3,7 +3,7 @@ defaults:
   - reward: incremental_schedule
   - system: h100
   - feature: gnn_single
-  - network: gnn_baseline
+  - models: gnn_baseline
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -18,7 +18,7 @@ defaults:
 hydra:
   callbacks:
     git_info:
-      _target_: train.GitInfo
+      _target_: task4feedback.exp_utils.gitinfo.GitInfo
 seed: 256
 deterministic_torch: true
 
@@ -61,7 +61,7 @@ system:
 #     prev_frames: 3
 #     batched: true
 
-# network:
+# models:
 #   layers:
 #     # lstm:
 #     #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)

@@ -1,0 +1,8 @@
+# @package feature
+defaults:
+  - normalization/task_normalization
+  - observer: gnn_observer
+  - sets/gnn/io_data_mapped  # Default feature set
+  - _self_
+
+add_device_load: true

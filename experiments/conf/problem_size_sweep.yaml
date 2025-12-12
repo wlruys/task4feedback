@@ -3,7 +3,7 @@ defaults:
   - reward: default
   - system: 4h100
   - feature: cnn_batch
-  - network: cnn_batch
+  - models: cnn_batch
   - algorithm: ppo
   - runtime: batch
   - wandb: default
@@ -29,7 +29,7 @@ parmetis:
 hydra:
   callbacks:
     git_info:
-      _target_: train.GitInfo
+      _target_: task4feedback.exp_utils.gitinfo.GitInfo
 seed: 256
 deterministic_torch: true
 
@@ -71,7 +71,7 @@ feature:
     prev_frames: 5
     batched: true
 
-network:
+models:
   layers:
     # lstm:
     #   hidden_size: 64 # Adjust the LSTM hidden size by hidden_channels ** (log2(n)-1)
@@ -92,4 +92,3 @@ wandb:
 
 eval:
   eval_interval: 0
-

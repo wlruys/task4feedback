@@ -1,0 +1,11 @@
+# @package graph.config
+workload:
+  _target_: task4feedback.graphs.base.TrajectoryWorkload
+workload_args:
+  traj_type: circle
+  lower_bound: 1
+  upper_bound: 5
+  scale: 0.3
+  traj_specifics:
+    radius: 0.5
+    max_angle: 1

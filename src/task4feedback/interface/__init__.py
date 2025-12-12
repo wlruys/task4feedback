@@ -1,4 +1,4 @@
-from task4feedback.fastsim2 import (
+from task4feedback.trip import (
     Devices,
     Topology,
     TaskNoise,
@@ -6,7 +6,7 @@ from task4feedback.fastsim2 import (
     DeviceType,
     SchedulerInput,
 )
-from task4feedback.fastsim2 import ExecutionState
+from task4feedback.trip import ExecutionState
 
 
 from .lambdas import VariantBuilder, TaskLabeler, DataBlockTransformer

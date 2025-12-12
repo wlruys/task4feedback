@@ -15,22 +15,22 @@ set(bindings_src
     simulator_bindings.cpp
     parmetis_wrapper_bindings.cpp)
 
-nanobind_add_module(fastsim2 NB_STATIC ${bindings_src})
+nanobind_add_module(trip NB_STATIC ${bindings_src})
 
-target_include_directories(fastsim2
+target_include_directories(trip
   PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
-set_target_properties(fastsim2 PROPERTIES
+set_target_properties(trip PROPERTIES
   UNITY_BUILD ON
 )
 
-set_target_properties(fastsim2 PROPERTIES
+set_target_properties(trip PROPERTIES
   INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
 )
 
-target_link_libraries(fastsim2 PRIVATE backend project_warnings tracy_headers unordered_dense::unordered_dense)
+target_link_libraries(trip PRIVATE backend project_warnings tracy_headers unordered_dense::unordered_dense)
 
 if(ENABLE_PARMETIS)
   find_package(MPI REQUIRED)
@@ -78,41 +78,41 @@ if(ENABLE_PARMETIS)
       INTERFACE_INCLUDE_DIRECTORIES "${PARMETIS_PREFIX}/include")
   endif()
 
-  target_include_directories(fastsim2 PRIVATE ${PARMETIS_INCLUDE_DIR} ${METIS_INCLUDE_DIR})
-  target_link_libraries(fastsim2 PRIVATE MPI::MPI_CXX
+  target_include_directories(trip PRIVATE ${PARMETIS_INCLUDE_DIR} ${METIS_INCLUDE_DIR})
+  target_link_libraries(trip PRIVATE MPI::MPI_CXX
                                         ParMETIS::ParMETIS
                                         METIS::METIS
                                         GKlib::GKlib)
 endif()
 
-target_compile_features(fastsim2 PUBLIC cxx_std_20)
+target_compile_features(trip PUBLIC cxx_std_20)
 
 check_cxx_compiler_flag("-fno-modules-ts" HAS_FNO_MODULES_TS)
 if (HAS_FNO_MODULES_TS)
-    target_compile_options(fastsim2 PRIVATE -fno-modules-ts)
+    target_compile_options(trip PRIVATE -fno-modules-ts)
 endif()
 
 if(CMAKE_CROSSCOMPILING AND SKBUILD_CROSS_STATIC_LIBCPP)
-    nanobind_musl_static_libcpp(fastsim2)
+    nanobind_musl_static_libcpp(trip)
 endif()
 
 if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)
-    target_link_libraries(fastsim2 PRIVATE mimalloc::mimalloc)
-    target_compile_definitions(fastsim2 PRIVATE MI_MALLOC_OVERRIDE=1)
+    target_link_libraries(trip PRIVATE mimalloc::mimalloc)
+    target_compile_definitions(trip PRIVATE MI_MALLOC_OVERRIDE=1)
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    nanobind_lto(fastsim2)
-    nanobind_strip(fastsim2)
+    nanobind_lto(trip)
+    nanobind_strip(trip)
 endif()
 
 
-nanobind_add_stub(fastsim2_stub
-    MODULE fastsim2
-    OUTPUT fastsim2.pyi
+nanobind_add_stub(trip_stub
+    MODULE trip
+    OUTPUT trip.pyi
     MARKER_FILE py.typed
-    DEPENDS fastsim2)
-
-install(TARGETS fastsim2
+    DEPENDS trip) 
+    
+install(TARGETS trip
         COMPONENT python
         LIBRARY DESTINATION task4feedback)

@@ -1,6 +1,6 @@
-# from . import fastsim2
+# from . import trip
 
-# CommunicationNoise = fastsim2.CommunicationNoise
-# Topology = fastsim2.Topology
+# CommunicationNoise = trip.CommunicationNoise
+# Topology = trip.Topology
 
-# __all__ = ["fastsim2"]
+# __all__ = ["trip"]

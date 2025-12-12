@@ -1,0 +1,5 @@
+# @package graph.init
+partitioner: row_cyclic
+nparts: 4
+gpu_only: true
+randomize: false

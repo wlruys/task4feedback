@@ -1,0 +1,27 @@
+# @package graph
+defaults:
+  - mesh: quad
+  - init: metis
+  - workload: grid/circle
+  - _self_
+
+type: "jacobi"
+config:
+  _target_: task4feedback.graphs.dynamic_jacobi.DynamicJacobiConfig
+  steps: 240
+  width: 8
+  length: 8
+  domain_ratio: 1.0
+  arithmetic_intensity: 595.5555555
+  arithmetic_complexity: 1.0
+  boundary_width: 0.25
+  boundary_complexity: 1
+  memory_intensity: 0
+  level_memory: 44e9
+  randomness: 0.0
+  permute_idx: 0
+  vcu_usage: 1.0
+  task_internal_memory: 0 
+  # task_time: 1000 
+  # boundary_time: 1000
+  # interior_time: 1000 

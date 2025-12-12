@@ -11,8 +11,8 @@ from typing import Optional, Literal
 from .base import Cell, Edge
 from ..base import DataBlocks, DataKey
 from collections import defaultdict
-from task4feedback.fastsim2 import TaskState
-import task4feedback.fastsim2 as fastsim
+from task4feedback.trip import TaskState
+import task4feedback.trip as trip
 import copy
 from ..base import EnvironmentState
 from dataclasses import dataclass, field
@@ -475,7 +475,7 @@ def _update_dynamic_state(env, time: int, static_state: EnvStaticState, dynamic_
 
     dynamic_state.ct_changed.fill(False)
     dynamic_state.ct_changed = (dynamic_state.ct_state != prev_state)
-    dynamic_state.ct_running = (dynamic_state.ct_state == fastsim.TaskState.LAUNCHED)
+    dynamic_state.ct_running = (dynamic_state.ct_state == trip.TaskState.LAUNCHED)
 
     return dynamic_state
 
@@ -518,7 +518,7 @@ def _update_initial_partition(env, current_time: int, static_state: EnvStaticSta
     dynamic_state.ct_changed.fill(False)
     dynamic_state.ct_state.fill(-1)
     dynamic_state.dt_state.fill(-1)
-    dynamic_state.ct_running = (dynamic_state.ct_state == fastsim.TaskState.LAUNCHED)
+    dynamic_state.ct_running = (dynamic_state.ct_state == trip.TaskState.LAUNCHED)
 
     return dynamic_state.partition, dynamic_state.last_duration, dynamic_state.last_label, changed_cells
 
@@ -533,8 +533,8 @@ def _update_dynamic_paritition(env, current_time: int,
 
     changed_idx = np.where(
         dy.ct_changed & (
-            (dy.ct_state == fastsim.TaskState.COMPLETED) |
-            (dy.ct_state == fastsim.TaskState.LAUNCHED)
+            (dy.ct_state == trip.TaskState.COMPLETED) |
+            (dy.ct_state == trip.TaskState.LAUNCHED)
         )
     )[0]
     

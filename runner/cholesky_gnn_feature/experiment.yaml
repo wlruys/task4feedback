@@ -42,12 +42,12 @@ packs:
           tag: "GNN-C-Degree"
   - name: layers
     options:
-      - network:
+      - models:
           layers:
             state:
               num_layers: 0
         tag: "0layer"
-      - network:
+      - models:
           layers:
             state:
               num_layers: 1

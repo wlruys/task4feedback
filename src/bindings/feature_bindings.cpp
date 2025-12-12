@@ -410,6 +410,8 @@ void init_feature_ext(nb::module_ &m) {
       .def_rw("max_edges_tasks_data", &GraphSpec::max_edges_tasks_data)
       .def_rw("max_edges_tasks_devices", &GraphSpec::max_edges_tasks_devices)
       .def_rw("max_edges_data_devices", &GraphSpec::max_edges_data_devices)
+      .def_rw("max_edges_devices_devices", &GraphSpec::max_edges_devices_devices)
+      .def_rw("max_edges_data_data", &GraphSpec::max_edges_data_data)
       .def_rw("max_tasks", &GraphSpec::max_tasks)
       .def_rw("max_data", &GraphSpec::max_data)
       .def_rw("max_devices", &GraphSpec::max_devices)

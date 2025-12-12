@@ -1,8 +1,8 @@
 import hydra
 from omegaconf import DictConfig
 
-from helper.graph import make_graph_builder
-from helper.env import make_env
+from task4feedback.exp_utils.graph import make_graph_builder
+from task4feedback.exp_utils.env import make_env
 
 from task4feedback.interface.wrappers import *
 from task4feedback.ml.models import *

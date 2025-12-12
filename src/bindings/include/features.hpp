@@ -10,13 +10,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <iostream>
 #include <limits>
 #include <math.h>
 #include <memory>
 #include <queue>
 #include <span>
-#include <stack>
 #include <sys/types.h>
 #include <tuple>
 #include <unordered_map>
@@ -29,13 +27,7 @@ using namespace nb::literals;
 using op_t = int32_t;
 using f_t = float;
 
-taskid_t max(taskid_t a, taskid_t b) {
-  return a > b ? a : b;
-}
 
-taskid_t min(taskid_t a, taskid_t b) {
-  return a < b ? a : b;
-}
 
 f_t guarded_divide(double a, double b) {
   if (b == 0) {
@@ -74,32 +66,34 @@ public:
   taskid_t max_edges_tasks_data = 0;
   taskid_t max_edges_tasks_devices = 0;
   taskid_t max_edges_data_devices = 0;
+  taskid_t max_edges_devices_devices = 0;
+  taskid_t max_edges_data_data = 0;
 };
 
 using TaskSet = ankerl::unordered_dense::set<taskid_t>;
 
+constexpr size_t DEFAULT_RESERVE_SIZE = 400;
+
 class GraphExtractor {
 protected:
   TaskSet visited;
+  TaskSet temp_set;
   ankerl::unordered_dense::set<dataid_t> data_visited;
   ankerl::unordered_dense::set<taskid_t> local_visited;
   ankerl::unordered_dense::map<taskid_t, int64_t> task_index_map;
   ankerl::unordered_dense::map<dataid_t, int64_t> data_index_map;
   ankerl::unordered_dense::map<devid_t, int64_t> device_index_map;
-  std::vector<op_t> source_list;
-  std::vector<op_t> target_list;
   std::reference_wrapper<const SchedulerState> state;
 
 public:
   GraphExtractor(const SchedulerState &state) : state(state) {
-    source_list.reserve(400);
-    target_list.reserve(400);
-    visited.reserve(400);
-    local_visited.reserve(400);
-    task_index_map.reserve(400);
-    data_index_map.reserve(400);
-    device_index_map.reserve(400);
-    data_visited.reserve(400);
+    visited.reserve(DEFAULT_RESERVE_SIZE);
+    temp_set.reserve(DEFAULT_RESERVE_SIZE);
+    local_visited.reserve(DEFAULT_RESERVE_SIZE);
+    task_index_map.reserve(DEFAULT_RESERVE_SIZE);
+    data_index_map.reserve(DEFAULT_RESERVE_SIZE);
+    device_index_map.reserve(DEFAULT_RESERVE_SIZE);
+    data_visited.reserve(DEFAULT_RESERVE_SIZE);
   }
 
   [[nodiscard]] TaskIDList get_active_tasks() const {
@@ -136,6 +130,8 @@ public:
     int current_hop = 0;
 
     while (!q.empty() && current_hop < k) {
+      if (visited.size() > max_tasks) return;
+
       std::size_t level_size = q.size();
 
       for (std::size_t i = 0; i < level_size; ++i) {
@@ -144,10 +140,7 @@ public:
 
         for (const auto &dep_id : static_graph.get_compute_task_dependents(current_task_id)) {
           if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= max_tasks) {
-              spdlog::warn("Task count exceeded max tasks: {}", visited.size());
-              return;
-            }
+            if (visited.size() > max_tasks) return;
             q.push(dep_id);
             visited.insert(dep_id);
           }
@@ -166,40 +159,38 @@ public:
     std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
 
     for (const auto &task_id_64_bit : initial_tasks_span) {
+      if (visited.size() > max_tasks) break;
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_dependents(visited, task_id, k, max_tasks);
-      if (visited.size() >= max_tasks) {
-        if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks: {}", visited.size());
-          has_warned = true;
-        }
-        break;
+    }
+
+    if (visited.size() > max_tasks) {
+      if (!has_warned) {
+        spdlog::warn("Task count exceeded max tasks: {}", visited.size());
+        has_warned = true;
       }
     }
 
-    auto count = min(max_tasks, visited.size());
+    auto count = std::min(max_tasks, visited.size());
 
-    // Always print the initial tasks first (remove them from visisted)
+    // Always print the initial tasks first
     // Then fill the rest
 
     size_t i = 0;
+    temp_set.clear();
     for (auto task_id_64_bit : initial_tasks_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
-      visited.erase(task_id);
+      temp_set.insert(task_id);
       v(i) = task_id_64_bit;
       i++;
     }
 
     for (auto task : visited) {
-      if (i >= count) {
-        if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks: {}", visited.size());
-          has_warned = true;
-        }
-        break;
+      if (!temp_set.contains(task)) {
+        if (i >= max_tasks) break;
+        v(i) = static_cast<int64_t>(task);
+        i++;
       }
-      v(i) = static_cast<int64_t>(task);
-      i++;
     }
 
     return count;
@@ -225,6 +216,8 @@ public:
     int current_hop = 0;
 
     while (!q.empty() && current_hop < k) {
+      if (visited.size() > max_tasks) return;
+
       std::size_t level_size = q.size();
 
       for (std::size_t i = 0; i < level_size; ++i) {
@@ -233,9 +226,7 @@ public:
 
         for (const auto &dep_id : static_graph.get_compute_task_dependencies(current_task_id)) {
           if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= max_tasks) {
-              return;
-            }
+            if (visited.size() > max_tasks) return;
             q.push(dep_id);
             visited.insert(dep_id);
           }
@@ -255,40 +246,38 @@ public:
 
     size_t max_tasks = output.size();
     for (const auto &task_id_64_bit : initial_tasks_span) {
+      if (visited.size() > max_tasks) break;
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_dependencies(visited, task_id, k, max_tasks);
-      if (visited.size() >= max_tasks) {
-        if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
-          has_warned = true;
-        }
-        break;
+    }
+
+    if (visited.size() > max_tasks) {
+      if (!has_warned) {
+        spdlog::warn("Task count exceeded max tasks, {}", visited.size());
+        has_warned = true;
       }
     }
 
-    auto count = min(max_tasks, visited.size());
+    auto count = std::min(max_tasks, visited.size());
 
-    // Always print the initial tasks first (remove them from visisted)
+    // Always print the initial tasks first
     // Then fill the rest
 
     size_t i = 0;
+    temp_set.clear();
     for (auto task_id_64_bit : initial_tasks_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
-      visited.erase(task_id);
+      temp_set.insert(task_id);
       v(i) = task_id_64_bit;
       i++;
     }
 
     for (auto task : visited) {
-      if (i >= count) {
-        if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
-          has_warned = true;
-        }
-        break;
+      if (!temp_set.contains(task)) {
+        if (i >= max_tasks) break;
+        v(i) = static_cast<int64_t>(task);
+        i++;
       }
-      v(i) = static_cast<int64_t>(task);
-      i++;
     }
 
     return count;
@@ -309,41 +298,39 @@ public:
 
     size_t max_tasks = output.size();
     for (const auto &task_id_64_bit : initial_tasks_span) {
+      if (visited.size() > max_tasks) break;
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_dependencies(visited, task_id, k, max_tasks);
       _get_k_hop_task_dependents(visited, task_id, k, max_tasks);
-      if (visited.size() >= max_tasks) {
-        if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
-          has_warned = true;
-        }
-        break;
+    }
+
+    if (visited.size() > max_tasks) {
+      if (!has_warned) {
+        spdlog::warn("Task count exceeded max tasks, {}", visited.size());
+        has_warned = true;
       }
     }
 
-    auto count = min(max_tasks, visited.size());
+    auto count = std::min(max_tasks, visited.size());
 
-    // Always print the initial tasks first (remove them from visisted)
+    // Always print the initial tasks first
     // Then fill the rest
 
     size_t i = 0;
+    temp_set.clear();
     for (auto task_id_64_bit : initial_tasks_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
-      visited.erase(task_id);
+      temp_set.insert(task_id);
       v(i) = task_id_64_bit;
       i++;
     }
 
     for (auto task : visited) {
-      if (i >= count) {
-        if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
-          has_warned = true;
-        }
-        break;
+      if (!temp_set.contains(task)) {
+        if (i >= max_tasks) break;
+        v(i) = static_cast<int64_t>(task);
+        i++;
       }
-      v(i) = static_cast<int64_t>(task);
-      i++;
     }
 
     return count;
@@ -362,6 +349,8 @@ public:
     int current_hop = 0;
 
     while (!q.empty() && current_hop < k) {
+      if (visited.size() > max_tasks) return;
+
       std::size_t level_size = q.size();
 
       for (std::size_t i = 0; i < level_size; ++i) {
@@ -370,13 +359,7 @@ public:
 
         for (const auto &dep_id : static_graph.get_compute_task_dependencies(current_task_id)) {
           if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= max_tasks) {
-              if (!has_warned) {
-                spdlog::warn("Task count exceeded max tasks: {}", visited.size());
-                has_warned = true;
-              }
-              return;
-            }
+            if (visited.size() > max_tasks) return;
             q.push(dep_id);
             visited.insert(dep_id);
           }
@@ -384,13 +367,7 @@ public:
 
         for (const auto &dep_id : static_graph.get_compute_task_dependents(current_task_id)) {
           if (local_visited.insert(dep_id).second) {
-            if (visited.size() >= max_tasks) {
-              if (!has_warned) {
-                spdlog::warn("Task count exceeded max tasks: {}", visited.size());
-                has_warned = true;
-              }
-              return;
-            }
+            if (visited.size() > max_tasks) return;
             q.push(dep_id);
             visited.insert(dep_id);
           }
@@ -414,41 +391,38 @@ public:
     std::span<int64_t> initial_tasks_span(initial_tasks.data(), initial_tasks.size());
     static bool has_warned = false;
     for (const auto &task_id_64_bit : initial_tasks_span) {
+      if (visited.size() > max_tasks) break;
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       _get_k_hop_task_neighborhood(visited, task_id, k, max_tasks);
-      if (visited.size() >= max_tasks) {
-        if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks, {}", visited.size());
-          has_warned = true;
-        }
-        break;
+    }
+
+    if (visited.size() > max_tasks) {
+      if (!has_warned) {
+        spdlog::warn("Task count exceeded max tasks, {}", visited.size());
+        has_warned = true;
       }
     }
 
-    auto count = min(max_tasks, visited.size());
+    auto count = std::min(max_tasks, visited.size());
 
-    // Always print the initial tasks first (remove them from visisted)
+    // Always print the initial tasks first
     // Then fill the rest
 
     size_t i = 0;
-
+    temp_set.clear();
     for (auto task_id_64_bit : initial_tasks_span) {
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
-      visited.erase(task_id);
+      temp_set.insert(task_id);
       v(i) = task_id_64_bit;
       i++;
     }
 
     for (auto task : visited) {
-      if (i >= count) {
-        if (!has_warned) {
-          spdlog::warn("Task count exceeded max tasks");
-          has_warned = true;
-        }
-        break;
+      if (!temp_set.contains(task)) {
+        if (i >= max_tasks) break;
+        v(i) = static_cast<int64_t>(task);
+        i++;
       }
-      v(i) = static_cast<int64_t>(task);
-      i++;
     }
 
     return count;
@@ -498,13 +472,15 @@ public:
       for (const auto &dep_id : dependencies) {
         auto it = task_index_map.find(dep_id);
         if (it != task_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(source_idx);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
-          gv(0, edge_count) = static_cast<int64_t>(source_id);
-          gv(1, edge_count) = static_cast<int64_t>(dep_id);
+          if (edge_count < max_edges) {
+            v(0, edge_count) = static_cast<int64_t>(source_idx);
+            v(1, edge_count) = static_cast<int64_t>(it->second);
+            gv(0, edge_count) = static_cast<int64_t>(source_id);
+            gv(1, edge_count) = static_cast<int64_t>(dep_id);
+          }
           edge_count++;
 
-          if (edge_count >= max_edges) {
+          if (edge_count > max_edges) {
             if (!has_warned) {
               spdlog::warn("TaskTask edge count exceeded max edges: {}", edge_count);
               has_warned = true;
@@ -513,7 +489,7 @@ public:
           }
         }
       }
-      if (edge_count >= max_edges) {
+      if (edge_count > max_edges) {
         if (!has_warned) {
           spdlog::warn("TaskTask edge count exceeded max edges: {}", edge_count);
           has_warned = true;
@@ -556,12 +532,14 @@ public:
       for (const auto &dep_id : dependents) {
         auto it = task_index_map.find(dep_id);
         if (it != task_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(source_idx);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
-          gv(0, edge_count) = static_cast<int64_t>(source_id);
-          gv(1, edge_count) = static_cast<int64_t>(dep_id);
+          if (edge_count < max_edges) {
+            v(0, edge_count) = static_cast<int64_t>(source_idx);
+            v(1, edge_count) = static_cast<int64_t>(it->second);
+            gv(0, edge_count) = static_cast<int64_t>(source_id);
+            gv(1, edge_count) = static_cast<int64_t>(dep_id);
+          }
           edge_count++;
-          if (edge_count >= max_edges) {
+          if (edge_count > max_edges) {
             if (!has_warned) {
               spdlog::warn("TaskTask edge count exceeded max edges: {}", edge_count);
               has_warned = true;
@@ -570,7 +548,7 @@ public:
           }
         }
       }
-      if (edge_count >= max_edges) {
+      if (edge_count > max_edges) {
         if (!has_warned) {
           spdlog::warn("TaskTask edge count exceeded max edges: {}", edge_count);
           has_warned = true;
@@ -583,7 +561,7 @@ public:
 
   size_t get_unique_data(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &output) {
     data_visited.clear();
-    data_visited.reserve(400);
+    data_visited.reserve(DEFAULT_RESERVE_SIZE);
 
     const auto max_data = output.size();
     auto v = output.view();
@@ -593,42 +571,30 @@ public:
     const auto &static_graph = s.get_tasks();
 
     for (const auto &task_id_64_bit : task_ids_span) {
+      if (data_visited.size() > max_data) break;
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       const auto &unique = static_graph.get_unique(task_id);
 
       for (int i = 0; i < unique.size(); i++) {
-
+        if (data_visited.size() > max_data) break;
         auto data_id = unique[i];
         data_visited.insert(data_id);
-        if (data_visited.size() >= max_data) {
-          if (!has_warned) {
-            spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
-            has_warned = true;
-          }
-          break;
-        }
-      }
-      if (data_visited.size() >= max_data) {
-        if (!has_warned) {
-          spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
-          has_warned = true;
-        }
-        break;
       }
     }
 
-    size_t count = min(output.size(), data_visited.size());
+    if (data_visited.size() > max_data) {
+      if (!has_warned) {
+        spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
+        has_warned = true;
+      }
+    }
+
+    size_t count = std::min(output.size(), data_visited.size());
 
     // std::cout << "Unique data count: " << count << std::endl;
     size_t i = 0;
     for (auto data_id : data_visited) {
-      if (i >= count) {
-        if (!has_warned) {
-          spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
-          has_warned = true;
-        }
-        break;
-      }
+      if (i >= count) break;
       v(i) = static_cast<int64_t>(data_id);
       i++;
     }
@@ -637,7 +603,7 @@ public:
 
   size_t get_read_data(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &output) {
     data_visited.clear();
-    data_visited.reserve(400);
+    data_visited.reserve(DEFAULT_RESERVE_SIZE);
 
     const auto max_data = output.size();
     auto v = output.view();
@@ -647,44 +613,29 @@ public:
     const auto &static_graph = s.get_tasks();
 
     for (const auto &task_id_64_bit : task_ids_span) {
+      if (data_visited.size() > max_data) break;
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       const auto read = static_graph.get_read(task_id);
 
-      // std::cout << "Task ID: " << task_id << " Read size: " << read.size() << std::endl;
-
       for (int i = 0; i < read.size(); i++) {
-
+        if (data_visited.size() > max_data) break;
         auto data_id = read[i];
         data_visited.insert(data_id);
-        if (data_visited.size() >= max_data) {
-          if (!has_warned) {
-            spdlog::warn("Read data count exceeded max data: {}", data_visited.size());
-            has_warned = true;
-          }
-          break;
-        }
-      }
-      if (data_visited.size() >= max_data) {
-        if (!has_warned) {
-          spdlog::warn("Read data count exceeded max data: {}", data_visited.size());
-          has_warned = true;
-        }
-        break;
       }
     }
 
-    size_t count = min(output.size(), data_visited.size());
+    if (data_visited.size() > max_data) {
+      if (!has_warned) {
+        spdlog::warn("Read data count exceeded max data: {}", data_visited.size());
+        has_warned = true;
+      }
+    }
 
-    // std::cout << "Unique data count: " << count << std::endl;
+    size_t count = std::min(output.size(), data_visited.size());
+
     size_t i = 0;
     for (auto data_id : data_visited) {
-      if (i >= count) {
-        if (!has_warned) {
-          spdlog::warn("Read data count exceeded max data: {}", data_visited.size());
-          has_warned = true;
-        }
-        break;
-      }
+      if (i >= count) break;
       v(i) = static_cast<int64_t>(data_id);
       i++;
     }
@@ -693,7 +644,7 @@ public:
 
   size_t get_write_data(TorchInt64Arr1D &task_ids, TorchInt64Arr1D &output) {
     data_visited.clear();
-    data_visited.reserve(400);
+    data_visited.reserve(DEFAULT_RESERVE_SIZE);
 
     const auto max_data = output.size();
     auto v = output.view();
@@ -703,41 +654,29 @@ public:
     const auto &static_graph = s.get_tasks();
 
     for (const auto &task_id_64_bit : task_ids_span) {
+      if (data_visited.size() > max_data) break;
       taskid_t task_id = static_cast<taskid_t>(task_id_64_bit);
       const auto write = static_graph.get_write(task_id);
 
       for (int i = 0; i < write.size(); i++) {
+        if (data_visited.size() > max_data) break;
         auto data_id = write[i];
         data_visited.insert(data_id);
-        if (data_visited.size() >= max_data) {
-          if (!has_warned) {
-            spdlog::warn("Write data count exceeded max data: {}", data_visited.size());
-            has_warned = true;
-          }
-          break;
-        }
-      }
-      if (data_visited.size() >= max_data) {
-        if (!has_warned) {
-          spdlog::warn("Write data count exceeded max data: {}", data_visited.size());
-          has_warned = true;
-        }
-        break;
       }
     }
 
-    size_t count = min(output.size(), data_visited.size());
+    if (data_visited.size() > max_data) {
+      if (!has_warned) {
+        spdlog::warn("Write data count exceeded max data: {}", data_visited.size());
+        has_warned = true;
+      }
+    }
 
-    // std::cout << "Unique data count: " << count << std::endl;
+    size_t count = std::min(output.size(), data_visited.size());
+
     size_t i = 0;
     for (auto data_id : data_visited) {
-      if (i >= count) {
-        if (!has_warned) {
-          spdlog::warn("Unique data count exceeded max data: {}", data_visited.size());
-          has_warned = true;
-        }
-        break;
-      }
+      if (i >= count) break;
       v(i) = static_cast<int64_t>(data_id);
       i++;
     }
@@ -773,12 +712,14 @@ public:
       for (auto data_id : static_graph.get_unique(task_id)) {
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(i);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
-          gv(0, edge_count) = static_cast<int64_t>(task_id);
-          gv(1, edge_count) = static_cast<int64_t>(data_id);
+          if (edge_count < max_edges) {
+            v(0, edge_count) = static_cast<int64_t>(i);
+            v(1, edge_count) = static_cast<int64_t>(it->second);
+            gv(0, edge_count) = static_cast<int64_t>(task_id);
+            gv(1, edge_count) = static_cast<int64_t>(data_id);
+          }
           edge_count++;
-          if (edge_count >= max_edges) {
+          if (edge_count > max_edges) {
             if (!has_warned) {
               spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
               has_warned = true;
@@ -787,7 +728,7 @@ public:
           }
         }
       }
-      if (edge_count >= max_edges) {
+      if (edge_count > max_edges) {
         if (!has_warned) {
           spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
           has_warned = true;
@@ -827,12 +768,14 @@ public:
       for (auto data_id : static_graph.get_read(task_id)) {
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(i);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
-          gv(0, edge_count) = static_cast<int64_t>(task_id);
-          gv(1, edge_count) = static_cast<int64_t>(data_id);
+          if (edge_count < max_edges) {
+            v(0, edge_count) = static_cast<int64_t>(i);
+            v(1, edge_count) = static_cast<int64_t>(it->second);
+            gv(0, edge_count) = static_cast<int64_t>(task_id);
+            gv(1, edge_count) = static_cast<int64_t>(data_id);
+          }
           edge_count++;
-          if (edge_count >= max_edges) {
+          if (edge_count > max_edges) {
             if (!has_warned) {
               spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
               has_warned = true;
@@ -841,7 +784,7 @@ public:
           }
         }
       }
-      if (edge_count >= max_edges) {
+      if (edge_count > max_edges) {
         if (!has_warned) {
           spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
           has_warned = true;
@@ -881,12 +824,14 @@ public:
       for (auto data_id : static_graph.get_write(task_id)) {
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(i);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
-          gv(0, edge_count) = static_cast<int64_t>(task_id);
-          gv(1, edge_count) = static_cast<int64_t>(data_id);
+          if (edge_count < max_edges) {
+            v(0, edge_count) = static_cast<int64_t>(i);
+            v(1, edge_count) = static_cast<int64_t>(it->second);
+            gv(0, edge_count) = static_cast<int64_t>(task_id);
+            gv(1, edge_count) = static_cast<int64_t>(data_id);
+          }
           edge_count++;
-          if (edge_count >= max_edges) {
+          if (edge_count > max_edges) {
             if (!has_warned) {
               spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
               has_warned = true;
@@ -895,7 +840,7 @@ public:
           }
         }
       }
-      if (edge_count >= max_edges) {
+      if (edge_count > max_edges) {
         if (!has_warned) {
           spdlog::warn("TaskData edge count exceeded max edges: {}", edge_count);
           has_warned = true;
@@ -949,12 +894,14 @@ public:
 
         auto it = data_index_map.find(data_id);
         if (it != data_index_map.end()) {
-          v(0, edge_count) = static_cast<int64_t>(i);
-          v(1, edge_count) = static_cast<int64_t>(it->second);
-          gv(0, edge_count) = static_cast<int64_t>(task_id);
-          gv(1, edge_count) = static_cast<int64_t>(data_id);
+          if (edge_count < max_edges) {
+            v(0, edge_count) = static_cast<int64_t>(i);
+            v(1, edge_count) = static_cast<int64_t>(it->second);
+            gv(0, edge_count) = static_cast<int64_t>(task_id);
+            gv(1, edge_count) = static_cast<int64_t>(data_id);
+          }
           edge_count++;
-          if (edge_count >= max_edges) {
+          if (edge_count > max_edges) {
             if (!has_warned) {
               spdlog::warn("Filtered TaskData edge count exceeded max edges: {}", edge_count);
               has_warned = true;
@@ -963,7 +910,7 @@ public:
           }
         }
       }
-      if (edge_count >= max_edges) {
+      if (edge_count > max_edges) {
         if (!has_warned) {
           spdlog::warn("Filtered TaskData edge count exceeded max edges: {}", edge_count);
           has_warned = true;
@@ -998,12 +945,14 @@ public:
       devid_t mapped_device = task_runtime.get_compute_task_mapped_device(task_id);
 
       if (mapped_device != -1) {
-        v(0, edge_count) = static_cast<int64_t>(i);
-        v(1, edge_count) = static_cast<int64_t>(mapped_device);
-        gv(0, edge_count) = static_cast<int64_t>(task_id);
-        gv(1, edge_count) = static_cast<int64_t>(mapped_device);
+        if (edge_count < max_edges) {
+          v(0, edge_count) = static_cast<int64_t>(i);
+          v(1, edge_count) = static_cast<int64_t>(mapped_device);
+          gv(0, edge_count) = static_cast<int64_t>(task_id);
+          gv(1, edge_count) = static_cast<int64_t>(mapped_device);
+        }
         edge_count++;
-        if (edge_count >= max_edges) {
+        if (edge_count > max_edges) {
           if (!has_warned) {
             spdlog::warn("TaskDevice edge count exceeded max edges: {}", edge_count);
             has_warned = true;
@@ -1041,12 +990,14 @@ public:
 
       for (uint8_t j = 0; j < devices.size(); j++) {
         if (valid_flags & (1 << j)) {
-          v(0, i) = static_cast<int64_t>(i);
-          v(1, i) = static_cast<int64_t>(j);
-          gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
-          gv(1, i) = static_cast<int64_t>(j);
+          if (i < max_edges) {
+            v(0, i) = static_cast<int64_t>(i);
+            v(1, i) = static_cast<int64_t>(j);
+            gv(0, i) = static_cast<int64_t>(data_ids_span[i]);
+            gv(1, i) = static_cast<int64_t>(j);
+          }
           edge_count++;
-          if (edge_count >= max_edges) {
+          if (edge_count > max_edges) {
             if (!has_warned) {
               spdlog::warn("DataDevice edge count exceeded max edges: {}", edge_count);
               has_warned = true;
@@ -1055,7 +1006,7 @@ public:
           }
         }
       }
-      if (edge_count >= max_edges) {
+      if (edge_count > max_edges) {
         if (!has_warned) {
           spdlog::warn("DataDevice edge count exceeded max edges: {}", edge_count);
           has_warned = true;
@@ -1190,7 +1141,7 @@ public:
   }
 };
 
-void one_hot(int index, std::span<f_t> output) {
+inline void one_hot(int index, std::span<f_t> output) {
   for (std::size_t i = 0; i < output.size(); i++) {
     output[i] = static_cast<f_t>(i == index);
   }
@@ -1529,32 +1480,10 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
     auto n_devices = devices.size() - 1; // Exclude CPU
     auto grid_size = stride;
     auto offset = (task_id % grid_size) * n_devices * frames;
-
-    std::cout << "Shifting history for task " << task_id << " at offset " << offset << std::endl;
-    std::cout << "History before shift: ";
-    for (int f = 0; f < frames; f++) {
-      for (int d = 0; d < n_devices; d++) {
-        std::cout << history[offset + f * n_devices + d] << " ";
-      }
-    }
-    std::cout << std::endl;
-
-    for (int f = frames - 1; f > 0; f--) {
-      for (int d = 0; d < n_devices; d++) {
-        history[offset + f * n_devices + d] = history[offset + (f - 1) * n_devices + d];
-      }
-    }
-    for (int d = 0; d < n_devices; d++) {
-      history[offset + d] = 0.0;
-    }
-
-    std::cout << "History after shift: ";
-    for (int f = 0; f < frames; f++) {
-      for (int d = 0; d < n_devices; d++) {
-        std::cout << history[offset + f * n_devices + d] << " ";
-      }
-    }
-    std::cout << std::endl;
+    auto start_it = history.begin() + offset;
+    auto end_it = start_it + (frames - 1) * n_devices;
+    std::copy_backward(start_it, end_it, start_it + frames * n_devices);
+    std::fill(start_it, start_it + n_devices, 0.0);
   }
 
   template <typename ID> void update_history_of_task(ID task_id) {
@@ -1575,14 +1504,6 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
         }
       }
     }
-
-    std::cout << "History after update: ";
-    for (int f = 0; f < frames; f++) {
-      for (int d = 0; d < n_devices; d++) {
-        std::cout << history[offset + f * n_devices + d] << " ";
-      }
-    }
-    std::cout << std::endl;
   }
 
   template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) {
@@ -1599,13 +1520,6 @@ struct PrevMappedSizeFeature : public StateFeature<PrevMappedSizeFeature> {
       }
       ++i;
     }
-    std::cout << "Extracted feature for task " << task_id << ": ";
-    for (int f = 0; f < frames; f++) {
-      for (int d = 0; d < n_devices; d++) {
-        std::cout << output[f * n_devices + d] << " ";
-      }
-    }
-    std::cout << std::endl;
   }
 };
 

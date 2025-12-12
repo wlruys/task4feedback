@@ -1,9 +1,14 @@
-mesh:
-  _target_: task4feedback.graphs.mesh.generate_quad_mesh
+# @package graph
+defaults:
+  - mesh: quad
+  - init: mincut
+
+type: "jacobi"
 config:
   _target_: task4feedback.graphs.jacobi.JacobiConfig
   steps: 32
-  n: 4
+  width: 4
+  length: 4
   arithmetic_intensity: 595.5555555
   arithmetic_complexity: 1.0
   memory_intensity: 0
@@ -18,15 +23,3 @@ config:
   # interior_time: 1000 
   # boundary_time: 1000
   # compute_time: 1000
-init:
-  partitioner: mincut
-  nparts: 4
-  gpu_only: True
-  randomize: False
-env:
-  change_priority: False
-  change_location: False
-  change_duration: False 
-  warmup: 20
-  seed: 1
-type: "jacobi"

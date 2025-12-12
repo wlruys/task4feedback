@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from ..fastsim2 import DeviceType, BYTES_IN_POWER
+from ..trip import DeviceType, BYTES_IN_POWER
 
 
 @dataclass

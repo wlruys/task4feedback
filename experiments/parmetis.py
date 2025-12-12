@@ -8,11 +8,10 @@ from task4feedback.interface.wrappers import start_logger
 import wandb
 import gmsh
 from hydra.utils import instantiate
-from hydra.experimental.callbacks import Callback
 
-from helper.graph import make_graph_builder, GraphBuilder
-from helper.env import make_env
-from helper.model import *
+from task4feedback.exp_utils.graph import make_graph_builder, GraphBuilder
+from task4feedback.exp_utils.env import make_env
+from task4feedback.exp_utils.model import *
 
 from task4feedback.graphs.jacobi import (
     JacobiGraph,
@@ -26,8 +25,8 @@ import matplotlib as mpl
 import numpy
 from collections import defaultdict
 import time
-from task4feedback.fastsim2 import ParMETIS_wrapper
-import task4feedback.fastsim2 as fastsim
+from task4feedback.trip import ParMETIS_wrapper
+import task4feedback.trip as trip
 from mpi4py import MPI
 from task4feedback.graphs.base import weighted_cell_partition
 
@@ -39,28 +38,6 @@ if size != 4:
         f"Expected 4 ranks, but got {size}. Please run with 4 ranks."
     )
 ParMETIS = ParMETIS_wrapper()
-
-
-class GitInfo(Callback):
-    def on_job_start(self, config: DictConfig, **kwargs) -> None:
-        try:
-            repo = git.Repo(search_parent_directories=True)
-            outdir = Path(config.hydra.runtime.output_dir)
-            outdir.mkdir(parents=True, exist_ok=True)
-            (outdir / "git_sha.txt").write_text(repo.head.commit.hexsha)
-            (outdir / "git_dirty.txt").write_text(str(repo.is_dirty()))
-            diff = repo.git.diff(None)
-            (outdir / "git_diff.patch").write_text(diff)
-
-            print(
-                "Git SHA:",
-                repo.head.commit.hexsha,
-                " (dirty)" if repo.is_dirty() else " (clean)",
-                flush=True,
-            )
-
-        except Exception as e:
-            print(f"GitInfo callback failed: {e}")
 
 
 @hydra.main(config_path="conf", config_name="dynamic_batch", version_base=None)
@@ -108,7 +85,7 @@ def main(cfg: DictConfig):
             cell_loc = [x + 1 for x in partition]
             partition = [-1 for _ in range(sim.observer.graph_spec.max_candidates)]
             sim.enable_external_mapper()
-            done = sim.run_until_external_mapping() == fastsim.ExecutionState.COMPLETE
+            done = sim.run_until_external_mapping() == trip.ExecutionState.COMPLETE
             candidates = torch.zeros(
                 (sim.observer.graph_spec.max_candidates), dtype=torch.int64
             )
@@ -117,7 +94,7 @@ def main(cfg: DictConfig):
             for i, id in enumerate(candidates):
                 mapping_priority = sim.get_mapping_priority(id)
                 actions.append(
-                    fastsim.Action(
+                    trip.Action(
                         i,
                         cell_loc[graph.task_to_cell[id.item()]],
                         mapping_priority,
@@ -125,7 +102,7 @@ def main(cfg: DictConfig):
                     )
                 )
             sim.simulator.map_tasks(actions)
-            done = sim.run_until_external_mapping() == fastsim.ExecutionState.COMPLETE
+            done = sim.run_until_external_mapping() == trip.ExecutionState.COMPLETE
             for i, loc in enumerate(cell_loc):
                 print(loc, end=" ")
                 if (i + 1) % 8 == 0:
@@ -201,7 +178,7 @@ def main(cfg: DictConfig):
                 for i, id in enumerate(candidates):
                     mapping_priority = sim.get_mapping_priority(id)
                     actions.append(
-                        fastsim.Action(
+                        trip.Action(
                             i,
                             cell_loc[graph.task_to_cell[id.item()]],
                             mapping_priority,
@@ -209,7 +186,7 @@ def main(cfg: DictConfig):
                         )
                     )
                 sim.simulator.map_tasks(actions)
-                done = sim.run_until_external_mapping() == fastsim.ExecutionState.COMPLETE
+                done = sim.run_until_external_mapping() == trip.ExecutionState.COMPLETE
                 print()
                 for i, loc in enumerate(cell_loc):
                     print(loc, end=" ")
@@ -231,4 +208,3 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
     main()
-

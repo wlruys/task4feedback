@@ -1,9 +1,9 @@
-logits: true
+logits: false
 actions: false
 store_in_tensordict: true
 sync_cuda: false
 logit_key: logit_inference_time_s
 action_key: action_inference_time_s
-log: true
+log: false
 conversion_key: data_conversion_time_s
-subtract_conversion: true
+subtract_conversion: false

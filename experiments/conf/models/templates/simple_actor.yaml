@@ -1,0 +1,15 @@
+name: actor
+inputs:
+  - [observation]
+
+nodes:
+  encode:
+    _target_: task4feedback.ml.nodes.ModuleNode
+    module: ${....layers.state}
+
+  head:
+    _target_: task4feedback.ml.nodes.ModuleNode
+    module: ${....layers.actor}
+
+outputs:
+  - [logits]

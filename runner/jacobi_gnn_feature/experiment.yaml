@@ -48,24 +48,24 @@ packs:
           tag: "MLP-B-Degree"
   - name: layers
     options:
-      - network:
+      - models:
           layers:
             state:
               num_layers: 0
         tag: "0layer"
-      - network:
+      - models:
           layers:
             state:
               num_layers: 1
         tag: "1layer"
   - name: layernorm
     options:
-      - network:
+      - models:
           layers:
             state:
               use_norm: False
         tag: "no_ln"
-      - network:
+      - models:
           layers:
             state:
               use_norm: True

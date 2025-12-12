@@ -1,9 +1,14 @@
-mesh:
-  _target_: task4feedback.graphs.mesh.generate_quad_mesh # MUST BE QUAD MESH FOR CHOLESKY (USED A BLOCK MATRIX)
+# @package graph
+defaults:
+  - init: row_cyclic
+  - mesh: quad
+  - _self_
+
+type: "cholesky"
 config:
   _target_: task4feedback.graphs.cholesky.CholeskyConfig
-  n: 8
-  domain_ratio: 1.0 #MUST BE 1.0 FOR CHOLESKY (SQUARE DOMAIN)
+  width: 8
+  length: 8
   arithmetic_intensity: 595.5555555
   arithmetic_complexity: 1.0
   memory_intensity: 0
@@ -16,15 +21,3 @@ config:
   block_time: 500
   verbose: False 
   # compute_time: 1000
-init:
-  partitioner: row_cyclic
-  nparts: 4
-  gpu_only: True
-  randomize: False
-env:
-  change_priority: False
-  change_location: False
-  change_duration: False 
-  warmup: 20
-  seed: 1
-type: "cholesky"

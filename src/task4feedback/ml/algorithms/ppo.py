@@ -1,35 +1,80 @@
-from pathlib import Path
-from ..models import *
-from ..util import *
-from dataclasses import dataclass
-from typing import Callable, Optional, List, Dict
-from torchrl.collectors import MultiSyncDataCollector, SyncDataCollector
-from torchrl.data.replay_buffers import (
-    SliceSampler,
-    TensorDictReplayBuffer,
-)
-from torchrl.data.replay_buffers.storages import LazyTensorStorage, TensorStorage
-from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
-from torchrl.objectives import ClipPPOLoss
-from torchrl.objectives.value import GAE, VTrace
-from torchrl.objectives.utils import ValueEstimators
-from tensordict import TensorDict
-import wandb
-import torch
-from torchrl._utils import compile_with_warmup
-from .base import AlgorithmConfig, LoggingConfig
-from ..base import ActorCriticModule
-from omegaconf import OmegaConf
-from task4feedback.logging import training
 import time
+import json
+import logging
+from pathlib import Path
+from dataclasses import dataclass
+from typing import Callable, Dict, Iterable, List, Optional
+
+import torch
+import wandb
+from omegaconf import OmegaConf
+from tensordict import TensorDict
+import torch.nn.functional as F
+from torchrl._utils import compile_with_warmup
+from torchrl.collectors import MultiSyncDataCollector, SyncDataCollector
 from torchrl.collectors.utils import split_trajectories
-from task4feedback.ml.util import log_parameter_and_gradient_norms
+from torchrl.data.replay_buffers import SliceSampler, TensorDictReplayBuffer
+from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
+from torchrl.data.replay_buffers.storages import LazyTensorStorage, TensorStorage
+from torchrl.envs import EnvBase
+from torchrl.objectives import ClipPPOLoss
+from torchrl.objectives.utils import ValueEstimators
+from torchrl.objectives.value import GAE, VTrace
+
+from task4feedback.logging import training
+from task4feedback.ml.base import ActorCriticModule
+from task4feedback.ml.eval import EvaluationConfig, make_eval_envs, run_evaluation
+from task4feedback.ml.models import *
+from task4feedback.ml.rl_utils import (
+    log_parameter_and_gradient_norms,
+    redistribute_rewards_uniform,
+    save_checkpoint,
+)
+from task4feedback.utils.atomic import atomic_write_text
+from .base import AlgorithmConfig, LoggingConfig
+
+
+def _best_metric_path(best_dir: Path) -> Path:
+    return Path(best_dir) / "best_metric.json"
+
+
+def load_best_performance(best_dir: Optional[str]) -> float:
+    if best_dir is None:
+        return 0.0
+    path = _best_metric_path(Path(best_dir))
+    if not path.exists():
+        return 0.0
+    try:
+        data = json.loads(path.read_text())
+        return float(data.get("best_mean_vs_EFT", 0.0))
+    except Exception as exc:
+        training.warning(f"Failed to load existing best metric from {path}: {exc}")
+        return 0.0
+
+
+def save_best_performance(best_dir: Optional[str], value: float, checkpoint_name: str) -> None:
+    if best_dir is None:
+        return
+    path = _best_metric_path(Path(best_dir))
+    payload = {
+        "best_mean_vs_EFT": value,
+        "checkpoint": checkpoint_name,
+        "updated_at": time.time(),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, json.dumps(payload, indent=2))
+    except Exception as exc:
+        training.warning(f"Failed to persist best metric to {path}: {exc}")
 
 
 def joint_stats(td, ppo):
+    if not training.isEnabledFor(logging.DEBUG):
+        return
+
     with torch.no_grad():
         prev_lp = td["sample_log_prob"].squeeze(-1)  # [N]
-        cur_lp, dist, _ = ppo._get_cur_log_prob(td)
+        cur_lp, _, _ = ppo._get_cur_log_prob(td)
         cur_lp = cur_lp.squeeze(-1)  # [N]
         act = td["action"]  # [N, 64]
         logits = td["logits"]  # [N, 64, 4]
@@ -39,52 +84,67 @@ def joint_stats(td, ppo):
         gathered = logp_heads.gather(-1, act.unsqueeze(-1)).squeeze(-1)  # [N, 64]
         joint_lp_explicit = gathered.sum(-1)  # [N]
 
-        print("\n=== LOG-PROB STATS ===")
-        for name, x in [
+        def _log_scalar(name, tensor):
+            values = tensor.detach()
+            training.debug(
+                "%s mean=%8.3f std=%8.3f min=%8.3f max=%8.3f",
+                name,
+                values.mean().item(),
+                values.std().item(),
+                values.min().item(),
+                values.max().item(),
+            )
+
+        training.debug("=== LOG-PROB STATS ===")
+        for name, values in [
             ("prev_lp (stored)", prev_lp),
             ("cur_lp (dist)", cur_lp),
             ("cur_lp (explicit)", joint_lp_explicit),
         ]:
-            x = x.detach()
-            print(f"{name:20s} mean={x.mean():8.3f} std={x.std():8.3f} " f"min={x.min():8.3f} max={x.max():8.3f}")
+            _log_scalar(name, values)
 
-        x = td["observation", "nodes", "tasks", "attr"]  # [B, 600] ideally; if it's [600], fix your batch shaping first
-        x = x.detach()
-        print("\n=== OBSERVATION STATS ===")
-        print(f"obs: {x}")
-        print(f"obs shape: {x.shape}")
-        print(f"obs mean={x.mean():8.3f} std={x.std():8.3f}")
-        print(f"obs min={x.min():8.3f} max={x.max():8.3f}")
-        print(f"obs numel={x.numel()} nan={torch.isnan(x).sum()} inf={torch.isinf(x).sum()}")
-        print(f"obs unique={torch.unique(x)}")
+        obs = td["observation", "nodes", "tasks", "attr"].detach()
+        training.debug("=== OBSERVATION STATS ===")
+        training.debug(
+            "obs shape=%s mean=%8.3f std=%8.3f min=%8.3f max=%8.3f numel=%d nan=%d inf=%d",
+            obs.shape,
+            obs.mean().item(),
+            obs.std().item(),
+            obs.min().item(),
+            obs.max().item(),
+            obs.numel(),
+            torch.isnan(obs).sum().item(),
+            torch.isinf(obs).sum().item(),
+        )
+        training.debug("obs unique count=%d", torch.unique(obs).numel())
 
-        # Show me the row where the max value is
-        max_val = x.max()
-        max_pos = (x == max_val).nonzero(as_tuple=False)
-        print(f"obs max position: {max_pos}")
-        if max_pos.shape[0] < 100:
+        max_val = obs.max()
+        max_pos = (obs == max_val).nonzero(as_tuple=False)
+        training.debug("obs max position count=%d", max_pos.shape[0])
+        if 0 < max_pos.shape[0] < 100:
             for pos in max_pos:
-                b, i, z = pos
-                print(f"obs[{b}, {i}, :] = {x[b, i, :]}")
+                coords = tuple(pos.tolist())
+                training.debug("obs%s = %s", coords, obs[coords])
 
-        # KL approximations
         kl_approx = prev_lp - cur_lp  # [N]
         kl_approx_explicit = prev_lp - joint_lp_explicit
-        print("\n=== KL APPROX (sample-wise) ===")
-        for name, x in [
+        training.debug("=== KL APPROX (sample-wise) ===")
+        for name, values in [
             ("kl_approx", kl_approx),
             ("kl_approx_explicit", kl_approx_explicit),
         ]:
-            x = x.detach()
-            print(f"{name:20s} mean={x.mean():8.3f} std={x.std():8.3f} " f"min={x.min():8.3f} max={x.max():8.3f}")
+            _log_scalar(name, values)
 
-        # Logit scale diagnostics
         l = logits.detach()
-        print(f"\nlogits shape: {l.shape}")
+        training.debug("logits shape=%s", tuple(l.shape))
         lmax = l.abs().amax().item()
         per_head_span = l.max(dim=-1).values - l.min(dim=-1).values  # [N, 64]
-        print("\n=== LOGIT SCALE ===")
-        print(f"|logits|_max = {lmax:.1f}; span per head: mean={per_head_span.mean():.2f} " f"max={per_head_span.max():.2f}")
+        training.debug(
+            "=== LOGIT SCALE === |logits|_max=%.1f span per head mean=%.2f max=%.2f",
+            lmax,
+            per_head_span.mean().item(),
+            per_head_span.max().item(),
+        )
 
 
 @dataclass
@@ -260,6 +320,218 @@ def log_training_metrics(
         wandb.log(log_payload)
 
 
+def _should_eval_with_logging(
+    n_collections: int,
+    eval_config: Optional[EvaluationConfig],
+) -> bool:
+    if eval_config is None or eval_config.eval_interval <= 0:
+        return False
+    decision = should_eval(n_collections, eval_config)
+    if decision:
+        training.info(
+            "Evaluation triggered at collection %d (interval=%d)",
+            n_collections,
+            eval_config.eval_interval,
+        )
+    else:
+        training.debug(
+            "Evaluation skipped at collection %d (interval=%d)",
+            n_collections,
+            eval_config.eval_interval,
+        )
+    return decision
+
+
+def _log_collection_timings(
+    n_updates: int,
+    advantage_seconds: float,
+    update_seconds: float,
+    batch_size: int,
+    logging_config: Optional[LoggingConfig],
+) -> None:
+    if logging_config is None:
+        return
+    payload = {
+        "timing/advantage_seconds": advantage_seconds,
+        "timing/update_seconds": update_seconds,
+        "timing/collection_seconds": advantage_seconds + update_seconds,
+    }
+    if batch_size > 0:
+        payload["timing/effective_batch_size"] = batch_size
+    wandb.log(payload, step=n_updates)
+
+
+def _build_advantage_module(
+    actor_critic_module: ActorCriticModule,
+    ppo_config: PPOConfig,
+    *,
+    vectorized: bool = True,
+    include_vtrace_lmbda: bool = False,
+) -> torch.nn.Module:
+    if ppo_config.advantage_type == "gae":
+        training.info("Using GAE for advantage estimation")
+        return GAE(
+            gamma=ppo_config.gamma,
+            lmbda=ppo_config.lmbda,
+            value_network=actor_critic_module.critic,
+            average_gae=False,
+            device=ppo_config.update_device,
+            vectorized=vectorized,
+            deactivate_vmap=True,
+        )
+    if ppo_config.advantage_type == "vtrace":
+        training.info("Using VTrace for advantage estimation")
+        kwargs = {
+            "gamma": ppo_config.gamma,
+            "value_network": actor_critic_module.critic,
+            "actor_network": actor_critic_module.actor,
+            "device": ppo_config.update_device,
+            "deactivate_vmap": True,
+        }
+        if include_vtrace_lmbda:
+            kwargs["lmbda"] = ppo_config.lmbda
+        return VTrace(**kwargs)
+    raise ValueError(f"Unsupported advantage type: {ppo_config.advantage_type}")
+
+
+def _build_loss_module(
+    actor_critic_module: ActorCriticModule,
+    ppo_config: PPOConfig,
+) -> ClipPPOLoss:
+    loss_module = ClipPPOLoss(
+        actor_network=actor_critic_module.actor,
+        critic_network=actor_critic_module.critic,
+        clip_epsilon=ppo_config.clip_eps,
+        entropy_bonus=True,
+        entropy_coeff=ppo_config.ent_coef,
+        critic_coeff=ppo_config.val_coef,
+        loss_critic_type=ppo_config.value_norm,
+        clip_value=ppo_config.clip_vloss,
+        normalize_advantage=ppo_config.normalize_advantage,
+    )
+    if ppo_config.advantage_type == "gae":
+        loss_module.make_value_estimator(ValueEstimators.GAE)
+    elif ppo_config.advantage_type == "vtrace":
+        loss_module.make_value_estimator(ValueEstimators.VTrace)
+    return loss_module
+
+
+def _configure_optimizer(
+    loss_module: ClipPPOLoss,
+    optimizer_ctor: Optional[Callable[[Iterable[torch.Tensor]], torch.optim.Optimizer]],
+    lr_scheduler_ctor: Optional[Callable[[torch.optim.Optimizer], torch.optim.lr_scheduler.LambdaLR]],
+    default_optimizer: Callable[[Iterable[torch.Tensor]], torch.optim.Optimizer],
+) -> tuple[torch.optim.Optimizer, Optional[torch.optim.lr_scheduler.LambdaLR]]:
+    if optimizer_ctor is None:
+        optimizer = default_optimizer(loss_module.parameters())
+    else:
+        optimizer = optimizer_ctor(loss_module.parameters())
+    if lr_scheduler_ctor is not None:
+        lr_scheduler = lr_scheduler_ctor(optimizer)
+    else:
+        lr_scheduler = None
+    return optimizer, lr_scheduler
+
+
+def _build_replay_buffer(
+    storage_size: int,
+    device: str,
+    minibatch_size: int,
+    *,
+    sample_slices: bool = False,
+    slice_len: int = 0,
+    traj_key: tuple[str, ...] | None = None,
+) -> TensorDictReplayBuffer:
+    storage = LazyTensorStorage(max_size=max(1, storage_size), device=device)
+    if sample_slices:
+        sampler = SliceSampler(
+            strict_length=True,
+            slice_len=slice_len,
+            traj_key=traj_key,
+        )
+    else:
+        sampler = SamplerWithoutReplacement()
+    return TensorDictReplayBuffer(
+        storage=storage,
+        sampler=sampler,
+        batch_size=minibatch_size,
+    )
+
+
+def _build_collector(
+    env_workers_fn: Callable[[], List[Callable[[], EnvBase]]],
+    actor_network: torch.nn.Module,
+    ppo_config: PPOConfig,
+    frames_per_batch: int,
+) -> SyncDataCollector | MultiSyncDataCollector:
+    env_workers = env_workers_fn()
+    if not env_workers:
+        raise ValueError("No environment constructors were provided to the collector factory.")
+    compile_policy = {"mode": "reduce-overhead"} if ppo_config.compile_policy else None
+    frames_per_batch = max(1, frames_per_batch)
+    if ppo_config.collector == "multi_sync":
+        training.info(
+            "Creating MultiSyncDataCollector with %d workers and %d frames-per-batch",
+            len(env_workers),
+            frames_per_batch,
+        )
+        return MultiSyncDataCollector(
+            env_workers,
+            actor_network,
+            frames_per_batch=frames_per_batch,
+            cat_results="stack",
+            reset_at_each_iter=False if ppo_config.rollout_steps > 0 else True,
+            policy_device=ppo_config.collect_device,
+            storing_device=ppo_config.storing_device,
+            env_device="cpu",
+            use_buffers=True,
+            num_threads=ppo_config.workers,
+            compile_policy=compile_policy,
+        )
+    if ppo_config.collector == "sync":
+        training.info(
+            "Creating SyncDataCollector with %d workers and %d frames-per-batch",
+            len(env_workers),
+            frames_per_batch,
+        )
+        return SyncDataCollector(
+            env_workers[0],
+            policy=actor_network,
+            frames_per_batch=frames_per_batch,
+            reset_at_each_iter=True,
+            policy_device=ppo_config.collect_device,
+            storing_device=ppo_config.storing_device,
+            env_device="cpu",
+            use_buffers=True,
+            compile_policy=compile_policy,
+        )
+    raise ValueError(f"Unknown collector type: {ppo_config.collector}. Use 'sync' or 'multi_sync'.")
+
+
+def _ppo_update_step(
+    batch: TensorDict,
+    loss_module: ClipPPOLoss,
+    optimizer: torch.optim.Optimizer,
+    ppo_config: PPOConfig,
+    preprocess_batch: Optional[Callable[[TensorDict], TensorDict]] = None,
+) -> Dict[str, torch.Tensor]:
+    if preprocess_batch is not None:
+        batch = preprocess_batch(batch)
+
+    loss_vals = loss_module(batch)
+    loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
+    if loss_vals["kl_approx"] > 0.8:
+        training.warning(f"High KL divergence detected: {loss_vals['kl_approx'].item()}")
+        training.warning("Skipping gradient update to maintain training stability.")
+        optimizer.zero_grad()
+        return loss_vals
+    optimizer.zero_grad()
+    loss_value.backward()
+    torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_norm=ppo_config.max_grad_norm)
+    optimizer.step()
+    return loss_vals
+
+
 def run_ppo(
     actor_critic_module: ActorCriticModule,
     env_constructors: List[Callable[[], EnvBase]],
@@ -280,7 +552,7 @@ def run_ppo(
         wandb.define_metric("param_norm/*", step_metric="batch/n_updates")
         wandb.define_metric("eval/*", step_metric="batch/n_updates")
 
-    print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
+    training.info("Using PPO with config:\n%s", OmegaConf.to_yaml(ppo_config))
 
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
@@ -291,120 +563,45 @@ def run_ppo(
         max_tasks = ppo_config.rollout_steps
 
     max_states_per_collection = ppo_config.graphs_per_collection * max_tasks
+    states_per_collection = min(ppo_config.states_per_collection, max_states_per_collection)
+    frames_per_batch = max(1, states_per_collection)
 
-    if ppo_config.advantage_type == "gae":
-        training.info("Using GAE for advantage estimation")
-        advantage_module = GAE(
-            gamma=ppo_config.gamma,
-            lmbda=ppo_config.lmbda,
-            value_network=actor_critic_module.critic,
-            average_gae=False,
-            device=ppo_config.update_device,
-            vectorized=(False if ppo_config.compile_advantage else True),
-            deactivate_vmap=True,
-        )
-    elif ppo_config.advantage_type == "vtrace":
-        training.info("Using VTrace for advantage estimation")
-        advantage_module = VTrace(
-            gamma=ppo_config.gamma,
-            value_network=actor_critic_module.critic,
-            actor_network=actor_critic_module.actor,
-            device=ppo_config.update_device,
-        )
-
-    replay_buffer = TensorDictReplayBuffer(
-        storage=LazyTensorStorage(
-            max_size=max_states_per_collection,
-            device=ppo_config.update_device,
-        ),
-        sampler=SamplerWithoutReplacement(),
-        batch_size=ppo_config.minibatch_size,
+    advantage_module = _build_advantage_module(
+        actor_critic_module,
+        ppo_config,
+        vectorized=(False if ppo_config.compile_advantage else True),
     )
-
-    def env_workers():
-        return [env_constructors[i % len(env_constructors)] for i in range(ppo_config.graphs_per_collection)]
-
-    if ppo_config.collector == "multi_sync":
-        collector = MultiSyncDataCollector(
-            env_workers(),
-            actor_critic_module.actor,
-            frames_per_batch=max_states_per_collection,
-            cat_results="stack",
-            reset_at_each_iter=False if ppo_config.rollout_steps > 0 else True,
-            policy_device=ppo_config.collect_device,
-            storing_device=ppo_config.storing_device,
-            env_device="cpu",
-            use_buffers=True,
-            num_threads=ppo_config.workers,
-            compile_policy=({"mode": "reduce-overhead"} if ppo_config.compile_policy else None),
-        )
-    elif ppo_config.collector == "sync":
-        collector = SyncDataCollector(
-            env_workers()[0],
-            policy=actor_critic_module.actor,
-            frames_per_batch=max_states_per_collection,
-            reset_at_each_iter=True if ppo_config.rollout_steps > 0 else True,
-            policy_device=ppo_config.collect_device,
-            storing_device=ppo_config.storing_device,
-            env_device="cpu",
-            use_buffers=True,
-            compile_policy=({"mode": "reduce-overhead"} if ppo_config.compile_policy else None),
-        )
-    else:
-        raise ValueError(f"Unknown collector type: {ppo_config.collector}. " "Use 'sync' or 'multi_sync'.")
-
-    collector.set_seed(seed)
-
-    loss_module = ClipPPOLoss(
-        actor_network=actor_critic_module.actor,
-        critic_network=actor_critic_module.critic,
-        clip_epsilon=ppo_config.clip_eps,
-        entropy_bonus=True,
-        entropy_coeff=ppo_config.ent_coef,
-        critic_coeff=ppo_config.val_coef,
-        loss_critic_type=ppo_config.value_norm,
-        clip_value=ppo_config.clip_vloss,
-        normalize_advantage=ppo_config.normalize_advantage,
+    loss_module = _build_loss_module(actor_critic_module, ppo_config)
+    optimizer, lr_scheduler = _configure_optimizer(
+        loss_module,
+        optimizer,
+        lr_scheduler,
+        default_optimizer=lambda params: torch.optim.Adam(params),
     )
-
-    if ppo_config.advantage_type == "gae":
-        loss_module.make_value_estimator(ValueEstimators.GAE)
-    elif ppo_config.advantage_type == "vtrace":
-        loss_module.make_value_estimator(ValueEstimators.VTrace)
-
-    if optimizer is None:
-        optimizer = torch.optim.Adam(loss_module.parameters())
-    else:
-        optimizer = optimizer(loss_module.parameters())
     training.info(f"Using optimizer: {optimizer}")
-
     if lr_scheduler is not None:
-        lr_scheduler = lr_scheduler(optimizer)
         training.info(f"Using learning rate scheduler: {lr_scheduler}")
 
     loss_module = loss_module.to(ppo_config.update_device)
     advantage_module = advantage_module.to(ppo_config.update_device)
 
-    def update(batch, loss_module, optimizer, ppo_config):
-        loss_vals = loss_module(batch)
-        loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
+    replay_buffer = _build_replay_buffer(
+        frames_per_batch,
+        ppo_config.update_device,
+        ppo_config.minibatch_size,
+    )
 
-        if loss_vals["kl_approx"] > 0.8:
-            training.warning(f"High KL divergence detected: {loss_vals['kl_approx'].item()}")
-            training.warning("Skipping gradient update to maintain training stability.")
-            optimizer.zero_grad()
-            return loss_vals
+    def env_workers():
+        return [
+            env_constructors[i % len(env_constructors)]
+            for i in range(ppo_config.graphs_per_collection)
+        ]
 
-        # joint_stats(batch, loss_module)
+    collector = _build_collector(env_workers, actor_critic_module.actor, ppo_config, frames_per_batch)
+    collector.set_seed(seed)
 
-        optimizer.zero_grad()
-        loss_value.backward()
-
-        torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_norm=ppo_config.max_grad_norm)
-
-        optimizer.step()
-
-        return loss_vals
+    def update(batch):
+        return _ppo_update_step(batch, loss_module, optimizer, ppo_config)
 
     if ppo_config.compile_advantage:
         advantage_module = compile_with_warmup(advantage_module, mode="reduce-overhead", warmup=8)
@@ -412,8 +609,7 @@ def run_ppo(
     if ppo_config.compile_update:
         update = compile_with_warmup(update, mode="reduce-overhead", warmup=8)
 
-    states_per_collection = min(ppo_config.states_per_collection, max_states_per_collection)
-    n_batch = max(1, states_per_collection // ppo_config.minibatch_size)
+    configured_n_batch = max(1, frames_per_batch // ppo_config.minibatch_size)
     if ppo_config.minibatch_size > states_per_collection:
         training.warning(f"Minibatch size <{ppo_config.minibatch_size}> is larger than states per collection <{states_per_collection}>. ")
 
@@ -423,14 +619,14 @@ def run_ppo(
         f"{states_per_collection} states used per collection, "
         f"{ppo_config.minibatch_size} minibatch size, "
         f"{ppo_config.epochs_per_collection} epochs per collection, "
-        f"{n_batch} batches per epoch, "
+        f"{configured_n_batch} batches per epoch (config-derived), "
         f"{ppo_config.workers} workers."
     )
 
     training.info(f"Max tasks per graph: {max_graph_size}, max candidates per task: {max_candidates}")
 
-    max_performance = 0.0
-    if should_eval(0, eval_config):
+    max_performance = load_best_performance(logging_config.best_policy_dir if logging_config else None)
+    if _should_eval_with_logging(0, eval_config):
         training.info("Running initial evaluation before training")
         metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0, eval_location=eval_location)
 
@@ -440,6 +636,10 @@ def run_ppo(
     n_updates = 0
     n_samples = 0
     n_collections = 0
+
+
+
+    #Main training loop
     for i, tensordict_data in enumerate(collector):
         n_collections += 1
         replay_buffer.empty()
@@ -459,13 +659,8 @@ def run_ppo(
         tensordict_data = tensordict_data.to(ppo_config.update_device, non_blocking=True)
 
         adv_start_t = time.perf_counter()
-        with torch.no_grad():
-            # Redistribute Rewards
-            if ppo_config.bagged_policy == "uniform":
-                redistribute_rewards_uniform(tensordict_data)
-            # Compute advantages
+        with torch.inference_mode():
             advantage_module(tensordict_data)
-
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
         training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")
@@ -474,52 +669,27 @@ def run_ppo(
         samples_in_collection = flattened_data.shape[0]
         n_samples += samples_in_collection
 
-        # print("SANITY CHECK OF SIZES IN OBSERVATION")
-        # print("observation shape", flattened_data["observation"].shape)
-        # print("action shape", flattened_data["action"].shape)
-        # print("reward shape", flattened_data["next", "reward"].shape)
-        # print("done shape", flattened_data["next", "done"].shape)
-        # print("logits shape", flattened_data["logits"].shape)
-
-        # print("keys", flattened_data.keys())
-
-        # if max_candidates > 1:
-        #    flattened_data["advantage"] = flattened_data["advantage"].expand(
-        #        -1, max_candidates
-        #    )
-        #    flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
-        #
-        #    flattened_data["value_target"] = flattened_data["value_target"].expand(
-        #        -1, max_candidates
-        #    )
-        #    flattened_data["value_target"] = flattened_data["value_target"].unsqueeze(-1)
-
-        # flattened_data["reward"] = flattened_data["next", "reward"].expand(
-        #     -1, max_candidates
-        # )
-
-        # flattened_data["reward"] = flattened_data["reward"].unsqueeze(-1)
-
-        # flattened_data["done"] = flattened_data["next", "done"].expand(
-        #     -1, max_candidates
-        # )
-        # flattened_data["done"] = flattened_data["done"].unsqueeze(-1)
-
-        # print("advantage shape", flattened_data["advantage"].shape)
-        # print("value target shape", flattened_data["value_target"].shape)
-        # print("reward shape", flattened_data["next", "reward"].shape)
-        # print("done shape", flattened_data["next", "done"].shape)
         replay_buffer.extend(flattened_data)
+
+        buffer_len = len(replay_buffer)
+        effective_batch_size = min(ppo_config.minibatch_size, buffer_len) if buffer_len > 0 else 0
+        if effective_batch_size == 0:
+            training.warning("Replay buffer is empty after collection; skipping update.")
+            continue
+
+        n_batch = max(1, buffer_len // effective_batch_size)
 
         update_start_t = time.perf_counter()
         loss_module.actor_network.train()
         loss_module.critic_network.train()
+
+        #Inner epoch / minibatch loop
         for j in range(ppo_config.epochs_per_collection):
             for k in range(n_batch):
                 n_updates += 1
-                batch = replay_buffer.sample(ppo_config.minibatch_size)
+                batch = replay_buffer.sample(effective_batch_size)
                 batch.to(ppo_config.update_device, non_blocking=True)
-                loss = update(batch, loss_module, optimizer, ppo_config)
+                loss = update(batch)
 
                 if should_log(n_updates, logging_config):
                     log_training_metrics(
@@ -533,31 +703,52 @@ def run_ppo(
                         n_samples,
                     )
 
-        collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
+        collector.update_policy_weights_()
         update_end_t = time.perf_counter()
         update_elapsed_time = update_end_t - update_start_t
+        _log_collection_timings(
+            n_updates,
+            adv_elapsed_time,
+            update_elapsed_time,
+            effective_batch_size,
+            logging_config,
+        )
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
 
         if lr_scheduler is not None:
             lr_scheduler.step()
 
-        if should_eval(n_collections, eval_config=eval_config):
+        if _should_eval_with_logging(n_collections, eval_config):
             collector.policy.eval()
             metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
-            if eval_config.pickle_path is not None:
-                if metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"] > max_performance:
-                    max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
+            det_metrics = metrics.get("eval/DETERMINISTIC", {})
+            mean_vs_eft = det_metrics.get("mean_vs_EFT")
+            if (
+                mean_vs_eft is not None
+                and logging_config is not None
+                and logging_config.best_policy_dir is not None
+            ):
+                if mean_vs_eft > max_performance:
+                    max_performance = mean_vs_eft
                     training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
                     if logging_config.best_policy_dir is not None:
+                        checkpoint_name = (
+                            f"{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_"
+                            f"perf{int(max_performance * 1e6):09d}_"
+                            f"seed{seed:03d}_"
+                            f"step{n_collections:06d}.pt"
+                        )
                         save_checkpoint(
                             n_collections,
                             policy_module=collector.policy,
                             value_module=loss_module.critic_network,
                             optimizer=optimizer,
                             lr_scheduler=lr_scheduler,
-                            filename=f"{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{max_performance:.3f}_{seed}.pt",
+                            filename=checkpoint_name,
                             checkpoint_dir=logging_config.best_policy_dir,
+                            performance_metrics={"mean_vs_EFT": max_performance},
                         )
+                        save_best_performance(logging_config.best_policy_dir, max_performance, checkpoint_name)
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at collection {n_collections}")
@@ -577,7 +768,34 @@ def run_ppo(
 
     if eval_config is not None and eval_config.eval_interval > 0:
         training.info("Running final evaluation after training")
-        run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
+        metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
+        det_metrics = metrics.get("eval/DETERMINISTIC", {})
+        mean_vs_eft = det_metrics.get("mean_vs_EFT")
+        if (
+            mean_vs_eft is not None
+            and logging_config is not None
+            and logging_config.best_policy_dir is not None
+            and mean_vs_eft > max_performance
+        ):
+            max_performance = mean_vs_eft
+            training.info(f"New max performance at final eval: {max_performance:.4f}. Saving checkpoint.")
+            checkpoint_name = (
+                f"{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_"
+                f"perf{int(max_performance * 1e6):09d}_"
+                f"seed{seed:03d}_"
+                f"step{n_collections:06d}.pt"
+            )
+            save_checkpoint(
+                n_collections,
+                policy_module=collector.policy,
+                value_module=loss_module.critic_network,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                filename=checkpoint_name,
+                checkpoint_dir=logging_config.best_policy_dir,
+                performance_metrics={"mean_vs_EFT": max_performance},
+            )
+            save_best_performance(logging_config.best_policy_dir, max_performance, checkpoint_name)
 
     save_checkpoint(n_collections, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
@@ -604,158 +822,77 @@ def run_ppo_lstm(
         wandb.define_metric("param_norm/*", step_metric="batch/n_updates")
         wandb.define_metric("eval/*", step_metric="batch/n_updates")
 
-    print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
+    training.info("Using PPO with config:\n%s", OmegaConf.to_yaml(ppo_config))
 
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
     max_candidates = max([env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs])
 
-    print(f"Max tasks in env constructors: {max_tasks}")
+    training.info("Max tasks in env constructors: %s", max_tasks)
 
     if ppo_config.rollout_steps > 0:
         max_tasks = ppo_config.rollout_steps
 
     max_states_per_collection = ppo_config.graphs_per_collection * max_tasks
+    states_per_collection = min(ppo_config.states_per_collection, max_states_per_collection)
+    frames_per_batch = max(1, states_per_collection)
 
-    if ppo_config.advantage_type == "gae":
-        training.info("Using GAE for advantage estimation")
-        advantage_module = GAE(
-            gamma=ppo_config.gamma,
-            lmbda=ppo_config.lmbda,
-            value_network=actor_critic_module.critic,
-            average_gae=False,
-            device=ppo_config.update_device,
-            deactivate_vmap=True,
-        )
-
-    elif ppo_config.advantage_type == "vtrace":
-        training.info("Using VTrace for advantage estimation")
-        advantage_module = VTrace(
-            gamma=ppo_config.gamma,
-            lmbda=ppo_config.lmbda,
-            value_network=actor_critic_module.critic,
-            actor_network=actor_critic_module.actor,
-            device=ppo_config.update_device,
-            deactivate_vmap=True,
-        )
-
-    if ppo_config.sample_slices:
-        replay_buffer = TensorDictReplayBuffer(
-            storage=LazyTensorStorage(
-                max_size=max_states_per_collection,
-                device=ppo_config.update_device,
-            ),
-            sampler=SliceSampler(
-                strict_length=True,
-                slice_len=ppo_config.slice_len,
-                traj_key=("collector", "traj_ids"),
-            ),
-            batch_size=ppo_config.minibatch_size,
-        )
-        num_slices = ppo_config.minibatch_size // ppo_config.slice_len
-    else:
-        replay_buffer = TensorDictReplayBuffer(
-            storage=LazyTensorStorage(
-                max_size=max_states_per_collection,
-                device=ppo_config.update_device,
-            ),
-            sampler=SamplerWithoutReplacement(),
-            batch_size=ppo_config.minibatch_size,
-        )
-        num_slices = ppo_config.minibatch_size
-
-    def env_workers():
-        return [env_constructors[i % len(env_constructors)] for i in range(ppo_config.workers)]
-
-    print(f"Creating collector with {ppo_config.workers} workers")
-
-    if ppo_config.collector == "multi_sync":
-        collector = MultiSyncDataCollector(
-            env_workers(),
-            actor_critic_module.actor,
-            frames_per_batch=max_states_per_collection,
-            cat_results="stack",
-            reset_at_each_iter=False if ppo_config.rollout_steps > 0 else True,
-            policy_device=ppo_config.collect_device,
-            storing_device=ppo_config.storing_device,
-            env_device="cpu",
-            use_buffers=True,
-            compile_policy=({"mode": "reduce-overhead"} if ppo_config.compile_policy else None),
-        )
-    elif ppo_config.collector == "sync":
-        collector = SyncDataCollector(
-            env_workers()[0],
-            policy=actor_critic_module.actor,
-            frames_per_batch=max_states_per_collection,
-            reset_at_each_iter=False,
-            policy_device=ppo_config.collect_device,
-            storing_device=ppo_config.storing_device,
-            env_device="cpu",
-            use_buffers=True,
-        )
-    else:
-        raise ValueError(f"Unknown collector type: {ppo_config.collector}. " "Use 'sync' or 'multi_sync'.")
-
-    collector.set_seed(seed)
-
-    loss_module = ClipPPOLoss(
-        actor_network=actor_critic_module.actor,
-        critic_network=actor_critic_module.critic,
-        clip_epsilon=ppo_config.clip_eps,
-        entropy_bonus=True,
-        entropy_coeff=ppo_config.ent_coef,
-        critic_coeff=ppo_config.val_coef,
-        loss_critic_type=ppo_config.value_norm,
-        clip_value=ppo_config.clip_vloss,
-        normalize_advantage=ppo_config.normalize_advantage,
+    advantage_module = _build_advantage_module(
+        actor_critic_module,
+        ppo_config,
+        vectorized=True,
+        include_vtrace_lmbda=True,
     )
-
-    if ppo_config.advantage_type == "gae":
-        loss_module.make_value_estimator(ValueEstimators.GAE)
-    elif ppo_config.advantage_type == "vtrace":
-        loss_module.make_value_estimator(ValueEstimators.VTrace)
-
-    if optimizer is None:
-        optimizer = torch.optim.AdamW(
-            loss_module.parameters(),
+    loss_module = _build_loss_module(actor_critic_module, ppo_config)
+    optimizer, lr_scheduler = _configure_optimizer(
+        loss_module,
+        optimizer,
+        lr_scheduler,
+        default_optimizer=lambda params: torch.optim.AdamW(
+            params,
             lr=3e-4,
             eps=1e-5,
-        )
-    else:
-        optimizer = optimizer(loss_module.parameters())
-
-    print(f"Using optimizer: {optimizer}")
+        ),
+    )
+    training.info("Using optimizer: %s", optimizer)
 
     loss_module = loss_module.to(ppo_config.update_device)
     advantage_module = advantage_module.to(ppo_config.update_device)
 
     if lr_scheduler is not None:
-        lr_scheduler = lr_scheduler(optimizer)
-        print(f"Using learning rate scheduler: {lr_scheduler}")
+        training.info("Using learning rate scheduler: %s", lr_scheduler)
+
+    if ppo_config.sample_slices:
+        replay_buffer = _build_replay_buffer(
+            frames_per_batch,
+            ppo_config.update_device,
+            ppo_config.minibatch_size,
+            sample_slices=True,
+            slice_len=ppo_config.slice_len,
+            traj_key=("collector", "traj_ids"),
+        )
+        num_slices = max(1, ppo_config.minibatch_size // ppo_config.slice_len)
+        def _reshape_batch(batch: TensorDict) -> TensorDict:
+            return batch.reshape(num_slices, -1)
+
+        preprocess_batch = _reshape_batch
+    else:
+        replay_buffer = _build_replay_buffer(
+            frames_per_batch,
+            ppo_config.update_device,
+            ppo_config.minibatch_size,
+        )
+        num_slices = ppo_config.minibatch_size
+        preprocess_batch = None
+
+    def env_workers():
+        return [env_constructors[i % len(env_constructors)] for i in range(ppo_config.workers)]
+
+    collector = _build_collector(env_workers, actor_critic_module.actor, ppo_config, frames_per_batch)
+    collector.set_seed(seed)
 
     def update(batch, i, j, k):
-
-        if ppo_config.sample_slices:
-            batch = batch.reshape(num_slices, -1)
-            # print(batch.shape)
-
-        loss_vals = loss_module(batch)
-        loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
-
-        if loss_vals["kl_approx"] > 0.8:
-            training.warning(f"High KL divergence detected: {loss_vals['kl_approx'].item()}")
-            training.warning("Skipping gradient update to maintain training stability.")
-            optimizer.zero_grad()
-            return loss_vals
-
-        optimizer.zero_grad()
-        loss_value.backward()
-
-        torch.nn.utils.clip_grad_norm_(loss_module.parameters(), max_norm=ppo_config.max_grad_norm)
-
-        optimizer.step()
-
-        return loss_vals
+        return _ppo_update_step(batch, loss_module, optimizer, ppo_config, preprocess_batch)
 
     if ppo_config.compile_advantage:
         advantage_module = compile_with_warmup(advantage_module, mode="reduce-overhead", warmup=8)
@@ -782,9 +919,37 @@ def run_ppo_lstm(
     )
 
     # Initial evaluation
-    if should_eval(0, eval_config):
+    max_performance = load_best_performance(logging_config.best_policy_dir if logging_config else None)
+    if _should_eval_with_logging(0, eval_config):
         training.info("Running initial evaluation before training")
-        run_evaluation(collector.policy, eval_envs, eval_config, 0, 0, 0, eval_location=eval_location)
+        metrics = run_evaluation(collector.policy, eval_envs, eval_config, 0, 0, 0, eval_location=eval_location)
+        det_metrics = metrics.get("eval/DETERMINISTIC", {})
+        mean_vs_eft = det_metrics.get("mean_vs_EFT")
+        if (
+            mean_vs_eft is not None
+            and logging_config is not None
+            and logging_config.best_policy_dir is not None
+            and mean_vs_eft > max_performance
+        ):
+            max_performance = mean_vs_eft
+            # Use integer-based filename for sortability (microseconds precision)
+            checkpoint_name = (
+                f"{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_"
+                f"perf{int(max_performance * 1e6):09d}_"
+                f"seed{seed:03d}_"
+                f"step{0:06d}.pt"
+            )
+            save_checkpoint(
+                0,
+                policy_module=collector.policy,
+                value_module=loss_module.critic_network,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                filename=checkpoint_name,
+                checkpoint_dir=logging_config.best_policy_dir,
+                performance_metrics={"mean_vs_EFT": max_performance},
+            )
+            save_best_performance(logging_config.best_policy_dir, max_performance, checkpoint_name)
 
     start_t = time.perf_counter()
 
@@ -852,16 +1017,51 @@ def run_ppo_lstm(
                         n_samples,
                     )
 
-        collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
+        collector.update_policy_weights_()
         update_end_t = time.perf_counter()
         update_elapsed_time = update_end_t - update_start_t
+        _log_collection_timings(
+            n_updates,
+            adv_elapsed_time,
+            update_elapsed_time,
+            ppo_config.minibatch_size,
+            logging_config,
+        )
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
 
         if lr_scheduler is not None:
             lr_scheduler.step()
 
-        if should_eval(n_collections, eval_config=eval_config):
-            run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
+        if _should_eval_with_logging(n_collections, eval_config):
+            metrics = run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
+            det_metrics = metrics.get("eval/DETERMINISTIC", {})
+            mean_vs_eft = det_metrics.get("mean_vs_EFT")
+            if (
+                mean_vs_eft is not None
+                and logging_config is not None
+                and logging_config.best_policy_dir is not None
+            ):
+                if mean_vs_eft > max_performance:
+                    max_performance = mean_vs_eft
+                    training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
+                    # Use integer-based filename for sortability (microseconds precision)
+                    checkpoint_name = (
+                        f"{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_"
+                        f"perf{int(max_performance * 1e6):09d}_"
+                        f"seed{seed:03d}_"
+                        f"step{n_collections:06d}.pt"
+                    )
+                    save_checkpoint(
+                        n_collections,
+                        policy_module=collector.policy,
+                        value_module=loss_module.critic_network,
+                        optimizer=optimizer,
+                        lr_scheduler=lr_scheduler,
+                        filename=checkpoint_name,
+                        checkpoint_dir=logging_config.best_policy_dir,
+                        performance_metrics={"mean_vs_EFT": max_performance},
+                    )
+                    save_best_performance(logging_config.best_policy_dir, max_performance, checkpoint_name)
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at update: {n_updates}")

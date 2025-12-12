@@ -1,0 +1,4 @@
+# @package graph.workload
+_target_: task4feedback.graphs.base.LoadedWorkload
+workload_args:
+  bundle_path: /Users/wlruys/workspace/scheduling/task4feedback/out/workload_eval_test_20250820-152203

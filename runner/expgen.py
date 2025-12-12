@@ -7,12 +7,11 @@ import hashlib
 import itertools
 import json
 import os
-import shutil
 import subprocess
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
 
@@ -50,28 +49,6 @@ def serialize_value_for_hydra(v: Any) -> str:
 def sh_single_quote(s: str) -> str:
     """Shell-safe single-quoting: ' -> '"'"' """
     return "'" + s.replace("'", "'\"'\"'") + "'"
-
-
-def read_existing_hashes(manifest_jsonl: Path) -> set[str]:
-    ids: set[str] = set()
-    if manifest_jsonl.exists():
-        with manifest_jsonl.open() as f:
-            for line in f:
-                try:
-                    rec = json.loads(line)
-                    ids.add(rec["id"])
-                except Exception:
-                    continue
-    return ids
-
-
-def next_batch_start_index(batch_dir: Path) -> int:
-    """Continue numbering if batch_###.txt already exist."""
-    if not batch_dir.exists():
-        return 0
-    existing = sorted(p for p in batch_dir.glob("batch_*.txt") if p.is_file())
-    return len(existing)
-
 
 # =========================
 # Validation
@@ -363,11 +340,11 @@ def to_hydra_cli(cfg: Config, base_cmd: str) -> str:
 # =========================
 
 class ExperimentBuilder:
-    def __init__(self, cli_base: str, packs: Sequence[Pack], strict: bool = True):
+    def __init__(self, cli_base: str, packs: Sequence[Pack]):
         self.cli_base = str(cli_base)
-        self._strict = bool(strict)
         self._packs = self._merge_same_name_packs(packs)
-        self._space = ConfigSpace(self._packs, strict=self._strict)
+        # Minimal default: allow equal-value overlaps, error on mismatches.
+        self._space = ConfigSpace(self._packs, strict=False)
 
     @staticmethod
     def _merge_same_name_packs(packs: Sequence[Pack]) -> List[Pack]:
@@ -380,88 +357,57 @@ class ExperimentBuilder:
         return list(by_name.values())
 
     @classmethod
-    def from_yaml(cls, path: str | Path, strict: bool = True) -> "ExperimentBuilder":
+    def from_yaml(cls, path: str | Path) -> "ExperimentBuilder":
         try:
             data = yaml.safe_load(Path(path).read_text())
         except Exception as e:
             raise ConfigError(f"Failed to parse YAML '{path}': {e}") from e
         validate_yaml_structure(data)
         packs = [Pack.from_dict(p["name"], p["options"]) for p in data["packs"]]
-        return cls(cli_base=data["cli_base"], packs=packs, strict=strict)
+        return cls(cli_base=data["cli_base"], packs=packs)
 
     def build(
         self,
         outdir: str | Path,
         batch_size: int,
-        *,
-        only_hashes: Optional[Iterable[str]] = None,
-        tags: Optional[Iterable[str]] = None,
-        skip_existing: bool = False,
-        write_csv: bool = True,
     ) -> List[Path]:
-        """Generate batch files and manifest. Return list of batch file paths."""
+        """Generate batch files and manifests for the full experiment."""
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0")
 
         outdir = Path(outdir)
         batch_dir = outdir / "batches"
-        batch_dir.mkdir(parents=True, exist_ok=True)
         manifest_jsonl = outdir / "manifest.jsonl"
         manifest_csv = outdir / "manifest.csv"
 
-        allow_ids: Optional[set[str]] = set(only_hashes) if only_hashes else None
-        require_tags: Optional[set[str]] = set(tags) if tags else None
-        existing_ids: set[str] = read_existing_hashes(manifest_jsonl) if skip_existing else set()
+        # No resume/append. Require a clean output directory.
+        if batch_dir.exists() and any(batch_dir.glob("batch_*.txt")):
+            raise ConfigError(f"{batch_dir} already contains batches. Remove OUT to rebuild.")
+        if manifest_jsonl.exists() or manifest_csv.exists():
+            raise ConfigError(f"{outdir} already contains a manifest. Remove OUT to rebuild.")
 
-        batch_index = next_batch_start_index(batch_dir)
-        mj_mode = "a" if manifest_jsonl.exists() else "w"
-        wrote_any = False
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        batch_index = 0
         written_batches: List[Path] = []
 
-        with manifest_jsonl.open(mj_mode) as mj:
-            csv_writer = None
-            mc_file = None
-            try:
-                if write_csv:
-                    mc_mode = "a" if manifest_csv.exists() else "w"
-                    mc_file = manifest_csv.open(mc_mode, newline="")
-                    csv_writer = csv.DictWriter(mc_file, fieldnames=["id", "wandb_name", "tags", "params"])
-                    if mc_mode == "w":
-                        csv_writer.writeheader()
+        with manifest_jsonl.open("w") as mj, manifest_csv.open("w", newline="") as mc_file:
+            csv_writer = csv.DictWriter(mc_file, fieldnames=["id", "wandb_name", "tags", "params"])
+            csv_writer.writeheader()
 
-                selected_batch: List[Config] = []
-                for cfg in self._space.iter_configs():
-                    if allow_ids and cfg.id not in allow_ids:
-                        continue
-                    if require_tags and not require_tags.issubset(set(cfg.tags)):
-                        continue
-                    if skip_existing and cfg.id in existing_ids:
-                        continue
-                    selected_batch.append(cfg)
-                    if len(selected_batch) == batch_size:
-                        path = self._flush_batch(selected_batch, batch_dir, batch_index, mj, csv_writer)
-                        written_batches.append(path)
-                        wrote_any = True
-                        batch_index += 1
-                        selected_batch = []
-                if selected_batch:
+            selected_batch: List[Config] = []
+            for cfg in self._space.iter_configs():
+                selected_batch.append(cfg)
+                if len(selected_batch) == batch_size:
                     path = self._flush_batch(selected_batch, batch_dir, batch_index, mj, csv_writer)
                     written_batches.append(path)
-                    wrote_any = True
-            finally:
-                if mc_file is not None:
-                    mc_file.close()
+                    batch_index += 1
+                    selected_batch = []
+            if selected_batch:
+                path = self._flush_batch(selected_batch, batch_dir, batch_index, mj, csv_writer)
+                written_batches.append(path)
 
-        if not wrote_any:
-            msg = "No matching configurations to write."
-            if only_hashes: msg += " (filtered by hashes)"
-            if tags: msg += " (filtered by tags)"
-            if skip_existing: msg += " (skipped existing IDs from manifest)"
-            print(msg)
-        else:
-            print(f"Manifest written to: {manifest_jsonl}")
-            if write_csv:
-                print(f"Manifest written to: {manifest_csv}")
+        print(f"Manifest written to: {manifest_jsonl}")
+        print(f"Manifest written to: {manifest_csv}")
         return written_batches
 
     def _flush_batch(
@@ -483,15 +429,6 @@ class ExperimentBuilder:
         print(f"Wrote {path} with {len(batch)} commands")
         return path
 
-    def rerun(self, outdir: str | Path, batch_size: int, *, hashes=None, tags=None, write_csv: bool = True) -> List[Path]:
-        return self.build(outdir, batch_size, only_hashes=hashes, tags=tags, write_csv=write_csv)
-
-    def extend(self, outdir: str | Path, batch_size: int, *, new_packs: Sequence[Pack], write_csv: bool = True) -> List[Path]:
-        merged = self._merge_same_name_packs(self._packs + list(new_packs))
-        extended = ExperimentBuilder(self.cli_base, merged, strict=self._strict)
-        return extended.build(outdir=outdir, batch_size=batch_size, skip_existing=True, write_csv=write_csv)
-
-
 # =========================
 # SLURM integration
 # =========================
@@ -501,8 +438,6 @@ def write_slurm_script(
     batch_files: List[Path],
     *,
     time: str = "01:00:00",
-    nodes: int = 1,
-    ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
     partition: Optional[str] = None,
     gres: Optional[str] = None,
@@ -516,19 +451,18 @@ def write_slurm_script(
     if not batch_files:
         raise ValueError("No batch files provided for SLURM job-array.")
 
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
     arr_max = len(batch_files) - 1
     files_array = " ".join(sh_single_quote(str(p)) for p in batch_files)
-    log_dir = output_dir / job_name
-    log_dir.mkdir(parents=True, exist_ok=True)
+    launcher_abs = Path(launcher).expanduser().resolve()
 
     lines = [
         "#!/bin/bash",
         f"#SBATCH --job-name={job_name}",
         f"#SBATCH --array=0-{arr_max}",
-        f"#SBATCH --nodes={nodes}",
-        f"#SBATCH --ntasks-per-node={ntasks_per_node}",
+        f"#SBATCH --nodes=1",
+        f"#SBATCH --ntasks-per-node=1",
         f"#SBATCH --cpus-per-task={cpus_per_task}",
         f"#SBATCH --time={time}",
         f"#SBATCH --output={output_dir}/{job_name}_%A_%a.out",
@@ -542,25 +476,13 @@ def write_slurm_script(
     body = f"""
 set -euo pipefail
 
-########## micromamba bootstrap ##########
-# Honors MICROMAMBA_EXE or MAMBA_EXE if you’ve set them; falls back to `micromamba` on PATH.
-MICROMAMBA="/scratch/06081/wlruys/micromamba/micromamba"
-if command -v "$MICROMAMBA" >/dev/null 2>&1; then
-  # Initialize the shell integration for bash in a non-interactive context
-  eval "$("$MICROMAMBA" shell hook -s bash --root-prefix /scratch/06081/wlruys/micromamba_prefix)"
-  # Activate your env; change "py313" to your actual env name if different
-  micromamba activate pyt4f
-else
-  echo "[WARN] micromamba not found (MICROMAMBA_EXE/MAMBA_EXE not set and 'micromamba' not on PATH)." >&2
-fi
-##########################################
+# Activate your environment here if needed (module load / conda activate / etc.)
 
 SLURM_JOB_ID="${{SLURM_JOB_ID:-nojid}}"
 SLURM_ARRAY_TASK_ID="${{SLURM_ARRAY_TASK_ID:-0}}"
 
 files=({files_array})
 
-# Bounds check for the array index
 idx="$SLURM_ARRAY_TASK_ID"
 if (( idx < 0 || idx >= ${{#files[@]}} )); then
   echo "[ERROR] SLURM_ARRAY_TASK_ID=$idx is out of range [0, $((${{#files[@]}}-1))]." >&2
@@ -575,13 +497,11 @@ fi
 
 echo "[INFO] Job $SLURM_JOB_ID ArrayTask $SLURM_ARRAY_TASK_ID -> file: $cmdfile"
 
-# Use **double quotes** so SLURM variables expand, and namespace logs per job
-export TMUX_LOG_DIR="slurm_logs/mylocal/${{SLURM_JOB_ID}}"
-export TMUX_PREFIX="mylocal_${{SLURM_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}"
+export TMUX_LOG_DIR="{output_dir}/{job_name}/tmux/${{SLURM_JOB_ID}}/${{SLURM_ARRAY_TASK_ID}}"
+export TMUX_PREFIX="{job_name}_${{SLURM_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}"
 mkdir -p "$TMUX_LOG_DIR"
 
-# Absolute path to the launcher; call via bash and quote properly
-LAUNCHER="/scratch/06081/wlruys/task4feedback/runner/run_tmux_launcher.sh"
+LAUNCHER="{launcher_abs}"
 if [[ ! -f "$LAUNCHER" ]]; then
   echo "[ERROR] Launcher not found at: $LAUNCHER" >&2
   exit 4
@@ -594,12 +514,9 @@ bash "$LAUNCHER" "$cmdfile" {k_per_session} "$TMUX_PREFIX" "$TMUX_LOG_DIR"
     return script_path
 
 
-def submit_sbatch(slurm_script: Path, dry_run: bool = False) -> None:
+def submit_sbatch(slurm_script: Path) -> None:
     print(f"[INFO] SLURM script at: {slurm_script}")
-    if dry_run:
-        print("[DRY-RUN] sbatch", slurm_script)
-    else:
-        subprocess.run(["sbatch", str(slurm_script)], check=True)
+    subprocess.run(["sbatch", str(slurm_script)], check=True)
 
 
 # =========================
@@ -615,50 +532,97 @@ def _ensure_executable(path: Path) -> List[str]:
     return ["bash", str(p)]
 
 
+def _list_batch_files(outdir: str | Path) -> List[Path]:
+    batch_dir = Path(outdir) / "batches"
+    batch_files = sorted(batch_dir.glob("batch_*.txt"))
+    if not batch_files:
+        raise ConfigError(f"No existing batches found in {batch_dir}. Run 'build' first.")
+    return [Path(p) for p in batch_files]
+
+
+def _write_experiment_copy(yaml_path: str | Path, outdir: str | Path) -> None:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "experiment.yaml").write_text(Path(yaml_path).read_text())
+
+
+def _launch_local_batches(
+    batch_files: List[Path],
+    *,
+    outdir: str | Path,
+    launcher: str | Path,
+    k_per_session: int,
+    job_name: str,
+    log_dir: Optional[str],
+    cores: Optional[str],
+) -> None:
+    env = os.environ.copy()
+    if cores:
+        env["CORES"] = cores
+    log_path = Path(log_dir) if log_dir else Path(outdir) / "tmux_logs"
+    log_path.mkdir(parents=True, exist_ok=True)
+    env["TMUX_LOG_DIR"] = str(log_path)
+
+    base_prefix = job_name
+    launcher_argv = _ensure_executable(Path(launcher))
+
+    for i, bfile in enumerate(batch_files):
+        prefix = f"{base_prefix}_b{i:03d}"
+        env["TMUX_PREFIX"] = prefix
+
+        argv = launcher_argv + [str(bfile), str(k_per_session), prefix, env["TMUX_LOG_DIR"]]
+
+        print(f"[LOCAL] Launching batch {i} -> {bfile}")
+        print(f"        K/core-session={k_per_session}, prefix={prefix}, log_dir={env['TMUX_LOG_DIR']}")
+        if cores:
+            print(f"        CORES={cores}")
+        subprocess.run(argv, check=True, env=env)
+
+
+def _submit_slurm_batches(
+    batch_files: List[Path],
+    *,
+    outdir: str | Path,
+    job_name: str,
+    time: str,
+    cpus_per_task: int,
+    partition: Optional[str],
+    gres: Optional[str],
+    account: Optional[str],
+    qos: Optional[str],
+    slurm_logs: Optional[str],
+    launcher: str | Path,
+    k_per_session: int,
+) -> None:
+    slurm_logs_path = Path(slurm_logs) if slurm_logs else Path(outdir) / "slurm_logs"
+    slurm_script = write_slurm_script(
+        job_name=job_name,
+        batch_files=batch_files,
+        time=time,
+        cpus_per_task=cpus_per_task,
+        partition=partition,
+        gres=gres,
+        account=account,
+        qos=qos,
+        output_dir=slurm_logs_path,
+        launcher=Path(launcher),
+        k_per_session=k_per_session,
+    )
+    submit_sbatch(slurm_script)
+
+
 # =========================
 # CLI commands
 # =========================
 
-def _read_hashes_arg(hashes: Optional[List[str]], hashes_file: Optional[str]) -> Optional[List[str]]:
-    acc: List[str] = []
-    if hashes:
-        acc.extend(hashes)
-    if hashes_file:
-        for line in Path(hashes_file).read_text().splitlines():
-            s = line.strip()
-            if s:
-                acc.append(s)
-    return acc or None
-
 
 def cli_build(args: argparse.Namespace) -> None:
-    eb = ExperimentBuilder.from_yaml(args.yaml, strict=not args.nonstrict)
+    eb = ExperimentBuilder.from_yaml(args.yaml)
+    _write_experiment_copy(args.yaml, args.out)
     eb.build(
         outdir=args.out,
         batch_size=args.batch_size,
-        skip_existing=args.skip_existing,
-        write_csv=not args.no_csv,
     )
-
-
-def cli_rerun(args: argparse.Namespace) -> None:
-    eb = ExperimentBuilder.from_yaml(args.yaml, strict=not args.nonstrict)
-    hashes = _read_hashes_arg(args.hashes, args.hashes_file)
-    eb.rerun(
-        outdir=args.out,
-        batch_size=args.batch_size,
-        hashes=hashes,
-        tags=args.tags,
-        write_csv=not args.no_csv,
-    )
-
-
-def cli_extend(args: argparse.Namespace) -> None:
-    base = ExperimentBuilder.from_yaml(args.yaml, strict=not args.nonstrict)
-    data = yaml.safe_load(Path(args.new).read_text())
-    validate_yaml_structure(data)
-    new_packs = [Pack.from_dict(p["name"], p["options"]) for p in data["packs"]]
-    base.extend(outdir=args.out, batch_size=args.batch_size, new_packs=new_packs, write_csv=not args.no_csv)
 
 
 def cli_local(args: argparse.Namespace) -> None:
@@ -666,42 +630,16 @@ def cli_local(args: argparse.Namespace) -> None:
     Launch existing batches locally via the tmux launcher.
     This command will NOT build batches; it requires OUT/batches to already exist.
     """
-    batch_dir = Path(args.out) / "batches"
-    batch_files = sorted(batch_dir.glob("batch_*.txt"))
-    if not batch_files:
-        raise ConfigError(f"No existing batches found in {batch_dir}. Run 'build' first.")
-
-    if args.batch_index is not None:
-        try:
-            batch_files = [batch_files[args.batch_index]]
-        except IndexError:
-            raise ConfigError(f"--batch-index {args.batch_index} out of range (0..{len(batch_files)-1})")
-
-    env = os.environ.copy()
-    if args.cores:
-        env["CORES"] = args.cores
-    if args.log_dir:
-        env["TMUX_LOG_DIR"] = args.log_dir
-
-    base_prefix = args.prefix or args.job_name
-    launcher_argv = _ensure_executable(Path(args.launcher))
-
-    for i, bfile in enumerate(batch_files):
-        prefix = f"{base_prefix}_b{i:03d}"
-        env["TMUX_PREFIX"] = prefix
-
-        argv = launcher_argv + [str(bfile), str(args.k_per_session), prefix, env.get("TMUX_LOG_DIR", "logs/tmux_sessions")]
-
-        print(f"[LOCAL] Launching batch {i} -> {bfile}")
-        print(f"        K/core-session={args.k_per_session}, prefix={prefix}, log_dir={env.get('TMUX_LOG_DIR','logs/tmux_sessions')}")
-        if args.cores:
-            print(f"        CORES={args.cores}")
-
-        if args.dry_run:
-            print("        (dry-run) would exec:", " ".join(argv))
-            continue
-
-        subprocess.run(argv, check=True, env=env)
+    batch_files = _list_batch_files(args.out)
+    _launch_local_batches(
+        batch_files,
+        outdir=args.out,
+        launcher=args.launcher,
+        k_per_session=args.k_per_session,
+        job_name=args.job_name,
+        log_dir=args.log_dir,
+        cores=args.cores,
+    )
 
     print("[LOCAL] Done.")
 
@@ -711,48 +649,58 @@ def cli_slurm(args: argparse.Namespace) -> None:
     Build a SLURM array script that references existing batch files (OUT/batches).
     This command will NOT build batches; it requires OUT/batches to already exist.
     """
-    batch_dir = Path(args.out) / "batches"
-    batch_files = sorted(batch_dir.glob("batch_*.txt"))
-    if not batch_files:
-        raise ConfigError(f"No existing batches found in {batch_dir}. Run 'build' first.")
-
-    batch_files = [Path(p) for p in batch_files]
-
-    slurm_script = write_slurm_script(
+    batch_files = _list_batch_files(args.out)
+    _submit_slurm_batches(
+        batch_files,
+        outdir=args.out,
         job_name=args.job_name,
-        batch_files=batch_files,
         time=args.time,
-        nodes=args.nodes,
-        ntasks_per_node=args.ntasks_per_node,
         cpus_per_task=args.cpus_per_task,
         partition=args.partition,
         gres=args.gres,
         account=args.account,
         qos=args.qos,
-        output_dir=Path(args.slurm_logs),
-        launcher=Path(args.launcher),
+        slurm_logs=args.slurm_logs,
+        launcher=args.launcher,
         k_per_session=args.k_per_session,
     )
-    submit_sbatch(slurm_script, dry_run=args.dry_run)
 
 
-def cli_clean(args: argparse.Namespace) -> None:
-    """
-    Remove batches/ and manifest files under OUT.
-    Minimal, deliberate deletion: only OUT/batches, OUT/manifest.jsonl, OUT/manifest.csv.
-    """
-    outdir = Path(args.out)
-    batch_dir = outdir / "batches"
-    manifest_jsonl = outdir / "manifest.jsonl"
-    manifest_csv = outdir / "manifest.csv"
+def cli_run(args: argparse.Namespace) -> None:
+    """One-step build + launch."""
+    eb = ExperimentBuilder.from_yaml(args.yaml)
+    _write_experiment_copy(args.yaml, args.out)
+    eb.build(outdir=args.out, batch_size=args.batch_size)
+    batch_files = _list_batch_files(args.out)
 
-    if batch_dir.exists():
-        shutil.rmtree(batch_dir)
-        print(f"[CLEAN] Removed {batch_dir}")
-    for f in [manifest_jsonl, manifest_csv]:
-        if f.exists():
-            f.unlink()
-            print(f"[CLEAN] Removed {f}")
+    if args.mode == "local":
+        _launch_local_batches(
+            batch_files,
+            outdir=args.out,
+            launcher=args.launcher,
+            k_per_session=args.k_per_session,
+            job_name=args.job_name,
+            log_dir=args.log_dir,
+            cores=args.cores,
+        )
+        print("[RUN] Local launch complete.")
+        return
+
+    _submit_slurm_batches(
+        batch_files,
+        outdir=args.out,
+        job_name=args.job_name,
+        time=args.time,
+        cpus_per_task=args.cpus_per_task,
+        partition=args.partition,
+        gres=args.gres,
+        account=args.account,
+        qos=args.qos,
+        slurm_logs=args.slurm_logs,
+        launcher=args.launcher,
+        k_per_session=args.k_per_session,
+    )
+    print("[RUN] Slurm submission complete.")
 
 
 # =========================
@@ -763,73 +711,55 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="expgen", description="Experiment batch generator + local/SLURM launch.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--yaml", required=True, help="Experiment YAML (cli_base + packs).")
-    common.add_argument("--out", required=True, help="Output directory.")
-    common.add_argument("--batch-size", type=int, required=True, help="Commands per batch file.")
-    common.add_argument("--no-csv", action="store_true", help="Do not write manifest.csv (only JSONL).")
-    common.add_argument("--nonstrict", action="store_true", help="Allow equal-value overlaps (fail on unequal).", default=True)
+    build_common = argparse.ArgumentParser(add_help=False)
+    build_common.add_argument("--yaml", required=True, help="Experiment YAML (cli_base + packs).")
+    build_common.add_argument("--out", required=True, help="Output directory.")
+    build_common.add_argument("--batch-size", type=int, required=True, help="Commands per batch file.")
 
-    # build
-    pb = sub.add_parser("build", parents=[common], help="Generate batches + manifest.")
-    pb.add_argument("--skip-existing", action="store_true", help="Skip configs already in manifest.jsonl.")
+    pb = sub.add_parser("build", parents=[build_common], help="Generate batches + manifests for full experiment.")
     pb.set_defaults(func=cli_build)
 
-    # rerun
-    pr = sub.add_parser("rerun", parents=[common], help="Generate rerun batches (by hashes/tags).")
-    pr.add_argument("--hashes", nargs="*", help="Only include configs with these hashes.")
-    pr.add_argument("--hashes-file", help="File with hashes, one per line.")
-    pr.add_argument("--tags", nargs="*", help="Require configs to include all these tags.")
-    pr.set_defaults(func=cli_rerun)
-
-    # extend
-    pe = sub.add_parser("extend", parents=[common], help="Extend sweep with new packs/options (merge by name).")
-    pe.add_argument("--new", required=True, help="YAML containing additional packs/options.")
-    pe.set_defaults(func=cli_extend)
+    # run (build + launch)
+    prun = sub.add_parser("run", parents=[build_common], help="Build full experiment and launch locally or on SLURM.")
+    prun.add_argument("--mode", choices=["local", "slurm"], required=True, help="Where to run after build.")
+    prun.add_argument("--launcher", default="run_tmux_launcher.sh", help="Path to tmux launcher script.")
+    prun.add_argument("--k-per-session", type=int, default=1, help="CPU cores per tmux session.")
+    prun.add_argument("--job-name", required=True, help="Name stem for tmux sessions / SLURM job.")
+    prun.add_argument("--log-dir", default=None, help="Local tmux logs dir (default: OUT/tmux_logs).")
+    prun.add_argument("--cores", default=None, help='Local CPU set, e.g. "0-31,48-63".')
+    prun.add_argument("--time", default="02:00:00", help="SLURM time, e.g., 02:00:00.")
+    prun.add_argument("--cpus-per-task", type=int, default=16)
+    prun.add_argument("--partition", help="SLURM partition")
+    prun.add_argument("--gres", help="SLURM GRES, e.g., gpu:1")
+    prun.add_argument("--account", help="SLURM account")
+    prun.add_argument("--qos", help="SLURM QoS")
+    prun.add_argument("--slurm-logs", default=None, help="SLURM logs dir (default: OUT/slurm_logs).")
+    prun.set_defaults(func=cli_run)
 
     # slurm
-    ps = sub.add_parser("slurm", parents=[common], help="Create SLURM array script from existing batches (no build).")
-    ps.add_argument("--use-existing-batches", action="store_true", help=argparse.SUPPRESS)  # kept for backward-compat; ignored
-    ps.add_argument("--skip-existing", action="store_true", help=argparse.SUPPRESS)
-    ps.add_argument("--hashes", nargs="*", help=argparse.SUPPRESS)
-    ps.add_argument("--hashes-file", help=argparse.SUPPRESS)
-    ps.add_argument("--tags", nargs="*", help=argparse.SUPPRESS)
+    ps = sub.add_parser("slurm", help="Create and submit SLURM array from existing batches (no build).")
+    ps.add_argument("--out", required=True, help="Output directory containing batches/.")
     ps.add_argument("--job-name", required=True, help="SLURM job name prefix.")
     ps.add_argument("--time", default="02:00:00", help="SLURM time, e.g., 02:00:00.")
-    ps.add_argument("--nodes", type=int, default=1)
-    ps.add_argument("--ntasks-per-node", type=int, default=1)
     ps.add_argument("--cpus-per-task", type=int, default=16)
-    ps.add_argument("--partition", help="SLURM partition", default="skx")
+    ps.add_argument("--partition", help="SLURM partition")
     ps.add_argument("--gres", help="SLURM GRES, e.g., gpu:1")
-    ps.add_argument("--account", help="SLURM account", default="PHY21005")
+    ps.add_argument("--account", help="SLURM account")
     ps.add_argument("--qos", help="SLURM QoS")
-    ps.add_argument("--slurm-logs", default="slurm_logs", help="Directory for SLURM stdout/err and script.")
+    ps.add_argument("--slurm-logs", default=None, help="Directory for SLURM stdout/err and script (default: OUT/slurm_logs).")
     ps.add_argument("--launcher", default="run_tmux_launcher.sh", help="Path to tmux launcher script.")
     ps.add_argument("--k-per-session", type=int, default=1, help="CPU cores per tmux session on the node.")
-    ps.add_argument("--dry-run", action="store_true", help="Show sbatch command but do not submit.")
     ps.set_defaults(func=cli_slurm)
 
     # local
-    pl = sub.add_parser("local", parents=[common], help="Launch existing batches locally via tmux (no SLURM).")
-    pl.add_argument("--use-existing-batches", action="store_true", help=argparse.SUPPRESS)  # kept for backward-compat; ignored
-    pl.add_argument("--skip-existing", action="store_true", help=argparse.SUPPRESS)
-    pl.add_argument("--hashes", nargs="*", help=argparse.SUPPRESS)
-    pl.add_argument("--hashes-file", help=argparse.SUPPRESS)
-    pl.add_argument("--tags", nargs="*", help=argparse.SUPPRESS)
+    pl = sub.add_parser("local", help="Launch existing batches locally via tmux (no SLURM).")
+    pl.add_argument("--out", required=True, help="Output directory containing batches/.")
     pl.add_argument("--launcher", default="run_tmux_launcher.sh", help="Path to tmux launcher script.")
     pl.add_argument("--k-per-session", type=int, default=1, help="CPU cores per tmux session.")
-    pl.add_argument("--prefix", default=None, help="TMUX session prefix (default: job-name).")
-    pl.add_argument("--job-name", default="localrun", help="Name stem for default prefix.")
-    pl.add_argument("--log-dir", default="logs/tmux_sessions", help="Directory for per-session logs.")
+    pl.add_argument("--job-name", default="localrun", help="Name stem for tmux session prefixes.")
+    pl.add_argument("--log-dir", default=None, help="Directory for per-session logs (default: OUT/tmux_logs).")
     pl.add_argument("--cores", default=None, help='CPU set for the node, e.g. "0-31,48-63".')
-    pl.add_argument("--batch-index", type=int, default=None, help="Only launch a single batch by index (0-based).")
-    pl.add_argument("--dry-run", action="store_true", help="Print launcher command(s) but do not execute.")
     pl.set_defaults(func=cli_local)
-
-    # clean
-    pc = sub.add_parser("clean", help="Remove all batches and manifest files in OUT directory.")
-    pc.add_argument("--out", required=True, help="Output directory to clean.")
-    pc.set_defaults(func=cli_clean)
 
     return p
 

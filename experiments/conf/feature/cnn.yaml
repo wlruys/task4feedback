@@ -1,0 +1,8 @@
+# @package feature
+defaults:
+  - normalization/task_normalization
+  - observer: cnn_observer
+  - sets/cnn/read_full
+  - _self_
+
+add_device_load: true

@@ -20,16 +20,16 @@ from omegaconf import DictConfig, OmegaConf
 from task4feedback.interface.wrappers import *  # noqa: F401,F403
 from task4feedback.graphs.jacobi import JacobiGraph, LevelPartitionMapper, JacobiRoundRobinMapper, JacobiQuadrantMapper, BlockCyclicMapper, GraphMETISMapper
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
-from task4feedback.fastsim2 import ParMETIS_wrapper
+from task4feedback.trip import ParMETIS_wrapper
 from task4feedback.graphs.mesh.partition import *
 from task4feedback.graphs.base import weighted_cell_partition
 from task4feedback.graphs.mesh.plot import animate_mesh_graph
 from task4feedback.ml.models import FeatureDimConfig
-from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
+from task4feedback.exp_utils.model import create_td_actor_critic_models, load_policy_from_checkpoint
 
-from helper.graph import make_graph_builder, GraphBuilder
-from helper.env import make_env, create_system
-from helper.parmetis import run_parmetis
+from task4feedback.exp_utils.graph import make_graph_builder, GraphBuilder
+from task4feedback.exp_utils.env import make_env, create_system
+from task4feedback.exp_utils.parmetis import run_parmetis
 import math
 
 font_scale = 1.75
@@ -173,13 +173,13 @@ def run_inf_mem_sim(sim: "SimulatorDriver") -> "SimulatorDriver":
     candidates = torch.zeros((sim.observer.graph_spec.max_candidates), dtype=torch.int64)
 
     state = inf_sim.run_until_external_mapping()
-    while state != fastsim.ExecutionState.COMPLETE:
+    while state != trip.ExecutionState.COMPLETE:
         inf_sim.get_mappable_candidates(candidates)
         actions = []
         for i, id in enumerate(candidates):
             task_id = id.item()
             mapping_priority = inf_sim.get_mapping_priority(task_id)
-            actions.append(fastsim.Action(i, task_runtime.get_compute_task_mapped_device(task_id), mapping_priority, mapping_priority))
+            actions.append(trip.Action(i, task_runtime.get_compute_task_mapped_device(task_id), mapping_priority, mapping_priority))
         inf_sim.simulator.map_tasks(actions)
         state = inf_sim.run_until_external_mapping()
     return inf_sim

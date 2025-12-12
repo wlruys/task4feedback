@@ -1,0 +1,19 @@
+# @package feature.observer
+_target_: task4feedback.observers.gnn.GNNObserverFactory
+
+spec:
+  _target_: task4feedback.interface.create_graph_spec
+  max_tasks: 64
+  max_data: 16
+  max_devices: 5
+  max_edges_tasks_tasks: 256
+  max_edges_tasks_data: 256
+  max_edges_data_devices: 128
+  max_edges_tasks_devices: 64
+  max_candidates: 64
+
+# GNN-specific parameters
+add_degree: false
+
+# Features will be provided by feature set configs
+features: ???

@@ -1,0 +1,9 @@
+# @package feature.observer.features
+
+
+task:
+  - name: PrevReadSizeFeature
+    args: ["$width", "$length", true, "$prev_frames"]
+  - TaskDataMappedSizeFeature
+  - name: PrevMappedDeviceFeature
+    args: ["$width", "$length", false, 1]
