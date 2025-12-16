@@ -1,0 +1,8 @@
+# Example sweep configuration
+# Keys starting with + are Hydra groups (ingredients)
+# Values can be lists (sweeps) or scalars (fixed)
+
++size: [b4, b8]
++entropy: [e0.001]
++architecture: [MLP-E-Degree, MLP-A-Degree]
+algorithm.num_collections: 100

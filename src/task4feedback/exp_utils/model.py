@@ -1,6 +1,7 @@
 from .definitions import *
 from task4feedback.ml.models import *
-from task4feedback.ml import ActorCriticModule
+from task4feedback.ml.models.distributions import MultiHeadCategorical, MultiHeadCategoricalMasked
+from task4feedback.ml import UnifiedRLModule
 from typing import Callable
 import hydra
 import torch
@@ -18,7 +19,6 @@ from torchrl.modules import ProbabilisticActor, ValueOperator, LSTMModule, GRUMo
 from pathlib import Path
 from .logging_helpers import get_helper_logger
 from tensordict.utils import expand_as_right, NestedKey
-from torch.distributions import Categorical, Independent, constraints  
 
 logger = get_helper_logger(__name__)
 
@@ -37,92 +37,7 @@ def _timing_options(cfg: DictConfig) -> dict:
         "subtract_conversion": OmegaConf.select(cfg, "timing.subtract_conversion", default=True),
     }
 
-
-def MultiHeadCategorical(**kwargs):
-    base = torch.distributions.Categorical(**kwargs)
-    return torch.distributions.Independent(base, 1)
-
-
-class MultiHeadCategoricalMasked(Independent):
-    """
-    Multi-head categorical with dynamic head masking.
-    """
-
-    arg_constraints = {"probs": constraints.simplex, "logits": constraints.real_vector}
-    has_rsample = False
-
-    def __init__(
-        self,
-        logits: Tensor | None = None,
-        probs: Tensor | None = None,
-        head_mask: Tensor | None = None,
-        inactive_action: int = 0,
-        validate_args: bool | None = None,
-    ) -> None:
-        base = Categorical(logits=logits, probs=probs, validate_args=validate_args)
-        super().__init__(base, reinterpreted_batch_ndims=1, validate_args=validate_args)
-        
-        self._inactive = inactive_action
-        self._logits = base.logits
-        self._device = self._logits.device
-        self._batch_shape = base.batch_shape
-        
-        # Coerce mask once
-        if head_mask is None:
-            self._mask = None  # Fast path: no masking
-        else:
-            self._mask = head_mask.to(device=self._device, dtype=torch.bool)
-            if self._mask.shape != self._batch_shape:
-                self._mask = self._mask.expand(self._batch_shape)
-
-    def _expand_mask(self, shape: tuple[int, ...]) -> Tensor:
-        """Expand mask to sample shape."""
-        m = self._mask
-        lead = len(shape) - m.ndim
-        if lead > 0:
-            m = m.view((1,) * lead + m.shape).expand(shape)
-        return m
-
-    def sample(self, sample_shape: torch.Size = torch.Size()) -> Tensor:
-        out = self.base_dist.sample(sample_shape)
-        if self._mask is None:
-            return out
-        mask = self._expand_mask(out.shape) if out.shape != self._mask.shape else self._mask
-        return out.masked_fill_(~mask, self._inactive)
-
-    @property
-    def mode(self) -> Tensor:
-        m = self._logits.argmax(dim=-1)
-        if self._mask is None:
-            return m
-        return m.masked_fill_(~self._mask, self._inactive)
-
-    @property
-    def deterministic_sample(self) -> Tensor:
-        return self.mode
-
-    @property
-    def mean(self) -> Tensor:
-        m = self.base_dist.mean
-        if self._mask is None:
-            return m
-        return m.masked_fill(~self._mask, float(self._inactive))
-
-    def log_prob(self, value: Tensor) -> Tensor:
-        if self._mask is None:
-            return self.base_dist.log_prob(value).sum(dim=-1)
-        mask = self._expand_mask(value.shape) if value.shape != self._mask.shape else self._mask
-        # Use 0 for masked positions
-        lp = self.base_dist.log_prob(value.masked_fill(~mask, 0))
-        return lp.mul_(mask.float()).sum(dim=-1)
-
-    def entropy(self) -> Tensor:
-        ent = self.base_dist.entropy()
-        if self._mask is None:
-            return ent.sum(dim=-1)
-        return ent.mul_(self._mask.float()).sum(dim=-1)
-
-def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
+def create_td_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
     # New DAG-based model configs expose a top-level Hydra builder target.
     model_cfg = OmegaConf.select(cfg, "models", default=None)
     if model_cfg is None:
@@ -141,10 +56,13 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
             n_devices=cfg.system.n_devices,
             action_dim=cfg.system.n_devices - 1,
         )
+        
+        # Prepare runtimes for different components
         actor_runtime = dict(runtime_base)
-        critic_runtime = dict(runtime_base)
         actor_runtime["output_dim"] = int(runtime_base["action_dim"])
-        # Critic should always be conditioned on progress features.
+        
+        # PPO Critic (Value Function)
+        critic_runtime = dict(runtime_base)
         critic_add_progress_cfg = OmegaConf.select(model_cfg, "critic.add_progress", default=True)
         if critic_add_progress_cfg is False:
             logger.warning(
@@ -155,13 +73,32 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
             add_device_load=add_device_load,
             output_dim=1,
         )
+        
+        # Off-Policy Q-Value Function
+        qvalue_runtime = dict(runtime_base)
+        qvalue_runtime.update(
+            add_progress=True,
+            add_device_load=add_device_load,
+            output_dim=int(runtime_base["action_dim"]), # Q-value outputs one value per action
+        )
+        
+        # Off-Policy Value Function (if used)
+        value_runtime = dict(runtime_base)
+        value_runtime.update(
+            add_progress=True,
+            add_device_load=add_device_load,
+            output_dim=1,
+        )
 
         model, reference, lstm_mod = instantiate(
             model_cfg,
             runtime=runtime_base,
             actor_runtime=actor_runtime,
             critic_runtime=critic_runtime,
+            qvalue_runtime=qvalue_runtime,
+            value_runtime=value_runtime,
             _recursive_=False,
+            _convert_="none",  # Don't convert to OmegaConf to preserve Python objects like classes
         )
         return model, reference, lstm_mod
 

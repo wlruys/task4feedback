@@ -1,0 +1,5 @@
+# @package _global_
+graph:
+  config:
+    block_time: 5000
+    task_time: 30000

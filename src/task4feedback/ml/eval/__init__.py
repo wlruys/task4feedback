@@ -7,6 +7,13 @@ from .evaluation import (
     run_evaluation,
     visualize_envs,
 )
+from .metrics import (
+    METRIC_REGISTRY,
+    MetricContext,
+    aggregate_all_metrics,
+    compute_metrics,
+    resolve_metric_ids,
+)
 
 __all__ = [
     "EvaluationConfig",
@@ -16,4 +23,9 @@ __all__ = [
     "evaluate_policy",
     "visualize_envs",
     "run_evaluation",
+    "METRIC_REGISTRY",
+    "MetricContext",
+    "aggregate_all_metrics",
+    "compute_metrics",
+    "resolve_metric_ids",
 ]

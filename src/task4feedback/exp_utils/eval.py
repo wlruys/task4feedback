@@ -3,13 +3,12 @@ from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
 from .graph import make_graph_builder
 from .env import make_env
-from .model import create_td_actor_critic_models
+from .model import create_td_models
 from .artifacts import (
     atomic_pickle_dump,
     eval_cache_context,
     load_normalization_state,
 )
-from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
 from task4feedback.ml.models import *
 from task4feedback.graphs.jacobi import (

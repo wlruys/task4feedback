@@ -1,4 +1,4 @@
-from .base import ActorCriticModule
+from .base import UnifiedRLModule
 
 from .models import *
 from .rl_utils import *

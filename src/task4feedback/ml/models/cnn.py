@@ -28,7 +28,7 @@ class ResidualBlock(nn.Module):
         return out + residual
 
 
-class CNNSingleStateNet(nn.Module):
+class CNNEncoder(nn.Module):
     def __init__(
         self,
         feature_config: FeatureDimConfig,
@@ -274,7 +274,7 @@ class DilatedResBlock_SPADE(nn.Module):
         return x + h
 
 
-class DilationState(nn.Module):
+class DilationEncoder(nn.Module):
     def __init__(
         self,
         feature_config,
@@ -427,7 +427,7 @@ class DilationState(nn.Module):
         return (h,)
 
 
-class DilationPolicyHead(nn.Module):
+class DilationActorHead(nn.Module):
     in_keys = [("observation",), ("embed",)]
     out_keys = [("logits",)]
 
@@ -498,7 +498,7 @@ class DilationPolicyHead(nn.Module):
         return logits[0] if single else logits
 
 
-class DilationValueHead(nn.Module):
+class DilationCriticHead(nn.Module):
     in_keys = [("observation",), ("embed",)]
     out_keys = [("state_value",)]
 

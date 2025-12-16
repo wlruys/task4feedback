@@ -239,7 +239,7 @@ class OutputHead(nn.Module):
         return out
 
 
-class MLPValueHead(nn.Module):
+class MLPCriticHead(nn.Module):
     in_keys = [("observation",), ("embed",)]
     out_keys = [("state_value",)]
 
@@ -313,7 +313,51 @@ class MLPValueHead(nn.Module):
         out = self.value_mlp(pooled)
         return out
 
-class MLPPolicyHead(OutputHead):
+
+class MLPQValueHead(MLPCriticHead):
+    in_keys = [("observation",), ("embed",)]
+    out_keys = [("action_value",)]
+
+    def __init__(
+        self,
+        input_dim: int | None = None,
+        hidden_channels: int = 64,
+        output_dim: int | None = None,
+        action_dim: int | None = None,
+        **kwargs,
+    ):
+        # For Q-value, output_dim should be action_dim (number of discrete actions)
+        if output_dim is None:
+            if action_dim is None:
+                raise ValueError("MLPQValueHead requires either output_dim or action_dim")
+            output_dim = action_dim
+            
+        super().__init__(
+            input_dim=input_dim,
+            hidden_channels=hidden_channels,
+            output_dim=output_dim,
+            **kwargs,
+        )
+
+    def forward(self, obs: TensorDict, emb: Tensor) -> Tensor:
+        # Do not pool over candidates. Return Q-values for each candidate-action pair.
+        emb_flat, batch_shape, B, C, aux_cand = _prepare_candidate_inputs(
+            obs, add_device_load=self.add_device_load, add_progress=self.add_progress
+        )
+        
+        if aux_cand is not None:
+            emb_flat = torch.cat([emb_flat, aux_cand], dim=-1)
+            
+        # emb_flat is (B, C, D)
+        # value_mlp maps D -> A
+        out = self.value_mlp(emb_flat) # (B, C, A)
+        
+        # Reshape to match batch shape if needed, but usually B is enough
+        out = out.view(*batch_shape, C, -1)
+        return out
+
+
+class MLPActorHead(OutputHead):
     in_keys = [("observation",), ("embed",)]
     out_keys = [("logits",)]
 
@@ -345,7 +389,7 @@ class MLPPolicyHead(OutputHead):
         out = out_flat.view(*batch_shape, C, -1)
         return out
     
-class MLPStateNet(nn.Module):
+class MLPEncoder(nn.Module):
 
     def __init__(
         self,
@@ -396,7 +440,7 @@ class MLPStateNet(nn.Module):
         return self.layers(x_flat).view(*batch_shape, C, self.output_dim)
 
 
-class MLPFiLMStateNet(nn.Module):
+class MLPFiLMEncoder(nn.Module):
 
     def __init__(
         self,

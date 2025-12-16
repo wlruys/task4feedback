@@ -18,15 +18,15 @@ from .nn_utils import (
 )
 from ..wrappers import BatchWrapper, HeteroDataWrapper, InferenceTimingProbabilisticActor, LogitInferenceTimingWrapper
 from .common import build_aux_features, flatten_task_grid
-from .mlp import MLPStateNet, MLPFiLMStateNet, MLPPolicyHead, MLPValueHead
+from .mlp import MLPEncoder, MLPFiLMEncoder, MLPActorHead, MLPCriticHead, MLPQValueHead
 # from .gnn import DataIterationGNNStateNet, GATStateNet, OriginalGNNStateNet, TaskIterationGNNStateNet, _FiLM
 from .cnn import (
     AdaSPADE_GN,
-    CNNSingleStateNet,
+    CNNEncoder,
     ConvNormAct,
-    DilationPolicyHead,
-    DilationState,
-    DilationValueHead,
+    DilationActorHead,
+    DilationEncoder,
+    DilationCriticHead,
     DilatedResBlock,
     DilatedResBlock_SPADE,
     ECA,
@@ -34,6 +34,7 @@ from .cnn import (
     SpatialModulator,
     TinyASPP,
 )
+from .distributions import MultiHeadCategorical, MultiHeadCategoricalMasked
 
 __all__ = [
     # utils
@@ -61,10 +62,11 @@ __all__ = [
     "BatchWrapper",
     "HeteroDataWrapper",
     # mlp
-    "MLPStateNet",
-    "MLPFiLMStateNet",
-    "MLPValueHead",
-    "MLPPolicyHead",
+    "MLPEncoder",
+    "MLPFiLMEncoder",
+    "MLPCriticHead",
+    "MLPQValueHead",
+    "MLPActorHead",
     # gnn
     # "_FiLM",
     # "GATStateNet",
@@ -73,10 +75,10 @@ __all__ = [
     # "OriginalGNNStateNet",
     # cnn
     "ResidualBlock",
-    "CNNSingleStateNet",
-    "DilationState",
-    "DilationPolicyHead",
-    "DilationValueHead",
+    "CNNEncoder",
+    "DilationEncoder",
+    "DilationActorHead",
+    "DilationCriticHead",
     "ConvNormAct",
     "DilatedResBlock",
     "ECA",
@@ -84,4 +86,7 @@ __all__ = [
     "SpatialModulator",
     "AdaSPADE_GN",
     "DilatedResBlock_SPADE",
+    # distributions
+    "MultiHeadCategorical",
+    "MultiHeadCategoricalMasked",
 ]

@@ -277,12 +277,14 @@ def _write_config_files(ctx: CacheContext, cfg: DictConfig) -> None:
         node = _select_cfg_node(cfg, SIGNATURE_COMPONENT_PATHS.get(name, name))
         path = ctx.dir / f"{name}.yaml"
         if not path.exists():
-            atomic_write_text(path, OmegaConf.to_yaml(node, resolve=True))
+            # Don't resolve sub-nodes as they may contain relative interpolations that break
+            atomic_write_text(path, OmegaConf.to_yaml(node, resolve=False))
 
     # Full config for convenience
     full_path = ctx.dir / "full_config.yaml"
     if not full_path.exists():
-        atomic_write_text(full_path, OmegaConf.to_yaml(cfg, resolve=True))
+        # Don't resolve to avoid issues with relative interpolations
+        atomic_write_text(full_path, OmegaConf.to_yaml(cfg, resolve=False))
 
 
 def _cpu_state(state: Dict[str, Any]) -> Dict[str, Any]:

@@ -257,12 +257,12 @@ def run_host_experiments_and_plot(cfg: DictConfig):
         
         if "RL" in experiment_names:
             from task4feedback.ml.models import FeatureDimConfig
-            from task4feedback.exp_utils.model import create_td_actor_critic_models, load_policy_from_checkpoint
+            from task4feedback.exp_utils.model import create_td_models, load_policy_from_checkpoint
             graph_builder = make_graph_builder(cfg, verbose=False)
             env = make_env(graph_builder=graph_builder, cfg=cfg, eval=True, normalization=False)
             observer = env.get_observer()
             feature_config = FeatureDimConfig.from_observer(observer)
-            model, lstm = create_td_actor_critic_models(cfg, feature_config)
+            model, _, lstm = create_td_models(cfg, feature_config)
             ckpt_path = Path(__file__).resolve().parent / "model.pt"
             if ckpt_path.exists():
                 loaded = load_policy_from_checkpoint(model, ckpt_path)

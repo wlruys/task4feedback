@@ -1,8 +1,0 @@
-defaults:
-  - activation/leaky_relu@activation
-  - initialization/orthogonal@initialization
-
-
-_target_: task4feedback.ml.models.mlp.MLPFiLMStateNet
-hidden_channels: []
-layer_norm: false

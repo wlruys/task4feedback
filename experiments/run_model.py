@@ -7,7 +7,7 @@ from hydra.utils import instantiate
 
 from task4feedback.exp_utils.graph import make_graph_builder
 from task4feedback.exp_utils.env import make_env
-from task4feedback.exp_utils.model import create_td_actor_critic_models, load_policy_from_checkpoint
+from task4feedback.exp_utils.model import create_td_models, load_policy_from_checkpoint
 from task4feedback.exp_utils.artifacts import (
     load_normalization_state,
     save_normalization_state,
@@ -186,7 +186,7 @@ def configure_training(cfg: DictConfig):
 
             observer = env.get_observer()
             feature_config = FeatureDimConfig.from_observer(observer)
-            model, _, _ = create_td_actor_critic_models(cfg, feature_config)
+            model, _, _ = create_td_models(cfg, feature_config)
 
             loaded = load_policy_from_checkpoint(model, ckpt_path)
             if not loaded:

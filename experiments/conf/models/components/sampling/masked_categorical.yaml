@@ -1,0 +1,15 @@
+# Standard masked categorical distribution (single-head)
+# Uses TorchRL's built-in MaskedCategorical for SAC and other off-policy algorithms
+
+_target_: torchrl.modules.distributions.MaskedCategorical
+
+# Distribution parameters (provided at runtime by ProbabilisticActor)
+# logits: Unnormalized log probabilities, shape (..., num_actions)
+# probs: Normalized probabilities, shape (..., num_actions)
+# mask: Boolean mask, shape (..., num_actions), True = valid action, False = invalid
+
+# Notes:
+# - This is TorchRL's standard masked categorical for single decisions
+# - Used in off-policy algorithms like SAC where action masking is needed
+# - Invalid actions (mask=False) are assigned zero probability
+# - For multi-head scenarios, use multi_head_categorical_masked instead

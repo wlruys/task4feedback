@@ -1,11 +1,39 @@
 defaults:
-  - modules/cnn_state@layers.state
-  - modules/cnn_policy_head@layers.actor
-  - modules/cnn_value_head@layers.critic
-  - templates/simple_actor@actor
-  - templates/simple_critic@critic
+  - components/encoders/cnn@policy.encoder
+  - components/heads/cnn_actor@policy.head
+  - components/encoders/cnn@value.encoder
+  - components/heads/cnn_critic@value.head
+  - _self_
 
-_target_: task4feedback.ml.builders.build_actor_critic
+_target_: task4feedback.ml.builders.build_model
+
+policy:
+  name: policy
+  inputs:
+    - [observation]
+  nodes:
+    encode:
+      _target_: task4feedback.ml.nodes.ModuleNode
+      module: ${models.policy.encoder}
+    head:
+      _target_: task4feedback.ml.nodes.ModuleNode
+      module: ${models.policy.head}
+  outputs:
+    - [logits]
+
+value:
+  name: value
+  inputs:
+    - [observation]
+  nodes:
+    encode:
+      _target_: task4feedback.ml.nodes.ModuleNode
+      module: ${models.value.encoder}
+    head:
+      _target_: task4feedback.ml.nodes.ModuleNode
+      module: ${models.value.head}
+  outputs:
+    - [state_value]
 
 meta:
   name: cnn_model
@@ -32,10 +60,3 @@ validation:
   check_cycles: true
   topo_tiebreak: lexicographic
   dry_run: false
-layers:
-  state:
-    hidden_channels: 16
-  actor:
-    hidden_channels: 16
-  critic:
-    hidden_channels: 128

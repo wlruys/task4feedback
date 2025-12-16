@@ -1,0 +1,65 @@
+defaults:
+  - graph: dynamic_jacobi
+  - env: batch_deterministic
+  - system: 4h100
+  - algorithm: sac
+  - wandb: default
+  - logging: default
+  - optimizer: adamw
+  - eval: default
+  - timing: default
+  - feature: cnn
+  - models: sac_mlp
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: task4feedback.exp_utils.gitinfo.GitInfo
+
+seed: 42
+deterministic_torch: true
+
+graph:
+  config:
+    width: 4
+    length: 4
+    steps: 16
+    level_memory: 98e9
+    boundary_time: 2500
+    interior_time: 10000
+    task_time: 10000
+
+system:
+  mem: 99999e9
+
+env:
+  action:
+    max_candidates: 16  # 4x4 grid
+  runtime:
+    max_in_flight: ${env.action.max_candidates}
+
+wandb:
+  enabled: false
+
+# Make eval run frequently for testing (every 2 collections)
+eval:
+  eval_interval: 2
+  animation_interval: 5
+  max_frames: 100
+  samples: 2
+
+# Override algorithm settings for short test
+algorithm:
+  num_collections: 10
+  graphs_per_collection: 2
+  states_per_collection: 128
+  workers: 1
+  rollout_steps: 128
+  batch_size: 64
+  updates_per_collection: 1
+
+# Override normalization warmup
+feature:
+  normalization:
+    warmup: 5

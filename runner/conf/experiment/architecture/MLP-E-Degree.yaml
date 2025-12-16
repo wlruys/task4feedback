@@ -1,0 +1,5 @@
+# @package _global_
+feature:
+  observer:
+    version: "E"
+    add_degree: True

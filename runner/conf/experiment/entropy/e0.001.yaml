@@ -1,0 +1,3 @@
+# @package _global_
+algorithm:
+  ent_coef: 0.001

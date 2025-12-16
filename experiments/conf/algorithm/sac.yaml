@@ -1,0 +1,32 @@
+_target_: task4feedback.ml.algorithms.sac.config.SACConfig
+type: off_policy
+implementation: torchrl
+replay_buffer_size: 1000000
+batch_size: 256
+gamma: 0.99
+alpha_init: 1.0
+target_entropy: auto
+lr: 3e-4
+q_lr: 3e-4
+alpha_lr: 3e-4
+target_update_polyak: 0.995
+num_qvalue_nets: 2
+loss_function: smooth_l1
+
+# Collection
+graphs_per_collection: 10
+states_per_collection: 1920
+rollout_steps: 1920
+workers: 1
+threads_per_worker: 1
+collect_device: cpu
+update_device: cpu
+storing_device: cpu
+
+# Optimization
+max_grad_norm: 0.5
+
+# Training Loop
+num_collections: 100
+updates_per_collection: 1
+timeout: 86400

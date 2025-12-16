@@ -1,0 +1,14 @@
+# Multi-head categorical distribution without masking
+# Used when all heads are always active and make independent categorical decisions
+
+_target_: task4feedback.ml.models.distributions.MultiHeadCategorical
+
+# Distribution parameters (provided at runtime by ProbabilisticActor)
+# logits: Unnormalized log probabilities, shape (..., num_heads, num_actions)
+# probs: Normalized probabilities, shape (..., num_heads, num_actions)
+
+# Notes:
+# - This is a simple wrapper around Independent(Categorical, reinterpreted_batch_ndims=1)
+# - Treats the "num_heads" dimension as an event dimension
+# - Each head makes an independent categorical choice
+# - No masking support - use multi_head_categorical_masked if you need masking

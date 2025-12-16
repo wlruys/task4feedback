@@ -1,0 +1,3 @@
+defaults:
+  - /../../experiments/conf/cholesky_4_mlp
+  - _self_

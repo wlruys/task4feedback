@@ -1,0 +1,8 @@
+defaults:
+  - /models/components/shared/activation/leaky_relu@activation
+  - /models/components/shared/initialization/orthogonal@initialization
+
+
+_target_: task4feedback.ml.models.mlp.MLPEncoder
+hidden_channels: []
+layer_norm: false

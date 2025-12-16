@@ -1,4 +1,4 @@
-_target_: task4feedback.ml.algorithms.PPOConfig
+_target_: task4feedback.ml.algorithms.ppo.config.PPOConfig
 implementation: torchrl
 workers: 4
 graphs_per_collection: 4

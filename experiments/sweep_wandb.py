@@ -5,7 +5,7 @@ from hydra.utils import instantiate
 
 from task4feedback.exp_utils.graph import make_graph_builder
 from task4feedback.exp_utils.env import make_env
-from task4feedback.exp_utils.model import create_td_actor_critic_models
+from task4feedback.exp_utils.model import create_td_models
 from task4feedback.exp_utils.algorithm import create_optimizer, create_lr_scheduler
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
@@ -32,7 +32,7 @@ def configure_training(cfg: DictConfig):
 
     observer = env.get_observer()
     feature_config = FeatureDimConfig.from_observer(observer)
-    model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
+    model, reference, lstm = create_td_models(cfg, feature_config)
 
     network = reference
 

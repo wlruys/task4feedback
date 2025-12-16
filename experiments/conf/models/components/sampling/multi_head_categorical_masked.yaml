@@ -1,0 +1,21 @@
+# Multi-head categorical distribution with masking support
+# Used for PPO and other on-policy algorithms where multiple heads make independent decisions
+# and some heads may be inactive (masked)
+
+_target_: task4feedback.ml.models.distributions.MultiHeadCategoricalMasked
+
+# Distribution parameters (provided at runtime by ProbabilisticActor)
+# logits: Unnormalized log probabilities, shape (..., num_heads, num_actions)
+# probs: Normalized probabilities, shape (..., num_heads, num_actions)
+# head_mask: Boolean mask, shape (..., num_heads), True = active, False = masked
+
+# Configuration parameters
+inactive_action: 0  # Action index to use for masked/inactive heads
+reinterpreted_batch_ndims: 1  # Number of batch dims to treat as event dims (1 = multi-head)
+validate_args: null  # Whether to validate distribution arguments (null = default PyTorch behavior)
+
+# Notes:
+# - This distribution extends Independent(Categorical) with per-head masking
+# - Masked heads always return the inactive_action
+# - Log probabilities and entropy contributions from masked heads are zero
+# - Useful for multi-task scheduling where some tasks/devices may be unavailable

@@ -1,9 +1,9 @@
-_target_: task4feedback.ml.algorithms.PPOConfig
+_target_: task4feedback.ml.algorithms.ppo.config.PPOConfig
 implementation: torchrl
 workers: 4
 graphs_per_collection: 4
 states_per_collection: 512
-num_collections: 10000
+num_collections: 100
 collect_device: cpu
 update_device: cpu
 storing_device: cpu
@@ -20,7 +20,6 @@ max_grad_norm: 0.5
 compile_policy: false
 compile_advantage: false
 compile_update: false
-collector: "multi_sync"
 advantage_type: "gae"
 bagged_policy: "none"
 epochs_per_collection: 4

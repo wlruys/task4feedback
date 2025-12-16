@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from task4feedback.exp_utils.graph import make_graph_builder
 from task4feedback.exp_utils.env import make_env
-from task4feedback.exp_utils.model import create_td_actor_critic_models
+from task4feedback.exp_utils.model import create_td_models
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *

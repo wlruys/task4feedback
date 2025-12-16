@@ -1,0 +1,5 @@
+# @package _global_
+reward:
+  pbrs: False
+  sparse_reward_scale: 0
+  dense_reward_scale: 1

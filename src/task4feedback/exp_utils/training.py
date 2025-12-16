@@ -22,12 +22,11 @@ from .artifacts import (
 from .env import NormalizationDetails, make_env
 from .eval import ensure_eval_location
 from .graph import GraphBuilder, make_graph_builder
-from .model import create_td_actor_critic_models
+from .model import create_td_models
 from .run_name import make_run_name
 from task4feedback.logging import training
 from task4feedback.ml.models import FeatureDimConfig
 from task4feedback.ml.rl_utils import compute_model_fingerprint
-from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 
 
 @dataclass
@@ -75,7 +74,7 @@ def initialize_env_and_model(
 
     observer = env.get_observer()
     feature_config = FeatureDimConfig.from_observer(observer)
-    model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
+    model, reference, lstm = create_td_models(cfg, feature_config)
 
     # Warm up once to materialize Lazy* parameters before logging.
     try:
@@ -172,10 +171,6 @@ def maybe_log_model_to_wandb(cfg: DictConfig, logging_config, model: torch.nn.Mo
             training.warning("wandb.watch failed: %s", e)
     else:
         training.info("wandb.watch is disabled (set logging.watch_model=true to enable)")
-
-
-def select_runner(has_lstm: bool):
-    return run_ppo_lstm if has_lstm else run_ppo
 
 
 def build_graph_builder(cfg: DictConfig) -> GraphBuilder:

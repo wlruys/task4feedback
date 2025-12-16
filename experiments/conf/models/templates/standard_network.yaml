@@ -1,0 +1,14 @@
+inputs:
+  - [observation]
+
+nodes:
+  encode:
+    _target_: task4feedback.ml.nodes.ModuleNode
+    module: ${encoder}
+
+  head:
+    _target_: task4feedback.ml.nodes.ModuleNode
+    module: ${head}
+
+# outputs must be defined by the consumer
+# Note: encoder and head are expected to be defined at the same level as this template

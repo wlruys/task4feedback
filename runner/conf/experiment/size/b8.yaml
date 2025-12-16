@@ -1,0 +1,4 @@
+# @package _global_
+graph:
+  config:
+    n: 8

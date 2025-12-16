@@ -1,0 +1,72 @@
+defaults:
+  - components/encoders/mlp@policy.encoder
+  - components/heads/mlp_actor@policy.head
+  - components/encoders/mlp@qvalue.encoder
+  - _self_
+
+_target_: task4feedback.ml.builders.build_model
+
+policy:
+  name: policy
+  inputs:
+    - [observation]
+  nodes:
+    encode:
+      _target_: task4feedback.ml.nodes.ModuleNode
+      module: ${models.policy.encoder}
+    head:
+      _target_: task4feedback.ml.nodes.ModuleNode
+      module: ${models.policy.head}
+  outputs:
+    - [logits]
+  encoder:
+    hidden_channels: [32, 32, 32]
+  head:
+    hidden_channels: 32
+
+qvalue:
+  name: qvalue
+  inputs:
+    - [observation]
+    - [action]
+  nodes:
+    encode:
+      _target_: task4feedback.ml.nodes.ModuleNode
+      module: ${models.qvalue.encoder}
+    head:
+      _target_: task4feedback.ml.nodes.ModuleNode
+      module: ${models.qvalue.head}
+  outputs:
+    - [action_value]
+  encoder:
+    hidden_channels: [32, 32, 32]
+  head:
+    _target_: task4feedback.ml.models.MLPQValueHead
+    hidden_channels: 128
+    # output_dim will be injected by runtime (action_dim)
+
+meta:
+  name: sac_mlp_model
+
+namespacing:
+  local_prefix: [net]
+  public_keys:
+    - [observation]
+    - [done]
+    - [terminated]
+    - [truncated]
+    - [reward]
+    - [candidate_mask]
+    - [logits]
+    - [action]
+    - [sample_log_prob]
+    - [action_value]
+  public_prefixes:
+    - [rnn]
+
+validation:
+  check_missing: true
+  check_collisions: true
+  check_cycles: true
+  topo_tiebreak: lexicographic
+  dry_run: false

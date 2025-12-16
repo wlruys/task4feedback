@@ -1,0 +1,90 @@
+# Packs Definition File
+# This file allows defining groups of overrides ("packs") in a single place.
+# Usage: python runner/launcher.py ... +group=pack
+
+size:
+  b8:
+    graph:
+      config:
+        n: 8
+  b4:
+    graph:
+      config:
+        n: 4
+
+entropy:
+  e0.001:
+    algorithm:
+      ent_coef: 0.001
+
+rollout:
+  r128:
+    algorithm:
+      rollout_steps: 128
+      minibatch_size: 128
+
+architecture:
+  MLP-E-Degree:
+    feature:
+      observer:
+        version: "E"
+        add_degree: True
+  MLP-A-Degree:
+    feature:
+      observer:
+        version: "A"
+        add_degree: True
+  MLP-B-Degree:
+    feature:
+      observer:
+        version: "B"
+        add_degree: True
+  MLP-C-Degree:
+    feature:
+      observer:
+        version: "C"
+        add_degree: True
+  MLP-E:
+    feature:
+      observer:
+        version: "E"
+        add_degree: False
+  MLP-A:
+    feature:
+      observer:
+        version: "A"
+        add_degree: False
+  MLP-B:
+    feature:
+      observer:
+        version: "B"
+        add_degree: False
+  MLP-C:
+    feature:
+      observer:
+        version: "C"
+        add_degree: False
+
+reward:
+  pbrs:
+    reward:
+      pbrs: True
+      sparse_reward_scale: 1
+      dense_reward_scale: 1
+  sparse_reward:
+    reward:
+      pbrs: False
+      sparse_reward_scale: 0
+      dense_reward_scale: 1
+
+block_time:
+  1_0:
+    graph:
+      config:
+        block_time: 0
+        task_time: 30000
+  2_1:
+    graph:
+      config:
+        block_time: 5000
+        task_time: 30000

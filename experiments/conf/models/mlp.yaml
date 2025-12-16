@@ -1,11 +1,29 @@
 defaults:
-  - modules/mlp_state_net@layers.state
-  - modules/mlp_policy_head@layers.actor
-  - modules/mlp_value_head@layers.critic
-  - templates/simple_actor@actor
-  - templates/simple_critic@critic
+  - templates/standard_network@policy
+  - templates/standard_network@value
+  - components/encoders/mlp@policy.encoder
+  - components/heads/mlp_actor@policy.head
+  - components/encoders/mlp@value.encoder
+  - components/heads/mlp_critic@value.head
+  - _self_
 
-_target_: task4feedback.ml.builders.build_actor_critic
+_target_: task4feedback.ml.builders.build_model
+
+policy:
+  outputs:
+    - [logits]
+  encoder:
+    hidden_channels: [32, 32, 32]
+  head:
+    hidden_channels: 32
+
+value:
+  outputs:
+    - [state_value]
+  encoder:
+    hidden_channels: [32, 32, 32]
+  head:
+    hidden_channels: 128
 
 meta:
   name: mlp_model
@@ -32,12 +50,4 @@ validation:
   check_cycles: true
   topo_tiebreak: lexicographic
   dry_run: false
-
-layers:
-  state:
-    hidden_channels: [32, 32, 32]
-  actor:
-    hidden_channels: 32
-  critic:
-    hidden_channels: 128
 
