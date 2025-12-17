@@ -301,7 +301,7 @@ def build_off_policy_model(
             "kwargs": {"inactive_action": 0},
             "mask_key_name": "head_mask",
             "mask_key_value": ("observation", "aux", "candidate_mask"),
-            "return_log_prob": False,
+            "return_log_prob": True,  # SAC/off-policy needs sample_log_prob for temperature/actor losses
         }
 
     return build_unified_model(

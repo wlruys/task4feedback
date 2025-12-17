@@ -476,7 +476,6 @@ class RuntimeEnv(EnvBase):
         reward = self._post_process_reward(reward, final_reward, done)
 
         buf = td.empty()
-        obs = obs if self.max_samples_per_iter > 0 else obs.clone()
         buf.set(self.observation_n, obs)
         buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))

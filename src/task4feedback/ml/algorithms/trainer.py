@@ -48,22 +48,49 @@ class Trainer:
         self.seed = seed
         self.eval_location = eval_location
 
-        # Instantiate optimizer if it's a partial
-        if isinstance(optimizer, functools.partial):
-            self.optimizer = optimizer(params=self.model.parameters())
-        else:
-            self.optimizer = optimizer
+        self._optimizer_spec = optimizer
+        self._lr_scheduler_spec = lr_scheduler
 
-        # Instantiate scheduler if it's a partial
-        if isinstance(lr_scheduler, functools.partial):
-            self.lr_scheduler = lr_scheduler(optimizer=self.optimizer)
-        else:
-            self.lr_scheduler = lr_scheduler
+        # Instantiate optimizer / scheduler lazily after the loss module exists so
+        # loss-specific parameters (e.g., SAC temperature) are included.
+        self.optimizer = None if isinstance(optimizer, functools.partial) else optimizer
+        self.lr_scheduler = None if isinstance(lr_scheduler, functools.partial) else lr_scheduler
 
         # Devices
         self.collect_device = torch.device(getattr(alg_config, "collect_device", "cpu"))
         self.update_device = torch.device(getattr(alg_config, "update_device", "cpu"))
         self.storing_device = torch.device(getattr(alg_config, "storing_device", "cpu"))
+
+    def _maybe_add_missing_optimizer_params(self, module: torch.nn.Module) -> None:
+        """Ensure the optimizer tracks all trainable parameters in `module`."""
+        if self.optimizer is None:
+            return
+        try:
+            existing = {
+                id(param)
+                for group in self.optimizer.param_groups
+                for param in group.get("params", [])
+            }
+        except Exception:
+            return
+
+        missing = [
+            param
+            for param in module.parameters()
+            if param.requires_grad and id(param) not in existing
+        ]
+        if not missing:
+            return
+
+        base_group = {}
+        if self.optimizer.param_groups:
+            base_group = {
+                k: v
+                for k, v in self.optimizer.param_groups[0].items()
+                if k != "params"
+            }
+        self.optimizer.add_param_group({**base_group, "params": missing})
+        training.info("Added %d loss-module parameters to optimizer.", len(missing))
 
     def train(self):
         training.info(f"Starting training with {self.algorithm.__class__.__name__}")
@@ -74,6 +101,18 @@ class Trainer:
         # 1. Setup Loss Module
         loss_module = self.algorithm.make_loss_module(self.model)
         loss_module.to(self.update_device)
+
+        # Create optimizer/scheduler after loss module exists so we include any
+        # trainable parameters registered on the loss module itself (e.g., SAC alpha).
+        if self.optimizer is None:
+            if not isinstance(self._optimizer_spec, functools.partial):
+                raise TypeError("Trainer requires an optimizer or a functools.partial optimizer factory.")
+            self.optimizer = self._optimizer_spec(params=loss_module.parameters())
+        else:
+            self._maybe_add_missing_optimizer_params(loss_module)
+
+        if self.lr_scheduler is None and isinstance(self._lr_scheduler_spec, functools.partial):
+            self.lr_scheduler = self._lr_scheduler_spec(optimizer=self.optimizer)
 
         # Target Network Updater (only for off-policy algorithms)
         target_net_updater = None
@@ -142,8 +181,8 @@ class Trainer:
                         if wandb.run is not None:
                             wandb.log(metrics, step=n_updates)
 
-                # Evaluation
-                if should_eval(n_updates, self.eval_config):
+                # Evaluation (gate by collection count to avoid running every minibatch)
+                if should_eval(i + 1, self.eval_config):
                     # Set policy to eval mode
                     policy.eval()
                     with torch.no_grad():

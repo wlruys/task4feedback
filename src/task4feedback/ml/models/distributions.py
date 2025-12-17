@@ -45,7 +45,47 @@ class MultiHeadCategoricalMasked(Independent):
         validate_args: bool | None = None,
         reinterpreted_batch_ndims: int = 1,
     ) -> None:
-        # Create base categorical distribution
+        # Process mask first to apply to logits before creating the distribution
+        if head_mask is not None and logits is not None:
+            # Convert to boolean mask
+            mask = head_mask.to(device=logits.device, dtype=torch.bool)
+            # Expand mask to match logits batch shape if needed
+            if mask.shape != logits.shape[:-1]:
+                mask = mask.expand(logits.shape[:-1])
+
+            # For masked heads: set inactive_action to 0 and all other actions to -inf
+            # This gives zero entropy and ensures the inactive_action is always selected
+            masked_logits = logits.clone()
+            num_actions = logits.shape[-1]
+
+            # Create mask for inactive heads: shape (..., num_heads)
+            inactive_mask = ~mask
+
+            if inactive_mask.any():
+                # Set all logits for inactive heads to -inf first
+                masked_logits = torch.where(
+                    inactive_mask.unsqueeze(-1),
+                    torch.tensor(float('-inf'), device=logits.device, dtype=logits.dtype),
+                    masked_logits
+                )
+                # Then set the inactive_action for inactive heads to 0 (or any finite value)
+                # This creates a deterministic distribution for masked heads with zero entropy
+                # Create a mask for the inactive_action position: shape (num_actions,)
+                action_mask = torch.zeros(num_actions, dtype=torch.bool, device=logits.device)
+                action_mask[inactive_action] = True
+
+                # Combine with inactive head mask: shape (..., num_heads, num_actions)
+                inactive_action_mask = inactive_mask.unsqueeze(-1) & action_mask
+
+                masked_logits = torch.where(
+                    inactive_action_mask,
+                    torch.tensor(0.0, device=logits.device, dtype=logits.dtype),
+                    masked_logits
+                )
+
+            logits = masked_logits
+
+        # Create base categorical distribution with masked logits
         base = Categorical(logits=logits, probs=probs, validate_args=validate_args)
 
         # Initialize Independent wrapper

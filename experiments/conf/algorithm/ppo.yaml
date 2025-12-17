@@ -21,10 +21,7 @@ compile_policy: false
 compile_advantage: false
 compile_update: false
 advantage_type: "gae"
-bagged_policy: "none"
 epochs_per_collection: 4
-slice_len: 32
-sample_slices: false
 minibatch_size: 128
 rollout_steps: 16
 

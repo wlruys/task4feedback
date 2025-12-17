@@ -38,10 +38,11 @@ class UnifiedConfig(AlgorithmConfig):
     compile_policy: bool = False
     compile_update: bool = False
     compile_advantage: bool = False
-    sample_slices: bool = True
-    slice_len: int = 16
+    log_norms: bool = False
     advantage_type: str = "gae"
     bagged_policy: str = "uniform"
+    target_kl: Optional[float] = None  # Early stop epoch if KL divergence exceeds this (e.g., 0.01-0.03)
+    vtrace_use_lambda: bool = False  # Whether to use lambda in VTrace (for special cases)
     
     # SAC/DQN Specific
     replay_buffer_size: int = 1000000

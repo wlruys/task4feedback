@@ -2,7 +2,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import torch
 from tensordict import TensorDict
-from torchrl.data import ReplayBuffer, TensorDictReplayBuffer, LazyTensorStorage, SamplerWithoutReplacement
+from torchrl.data import ReplayBuffer, TensorDictReplayBuffer, LazyTensorStorage, RandomSampler
 from torchrl.envs import EnvBase
 from torchrl.objectives import DiscreteSACLoss
 from torchrl.objectives.common import LossModule
@@ -73,14 +73,16 @@ class SACAlgorithm(Algorithm):
         if actor is None or qvalue is None:
             raise ValueError("SAC requires both policy and qvalue networks")
 
-        # Configure target entropy for multi-head case
+        # Configure target entropy
         target_entropy = self.config.target_entropy
-        if target_entropy == "auto" and self.use_multihead and self.num_heads:
-            # For multi-head: target entropy is -log(num_actions) per head
-            # Total target entropy = num_heads * (-log(num_actions))
+        if target_entropy == "auto":
             import math
-            target_entropy = -float(self.num_heads) * math.log(self.num_actions)
-            training.info(f"Auto target entropy for {self.num_heads} heads: {target_entropy}")
+            # Use per-head entropy target; masked/padded heads contribute zero.
+            target_entropy = -math.log(self.num_actions)
+            if self.use_multihead:
+                training.info(
+                    f"Auto target entropy (per head) for multi-head policy: {target_entropy:.4f}"
+                )
 
         # TorchRL's DiscreteSACLoss should work with multi-head distributions
         # as long as:
@@ -108,23 +110,47 @@ class SACAlgorithm(Algorithm):
     ) -> Optional[ReplayBuffer]:
         return TensorDictReplayBuffer(
             storage=LazyTensorStorage(self.config.replay_buffer_size, device=device),
-            sampler=SamplerWithoutReplacement(),
+            sampler=RandomSampler(),
             batch_size=batch_size,
         )
 
     def process_batch(self, batch: TensorDict, device: torch.device) -> TensorDict:
         batch = batch.to(device, non_blocking=True)
+        mask = batch.get(("observation", "aux", "candidate_mask"), None)
+        mask_b = mask.to(device=device, dtype=torch.bool) if mask is not None else None
         
-        # Expand reward/done for MultiDiscrete (Independent SAC) if needed
         action = batch.get("action")
+
+        # TorchRL's DiscreteSACLoss supports weighting via the prioritized replay
+        # `priority_weight` key. Use the candidate mask to exclude padded heads
+        # from actor/Q/alpha losses.
+        if mask_b is not None and action.ndim > 1 and mask_b.shape == action.shape and mask_b.any():
+            batch.set("priority_weight", mask_b.to(dtype=torch.float32))
+
+        # Expand reward/done for multi-head categorical actions if needed
         if action.ndim > 1:
             C = action.shape[1]
             for key in ["reward", "done", "terminated"]:
                 val = batch.get(("next", key))
-                if val.shape[-1] == 1 and val.ndim == 2: # (B, 1)
-                    val = val.expand(-1, C) # (B, C)
-                    val = val.unsqueeze(-1) # (B, C, 1)
-                    batch.set(("next", key), val)
+                if val.ndim == 1:
+                    # (B,) -> (B, 1)
+                    val = val.unsqueeze(-1)
+                if val.ndim == 2:
+                    # (B, 1) -> (B, C, 1) or (B, C) -> (B, C, 1)
+                    if val.shape[1] == 1:
+                        val = val.expand(-1, C).unsqueeze(-1)
+                    elif val.shape[1] == C:
+                        val = val.unsqueeze(-1)
+
+                if mask_b is not None:
+                    head_mask = mask_b.unsqueeze(-1)
+                    if key == "reward":
+                        val = val * head_mask.to(val.dtype)
+                    else:
+                        # Treat padded heads as terminal to avoid bootstrapping on junk.
+                        val = val.to(torch.bool) | (~head_mask)
+
+                batch.set(("next", key), val)
                     
         return batch
 

@@ -40,7 +40,7 @@ class SACConfig(UnifiedConfig):
     # Replay buffer and training
     replay_buffer_size: int = 1000000
     batch_size: int = 256
-    updates_per_collection: int = 1
+    updates_per_collection: int = 64
 
     # Learning rates
     lr: float = 3e-4  # Actor learning rate

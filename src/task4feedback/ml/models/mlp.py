@@ -308,8 +308,12 @@ class MLPCriticHead(nn.Module):
             aux_emb = self.side_info_mlp(aux_flat).unsqueeze(1).expand(-1, C, -1)
             emb_flat = torch.cat([emb_flat, aux_emb], dim=-1)
 
-        weights = mask.unsqueeze(-1)  # [B, C, 1], bool/float handled by promotion
-        pooled = (emb_flat * weights).sum(dim=1).view(*batch_shape, -1)
+        # Normalize masked pooling: use masked-mean instead of masked-sum
+        # This keeps the value scale stable across different candidate counts
+        mask_f = mask.to(dtype=emb_flat.dtype).unsqueeze(-1)  # [B, C, 1]
+        counts = mask_f.sum(dim=1).clamp_min(1.0)  # [B, 1]
+        pooled = (emb_flat * mask_f).sum(dim=1) / counts  # [B, D]
+        pooled = pooled.view(*batch_shape, -1)
         out = self.value_mlp(pooled)
         return out
 
