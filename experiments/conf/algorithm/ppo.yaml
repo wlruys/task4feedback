@@ -2,13 +2,12 @@ _target_: task4feedback.ml.algorithms.ppo.config.PPOConfig
 implementation: torchrl
 workers: 4
 graphs_per_collection: 4
-states_per_collection: 512
-num_collections: 100
+num_collections: 1000
 collect_device: cpu
 update_device: cpu
 storing_device: cpu
 threads_per_worker: 1
-ent_coef: 0.01
+ent_coef: 0.001
 lmbda: 0.95
 gamma: 0.999
 clip_eps: 0.2
@@ -20,8 +19,8 @@ max_grad_norm: 0.5
 compile_policy: false
 compile_advantage: false
 compile_update: false
+compile_loss_networks: true
 advantage_type: "gae"
 epochs_per_collection: 4
-minibatch_size: 128
-rollout_steps: 16
-
+minibatch_size: 64
+rollout_steps: 64

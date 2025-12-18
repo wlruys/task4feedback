@@ -1,14 +1,19 @@
 from dataclasses import dataclass
-from ..config import UnifiedConfig
+
+from ..config import OffPolicyConfig
+
 
 @dataclass
-class DQNConfig(UnifiedConfig):
+class DQNConfig(OffPolicyConfig):
+    """Deep Q-Network (DQN) configuration."""
+
     name: str = "dqn"
-    type: str = "off_policy"
 
-    # DQN specific defaults
+    # Exploration
+    eps_init: float = 1.0
+    eps_end: float = 0.01
+    eps_decay: int = 100000
+
+    # Defaults
     gamma: float = 0.99
-
-    # Collector defaults for DQN (off-policy)
-    collector_reset_at_each_iter: bool = False  # Let episodes run naturally
-
+    collector_actor: str = "qvalue_epsilon_greedy"

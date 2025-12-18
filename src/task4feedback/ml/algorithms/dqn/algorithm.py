@@ -8,6 +8,8 @@ from torchrl.objectives import DQNLoss
 from torchrl.objectives.common import LossModule
 
 from task4feedback.logging import training
+from task4feedback.ml.actors import EpsilonGreedyQValueActor
+from ..compile_utils import _safe_compile_with_warmup
 from ..interface import Algorithm
 from .config import DQNConfig
 
@@ -16,6 +18,7 @@ class DQNAlgorithm(Algorithm):
     def __init__(self, config: DQNConfig):
         super().__init__(config)
         self.config = config
+        self._collection_actor: Optional[EpsilonGreedyQValueActor] = None
 
     def make_loss_module(self, model: torch.nn.Module) -> DQNLoss:
         # Validate model has required components
@@ -26,6 +29,9 @@ class DQNAlgorithm(Algorithm):
 
         if qvalue is None:
             raise ValueError("DQN requires qvalue network")
+
+        if getattr(self.config, "compile_loss_networks", False):
+            qvalue = _safe_compile_with_warmup(qvalue)
 
         loss_module = DQNLoss(
             value_network=qvalue,
@@ -50,6 +56,31 @@ class DQNAlgorithm(Algorithm):
         batch = batch.to(device, non_blocking=True)
         return batch
 
+    def get_collection_policy(
+        self,
+        model: torch.nn.Module,
+        device: torch.device,
+        mode: str = "train",
+    ) -> torch.nn.Module:
+        actor_kind = getattr(self.config, "collector_actor", "qvalue_epsilon_greedy")
+        if actor_kind in ("qvalue_epsilon_greedy", "epsilon_greedy_qvalue"):
+            if model.qvalue is None:
+                raise ValueError("DQN collector requires a qvalue network.")
+            if self._collection_actor is None:
+                self._collection_actor = EpsilonGreedyQValueActor(
+                    model.qvalue,
+                    qvalue_key=("action_value",),
+                    action_key=("action",),
+                    mask_key=("observation", "aux", "candidate_mask"),
+                    eps_init=self.config.eps_init,
+                    eps_end=self.config.eps_end,
+                    eps_decay=self.config.eps_decay,
+                )
+            self._collection_actor.train(mode == "train")
+            return self._collection_actor
+
+        return super().get_collection_policy(model, device, mode)
+
     def update(
         self,
         loss_module: DQNLoss,
@@ -67,8 +98,11 @@ class DQNAlgorithm(Algorithm):
         
         if target_net_updater:
             target_net_updater.step()
-            
-        return {k: v.item() for k, v in loss_td.items()}
+
+        metrics = {k: v.item() for k, v in loss_td.items()}
+        if self._collection_actor is not None:
+            metrics["exploration/epsilon"] = float(self._collection_actor.epsilon)
+        return metrics
 
     def train_step(
         self,

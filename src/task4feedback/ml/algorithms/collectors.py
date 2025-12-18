@@ -1,16 +1,33 @@
-"""
-Shared collector utilities for RL algorithms.
+"""Collector factory used by RL algorithms.
 
-This module provides a unified factory function to create data collectors with the new TorchRL API,
-reducing code duplication. All algorithm-specific behavior is configured via parameters.
+Keep this thin: pick `Collector` vs `MultiCollector` and apply sane defaults.
 """
+
+from __future__ import annotations
 
 from typing import Callable, List, Optional, Union
+
 import torch
 from torchrl.collectors import Collector, MultiCollector
 from torchrl.envs import EnvBase
 
 from task4feedback.logging import training
+
+
+def _seeded_env_constructor(env_fn: Callable[[], EnvBase], seed: int) -> Callable[[], EnvBase]:
+    """Wrap an env constructor and immediately apply a deterministic seed."""
+
+    def _make() -> EnvBase:
+        env = env_fn()
+        try:
+            env.set_seed(seed)
+        except Exception:
+            # Some custom env wrappers may not expose set_seed; in that case just
+            # return the env and rely on the collector-level seeding.
+            pass
+        return env
+
+    return _make
 
 
 def make_collector(
@@ -21,46 +38,29 @@ def make_collector(
     workers: int = 1,
     sync: bool = True,
     reset_at_each_iter: bool = True,
+    seed: int | None = None,
     policy_device: Union[str, torch.device] = "cpu",
     storing_device: Union[str, torch.device] = "cpu",
     env_device: Union[str, torch.device] = "cpu",
     use_buffers: bool = True,
     compile_policy: Optional[dict] = None,
     num_threads: Optional[int] = None,
-    cat_results: Optional[str] = None,
+    cat_results: str = "stack",
+    
     **kwargs,
 ):
-    """
-    Factory function to create collectors using the modern TorchRL API.
+    if not env_constructors:
+        raise ValueError("env_constructors must contain at least one callable.")
 
-    Args:
-        env_constructors: List of environment constructor callables.
-        policy: Policy module for action selection.
-        frames_per_batch: Number of frames to collect per batch.
-        total_frames: Total frames to collect (optional, for auto-stopping).
-        workers: Number of parallel workers (1 for single-process).
-        sync: If True, use synchronous collection (recommended for on-policy).
-              If False, use asynchronous collection (recommended for off-policy).
-        reset_at_each_iter: Whether to reset environments at each iteration.
-        policy_device: Device for policy inference.
-        storing_device: Device for storing collected data.
-        env_device: Device for environment execution.
-        use_buffers: Whether to use buffers for data collection.
-        compile_policy: Dict with compilation settings (e.g., {"mode": "reduce-overhead"}).
-        num_threads: Number of threads for multi-process collectors.
-        cat_results: How to concatenate results for multi-collectors ("stack" or None).
-        **kwargs: Additional collector-specific arguments.
+    # Build per-worker env constructors (and seed them immediately).
+    env_workers: List[Callable[[], EnvBase]] = []
+    for i in range(max(1, int(workers))):
+        base_fn = env_constructors[i % len(env_constructors)]
+        if seed is None:
+            env_workers.append(base_fn)
+        else:
+            env_workers.append(_seeded_env_constructor(base_fn, int(seed) + i))
 
-    Returns:
-        A Collector or MultiCollector instance.
-    """
-    # Prepare environment workers
-    env_workers = [
-        env_constructors[i % len(env_constructors)]
-        for i in range(workers)
-    ]
-
-    # Common collector kwargs
     collector_kwargs = {
         "frames_per_batch": frames_per_batch,
         "reset_at_each_iter": reset_at_each_iter,
@@ -77,16 +77,20 @@ def make_collector(
     if compile_policy is not None:
         collector_kwargs["compile_policy"] = compile_policy
 
-    # Single-process collector
     if workers == 1:
         training.debug(f"Creating single-process Collector (frames_per_batch={frames_per_batch})")
-        return Collector(
+        collector = Collector(
             env_workers[0],
             policy=policy,
             **collector_kwargs,
         )
+        if seed is not None:
+            try:
+                collector.set_seed(int(seed))
+            except Exception as exc:
+                training.debug("Collector.set_seed failed: %s", exc)
+        return collector
 
-    # Multi-process collector
     training.debug(
         f"Creating multi-process {'sync' if sync else 'async'} collector "
         f"(workers={workers}, frames_per_batch={frames_per_batch})"
@@ -95,14 +99,22 @@ def make_collector(
     multi_kwargs = collector_kwargs.copy()
     if num_threads is not None:
         multi_kwargs["num_threads"] = num_threads
-    if cat_results is not None:
-        multi_kwargs["cat_results"] = cat_results
+    # Always stack results: PPO advantage estimation depends on preserving the
+    # (time, env) structure instead of concatenating across workers.
+    multi_kwargs["cat_results"] = cat_results
 
-    return MultiCollector(
+    collector = MultiCollector(
         env_workers,
         policy,
         sync=sync,
         **multi_kwargs,
     )
 
+    if seed is not None:
+        try:
+            collector.set_seed(int(seed))
+        except Exception as exc:
+            training.debug("MultiCollector.set_seed failed: %s", exc)
+
+    return collector
 

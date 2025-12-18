@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
 from tensordict import TensorDict
@@ -12,9 +12,7 @@ from .base import AlgorithmConfig
 
 
 class Algorithm(ABC):
-    """
-    Abstract base class for RL algorithms.
-    """
+    """Base class for RL algorithms."""
 
     def __init__(self, config: AlgorithmConfig):
         self.config = config
@@ -25,17 +23,12 @@ class Algorithm(ABC):
         device: torch.device,
         env_constructors: Optional[List[Callable[[], EnvBase]]] = None,
     ):
-        """
-        Initialize the algorithm with the model and device.
-        Useful for setting up advantage modules or other model-dependent components.
-        """
+        """Initialize algorithm-specific components (advantage modules, etc)."""
         pass
 
     @abstractmethod
     def make_loss_module(self, model: torch.nn.Module) -> LossModule:
-        """
-        Create and return the loss module for the algorithm.
-        """
+        """Create loss module."""
         pass
 
     def make_collector(
@@ -44,19 +37,19 @@ class Algorithm(ABC):
         policy: torch.nn.Module,
         device: torch.device,
         storing_device: torch.device,
+        seed: int | None = None,
     ) -> DataCollectorBase:
-        """
-        Create and return the data collector (default implementation).
-
-        Uses the unified collector factory. All behavior is configured via the config object.
-        Algorithms typically don't need to override this unless they have special requirements.
-        """
+        """Create data collector with automatic frames_per_batch limiting."""
         from .collectors import make_collector
 
-        frames_per_batch = max(1, self.config.states_per_collection)
-        total_frames = self.config.num_collections * self.config.states_per_collection
+        # Compute states_per_collection from rollout_steps and graphs_per_collection
+        if not hasattr(self.config, 'rollout_steps') or self.config.rollout_steps <= 0:
+            raise ValueError("rollout_steps must be set and > 0 in config")
 
-        compile_policy = {"mode": "reduce-overhead"} if getattr(self.config, "compile_policy", False) else None
+        states_per_collection = self.config.graphs_per_collection * self.config.rollout_steps
+        frames_per_batch = max(1, states_per_collection)
+        total_frames = self.config.num_collections * states_per_collection
+        compile_policy = {"mode": "default"} if getattr(self.config, "compile_policy", False) else None
 
         return make_collector(
             env_constructors=env_constructors,
@@ -65,30 +58,45 @@ class Algorithm(ABC):
             total_frames=total_frames,
             workers=self.config.workers,
             sync=getattr(self.config, "collector_sync", True),
-            reset_at_each_iter=getattr(self.config, "collector_reset_at_each_iter", True),
+            reset_at_each_iter=False,  # Use continuous rollouts when rollout_steps > 0
+            seed=seed,
             policy_device=device,
             storing_device=storing_device,
             compile_policy=compile_policy,
+            num_threads=self.config.workers,
+            cat_results="stack",
         )
 
-    @abstractmethod
-    def make_replay_buffer(
+    def get_collection_policy(
         self,
-        batch_size: int,
+        model: torch.nn.Module,
         device: torch.device,
-    ) -> Optional[ReplayBuffer]:
-        """
-        Create and return the replay buffer (if needed).
-        Returns None if the algorithm does not use a replay buffer.
-        """
+        mode: str = "train",
+    ) -> torch.nn.Module:
+        """Select or build the policy module used for data collection."""
+        kind = getattr(self.config, "collector_actor", "auto")
+
+        if kind == "policy":
+            policy = getattr(model, "policy", None)
+        elif kind == "qvalue":
+            policy = getattr(model, "qvalue", None)
+        else:
+            policy = getattr(model, "policy", None) or getattr(model, "qvalue", None) or model
+
+        if policy is None:
+            raise ValueError("No suitable policy found for collection.")
+
+        policy.train(mode == "train")
+        return policy
+
+    @abstractmethod
+    def make_replay_buffer(self, batch_size: int, device: torch.device) -> Optional[ReplayBuffer]:
+        """Create replay buffer (None if not needed)."""
         pass
 
     @abstractmethod
     def process_batch(self, batch: TensorDict, device: torch.device) -> TensorDict:
-        """
-        Process a batch of data before updating.
-        This can include moving to device, expanding rewards, etc.
-        """
+        """Process batch before training (compute advantages, move to device, etc)."""
         pass
 
     @abstractmethod
@@ -99,12 +107,10 @@ class Algorithm(ABC):
         optimizer: torch.optim.Optimizer,
         target_net_updater: Optional[Any] = None,
     ) -> Dict[str, float]:
-        """
-        Perform a single update step.
-        Returns a dictionary of metrics to log.
-        """
+        """Perform single gradient update, return metrics."""
         pass
 
+    @abstractmethod
     def train_step(
         self,
         batch: TensorDict,
@@ -113,32 +119,9 @@ class Algorithm(ABC):
         replay_buffer: Optional[ReplayBuffer] = None,
         target_net_updater: Optional[Any] = None,
         device: Optional[torch.device] = None,
+        n_collections: int = 0,
+        n_updates: int = 0,
+        n_samples: int = 0,
     ) -> List[Dict[str, float]]:
-        """
-        Perform a training step on the collected batch.
-        This handles the difference between on-policy (update on batch) and off-policy (add to buffer, sample, update).
-        
-        Args:
-            batch: The batch of data collected from the environment.
-            loss_module: The loss module.
-            optimizer: The optimizer.
-            replay_buffer: The replay buffer (optional, for off-policy).
-            target_net_updater: The target network updater (optional).
-            device: The device to perform updates on.
-            
-        Returns:
-            A list of dictionaries containing metrics for each update step performed.
-        """
-        raise NotImplementedError("Algorithm must implement train_step.")
-
-    def update_on_collection(
-        self,
-        loss_module: LossModule,
-        batch: TensorDict,
-        optimizer: torch.optim.Optimizer,
-    ) -> List[Dict[str, float]]:
-        """
-        Perform updates on a collected batch (for on-policy algorithms).
-        Returns a list of metrics dictionaries (one per update).
-        """
-        raise NotImplementedError("This algorithm does not support update_on_collection.")
+        """Perform complete training step on collected batch, return list of metrics."""
+        pass

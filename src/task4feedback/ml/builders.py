@@ -52,11 +52,14 @@ def _wrap_policy_with_distribution(
         component_rt: Component-specific runtime parameters
 
     Returns:
-        Policy module wrapped with timing and distribution
+        Policy module wrapped with timing and distribution (or returned
+        directly when actor_kind is set to deterministic).
     """
     timing_cfg = _timing_options(
         base_rt.get("cfg") if "cfg" in base_rt else OmegaConf.create({})
     )
+
+    actor_kind = (component_rt or {}).get("actor_kind", base_rt.get("actor_kind", "probabilistic"))
 
     # Apply logit timing wrapper if configured
     policy_module: nn.Module = policy_graph
@@ -70,6 +73,9 @@ def _wrap_policy_with_distribution(
             conversion_timing_key=timing_cfg.get("conversion_key", "data_conversion_time_s"),
             subtract_conversion_time=timing_cfg.get("subtract_conversion", True),
         )
+
+    if actor_kind == "deterministic":
+        return policy_module
 
     # Get distribution configuration
     dist_cfg = _get_distribution_config(base_rt, component_rt)

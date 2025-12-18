@@ -202,5 +202,13 @@ cached_models/
 cached_norms/
 best_policies/
 
+.clangd/
+.claude
+plans/
+logs/
+
+.venv
+
+
 *.pkl
 *.json

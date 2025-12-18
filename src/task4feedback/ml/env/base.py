@@ -459,7 +459,6 @@ class RuntimeEnv(EnvBase):
 
         self.map_tasks(td)
 
-        # Calculate reward using the hook
         reward = self._compute_reward(td)
 
         simulator_status = self.simulator.run_until_external_mapping()

@@ -39,12 +39,13 @@ lint:
 	ruff check .
 check-deps:
 	@echo "Checking build dependencies..."
-	@$(PYTHON) -c "import scikit_build_core; print('✓ scikit-build-core available')" || echo "✗ scikit-build-core missing"
-	@$(PYTHON) -c "import nanobind; print('✓ nanobind available')" || echo "✗ nanobind missing"
-	@$(PYTHON) -c "import numpy; print('✓ numpy available')" || echo "✗ numpy missing"
-	@cmake --version || echo "✗ cmake not found"
+	@$(PYTHON) -c "import scikit_build_core; print('✓ scikit-build-core available')" || { echo "✗ scikit-build-core missing"; exit 1; }
+	@$(PYTHON) -c "import nanobind; print('✓ nanobind available')" || { echo "✗ nanobind missing"; exit 1; }
+	@$(PYTHON) -c "import numpy; print('✓ numpy available')" || { echo "✗ numpy missing"; exit 1; }
+	@cmake --version >/dev/null || { echo "✗ cmake not found"; exit 1; }
+	@c++ --version >/dev/null || { echo "✗ C++ compiler not found"; exit 1; }
 wheel: install-build-deps
-	$(PIP) wheel . -w dist/ --no-build-isolation
+	$(PIP) wheel . -w dist/
 sdist:
 	$(PYTHON) -m build --sdist
 dev: setup-dev build-dev test

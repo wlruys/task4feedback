@@ -51,8 +51,6 @@ class Trainer:
         self._optimizer_spec = optimizer
         self._lr_scheduler_spec = lr_scheduler
 
-        # Instantiate optimizer / scheduler lazily after the loss module exists so
-        # loss-specific parameters (e.g., SAC temperature) are included.
         self.optimizer = None if isinstance(optimizer, functools.partial) else optimizer
         self.lr_scheduler = None if isinstance(lr_scheduler, functools.partial) else lr_scheduler
 
@@ -60,6 +58,30 @@ class Trainer:
         self.collect_device = torch.device(getattr(alg_config, "collect_device", "cpu"))
         self.update_device = torch.device(getattr(alg_config, "update_device", "cpu"))
         self.storing_device = torch.device(getattr(alg_config, "storing_device", "cpu"))
+
+    def _setup_wandb_logging(self) -> None:
+        """Configure wandb metric stepping and optional model watching."""
+        if wandb.run is None:
+            return
+
+        wandb.define_metric("batch/n_collections")
+        wandb.define_metric("batch/n_updates", step_metric="batch/n_collections")
+        wandb.define_metric("batch/n_samples", step_metric="batch/n_collections")
+        wandb.define_metric("batch/*", step_metric="batch/n_collections")
+        wandb.define_metric("timing/*", step_metric="batch/n_collections")
+        wandb.define_metric("grad_norm/*", step_metric="batch/n_collections")
+        wandb.define_metric("param_norm/*", step_metric="batch/n_collections")
+        wandb.define_metric("eval/*", step_metric="batch/n_collections")
+
+        if getattr(self.logging_config, "watch_model", False):
+            try:
+                wandb.watch(
+                    self.model,
+                    log=self.logging_config.watch_log_mode,
+                    log_freq=self.logging_config.watch_log_freq,
+                )
+            except Exception as exc:
+                training.warning("Failed to enable wandb.watch: %s", exc)
 
     def _maybe_add_missing_optimizer_params(self, module: torch.nn.Module) -> None:
         """Ensure the optimizer tracks all trainable parameters in `module`."""
@@ -95,15 +117,13 @@ class Trainer:
     def train(self):
         training.info(f"Starting training with {self.algorithm.__class__.__name__}")
 
-        # 0. Initialize Algorithm
         self.algorithm.initialize(self.model, self.update_device, self.env_constructors)
+        self._setup_wandb_logging()
 
-        # 1. Setup Loss Module
         loss_module = self.algorithm.make_loss_module(self.model)
         loss_module.to(self.update_device)
 
-        # Create optimizer/scheduler after loss module exists so we include any
-        # trainable parameters registered on the loss module itself (e.g., SAC alpha).
+        # Create optimizer/scheduler after loss module exists
         if self.optimizer is None:
             if not isinstance(self._optimizer_spec, functools.partial):
                 raise TypeError("Trainer requires an optimizer or a functools.partial optimizer factory.")
@@ -114,52 +134,62 @@ class Trainer:
         if self.lr_scheduler is None and isinstance(self._lr_scheduler_spec, functools.partial):
             self.lr_scheduler = self._lr_scheduler_spec(optimizer=self.optimizer)
 
-        # Target Network Updater (only for off-policy algorithms)
+        # Target Network Updater (if needed)
         target_net_updater = None
         if self.alg_config.type == "off_policy" and hasattr(self.alg_config, "target_update_polyak"):
             target_net_updater = SoftUpdate(loss_module, eps=self.alg_config.target_update_polyak)
 
-        # 2. Setup Replay Buffer
         replay_buffer = self.algorithm.make_replay_buffer(
             batch_size=getattr(self.alg_config, "batch_size", 256),
             device=self.storing_device,
         )
 
-        # 3. Setup Collector
-        # Determine policy for collection (Actor for PPO/SAC, Q-value for DQN exploration)
-        # This logic might need to be in the algorithm or passed in.
-        # Extract policy from model using standard attribute names
-        # Try policy first (for PPO/SAC), then qvalue (for DQN), then use whole model
-        policy = self.model.policy or self.model.qvalue or self.model
+        policy = self.algorithm.get_collection_policy(
+            self.model,
+            device=self.collect_device,
+            mode="train",
+        )
+
+        try:
+            policy_device = next(policy.parameters()).device
+        except StopIteration:
+            policy_device = self.collect_device
         
         collector = self.algorithm.make_collector(
             self.env_constructors,
             policy,
-            self.collect_device,
+            policy_device,
             self.storing_device,
+            seed=self.seed,
         )
 
-        # 4. Setup Evaluation
         eval_env_fns = self.env_constructors if isinstance(self.env_constructors, list) else [self.env_constructors]
         eval_envs = make_eval_envs(eval_env_fns)
         best_performance = load_best_performance(self.logging_config.best_policy_dir)
         if (self.eval_config.best_metric_mode or "max").lower() == "min" and best_performance == 0.0:
             best_performance = float("inf")
 
-        # 5. Training Loop
         start_time = time.time()
         n_updates = 0
-        
-        # Determine max collections
+        n_collections = 0
+        n_samples = 0
+
         num_collections = getattr(self.alg_config, "num_collections", None)
 
         try:
             for i, data in enumerate(collector):
+                n_collections += 1
+
                 if num_collections is not None and i >= num_collections:
                     training.info(f"Reached maximum number of collections: {num_collections}")
                     break
 
-                # Unified training step
+                try:
+                    n_samples += data.reshape(-1).shape[0]
+                except Exception:
+                    training.warning("Could not determine number of samples in collected data.")
+                    pass
+
                 metrics_list = self.algorithm.train_step(
                     batch=data,
                     loss_module=loss_module,
@@ -167,69 +197,43 @@ class Trainer:
                     replay_buffer=replay_buffer,
                     target_net_updater=target_net_updater,
                     device=self.update_device,
+                    n_collections=n_collections,
+                    n_updates=n_updates,
+                    n_samples=n_samples,
                 )
-                
-                current_buffer_size = len(replay_buffer) if replay_buffer is not None else 0
-                
-                for metrics in metrics_list:
-                    n_updates += 1
-                    if should_log(n_updates, self.logging_config):
-                        metrics["batch/n_updates"] = n_updates
-                        metrics["batch/n_collections"] = i + 1
-                        if current_buffer_size > 0:
-                            metrics["batch/buffer_size"] = current_buffer_size
-                        if wandb.run is not None:
-                            wandb.log(metrics, step=n_updates)
 
-                # Evaluation (gate by collection count to avoid running every minibatch)
-                if should_eval(i + 1, self.eval_config):
-                    # Set policy to eval mode
+                collector.update_policy_weights_()
+
+                current_buffer_size = len(replay_buffer) if replay_buffer is not None else 0
+                n_updates += len(metrics_list)
+
+                if should_log(n_collections, self.logging_config) and metrics_list:
+                    log_payload = dict(metrics_list[-1])
+                    log_payload["batch/n_updates"] = n_updates
+                    log_payload["batch/n_collections"] = n_collections
+                    log_payload["batch/n_samples"] = n_samples
+                    if current_buffer_size > 0:
+                        log_payload["batch/buffer_size"] = current_buffer_size
+                    if wandb.run is not None:
+                        wandb.log(log_payload, step=n_collections)
+
+                if should_eval(n_collections, self.eval_config):
                     policy.eval()
-                    with torch.no_grad():
+                    with torch.inference_mode():
                         eval_metrics = run_evaluation(
                             policy,
                             eval_envs,
                             self.eval_config,
-                            n_collections=i + 1,
+                            n_collections=n_collections,
                             n_updates=n_updates,
+                            n_samples=n_samples,
+                            eval_location=self.eval_location,
                         )
-                    # Set policy back to train mode
+                        if wandb.run is not None and eval_metrics is not None:
+                            wandb.log(eval_metrics, step=n_collections)
                     policy.train()
 
-                    best_metric_key = self.eval_config.best_metric or "eval/DETERMINISTIC/vs_baseline/mean_vs_EFT"
-                    best_mode = (self.eval_config.best_metric_mode or "max").lower()
-                    current_metric = eval_metrics.get(best_metric_key)
-                    if current_metric is not None:
-                        improved = current_metric < best_performance if best_mode == "min" else current_metric > best_performance
-                        if improved:
-                            best_performance = current_metric
-                            save_best_performance(
-                                self.logging_config.best_policy_dir,
-                                best_performance,
-                                self.logging_config.best_policy_name,
-                                metric_name=best_metric_key,
-                            )
-                            # TODO: Fix save_checkpoint call to match actual function signature
-                            # save_checkpoint(
-                            #     self.model,
-                            #     self.logging_config.best_policy_dir,
-                            #     self.logging_config.best_policy_name,
-                            # )
-
-                    if wandb.run is not None:
-                        wandb.log(eval_metrics, step=n_updates)
-
-                # Checkpoint
-                if should_checkpoint(n_updates, self.logging_config):
-                    # TODO: Fix save_checkpoint call to match actual function signature
-                    pass
-                    # save_checkpoint(
-                    #     self.model,
-                    #     self.logging_config.best_policy_dir,
-                    #     self.logging_config.best_policy_name
-                    # )
-                
-                # Timeout
+                # Timeout guard (useful for final logging/checkpointing on long runs)
                 timeout = getattr(self.alg_config, "timeout", 60 * 60 * 24)
                 if time.time() - start_time > timeout:
                     training.info("Training timed out")

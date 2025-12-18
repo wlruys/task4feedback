@@ -20,6 +20,7 @@ max_grad_norm: 0.5
 compile_policy: false
 compile_advantage: false
 compile_update: false
+compile_loss_networks: false
 collector: "multi_sync"
 advantage_type: "gae"
 bagged_policy: "none"
@@ -29,4 +30,3 @@ sample_slices: true
 #number of samples per minibatch (episodes per minibatch if sample_slices = false and using ppo LSTM)
 minibatch_size: 64
 rollout_steps: 80
-

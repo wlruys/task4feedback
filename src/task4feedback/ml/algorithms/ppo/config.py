@@ -1,15 +1,35 @@
 from dataclasses import dataclass
-from ..config import UnifiedConfig
+from typing import Optional
+
+from ..config import OnPolicyConfig
+
 
 @dataclass
-class PPOConfig(UnifiedConfig):
+class PPOConfig(OnPolicyConfig):
+    """PPO algorithm configuration."""
+
     name: str = "ppo"
-    # PPO specific defaults that might differ from UnifiedConfig
-    gamma: float = 0.99
+
+    # PPO Core
+    clip_eps: float = 0.2
+    clip_vloss: bool = True
+    target_kl: Optional[float] = None
+
+    # Loss Coefficients
+    ent_coef: float = 0.001
+    val_coef: float = 0.5
+    value_norm: str = "l1"
+
+    # Advantage Estimation
     lmbda: float = 0.95
-    rollout_steps: int = 250
+    advantage_type: str = "gae"  # "gae" or "vtrace"
+    vtrace_use_lambda: bool = False
+    compile_advantage: bool = False
+
+    # Policy
+    collector: str = "multi_sync"
+
+    # Defaults
+    gamma: float = 0.998
+    rollout_steps: int = 16
     normalize_advantage: bool = True
-
-    # Collector defaults for PPO
-    collector_reset_at_each_iter: bool = False  # PPO uses rollouts by default
-

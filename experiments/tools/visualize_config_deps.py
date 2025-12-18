@@ -1,23 +1,3 @@
-#!/usr/bin/env python3
-"""
-Generate Graphviz diagram of Hydra config dependencies.
-
-This tool visualizes the configuration composition hierarchy by parsing
-defaults lists in YAML files and generating a dependency graph.
-
-Usage:
-    python experiments/tools/visualize_config_deps.py > config_deps.dot
-    dot -Tpng config_deps.dot > config_deps.png
-    dot -Tsvg config_deps.dot > config_deps.svg
-
-Requirements:
-    - PyYAML (for parsing YAML files)
-    - Graphviz (for rendering the output)
-
-Output:
-    Graphviz DOT format to stdout
-"""
-
 import sys
 from pathlib import Path
 from typing import List, Set, Dict, Tuple

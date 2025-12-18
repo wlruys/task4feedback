@@ -58,11 +58,9 @@ target_precompile_headers(backend PRIVATE
 
 if(CMAKE_BUILD_TYPE MATCHES Debug)
   target_compile_definitions(backend PUBLIC DEBUG)
-elseif(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo)
-  target_compile_definitions(backend PUBLIC DEBUG)
 endif()
 
-target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt tracy_headers unordered_dense::unordered_dense)
+target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt tracy_headers unordered_dense)
 
 if(SIM_RECORD)
     target_compile_definitions(backend PUBLIC SIM_RECORD)
@@ -91,4 +89,6 @@ target_include_directories(backend
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
-install(TARGETS backend)
+install(TARGETS backend
+    EXPORT backendTargets
+    FILE_SET cxx_hdr)

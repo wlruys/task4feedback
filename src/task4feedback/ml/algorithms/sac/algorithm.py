@@ -6,7 +6,7 @@ from torchrl.data import ReplayBuffer, TensorDictReplayBuffer, LazyTensorStorage
 from torchrl.envs import EnvBase
 from torchrl.objectives import DiscreteSACLoss
 from torchrl.objectives.common import LossModule
-
+from ..compile_utils import _safe_compile_with_warmup
 from task4feedback.logging import training
 from ..interface import Algorithm
 from .config import SACConfig
@@ -72,6 +72,10 @@ class SACAlgorithm(Algorithm):
 
         if actor is None or qvalue is None:
             raise ValueError("SAC requires both policy and qvalue networks")
+
+        if getattr(self.config, "compile_loss_networks", False):
+            actor = _safe_compile_with_warmup(actor, warmup=8, mode="default")
+            qvalue = _safe_compile_with_warmup(qvalue, warmup=8, mode="default")
 
         # Configure target entropy
         target_entropy = self.config.target_entropy

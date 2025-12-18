@@ -15,9 +15,9 @@ if TYPE_CHECKING:
 
 @dataclass
 class LoggingConfig:
-    stats_interval: int = 1000
-    save_interval: int = 100
-    checkpoint_interval: int = 100
+    stats_interval: int = 1
+    save_interval: int = 1
+    checkpoint_interval: int = 1
     best_policy_dir: str = None
     best_policy_name: str = None
     # wandb.watch configuration (can cause 10-100x slowdown for large models)
@@ -70,30 +70,30 @@ def save_best_performance(best_dir: Optional[str], value: float, checkpoint_name
 
 
 def should_log(
-    n_updates: int,
+    n_collections: int,
     logging_config: Optional[LoggingConfig],
 ) -> bool:
-    """Check if we should log based on the current update count and logging configuration."""
+    """Check if we should log based on the current collection count and logging configuration."""
     if logging_config is None:
         return False
-    return n_updates % logging_config.stats_interval == 0
+    return n_collections % logging_config.stats_interval == 0
 
 
 def should_eval(
-    n_updates: int,
+    n_collections: int,
     eval_config: Optional[EvaluationConfig],
 ) -> bool:
-    """Check if we should evaluate based on the current update count and logging configuration."""
+    """Check if we should evaluate based on the current collection count and logging configuration."""
     if eval_config is None:
         return False
-    return eval_config.eval_interval > 0 and n_updates % eval_config.eval_interval == 0
+    return eval_config.eval_interval > 0 and n_collections % eval_config.eval_interval == 0
 
 
 def should_checkpoint(
-    n_updates: int,
+    n_collections: int,
     logging_config: Optional[LoggingConfig],
 ) -> bool:
-    """Check if we should checkpoint based on the current update count and logging configuration."""
+    """Check if we should checkpoint based on the current collection count and logging configuration."""
     if logging_config is None:
         return False
-    return n_updates % logging_config.checkpoint_interval == 0
+    return n_collections % logging_config.checkpoint_interval == 0

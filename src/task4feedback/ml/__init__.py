@@ -1,4 +1,5 @@
 from .base import UnifiedRLModule
+from .actors import *
 
 from .models import *
 from .rl_utils import *

@@ -60,13 +60,13 @@ cmake.version = ">=3.22"
 cmake.build-type = "RelWithDebInfo"
 build.verbose = true
 build-dir = "build/{wheel_tag}"
-wheel.expand-macos-universal-tags = true
+wheel.expand-macos-universal-tags = false
 
 
 [tool.scikit-build.cmake.define]
 SIM_RECORD = { env = "SIM_RECORD", default = "OFF" }
 SPDLOG_ACTIVE_LEVEL = { env = "SPDLOG_ACTIVE_LEVEL", default = "SPDLOG_LEVEL_CRITICAL" }
-ENABLE_NATIVE_TUNING = "ON"
+ENABLE_NATIVE_TUNING = "OFF"
 
 [[tool.scikit-build.overrides]]
 if.env.PGO_MODE = "Generate"
@@ -98,7 +98,7 @@ cmake.define.ENABLE_NATIVE_TUNING = "OFF"
 if.env.CMAKE_BUILD_TYPE = "Release"
 inherit.cmake.define = "append"
 cmake.build-type = "Release"
-cmake.define.ENABLE_NATIVE_TUNING = "ON"
+cmake.define.ENABLE_NATIVE_TUNING = "OFF"
 
 [[tool.scikit-build.overrides]]
 if.env.CMAKE_BUILD_TYPE = "RelWithDebInfo"

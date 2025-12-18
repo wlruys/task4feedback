@@ -357,20 +357,13 @@ def run_evaluation(
         ):
             visualize_envs(n_collections, viz_envs, config, exploration_type, video_log)
 
-    if wandb.run:
-        wandb.log(
-            {
+    return  {
                 **metrics,
                 **video_log,
                 "batch/n_updates": n_updates,
                 "batch/n_collections": n_collections,
                 "batch/n_samples": n_samples,
             }
-        )
-    else:
-        training.debug("Skipping wandb.log for evaluation because no active run was found.")
-
-    return metrics
 
 
 __all__ = [
