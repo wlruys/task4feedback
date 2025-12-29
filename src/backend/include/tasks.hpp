@@ -934,7 +934,7 @@ public:
   }
 
   // Update variants
-  void update_variants(Graph& graph) {
+  void update_variants(Graph &graph) {
     auto &tasks = graph.tasks;
 
     for (const auto &task : tasks) {
@@ -1400,7 +1400,7 @@ public:
                        std::to_string(data_id) + "_" + std::to_string(evicting_on_device_id);
     eviction_task_names.push_back(name);
 
-    set_eviction_task_state(id, TaskState::SPAWNED);
+    set_eviction_task_state(id, TaskState::RESERVED);
     set_eviction_task_evicting_on(id, evicting_on_device_id);
     set_eviction_task_data_id(id, data_id);
     set_eviction_task_compute_task(id, compute_task_id);
@@ -1787,7 +1787,8 @@ public:
   }
 
   timecount_t get_compute_task_duration(taskid_t id) const {
-    return compute_task_time_records[id].completed_time - compute_task_time_records[id].launched_time;
+    return compute_task_time_records[id].completed_time -
+           compute_task_time_records[id].launched_time;
   }
 
   timecount_t get_data_task_duration(taskid_t id) const {
@@ -1795,7 +1796,8 @@ public:
   }
 
   timecount_t get_eviction_task_duration(taskid_t id) const {
-    return eviction_task_time_records[id].completed_time - eviction_task_time_records[id].launched_time;
+    return eviction_task_time_records[id].completed_time -
+           eviction_task_time_records[id].launched_time;
   }
 
   void record_data_launched(taskid_t id, timecount_t launched_time) {

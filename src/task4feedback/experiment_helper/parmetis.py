@@ -253,7 +253,7 @@ def query_parmetis(
         if not status:
             if rank == 0:
                 print("ParMETIS failed!", flush=True)
-            return None, False
+            return prev_mapping, False
 
         if rank == 0:
             for i, p in enumerate(parts):

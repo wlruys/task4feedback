@@ -943,24 +943,24 @@ class IncrementalSchedule(RuntimeEnv):
 
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step", self.step_count)
-        if self.step_count == 0:
+        if self.step_count == 0 and not self.disable_reward_flag:
             self.EFT_baseline = self._get_baseline(policy=self.baseline_policy)
             self.prev_makespan = self.EFT_baseline
-            self.graph_extractor = fastsim.GraphExtractor(self.simulator.get_state())
             self.eft_time = self.EFT_baseline
             sim_current = self.simulator.copy()
             sim_current.disable_external_mapper()
-
             if self.k > 0:
                 sim_current.set_steps((self.k) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
                 sim_current.run()
             sim_current.start_drain()
             sim_current.run()
-
             self.potential = [(-sim_current.time) / (self.EFT_baseline)]
             self.potential_sum = 0.0
             if self.chance < 1.0:
                 self._reinitialize_intervals()
+        else:
+            self.potential = [0.0]
+            self.potential_sum = 0.0
 
         self.step_count += 1
 
@@ -991,9 +991,9 @@ class IncrementalSchedule(RuntimeEnv):
         done = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
-        if done:
+        if done and not self.disable_reward_flag:
             self.potential_sum -= reward
-            obs, r, time, improvement = self._handle_done(obs)
+            obs, r, _, _ = self._handle_done(obs)
             if self.terminal_reward:
                 reward = self.dense_reward_scale * r
                 if self.pbrs:

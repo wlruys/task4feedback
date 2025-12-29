@@ -1153,6 +1153,7 @@ class RandomCornerWorkload(DynamicWorkload):
         seed: int = 0,
         **kwargs,
     ):
+        # Although not random, we need to set self.random for the seed
         self.random = True
         rng = np.random.default_rng(seed)
 
@@ -1190,10 +1191,28 @@ class RandomCornerWorkload(DynamicWorkload):
             np.array([x_max - half, y_max - half], dtype=float),  # top-right
         ]
 
-        # Pick random start and end corners
-        # start_corner = rng.choice(corners)
-        start_corner = corners[seed % len(corners)]  # deterministic start for reproducibility
-        end_corner = rng.choice([c for c in corners if not np.allclose(c, start_corner)])
+        # --- Helper: Deterministic Next Corner ---
+        def get_next_corner_index(current_idx, choice_idx):
+            # There are 3 valid neighbors. We pick the (choice_idx)-th one.
+            # We iterate 1, 2, 3 steps forward modulo 4 to find valid indices.
+            valid_indices = [(current_idx + k) % 4 for k in range(1, 4)]
+            return valid_indices[choice_idx]
+
+        # --- Initialize Path based on Seed ---
+        # 1. Determine Initial Start Corner (4 options)
+        current_corner_idx = seed % 4
+        start_corner = corners[current_corner_idx]
+
+        # 2. Determine Initial End Corner (3 options)
+        # We strip the first factor (4) from the seed
+        remaining_seed = seed // 4
+
+        choice = remaining_seed % 3
+        next_corner_idx = get_next_corner_index(current_corner_idx, choice)
+        end_corner = corners[next_corner_idx]
+
+        # Prepare for the loop
+        remaining_seed //= 3  # Consume the choice we just made
 
         # Helper: smoothstep
         def smoothstep01(t):
@@ -1204,10 +1223,19 @@ class RandomCornerWorkload(DynamicWorkload):
             phase_idx = (j - start_step) // phase_length
             phase_step = (j - start_step) % phase_length
 
-            # Choose new random end corner at each phase
+            # Check if we are entering a NEW phase (after the first one)
             if phase_step == 0 and j > start_step:
+                # 1. Old end becomes new start
                 start_corner = end_corner
-                end_corner = rng.choice([c for c in corners if not np.allclose(c, start_corner)])
+                current_corner_idx = next_corner_idx
+
+                # 2. Decode next choice from the seed
+                choice = remaining_seed % 3
+                next_corner_idx = get_next_corner_index(current_corner_idx, choice)
+                end_corner = corners[next_corner_idx]
+
+                # 3. Consume the seed factor
+                remaining_seed //= 3
 
             dwell_steps = int(round(phase_length * (1 - transition_frac)))
             move_steps = max(1, phase_length - dwell_steps)  # avoid div-by-zero

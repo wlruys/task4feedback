@@ -1,5 +1,5 @@
 from .mesh.base import Geometry, Cell, Edge
-from .mesh.partition import block_cyclic
+from .mesh.partition import block_cyclic, ij_partition
 from ..interface import DataBlocks, DeviceType, TaskTuple, VariantTuple
 from .base import (
     DataGeometry,
@@ -1109,6 +1109,19 @@ class PartitionMapper:
             mapping_result.append(fastsim.Action(local_id, device, mapping_priority, mapping_priority))
         return mapping_result
 
+    def get_current_mapping(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        candidates = torch.zeros((simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item()
+            graph = simulator.input.graph
+            assert isinstance(graph, JacobiGraph)
+            cell_id = graph.task_to_cell[global_task_id]
+            device = self.cell_to_mapping[cell_id]
+            mapping_result.append(device - self.offset)
+        return mapping_result
+
 
 class BlockCyclicMapper(PartitionMapper):
     def __init__(self, mapper: Optional[Self] = None, geometry: Optional[Geometry] = None, n_devices: int = 4, block_size: int = 2, offset: int = 1):
@@ -1128,6 +1141,73 @@ class BlockCyclicMapper(PartitionMapper):
             self.cell_to_mapping = {cell: device + self.offset for cell, device in enumerate(partition)}
         else:
             raise ValueError("Either mapper or geometry must be provided for BlockCyclicMapper")
+
+
+class RowColCyclicMapper(PartitionMapper):
+    def __init__(
+        self,
+        geometry: Geometry,
+        n_devices: int = 4,
+        setting: int = 0,
+        offset: int = 1,
+        level_start: int = 0,
+        mapper: Optional[Self] = None,
+        round: int = 2,
+    ):
+        """
+        setting == 0 : Checkerboard
+        setting == 1 : Row cyclic
+        setting == 2 : Column cyclic
+        """
+        self.geometry = geometry
+        self.n_devices = n_devices
+        self.setting = setting
+        self.offset = offset
+        self.level_start = level_start
+
+        if mapper is not None:
+            assert isinstance(mapper, RowColCyclicMapper)
+            self.cell_to_mapping = mapper.cell_to_mapping
+            return
+
+        # Use the same (i,j) partitioning as block_cyclic
+        _, _, row_keys, col_keys, ij_map = ij_partition(geometry, round=round)
+
+        cell_to_mapping = {}
+
+        for i, rv in enumerate(row_keys):
+            for j, cv in enumerate(col_keys):
+                cells = ij_map[(rv, cv)]
+
+                if setting == 0:
+                    # Checkerboard
+                    if n_devices == 2:
+                        device = (i + j) & 1
+                    elif n_devices == 4:
+                        device = (i & 1) * 2 + (j & 1)
+                    else:
+                        device = (i + j) % n_devices
+
+                elif setting == 1:
+                    # Row cyclic
+                    device = i % n_devices
+
+                elif setting == 2:
+                    # Column cyclic
+                    device = j % n_devices
+
+                else:
+                    raise ValueError(f"Invalid setting {setting}")
+
+                device += offset
+
+                for c in cells:
+                    cell_to_mapping[c] = device
+
+        super().__init__(
+            cell_to_mapping=cell_to_mapping,
+            level_start=level_start,
+        )
 
 
 class LevelPartitionMapper:
@@ -1175,8 +1255,8 @@ class JacobiRoundRobinMapper:
     def __init__(self, n_devices: int = 4, setting: int = 0, offset: int = 1, mapper: Optional[Self] = None):
         """
         Initialize the JacobiRoundRobinMapper.
-        setting == 2 : Column cyclic
-        setting == 1 : Row cyclic
+        setting == 2 : Row cyclic
+        setting == 1 : Column cyclic
         setting == 0 : Checker board
         """
         self.n_devices = n_devices

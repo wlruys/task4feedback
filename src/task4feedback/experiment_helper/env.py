@@ -93,7 +93,7 @@ def _parse_norm_specs(cfg: DictConfig) -> Tuple[bool, int, List[dict]]:
 
 
 def _setup_observation_norms(
-    env: TransformedEnv,
+    env: RuntimeEnv,
     cfg: DictConfig,
     normalization: Optional[NormalizationDetails],
 ) -> Optional[NormalizationDetails]:
@@ -148,8 +148,8 @@ def _setup_observation_norms(
                 except TypeError:
                     norm.init_stats(num_iter=num_iter, key=in_keys[0])
                 if cfg.feature.observer.version in "DFGH":
-                    norm.loc[-4:] = 0.0
-                    norm.scale[-4:] = 1.0
+                    norm.loc[-env.n_compute_devices :] = 0.0
+                    norm.scale[-env.n_compute_devices :] = 1.0
         finally:
             env.enable_reward()
         return NormalizationDetails(states={n: t.state_dict() for n, t in created.items()})
