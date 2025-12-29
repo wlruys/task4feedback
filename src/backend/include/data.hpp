@@ -493,7 +493,7 @@ public:
       accumulated += sz_it->second;
       id_buffer.push_back(did);
     }
-    assert(accumulated <= mem_size && "getLRUids(): accumulated size exceeds requested size");
+    assert(accumulated >= mem_size && "getLRUids(): evictable memory isze is smaller than the requested size");
     return id_buffer;
   }
 
