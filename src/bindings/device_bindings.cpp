@@ -38,10 +38,12 @@ void init_device_ext(nb::module_ &m) {
 
   nb::class_<Device>(m, "Device")
       .def(nb::init<>())
-      .def(nb::init<devid_t, DeviceType, copy_t, vcu_t, mem_t>(), "id"_a, "arch"_a, "copy"_a,
-           "vcu"_a, "mem"_a)
+      .def(nb::init<devid_t, DeviceType, copy_t, copy_t, vcu_t, mem_t>(), "id"_a, "arch"_a,
+           "h2d_max_copy"_a, "d2d_max_copy"_a, "vcu"_a, "mem"_a)
       .def_ro("id", &Device::id)
       .def_ro("arch", &Device::arch)
+      .def_ro("h2d_max_copy", &Device::h2d_max_copy)
+      .def_ro("d2d_max_copy", &Device::d2d_max_copy)
       .def_ro("max_resources", &Device::max_resources, nb::rv_policy::copy)
       .def("get_mem", &Device::get_mem)
       .def("get_vcu", &Device::get_vcu);
@@ -49,8 +51,10 @@ void init_device_ext(nb::module_ &m) {
   nb::class_<Devices>(m, "Devices")
       .def(nb::init<>())
       .def(nb::init<devid_t>(), "n_devices"_a)
-      .def("create_device", &Devices::create_device, "id"_a, "name"_a, "arch"_a, "copy"_a, "mem"_a)
-      .def("append_device", &Devices::append_device, "name"_a, "arch"_a, "copy"_a, "mem"_a)
+      .def("create_device", &Devices::create_device, "id"_a, "name"_a, "arch"_a, "h2d_max_copy"_a,
+           "d2d_max_copy"_a, "mem"_a)
+      .def("append_device", &Devices::append_device, "name"_a, "arch"_a, "h2d_max_copy"_a,
+           "d2d_max_copy"_a, "mem"_a)
       .def("get_device", nb::overload_cast<devid_t>(&Devices::get_device, nb::const_), "id"_a,
            nb::rv_policy::reference_internal)
       .def("get_device_id", &Devices::get_device_id, "name"_a)

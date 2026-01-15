@@ -159,6 +159,23 @@ public:
     data_initialized = true;
   }
 
+  void initialize_data_replicate(dataid_t data_id, devid_t device_id) {
+    ZoneScoped;
+    if (!initialized) {
+      SPDLOG_CRITICAL("Simulator not initialized.");
+      assert(false);
+      return;
+    }
+
+    if (!data_initialized) {
+      SPDLOG_CRITICAL("Data Manager not initialized.");
+      assert(false);
+      return;
+    }
+
+    scheduler.initialize_data_replicate(data_id, device_id);
+  }
+
   void set_transition_conditions(TransitionConditions &conditions) {
     scheduler.set_transition_conditions(conditions);
   }

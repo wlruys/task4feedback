@@ -304,7 +304,7 @@ class TaskGraph:
             if task.dependencies:
                 dep_names = []
                 for dep_id in task.dependencies:
-                    dep_name = self.graph.get_name(dep_id)
+                    dep_name = self.get_task(dep_id).name
                     dep_names.append(f"{dep_name}({dep_id})")
                 deps_str = ", ".join(dep_names)
             else:
@@ -319,6 +319,21 @@ class TaskGraph:
             result.append(f"    Writes: {write_str}")
 
         return "\n".join(result)
+
+    def info_to_dict(self):
+        info = {}
+
+        task_count = self.graph.get_n_compute_tasks()
+
+        for i in range(task_count):
+            task = self.get_task(i)
+            info[task.id] = {
+                "dependencies": [self.get_task(dep).id for dep in task.dependencies],
+                "read": [r for r in task.read],
+                "write": [w for w in task.write],
+            }
+
+        return info
 
 
 class DataBlocks:
@@ -427,6 +442,9 @@ class DataBlocks:
 
         return "\n".join(result)
 
+    def __len__(self):
+        return self.data.size()
+
 
 class System:
     def __init__(self, fastest_flops=11e12, slowest_flops=11e12, gpu_flop=11e12, fastest_gmbw=443e9, slowest_gmbw=443e9):
@@ -449,8 +467,8 @@ class System:
         self.slowest_gmbw = slowest_gmbw
         self.arch_to_maxmem = {DeviceType.CPU: 0, DeviceType.GPU: 0}
 
-    def create_device(self, name, arch, copy, memory, flops: Optional[int] = None, gmbw: Optional[int] = None):
-        id = self.devices.append_device(name, arch, copy, memory)
+    def create_device(self, name, arch, h2d_max_copy, d2d_max_copy, memory, flops: Optional[int] = None, gmbw: Optional[int] = None):
+        id = self.devices.append_device(name, arch, h2d_max_copy, d2d_max_copy, memory)
         if flops is not None:
             self.fastest_flops = max(self.fastest_flops, flops)
             self.slowest_flops = min(self.slowest_flops, flops)
@@ -841,7 +859,7 @@ class CompiledDefaultObserverFactory:
 class DefaultObserverFactory(ExternalObserverFactory):
     def __init__(self, spec: fastsim.GraphSpec):
         # Enable edge/neighbor caching per taskid
-        # NOTE: This only works if all graphs have exactly the same DAG and ids. 
+        # NOTE: This only works if all graphs have exactly the same DAG and ids.
         #       ALL OBSERVERS SHARE THE SAME CACHE. THIS IS A HACKED TOGETHER IMPL.
 
         graph_extractor_t = fastsim.GraphExtractor
@@ -1967,6 +1985,13 @@ class SimulatorDriver:
         """
         self.simulator.initialize_data()
 
+    def initialize_data_replicate(self, data_id, device_id):
+        """
+        Replicate a data block to a device during initialization.
+        This is used to set up initial data placements before simulation starts.
+        """
+        self.simulator.initialize_data_replicate(data_id, device_id)
+
     @property
     def mapper(self):
         if self.use_external_mapper:
@@ -2259,9 +2284,9 @@ def uniform_connected_devices(
         s = System(**system_specs)
     n_gpus = n_devices - 1
 
-    s.create_device("CPU:0", DeviceType.CPU, cpu_copyengines, int(2**62))
+    s.create_device("CPU:0", DeviceType.CPU, cpu_copyengines, 0, int(2**62))
     for i in range(n_gpus):
-        s.create_device(f"GPU:{i}", DeviceType.GPU, device_copyengines, int(mem) if mem != float("inf") else int(2**62))
+        s.create_device(f"GPU:{i}", DeviceType.GPU, 2, device_copyengines, int(mem) if mem != float("inf") else int(2**62))
 
     s.finalize_devices()
 

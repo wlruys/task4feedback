@@ -9,6 +9,7 @@
 #include <ankerl/unordered_dense.h>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <span>
 #include <string>
@@ -266,7 +267,8 @@ public:
     return set_valid(data_id, device_id, current_time) == 0;
   }
 
-  inline devicemask_t invalidate_except(dataid_t data_id, devid_t device_id, timecount_t current_time) {
+  inline devicemask_t invalidate_except(dataid_t data_id, devid_t device_id,
+                                        timecount_t current_time) {
     assert(data_id < num_data && device_id < num_devices);
     devicemask_t old_status = locations[data_id];
     devicemask_t keep_mask = (1 << device_id);
@@ -493,7 +495,8 @@ public:
       accumulated += sz_it->second;
       id_buffer.push_back(did);
     }
-    assert(accumulated >= mem_size && "getLRUids(): evictable memory isze is smaller than the requested size");
+    assert(accumulated >= mem_size &&
+           "getLRUids(): evictable memory isze is smaller than the requested size");
     return id_buffer;
   }
 
@@ -665,6 +668,23 @@ public:
                    lru_manager.get_mem(i), devices.get_max_resources(i).mem);
     }
     valid_location_buffer.reserve(devices.size());
+  }
+
+  void initialize_data_replicate(const Data &data, const Devices &devices,
+                                 DeviceManager &device_manager, dataid_t data_id,
+                                 devid_t device_id) {
+    const auto data_size = data.get_size(data_id);
+    if (device_id > -1 &&
+        (lru_manager.get_mem(device_id) + data_size) <= devices.get_max_resources(device_id).mem &&
+        !mapped_locations.is_valid(data_id, device_id)) {
+      mapped_locations.set_valid(data_id, device_id, 0);
+      reserved_locations.set_valid(data_id, device_id, 0);
+      launched_locations.set_valid(data_id, device_id, 0);
+      device_manager.add_mem<TaskState::MAPPED>(device_id, data_size, 0);
+      device_manager.add_mem<TaskState::RESERVED>(device_id, data_size, 0);
+      device_manager.add_mem<TaskState::LAUNCHED>(device_id, data_size, 0);
+      lru_manager.read(device_id, data_id, data_size);
+    }
   }
 
   [[nodiscard]] const LRU_manager &get_lru_manager() const {
@@ -960,6 +980,14 @@ public:
 
     timecount_t duration = comm_manager.ideal_time_to_transfer(topology, size, source, destination);
 
+    // if (rand() % 100 < 10) {
+    //   duration = duration * 146 / 100;
+    // }
+
+    // // if (size < 64 * 1024 * 1024) {
+    // //   duration = duration * 129 / 100;
+    // // }
+
     if (duration == 0) {
       assert(source != destination);
       SPDLOG_DEBUG("Block moving instantly from {} to {}. Check bandwidth settings.", source,
@@ -1045,8 +1073,8 @@ public:
     comm_manager.release_connection(source, destination);
   }
 
-  void remove_memory(DeviceManager &device_manager, const devicemask_t changed_flags, dataid_t data_id,
-                     mem_t size, timecount_t current_time) {
+  void remove_memory(DeviceManager &device_manager, const devicemask_t changed_flags,
+                     dataid_t data_id, mem_t size, timecount_t current_time) {
     const devid_t n_devices = device_manager.n_devices;
     for (devid_t device = 0; device < n_devices; device++) {
       if (changed_flags & (1 << device)) {
