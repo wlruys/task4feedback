@@ -66,16 +66,21 @@ def make_folder_name(cfg: DictConfig):
     - boundary_ratio: str
     """
 
-    def closest_ratio_string(value: float) -> str:
-        mapping = {100: "100", 10: "10", 1: "1", 0.1: "0.1"}
-        closest = min(mapping.keys(), key=lambda x: abs(value - x))
-        return mapping[closest]
+    if cfg.graph.config.get("r_interior") is not None and cfg.graph.config.get("r_boundary") is not None:
+        interior_ratio = cfg.graph.config.r_interior
+        boundary_ratio = cfg.graph.config.r_boundary
+    else:
 
-    interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
-    boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
+        def closest_ratio_string(value: float) -> str:
+            mapping = {100: "100", 10: "10", 1: "1", 0.1: "0.1"}
+            closest = min(mapping.keys(), key=lambda x: abs(value - x))
+            return mapping[closest]
 
-    interior_ratio = closest_ratio_string(interior_ratio)
-    boundary_ratio = closest_ratio_string(boundary_ratio)
+        interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
+        boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
+
+        interior_ratio = closest_ratio_string(interior_ratio)
+        boundary_ratio = closest_ratio_string(boundary_ratio)
 
     if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
         graph_name = cfg.graph.config.workload_args.traj_type

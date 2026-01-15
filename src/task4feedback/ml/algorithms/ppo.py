@@ -530,41 +530,6 @@ def run_ppo(
         samples_in_collection = flattened_data.shape[0]
         n_samples += samples_in_collection
 
-        # print("SANITY CHECK OF SIZES IN OBSERVATION")
-        # print("observation shape", flattened_data["observation"].shape)
-        # print("action shape", flattened_data["action"].shape)
-        # print("reward shape", flattened_data["next", "reward"].shape)
-        # print("done shape", flattened_data["next", "done"].shape)
-        # print("logits shape", flattened_data["logits"].shape)
-
-        # print("keys", flattened_data.keys())
-
-        # if max_candidates > 1:
-        #    flattened_data["advantage"] = flattened_data["advantage"].expand(
-        #        -1, max_candidates
-        #    )
-        #    flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
-        #
-        #    flattened_data["value_target"] = flattened_data["value_target"].expand(
-        #        -1, max_candidates
-        #    )
-        #    flattened_data["value_target"] = flattened_data["value_target"].unsqueeze(-1)
-
-        # flattened_data["reward"] = flattened_data["next", "reward"].expand(
-        #     -1, max_candidates
-        # )
-
-        # flattened_data["reward"] = flattened_data["reward"].unsqueeze(-1)
-
-        # flattened_data["done"] = flattened_data["next", "done"].expand(
-        #     -1, max_candidates
-        # )
-        # flattened_data["done"] = flattened_data["done"].unsqueeze(-1)
-
-        # print("advantage shape", flattened_data["advantage"].shape)
-        # print("value target shape", flattened_data["value_target"].shape)
-        # print("reward shape", flattened_data["next", "reward"].shape)
-        # print("done shape", flattened_data["next", "done"].shape)
         replay_buffer.extend(flattened_data)
 
         update_start_t = time.perf_counter()
@@ -640,28 +605,6 @@ def run_ppo(
                         training.info(
                             f"Skipping env check and checkpointing, batch mean improvement {wandb_log.get('batch/mean_improvement', -1):.2f} did not exceed threshold of {batch_max_performance:.2f}."
                         )
-                    #     filename = f"{batch_max_performance:.3f}_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt"
-                    #     checkpoint_path = os.path.join(logging_config.best_policy_dir, filename)
-                    #     # Remove all old checkpoints with the same seed
-                    #     pattern = os.path.join(logging_config.best_policy_dir, f"*_{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{seed}.pt")
-                    #     for old_file in glob.glob(pattern):
-                    #         if os.path.abspath(old_file) != os.path.abspath(checkpoint_path):
-                    #             try:
-                    #                 os.remove(old_file)
-                    #                 training.info(f"Removed old checkpoint for seed {seed}: {old_file}")
-                    #             except OSError as e:
-                    #                 training.warning(f"Failed to remove {old_file}: {e}")
-                    #     training.info(f"New max performance: {batch_max_performance:.4f}. Saving checkpoint.")
-                    #     if logging_config.best_policy_dir is not None:
-                    #         save_checkpoint(
-                    #             n_collections,
-                    #             policy_module=collector.policy,
-                    #             value_module=loss_module.critic_network,
-                    #             optimizer=optimizer,
-                    #             lr_scheduler=lr_scheduler,
-                    #             filename=filename,
-                    #             checkpoint_dir=logging_config.best_policy_dir,
-                    #         )
 
         collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
         update_end_t = time.perf_counter()

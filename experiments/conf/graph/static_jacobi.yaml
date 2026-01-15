@@ -11,13 +11,15 @@ config:
   boundary_complexity: 1.0
   level_memory: 80e9
   randomness: 0.0
-  permute_idx: 0 
+  permute_idx: 0
   vcu_usage: 1.0
   task_internal_memory: 0
-  # task_time: 1000 
-  # interior_time: 1000 
-  # boundary_time: 1000
-  # compute_time: 1000
+  task_time: null
+  interior_time: null
+  boundary_time: null
+  compute_time: null # interior_time and boundary_time must be set to use compute_time
+  interior_size: null # if you define interior_size and boundary_size, they will be used over time-based calculations
+  boundary_size: null
 init:
   partitioner: metis
   nparts: 4
@@ -26,6 +28,6 @@ init:
 env:
   change_priority: False
   change_location: True
-  change_duration: False 
+  change_duration: False
   warmup: 20
   seed: 1

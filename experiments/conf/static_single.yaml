@@ -1,6 +1,6 @@
 defaults:
   - graph: static_jacobi
-  - reward: pbrs
+  - reward: incremental_schedule
   - system: 4h100
   - feature: candidate_coordinate
   - network: vector_baseline
@@ -8,7 +8,7 @@ defaults:
   - runtime: batch
   - wandb: default
   - logging: default
-  - lr_scheduler: none 
+  - lr_scheduler: none
   - noise: none
   - optimizer: adamw
   - eval: default
@@ -33,7 +33,7 @@ graph:
     level_memory: 110e9
   env:
     change_priority: False
-    change_location: True
+    change_location: False
     change_duration: False
     seed: 1
 
@@ -75,9 +75,9 @@ network:
     add_progress: True
 
 runtime:
-  batch_size: 5
+  batch_size: 64
   queue_threshold: 5
-  max_in_flight: 16
+  max_in_flight: 5
 
 wandb:
   enabled: true

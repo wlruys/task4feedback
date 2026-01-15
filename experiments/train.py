@@ -53,11 +53,19 @@ class GitInfo(Callback):
             print(f"GitInfo callback failed: {e}")
 
 
-def configure_training(cfg: DictConfig):
+def configure_training(cfg: DictConfig, normalization=None):
     # start_logger()
+    run_name, _, _, _ = make_folder_name(cfg)
     graph_builder = make_graph_builder(cfg)
-    env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
+    if normalization is None:
+        env, normalization = make_env(graph_builder=graph_builder, cfg=cfg)
+        norm_dir = os.path.join("./norms", run_name)
+        os.makedirs(norm_dir, exist_ok=True)
 
+        with open(os.path.join(norm_dir, f"{cfg.feature.observer.version}_norm.pkl"), "wb") as f:
+            pickle.dump(normalization, f)
+    else:
+        env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=normalization)
     observer = env.get_observer()
     feature_config = FeatureDimConfig.from_observer(observer)
     model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
@@ -72,6 +80,7 @@ def configure_training(cfg: DictConfig):
     #     print(f"Loading policy from checkpoint: {ckpt_path}")
     #     loaded = load_policy_from_checkpoint(model, ckpt_path)
     #     assert loaded, f"Failed to load model from {ckpt_path}"
+    # model.actor.load_state_dict(torch.load("/home/cc/task4feedback_torchrl/experiments/dataset/8w_256lvl_4gpu_noise_10-1_72GB/bc_actor_best_eft.pt", weights_only=False))
 
     def env_fn(eval: bool = False, imported_cfg: DictConfig = None):
         if imported_cfg is not None:
@@ -134,7 +143,6 @@ def configure_training(cfg: DictConfig):
                 )
     else:
         expert_demonstration = None
-
     if lstm is not None:
         run_ppo_lstm(
             actor_critic_module=model,
@@ -183,6 +191,7 @@ def main(cfg: DictConfig):
         checkpoint_path = Path(cfg.wandb.dir).parent / "model_checkpoints" / f"{run_name}"
         cfg.eval.pickle_path = f"./pickled_evaluation/{run_name}.pkl"
         cfg.eval.expert_path = f"./dataset/{run_name}/{cfg.eval.expert_path}.pkl" if cfg.eval.expert_path is not None else None
+        norm_path = f"./norms/{run_name}/{cfg.feature.observer.version}_norm.pkl"
 
         if not os.path.exists(cfg.eval.pickle_path):
             print(f"Pickle path {cfg.eval.pickle_path} does not exist.")
@@ -195,6 +204,12 @@ def main(cfg: DictConfig):
             cfg.eval.expert_path = None
         else:
             print(f"Using expert path {cfg.eval.expert_path}")
+
+        if os.path.exists(norm_path):
+            print(f"Loading normalization from {norm_path}")
+            normalization = pickle.load(open(norm_path, "rb"))
+        else:
+            normalization = None
 
         # Make a dir if not exists
         checkpoint_path.mkdir(parents=True, exist_ok=True)
@@ -227,7 +242,7 @@ def main(cfg: DictConfig):
     random.seed(cfg.seed)
     torch.use_deterministic_algorithms(cfg.deterministic_torch)
 
-    configure_training(cfg)
+    configure_training(cfg, normalization=normalization)
 
     if cfg.wandb.enabled:
         wandb.finish()

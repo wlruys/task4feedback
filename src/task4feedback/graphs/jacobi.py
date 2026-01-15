@@ -47,6 +47,8 @@ class JacobiConfig(GraphConfig):
     task_time: Optional[int] = None
     interior_time: Optional[int] = None
     boundary_time: Optional[int] = None
+    interior_size: Optional[int] = None
+    boundary_size: Optional[int] = None
     compute_time: Optional[int] = None
     vcu_usage: float = 1.0
     task_internal_memory: int = 0
@@ -84,15 +86,17 @@ class JacobiData(DataGeometry):
         if self.config.interior_time is not None:
             assert system is not None
             interior_size = system.fastest_bandwidth * self.config.interior_time
-
         if self.config.boundary_time is not None:
             assert system is not None
             boundary_size = system.fastest_bandwidth * self.config.boundary_time
-
+        if self.config.interior_size is not None:
+            interior_size = self.config.interior_size
+        if self.config.boundary_size is not None:
+            boundary_size = self.config.boundary_size
         if self.config.compute_time is not None:
             assert system is not None
-            assert self.config.interior_time is not None, "Interior time should be set to manually set compute time"
-            assert self.config.boundary_time is not None, "Boundary time should be set to manually set compute time"
+            assert self.config.interior_time is not None or self.config.interior_size is not None, "Interior time or size should be set to manually set compute time"
+            assert self.config.boundary_time is not None or self.config.boundary_size is not None, "Boundary time or size should be set to manually set compute time"
             self.config.memory_intensity = self.config.compute_time / interior_size * (system.fastest_gmbw / 1e6)
 
         interior_size = int(interior_size)
@@ -1331,6 +1335,12 @@ class JacobiQuadrantMapper:
             mapping_priority = simulator.simulator.get_state().get_mapping_priority(global_task_id)
             mapping_result.append(fastsim.Action(i, device, mapping_priority, mapping_priority))
         return mapping_result
+
+    def mapping_from_id(self, global_task_id: int) -> int:
+        x = global_task_id % self.n_tasks // self.width // (self.width // 2)
+        y = global_task_id % self.n_tasks % self.width // (self.width // 2)
+        device = x * 2 + y + self.offset
+        return device
 
 
 class JacobiVariantGPUOnly(VariantBuilder):

@@ -14,10 +14,12 @@ config:
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0
-  task_internal_memory: 0 
-  # task_time: 1000 
+  task_internal_memory: 0
+  # task_time: 1000
   # boundary_time: 1000
-  # interior_time: 1000 
+  # interior_time: 1000
+  r_interior: 1
+  r_boundary: 1
   workload:
     _target_: task4feedback.graphs.base.TrajectoryWorkload
   workload_args:
@@ -27,7 +29,7 @@ config:
     scale: 0.3
     traj_specifics:
       radius: 0.5
-      max_angle: 2
+      phase_length: 128
 init:
   partitioner: metis
   nparts: 4

@@ -14,7 +14,9 @@ config:
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0
-  task_internal_memory: 0 
+  task_internal_memory: 0
+  r_interior: 1
+  r_boundary: 1
   workload:
     _target_: task4feedback.graphs.base.RandomCornerWorkload
   workload_args:
