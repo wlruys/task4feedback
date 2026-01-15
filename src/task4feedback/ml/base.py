@@ -3,12 +3,11 @@ from torchrl.modules import ProbabilisticActor, ValueOperator
 
 
 class ActorCriticModule(Module):
-    def __init__(
-        self, actor: Module | ProbabilisticActor, critic: Module | ValueOperator
-    ):
+    def __init__(self, actor: Module | ProbabilisticActor, critic: Module | ValueOperator, disciminator: Module = None):
         super().__init__()
         self.actor = actor
         self.critic = critic
+        self.discriminator = disciminator
 
     def forward(self, x):
         action = self.actor(x)

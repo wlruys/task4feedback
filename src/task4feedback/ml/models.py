@@ -734,7 +734,7 @@ class GATStateNet(nn.Module):
         x = x.reshape(*batch_size, -1, x.shape[-1])
         # print(f"x shape before return: {x.shape}")
         return x.select(dim=-2, index=0)
-    
+
 
 class TaskIterationGNNStateNet(nn.Module):
 
@@ -745,7 +745,7 @@ class TaskIterationGNNStateNet(nn.Module):
         return edge_index_masked, edge_attr_masked
 
     def __init__(
-        self, 
+        self,
         feature_config: FeatureDimConfig,
         hidden_channels: int = 16,
         n_heads: int = 2,
@@ -783,7 +783,7 @@ class TaskIterationGNNStateNet(nn.Module):
                 "tasks": nn.LayerNorm(hidden_channels),
                 "data": nn.LayerNorm(hidden_channels),
             }
-        )        
+        )
 
         self.convert_data = HeteroDataWrapper()
 
@@ -803,7 +803,6 @@ class TaskIterationGNNStateNet(nn.Module):
         self.task_dependent_convs = nn.ModuleList()
         self.task_dependent_norms = nn.ModuleList()
         self.task_merge_mlps = nn.ModuleList()
-        
 
         for _ in range(num_layers):
             self.task_dependency_convs.append(
@@ -833,40 +832,42 @@ class TaskIterationGNNStateNet(nn.Module):
             self.task_dependent_norms.append(nn.LayerNorm(hidden_channels))
 
             self.task_merge_mlps.append(
-                        nn.Sequential(
-                            nn.Linear(hidden_channels *2, hidden_channels),
-                            nn.LayerNorm(hidden_channels),
-                            nn.LeakyReLU(negative_slope=0.01),
-                            nn.Linear(hidden_channels, hidden_channels),
-                        )
+                nn.Sequential(
+                    nn.Linear(hidden_channels * 2, hidden_channels),
+                    nn.LayerNorm(hidden_channels),
+                    nn.LeakyReLU(negative_slope=0.01),
+                    nn.Linear(hidden_channels, hidden_channels),
+                )
             )
 
+        self.act = nn.LeakyReLU(negative_slope=0.01)
 
-        self.act = nn.LeakyReLU(negative_slope=0.01) 
-
-        self.g_mlp = nn.Sequential(
-            nn.Linear(self.g_dim, hidden_channels),
-            nn.LayerNorm(hidden_channels),
-            nn.LeakyReLU(negative_slope=0.01),
-            nn.Linear(hidden_channels, hidden_channels),
-        ) if self.g_dim > 0 else None       
+        self.g_mlp = (
+            nn.Sequential(
+                nn.Linear(self.g_dim, hidden_channels),
+                nn.LayerNorm(hidden_channels),
+                nn.LeakyReLU(negative_slope=0.01),
+                nn.Linear(hidden_channels, hidden_channels),
+            )
+            if self.g_dim > 0
+            else None
+        )
 
         self.output_dim = hidden_channels * 2 + (hidden_channels if self.g_dim > 0 else 0)
         self.output_keys = ["embed"]
 
-
     def forward(self, tensordict: TensorDict):
         batch_size = tensordict.batch_size
-        data= self.convert_data(tensordict)
+        data = self.convert_data(tensordict)
 
         b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
 
         x_tasks = self.stem_prog["tasks"](data["tasks"].x)
-        #x_tasks = self.stem_norm["tasks"](x_tasks)
+        # x_tasks = self.stem_norm["tasks"](x_tasks)
         x_tasks = self.act(x_tasks)
 
         x_data = self.stem_prog["data"](data["data"].x)
-        #x_data = self.stem_norm["data"](x_data)
+        # x_data = self.stem_norm["data"](x_data)
         x_data = self.act(x_data)
 
         data_read_tasks = data["data", "read", "tasks"].edge_index
@@ -880,7 +881,7 @@ class TaskIterationGNNStateNet(nn.Module):
         tasks_w_data = self.norm_tasks_data(tasks_w_data)
         tasks_w_data = self.act(tasks_w_data)
 
-        x_tasks= tasks_w_data
+        x_tasks = tasks_w_data
 
         for l in range(len(self.task_dependency_convs)):
 
@@ -905,7 +906,7 @@ class TaskIterationGNNStateNet(nn.Module):
 
         tasks_global = global_mean_pool(x_tasks, b_tasks)
 
-        g = None 
+        g = None
         if self.g_dim > 0:
             if self.add_progress:
                 time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
@@ -942,10 +943,9 @@ class TaskIterationGNNStateNet(nn.Module):
         x = torch.cat([x, tasks_global], dim=-1)
         if g is not None:
             x = torch.cat([x, g], dim=-1)
-        
+
         x = x.reshape(*batch_size, -1, x.shape[-1])
         return x.select(dim=-2, index=0)
-
 
 
 class DataIterationGNNStateNet(nn.Module):
@@ -957,7 +957,7 @@ class DataIterationGNNStateNet(nn.Module):
         return edge_index_masked, edge_attr_masked
 
     def __init__(
-        self, 
+        self,
         feature_config: FeatureDimConfig,
         hidden_channels: int = 16,
         n_heads: int = 2,
@@ -965,7 +965,7 @@ class DataIterationGNNStateNet(nn.Module):
         add_progress: bool = False,
         n_devices: int = 5,
         num_layers: int = 1,
-        conv_type: str = "SAGE", #"GATv2",
+        conv_type: str = "SAGE",  # "GATv2",
         **_ignored,
     ):
 
@@ -997,10 +997,9 @@ class DataIterationGNNStateNet(nn.Module):
                 "tasks": nn.LayerNorm(hidden_channels),
                 "data": nn.LayerNorm(hidden_channels),
             }
-        )        
+        )
 
         self.convert_data = HeteroDataWrapper()
-
 
         self.gnn_tasks_read_data = GATv2Conv(
             (hidden_channels, hidden_channels),
@@ -1010,34 +1009,42 @@ class DataIterationGNNStateNet(nn.Module):
             residual=True,
             dropout=0,
             add_self_loops=False,
-        ) 
+        )
 
-        self.gnn_tasks_from_tasks = GATv2Conv(
-            (hidden_channels, hidden_channels),
-            hidden_channels,
-            heads=n_heads,
-            concat=False,
-            residual=True,
-            dropout=0,
-            add_self_loops=False,
-        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+        self.gnn_tasks_from_tasks = (
+            GATv2Conv(
+                (hidden_channels, hidden_channels),
+                hidden_channels,
+                heads=n_heads,
+                concat=False,
+                residual=True,
+                dropout=0,
+                add_self_loops=False,
+            )
+            if conv_type == "GATv2"
+            else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+        )
 
-        self.gnn_tasks_to_tasks = GATv2Conv(
-            (hidden_channels, hidden_channels),
-            hidden_channels,
-            heads=n_heads,
-            concat=False,
-            residual=True,
-            dropout=0,
-            add_self_loops=False,
-        ) if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+        self.gnn_tasks_to_tasks = (
+            GATv2Conv(
+                (hidden_channels, hidden_channels),
+                hidden_channels,
+                heads=n_heads,
+                concat=False,
+                residual=True,
+                dropout=0,
+                add_self_loops=False,
+            )
+            if conv_type == "GATv2"
+            else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="add", root_weight=True)
+        )
 
         self.norm_tasks_to_tasks = nn.LayerNorm(hidden_channels)
         self.norm_tasks_from_tasks = nn.LayerNorm(hidden_channels)
         self.norm_task_read_data = nn.LayerNorm(hidden_channels)
 
         self.task_merge_mlp = nn.Sequential(
-            nn.Linear(hidden_channels *2, hidden_channels),
+            nn.Linear(hidden_channels * 2, hidden_channels),
             nn.LayerNorm(hidden_channels),
             nn.LeakyReLU(negative_slope=0.01),
             nn.Linear(hidden_channels, hidden_channels),
@@ -1049,7 +1056,7 @@ class DataIterationGNNStateNet(nn.Module):
         self.task_data_norms = nn.ModuleList()
 
         for l in range(self.num_layers):
-            
+
             self.task_data_convs.append(
                 GATv2Conv(
                     (hidden_channels, hidden_channels),
@@ -1060,8 +1067,9 @@ class DataIterationGNNStateNet(nn.Module):
                     dropout=0,
                     add_self_loops=False,
                 )
-            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
-
+                if conv_type == "GATv2"
+                else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False)
+            )
 
             self.data_task_convs.append(
                 GATv2Conv(
@@ -1073,37 +1081,42 @@ class DataIterationGNNStateNet(nn.Module):
                     dropout=0,
                     add_self_loops=False,
                 )
-            if conv_type == "GATv2" else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False))
+                if conv_type == "GATv2"
+                else SAGEConv(hidden_channels, hidden_channels, project=True, aggr="mean", root_weight=False)
+            )
 
             self.task_data_norms.append(nn.LayerNorm(hidden_channels))
             self.data_task_norms.append(nn.LayerNorm(hidden_channels))
 
-        self.act = nn.LeakyReLU(negative_slope=0.01) 
+        self.act = nn.LeakyReLU(negative_slope=0.01)
 
-        self.g_mlp = nn.Sequential(
-            nn.Linear(self.g_dim, hidden_channels),
-            nn.LayerNorm(hidden_channels),
-            nn.LeakyReLU(negative_slope=0.01),
-            nn.Linear(hidden_channels, hidden_channels),
-        ) if self.g_dim > 0 else None       
+        self.g_mlp = (
+            nn.Sequential(
+                nn.Linear(self.g_dim, hidden_channels),
+                nn.LayerNorm(hidden_channels),
+                nn.LeakyReLU(negative_slope=0.01),
+                nn.Linear(hidden_channels, hidden_channels),
+            )
+            if self.g_dim > 0
+            else None
+        )
 
         self.output_dim = hidden_channels * 2 + (hidden_channels if self.g_dim > 0 else 0)
         self.output_keys = ["embed"]
 
-
     def forward(self, tensordict: TensorDict):
         batch_size = tensordict.batch_size
-        data= self.convert_data(tensordict)
+        data = self.convert_data(tensordict)
 
         b_tasks = data["tasks"].batch if isinstance(data, Batch) else None
         b_data = data["data"].batch if isinstance(data, Batch) else None
 
         x_tasks = self.stem_prog["tasks"](data["tasks"].x)
-        #x_tasks = self.stem_norm["tasks"](x_tasks)
+        # x_tasks = self.stem_norm["tasks"](x_tasks)
         x_tasks = self.act(x_tasks)
 
         x_data = self.stem_prog["data"](data["data"].x)
-        #x_data = self.stem_norm["data"](x_data)
+        # x_data = self.stem_norm["data"](x_data)
         x_data = self.act(x_data)
 
         data_read_tasks = data["data", "read", "tasks"].edge_index
@@ -1117,7 +1130,7 @@ class DataIterationGNNStateNet(nn.Module):
         tasks_read_data = self.norm_task_read_data(tasks_read_data)
         tasks_read_data = self.act(tasks_read_data)
 
-        x_tasks= tasks_read_data
+        x_tasks = tasks_read_data
 
         tasks_from_tasks = self.gnn_tasks_from_tasks(
             (x_tasks, x_tasks),
@@ -1160,7 +1173,7 @@ class DataIterationGNNStateNet(nn.Module):
 
         global_state = tasks_global + data_global
 
-        g = None 
+        g = None
         if self.g_dim > 0:
             if self.add_progress:
                 time_feature = tensordict["aux", "time"] / tensordict["aux", "baseline"]
@@ -1197,17 +1210,9 @@ class DataIterationGNNStateNet(nn.Module):
         x = torch.cat([x, global_state], dim=-1)
         if g is not None:
             x = torch.cat([x, g], dim=-1)
-        
+
         x = x.reshape(*batch_size, -1, x.shape[-1])
         return x.select(dim=-2, index=0)
-
-
-
-
-
-
-        
-
 
 
 class OriginalGNNStateNet(nn.Module):
@@ -1998,6 +2003,36 @@ class DilationPolicyHead(nn.Module):
         return logits[0] if single else logits
 
 
+class DilationFlowHead(nn.Module):
+    def __init__(self, input_dim, action_dim, width, length, t_dim=16, **_ignored):
+        super().__init__()
+        self.width = width
+        self.length = length
+        self.action_dim = action_dim
+
+        self.t_embed = nn.Sequential(
+            nn.Linear(1, t_dim),
+            nn.SiLU(),
+            nn.Linear(t_dim, t_dim),
+        )
+
+        self.proj = nn.Conv2d(
+            input_dim + action_dim + t_dim,
+            action_dim,
+            kernel_size=1,
+        )
+
+    def forward(self, embed, x_t, t):
+        B, _, H, W = embed.shape
+
+        t_emb = self.t_embed(t)  # (B, t_dim)
+        t_emb = t_emb[:, :, None, None].expand(-1, -1, H, W)
+
+        h = torch.cat([embed, x_t, t_emb], dim=1)
+        v = self.proj(h)  # velocity field
+        return v
+
+
 class DilationValueHead(nn.Module):
     def __init__(
         self,
@@ -2081,6 +2116,345 @@ class DilationValueHead(nn.Module):
         v = self.mlp(pooled).squeeze(-1)  # (B,)
         v = v.view(*batch, 1)  # (*batch,)
         return v
+
+
+class DilationDiscriminatorHead(nn.Module):
+    """
+    Discriminator head: (obs, embed, action) -> logits (..., 1)
+
+    Intended use:
+      - `embed` comes from `DilationState` and has shape (*batch, C, H, W)
+      - `action` is a multi-discrete vector per state with shape (*batch, H*W)
+        (e.g., your [N, 64] actions where 64 == H*W and each entry in [0, A-1])
+      - output is a *logit* (NOT sigmoid) so you can train with BCEWithLogitsLoss.
+
+    Design:
+      - Project state feature map to P channels via 1x1 conv
+      - Embed each per-cell discrete action via nn.Embedding(A, E)
+      - Combine per-cell (state_proj, action_emb) and attention-pool across H*W
+      - Optionally add GAP state summary + action histogram + aux features (z / progress / device load)
+      - MLP -> scalar logit
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        action_dim: int,
+        width: int,
+        length: int,
+        # action + pooling
+        act_emb_dim: int = 16,
+        proj_dim: int = 8,
+        attn_hidden: int = 32,
+        add_gap: bool = True,  # add GAP pooled state features
+        add_action_hist: bool = True,  # add action distribution summary
+        # aux features (match your ValueHead toggles)
+        z_dim: int = 8,
+        add_z: bool = False,
+        add_progress: bool = True,
+        add_device_load: bool = False,
+        n_devices: int = 5,
+        # MLP
+        hidden_channels: int = 128,
+        tiny_std: float = 1e-3,
+        **_ignored,
+    ):
+        super().__init__()
+
+        self.width = int(width)
+        self.length = int(length)
+        self.action_dim = int(action_dim)
+
+        C = int(input_dim)
+        P = int(proj_dim)
+        E = int(act_emb_dim)
+        Dz = int(z_dim) * 2  # z_ch and z_spa
+
+        self.add_gap = bool(add_gap)
+        self.add_action_hist = bool(add_action_hist)
+        self.add_z = bool(add_z)
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+
+        # Project state embedding to a compact feature map
+        self.mix = nn.Conv2d(C, P, kernel_size=1, bias=False)
+        nn.init.kaiming_normal_(self.mix.weight, nonlinearity="relu")
+
+        # Embed per-cell discrete actions
+        self.act_emb = nn.Embedding(self.action_dim, E)
+        nn.init.normal_(self.act_emb.weight, std=float(tiny_std))
+
+        # Attention over spatial cells conditioned on (state_proj, action_emb)
+        attn_hid = int(max(attn_hidden, 16))
+        self.attn = nn.Sequential(
+            nn.Linear(P + E, attn_hid),
+            nn.SiLU(),
+            nn.Linear(attn_hid, 1),
+        )
+        nn.init.normal_(self.attn[-1].weight, std=float(tiny_std))
+        nn.init.zeros_(self.attn[-1].bias)
+
+        # MLP input dim
+        mlp_in = P + E  # attention-pooled (state_proj + action_emb)
+
+        if self.add_gap:
+            mlp_in += P  # GAP over state_proj
+
+        if self.add_action_hist:
+            mlp_in += self.action_dim  # histogram summary of actions
+
+        if self.add_z:
+            mlp_in += Dz
+
+        if self.add_device_load:
+            mlp_in += 3 * int(n_devices)
+
+        if self.add_progress:
+            mlp_in += 2  # progress + perc(time/baseline)
+
+        self.mlp = nn.Sequential(
+            nn.Linear(mlp_in, int(hidden_channels)),
+            nn.SiLU(),
+            nn.Linear(int(hidden_channels), 1),
+        )
+        nn.init.normal_(self.mlp[-1].weight, std=float(tiny_std))
+        nn.init.zeros_(self.mlp[-1].bias)
+
+        # Optional metadata (if you use these elsewhere)
+        self.input_keys = ["embed", "action"]
+        self.output_dim = 1
+
+    def forward(self, obs, embed, action):
+        """
+        obs: observation tensordict (same object used in DilationState)
+        embed: (*batch, C, H, W)
+        action: (*batch, H*W) discrete
+        """
+        *batch, C, H, W = embed.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        T = H * W
+
+        # Flatten embed to (B, C, H, W)
+        embed_f = embed.reshape(B, C, H, W)
+
+        # Flatten action to (B, T)
+        action_f = action.long().reshape(B, -1)
+        if action_f.shape[1] != T:
+            raise AssertionError(f"[DilationDiscriminatorHead] action has T={action_f.shape[1]} " f"but expected H*W={T} (H={H}, W={W}).")
+
+        # Project state features
+        Fm = F.silu(self.mix(embed_f))  # (B, P, H, W)
+        Fm_flat = Fm.permute(0, 2, 3, 1).reshape(B, T, -1)  # (B, T, P)
+
+        # Action embedding per cell
+        # Clamp just in case; better to assert in your env if possible.
+        action_f = action_f.clamp(min=0, max=self.action_dim - 1)
+        A_emb = self.act_emb(action_f)  # (B, T, E)
+
+        # Combine per-cell state/action features and attention-pool across cells
+        comb = torch.cat([Fm_flat, A_emb], dim=-1)  # (B, T, P+E)
+        scores = self.attn(comb).squeeze(-1)  # (B, T)
+        weights = scores.softmax(dim=-1)  # (B, T)
+        pooled_attn = (comb * weights.unsqueeze(-1)).sum(dim=1)  # (B, P+E)
+
+        pooled = pooled_attn
+
+        # Optional GAP (state-only) summary
+        if self.add_gap:
+            pooled_gap = Fm_flat.mean(dim=1)  # (B, P)
+            pooled = torch.cat([pooled, pooled_gap], dim=-1)
+
+        # Optional action histogram summary (helps D detect global action tendencies)
+        if self.add_action_hist:
+            hist = F.one_hot(action_f, num_classes=self.action_dim).float()  # (B, T, A)
+            hist = hist.mean(dim=1)  # (B, A)
+            pooled = torch.cat([pooled, hist], dim=-1)
+
+        # Optional aux features (match your ValueHead)
+        if self.add_z:
+            z_ch = obs[("aux", "z_ch")]
+            z_spa = obs[("aux", "z_spa")]
+            z_f = torch.cat([z_ch, z_spa], dim=-1).reshape(B, -1)  # (B, Dz)
+            pooled = torch.cat([pooled, z_f], dim=-1)
+
+        if self.add_device_load:
+            device_load = obs["aux", "device_load"]
+            device_memory = obs["aux", "device_memory"]
+            device_feat = torch.cat([device_load, device_memory], dim=-1).reshape(B, -1)
+            pooled = torch.cat([pooled, device_feat], dim=-1)
+
+        if self.add_progress:
+            progress = obs["aux", "progress"].reshape(B, -1)
+            baseline = obs["aux", "baseline"].reshape(B, -1)
+            time = obs["aux", "time"].reshape(B, -1)
+            perc = time / baseline.clamp_min(1e-6)
+            prog_feat = torch.cat([progress, perc], dim=-1)  # (B, 2)
+            pooled = torch.cat([pooled, prog_feat], dim=-1)
+
+        logits = self.mlp(pooled).squeeze(-1)  # (B,)
+        logits = logits.view(*batch, 1)  # (*batch, 1)  (matches your ValueHead style)
+        return logits
+
+
+class DilationFlowMatchingHead(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        action_dim: int,
+        width: int,
+        length: int,
+        # action + pooling
+        act_emb_dim: int = 16,
+        proj_dim: int = 8,
+        attn_hidden: int = 32,
+        add_gap: bool = True,  # add GAP pooled state features
+        add_action_hist: bool = True,  # add action distribution summary
+        # aux features (match your ValueHead toggles)
+        z_dim: int = 8,
+        add_z: bool = False,
+        add_progress: bool = True,
+        add_device_load: bool = False,
+        n_devices: int = 5,
+        # MLP
+        hidden_channels: int = 128,
+        tiny_std: float = 1e-3,
+        **_ignored,
+    ):
+        super().__init__()
+
+        self.width = int(width)
+        self.length = int(length)
+        self.action_dim = int(action_dim)
+
+        C = int(input_dim)
+        P = int(proj_dim)
+        E = int(act_emb_dim)
+        Dz = int(z_dim) * 2  # z_ch and z_spa
+
+        self.add_gap = bool(add_gap)
+        self.add_action_hist = bool(add_action_hist)
+        self.add_z = bool(add_z)
+        self.add_progress = bool(add_progress)
+        self.add_device_load = bool(add_device_load)
+
+        # Project state embedding to a compact feature map
+        self.mix = nn.Conv2d(C, P, kernel_size=1, bias=False)
+        nn.init.kaiming_normal_(self.mix.weight, nonlinearity="relu")
+
+        # Embed per-cell discrete actions
+        self.act_emb = nn.Embedding(self.action_dim, E)
+        nn.init.normal_(self.act_emb.weight, std=float(tiny_std))
+
+        # Attention over spatial cells conditioned on (state_proj, action_emb)
+        attn_hid = int(max(attn_hidden, 16))
+        self.attn = nn.Sequential(
+            nn.Linear(P + E, attn_hid),
+            nn.SiLU(),
+            nn.Linear(attn_hid, 1),
+        )
+        nn.init.normal_(self.attn[-1].weight, std=float(tiny_std))
+        nn.init.zeros_(self.attn[-1].bias)
+
+        # MLP input dim
+        mlp_in = P + E  # attention-pooled (state_proj + action_emb)
+
+        if self.add_gap:
+            mlp_in += P  # GAP over state_proj
+
+        if self.add_action_hist:
+            mlp_in += self.action_dim  # histogram summary of actions
+
+        if self.add_z:
+            mlp_in += Dz
+
+        if self.add_device_load:
+            mlp_in += 3 * int(n_devices)
+
+        if self.add_progress:
+            mlp_in += 2  # progress + perc(time/baseline)
+
+        self.mlp = nn.Sequential(
+            nn.Linear(mlp_in, int(hidden_channels)),
+            nn.SiLU(),
+            nn.Linear(int(hidden_channels), 1),
+        )
+        nn.init.normal_(self.mlp[-1].weight, std=float(tiny_std))
+        nn.init.zeros_(self.mlp[-1].bias)
+
+        # Optional metadata (if you use these elsewhere)
+        self.input_keys = ["embed", "action"]
+        self.output_dim = 1
+
+    def forward(self, obs, embed, action):
+        """
+        obs: observation tensordict (same object used in DilationState)
+        embed: (*batch, C, H, W)
+        action: (*batch, H*W) discrete
+        """
+        *batch, C, H, W = embed.shape
+        B = int(torch.tensor(batch).prod().item()) if batch else 1
+        T = H * W
+
+        # Flatten embed to (B, C, H, W)
+        embed_f = embed.reshape(B, C, H, W)
+
+        # Flatten action to (B, T)
+        action_f = action.long().reshape(B, -1)
+        if action_f.shape[1] != T:
+            raise AssertionError(f"[DilationDiscriminatorHead] action has T={action_f.shape[1]} " f"but expected H*W={T} (H={H}, W={W}).")
+
+        # Project state features
+        Fm = F.silu(self.mix(embed_f))  # (B, P, H, W)
+        Fm_flat = Fm.permute(0, 2, 3, 1).reshape(B, T, -1)  # (B, T, P)
+
+        # Action embedding per cell
+        # Clamp just in case; better to assert in your env if possible.
+        action_f = action_f.clamp(min=0, max=self.action_dim - 1)
+        A_emb = self.act_emb(action_f)  # (B, T, E)
+
+        # Combine per-cell state/action features and attention-pool across cells
+        comb = torch.cat([Fm_flat, A_emb], dim=-1)  # (B, T, P+E)
+        scores = self.attn(comb).squeeze(-1)  # (B, T)
+        weights = scores.softmax(dim=-1)  # (B, T)
+        pooled_attn = (comb * weights.unsqueeze(-1)).sum(dim=1)  # (B, P+E)
+
+        pooled = pooled_attn
+
+        # Optional GAP (state-only) summary
+        if self.add_gap:
+            pooled_gap = Fm_flat.mean(dim=1)  # (B, P)
+            pooled = torch.cat([pooled, pooled_gap], dim=-1)
+
+        # Optional action histogram summary (helps D detect global action tendencies)
+        if self.add_action_hist:
+            hist = F.one_hot(action_f, num_classes=self.action_dim).float()  # (B, T, A)
+            hist = hist.mean(dim=1)  # (B, A)
+            pooled = torch.cat([pooled, hist], dim=-1)
+
+        # Optional aux features (match your ValueHead)
+        if self.add_z:
+            z_ch = obs[("aux", "z_ch")]
+            z_spa = obs[("aux", "z_spa")]
+            z_f = torch.cat([z_ch, z_spa], dim=-1).reshape(B, -1)  # (B, Dz)
+            pooled = torch.cat([pooled, z_f], dim=-1)
+
+        if self.add_device_load:
+            device_load = obs["aux", "device_load"]
+            device_memory = obs["aux", "device_memory"]
+            device_feat = torch.cat([device_load, device_memory], dim=-1).reshape(B, -1)
+            pooled = torch.cat([pooled, device_feat], dim=-1)
+
+        if self.add_progress:
+            progress = obs["aux", "progress"].reshape(B, -1)
+            baseline = obs["aux", "baseline"].reshape(B, -1)
+            time = obs["aux", "time"].reshape(B, -1)
+            perc = time / baseline.clamp_min(1e-6)
+            prog_feat = torch.cat([progress, perc], dim=-1)  # (B, 2)
+            pooled = torch.cat([pooled, prog_feat], dim=-1)
+
+        logits = self.mlp(pooled).squeeze(-1)  # (B,)
+        logits = logits.view(*batch, 1)  # (*batch, 1)  (matches your ValueHead style)
+        return logits
 
 
 class UnconditionedDilationState(nn.Module):

@@ -546,13 +546,23 @@ def run_evaluation(
 
 
 def save_checkpoint(
-    step, policy_module, value_module, optimizer, lr_scheduler=None, extras: Optional[Dict[str, Any]] = None, checkpoint_dir: Optional[str] = None, filename: Optional[str] = None, wandb=None
+    step,
+    policy_module,
+    value_module,
+    optimizer,
+    lr_scheduler=None,
+    extras: Optional[Dict[str, Any]] = None,
+    checkpoint_dir: Optional[str] = None,
+    filename: Optional[str] = None,
+    wandb=None,
+    discriminator_module=None,
 ) -> Path:
     try:
         state = dict(
             step=step,
             policy_module=policy_module.state_dict(),
             value_module=value_module.state_dict(),
+            discriminator_module=discriminator_module.state_dict() if discriminator_module is not None else None,
             optimizer=optimizer.state_dict(),
             rng_torch=torch.get_rng_state(),
             rng_cuda=torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,

@@ -2,6 +2,7 @@ defaults:
   - architecture/cond_dilation_state@layers.state
   - architecture/cond_dilation_policy_head@layers.actor
   - architecture/cond_dilation_value_head@layers.critic
+  - architecture/cond_dilation_discriminator_head@layers.discriminator
 layers:
   state:
     hidden_channels: 16
@@ -9,6 +10,11 @@ layers:
     hidden_channels: 16
   critic:
     hidden_channels: 128
+  discriminator:
+    hidden_channels: 128
 
 critic:
+  add_progress: True
+
+discriminator:
   add_progress: True

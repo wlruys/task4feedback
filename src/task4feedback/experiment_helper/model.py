@@ -283,6 +283,385 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
     return ActorCriticModule(probabilistic_policy, value_operator), reference_module, lstm_mod
 
 
+def create_td_actor_critic_discriminator_models(
+    cfg: DictConfig,
+    feature_cfg: FeatureDimConfig,
+) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
+
+    graph_config = instantiate(cfg.graph.config)
+    batched = cfg.feature.observer.get("batched", False)
+    add_device_load = cfg.feature.get("add_device_load", False)
+
+    lstm_mod = None
+    layers = cfg.network.layers
+
+    state_layer = layers.state
+    actor_layer = layers.actor
+    critic_layer = layers.critic
+
+    # ---------------------------
+    # Actor
+    # ---------------------------
+    actor_layers = []
+
+    width = graph_config.n
+    length = get_length_from_config(graph_config)
+    action_dim = cfg.system.n_devices - 1
+
+    if hasattr(state_layer, "width") and hasattr(state_layer, "length"):
+        print("Using rectangular state layer")
+        policy_state_module = instantiate(
+            state_layer,
+            width=width,
+            length=length,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            feature_config=feature_cfg,
+            _recursive_=False,
+        )
+    else:
+        policy_state_module = instantiate(
+            state_layer,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            feature_config=feature_cfg,
+            _recursive_=False,
+        )
+
+    if hasattr(policy_state_module, "output_keys"):
+        state_output_keys = policy_state_module.output_keys
+        print(f"State output keys: {state_output_keys}")
+    else:
+        state_output_keys = ["embed"]
+
+    _td_policy_state = td_nn.TensorDictModule(
+        policy_state_module,
+        in_keys=["observation"],
+        out_keys=state_output_keys,
+    )
+    actor_layers.append(_td_policy_state)
+
+    output_dim = policy_state_module.output_dim
+    print(f"Policy state output dim: {output_dim}")
+
+    if "lstm" in layers:
+        print("Using LSTM layer for actor")
+        actor_lstm_layer = instantiate(
+            layers.lstm,
+            input_size=policy_state_module.output_dim,
+        )
+        output_dim = layers.lstm.hidden_size
+        actor_layers.append(actor_lstm_layer)
+        lstm_mod = actor_lstm_layer
+        print(f"  LSTM hidden size: {layers.lstm.hidden_size}, Output dim: {output_dim}")
+
+    if hasattr(actor_layer, "width") and hasattr(actor_layer, "length"):
+        print("Using rectangular actor layer for actor")
+        policy_output_module = instantiate(
+            actor_layer,
+            width=width,
+            length=length,
+            input_dim=output_dim,
+            output_dim=action_dim,
+            _recursive_=False,
+        )
+    else:
+        policy_output_module = instantiate(
+            actor_layer,
+            input_dim=output_dim,
+            output_dim=action_dim,
+            _recursive_=False,
+        )
+
+    if hasattr(policy_output_module, "input_keys"):
+        actor_input_keys = policy_output_module.input_keys
+        print(f"Actor input keys: {actor_input_keys}")
+    else:
+        actor_input_keys = ["embed"]
+
+    actor_input_keys = ["observation"] + actor_input_keys
+
+    _td_policy_output = td_nn.TensorDictModule(
+        policy_output_module,
+        in_keys=actor_input_keys,
+        out_keys=["logits"],
+    )
+    actor_layers.append(_td_policy_output)
+
+    policy_module = td_nn.TensorDictSequential(*actor_layers, inplace=True)
+
+    probabilistic_policy = ProbabilisticActor(
+        module=policy_module,
+        in_keys=["logits"],
+        out_keys=["action"],
+        distribution_class=MultiHeadCategorical if batched else torch.distributions.Categorical,
+        return_log_prob=True,
+    )
+
+    # ---------------------------
+    # Critic + Reference
+    # ---------------------------
+    critic_layers = []
+    reference_layers = []
+
+    if hasattr(state_layer, "width") and hasattr(state_layer, "length"):
+        critic_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_progress=cfg.network.critic.add_progress,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            _recursive_=False,
+            width=width,
+            length=length,
+        )
+        reference_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_progress=cfg.network.critic.add_progress,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            _recursive_=False,
+            width=width,
+            length=length,
+        )
+    else:
+        critic_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            add_progress=cfg.network.critic.add_progress,
+            _recursive_=False,
+        )
+        reference_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            add_progress=cfg.network.critic.add_progress,
+            _recursive_=False,
+        )
+
+    _td_critic_state = td_nn.TensorDictModule(
+        critic_state_module,
+        in_keys=["observation"],
+        out_keys=state_output_keys,
+    )
+    _td_reference_state = td_nn.TensorDictModule(
+        reference_state_module,
+        in_keys=["observation"],
+        out_keys=state_output_keys,
+    )
+
+    output_dim = critic_state_module.output_dim
+    critic_layers.append(_td_critic_state)
+    reference_layers.append(_td_reference_state)
+
+    if "lstm" in layers:
+        critic_lstm_layer = instantiate(
+            layers.lstm,
+            input_size=critic_state_module.output_dim,
+        )
+        output_dim = layers.lstm.hidden_size
+        critic_layers.append(critic_lstm_layer)
+
+    critic_output_module = instantiate(
+        critic_layer,
+        input_dim=output_dim,
+        add_device_load=add_device_load,
+        n_devices=cfg.system.n_devices,
+        add_progress=cfg.network.critic.add_progress,
+        output_dim=1,
+        _recursive_=False,
+    )
+    reference_output_module = instantiate(
+        critic_layer,
+        input_dim=output_dim,
+        add_device_load=add_device_load,
+        n_devices=cfg.system.n_devices,
+        add_progress=cfg.network.critic.add_progress,
+        output_dim=8,
+        _recursive_=False,
+    )
+
+    if "input_keys" in cfg.network.critic:
+        critic_input_keys = cfg.network.critic.input_keys
+        print(f"Critic input keys: {critic_input_keys}")
+    else:
+        critic_input_keys = state_output_keys
+
+    critic_input_keys = ["observation"] + critic_input_keys
+
+    _td_critic_output = td_nn.TensorDictModule(
+        critic_output_module,
+        in_keys=critic_input_keys,
+        out_keys=["state_value"],
+    )
+    _td_reference_output = td_nn.TensorDictModule(
+        reference_output_module,
+        in_keys=critic_input_keys,
+        out_keys=["reference_state"],
+    )
+    critic_layers.append(_td_critic_output)
+    reference_layers.append(_td_reference_output)
+
+    critic_module = td_nn.TensorDictSequential(*critic_layers, inplace=True)
+    reference_module = td_nn.TensorDictSequential(*reference_layers, inplace=True)
+    value_operator = critic_module
+
+    # ---------------------------
+    # Discriminator
+    # ---------------------------
+    disc_layers = []
+
+    # discriminator state: observation -> embed
+    if hasattr(state_layer, "width") and hasattr(state_layer, "length"):
+        disc_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_progress=cfg.network.discriminator.add_progress,  # or cfg.network.discriminator.add_progress if you add it
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            _recursive_=False,
+            width=width,
+            length=length,
+        )
+    else:
+        disc_state_module = instantiate(
+            state_layer,
+            feature_config=feature_cfg,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            add_progress=cfg.network.discriminator.add_progress,
+            _recursive_=False,
+        )
+
+    disc_state_out_keys = disc_state_module.output_keys if hasattr(disc_state_module, "output_keys") else state_output_keys
+    # DilationDiscriminatorHead expects exactly one embed tensor; pick the right key.
+    disc_embed_key = "embed" if "embed" in disc_state_out_keys else disc_state_out_keys[0]
+
+    _td_disc_state = td_nn.TensorDictModule(
+        disc_state_module,
+        in_keys=["observation"],
+        out_keys=disc_state_out_keys,
+    )
+    disc_layers.append(_td_disc_state)
+
+    # discriminator head: (observation, embed, action) -> disc_logits
+    # Prefer cfg.network.layers.discriminator if you have it; else instantiate DilationDiscriminatorHead directly.
+    if "discriminator" in layers:
+        disc_head_module = instantiate(
+            layers.discriminator,
+            input_dim=disc_state_module.output_dim,
+            action_dim=action_dim,
+            width=width,
+            length=length,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            add_progress=cfg.network.critic.add_progress,
+            _recursive_=False,
+        )
+    else:
+        disc_head_module = DilationDiscriminatorHead(
+            input_dim=disc_state_module.output_dim,
+            action_dim=action_dim,
+            width=width,
+            length=length,
+            add_device_load=add_device_load,
+            n_devices=cfg.system.n_devices,
+            add_progress=cfg.network.critic.add_progress,
+        )
+
+    _td_disc_head = td_nn.TensorDictModule(
+        disc_head_module,
+        in_keys=["observation", disc_embed_key, "action"],  # REQUIRED for DilationDiscriminatorHead
+        out_keys=["disc_logits"],  # REQUIRED: stable logit key
+    )
+    disc_layers.append(_td_disc_head)
+
+    discriminator_module = td_nn.TensorDictSequential(*disc_layers, inplace=True)
+
+    # ---------------------------
+    # Pack everything
+    # ---------------------------
+    actor_critic = ActorCriticModule(probabilistic_policy, value_operator)
+    # needed by your PPO code: actor_critic_module.discriminator
+    actor_critic.discriminator = discriminator_module
+    print("Created actor-critic-discriminator model.")
+    print(actor_critic.actor)
+    print(actor_critic.critic)
+    print(actor_critic.discriminator)
+
+    return actor_critic, reference_module, lstm_mod
+
+
+def create_actor_flow_model(
+    cfg: DictConfig,
+    feature_cfg: FeatureDimConfig,
+) -> nn.Module:
+
+    # ---------------------------
+    # Graph / dimensions
+    # ---------------------------
+    graph_config = instantiate(cfg.graph.config)
+    add_device_load = cfg.feature.get("add_device_load", False)
+
+    width = graph_config.n
+    length = get_length_from_config(graph_config)
+    action_dim = cfg.system.n_devices - 1
+
+    # ---------------------------
+    # State backbone
+    # ---------------------------
+    state_layer_cfg = cfg.network.layers.state
+
+    state_module = instantiate(
+        state_layer_cfg,
+        width=width,
+        length=length,
+        add_device_load=add_device_load,
+        n_devices=cfg.system.n_devices,
+        feature_config=feature_cfg,
+        _recursive_=False,
+    )
+
+    state_output_keys = getattr(state_module, "output_keys", ["embed"])
+    output_dim = state_module.output_dim
+
+    td_state = td_nn.TensorDictModule(
+        module=state_module,
+        in_keys=["observation"],
+        out_keys=state_output_keys,
+    )
+
+    # ---------------------------
+    # Flow head (velocity model)
+    # ---------------------------
+    flow_head = DilationFlowHead(
+        input_dim=output_dim,
+        action_dim=action_dim,
+        width=width,
+        length=length,
+    )
+
+    td_flow = td_nn.TensorDictModule(
+        module=flow_head,
+        in_keys=["embed", "x_t", "t"],
+        out_keys=["v"],  # velocity field
+    )
+
+    # ---------------------------
+    # Full policy
+    # ---------------------------
+    policy = td_nn.TensorDictSequential(
+        td_state,
+        td_flow,
+    )
+
+    return policy
+
+
 def load_policy_from_checkpoint(model: torch.nn.Module, ckpt_path: Path) -> bool:
     """Load a policy module state_dict from `ckpt_path` into `model`.
 
