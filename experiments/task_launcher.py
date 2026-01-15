@@ -135,20 +135,6 @@ class Scheduler:
                 finished_count += 1
                 self.free_resources(job["cores"])
 
-                # Check for errors
-                job["err_file"].seek(0)
-                err_content = job["err_file"].read()
-                job["err_file"].close()
-
-                if ret != 0:
-                    tqdm.write(f"\n[FAILED] Exit {ret}: {job['cmd_str']}")
-                    with open(self.error_log_file, "a") as log:
-                        log.write(f"\n{'='*30}\nFAILED JOB: {job['cmd_str']}\n")
-                        log.write(f"EXIT CODE: {ret}\n--- STDERR ---\n{err_content}\n{'='*30}\n")
-
-                if os.path.exists(job["log_path"]):
-                    os.remove(job["log_path"])
-
         self.running_jobs = still_running
         return finished_count
 
@@ -182,17 +168,14 @@ class Scheduler:
         cmd_str = " ".join(full_cmd)
 
         self.job_counter += 1
-        log_path = os.path.join(self.temp_log_dir, f"job_{self.job_counter}.err")
-        err_file = open(log_path, "w+")
 
         try:
-            proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=err_file)
+            proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
 
-            self.running_jobs.append({"proc": proc, "cores": cores, "cmd_str": cmd_str, "err_file": err_file, "log_path": log_path})
+            self.running_jobs.append({"proc": proc, "cores": cores, "cmd_str": cmd_str})
         except Exception as e:
             tqdm.write(f"[ERROR] Failed to launch: {cmd_str}\n{e}")
             self.free_resources(cores)
-            err_file.close()
             return False
 
         return True
@@ -276,7 +259,7 @@ def main():
     # Use args.no_pinning to toggle behavior
     scheduler = Scheduler(use_pinning=not args.no_pinning)
 
-    pending_jobs = jobs
+    pending_jobs = list(jobs)
     pbar = tqdm(total=len(jobs), desc="Processing Jobs", unit="job")
 
     try:
