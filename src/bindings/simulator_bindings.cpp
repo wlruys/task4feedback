@@ -57,6 +57,8 @@ void init_simulator_ext(nb::module_ &m) {
       .def("start_drain", &Simulator::start_drain)
       .def("stop_drain", &Simulator::stop_drain)
       .def("initialize_data", &Simulator::initialize_data_manager)
+      .def("initialize_data_replicate", &Simulator::initialize_data_replicate, "data_id"_a,
+           "device_id"_a)
       .def("enable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(true); })
       .def("disable_python_mapper", [](Simulator &s) { s.set_use_python_mapper(false); })
       .def("skip_external_mapping", &Simulator::skip_external_mapping,

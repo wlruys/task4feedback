@@ -17,12 +17,15 @@ class Device {
 public:
   Resources max_resources;
   devid_t id = 0;
-  copy_t max_copy = 0;
+  copy_t h2d_max_copy = 0;
+  copy_t d2d_max_copy = 0;
   DeviceType arch = DeviceType::CPU;
 
   Device() = default;
-  Device(devid_t id, DeviceType arch, copy_t max_copy, vcu_t vcu, mem_t mem)
-      : id(id), max_resources(vcu, mem), max_copy(max_copy), arch(arch) {
+  Device(devid_t id, DeviceType arch, copy_t h2d_max_copy, copy_t d2d_max_copy, vcu_t vcu,
+         mem_t mem)
+      : id(id), max_resources(vcu, mem), h2d_max_copy(h2d_max_copy), d2d_max_copy(d2d_max_copy),
+        arch(arch) {
   }
 
   [[nodiscard]] mem_t get_mem() const {
@@ -32,8 +35,11 @@ public:
     return max_resources.vcu;
   }
 
-  [[nodiscard]] copy_t get_max_copy() const {
-    return max_copy;
+  [[nodiscard]] copy_t get_h2d_max_copy() const {
+    return h2d_max_copy;
+  }
+  [[nodiscard]] copy_t get_d2d_max_copy() const {
+    return d2d_max_copy;
   }
 };
 
@@ -90,7 +96,6 @@ template <typename T> struct ResourceEventArray {
   }
 };
 
-
 class DeviceResources {
 protected:
   void resize(std::size_t n) {
@@ -119,7 +124,7 @@ public:
     record = true;
   }
 
-  void stop_record(){
+  void stop_record() {
     record = false;
     for (auto &tracker : vcu_tracker) {
       tracker.clear();
@@ -318,13 +323,14 @@ public:
     return type_map[idx][local_id];
   }
 
-  void create_device(devid_t id, std::string name, DeviceType arch, copy_t max_copy, mem_t mem) {
+  void create_device(devid_t id, std::string name, DeviceType arch, copy_t h2d_max_copy,
+                     copy_t d2d_max_copy, mem_t mem) {
     if (id >= devices.size()) {
       resize(id + 1);
     }
 
     assert(id < devices.size());
-    devices[id] = Device(id, arch, max_copy, MAX_VCUS, mem);
+    devices[id] = Device(id, arch, h2d_max_copy, d2d_max_copy, MAX_VCUS, mem);
     const auto idx = __builtin_ctz(static_cast<uint8_t>(arch));
     assert(idx < type_map.size() && "Invalid device type index");
     type_map[idx].push_back(id);
@@ -336,9 +342,10 @@ public:
     device_names[id] = std::move(name);
   }
 
-  devid_t append_device(std::string name, DeviceType arch, copy_t max_copy, mem_t mem) {
+  devid_t append_device(std::string name, DeviceType arch, copy_t h2d_max_copy, copy_t d2d_max_copy,
+                        mem_t mem) {
     devid_t id = devices.size();
-    create_device(id, std::move(name), arch, max_copy, mem);
+    create_device(id, std::move(name), arch, h2d_max_copy, d2d_max_copy, mem);
     return id;
   }
 
@@ -364,7 +371,7 @@ public:
 
   DeviceManager(const Devices &devices_)
       : mapped(devices_.size()), reserved(devices_.size()), launched(devices_.size()),
-        n_devices{devices_.size()}{};
+        n_devices{devices_.size()} {};
 
   DeviceManager(const DeviceManager &other) = default;
 

@@ -640,6 +640,11 @@ public:
     }
   }
 
+  void initialize_data_replicate(dataid_t data_id, devid_t device_id) {
+    data_manager.initialize_data_replicate(data.get(), devices.get(), device_manager, data_id,
+                                           device_id);
+  }
+
   void randomize_durations() {
     get_task_noise().generate_duration(tasks);
   }
@@ -1095,6 +1100,10 @@ public:
 
   void initialize_data_manager() {
     state.initialize_data_manager();
+  }
+
+  void initialize_data_replicate(dataid_t data_id, devid_t device_id) {
+    state.initialize_data_replicate(data_id, device_id);
   }
 
   size_t get_mappable_candidates(std::span<int64_t> v);

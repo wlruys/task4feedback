@@ -114,9 +114,12 @@ struct SourceRequest {
 };
 
 struct DeviceUsage {
-  copy_t incoming = 0;
-  copy_t outgoing = 0;
-  copy_t max = 0;
+  copy_t h2d_incoming = 0;
+  copy_t h2d_outgoing = 0;
+  copy_t d2d_outgoing = 0;
+  copy_t d2d_incoming = 0;
+  copy_t h2d_max = 0;
+  copy_t d2d_max = 0;
 };
 
 struct LinkUsage {
@@ -127,8 +130,9 @@ struct LinkUsage {
 class CommunicationManager {
   devid_t num_devices = 0;
   std::vector<DeviceUsage> device_usage;
-  std::vector<LinkUsage> link_usage;
+  std::vector<LinkUsage> link_usage; // (src, dst) links
   std::vector<double> bandwidth_reciprocals;
+  std::vector<bool> is_host;
 
   void precompute_reciprocals(const Topology &topology) {
     bandwidth_reciprocals.resize(num_devices * num_devices);
@@ -142,8 +146,11 @@ class CommunicationManager {
     device_usage.resize(num_devices);
     for (devid_t i = 0; i < num_devices; ++i) {
       const auto &device = devices.get_device(i);
-      device_usage[i].max = device.get_max_copy();
-      SPDLOG_DEBUG("Precomputed max copies for device {}: {}", i, device_usage[i].max);
+      device_usage[i].h2d_max = device.get_h2d_max_copy();
+      device_usage[i].d2d_max = device.get_d2d_max_copy();
+      SPDLOG_DEBUG("Precomputed max copies for device {}: h2d={}, d2d={}", i,
+                   device_usage[i].h2d_max, device_usage[i].d2d_max);
+      is_host.push_back(device.arch == DeviceType::CPU);
     }
   }
 
@@ -173,20 +180,36 @@ public:
 
   CommunicationManager &operator=(const CommunicationManager &c) = default;
 
-  inline void increase_incoming(devid_t device_id) {
-    device_usage[device_id].incoming += 1;
-  }
-  inline void decrease_incoming(devid_t device_id) {
-    assert(device_usage[device_id].incoming >= 1);
-    device_usage[device_id].incoming -= 1;
+  inline bool is_h2d(devid_t src, devid_t dst) const {
+    return (is_host[src] && !is_host[dst]) || (!is_host[src] && is_host[dst]);
   }
 
-  inline void increase_outgoing(devid_t device_id) {
-    device_usage[device_id].outgoing += 1;
+  inline bool is_d2d(devid_t src, devid_t dst) const {
+    return !is_host[src] && !is_host[dst];
   }
-  inline void decrease_outgoing(devid_t device_id) {
-    assert(device_usage[device_id].outgoing >= 1);
-    device_usage[device_id].outgoing -= 1;
+
+  inline bool is_h2h(devid_t src, devid_t dst) const {
+    return is_host[src] && is_host[dst];
+  }
+
+  inline void reserve_copy_engine(devid_t dst, devid_t src) {
+    if (is_h2d(src, dst)) {
+      device_usage[src].h2d_outgoing += 1;
+      device_usage[dst].h2d_incoming += 1;
+    } else if (is_d2d(src, dst)) {
+      device_usage[src].d2d_outgoing += 1;
+      device_usage[dst].d2d_incoming += 1;
+    }
+  }
+
+  inline void release_copy_engine(devid_t dst, devid_t src) {
+    if (is_h2d(src, dst)) {
+      device_usage[src].h2d_outgoing -= 1;
+      device_usage[dst].h2d_incoming -= 1;
+    } else if (is_d2d(src, dst)) {
+      device_usage[src].d2d_outgoing -= 1;
+      device_usage[dst].d2d_incoming -= 1;
+    }
   }
 
   inline void increase_active_links(devid_t src, devid_t dst) {
@@ -199,14 +222,12 @@ public:
   }
 
   inline void reserve_connection(devid_t src, devid_t dst) {
-    increase_incoming(dst);
-    increase_outgoing(src);
+    reserve_copy_engine(dst, src);
     increase_active_links(src, dst);
   }
 
   inline void release_connection(devid_t src, devid_t dst) {
-    decrease_incoming(dst);
-    decrease_outgoing(src);
+    release_copy_engine(dst, src);
     decrease_active_links(src, dst);
   }
 
@@ -214,22 +235,22 @@ public:
     return link_usage[src * num_devices + dst].active;
   }
 
-  [[nodiscard]] inline copy_t get_incoming(devid_t device_id) const {
-    return device_usage[device_id].incoming;
-  }
-
-  [[nodiscard]] inline copy_t get_outgoing(devid_t device_id) const {
-    return device_usage[device_id].outgoing;
-  }
-
-  [[nodiscard]] inline copy_t get_total_usage(devid_t device_id) const {
-    return device_usage[device_id].incoming + device_usage[device_id].outgoing;
-  }
-
-  [[nodiscard]] inline bool is_device_available(devid_t device_id) const {
-    const auto used = get_total_usage(device_id);
-    const auto available = device_usage[device_id].max;
-    return used < available;
+  [[nodiscard]] inline bool is_device_available(devid_t src, devid_t dst) const {
+    if (is_h2d(src, dst)) {
+      const auto used_h2d_outgoing = device_usage[src].h2d_outgoing;
+      const auto used_h2d_incoming = device_usage[dst].h2d_incoming;
+      const auto available_h2d_outgoing = device_usage[src].h2d_max;
+      const auto available_h2d_incoming = device_usage[dst].h2d_max;
+      return used_h2d_outgoing < available_h2d_outgoing &&
+             used_h2d_incoming < available_h2d_incoming;
+    } else if (is_d2d(src, dst)) {
+      const auto used_d2d_outgoing = device_usage[src].d2d_outgoing;
+      const auto used_d2d_incoming = device_usage[dst].d2d_incoming;
+      const auto available_d2d_outgoing = device_usage[src].d2d_max;
+      const auto available_d2d_incoming = device_usage[dst].d2d_max;
+      return used_d2d_outgoing < available_d2d_outgoing &&
+             used_d2d_incoming < available_d2d_incoming;
+    }
   }
 
   [[nodiscard]] inline bool is_link_available(devid_t src, devid_t dst) const {
@@ -249,7 +270,7 @@ public:
     }
 
     // check device availability
-    return is_device_available(src) && is_device_available(dst);
+    return is_device_available(src, dst);
   }
 
   [[nodiscard]] mem_t get_bandwidth(const Topology &topology, devid_t src, devid_t dst) const {
@@ -300,13 +321,12 @@ public:
       const devicemask_t src_mask = (1 << src);
 
       const bool is_valid = (possible_source_flags & src_mask) && is_link_available(src, dst) &&
-                            is_device_available(src) && is_device_available(dst);
+                            is_device_available(src, dst);
 
       SPDLOG_DEBUG("Checking source {} for destination {}: is_valid = {}", src, dst, is_valid);
       SPDLOG_DEBUG("HAS_DATA = {}", possible_source_flags & src_mask);
       SPDLOG_DEBUG("LINK_AVAILABLE = {}", is_link_available(src, dst));
-      SPDLOG_DEBUG("SRC_AVAILABLE = {}", is_device_available(src));
-      SPDLOG_DEBUG("DST_AVAILABLE = {}", is_device_available(dst));
+      SPDLOG_DEBUG("SRC2DST_CE_AVAILABLE = {}", is_device_available(src, dst));
 
       const auto bandwidth = topology.get_bandwidth(src, dst);
 
@@ -319,8 +339,9 @@ public:
     return {found, best_source};
   }
 
-  [[nodiscard]] inline SourceRequest get_best_source(const Topology &topology, devid_t dst,
-                                                     const devicemask_t possible_source_flags) const {
+  [[nodiscard]] inline SourceRequest
+  get_best_source(const Topology &topology, devid_t dst,
+                  const devicemask_t possible_source_flags) const {
 
     const devicemask_t destination_mask = (1 << dst);
     if (possible_source_flags & destination_mask) {
