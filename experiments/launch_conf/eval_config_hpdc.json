@@ -1,0 +1,142 @@
+{
+    "sweeps": {
+        "dmem": [
+            84000000000,
+            90000000000,
+            96000000000,
+            9999000000000
+        ],
+        "obs_ver": [
+            "F"
+        ],
+        "iteration": [
+            10
+        ]
+    },
+    "experiments": {
+        "circle": [
+            {
+                "interior": 0.1,
+                "boundary": 0.1,
+                "mem": "46e9"
+            },
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": "39e9"
+            },
+            {
+                "interior": 1,
+                "boundary": 1,
+                "mem": "39e9"
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1,
+                "mem": "24e9"
+            },
+            {
+                "interior": 10,
+                "boundary": 1,
+                "mem": "24e9"
+            }
+        ],
+        "ncircle": [
+            {
+                "interior": 0.1,
+                "boundary": 0.1,
+                "mem": "46e9"
+            },
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": "39e9"
+            },
+            {
+                "interior": 1,
+                "boundary": 1,
+                "mem": "39e9"
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1,
+                "mem": "24e9"
+            },
+            {
+                "interior": 10,
+                "boundary": 1,
+                "mem": "24e9"
+            }
+        ],
+        "corners": [
+            {
+                "interior": 0.1,
+                "boundary": 0.1,
+                "mem": "44e9"
+            },
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": "35e9"
+            },
+            {
+                "interior": 1,
+                "boundary": 1,
+                "mem": "35e9"
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1,
+                "mem": "40e9"
+            },
+            {
+                "interior": 10,
+                "boundary": 1,
+                "mem": "40e9"
+            }
+        ],
+        "noise": [
+            {
+                "interior": 0.1,
+                "boundary": 0.1,
+                "mem": "44e9"
+            },
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": "35e9"
+            },
+            {
+                "interior": 1,
+                "boundary": 1,
+                "mem": "35e9"
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1,
+                "mem": "40e9"
+            },
+            {
+                "interior": 10,
+                "boundary": 1,
+                "mem": "40e9"
+            }
+        ]
+    },
+    "cores_per_job": 4,
+    "command_template": [
+        "mpirun",
+        "-n",
+        "4",
+        "python3",
+        "evaluate_model.py",
+        "--config-name=8x8x128_dynamic_{exp_name}_cnn",
+        "feature.observer.version={obs_ver}",
+        "graph.config.r_interior={interior}",
+        "graph.config.r_boundary={boundary}",
+        "graph.config.level_memory={mem}",
+        "system.mem={dmem_int}",
+        "+extend=2",
+        "+n_samples={iteration}"
+    ]
+}

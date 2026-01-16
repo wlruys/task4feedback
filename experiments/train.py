@@ -189,7 +189,7 @@ def main(cfg: DictConfig):
         run_name, _, _, _ = make_folder_name(cfg)
 
         checkpoint_path = Path(cfg.wandb.dir).parent / "model_checkpoints" / f"{run_name}"
-        cfg.eval.pickle_path = f"./pickled_evaluation/{run_name}.pkl"
+        cfg.eval.pickle_path = f"./pickled_evaluation/{cfg.feature.observer.version}/{run_name}.pkl"
         cfg.eval.expert_path = f"./dataset/{run_name}/{cfg.eval.expert_path}.pkl" if cfg.eval.expert_path is not None else None
         norm_path = f"./norms/{run_name}/{cfg.feature.observer.version}_norm.pkl"
 
