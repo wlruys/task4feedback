@@ -1,7 +1,7 @@
 {
     "seed_start": 1100000000,
     "seed_step": 100000000,
-    "num_seeds": 10,
+    "num_seeds": 30,
     "sweeps": {
         "dmem": [
             96000000000
