@@ -14,9 +14,7 @@
             90,
             100,
             110,
-            120,
-            130,
-            140
+            120
         ]
     },
     "experiments": {
@@ -24,34 +22,34 @@
             {
                 "interior": 1,
                 "boundary": 0.1,
-                "mem": "44e9"
+                "mem": "50e9"
             },
             {
                 "interior": 10,
                 "boundary": 0.1,
-                "mem": "38e9"
+                "mem": "51e9"
             },
             {
                 "interior": 10,
                 "boundary": 1,
-                "mem": "38e9"
+                "mem": "51e9"
             }
         ],
         "corners": [
             {
                 "interior": 1,
                 "boundary": 0.1,
-                "mem": "44e9"
+                "mem": "46e9"
             },
             {
                 "interior": 10,
                 "boundary": 0.1,
-                "mem": "41e9"
+                "mem": "42e9"
             },
             {
                 "interior": 10,
                 "boundary": 1,
-                "mem": "41e9"
+                "mem": "42e9"
             }
         ]
     },

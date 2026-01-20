@@ -88,7 +88,7 @@ class DynamicJacobiData(JacobiData):
             self.boundary_elem = self.interior_elem * self.config.boundary_width * self.config.r_boundary / self.config.r_interior
             boundary_size = self.boundary_elem * self.config.bytes_per_element
             self.config.arithmetic_complexity = 1.0
-            self.config.arithmetic_intensity = system.fastest_flops / 1e6 / system.fastest_bandwidth / self.config.r_interior
+            self.config.arithmetic_intensity = system.fastest_flops / 1e6 / system.fastest_bandwidth / self.config.r_interior * self.config.bytes_per_element
             interior_size = int(interior_size)
             boundary_size = int(boundary_size)
 
@@ -182,6 +182,7 @@ class DynamicJacobiData(JacobiData):
             "boundary_average_comm": sum(boundary_data) / len(boundary_data) / system.fastest_bandwidth,
             "compute_average": sum(compute_time) / len(compute_time),
         }
+        print(self.data_stat)
         print(f"Average Step Size: {int(self.data_stat['average_step_data']/1e9):,}GB")
 
     def reset_data_size(self, system: System):

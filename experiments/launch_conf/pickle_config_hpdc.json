@@ -1,122 +1,55 @@
 {
+    "seed_start": 1000,
+    "seed_step": 100000000,
+    "num_seeds": 1,
     "sweeps": {
         "dmem": [
-            84000000000,
-            90000000000,
-            96000000000,
-            9999000000000
+            96000000000
         ],
         "obs_ver": [
-            "D"
+            "F"
+        ],
+        "percentages": [
+            80,
+            90,
+            100,
+            110,
+            120
         ]
     },
     "experiments": {
         "circle": [
             {
-                "interior": 0.1,
-                "boundary": 0.1,
-                "mem": "46e9"
-            },
-            {
                 "interior": 1,
                 "boundary": 0.1,
-                "mem": "39e9"
-            },
-            {
-                "interior": 1,
-                "boundary": 1,
-                "mem": "39e9"
+                "mem": "50e9"
             },
             {
                 "interior": 10,
                 "boundary": 0.1,
-                "mem": "24e9"
+                "mem": "51e9"
             },
             {
                 "interior": 10,
                 "boundary": 1,
-                "mem": "24e9"
-            }
-        ],
-        "ncircle": [
-            {
-                "interior": 0.1,
-                "boundary": 0.1,
-                "mem": "46e9"
-            },
-            {
-                "interior": 1,
-                "boundary": 0.1,
-                "mem": "39e9"
-            },
-            {
-                "interior": 1,
-                "boundary": 1,
-                "mem": "39e9"
-            },
-            {
-                "interior": 10,
-                "boundary": 0.1,
-                "mem": "24e9"
-            },
-            {
-                "interior": 10,
-                "boundary": 1,
-                "mem": "24e9"
+                "mem": "51e9"
             }
         ],
         "corners": [
             {
-                "interior": 0.1,
-                "boundary": 0.1,
-                "mem": "44e9"
-            },
-            {
                 "interior": 1,
                 "boundary": 0.1,
-                "mem": "35e9"
-            },
-            {
-                "interior": 1,
-                "boundary": 1,
-                "mem": "35e9"
+                "mem": "46e9"
             },
             {
                 "interior": 10,
                 "boundary": 0.1,
-                "mem": "40e9"
+                "mem": "42e9"
             },
             {
                 "interior": 10,
                 "boundary": 1,
-                "mem": "40e9"
-            }
-        ],
-        "noise": [
-            {
-                "interior": 0.1,
-                "boundary": 0.1,
-                "mem": "44e9"
-            },
-            {
-                "interior": 1,
-                "boundary": 0.1,
-                "mem": "35e9"
-            },
-            {
-                "interior": 1,
-                "boundary": 1,
-                "mem": "35e9"
-            },
-            {
-                "interior": 10,
-                "boundary": 0.1,
-                "mem": "40e9"
-            },
-            {
-                "interior": 10,
-                "boundary": 1,
-                "mem": "40e9"
+                "mem": "42e9"
             }
         ]
     },
@@ -131,6 +64,7 @@
         "graph.config.r_interior={interior}",
         "graph.config.r_boundary={boundary}",
         "feature.observer.version={obs_ver}",
+        "seed={seed_val}",
         "graph.config.level_memory={mem}",
         "system.mem={dmem_int}",
         "+extend=2"
