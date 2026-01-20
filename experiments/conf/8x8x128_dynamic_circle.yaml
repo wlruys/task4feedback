@@ -6,7 +6,7 @@ defaults:
   - runtime: batch
   - wandb: default
   - logging: default
-  - lr_scheduler: none 
+  - lr_scheduler: linear_decay
   - noise: none
   - optimizer: adamw
   - eval: default
@@ -38,7 +38,7 @@ graph:
     seed: 1
 
 algorithm:
-  num_collections: 10000
+  num_collections: 20000
   rollout_steps: 64
   workers: 4
   graphs_per_collection: 4

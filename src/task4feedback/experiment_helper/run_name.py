@@ -96,7 +96,7 @@ def make_folder_name(cfg: DictConfig):
         graph_name = "l" + graph_name
 
     return (
-        f"{cfg.graph.config.n}w_{cfg.graph.config.steps}lvl_{cfg.system.n_devices-1}gpu_{graph_name}_{interior_ratio}-{boundary_ratio}_{int(cfg.system.mem/1e9)}GB",
+        f"{cfg.graph.config.n}w_{cfg.graph.config.steps}lvl_{cfg.system.n_devices-1}gpu_{graph_name}_{interior_ratio}-{boundary_ratio}_{int(cfg.graph.config.level_memory/1e8)}",
         graph_name,
         interior_ratio,
         boundary_ratio,

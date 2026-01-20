@@ -170,8 +170,8 @@ class Scheduler:
         self.job_counter += 1
 
         try:
-            proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
-
+            # proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+            proc = subprocess.Popen(full_cmd, text=True)
             self.running_jobs.append({"proc": proc, "cores": cores, "cmd_str": cmd_str})
         except Exception as e:
             tqdm.write(f"[ERROR] Failed to launch: {cmd_str}\n{e}")
@@ -192,8 +192,7 @@ class Scheduler:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--run", action="store_true")
     parser.add_argument("--max-jobs", type=int, default=None)
     parser.add_argument("--no-pinning", action="store_true", help="Disable numactl pinning")
     args = parser.parse_args()
@@ -205,53 +204,49 @@ def main():
     jobs = []
     cmd_template = config["command_template"]
     cores_per_job = config.get("cores_per_job", 4)
+    seed_start = config.get("seed_start", 0)
+    seed_step = config.get("seed_step", 100000000)
+    num_seeds = config.get("num_seeds", 1)
     global_params = config.get("global_params", {})
 
     # print(f"Generating jobs from {args.config}...")
 
     # Iterate over experiments
-    for exp_name, run_list in config["experiments"].items():
-        for params in run_list:
-            interior = params.get("interior")
-            boundary = params.get("boundary")
+    for seed_offset in range(num_seeds):
+        for exp_name, run_list in config["experiments"].items():
+            for params in run_list:
+                sweeps = params.get("sweeps", config.get("sweeps", {}))
+                import itertools
 
-            if interior and boundary:
-                calc_int, calc_bound = calculate_ratio(interior, boundary)
-                if calc_int is None:
-                    continue
-            else:
-                raise ValueError("Interior and Boundary must be specified")
+                keys = sweeps.keys()
+                values = sweeps.values()
 
-            sweeps = params.get("sweeps", config.get("sweeps", {}))
-            import itertools
+                for bundle in itertools.product(*values):
+                    sweep_context = dict(zip(keys, bundle))
 
-            keys = sweeps.keys()
-            values = sweeps.values()
+                    context = {
+                        "exp_name": exp_name,
+                        "seed_val": seed_start + seed_offset * seed_step,
+                        **global_params,
+                        **params,
+                        **sweep_context,
+                    }
+                    if "dmem" in context:
+                        context["dmem_gb"] = int(context["dmem"] / 1e9)
+                        context["dmem_int"] = int(context["dmem"])
 
-            for bundle in itertools.product(*values):
-                sweep_context = dict(zip(keys, bundle))
-                context = {
-                    "exp_name": exp_name,
-                    "seed_val": (args.seed + 10) * 100000000,
-                    "calc_intensity": calc_int,
-                    "calc_boundary": calc_bound,
-                    **global_params,
-                    **params,
-                    **sweep_context,
-                }
-                if "dmem" in context:
-                    context["dmem_gb"] = int(context["dmem"] / 1e9)
-                    context["dmem_int"] = int(context["dmem"])
+                    if "percentages" in context:
+                        context["mem"] = int(float(context["mem"]) * context["percentages"] / 100)
 
-                formatted_cmd = []
-                for token in cmd_template:
-                    formatted_cmd.append(str(token).format(**context))
+                    formatted_cmd = []
+                    for token in cmd_template:
+                        formatted_cmd.append(str(token).format(**context))
 
-                jobs.append((cores_per_job, formatted_cmd))
+                    jobs.append((cores_per_job, formatted_cmd))
 
     # print(f"Total jobs prepared: {len(jobs)}")
 
-    if args.dry_run:
+    if not args.run:
         for n, cmd in jobs:
             print(f"{' '.join(cmd)}")
         return
