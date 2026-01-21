@@ -195,6 +195,7 @@ def main():
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--max-jobs", type=int, default=None)
     parser.add_argument("--no-pinning", action="store_true", help="Disable numactl pinning")
+    parser.add_argument("--seed", type=int, default=None, help="Base random seed offset")
     args = parser.parse_args()
 
     # Load Config
@@ -207,6 +208,10 @@ def main():
     seed_start = config.get("seed_start", 0)
     seed_step = config.get("seed_step", 100000000)
     num_seeds = config.get("num_seeds", 1)
+    if args.seed is not None:
+        seed_start = args.seed
+        num_seeds = 1
+
     global_params = config.get("global_params", {})
 
     # print(f"Generating jobs from {args.config}...")

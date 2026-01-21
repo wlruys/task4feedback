@@ -23,36 +23,36 @@
     "experiments": {
         "circle": [
             {
-                "interior": 1,
+                "interior": 1000,
                 "boundary": 0.1,
-                "mem": "50e9"
+                "mem": "49e9"
             },
             {
-                "interior": 10,
-                "boundary": 0.1,
-                "mem": "51e9"
-            },
-            {
-                "interior": 10,
+                "interior": 100,
                 "boundary": 1,
-                "mem": "51e9"
+                "mem": "49e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": "49e9"
             }
         ],
         "corners": [
             {
-                "interior": 1,
+                "interior": 100,
                 "boundary": 0.1,
-                "mem": "46e9"
+                "mem": "44e9"
             },
             {
-                "interior": 10,
-                "boundary": 0.1,
-                "mem": "42e9"
-            },
-            {
-                "interior": 10,
+                "interior": 100,
                 "boundary": 1,
-                "mem": "42e9"
+                "mem": "44e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": "44e9"
             }
         ]
     },
