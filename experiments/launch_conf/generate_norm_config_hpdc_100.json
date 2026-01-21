@@ -1,0 +1,68 @@
+{
+    "seed_start": 1000,
+    "seed_step": 100000000,
+    "num_seeds": 1,
+    "sweeps": {
+        "dmem": [
+            96000000000
+        ],
+        "obs_ver": [
+            "F"
+        ],
+        "percentages": [
+            80,
+            90,
+            100,
+            110,
+            120
+        ]
+    },
+    "experiments": {
+        "circle": [
+            {
+                "interior": 1000,
+                "boundary": 0.1,
+                "mem": "49e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 1,
+                "mem": "49e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": "49e9"
+            }
+        ],
+        "corners": [
+            {
+                "interior": 100,
+                "boundary": 0.1,
+                "mem": "44e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 1,
+                "mem": "44e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": "44e9"
+            }
+        ]
+    },
+    "cores_per_job": 4,
+    "command_template": [
+        "python3",
+        "generate_norm.py",
+        "--config-name=8x8x128_dynamic_{exp_name}_cnn",
+        "graph.config.r_interior={interior}",
+        "graph.config.r_boundary={boundary}",
+        "feature.observer.version={obs_ver}",
+        "seed={seed_val}",
+        "graph.config.level_memory={mem}",
+        "system.mem={dmem_int}"
+    ]
+}
