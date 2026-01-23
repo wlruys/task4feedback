@@ -9,6 +9,10 @@ import torch
 import numpy as np
 from ..graphs.jacobi import get_length_from_config
 import hydra
+import hashlib
+import pickle
+from pathlib import Path
+from omegaconf import OmegaConf
 
 
 def run_parmetis(sim: SimulatorDriver, cfg, verbose=False, offset=1, future_levels=0, itr: float = 1000, unbalance: float = 1.225, n_compute_devices: int = 4, ParMETIS=None) -> bool:
@@ -38,12 +42,16 @@ def run_parmetis(sim: SimulatorDriver, cfg, verbose=False, offset=1, future_leve
     if rank == 0:
         graph = sim.input.graph
         assert isinstance(graph, JacobiGraph), "Graph must be a JacobiGraph"
-        cell_graph = graph.get_weighted_cell_graph(
-            DeviceType.GPU,
-            bandwidth=d2d_bandwidth,
-            levels=[0, 1],
-        )
-        edge_cut, partition = weighted_cell_partition(cell_graph, nparts=(cfg.system.n_devices - 1))
+        if cfg.graph.init.partitioner == "metis":
+            cell_graph = graph.get_weighted_cell_graph(
+                DeviceType.GPU,
+                bandwidth=d2d_bandwidth,
+                levels=[0, 1],
+            )
+            edge_cut, partition = weighted_cell_partition(cell_graph, nparts=(cfg.system.n_devices - 1))
+        elif cfg.graph.init.partitioner == "quad":
+            partition = graph.quadrant_partition(offset=0)
+        partition = graph.maximize_matches(partition)
         cell_to_device = [x + offset for x in partition]
         partition = [-1 for _ in range(sim.observer.graph_spec.max_candidates)]
         sim.enable_external_mapper()
@@ -265,3 +273,86 @@ def query_parmetis(
             return prev_mapping, status
         else:
             return None, status
+
+
+def hash_graph_cfg(graph_cfg) -> str:
+    data = OmegaConf.to_container(graph_cfg, resolve=True)
+    serialized = repr(sorted(data.items())).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", search_new=False):
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    cache_dir = Path(cache_dir)
+
+    if rank == 0:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        graph_hash = hash_graph_cfg(cfg.graph)
+        cache_file = cache_dir / f"{graph_hash}.pkl"
+
+        if cache_file.exists():
+            with cache_file.open("rb") as f:
+                best_cfg = pickle.load(f)
+
+            print(
+                f"Using cached ParMETIS config " f"(graph={graph_hash[:8]}): " f"itr={best_cfg[0]}, ub={best_cfg[1]}, time={best_cfg[2]}",
+                flush=True,
+            )
+        else:
+            best_cfg = None
+    else:
+        best_cfg = None
+        cache_file = None
+
+    # Broadcast cache hit / miss
+    best_cfg = comm.bcast(best_cfg, root=0)
+    cache_file = comm.bcast(cache_file, root=0)
+
+    if best_cfg is not None and not search_new:
+        return best_cfg
+
+    if rank == 0:
+        print("Finding best ParMETIS configuration...", flush=True)
+
+    best_cfg = (None, None, float("inf"))  # (itr, ub, time)
+
+    itr_list = [0.0001001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000]
+    ub_list = [1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
+
+    for itr in itr_list:
+        for ub in ub_list:
+            if rank == 0:
+                temp = env.simulator.copy()
+            else:
+                temp = None
+
+            comm.barrier()
+            status = run_parmetis(
+                sim=temp,
+                cfg=cfg,
+                unbalance=ub,
+                itr=itr,
+                n_compute_devices=cfg.system.n_devices - 1,
+                ParMETIS=ParMETIS,
+            )
+
+            if not status:
+                continue
+
+            if rank == 0 and temp.time < best_cfg[2]:
+                best_cfg = (itr, ub, temp.time)
+
+    best_cfg = comm.bcast(best_cfg, root=0)
+
+    # Save result using hash as filename
+    if rank == 0:
+        with cache_file.open("wb") as f:
+            pickle.dump(best_cfg, f)
+
+        print(
+            f"Best ParMETIS config saved " f"(graph={graph_hash[:8]}): " f"itr={best_cfg[0]}, ub={best_cfg[1]}, time={best_cfg[2]}",
+            flush=True,
+        )
+
+    return best_cfg

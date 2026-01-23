@@ -12,16 +12,16 @@ config:
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0
-  task_internal_memory: 0 
-  task_time: 1000 
+  task_internal_memory: 0
+  task_time: 1000
   boundary_time: 1000
-  interior_time: 1000 
+  interior_time: 1000
   workload:
     _target_: task4feedback.graphs.base.LoadedWorkload
   workload_args:
     bundle_path: /Users/wlruys/workspace/scheduling/task4feedback/out/workload_eval_test_20250820-152203
 init:
-  partitioner: metis
+  partitioner: quad
   nparts: 4
   gpu_only: True
   randomize: False

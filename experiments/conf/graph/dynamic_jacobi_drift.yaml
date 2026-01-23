@@ -12,7 +12,7 @@ config:
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0
-  task_internal_memory: 0 
+  task_internal_memory: 0
   workload:
     _target_: task4feedback.graphs.base.TrajectoryWorkload
   workload_args:
@@ -25,7 +25,7 @@ config:
       direction_std: 0.1
       radius: 0.3
 init:
-  partitioner: metis
+  partitioner: quad
   nparts: 4
   gpu_only: True
   randomize: True
@@ -33,5 +33,5 @@ env:
   change_priority: True
   change_locations: True
   change_duration: True
-  change_workload: True 
+  change_workload: True
   seed: 1

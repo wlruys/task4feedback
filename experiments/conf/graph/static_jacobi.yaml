@@ -21,7 +21,7 @@ config:
   interior_size: null # if you define interior_size and boundary_size, they will be used over time-based calculations
   boundary_size: null
 init:
-  partitioner: metis
+  partitioner: quad
   nparts: 4
   gpu_only: True
   randomize: True

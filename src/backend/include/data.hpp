@@ -530,7 +530,7 @@ public:
     assert(dest < total_data_movement.size());
     total_data_movement[src] += size;
     total_data_movement[dest] += size;
-    if (src == 0 || dest == 0) {
+    if (dest == 0) {
       eviction_data_movement[src] += size;
       eviction_data_movement[dest] += size;
     }

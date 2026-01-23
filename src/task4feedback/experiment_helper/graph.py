@@ -21,16 +21,13 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
     def make_graph(system: System):
         mesh = instantiate(cfg.graph.mesh, L=1, n=graph_cfg.n, domain_ratio=graph_cfg.domain_ratio)
 
-        if cfg.graph.init.partitioner == "metis":
-            partitioner = metis_geometry_partition
-        else:
-            raise NotImplementedError(f"Partitioner {cfg.graph.init.partitioner} is not implemented.")
-
         geom = build_geometry(mesh)
         graph = build_graph(geom, graph_cfg, system=system)
-        # partition = partitioner(geom, nparts=cfg.graph.init.nparts)
-        # partition = block_cyclic(geom)
-        partition = graph.initial_mincut_partition(
+        if cfg.graph.init.partitioner == "metis":
+            graph.make_partition = graph.initial_mincut_partition
+        elif cfg.graph.init.partitioner == "quad":
+            graph.make_partition = graph.quadrant_partition
+        partition = graph.make_partition(
             arch=DeviceType.GPU,
             bandwidth=cfg.system.d2d_bw,
             n_parts=4,
@@ -44,15 +41,6 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
         #         for y in range(graph.ny):
         #             print(f"{partition[graph.xy_from_id(x * graph.ny + y)]}", end=" ")
         #         print()
-
-        """ 
-        def initial_mincut_partition(
-        self,
-        arch: DeviceType = DeviceType.GPU,
-        bandwidth: int = 1000,
-        n_parts: int = 4,
-        offset: int = 1,  # 1 to ignore cpu
-    ):"""
 
         if cfg.graph.init.gpu_only:
             partition = [x + 1 for x in partition]  # offset by 1 to ignore cpu

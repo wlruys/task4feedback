@@ -31,7 +31,7 @@ config:
       radius: 0.5
       phase_length: 128
 init:
-  partitioner: metis
+  partitioner: quad
   nparts: 4
   gpu_only: True
   randomize: False

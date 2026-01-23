@@ -972,6 +972,27 @@ class JacobiGraph(ComputeDataGraph):
 
         return aligned.tolist()
 
+    def quadrant_partition(
+        self,
+        arch: DeviceType = DeviceType.GPU,
+        bandwidth: int = 1000,
+        n_parts: int = 4,
+        offset: int = 1,  # 1 to ignore cpu
+    ):
+        partition = []
+        half = self.config.n // 2
+        for j in range(self.config.n):  # column-wise unrolling
+            for i in range(self.config.n):
+                if i < half and j < half:
+                    partition.append(0 + offset)  # top-left
+                elif i < half and j >= half:
+                    partition.append(1 + offset)  # top-right
+                elif i >= half and j < half:
+                    partition.append(2 + offset)  # bottom-left
+                else:
+                    partition.append(3 + offset)  # bottom-right
+        return partition
+
 
 register_graph(JacobiGraph, JacobiConfig)
 

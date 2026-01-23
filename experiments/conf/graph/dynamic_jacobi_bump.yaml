@@ -13,12 +13,12 @@ config:
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0
-  task_internal_memory: 0 
+  task_internal_memory: 0
   workload:
     _target_: task4feedback.graphs.base.BumpWorkload
   workload_args:
     traj_type: bump
-    lower_bound: 1 
+    lower_bound: 1
     upper_bound: 5
     probability: 0.05
     traj_specifics:
@@ -29,7 +29,7 @@ config:
       min_life: 32
       max_life: 64
 init:
-  partitioner: metis
+  partitioner: quad
   nparts: 4
   gpu_only: True
   randomize: True

@@ -476,7 +476,7 @@ class RuntimeEnv(EnvBase):
             new_workload_seed = self.workload_seed + self.resets
             random.seed(new_workload_seed)
             graph.randomize_workload(seed=new_workload_seed, system=self.simulator_factory[self.active_idx].input.system)
-            partition = graph.initial_mincut_partition(
+            partition = graph.make_partition(
                 arch=DeviceType.GPU,
                 bandwidth=450e9,
                 n_parts=self.n_compute_devices,

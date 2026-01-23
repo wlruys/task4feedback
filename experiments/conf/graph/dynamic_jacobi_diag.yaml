@@ -14,7 +14,7 @@ config:
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0
-  task_internal_memory: 0 
+  task_internal_memory: 0
   workload:
     _target_: task4feedback.graphs.base.DiagonalWorkload
   workload_args:
@@ -26,7 +26,7 @@ config:
       blur_frac: 0.10 # border softness (fraction of side). 0 -> hard edges
       width: 0.5 # box width (fraction of domain min side)
 init:
-  partitioner: metis
+  partitioner: quad
   nparts: 4
   gpu_only: True
   randomize: False
