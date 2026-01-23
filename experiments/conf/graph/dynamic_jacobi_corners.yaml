@@ -29,7 +29,7 @@ config:
       width: 0.5 # box width (fraction of domain min side)
       phase_length: 128
 init:
-  partitioner: quad
+  partitioner: metis
   nparts: 4
   gpu_only: True
   randomize: False

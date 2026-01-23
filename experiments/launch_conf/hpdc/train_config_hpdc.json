@@ -2,24 +2,12 @@
     "seed_start": 1100000000,
     "seed_step": 100000000,
     "num_seeds": 30,
-    "sweeps": {
-        "dmem": [
-            96000000000
-        ],
-        "obs_ver": [
-            "F"
-        ],
-        "percentages": [
-            80,
-            90,
-            100,
-            110,
-            120
-        ],
-        "horizon": [
-            40000
-        ]
-    },
+    "start_mem": 20e9,
+    "end_mem": 60e9,
+    "step_mem": 4e9,
+    "horizon": 40000,
+    "obs_ver": "F",
+    "dmem": 96e9,
     "experiments": {
         "circle": [
             {
@@ -30,29 +18,59 @@
             {
                 "interior": 10,
                 "boundary": 0.1,
-                "mem": "51e9"
+                "mem": "49e9"
             },
             {
                 "interior": 10,
                 "boundary": 1,
-                "mem": "51e9"
+                "mem": "49e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1,
+                "mem": "48e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 1,
+                "mem": "48e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": "48e9"
             }
         ],
         "corners": [
             {
                 "interior": 1,
                 "boundary": 0.1,
-                "mem": "46e9"
+                "mem": "45e9"
             },
             {
                 "interior": 10,
                 "boundary": 0.1,
-                "mem": "42e9"
+                "mem": "44e9"
             },
             {
                 "interior": 10,
                 "boundary": 1,
-                "mem": "42e9"
+                "mem": "44e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1,
+                "mem": "44e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 1,
+                "mem": "44e9"
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": "44e9"
             }
         ]
     },

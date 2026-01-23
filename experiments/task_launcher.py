@@ -170,8 +170,8 @@ class Scheduler:
         self.job_counter += 1
 
         try:
-            # proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
-            proc = subprocess.Popen(full_cmd, text=True)
+            proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+            # proc = subprocess.Popen(full_cmd, text=True)
             self.running_jobs.append({"proc": proc, "cores": cores, "cmd_str": cmd_str})
         except Exception as e:
             tqdm.write(f"[ERROR] Failed to launch: {cmd_str}\n{e}")
@@ -188,38 +188,108 @@ class Scheduler:
                 pass
 
 
-# --- Main Entry Point ---
+def parse_mem(mem_str):
+    if isinstance(mem_str, (int, float)):
+        return int(mem_str)
+    return int(float(mem_str))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--max-jobs", type=int, default=None)
     parser.add_argument("--no-pinning", action="store_true", help="Disable numactl pinning")
-    parser.add_argument("--seed", type=int, default=None, help="Base random seed offset")
+    parser.add_argument("--nodes", type=int, default=1, help="Total number of nodes")
+    parser.add_argument("--node-number", type=int, default=0, help="Index of current node (0 to nodes-1)")
     args = parser.parse_args()
+
+    if args.node_number >= args.nodes:
+        raise ValueError(f"node_number ({args.node_number}) must be less than nodes ({args.nodes})")
 
     # Load Config
     with open(args.config, "r") as f:
         config = json.load(f)
 
-    jobs = []
-    cmd_template = config["command_template"]
-    cores_per_job = config.get("cores_per_job", 4)
+    # Global Config params
+    start_mem = parse_mem(config.get("start_mem", 0))
+    end_mem = parse_mem(config.get("end_mem", 0))
+    step_mem = parse_mem(config.get("step_mem", 1e9))
+
     seed_start = config.get("seed_start", 0)
     seed_step = config.get("seed_step", 100000000)
     num_seeds = config.get("num_seeds", 1)
-    if args.seed is not None:
-        seed_start = args.seed
-        num_seeds = 1
 
-    global_params = config.get("global_params", {})
+    # Generate Memory Points
+    base_mem_range = []
+    if start_mem > 0 and end_mem > 0:
+        curr = start_mem
+        while curr <= end_mem:
+            base_mem_range.append(curr)
+            curr += step_mem
 
-    # print(f"Generating jobs from {args.config}...")
+    experiment_jobs = []
 
     # Iterate over experiments
+    cmd_template = config["command_template"]
+    cores_per_job = config.get("cores_per_job", 4)
+    global_params = config.get("global_params", {})
+
+    # Identify top-level keys that should be in context
+    # exclude known structural keys
+    exclude_keys = {"experiments", "command_template", "cores_per_job", "seed_start", "seed_step", "num_seeds", "start_mem", "end_mem", "step_mem", "global_params", "sweeps"}
+
+    # Create a base context from top-level config items
+    base_context = {k: v for k, v in config.items() if k not in exclude_keys}
+    base_context.update(global_params)
+
     for seed_offset in range(num_seeds):
+        current_seed = seed_start + seed_offset * seed_step
+
         for exp_name, run_list in config["experiments"].items():
             for params in run_list:
+                # 1. Determine Memory Points
+
+                # Start with the base range
+                # Filter out points "close" to specified "mem" in params
+
+                job_specific_mem_points = []
+                if "mem" in params:
+                    spec_mem = parse_mem(params["mem"])
+                    job_specific_mem_points.append(spec_mem)
+
+                final_mem_points = []
+                # Add base points that are NOT covered by specific points
+                # specific point covers range [spec_mem - step_mem, spec_mem + step_mem] ?
+                # User said: "if there is a memory that difference is less then step mem wrt specified "mem" aggregate that point into specified "mem""
+
+                # We want to iterate through base_mem_range.
+                # If a base_mem is within step_mem of ANY spec_mem, we skip it (it's "aggregated" into spec_mem)
+                # Then we add all spec_mem points.
+
+                # Wait, "aggregate" means the user wants to run the specific mem INSTEAD of the nearby base points.
+
+                for base_m in base_mem_range:
+                    covered = False
+                    # for spec_m in job_specific_mem_points:
+                    #     if base_m - spec_m < step_mem and base_m - spec_m > 0:
+                    #         covered = True
+                    #         break
+                    if not covered:
+                        final_mem_points.append(base_m)
+
+                # Add specific points
+                final_mem_points.extend(job_specific_mem_points)
+                final_mem_points = sorted(list(set(final_mem_points)))
+
+                # If no memory config at all, just run once with params as is?
+                # The prompt implies we are generating sweeps over memory.
+                # If final_mem_points is empty (no start/end/step config), we just run params once
+
+                if not final_mem_points:
+                    final_mem_points = [None]  # Dummy to run loop once
+
+                # Handle other sweeps if present
                 sweeps = params.get("sweeps", config.get("sweeps", {}))
                 import itertools
 
@@ -229,38 +299,54 @@ def main():
                 for bundle in itertools.product(*values):
                     sweep_context = dict(zip(keys, bundle))
 
-                    context = {
-                        "exp_name": exp_name,
-                        "seed_val": seed_start + seed_offset * seed_step,
-                        **global_params,
-                        **params,
-                        **sweep_context,
-                    }
-                    if "dmem" in context:
-                        context["dmem_gb"] = int(context["dmem"] / 1e9)
-                        context["dmem_int"] = int(context["dmem"])
+                    for mem_val in final_mem_points:
+                        context = {
+                            "exp_name": exp_name,
+                            "seed_val": current_seed,
+                            **base_context,
+                            **params,
+                            **sweep_context,
+                        }
 
-                    if "percentages" in context:
-                        context["mem"] = int(float(context["mem"]) * context["percentages"] / 100)
+                        # Overwrite/Set memory context if valid
+                        if mem_val is not None:
+                            context["mem"] = int(mem_val)  # Ensure int format for template
 
-                    formatted_cmd = []
-                    for token in cmd_template:
-                        formatted_cmd.append(str(token).format(**context))
+                        # Derived memory params
+                        if "dmem" in context:
+                            if isinstance(context["dmem"], str):
+                                context["dmem"] = parse_mem(context["dmem"])
+                            context["dmem_gb"] = int(context["dmem"] / 1e9)
+                            context["dmem_int"] = int(context["dmem"])
 
-                    jobs.append((cores_per_job, formatted_cmd))
+                        if "percentages" in context and mem_val is not None:
+                            context["mem"] = int(float(mem_val) * context["percentages"] / 100)
 
-    # print(f"Total jobs prepared: {len(jobs)}")
+                        formatted_cmd = []
+                        for token in cmd_template:
+                            formatted_cmd.append(str(token).format(**context))
+
+                        experiment_jobs.append((cores_per_job, formatted_cmd))
+
+    # Round Robin Distribution
+    # Filter jobs for this node
+    # experiments "circle": ..., num_seeds=32, nodes=32 -> every node should have 1 of the run
+    # This implies we just slice the list
+
+    my_jobs = experiment_jobs[args.node_number :: args.nodes]
 
     if not args.run:
-        for n, cmd in jobs:
+        print(f"Total generate jobs: {len(experiment_jobs)}")
+        print(f"Node {args.node_number}/{args.nodes} assigned {len(my_jobs)} jobs:")
+        for n, cmd in my_jobs:
             print(f"{' '.join(cmd)}")
         return
 
     # Use args.no_pinning to toggle behavior
     scheduler = Scheduler(use_pinning=not args.no_pinning)
 
-    pending_jobs = list(jobs)
-    pbar = tqdm(total=len(jobs), desc="Processing Jobs", unit="job")
+    pending_jobs = list(my_jobs)
+    pbar = tqdm(total=len(my_jobs), desc="Processing Jobs", unit="job")
 
     try:
         while pending_jobs or scheduler.running_jobs:

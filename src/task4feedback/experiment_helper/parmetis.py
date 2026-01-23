@@ -15,7 +15,9 @@ from pathlib import Path
 from omegaconf import OmegaConf
 
 
-def run_parmetis(sim: SimulatorDriver, cfg, verbose=False, offset=1, future_levels=0, itr: float = 1000, unbalance: float = 1.225, n_compute_devices: int = 4, ParMETIS=None) -> bool:
+def run_parmetis(
+    sim: SimulatorDriver, cfg, verbose=False, offset=1, future_levels=0, itr: float = 1000, unbalance: float = 1.225, n_compute_devices: int = 4, ParMETIS=None, best_time=float("inf")
+) -> bool:
     d2d_bandwidth = cfg.system.d2d_bw
     graph_config = hydra.utils.instantiate(cfg.graph.config)
     width = graph_config.n
@@ -159,6 +161,12 @@ def run_parmetis(sim: SimulatorDriver, cfg, verbose=False, offset=1, future_leve
                     print(loc, end=" ")
                     if (i + 1) % 8 == 0:
                         print()
+        time = comm.bcast(sim.time if rank == 0 else None, root=0)
+        if time >= best_time:
+            if rank == 0:
+                print(f"Terminating early: current time {time} >= best time {best_time}", flush=True)
+            return False
+
     return True
 
 
@@ -282,6 +290,7 @@ def hash_graph_cfg(graph_cfg) -> str:
 
 
 def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", search_new=False):
+    cfg.graph.config.steps = 256
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     cache_dir = Path(cache_dir)
@@ -309,8 +318,11 @@ def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", search_new=
     best_cfg = comm.bcast(best_cfg, root=0)
     cache_file = comm.bcast(cache_file, root=0)
 
-    if best_cfg is not None and not search_new:
+    if best_cfg is not None:
         return best_cfg
+
+    if best_cfg is None and not search_new:
+        return None
 
     if rank == 0:
         print("Finding best ParMETIS configuration...", flush=True)
@@ -318,7 +330,7 @@ def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", search_new=
     best_cfg = (None, None, float("inf"))  # (itr, ub, time)
 
     itr_list = [0.0001001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000]
-    ub_list = [1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
+    ub_list = [1.001, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9]
 
     for itr in itr_list:
         for ub in ub_list:
@@ -333,6 +345,7 @@ def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", search_new=
                 cfg=cfg,
                 unbalance=ub,
                 itr=itr,
+                best_time=best_cfg[2],
                 n_compute_devices=cfg.system.n_devices - 1,
                 ParMETIS=ParMETIS,
             )
@@ -343,7 +356,7 @@ def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", search_new=
             if rank == 0 and temp.time < best_cfg[2]:
                 best_cfg = (itr, ub, temp.time)
 
-    best_cfg = comm.bcast(best_cfg, root=0)
+            best_cfg = comm.bcast(best_cfg, root=0)
 
     # Save result using hash as filename
     if rank == 0:
