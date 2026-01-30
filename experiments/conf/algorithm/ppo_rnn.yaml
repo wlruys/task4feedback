@@ -29,4 +29,6 @@ sample_slices: true
 #number of samples per minibatch (episodes per minibatch if sample_slices = false and using ppo LSTM)
 minibatch_size: 64
 rollout_steps: 80
-
+time_discounting: true
+time_delta_key: ["next", "observation", "aux", "dt"]
+time_budget_per_collection: 0.0

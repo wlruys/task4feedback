@@ -45,6 +45,7 @@ algorithm:
   rollout_steps: 32
   workers: 4
   graphs_per_collection: 4
+  time_budget_per_collection: ${graph.config.task_time}
   ent_coef: 0.00025
   sample_slices: False
   slice_len: 16 # only used if sample_slices is True (LSTM)

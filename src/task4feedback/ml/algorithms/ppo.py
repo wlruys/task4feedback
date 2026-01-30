@@ -19,7 +19,7 @@ import torch
 from torchrl._utils import compile_with_warmup
 from .base import AlgorithmConfig, LoggingConfig
 from ..base import ActorCriticModule
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, ListConfig
 from task4feedback.logging import training
 import time
 from torchrl.collectors.utils import split_trajectories
@@ -119,6 +119,9 @@ class PPOConfig(AlgorithmConfig):
     advantage_type: str = "gae"  # "gae" or "vtrace"
     bagged_policy: str = "uniform"
     timeout: int = 60 * 60 * 24  # 1 day
+    time_discounting: bool = False
+    time_delta_key: tuple = ("next", "observation", "aux", "dt")
+    time_budget_per_collection: float = 0.0
 
 
 def should_log(
@@ -151,6 +154,77 @@ def should_checkpoint(
     return n_updates % logging_config.checkpoint_interval == 0
 
 
+def _normalize_td_key(key):
+    if isinstance(key, ListConfig):
+        return tuple(key)
+    if isinstance(key, list):
+        return tuple(key)
+    return key
+
+
+def _sum_advanced_time(td: TensorDict, dt_key):
+    key = _normalize_td_key(dt_key)
+    try:
+        dt = td.get(key)
+    except KeyError:
+        return 0.0
+    if dt is None:
+        return 0.0
+    return float(dt.to(torch.float32).sum().item())
+
+
+def compute_time_gae(
+    tensordict_data: TensorDict,
+    value_network,
+    gamma: float,
+    lmbda: float,
+    dt_key,
+    done_key=("next", "done"),
+    reward_key=("next", "reward"),
+) -> TensorDict:
+    dt_key = _normalize_td_key(dt_key)
+    with torch.no_grad():
+        value_network(tensordict_data)
+        try:
+            value_network(tensordict_data["next"])
+        except Exception:
+            pass
+
+        trajectories = split_trajectories(tensordict_data, done_key=done_key)
+        for traj in trajectories:
+            rewards = traj.get(reward_key).to(torch.float32).squeeze(-1)
+            dones = traj.get(done_key).to(torch.float32).squeeze(-1)
+            dt = traj.get(dt_key, None)
+            if dt is None:
+                dt = torch.ones_like(rewards)
+            else:
+                dt = dt.to(torch.float32).squeeze(-1)
+            gamma_t = torch.pow(torch.tensor(gamma, device=dt.device), dt)
+            lambda_t = torch.pow(torch.tensor(lmbda, device=dt.device), dt)
+
+            values = traj.get("state_value").to(torch.float32).squeeze(-1)
+            next_values = traj.get(("next", "state_value"), None)
+            if next_values is None:
+                next_values = torch.zeros_like(values)
+            else:
+                next_values = next_values.to(torch.float32).squeeze(-1)
+
+            not_done = 1.0 - dones
+            deltas = rewards + gamma_t * next_values * not_done - values
+
+            advantages = torch.zeros_like(deltas)
+            gae = 0.0
+            for t in reversed(range(deltas.shape[0])):
+                gae = deltas[t] + gamma_t[t] * lambda_t[t] * gae * not_done[t]
+                advantages[t] = gae
+
+            value_targets = advantages + values
+            traj.set("advantage", advantages.unsqueeze(-1))
+            traj.set("value_target", value_targets.unsqueeze(-1))
+
+    return tensordict_data
+
+
 def log_training_metrics(
     flattened_data: TensorDict,
     tensordict_data: TensorDict,
@@ -160,6 +234,8 @@ def log_training_metrics(
     n_updates: int,
     i: int,
     n_samples: int,
+    time_advanced: Optional[float] = None,
+    dt_key: Optional[tuple] = None,
 ) -> None:
     """Log training metrics to wandb."""
     with torch.no_grad():
@@ -194,10 +270,25 @@ def log_training_metrics(
                 std_reward = None
 
         # Calculate advantage and value target metrics
-        advantage_mean = tensordict_data["advantage"].mean().item()
-        advantage_std = tensordict_data["advantage"].std().item()
-        value_target_mean = tensordict_data["value_target"].mean().item()
-        value_target_std = tensordict_data["value_target"].std().item()
+        advantage = tensordict_data.get("advantage", None)
+        if advantage is None:
+            advantage = flattened_data.get("advantage", None)
+        if advantage is not None:
+            advantage_mean = advantage.mean().item()
+            advantage_std = advantage.std().item()
+        else:
+            advantage_mean = None
+            advantage_std = None
+
+        value_target = tensordict_data.get("value_target", None)
+        if value_target is None:
+            value_target = flattened_data.get("value_target", None)
+        if value_target is not None:
+            value_target_mean = value_target.mean().item()
+            value_target_std = value_target.std().item()
+        else:
+            value_target_mean = None
+            value_target_std = None
 
         explained_variance = None
         if "state_value" in flattened_data.keys() and "value_target" in flattened_data.keys():
@@ -211,6 +302,9 @@ def log_training_metrics(
 
         # Get gradient and parameter norms
         post_clip_norms = log_parameter_and_gradient_norms(loss_module)
+
+        if time_advanced is None and dt_key is not None:
+            time_advanced = _sum_advanced_time(flattened_data, dt_key)
 
         # Base log payload
         log_payload = {
@@ -226,12 +320,16 @@ def log_training_metrics(
             "batch/kl_approx": loss["kl_approx"].item(),
             "batch/clip_fraction": loss["clip_fraction"].item(),
             "batch/ESS": loss["ESS"].item(),
-            "batch/advantage_mean": advantage_mean,
-            "batch/advantage_std": advantage_std,
-            "batch/mean_value_target": value_target_mean,
-            "batch/std_value_target": value_target_std,
+            "batch/advantage_mean": advantage_mean if advantage_mean is not None else 0.0,
+            "batch/advantage_std": advantage_std if advantage_std is not None else 0.0,
+            "batch/mean_value_target": value_target_mean if value_target_mean is not None else 0.0,
+            "batch/std_value_target": value_target_std if value_target_std is not None else 0.0,
             "batch/lr": optimizer.param_groups[0]["lr"],
         }
+        if time_advanced and time_advanced > 0:
+            log_payload["batch/advanced_time"] = time_advanced
+            log_payload["batch/avg_dt"] = time_advanced / max(1, n_samples)
+            log_payload["batch/decisions_per_time"] = n_samples / time_advanced
 
         if std_reward is not None:
             log_payload["batch/std_reward"] = std_reward
@@ -311,6 +409,11 @@ def run_ppo(
             actor_network=actor_critic_module.actor,
             device=ppo_config.update_device,
         )
+
+    use_time_discounting = bool(ppo_config.time_discounting and ppo_config.advantage_type == "gae")
+    if ppo_config.time_discounting and not use_time_discounting:
+        training.warning("time_discounting is enabled but advantage_type is not 'gae'. Falling back to standard advantage estimator.")
+    dt_key = _normalize_td_key(ppo_config.time_delta_key)
 
     replay_buffer = TensorDictReplayBuffer(
         storage=LazyTensorStorage(
@@ -406,7 +509,7 @@ def run_ppo(
 
         return loss_vals
 
-    if ppo_config.compile_advantage:
+    if ppo_config.compile_advantage and not use_time_discounting:
         advantage_module = compile_with_warmup(advantage_module, mode="reduce-overhead", warmup=8)
 
     if ppo_config.compile_update:
@@ -426,6 +529,8 @@ def run_ppo(
         f"{n_batch} batches per epoch, "
         f"{ppo_config.workers} workers."
     )
+    if ppo_config.time_budget_per_collection > 0:
+        training.info(f"Time budget per collection: {ppo_config.time_budget_per_collection}")
 
     training.info(f"Max tasks per graph: {max_graph_size}, max candidates per task: {max_candidates}")
 
@@ -440,12 +545,48 @@ def run_ppo(
     n_updates = 0
     n_samples = 0
     n_collections = 0
-    for i, tensordict_data in enumerate(collector):
+
+    def collect_with_time_budget(collector_iter):
+        if ppo_config.time_budget_per_collection <= 0:
+            td = next(collector_iter)
+            return td, _sum_advanced_time(td, dt_key)
+
+        total_time = 0.0
+        total_states = 0
+        batches = []
+        zero_time_batches = 0
+        while total_time < ppo_config.time_budget_per_collection:
+            td = next(collector_iter)
+            batches.append(td)
+            batch_time = _sum_advanced_time(td, dt_key)
+            total_time += batch_time
+
+            try:
+                batch_states = td.reshape(-1).shape[0]
+            except Exception:
+                batch_states = 0
+            total_states += batch_states
+
+            if batch_time <= 0:
+                zero_time_batches += 1
+                if zero_time_batches >= 3:
+                    training.warning("Collected batches with zero advanced time. Stopping early to avoid infinite loop.")
+                    break
+
+            if total_states >= max_states_per_collection:
+                training.warning("Time budget not reached before max_states_per_collection. Stopping early.")
+                break
+
+        if len(batches) == 1:
+            return batches[0], total_time
+        return TensorDict.cat(batches, dim=0), total_time
+
+    collector_iter = iter(collector)
+    for i in range(ppo_config.num_collections):
         n_collections += 1
         replay_buffer.empty()
 
-        if i >= ppo_config.num_collections:
-            break
+        tensordict_data, time_advanced = collect_with_time_budget(collector_iter)
 
         collector.policy.eval()
 
@@ -464,7 +605,16 @@ def run_ppo(
             if ppo_config.bagged_policy == "uniform":
                 redistribute_rewards_uniform(tensordict_data)
             # Compute advantages
-            advantage_module(tensordict_data)
+            if use_time_discounting:
+                compute_time_gae(
+                    tensordict_data,
+                    actor_critic_module.critic,
+                    gamma=ppo_config.gamma,
+                    lmbda=ppo_config.lmbda,
+                    dt_key=dt_key,
+                )
+            else:
+                advantage_module(tensordict_data)
 
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
@@ -514,6 +664,12 @@ def run_ppo(
         update_start_t = time.perf_counter()
         loss_module.actor_network.train()
         loss_module.critic_network.train()
+        effective_states_per_collection = min(states_per_collection, samples_in_collection)
+        n_batch = max(1, effective_states_per_collection // ppo_config.minibatch_size)
+        if ppo_config.minibatch_size > effective_states_per_collection:
+            training.warning(
+                f"Minibatch size <{ppo_config.minibatch_size}> is larger than effective states per collection <{effective_states_per_collection}>. "
+            )
         for j in range(ppo_config.epochs_per_collection):
             for k in range(n_batch):
                 n_updates += 1
@@ -531,6 +687,8 @@ def run_ppo(
                         n_updates,
                         i,
                         n_samples,
+                        time_advanced=time_advanced,
+                        dt_key=dt_key,
                     )
 
         collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
@@ -638,6 +796,11 @@ def run_ppo_lstm(
             device=ppo_config.update_device,
             deactivate_vmap=True,
         )
+
+    use_time_discounting = bool(ppo_config.time_discounting and ppo_config.advantage_type == "gae")
+    if ppo_config.time_discounting and not use_time_discounting:
+        training.warning("time_discounting is enabled but advantage_type is not 'gae'. Falling back to standard advantage estimator.")
+    dt_key = _normalize_td_key(ppo_config.time_delta_key)
 
     if ppo_config.sample_slices:
         replay_buffer = TensorDictReplayBuffer(
@@ -757,7 +920,7 @@ def run_ppo_lstm(
 
         return loss_vals
 
-    if ppo_config.compile_advantage:
+    if ppo_config.compile_advantage and not use_time_discounting:
         advantage_module = compile_with_warmup(advantage_module, mode="reduce-overhead", warmup=8)
 
     if ppo_config.compile_update:
@@ -780,6 +943,8 @@ def run_ppo_lstm(
         f"{n_batch} batches per epoch, "
         f"{ppo_config.workers} workers.",
     )
+    if ppo_config.time_budget_per_collection > 0:
+        training.info(f"Time budget per collection: {ppo_config.time_budget_per_collection}")
 
     # Initial evaluation
     if should_eval(0, eval_config):
@@ -791,12 +956,48 @@ def run_ppo_lstm(
     n_updates = 0
     n_samples = 0
     n_collections = 0
-    for i, tensordict_data in enumerate(collector):
+
+    def collect_with_time_budget(collector_iter):
+        if ppo_config.time_budget_per_collection <= 0:
+            td = next(collector_iter)
+            return td, _sum_advanced_time(td, dt_key)
+
+        total_time = 0.0
+        total_states = 0
+        batches = []
+        zero_time_batches = 0
+        while total_time < ppo_config.time_budget_per_collection:
+            td = next(collector_iter)
+            batches.append(td)
+            batch_time = _sum_advanced_time(td, dt_key)
+            total_time += batch_time
+
+            try:
+                batch_states = td.reshape(-1).shape[0]
+            except Exception:
+                batch_states = 0
+            total_states += batch_states
+
+            if batch_time <= 0:
+                zero_time_batches += 1
+                if zero_time_batches >= 3:
+                    training.warning("Collected batches with zero advanced time. Stopping early to avoid infinite loop.")
+                    break
+
+            if total_states >= max_states_per_collection:
+                training.warning("Time budget not reached before max_states_per_collection. Stopping early.")
+                break
+
+        if len(batches) == 1:
+            return batches[0], total_time
+        return TensorDict.cat(batches, dim=0), total_time
+
+    collector_iter = iter(collector)
+    for i in range(ppo_config.num_collections):
         n_collections += 1
         replay_buffer.empty()
 
-        if i >= ppo_config.num_collections:
-            break
+        tensordict_data, time_advanced = collect_with_time_budget(collector_iter)
 
         current_t = time.perf_counter()
         elapsed_time = current_t - start_t
@@ -810,7 +1011,16 @@ def run_ppo_lstm(
 
         adv_start_t = time.perf_counter()
         with torch.no_grad():
-            advantage_module(tensordict_data)
+            if use_time_discounting:
+                compute_time_gae(
+                    tensordict_data,
+                    actor_critic_module.critic,
+                    gamma=ppo_config.gamma,
+                    lmbda=ppo_config.lmbda,
+                    dt_key=dt_key,
+                )
+            else:
+                advantage_module(tensordict_data)
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
         training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")
@@ -832,6 +1042,11 @@ def run_ppo_lstm(
         n_samples += flattened_data.shape[0]
 
         update_start_t = time.perf_counter()
+        effective_states_per_collection = min(states_per_collection, flattened_data.shape[0])
+        if ppo_config.sample_slices:
+            n_batch = max(1, effective_states_per_collection // ppo_config.minibatch_size)
+        else:
+            n_batch = max(1, ppo_config.graphs_per_collection // ppo_config.minibatch_size)
         for j in range(ppo_config.epochs_per_collection):
             for k in range(n_batch):
                 n_updates += 1
@@ -850,6 +1065,8 @@ def run_ppo_lstm(
                         n_updates,
                         i,
                         n_samples,
+                        time_advanced=time_advanced,
+                        dt_key=dt_key,
                     )
 
         collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))

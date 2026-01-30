@@ -140,6 +140,12 @@ class RuntimeEnv(EnvBase):
                 print("Warning: Randomizing locations on a legacy graph. This may not work as expected. location_randomness is ignored.")
 
         self.observation = self._get_new_observation_buffer()
+        if ("aux", "time") in self.observation.keys(True):
+            time_like = self.observation.get(("aux", "time"))
+            if time_like is not None:
+                self.observation.set(("aux", "dt"), torch.zeros_like(time_like, dtype=torch.float32))
+        else:
+            self.observation.set(("aux", "dt"), torch.zeros(1, device=self.device, dtype=torch.float32))
         observation_spec = self._create_observation_spec(self.observation)
 
         action_spec = self._create_action_spec(n_devices=self.n_compute_devices)
@@ -176,11 +182,13 @@ class RuntimeEnv(EnvBase):
         self.z_ch_key = ("aux", "z_ch")
         self.z_spa_key = ("aux", "z_spa")
         self.time_key = ("aux", "time")
+        self.dt_key = ("aux", "dt")
         self.action_n = "action"
         self.reward_n = "reward"
         self.done_n = "done"
         self.observation_n = "observation"
         self.disable_reward_flag = False
+        self.last_sim_time = 0.0
 
     def size(self):
         """
@@ -331,6 +339,18 @@ class RuntimeEnv(EnvBase):
         baseline = max(1.0, self.EFT_baseline)
         obs.set_at_(self.progress_key, progress, 0)
         obs.set_at_(self.baseline_key, baseline, 0)
+        if self.time_key in obs.keys(True):
+            sim_time = obs.get(self.time_key)
+            if reset:
+                dt = torch.zeros_like(sim_time, dtype=torch.float32)
+            else:
+                dt = sim_time.to(torch.float32) - float(self.last_sim_time)
+                dt = torch.clamp(dt, min=0.0)
+            obs.set(self.dt_key, dt.to(torch.float32))
+            try:
+                self.last_sim_time = float(sim_time.item())
+            except Exception:
+                self.last_sim_time = float(sim_time.reshape(-1)[0].item())
         return obs
 
     def _get_new_observation_buffer(self) -> TensorDict:
@@ -496,6 +516,7 @@ class RuntimeEnv(EnvBase):
 
         simulator_status = self.simulator.run_until_external_mapping()
         assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, f"Unexpected simulator status: {simulator_status}"
+        self.last_sim_time = float(self.simulator.time)
         gc.collect()
 
     def set_reset_counter(self, count):
@@ -1016,6 +1037,7 @@ class IncrementalSchedule(RuntimeEnv):
             sim_current.run()
 
             self.potential = [(-sim_current.time) / (self.EFT_baseline)]
+            self.potential_time = [float(sim_current.time)]
             self.potential_sum = 0.0
             if self.chance < 1.0:
                 self._reinitialize_intervals()
@@ -1035,13 +1057,18 @@ class IncrementalSchedule(RuntimeEnv):
             sim_current.run()
 
             self.potential.append((-sim_current.time) / (self.EFT_baseline))
+            self.potential_time.append(float(sim_current.time))
 
-            reward = self.dense_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
+            dt = max(0.0, self.potential_time[-1] - self.potential_time[-2])
+            gamma_t = self.gamma ** dt
+            reward = self.dense_reward_scale * (gamma_t * self.potential[-1] - self.potential[-2])
             reward = reward - self.dense_reward_scale*self.bias 
             if self.verbose:
                 print(f"Step {self.step_count} Reward: {reward:.4f} (P(s)={self.potential[-2]:.4f}, P(s+1)={self.potential[-1]:.4f})")
         else:
             self.potential.append(0.0)
+            if hasattr(self, "potential_time") and self.potential_time:
+                self.potential_time.append(self.potential_time[-1])
             reward = 0.0
 
         simulator_status = self.simulator.run_until_external_mapping()
@@ -1062,7 +1089,11 @@ class IncrementalSchedule(RuntimeEnv):
                 # print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f}")
                 deltas = []
                 for i in range(1, len(self.potential)):
-                    deltas.append(self.dense_reward_scale * (self.gamma * self.potential[i] - self.potential[i - 1]))
+                    dt = 0.0
+                    if hasattr(self, "potential_time") and len(self.potential_time) > i:
+                        dt = max(0.0, self.potential_time[i] - self.potential_time[i - 1])
+                    gamma_t = self.gamma ** dt
+                    deltas.append(self.dense_reward_scale * (gamma_t * self.potential[i] - self.potential[i - 1]))
                 if not self.disable_reward_flag:
                     print(f"Max pbrs: {max(deltas):.4f}, Min pbrs: {min(deltas):.4f}")
 

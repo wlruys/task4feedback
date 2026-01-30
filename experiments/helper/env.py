@@ -229,6 +229,16 @@ def make_env(
     #Og én til javanissen
     rollout_steps = rollout_steps + 1
 
+    time_budget = float(getattr(cfg.algorithm, "time_budget_per_collection", 0.0))
+    if time_budget > 0:
+        states_per_collection = int(getattr(cfg.algorithm, "states_per_collection", 0))
+        graphs_per_collection = int(getattr(cfg.algorithm, "graphs_per_collection", 1))
+        if states_per_collection > 0:
+            min_rollout_steps = max(1, int(states_per_collection // max(1, graphs_per_collection)))
+            if rollout_steps < min_rollout_steps:
+                print(f"Time budget enabled; increasing rollout_steps from {rollout_steps} to {min_rollout_steps}")
+                rollout_steps = min_rollout_steps
+
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),
         device="cpu",
