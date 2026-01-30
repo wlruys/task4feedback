@@ -123,6 +123,19 @@ class HashHolder:
 _HASH_HOLDER = HashHolder()
 
 
+def _grid_index_for_task(graph, task_id: int) -> int:
+    """
+    Prefer the task tag (column-major local id) when available; fall back to xy_from_id.
+    """
+    if hasattr(graph, "tasks") and task_id in graph.tasks:
+        tag = graph.tasks[task_id].tag
+        if tag is not None and tag >= 0:
+            return tag
+    if hasattr(graph, "xy_from_id"):
+        return graph.xy_from_id(task_id)
+    return task_id
+
+
 class TaskGraph:
     def __init__(self):
         self.graph = Graph()
@@ -449,8 +462,25 @@ class System:
         self.slowest_gmbw = slowest_gmbw
         self.arch_to_maxmem = {DeviceType.CPU: 0, DeviceType.GPU: 0}
 
-    def create_device(self, name, arch, copy, memory, flops: Optional[int] = None, gmbw: Optional[int] = None):
-        id = self.devices.append_device(name, arch, copy, memory)
+    def create_device(
+        self,
+        name,
+        arch,
+        copy,
+        memory,
+        flops: Optional[int] = None,
+        gmbw: Optional[int] = None,
+    ):
+        # accept a single copy-engine count or an (h2d, d2d) pair
+        if isinstance(copy, (tuple, list)):
+            if len(copy) != 2:
+                raise ValueError("copy must be an int or a (h2d_max_copy, d2d_max_copy) pair")
+            h2d_max_copy, d2d_max_copy = copy
+        else:
+            h2d_max_copy = copy
+            d2d_max_copy = copy
+
+        id = self.devices.append_device(name, arch, h2d_max_copy, d2d_max_copy, memory)
         if flops is not None:
             self.fastest_flops = max(self.fastest_flops, flops)
             self.slowest_flops = min(self.slowest_flops, flops)
@@ -1734,7 +1764,7 @@ class CnnSingleTaskObserver(ExternalObserver):
 
         self.task_ids = torch.Tensor([-1 for _ in range(graph.nx * graph.ny)])
         for task in graph.level_to_task[0]:
-            self.task_ids[graph.xy_from_id(task)] = task
+            self.task_ids[_grid_index_for_task(graph, task)] = task
         if -1 in self.task_ids:
             raise ValueError("Not all task ids were set during reset. Check the graph initialization.")
         self.prev_candidate = -1
@@ -1791,7 +1821,7 @@ class CnnSingleTaskObserver(ExternalObserver):
         # Get mappable candidates
         self.candidate_observation(output)
         current_candidate = output["aux", "candidates", "idx"][0].item()
-        idx = graph.xy_from_id(current_candidate)
+        idx = _grid_index_for_task(graph, current_candidate)
         output.set_at_(("nodes", "tasks", "attr"), 1, (idx, -1))
 
         if current_candidate != self.prev_candidate and self.prev_candidate != -1:
@@ -1799,7 +1829,7 @@ class CnnSingleTaskObserver(ExternalObserver):
             if current_level < (graph.config.steps - 1):
                 for next_id in graph.level_to_task[current_level + 1]:
                     if graph.task_to_cell[next_id] == graph.task_to_cell[self.prev_candidate]:
-                        self.task_ids[graph.xy_from_id(self.prev_candidate)] = next_id
+                        self.task_ids[_grid_index_for_task(graph, self.prev_candidate)] = next_id
                         break
         self.prev_candidate = current_candidate
 
@@ -1889,7 +1919,7 @@ class CnnBatchTaskObserver(ExternalObserver):
         candidate_ids = output["aux", "candidates", "idx"][:n_candidates]
 
         for i, task_id in enumerate(candidate_ids):
-            idx = self.simulator.input.graph.xy_from_id(task_id.item())
+            idx = _grid_index_for_task(self.simulator.input.graph, task_id.item())
             output["aux", "candidate_action_map"][i] = idx
 
     def get_observation(self, output: Optional[TensorDict] = None):
@@ -1902,13 +1932,13 @@ class CnnBatchTaskObserver(ExternalObserver):
 
         # Get mappable candidates
         self.candidate_observation(output)
-        print("Candidates:", output["aux", "candidates", "idx"])
-        print("Candidate count:", output["aux", "candidates", "count"][0].item())
+        #print("Candidates:", output["aux", "candidates", "idx"])
+        #print("Candidate count:", output["aux", "candidates", "count"][0].item())
         assert output["aux", "candidates", "count"][0] == graph.nx * graph.ny or output["aux", "candidates", "count"][0] == 0, "CnnBatchTaskObserver expects {} candidates but got {}.".format(
             graph.nx * graph.ny, output["aux", "candidates", "count"][0].item()
         )
         for task_id in output["aux", "candidates", "idx"]:
-            idx = graph.xy_from_id(task_id.item())
+            idx = _grid_index_for_task(graph, task_id.item())
             self.task_ids[idx] = task_id.item()
 
         self.get_task_features(self.task_ids, output["nodes", "tasks", "attr"])

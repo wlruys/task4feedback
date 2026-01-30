@@ -168,6 +168,7 @@ def block_cyclic(
     n_col_parts=2,
     parts_per_column=2,
     parts_per_row=2,
+    n_devices=4,
 ):
     # With default parameters this partitions the mesh into 4 blocks of size 2x2
 
@@ -194,6 +195,6 @@ def block_cyclic(
             # Assign the partition ID to all cells in this (i,j) position
             cells = ij_map[(rv, cv)]
             for c in cells:
-                partition_vector[c] = part_id
+                partition_vector[c] = part_id % n_devices
 
     return partition_vector

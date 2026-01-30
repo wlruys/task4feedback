@@ -1,5 +1,5 @@
 from .mesh.base import Geometry, Cell, Edge
-from .mesh.partition import block_cyclic
+from .mesh.partition import block_cyclic, ij_partition
 from ..interface import DataBlocks, DeviceType, TaskTuple, VariantTuple
 from .base import (
     DataGeometry,
@@ -231,15 +231,19 @@ class CholeskyData(DataGeometry):
 
 
 class CholeskyGraph(ComputeDataGraph):
+    def _ij_to_local_id(self, row: int, col: int) -> int:
+        """
+        Column-major local id: row + col*H where H = ny (rows).
+        """
+        return int(row + col * self.ny)
+
     def xy_from_id(self, taskid: int) -> int:
         """
-        Convert a task ID to its (x, y) coordinates in the Jacobi grid.
-        And returns row-major order index.
-        Only works for rectangular grids.
+        Return column-major local id for the task based on its write target.
         """
         cell_id = self.task_to_cell[taskid]
         i, j = self.data.cell_to_ij[cell_id]
-        return i, j 
+        return self._ij_to_local_id(i, j)
 
     @property
     def nx(self) -> int:
@@ -272,10 +276,13 @@ class CholeskyGraph(ComputeDataGraph):
         self.max_requirement = max(self.max_requirement, data_req)
 
     def _create_syrk_task(self, j: int, k: int, system: Optional[System] = None):
+        # Spatial XY (write target): j, j
+
         name = f"SYRK(j={j}, k={k})"
         task_id = self.add_task(name)
 
         self.task_to_cell[task_id] = self.data.ij_to_cell[(j, j)]
+        self.add_tag(task_id, self._ij_to_local_id(j, j))
         self.task_to_type[task_id] = "SYRK"
         self.type_to_tasks["SYRK"].append(task_id)
 
@@ -292,10 +299,13 @@ class CholeskyGraph(ComputeDataGraph):
         self.task_list.append(task_id)
 
     def _create_gemm_task(self, i: int, j: int, k: int, system: Optional[System] = None):
+        # Spatial XY (write target): j, i
+
         name = f"GEMM(i={i}, j={j}, k={k})"
         task_id = self.add_task(name)
 
         self.task_to_cell[task_id] = self.data.ij_to_cell[(j, i)]
+        self.add_tag(task_id, self._ij_to_local_id(j, i))
         self.task_to_type[task_id] = "GEMM"
         self.type_to_tasks["GEMM"].append(task_id)
 
@@ -312,10 +322,12 @@ class CholeskyGraph(ComputeDataGraph):
         self.task_list.append(task_id)
 
     def _create_potrf_task(self, j: int, system: Optional[System] = None):
+        # Spatial XY (write target): j, j
         name = f"POTRF(j={j})"
         task_id = self.add_task(name)
 
         self.task_to_cell[task_id] = self.data.ij_to_cell[(j, j)]
+        self.add_tag(task_id, self._ij_to_local_id(j, j))
         self.task_to_type[task_id] = "POTRF"
         self.type_to_tasks["POTRF"].append(task_id)
 
@@ -332,10 +344,12 @@ class CholeskyGraph(ComputeDataGraph):
         self.task_list.append(task_id)
 
     def _create_solve_task(self, i: int, j: int, system: Optional[System] = None):
+        # Spatial XY (write target): i, j
         name = f"SOLVE(i={i}, j={j})"
         task_id = self.add_task(name)
 
         self.task_to_cell[task_id] = self.data.ij_to_cell[(i, j)]
+        self.add_tag(task_id, self._ij_to_local_id(i, j))
         self.task_to_type[task_id] = "SOLVE"
         self.type_to_tasks["SOLVE"].append(task_id)
 
@@ -385,7 +399,10 @@ class CholeskyGraph(ComputeDataGraph):
         self.config = config
         self._build_graph()
         self.dynamic = False
-        self.reference_partition = []
+        self.reference_partition = self._build_block_row_cyclic_reference(
+            n_parts=getattr(self.config, "reference_nparts", 4),
+            block_rows=getattr(self.config, "reference_block_rows", 1),
+        )
         # half = config.n // 2
         # for j in range(config.n):  # column-wise unrolling
         #     for i in range(config.n):
@@ -407,6 +424,29 @@ class CholeskyGraph(ComputeDataGraph):
             self.apply_variant(CholeskyVariant)
 
         self.finalize()
+
+    def _build_block_row_cyclic_reference(self, n_parts: int = 4, block_rows: int = 1) -> list[int]:
+        if n_parts <= 0:
+            n_parts = 1
+        if block_rows <= 0:
+            block_rows = 1
+
+        row_map, _, row_keys, _, _ = ij_partition(self.data.geometry, round=2)
+        partition = [0] * len(self.data.geometry.cells)
+
+        for row_idx, rv in enumerate(row_keys):
+            block_idx = row_idx // block_rows
+            part = block_idx % n_parts
+            for cell in row_map[rv]:
+                partition[cell] = part
+
+        return partition
+
+    def finalize(self):
+        super().finalize()
+        if self.static_graph is not None:
+            self.static_graph.set_grid_shape(self.ny, self.nx)
+            self.static_graph.set_morton_priority_enabled(False)
 
     def _apply_workload_variant(self, system: System):
         # print("Building custom variant for system", system)
@@ -986,4 +1026,3 @@ class JacobiVariant(VariantBuilder):
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
         else:
             return None
-

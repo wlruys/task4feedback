@@ -761,6 +761,10 @@ protected:
   std::vector<std::string> compute_task_names;
   std::vector<std::string> data_task_names;
 
+  int32_t grid_h{-1};
+  int32_t grid_w{-1};
+  bool morton_priority_enabled{false};
+
 public:
   StaticTaskInfo(int32_t num_compute_tasks, int32_t num_data_tasks) {
     compute_task_dep_info.resize(num_compute_tasks);
@@ -986,6 +990,37 @@ public:
 
   void set_total_unique(int32_t num_unique) {
     compute_task_unique.resize(num_unique, 0);
+  }
+
+  // Optional grid metadata (for priority ordering)
+  void set_grid_shape(int32_t h, int32_t w) {
+    if (h > 0 && w > 0) {
+      grid_h = h;
+      grid_w = w;
+    } else {
+      grid_h = -1;
+      grid_w = -1;
+    }
+  }
+
+  [[nodiscard]] int32_t get_grid_h() const {
+    return grid_h;
+  }
+
+  [[nodiscard]] int32_t get_grid_w() const {
+    return grid_w;
+  }
+
+  [[nodiscard]] bool has_grid_shape() const {
+    return grid_h > 0 && grid_w > 0;
+  }
+
+  void set_morton_priority_enabled(bool enabled) {
+    morton_priority_enabled = enabled;
+  }
+
+  [[nodiscard]] bool get_morton_priority_enabled() const {
+    return morton_priority_enabled;
   }
 
   void add_compute_task(taskid_t id, const std::string &name, const ComputeTaskDepInfo &dep_info,

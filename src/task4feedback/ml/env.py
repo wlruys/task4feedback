@@ -376,6 +376,30 @@ class RuntimeEnv(EnvBase):
         # print("Actions", actions)
         # print("Candidate Action Map", candidate_action_map)
         # print("Candidate Mask", candidate_mask)
+        graph = self.simulator.input.graph
+        static_graph = graph.static_graph
+        #grid_h = static_graph.get_grid_h() if static_graph is not None and static_graph.has_grid_shape() else None
+        #grid_w = static_graph.get_grid_w() if static_graph is not None and static_graph.has_grid_shape() else None
+        # if grid_h is not None and grid_w is not None:
+        #     debug_rows = []
+        #     for i in range(num_candidates):
+        #         task_id = candidates[i].item()
+        #         tag = graph.tasks[task_id].tag if task_id in graph.tasks else -1
+        #         row = tag % grid_h if tag >= 0 else -1
+        #         col = tag // grid_h if tag >= 0 else -1
+        #         mp = self.simulator.get_mapping_priority(task_id)
+        #         debug_rows.append((task_id, tag, row, col, mp))
+        #     print("Candidate Morton Debug (task_id, tag, row, col, mapping_priority)", debug_rows)
+        #     if grid_h * grid_w <= 256:
+        #         order = sorted(debug_rows, key=lambda x: x[4])
+        #         rank_by_tag = {row[1]: rank for rank, row in enumerate(order)}
+        #         grid = [[" ." for _ in range(grid_w)] for _ in range(grid_h)]
+        #         for task_id, tag, row, col, mp in debug_rows:
+        #             if tag >= 0 and 0 <= row < grid_h and 0 <= col < grid_w:
+        #                 grid[row][col] = f"{rank_by_tag.get(tag, -1):2d}"
+        #         print("Morton order grid (rank by mapping_priority):")
+        #         for r in range(grid_h):
+        #             print(" ".join(grid[r]))
 
         if remapped_candidates:
             for i in range(num_candidates):
@@ -383,7 +407,6 @@ class RuntimeEnv(EnvBase):
                 global_task_id = candidates[i].item()
                 chosen_device = actions[idx].item() + int(self.only_gpu)
                 mapping_priority = self.simulator.get_mapping_priority(global_task_id)
-                old_idx = self.simulator.input.graph.xy_from_id(global_task_id)
                 #print(f"Idx ({idx}), Global Task ID ({global_task_id}), Old Idx ({old_idx}), Chosen Device ({chosen_device}), Mapping Priority ({mapping_priority})")
                 action = fastsim.Action(
                     i,
@@ -397,8 +420,7 @@ class RuntimeEnv(EnvBase):
                 global_task_id = candidates[i].item()
                 chosen_device = actions[i].item() + int(self.only_gpu)
                 mapping_priority = self.simulator.get_mapping_priority(global_task_id)
-                old_idx = self.simulator.input.graph.xy_from_id(global_task_id)
-                #print(f"Idx ({i}), Global Task ID ({global_task_id}), Old Idx ({old_idx}), Chosen Device ({chosen_device}), Mapping Priority ({mapping_priority})")
+                #prnt(f"Idx ({i}), Global Task ID ({global_task_id}), Old Idx ({old_idx}), Chosen Device ({chosen_device}), Mapping Priority ({mapping_priority})")
                 action = fastsim.Action(
                     i,
                     chosen_device,
@@ -1014,11 +1036,6 @@ class IncrementalSchedule(RuntimeEnv):
 
             self.potential.append((-sim_current.time) / (self.EFT_baseline))
 
-            #print("Potential:", self.potential[-2], "->", self.potential[-1])
-            #print("Delta Potential:", self.gamma * self.potential[-1] - self.potential[-2])
-            #print("Time:", sim_current.time, "Baseline:", self.EFT_baseline)
-
-            # Normalized in per-task time observed in global baseline.
             reward = self.dense_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
             reward = reward - self.dense_reward_scale*self.bias 
             if self.verbose:
@@ -1051,14 +1068,6 @@ class IncrementalSchedule(RuntimeEnv):
 
         buf = td.empty()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-
-        # if self.network is not None and self.use_rle:
-        #     self.network(buf)
-        #     f = buf["reference_state"]
-        #     z = td["observation", "aux", "z"]
-        #     r_rle = rle_reward(f, z)
-        #     # print(f"r_rle", r_rle, reward)
-        #     reward = reward + 0.5 * r_rle
 
         buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))

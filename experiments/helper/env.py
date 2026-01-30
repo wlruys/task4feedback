@@ -203,6 +203,8 @@ def make_env(
 
     s = create_system(cfg)
     graph = graph_builder.function(s)
+    if hasattr(graph, "is_finalized") and not graph.is_finalized:
+        graph.finalize()
 
     d = graph.get_blocks()
     m = graph

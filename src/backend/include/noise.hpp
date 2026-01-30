@@ -2,8 +2,11 @@
 #include "devices.hpp"
 #include "macros.hpp"
 #include "tasks.hpp"
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <functional>
+#include <numeric>
 #include <random>
 #include <span>
 #include <unordered_map>
@@ -158,11 +161,102 @@ public:
     mapping_priority = priorities;
   }
 
+  static int32_t infer_grid_height(int32_t grid_size) {
+    if (grid_size <= 0) {
+      return 1;
+    }
+    int32_t h = static_cast<int32_t>(std::floor(std::sqrt(static_cast<double>(grid_size))));
+    for (; h > 1; --h) {
+      if (grid_size % h == 0) {
+        return h;
+      }
+    }
+    return 1;
+  }
+
+  static uint64_t morton_encode_2d(uint32_t row, uint32_t col) {
+    uint64_t code = 0;
+    uint32_t max_coord = std::max(row, col);
+    uint32_t bit = 0;
+    while (max_coord > 0) {
+      const uint64_t r = (static_cast<uint64_t>(row) >> bit) & 1ULL;
+      const uint64_t c = (static_cast<uint64_t>(col) >> bit) & 1ULL;
+      code |= (r << (2 * bit));
+      code |= (c << (2 * bit + 1));
+      max_coord >>= 1;
+      ++bit;
+    }
+    return code;
+  }
+
   virtual void generate_priority(StaticTaskInfo &task_info) {
+    if (!task_info.get_morton_priority_enabled()) {
+      for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
+        // TODO(wlr, jae): RESTORE THIS, add external load and save of priorities to override it
+        set_priority(task_id, task_id);
+      }
+      return;
+    }
+
+    int32_t max_tag = -1;
+    bool has_tags = true;
     for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
-      //set_priority(task_id, sample_priority(task_id));
-      //TODO(wlr, jae): RESTORE THIS, add external load and save of priorities to override it
-      set_priority(task_id, task_id);
+      const auto &info = task_info.get_compute_task_static_info(task_id);
+      if (info.tag < 0) {
+        has_tags = false;
+        break;
+      }
+      max_tag = std::max(max_tag, info.tag);
+    }
+
+    int32_t grid_size = has_tags ? (max_tag + 1) : static_cast<int32_t>(n_tasks);
+    if (grid_size <= 0 || grid_size > n_tasks || (has_tags && (n_tasks % grid_size != 0))) {
+      grid_size = static_cast<int32_t>(n_tasks);
+      has_tags = false;
+    }
+
+    int32_t grid_h = task_info.get_grid_h();
+    int32_t grid_w = task_info.get_grid_w();
+
+    if (grid_h <= 0 || grid_w <= 0 || grid_h * grid_w != grid_size) {
+      grid_h = infer_grid_height(grid_size);
+      grid_w = grid_size / grid_h;
+    }
+
+    std::vector<uint64_t> morton_code(grid_size);
+    for (int32_t local_id = 0; local_id < grid_size; ++local_id) {
+      const uint32_t row = static_cast<uint32_t>(local_id % grid_h);
+      const uint32_t col = static_cast<uint32_t>(local_id / grid_h);
+      morton_code[local_id] = morton_encode_2d(row, col);
+    }
+
+    std::vector<int32_t> order(grid_size);
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(),
+              [&](int32_t a, int32_t b) {
+                if (morton_code[a] == morton_code[b]) {
+                  return a < b;
+                }
+                return morton_code[a] < morton_code[b];
+              });
+
+    std::vector<int32_t> morton_rank(grid_size, 0);
+    for (int32_t rank = 0; rank < grid_size; ++rank) {
+      morton_rank[order[rank]] = rank;
+    }
+
+    for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
+      // TODO(wlr, jae): RESTORE THIS, add external load and save of priorities to override it
+      int32_t local_id = has_tags
+                             ? task_info.get_compute_task_static_info(task_id).tag
+                             : static_cast<int32_t>(task_id);
+      if (local_id < 0 || local_id >= grid_size) {
+        local_id = static_cast<int32_t>(task_id);
+      }
+
+      const int32_t step = has_tags ? (static_cast<int32_t>(task_id) / grid_size) : 0;
+      const int32_t priority = step * grid_size + morton_rank[local_id];
+      set_priority(task_id, priority);
     }
   }
 

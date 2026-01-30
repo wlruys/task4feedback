@@ -19,6 +19,8 @@ class DynamicJacobiConfig(JacobiConfig):
     )
     steps: int = 10
     level_chunks: int = 1
+    r_interior: float = None
+    r_boundary: float = None
 
 
 class DynamicJacobiData(JacobiData):
@@ -59,27 +61,39 @@ class DynamicJacobiData(JacobiData):
         # equation = interiors_per_level * y + self.config.boundary_width * edges_per_level * (y)**self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
         solution = sympy.solve(equation, y)
         y_value = solution[0].evalf()
-        interior_elem = int(y_value)
+        self.interior_elem = int(y_value)
         # print("ERROR: ", interior_elem * interiors_per_level * self.config.bytes_per_element - self.config.level_memory)
-        boundary_elem = interior_elem ** (self.config.boundary_complexity) * self.config.boundary_width
-        interior_size = interior_elem * self.config.bytes_per_element
-        boundary_size = boundary_elem * self.config.bytes_per_element
 
-        self.interior_elem = interior_elem
-        self.boundary_elem = boundary_elem
+        if (self.config.r_interior, self.config.r_boundary) == (None, None):
+            boundary_elem = self.interior_elem ** (self.config.boundary_complexity) * self.config.boundary_width
+            interior_size = self.interior_elem * self.config.bytes_per_element
+            boundary_size = boundary_elem * self.config.bytes_per_element
 
-        if self.config.interior_time is not None:
-            assert system is not None
-            interior_size = system.fastest_bandwidth * self.config.interior_time
-            interior_elem = int(interior_size / self.config.bytes_per_element)
+            self.boundary_elem = boundary_elem
 
-        if self.config.boundary_time is not None:
-            assert system is not None
-            boundary_size = system.fastest_bandwidth * self.config.boundary_time
-            boundary_elem = int(boundary_size / self.config.bytes_per_element)
+            if self.config.interior_time is not None:
+                assert system is not None
+                interior_size = system.fastest_bandwidth * self.config.interior_time
+                interior_elem = int(interior_size / self.config.bytes_per_element)
 
-        interior_size = int(interior_size)
-        boundary_size = int(boundary_size)
+            if self.config.boundary_time is not None:
+                assert system is not None
+                boundary_size = system.fastest_bandwidth * self.config.boundary_time
+                boundary_elem = int(boundary_size / self.config.bytes_per_element)
+
+            interior_size = int(interior_size)
+            boundary_size = int(boundary_size)
+        else:
+            interior_size = self.interior_elem * self.config.bytes_per_element
+            self.boundary_elem = self.interior_elem * self.config.boundary_width * self.config.r_boundary / self.config.r_interior
+            boundary_size = self.boundary_elem * self.config.bytes_per_element
+            self.config.arithmetic_complexity = 1.0
+            self.config.arithmetic_intensity = system.fastest_flops / 1e6 / system.fastest_bandwidth / self.config.r_interior * self.config.bytes_per_element
+            interior_size = int(interior_size)
+            boundary_size = int(boundary_size)
+
+        interior_elem = self.interior_elem
+        boundary_elem = self.boundary_elem
 
         print(f"Total (per-level) Interior Size: {_bytes_to_readable(interior_size * interiors_per_level)}")
         print(f"Communication time for reference interior size: {interior_size / system.fastest_bandwidth:.2f} {_bytes_to_readable(interior_size)} {interior_elem} elements")
@@ -176,7 +190,7 @@ class DynamicJacobiData(JacobiData):
         """
         interior_data = []
         boundary_data = []
-        step_data_sum = [0 for _ in range(self.config.steps)]
+        step_data_sum = [0 for _ in range(self.config.steps + 1)]
         compute_time = []
 
         for cell in range(len(self.geometry.cells)):

@@ -1,5 +1,5 @@
 from .mesh.base import Geometry, Cell, Edge
-from .mesh.partition import block_cyclic, row_cyclic, col_cyclic 
+from .mesh.partition import block_cyclic, row_cyclic, col_cyclic, ij_partition
 from ..interface import DataBlocks, DeviceType, TaskTuple, VariantTuple
 from .base import (
     DataGeometry,
@@ -47,6 +47,8 @@ class JacobiConfig(GraphConfig):
     task_time: Optional[int] = None
     interior_time: Optional[int] = None
     boundary_time: Optional[int] = None
+    interior_size: Optional[int] = None
+    boundary_size: Optional[int] = None
     compute_time: Optional[int] = None
     vcu_usage: float = 1.0
     task_internal_memory: int = 0
@@ -89,10 +91,16 @@ class JacobiData(DataGeometry):
             assert system is not None
             boundary_size = system.fastest_bandwidth * self.config.boundary_time
 
+        if self.config.interior_size is not None:
+            interior_size = self.config.interior_size
+
+        if self.config.boundary_size is not None:
+            boundary_size = self.config.boundary_size
+
         if self.config.compute_time is not None:
             assert system is not None
-            assert self.config.interior_time is not None, "Interior time should be set to manually set compute time"
-            assert self.config.boundary_time is not None, "Boundary time should be set to manually set compute time"
+            assert self.config.interior_time is not None or self.config.interior_size is not None, "Interior time or size should be set to manually set compute time"
+            assert self.config.boundary_time is not None or self.config.boundary_size is not None, "Boundary time or size should be set to manually set compute time"
             self.config.memory_intensity = self.config.compute_time / interior_size * (system.fastest_gmbw / 1e6)
 
         interior_size = int(interior_size)
@@ -258,22 +266,48 @@ class JacobiData(DataGeometry):
 
 
 class JacobiGraph(ComputeDataGraph):
+    def _cell_row_col(self, cell_id: int) -> tuple[int, int]:
+        """
+        Map a cell id to (row, col) in the structured grid using centroids.
+        Row corresponds to the y-axis, col to the x-axis.
+        """
+        centroid = self.data.geometry.get_centroid(cell_id)
+        bounds = self.data.geometry.bounds
+
+        x_min, x_max, y_min, y_max = bounds
+        x_span = x_max - x_min
+        y_span = y_max - y_min
+
+        # Guard against degenerate bounds (should not happen for valid grids).
+        if x_span == 0:
+            col = 0
+        else:
+            col = int(np.floor((centroid[0] - x_min) / x_span * self.nx))
+
+        if y_span == 0:
+            row = 0
+        else:
+            row = int(np.floor((centroid[1] - y_min) / y_span * self.ny))
+
+        # Clamp to valid grid range.
+        col = min(max(col, 0), self.nx - 1)
+        row = min(max(row, 0), self.ny - 1)
+
+        return row, col
+
+    def _cell_to_local_id(self, cell_id: int) -> int:
+        """
+        Column-major local id: r + c*H where H = ny (rows).
+        """
+        row, col = self._cell_row_col(cell_id)
+        return int(row + col * self.ny)
+
     def xy_from_id(self, taskid: int) -> int:
         """
-        Convert a task ID to its (x, y) coordinates in the Jacobi grid.
-        And returns row-major order index.
-        Only works for rectangular grids.
+        Return column-major local id for the task (r + c*H).
         """
         cell_id = self.task_to_cell[taskid]
-        centroid = self.data.geometry.cell_points[self.data.geometry.cells[cell_id]].mean(axis=0)
-        n = self.nx
-        centroid = np.floor(centroid * n)
-
-        x = int(centroid[0])
-        y = int(centroid[1])
-
-        # print(f"Task ID {taskid} -> Cell ID {cell_id} -> Centroid {centroid} -> (x, y) = ({x}, {y}) -> Index {int(x * n + y)}")
-        return int(x * n + y)
+        return self._cell_to_local_id(cell_id)
 
     @property
     def nx(self) -> int:
@@ -296,6 +330,10 @@ class JacobiGraph(ComputeDataGraph):
         prev_interiors = {}
         self.max_requirement = 0
 
+        cell_to_local_id: dict[int, int] = {}
+        for cell_id in self.data.geometry.cell_edges.keys():
+            cell_to_local_id[cell_id] = self._cell_to_local_id(cell_id)
+
         if retire_data:
             self.dynamic = True
         else:
@@ -311,6 +349,8 @@ class JacobiGraph(ComputeDataGraph):
 
                 name = f"Task(Cell({cell}), {i})"
                 task_id = self.add_task(name)
+
+                self.add_tag(task_id, cell_to_local_id[cell])
 
                 self.task_to_cell[task_id] = cell
                 self.task_to_level[task_id] = i
@@ -379,14 +419,15 @@ class JacobiGraph(ComputeDataGraph):
         self._build_graph()
         self.dynamic = False
         self.reference_partition = []
-        half = config.n // 2
-        for j in range(config.n):  # column-wise unrolling
-            for i in range(config.n):
-                if i < half and j < half:
+        half_x = self.nx // 2
+        half_y = self.ny // 2
+        for j in range(self.ny):  # column-wise unrolling
+            for i in range(self.nx):
+                if i < half_x and j < half_y:
                     self.reference_partition.append(0)  # top-left
-                elif i < half and j >= half:
+                elif i < half_x and j >= half_y:
                     self.reference_partition.append(1)  # top-right
-                elif i >= half and j < half:
+                elif i >= half_x and j < half_y:
                     self.reference_partition.append(2)  # bottom-left
                 else:
                     self.reference_partition.append(3)  # bottom-right
@@ -400,6 +441,12 @@ class JacobiGraph(ComputeDataGraph):
             self.apply_variant(JacobiVariant)
 
         self.finalize()
+
+    def finalize(self):
+        super().finalize()
+        if self.static_graph is not None:
+            self.static_graph.set_grid_shape(self.ny, self.nx)
+            self.static_graph.set_morton_priority_enabled(True)
 
     def _apply_workload_variant(self, system: System):
         # print("Building custom variant for system", system)
@@ -965,6 +1012,28 @@ class JacobiGraph(ComputeDataGraph):
 
         return aligned.tolist()
 
+    def quadrant_partition(
+        self,
+        arch: DeviceType = DeviceType.GPU,
+        bandwidth: int = 1000,
+        n_parts: int = 4,
+        offset: int = 1,  # 1 to ignore cpu
+    ):
+        partition = []
+        half_x = self.nx // 2
+        half_y = self.ny // 2
+        for j in range(self.ny):  # column-wise unrolling
+            for i in range(self.nx):
+                if i < half_x and j < half_y:
+                    partition.append(0 + offset)  # top-left
+                elif i < half_x and j >= half_y:
+                    partition.append(1 + offset)  # top-right
+                elif i >= half_x and j < half_y:
+                    partition.append(2 + offset)  # bottom-left
+                else:
+                    partition.append(3 + offset)  # bottom-right
+        return partition
+
 
 register_graph(JacobiGraph, JacobiConfig)
 
@@ -1110,6 +1179,19 @@ class PartitionMapper:
             mapping_result.append(fastsim.Action(local_id, device, mapping_priority, mapping_priority))
         return mapping_result
 
+    def get_current_mapping(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        candidates = torch.zeros((simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item()
+            graph = simulator.input.graph
+            assert isinstance(graph, JacobiGraph)
+            cell_id = graph.task_to_cell[global_task_id]
+            device = self.cell_to_mapping[cell_id]
+            mapping_result.append(device - self.offset)
+        return mapping_result
+
 
 class BlockCyclicMapper(PartitionMapper):
     def __init__(self, mapper: Optional[Self] = None, geometry: Optional[Geometry] = None, n_devices: int = 4, block_size: int = 2, offset: int = 1):
@@ -1125,10 +1207,76 @@ class BlockCyclicMapper(PartitionMapper):
             if x_dev + y_dev != n_devices:
                 x_dev += 1
             n_cells = len(geometry.cells)
-            partition = block_cyclic(geometry, n_row_parts=x_dev, n_col_parts=y_dev, parts_per_column=block_size, parts_per_row=block_size)
+            partition = block_cyclic(geometry, n_row_parts=x_dev, n_col_parts=y_dev, parts_per_column=block_size, parts_per_row=block_size, n_devices=n_devices)
             self.cell_to_mapping = {cell: device + self.offset for cell, device in enumerate(partition)}
         else:
             raise ValueError("Either mapper or geometry must be provided for BlockCyclicMapper")
+
+class RowColCyclicMapper(PartitionMapper):
+    def __init__(
+        self,
+        geometry: Geometry,
+        n_devices: int = 4,
+        setting: int = 0,
+        offset: int = 1,
+        level_start: int = 0,
+        mapper: Optional[Self] = None,
+        round: int = 2,
+    ):
+        """
+        setting == 0 : Checkerboard
+        setting == 1 : Row cyclic
+        setting == 2 : Column cyclic
+        """
+        self.geometry = geometry
+        self.n_devices = n_devices
+        self.setting = setting
+        self.offset = offset
+        self.level_start = level_start
+
+        if mapper is not None:
+            assert isinstance(mapper, RowColCyclicMapper)
+            self.cell_to_mapping = mapper.cell_to_mapping
+            return
+
+        # Use the same (i,j) partitioning as block_cyclic
+        _, _, row_keys, col_keys, ij_map = ij_partition(geometry, round=round)
+
+        cell_to_mapping = {}
+
+        for i, rv in enumerate(row_keys):
+            for j, cv in enumerate(col_keys):
+                cells = ij_map[(rv, cv)]
+
+                if setting == 0:
+                    # Checkerboard
+                    if n_devices == 2:
+                        device = (i + j) & 1
+                    elif n_devices == 4:
+                        device = (i & 1) * 2 + (j & 1)
+                    else:
+                        device = (i + j) % n_devices
+
+                elif setting == 1:
+                    # Row cyclic
+                    device = i % n_devices
+
+                elif setting == 2:
+                    # Column cyclic
+                    device = j % n_devices
+
+                else:
+                    raise ValueError(f"Invalid setting {setting}")
+
+                device += offset
+
+                for c in cells:
+                    cell_to_mapping[c] = device
+
+        super().__init__(
+            cell_to_mapping=cell_to_mapping,
+            level_start=level_start,
+        )
 
 class RowCyclicMapper(PartitionMapper):
 
@@ -1697,10 +1845,10 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
             task_feature_factory.add(fastsim.InDegreeTaskFeature)
             task_feature_factory.add(fastsim.OutDegreeTaskFeature)
 
-        print(f"CandidateCoordinateObserverFactory: version {version}")
-        print(f"CandidateCoordinateObserverFactory: graph_override {self.graph_override}")
-        print(f"CandidateCoordinateObserverFactory: width {width}, length {length}")
-        print(f"Max candidates: {spec.max_candidates}")
+        # print(f"CandidateCoordinateObserverFactory: version {version}")
+        # print(f"CandidateCoordinateObserverFactory: graph_override {self.graph_override}")
+        # print(f"CandidateCoordinateObserverFactory: width {width}, length {length}")
+        # print(f"Max candidates: {spec.max_candidates}")
 
 
 

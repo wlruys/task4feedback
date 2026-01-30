@@ -1,17 +1,20 @@
 defaults:
   - 4x4x16_static.yaml
-  - feature: candidate_coordinate
-  - network: vector_baseline
+  # - feature: candidate_coordinate
+  # - network: vector_baseline
+  - feature: cnn_batch
+  - network: cond_dilation_cnn_batch
   - _self_
 
 algorithm:
-  rollout_steps: 16
-  minibatch_size: 16
+  rollout_steps: 32
+  minibatch_size: 32
 
 feature:
   observer:
     prev_frames: 1
     grid_override: True
+    graph_override: True
     n_candidates: 1
     version: H
   normalization:

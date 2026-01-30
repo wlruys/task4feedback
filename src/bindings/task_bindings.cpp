@@ -69,6 +69,13 @@ void init_task_ext(nb::module_ &m) {
       .def(nb::init<Graph &>(), "graph"_a, nb::keep_alive<1, 2>())
       .def("get_data_id", &StaticTaskInfo::get_data_id, "task_id"_a)
       .def("get_compute_task", &StaticTaskInfo::get_compute_task, "task_id"_a)
+      .def("set_grid_shape", &StaticTaskInfo::set_grid_shape, "h"_a, "w"_a)
+      .def("get_grid_h", &StaticTaskInfo::get_grid_h)
+      .def("get_grid_w", &StaticTaskInfo::get_grid_w)
+      .def("has_grid_shape", &StaticTaskInfo::has_grid_shape)
+      .def("set_morton_priority_enabled", &StaticTaskInfo::set_morton_priority_enabled,
+           "enabled"_a)
+      .def("get_morton_priority_enabled", &StaticTaskInfo::get_morton_priority_enabled)
       .def("update_variants", &StaticTaskInfo::update_variants, "graph"_a); // This is the only method that modified StaticTaskInfo once created
 
   nb::class_<RuntimeTaskInfo>(m, "RuntimeTaskInfo")

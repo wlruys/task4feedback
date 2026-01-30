@@ -23,13 +23,13 @@ deterministic_torch: true
 reward:
   verbose: False
   random_start: False
-  gamma: 1.0
+  gamma: 0.999
   terminal_reward: True
 
 graph:
   config:
-    n: 16
-    steps: 16
+    n: 8
+    steps: 128
     level_memory: 98e9
     boundary_time: 2500
     interior_time: 10000
@@ -41,16 +41,16 @@ graph:
     seed: 1
 
 algorithm:
-  num_collections: 10000
-  rollout_steps: 16
+  num_collections: 1000
+  rollout_steps: 32
   workers: 4
   graphs_per_collection: 4
-  ent_coef: 0.01
+  ent_coef: 0.00025
   sample_slices: False
   slice_len: 16 # only used if sample_slices is True (LSTM)
-  gamma: 1.0
+  gamma: 0.999
   lmbda: 0.95
-  minibatch_size: 16
+  minibatch_size: 32
   collector: "multi_sync"
 
 optimizer:

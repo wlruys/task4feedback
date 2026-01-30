@@ -641,6 +641,94 @@ class DynamicWorkload:
 
         return ani
 
+    def snapshot_workload_levels_to_individual_pdfs(
+        self,
+        levels_to_save: list[int],
+        base_filename: str = "workload_level",
+        folder: Optional[str] = None,
+        colormap: str = "viridis",
+        normalize: bool = True,
+        max_radius: float = 0.1,
+        figsize: tuple = (8, 8),
+        dpi: int = 300,
+        noise_sigma: Optional[float] = None,  # <-- NEW PARAM
+    ):
+        """
+        Save snapshots of specific workload levels into individual PDF files.
+        Optionally adds lognormal noise to workload sizes.
+        """
+
+        from .mesh.plot import create_mesh_plot
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle
+        from matplotlib.collections import PatchCollection
+
+        # Determine output folder
+        if folder is None:
+            if wandb is not None and wandb.run is not None and wandb.run.dir is not None:
+                folder = wandb.run.dir
+            else:
+                folder = "."
+
+        os.makedirs(folder, exist_ok=True)
+
+        # Filter only valid levels
+        levels_to_save = [lvl for lvl in levels_to_save if lvl in self.level_workload]
+        if not levels_to_save:
+            print("⚠️ No valid levels found to save.")
+            return
+
+        # Normalize if requested
+        if normalize:
+            max_workload = max(np.max(self.level_workload[lvl]) for lvl in levels_to_save)
+        else:
+            max_workload = None
+
+        # Geometry domain for scaling
+        domain_width = self.geom.get_max_coordinate(0) - self.geom.get_min_coordinate(0)
+        domain_height = self.geom.get_max_coordinate(1) - self.geom.get_min_coordinate(1)
+        domain_size = min(domain_width, domain_height)
+
+        cmap = plt.get_cmap(colormap)
+
+        for level in levels_to_save:
+            workload = self.level_workload[level].copy()
+
+            # --- ADD STOCHASTIC PERTURBATION ---
+            if noise_sigma is not None and noise_sigma > 0:
+                sigma = noise_sigma
+                mu = np.log(workload**2 / np.sqrt(workload**2 + (sigma * workload) ** 2))
+                var = np.log(1 + sigma**2)
+                noise = np.exp(np.random.normal(mu, np.sqrt(var)))
+                workload = noise  # replace workload with noisy values
+
+            radius_scale = max_workload if normalize else np.max(workload)
+
+            fig, ax = create_mesh_plot(self.geom, figsize=figsize)
+            ax.set_title("")
+            ax.axis("off")
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+
+            patches, colors = [], []
+            for i, cell in enumerate(self.geom.cells):
+                centroid = self.geom.get_centroid(i)
+                radius = (workload[i] / radius_scale) * domain_size * max_radius if radius_scale > 0 else 0
+                if radius > 0:
+                    patches.append(Circle((centroid[0], centroid[1]), radius))
+                    colors.append(cmap(workload[i] / radius_scale if radius_scale > 0 else 0))
+
+            if patches:
+                pcoll = PatchCollection(patches, facecolors=colors, edgecolors="black", alpha=0.7, zorder=10)
+                ax.add_collection(pcoll)
+
+            filename = os.path.join(folder, f"{base_filename}_{level}.pdf")
+            fig.savefig(filename, dpi=dpi, bbox_inches="tight", pad_inches=0)
+            plt.close(fig)
+            print(f"✅ Saved noisy workload snapshot: {filename}")
+
+        print(f"🎯 Done. Saved {len(levels_to_save)} PDFs to {os.path.abspath(folder)}")
+
 
 @dataclass
 class Trajectory:
@@ -684,7 +772,7 @@ def make_random_walk_trajectory(
     return trajectory
 
 
-def make_circle_trajectory(geom: Geometry, num_steps: int, radius: float = 0.5, center=None, max_angle=None):
+def make_circle_trajectory(geom: Geometry, num_steps: int, radius: float = 0.5, center=None, phase_length=None):
     if center is None:
         # Get center of mesh
         center = np.array(
@@ -700,10 +788,10 @@ def make_circle_trajectory(geom: Geometry, num_steps: int, radius: float = 0.5, 
     # Adjust radius as a fraction of the domain size
     radius = min(width, height) * radius
 
-    if max_angle is None:
+    if phase_length is None:
         max_angle = 2 * np.pi
     else:
-        max_angle = max_angle * 2 * np.pi
+        max_angle = (num_steps / phase_length) * 2 * np.pi
 
     # Generate circle trajectory
     theta = np.linspace(0, max_angle, num_steps)
@@ -863,7 +951,7 @@ class GaussianBump:
 
 
 def create_bump_random_center(rng: np.random.RandomState, min_std=0.1, max_std: float = 0.3, min_scale: float = 0.05, max_scale: float = 0.5, min_life=25, max_life=50):
-    x = rng.uniform(0.2, 0.8, size=2)
+    x = rng.uniform(0.1, 0.9, size=2)
     life = rng.randint(min_life, max_life)
 
     return GaussianBump(x, min_std, max_std, min_scale, max_scale, t=0, num_steps=life)
@@ -1065,6 +1153,7 @@ class RandomCornerWorkload(DynamicWorkload):
         seed: int = 0,
         **kwargs,
     ):
+        # Although not random, we need to set self.random for the seed
         self.random = True
         rng = np.random.default_rng(seed)
 
@@ -1102,10 +1191,28 @@ class RandomCornerWorkload(DynamicWorkload):
             np.array([x_max - half, y_max - half], dtype=float),  # top-right
         ]
 
-        # Pick random start and end corners
-        # start_corner = rng.choice(corners)
-        start_corner = corners[seed % len(corners)]  # deterministic start for reproducibility
-        end_corner = rng.choice([c for c in corners if not np.allclose(c, start_corner)])
+        # --- Helper: Deterministic Next Corner ---
+        def get_next_corner_index(current_idx, choice_idx):
+            # There are 3 valid neighbors. We pick the (choice_idx)-th one.
+            # We iterate 1, 2, 3 steps forward modulo 4 to find valid indices.
+            valid_indices = [(current_idx + k) % 4 for k in range(1, 4)]
+            return valid_indices[choice_idx]
+
+        # --- Initialize Path based on Seed ---
+        # 1. Determine Initial Start Corner (4 options)
+        current_corner_idx = seed % 4
+        start_corner = corners[current_corner_idx]
+
+        # 2. Determine Initial End Corner (3 options)
+        # We strip the first factor (4) from the seed
+        remaining_seed = seed // 4
+
+        choice = remaining_seed % 3
+        next_corner_idx = get_next_corner_index(current_corner_idx, choice)
+        end_corner = corners[next_corner_idx]
+
+        # Prepare for the loop
+        remaining_seed //= 3  # Consume the choice we just made
 
         # Helper: smoothstep
         def smoothstep01(t):
@@ -1116,10 +1223,19 @@ class RandomCornerWorkload(DynamicWorkload):
             phase_idx = (j - start_step) // phase_length
             phase_step = (j - start_step) % phase_length
 
-            # Choose new random end corner at each phase
+            # Check if we are entering a NEW phase (after the first one)
             if phase_step == 0 and j > start_step:
+                # 1. Old end becomes new start
                 start_corner = end_corner
-                end_corner = rng.choice([c for c in corners if not np.allclose(c, start_corner)])
+                current_corner_idx = next_corner_idx
+
+                # 2. Decode next choice from the seed
+                choice = remaining_seed % 3
+                next_corner_idx = get_next_corner_index(current_corner_idx, choice)
+                end_corner = corners[next_corner_idx]
+
+                # 3. Consume the seed factor
+                remaining_seed //= 3
 
             dwell_steps = int(round(phase_length * (1 - transition_frac)))
             move_steps = max(1, phase_length - dwell_steps)  # avoid div-by-zero

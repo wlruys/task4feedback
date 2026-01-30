@@ -26,8 +26,32 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
 
 
         if cfg.graph.init.partitioner == "metis":
-            partitioner = metis_geometry_partition
-            partition = partitioner(geom, nparts=cfg.graph.init.nparts)
+            graph.make_partition = graph.initial_mincut_partition
+            partition = graph.make_partition(
+                arch=DeviceType.GPU,
+                bandwidth=cfg.system.d2d_bw,
+                n_parts=cfg.graph.init.nparts,
+                offset=0,
+            )
+            partition = graph.maximize_matches(partition)
+        elif cfg.graph.init.partitioner == "quad":
+            graph.make_partition = graph.quadrant_partition
+            partition = graph.make_partition(
+                arch=DeviceType.GPU,
+                bandwidth=cfg.system.d2d_bw,
+                n_parts=cfg.graph.init.nparts,
+                offset=0,
+            )
+            partition = graph.maximize_matches(partition)
+        elif cfg.graph.init.partitioner == "mincut":
+            partition = graph.initial_mincut_partition(
+                arch=DeviceType.GPU,
+                bandwidth=cfg.system.d2d_bw,
+                n_parts=cfg.graph.init.nparts,
+                offset=0,
+            )
+            partition = graph.maximize_matches(partition)
+            print(f"Mincut partition: {partition}")
         elif cfg.graph.init.partitioner == "block_cyclic":
             partitioner = block_cyclic
             partition = block_cyclic(geom)
@@ -37,16 +61,6 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
         elif cfg.graph.init.partitioner == "row_cyclic":
             partitioner = row_cyclic
             partition = row_cyclic(geom)
-        elif cfg.graph.init.partitioner == "mincut":
-            partitioner = None  # use built-in mincut partitioning
-            partition = graph.initial_mincut_partition(
-                arch=DeviceType.GPU,
-                bandwidth=cfg.system.d2d_bw,
-                n_parts=4,
-                offset=0,
-            )
-            partition = graph.maximize_matches(partition)
-            print(f"Mincut partition: {partition}")
         else:
             raise NotImplementedError(f"Partitioner {cfg.graph.init.partitioner} is not implemented.")
         # partition = partitioner(geom, nparts=cfg.graph.init.nparts)
