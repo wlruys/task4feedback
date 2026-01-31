@@ -347,8 +347,10 @@ class LogitStabilizer(nn.Module):
     def forward(self, logits: torch.Tensor) -> torch.Tensor:
         if logits.ndim == 0:
             return logits  # nothing to stabilize
+
         logits = logits - logits.mean(dim=-1, keepdim=True)
-        return logits / self.tau
+        logits = logits / self.tau
+        return logits
 
 
 class LogitsOutputHead(OutputHead):

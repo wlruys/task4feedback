@@ -1864,8 +1864,6 @@ class CnnBatchTaskObserver(ExternalObserver):
     Observer that collects 2d flattened grid of task features.
     """
 
-    task_ids = None
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Always remap candidates for CNN batch observer to grid order
@@ -1914,34 +1912,45 @@ class CnnBatchTaskObserver(ExternalObserver):
 
         return obs_tensor
     
-    def get_candidate_action_map(self, output):
-        n_candidates = output["aux", "candidates", "count"][0]
-        candidate_ids = output["aux", "candidates", "idx"][:n_candidates]
+    def candidate_observation(self, output: TensorDict):
+        count = self.simulator.simulator.get_mappable_candidates(output["aux", "candidates", "idx"])
+        output.set_at_(("aux", "candidates", "count"), count, 0)
 
-        for i, task_id in enumerate(candidate_ids):
-            idx = _grid_index_for_task(self.simulator.input.graph, task_id.item())
-            output["aux", "candidate_action_map"][i] = idx
+        candidate_mask = output["aux", "candidate_mask"]
+        candidate_mask.fill_(False)
+
+        action_map = output["aux", "candidate_action_map"]
+        action_map.fill_(-1)
+
+        graph = self.simulator.input.graph
+        for i in range(count):
+            task_id = output["aux", "candidates", "idx"][i].item()
+            idx = _grid_index_for_task(graph, task_id)
+            if 0 <= idx < candidate_mask.numel():
+                candidate_mask[idx] = True
+                action_map[i] = idx
 
     def get_observation(self, output: Optional[TensorDict] = None):
         graph = self.simulator.input.graph
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
             raise Warning("Allocating new observation buffer, this is not efficient!")
-        if self.task_ids is None:
-            self.task_ids = torch.Tensor([-1 for _ in range(graph.nx * graph.ny)])
 
         # Get mappable candidates
         self.candidate_observation(output)
-        #print("Candidates:", output["aux", "candidates", "idx"])
-        #print("Candidate count:", output["aux", "candidates", "count"][0].item())
-        assert output["aux", "candidates", "count"][0] == graph.nx * graph.ny or output["aux", "candidates", "count"][0] == 0, "CnnBatchTaskObserver expects {} candidates but got {}.".format(
-            graph.nx * graph.ny, output["aux", "candidates", "count"][0].item()
-        )
-        for task_id in output["aux", "candidates", "idx"]:
-            idx = _grid_index_for_task(graph, task_id.item())
-            self.task_ids[idx] = task_id.item()
+        n_candidates = output["aux", "candidates", "count"][0].item()
 
-        self.get_task_features(self.task_ids, output["nodes", "tasks", "attr"])
+        output["nodes", "tasks", "attr"].fill_(0)
+        if n_candidates > 0:
+            candidate_ids = output["aux", "candidates", "idx"][:n_candidates]
+            tmp = output["nodes", "tasks", "attr"].new_zeros(
+                (n_candidates, self.task_features.feature_dim),
+            )
+            self.get_task_features(candidate_ids, tmp)
+            for i, task_id in enumerate(candidate_ids):
+                idx = _grid_index_for_task(graph, task_id.item())
+                if 0 <= idx < graph.nx * graph.ny:
+                    output["nodes", "tasks", "attr"][idx] = tmp[i]
         self.get_device_load(output)
         self.get_device_memory(output)
 

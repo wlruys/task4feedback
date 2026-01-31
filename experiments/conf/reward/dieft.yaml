@@ -1,5 +1,6 @@
 _target_: task4feedback.ml.env.DelayIncrementalEFT
 _partial_: true
+milestone: ${algorithm.milestone}
 delay: 10
 random_offset: False
 offset: 1

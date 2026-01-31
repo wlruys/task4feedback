@@ -16,6 +16,7 @@ from torchrl.objectives.utils import ValueEstimators
 from tensordict import TensorDict
 import wandb
 import torch
+import torch.nn.functional as F
 from torchrl._utils import compile_with_warmup
 from .base import AlgorithmConfig, LoggingConfig
 from ..base import ActorCriticModule
@@ -24,6 +25,7 @@ from task4feedback.logging import training
 import time
 from torchrl.collectors.utils import split_trajectories
 from task4feedback.ml.util import log_parameter_and_gradient_norms
+import math
 
 
 def joint_stats(td, ppo):
@@ -87,6 +89,609 @@ def joint_stats(td, ppo):
         print(f"|logits|_max = {lmax:.1f}; span per head: mean={per_head_span.mean():.2f} " f"max={per_head_span.max():.2f}")
 
 
+def _get_step_primitives(flat_td: TensorDict) -> torch.Tensor:
+    """Return per-step primitive counts (n_candidates), clamped to at least 0 for progress."""
+    try:
+        n_candidates = flat_td["observation", "aux", "candidates", "count"].view(-1)
+    except KeyError as exc:
+        raise KeyError("Missing observation->aux->candidates->count for milestone accounting.") from exc
+    if n_candidates.ndim != 1:
+        n_candidates = n_candidates.view(-1)
+    return n_candidates.to(dtype=torch.int64).clamp_min(0)
+
+
+def _value_loss_per_sample(values: torch.Tensor, targets: torch.Tensor, loss_type: str) -> torch.Tensor:
+    if loss_type == "l1":
+        return (values - targets).abs()
+    if loss_type in ("smooth_l1", "huber"):
+        return F.smooth_l1_loss(values, targets, reduction="none")
+    # Default to L2 / MSE
+    return (values - targets).pow(2)
+
+
+def _masked_critic_loss(
+    batch: TensorDict,
+    loss_module: ClipPPOLoss,
+    ppo_config: "PPOConfig",
+) -> Optional[torch.Tensor]:
+    """Compute critic loss only on milestone boundaries when a mask is present."""
+    if ("milestone_boundary" not in batch.keys()) or ("value_target" not in batch.keys()):
+        return None
+    if ppo_config.val_coef is None:
+        return None
+
+    values = loss_module.critic_network(batch)["state_value"].view(-1)
+    targets = batch["value_target"].view(-1).to(dtype=values.dtype)
+    mask = batch["milestone_boundary"].view(-1).to(dtype=values.dtype)
+    if mask.sum() <= 0:
+        return values.new_tensor(0.0)
+
+    if ppo_config.clip_vloss and ("state_value" in batch.keys()):
+        old_values = batch["state_value"].view(-1).detach()
+        delta = (values - old_values).clamp(-ppo_config.clip_eps, ppo_config.clip_eps)
+        clipped = old_values + delta
+        loss_unclipped = _value_loss_per_sample(values, targets, ppo_config.value_norm)
+        loss_clipped = _value_loss_per_sample(clipped, targets, ppo_config.value_norm)
+        value_loss = torch.max(loss_unclipped, loss_clipped)
+    else:
+        value_loss = _value_loss_per_sample(values, targets, ppo_config.value_norm)
+
+    return ppo_config.val_coef * (value_loss * mask).sum() / mask.sum()
+
+
+def _milestone_regularization_scale(batch: TensorDict) -> Optional[torch.Tensor]:
+    """Scale entropy/KL to be per-milestone instead of per-step."""
+    if "milestone_avg_block_len" in batch.keys():
+        avg_len = batch["milestone_avg_block_len"].mean()
+        return 1.0 / avg_len.clamp_min(1.0)
+    if "milestone_boundary" in batch.keys():
+        mask = batch["milestone_boundary"].view(-1).to(dtype=torch.float32)
+        blocks = mask.sum()
+        if blocks > 0:
+            avg_len = mask.numel() / blocks
+            return mask.new_tensor(1.0) / avg_len.clamp_min(1.0)
+    return None
+
+
+def _flatten_valid_batch(batch: TensorDict) -> TensorDict:
+    """Flatten batch and drop padded entries when valid_mask is present."""
+    if "valid_mask" not in batch.keys():
+        return batch
+    flat = batch.reshape(-1)
+    valid = flat["valid_mask"].view(-1)
+    if valid.all():
+        return flat
+    if valid.any():
+        return flat[valid]
+    return flat
+
+
+def _pad_tensor_time(x: torch.Tensor, pad: int, value) -> torch.Tensor:
+    if pad <= 0:
+        return x
+    pad_shape = list(x.shape)
+    pad_shape[0] = pad
+    pad_t = torch.full(pad_shape, value, dtype=x.dtype, device=x.device)
+    return torch.cat([x, pad_t], dim=0)
+
+
+def _reshape_time_to_blocks(x: torch.Tensor, block: int) -> torch.Tensor:
+    # x: [T, ...] with T % block == 0
+    T = x.shape[0]
+    B = T // block
+    return x.view(B, block, *x.shape[1:])
+
+
+@torch.no_grad()
+def pack_primitives_to_macros(
+    td: TensorDict,
+    milestone: int,
+    *,
+    time_dim: int = 0,
+    pad_done_to_true: bool = True,
+) -> TensorDict:
+    """
+    Pack primitive-step rollouts into fixed-length milestone blocks.
+
+    Input td shape: [T] (time)
+    Output macro_td shape: [B] where each leaf is shaped [B, milestone, ...]
+      and macro_td["valid_mask"] is [B, milestone] (True for real primitive steps).
+    """
+    assert td.ndim >= 1 and td.shape[time_dim] == td.shape[0], "assumes time dim is 0"
+    if milestone <= 0:
+        return td
+
+    T = td.shape[0]
+    B = int(math.ceil(T / milestone))
+    T_pad = B * milestone
+    pad = T_pad - T
+    device = td.device
+
+    valid_mask = torch.zeros((T_pad,), dtype=torch.bool, device=device)
+    valid_mask[:T] = True
+
+    tdp = td.clone()
+
+    # Pad tensor leaves that are time-major
+    done_key = None
+    if ("next", "terminated") in tdp.keys(True):
+        done_key = ("next", "terminated")
+    elif ("next", "done") in tdp.keys(True):
+        done_key = ("next", "done")
+
+    for key in tdp.keys(True):
+        leaf = tdp.get(key)
+        if not torch.is_tensor(leaf):
+            continue
+        if leaf.shape[0] != T:
+            continue
+        if done_key is not None and key == done_key:
+            pad_value = True if pad_done_to_true else False
+        else:
+            pad_value = False if leaf.dtype == torch.bool else 0.0
+        tdp.set(key, _pad_tensor_time(leaf, pad, pad_value))
+
+    macro = TensorDict({}, batch_size=[B], device=device)
+
+    def blockify(key):
+        macro.set(key, _reshape_time_to_blocks(tdp.get(key), milestone))
+
+    for key in tdp.keys(True):
+        leaf = tdp.get(key)
+        if not torch.is_tensor(leaf):
+            continue
+        if leaf.shape[0] != T_pad:
+            continue
+        blockify(key)
+
+    macro.set("valid_mask", _reshape_time_to_blocks(valid_mask, milestone))
+    return macro
+
+
+@torch.no_grad()
+def compute_macro_gae(
+    macro_td: TensorDict,
+    critic: torch.nn.Module,
+    milestone: int,
+    gamma: float,
+    lmbda: float,
+) -> TensorDict:
+    """
+    Compute GAE on macro transitions:
+      S_t = first observation in block
+      S_{t+1} = last next_observation in block
+      R_t = sum of rewards in block (no internal discount)
+      done_t = any(done) within the valid part of the block
+
+    Adds:
+      macro_td["macro_advantage"]    [B, 1]
+      macro_td["macro_value_target"] [B, 1]
+    """
+    if milestone <= 0:
+        return macro_td
+
+    device = macro_td.device
+    valid = macro_td["valid_mask"]  # [B, milestone]
+    obs0 = macro_td["observation"][:, 0]
+    next_obs = macro_td[("next", "observation")]
+    rew = macro_td[("next", "reward")]
+    if rew.ndim == 2:
+        rew = rew.unsqueeze(-1)
+
+    done_key = None
+    if ("next", "terminated") in macro_td.keys(True):
+        done_key = ("next", "terminated")
+    elif ("next", "done") in macro_td.keys(True):
+        done_key = ("next", "done")
+
+    if done_key is None:
+        done_any = torch.zeros((macro_td.shape[0], 1), dtype=torch.bool, device=device)
+    else:
+        done = macro_td.get(done_key)
+        if done.ndim == 2:
+            done = done.unsqueeze(-1)
+        done_any = ((done.squeeze(-1) & valid).any(dim=1, keepdim=True))
+
+    not_done = (~done_any).to(dtype=torch.float32)
+
+    obs1 = next_obs[:, -1]
+
+    V0 = critic(TensorDict({"observation": obs0}, batch_size=[obs0.shape[0]], device=device))["state_value"]
+    V1 = critic(TensorDict({"observation": obs1}, batch_size=[obs1.shape[0]], device=device))["state_value"]
+
+    R = (rew.squeeze(-1) * valid.to(dtype=rew.dtype)).sum(dim=1, keepdim=True)
+
+    # One gamma step per block.
+    delta = R + gamma * not_done * V1 - V0
+
+    B = delta.shape[0]
+    A = torch.zeros_like(delta)
+    gae = torch.zeros((1,), device=device, dtype=delta.dtype)
+    for t in reversed(range(B)):
+        gae = delta[t] + gamma * lmbda * not_done[t] * gae
+        A[t] = gae
+
+    VT = A + V0
+
+    macro_td.set("macro_advantage", A)
+    macro_td.set("macro_value_target", VT)
+    return macro_td
+
+
+class MacroReplayPPOLoss(torch.nn.Module):
+    """
+    PPO loss where replay unit is a macro item, but objective is token-level.
+
+    Expects batch leaves shaped:
+      observation:        [MB, milestone, ...]
+      action:             [MB, milestone, ...]
+      sample_log_prob:    [MB, milestone] (or action_log_prob)
+      valid_mask:         [MB, milestone]
+      macro_advantage:    [MB, 1]
+      macro_value_target: [MB, 1]
+    """
+
+    def __init__(
+        self,
+        actor: torch.nn.Module,
+        critic: torch.nn.Module,
+        clip_eps: float,
+        ent_coef: float,
+        val_coef: float,
+        normalize_advantage: bool = True,
+    ) -> None:
+        super().__init__()
+        self.actor = actor
+        self.critic = critic
+        self.clip_eps = clip_eps
+        self.ent_coef = ent_coef
+        self.val_coef = val_coef
+        self.normalize_advantage = normalize_advantage
+
+    def forward(self, batch: TensorDict) -> TensorDict:
+        device = batch.device
+        valid = batch["valid_mask"]  # [MB, milestone]
+        MB, X = valid.shape
+
+        adv = batch["macro_advantage"]  # [MB,1] or [MB,X]
+        vt = batch["macro_value_target"]  # [MB,1] or [MB,X]
+        if adv.ndim == 2 and adv.shape[1] == X:
+            adv_tok = adv
+        else:
+            adv_tok = adv.expand(MB, X).contiguous()
+        if vt.ndim == 2 and vt.shape[1] == X:
+            vt_tok = vt
+        else:
+            vt_tok = vt.expand(MB, X).contiguous()
+
+        if self.normalize_advantage:
+            v = adv_tok[valid]
+            adv_tok = (adv_tok - v.mean()) / (v.std().clamp_min(1e-8))
+
+        obs = batch["observation"]
+        if isinstance(obs, TensorDict):
+            obs_flat = TensorDict({}, batch_size=[MB * X], device=device)
+            for key in obs.keys(True):
+                leaf = obs.get(key)
+                if not torch.is_tensor(leaf):
+                    continue
+                if leaf.shape[0] != MB or leaf.shape[1] != X:
+                    raise RuntimeError(
+                        f"Expected observation leaf {key} to have leading shape ({MB}, {X}), "
+                        f"got {tuple(leaf.shape)}."
+                    )
+                obs_flat.set(key, leaf.reshape(MB * X, *leaf.shape[2:]))
+        else:
+            if obs.shape[0] != MB or obs.shape[1] != X:
+                raise RuntimeError(
+                    f"Expected observation to have leading shape ({MB}, {X}), got {tuple(obs.shape)}."
+                )
+            obs_flat = obs.reshape(MB * X, *obs.shape[2:])
+
+        act_unflat = batch["action"]
+        if act_unflat.shape[0] != MB or act_unflat.shape[1] != X:
+            raise RuntimeError(
+                f"Expected action to have leading shape ({MB}, {X}), got {tuple(act_unflat.shape)}."
+            )
+        act = act_unflat.reshape(MB * X, *act_unflat.shape[2:])
+
+        flat = TensorDict({"observation": obs_flat, "action": act}, batch_size=[MB * X], device=device)
+        dist = self.actor.get_dist(flat)
+        logp = dist.log_prob(act)
+        if logp.ndim > 1 and logp.shape[-1] == 1:
+            logp = logp.squeeze(-1)
+        if act_unflat.ndim > 2 and logp.shape == act.shape:
+            logp = logp.sum(dim=-1)
+        logp = logp.view(MB, X)
+
+        if "sample_log_prob" in batch.keys():
+            old_logp = batch["sample_log_prob"]
+        else:
+            old_logp = batch["action_log_prob"]
+        if old_logp.ndim > 1 and old_logp.shape[-1] == 1:
+            old_logp = old_logp.squeeze(-1)
+        if act_unflat.ndim > 2 and old_logp.shape == act_unflat.shape:
+            old_logp = old_logp.sum(dim=-1)
+        old_logp = old_logp.view(MB, X)
+
+        ratio = (logp - old_logp).exp()
+        surr1 = ratio * adv_tok
+        surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_tok
+        policy_loss_tok = -torch.minimum(surr1, surr2)
+        policy_loss = policy_loss_tok[valid].mean()
+
+        vpred = self.critic(TensorDict({"observation": obs_flat}, batch_size=[MB * X], device=device))["state_value"]
+        vpred = vpred.view(MB, X)
+        value_loss_tok = 0.5 * (vpred - vt_tok).pow(2)
+        value_loss = value_loss_tok[valid].mean()
+
+        ent = dist.entropy()
+        if ent.ndim > 1:
+            ent = ent.sum(dim=-1)
+        ent = ent.view(MB, X)
+        entropy = ent[valid].mean()
+
+        ratio_valid = ratio[valid].detach()
+        kl_approx = (old_logp - logp)[valid].mean().detach()
+        clip_fraction = (ratio_valid.gt(1.0 + self.clip_eps) | ratio_valid.lt(1.0 - self.clip_eps)).float().mean()
+        ess = (ratio_valid.sum().pow(2) / ratio_valid.pow(2).sum().clamp_min(1e-8)).detach()
+
+        loss_entropy = -self.ent_coef * entropy
+        loss_critic = self.val_coef * value_loss
+        total = policy_loss + loss_critic + loss_entropy
+
+        return TensorDict(
+            {
+                "loss_total": total,
+                "loss_objective": policy_loss,
+                "loss_critic": loss_critic,
+                "loss_entropy": loss_entropy,
+                "entropy": entropy,
+                "kl_approx": kl_approx,
+                "clip_fraction": clip_fraction,
+                "ESS": ess,
+            },
+            batch_size=[],
+            device=device,
+        )
+
+@torch.no_grad()
+def pack_milestone_blocks(
+    flat_td: TensorDict,
+    milestone: int,
+) -> TensorDict:
+    """
+    Pack primitive-step rollouts into milestone-sized macroaction blocks.
+
+    Each block aggregates env steps until the accumulated primitive count reaches `milestone`
+    (or a trajectory terminates). Blocks are padded to the max block length with a valid_mask.
+
+    Note: milestone_ticks is always 1 per block (simplified assumption).
+    """
+    if milestone <= 0:
+        return flat_td
+
+    device = flat_td.device
+
+    # Split into individual trajectories using TorchRL's built-in function
+    traj_list = split_trajectories(flat_td, trajectory_key=("collector", "traj_ids"))
+
+    if ("next", "done") in flat_td.keys(True):
+        done_key = ("next", "done")
+    elif ("next", "terminated") in flat_td.keys(True):
+        done_key = ("next", "terminated")
+    else:
+        raise KeyError("Missing next->done (or next->terminated) required for milestone blocking.")
+
+    all_blocks = []
+
+    # Process each trajectory independently
+    for traj_td in traj_list:
+        if traj_td.shape[0] == 0:
+            continue
+
+        step_primitives = _get_step_primitives(traj_td)
+        dones = traj_td[done_key].view(-1)
+
+        start_pos = 0
+        primitive_acc = 0
+
+        for pos in range(traj_td.shape[0]):
+            n_prims = int(step_primitives[pos].item())
+            primitive_acc += n_prims
+            done_now = bool(dones[pos].item())
+
+            if done_now or primitive_acc >= milestone:
+                # Extract block from start_pos to pos+1
+                block_td = traj_td[start_pos : pos + 1]
+                all_blocks.append(block_td)
+
+                primitive_acc = primitive_acc % milestone
+                start_pos = pos + 1
+
+        # Handle partial block at end of trajectory
+        if start_pos < traj_td.shape[0]:
+            block_td = traj_td[start_pos:]
+            all_blocks.append(block_td)
+
+    if not all_blocks:
+        return TensorDict({}, batch_size=[0], device=device)
+
+    # Pad blocks to uniform width
+    num_blocks = len(all_blocks)
+    max_block_len = max(block.shape[0] for block in all_blocks)
+
+    valid_mask = torch.zeros((num_blocks, max_block_len), dtype=torch.bool, device=device)
+
+    # Create padded result TensorDict
+    block_td = TensorDict({}, batch_size=[num_blocks, max_block_len], device=device)
+
+    # Get all keys from first block to determine structure
+    sample_block = all_blocks[0]
+    for key in sample_block.keys(True, leaves_only=True):
+        leaf = sample_block.get(key)
+        if not torch.is_tensor(leaf):
+            continue
+
+        # Create padded tensor for this key
+        pad_value = False if leaf.dtype == torch.bool else 0
+        padded_shape = (num_blocks, max_block_len, *leaf.shape[1:])
+        out = torch.full(padded_shape, pad_value, dtype=leaf.dtype, device=device)
+
+        # Fill in actual values from each block
+        for b, block in enumerate(all_blocks):
+            block_len = block.shape[0]
+            out[b, :block_len] = block.get(key)
+
+        block_td.set(key, out)
+
+    # Set valid_mask
+    for b, block in enumerate(all_blocks):
+        block_len = block.shape[0]
+        valid_mask[b, :block_len] = True
+
+    block_td.set("valid_mask", valid_mask)
+    return block_td
+
+
+@torch.no_grad()
+def compute_milestone_gae_flat(
+    flat_td: TensorDict,
+    critic: torch.nn.Module,
+    milestone: int,
+    gamma: float,
+    lmbda: float,
+    scale_advantage_by_block: bool = True,
+) -> TensorDict:
+    """
+    Compute milestone-time GAE on variable-length blocks (in primitive steps),
+    then broadcast advantages/value targets back to primitive steps.
+
+    Each env step contributes `n_candidates` primitive steps. Milestones tick every
+    `milestone` primitive steps, independent of n_candidates.
+    """
+    if milestone <= 0:
+        return flat_td
+
+    device = flat_td.device
+    traj_ids = flat_td.get(("collector", "traj_ids"), None)
+    if traj_ids is None:
+        raise KeyError("Missing collector->traj_ids required for milestone GAE.")
+    traj_ids = traj_ids.view(-1)
+
+    rewards = flat_td.get(("next", "reward")).view(-1)
+    dones = flat_td.get(("next", "done")).view(-1)
+    step_primitives = _get_step_primitives(flat_td)
+
+    advantage = torch.zeros_like(rewards, dtype=torch.float32, device=device)
+    value_target = torch.zeros_like(rewards, dtype=torch.float32, device=device)
+    milestone_boundary = torch.zeros_like(rewards, dtype=torch.bool, device=device)
+    milestone_block_len = torch.zeros_like(rewards, dtype=torch.float32, device=device)
+    total_steps = 0
+    total_blocks = 0
+
+    # Compute per-trajectory to avoid cross-episode leakage.
+    for traj in traj_ids.unique():
+        idx = (traj_ids == traj).nonzero(as_tuple=False).squeeze(-1)
+        if idx.numel() == 0:
+            continue
+        idx = idx.sort().values
+
+        traj_rewards = rewards[idx]
+        traj_dones = dones[idx]
+        traj_primitives = step_primitives[idx]
+
+        cumsum = torch.cumsum(traj_rewards, dim=0)
+
+        def sum_range(a: int, b: int) -> torch.Tensor:
+            if a == 0:
+                return cumsum[b]
+            return cumsum[b] - cumsum[a - 1]
+
+        start_positions: list[int] = []
+        end_positions: list[int] = []
+        block_lens: list[int] = []
+        block_rewards: list[torch.Tensor] = []
+        block_dones: list[torch.Tensor] = []
+
+        start_pos = 0
+        primitive_acc = 0
+
+        for pos in range(idx.numel()):
+            primitive_acc += int(traj_primitives[pos].item())
+            done_now = bool(traj_dones[pos].item())
+
+            if done_now or primitive_acc >= milestone:
+                start_positions.append(start_pos)
+                end_positions.append(pos)
+                block_lens.append(pos - start_pos + 1)
+                block_rewards.append(sum_range(start_pos, pos))
+                block_dones.append(traj_dones[pos])
+
+                primitive_acc = primitive_acc % milestone
+                start_pos = pos + 1
+
+        # Final partial block (bootstrap if not done)
+        if start_pos < idx.numel():
+            end_pos = idx.numel() - 1
+            start_positions.append(start_pos)
+            end_positions.append(end_pos)
+            block_lens.append(end_pos - start_pos + 1)
+            block_rewards.append(sum_range(start_pos, end_pos))
+            block_dones.append(traj_dones[end_pos])
+
+        if not block_rewards:
+            continue
+
+        start_indices = idx[torch.tensor(start_positions, device=device)]
+        end_indices = idx[torch.tensor(end_positions, device=device)]
+
+        start_td = flat_td[start_indices]
+        next_obs = flat_td["next", "observation"][end_indices]
+        next_td = TensorDict({"observation": next_obs}, batch_size=[len(end_indices)], device=device)
+
+        V0 = critic(start_td)["state_value"].view(-1)
+        V1 = critic(next_td)["state_value"].view(-1)
+
+        R = torch.stack(block_rewards).view(-1)
+        done_b = torch.stack(block_dones).view(-1)
+        not_done = (~done_b).to(dtype=V0.dtype)
+
+        delta = R + gamma * not_done * V1 - V0
+
+        A = torch.zeros_like(delta)
+        gae = torch.zeros(1, device=device, dtype=delta.dtype)
+        for t in reversed(range(delta.numel())):
+            gae = delta[t] + gamma * lmbda * not_done[t] * gae
+            A[t] = gae
+
+        VT = A + V0
+
+        for b, (s_pos, e_pos, blen) in enumerate(zip(start_positions, end_positions, block_lens)):
+            step_idx = idx[s_pos : e_pos + 1]
+            adv_val = A[b]
+            if scale_advantage_by_block and blen > 0:
+                adv_val = adv_val / float(blen)
+            advantage[step_idx] = adv_val
+            value_target[step_idx] = VT[b]
+            milestone_block_len[step_idx] = float(blen)
+
+        milestone_boundary[start_indices] = True
+        total_steps += idx.numel()
+        total_blocks += len(block_lens)
+
+    avg_block_len = float(total_steps) / float(total_blocks) if total_blocks > 0 else 1.0
+    flat_td.set("advantage", advantage.unsqueeze(-1))
+    flat_td.set("value_target", value_target.unsqueeze(-1))
+    flat_td.set("milestone_boundary", milestone_boundary.unsqueeze(-1))
+    flat_td.set("milestone_block_len", milestone_block_len.unsqueeze(-1))
+    flat_td.set(
+        "milestone_avg_block_len",
+        torch.full_like(rewards, avg_block_len, dtype=torch.float32).unsqueeze(-1),
+    )
+    return flat_td
+
+
 @dataclass
 class PPOConfig(AlgorithmConfig):
     implementation: str = "torchrl"
@@ -115,10 +720,12 @@ class PPOConfig(AlgorithmConfig):
     collector: str = "multi_sync"  # "sync" or "multi_sync"
     sample_slices: bool = True  # if using lstm, whether slices are used instead of episodes
     slice_len: int = 16  # length of slices for LSTM, only used if sample_slices is True
-    rollout_steps: int = 250
+    rollout_steps: int = 250  # rollout length in milestones
     advantage_type: str = "gae"  # "gae" or "vtrace"
     bagged_policy: str = "uniform"
     timeout: int = 60 * 60 * 24  # 1 day
+    milestone: int = 32  # primitive steps per milestone; 0 disables milestone-time GAE
+    milestone_scale_advantage: bool = True  # normalize advantage by steps per milestone block
 
 
 def should_log(
@@ -194,10 +801,10 @@ def log_training_metrics(
                 std_reward = None
 
         # Calculate advantage and value target metrics
-        advantage_mean = tensordict_data["advantage"].mean().item()
-        advantage_std = tensordict_data["advantage"].std().item()
-        value_target_mean = tensordict_data["value_target"].mean().item()
-        value_target_std = tensordict_data["value_target"].std().item()
+        advantage_mean = flattened_data["advantage"].mean().item()
+        advantage_std = flattened_data["advantage"].std().item()
+        value_target_mean = flattened_data["value_target"].mean().item()
+        value_target_std = flattened_data["value_target"].std().item()
 
         explained_variance = None
         if "state_value" in flattened_data.keys() and "value_target" in flattened_data.keys():
@@ -281,16 +888,29 @@ def run_ppo(
         wandb.define_metric("eval/*", step_metric="batch/n_updates")
 
     print("Using PPO with config:", OmegaConf.to_yaml(ppo_config))
+    if ppo_config.milestone > 0 and ppo_config.advantage_type != "gae":
+        raise ValueError("Milestone GAE currently supports only advantage_type='gae'.")
+    if ppo_config.milestone > 0 and ppo_config.advantage_type != "gae":
+        raise ValueError("Milestone GAE currently supports only advantage_type='gae'.")
 
     eval_envs = make_eval_envs(env_constructors)
     max_tasks = max([env.size() for env in eval_envs])
-    max_graph_size = max_tasks 
+    max_graph_size = max_tasks
     max_candidates = max([env.simulator_factory[0].graph_spec.max_candidates for env in eval_envs])
 
+    rollout_env_steps = 0
     if ppo_config.rollout_steps > 0:
-        max_tasks = ppo_config.rollout_steps
+        if ppo_config.milestone <= 0:
+            raise ValueError("rollout_steps is in milestones; set a positive milestone size.")
+        rollout_env_steps = milestones_to_env_steps(ppo_config.rollout_steps, ppo_config.milestone, max_candidates)
+        max_tasks = rollout_env_steps
 
     max_states_per_collection = ppo_config.graphs_per_collection * max_tasks
+    max_macro_per_collection = (
+        int(math.ceil(max_states_per_collection / ppo_config.milestone))
+        if ppo_config.milestone > 0
+        else max_states_per_collection
+    )
 
     if ppo_config.advantage_type == "gae":
         training.info("Using GAE for advantage estimation")
@@ -314,7 +934,7 @@ def run_ppo(
 
     replay_buffer = TensorDictReplayBuffer(
         storage=LazyTensorStorage(
-            max_size=max_states_per_collection,
+            max_size=max_macro_per_collection if ppo_config.milestone > 0 else max_states_per_collection,
             device=ppo_config.update_device,
         ),
         sampler=SamplerWithoutReplacement(),
@@ -330,7 +950,7 @@ def run_ppo(
             actor_critic_module.actor,
             frames_per_batch=max_states_per_collection,
             cat_results="stack",
-            reset_at_each_iter=False if ppo_config.rollout_steps > 0 else True,
+            reset_at_each_iter=False if rollout_env_steps > 0 else True,
             policy_device=ppo_config.collect_device,
             storing_device=ppo_config.storing_device,
             env_device="cpu",
@@ -343,7 +963,7 @@ def run_ppo(
             env_workers()[0],
             policy=actor_critic_module.actor,
             frames_per_batch=max_states_per_collection,
-            reset_at_each_iter=True if ppo_config.rollout_steps > 0 else True,
+            reset_at_each_iter=False if rollout_env_steps > 0 else True,
             policy_device=ppo_config.collect_device,
             storing_device=ppo_config.storing_device,
             env_device="cpu",
@@ -355,22 +975,32 @@ def run_ppo(
 
     collector.set_seed(seed)
 
-    loss_module = ClipPPOLoss(
-        actor_network=actor_critic_module.actor,
-        critic_network=actor_critic_module.critic,
-        clip_epsilon=ppo_config.clip_eps,
-        entropy_bonus=True,
-        entropy_coeff=ppo_config.ent_coef,
-        critic_coeff=ppo_config.val_coef,
-        loss_critic_type=ppo_config.value_norm,
-        clip_value=ppo_config.clip_vloss,
-        normalize_advantage=ppo_config.normalize_advantage,
-    )
+    if ppo_config.milestone > 0:
+        loss_module = MacroReplayPPOLoss(
+            actor=actor_critic_module.actor,
+            critic=actor_critic_module.critic,
+            clip_eps=ppo_config.clip_eps,
+            ent_coef=ppo_config.ent_coef,
+            val_coef=ppo_config.val_coef,
+            normalize_advantage=ppo_config.normalize_advantage,
+        )
+    else:
+        loss_module = ClipPPOLoss(
+            actor_network=actor_critic_module.actor,
+            critic_network=actor_critic_module.critic,
+            clip_epsilon=ppo_config.clip_eps,
+            entropy_bonus=True,
+            entropy_coeff=ppo_config.ent_coef,
+            critic_coeff=ppo_config.val_coef,
+            loss_critic_type=ppo_config.value_norm,
+            clip_value=ppo_config.clip_vloss,
+            normalize_advantage=ppo_config.normalize_advantage,
+        )
 
-    if ppo_config.advantage_type == "gae":
-        loss_module.make_value_estimator(ValueEstimators.GAE)
-    elif ppo_config.advantage_type == "vtrace":
-        loss_module.make_value_estimator(ValueEstimators.VTrace)
+        if ppo_config.advantage_type == "gae":
+            loss_module.make_value_estimator(ValueEstimators.GAE)
+        elif ppo_config.advantage_type == "vtrace":
+            loss_module.make_value_estimator(ValueEstimators.VTrace)
 
     if optimizer is None:
         optimizer = torch.optim.Adam(loss_module.parameters())
@@ -406,16 +1036,26 @@ def run_ppo(
 
         return loss_vals
 
-    if ppo_config.compile_advantage:
+    if ppo_config.compile_advantage and ppo_config.milestone <= 0:
         advantage_module = compile_with_warmup(advantage_module, mode="reduce-overhead", warmup=8)
 
     if ppo_config.compile_update:
         update = compile_with_warmup(update, mode="reduce-overhead", warmup=8)
 
     states_per_collection = min(ppo_config.states_per_collection, max_states_per_collection)
-    n_batch = max(1, states_per_collection // ppo_config.minibatch_size)
-    if ppo_config.minibatch_size > states_per_collection:
-        training.warning(f"Minibatch size <{ppo_config.minibatch_size}> is larger than states per collection <{states_per_collection}>. ")
+    if ppo_config.milestone > 0:
+        states_per_collection_macro = int(math.ceil(states_per_collection / ppo_config.milestone))
+        n_batch = max(1, states_per_collection_macro // ppo_config.minibatch_size)
+        if ppo_config.minibatch_size > states_per_collection_macro:
+            training.warning(
+                f"Minibatch size <{ppo_config.minibatch_size}> is larger than macro samples per collection <{states_per_collection_macro}>. "
+            )
+    else:
+        n_batch = max(1, states_per_collection // ppo_config.minibatch_size)
+        if ppo_config.minibatch_size > states_per_collection:
+            training.warning(
+                f"Minibatch size <{ppo_config.minibatch_size}> is larger than states per collection <{states_per_collection}>. "
+            )
 
     training.info(
         f"Running PPO training with {ppo_config.num_collections} collections, "
@@ -463,15 +1103,34 @@ def run_ppo(
             # Redistribute Rewards
             if ppo_config.bagged_policy == "uniform":
                 redistribute_rewards_uniform(tensordict_data)
-            # Compute advantages
-            advantage_module(tensordict_data)
+
+            if ppo_config.milestone > 0:
+                flattened_data = tensordict_data.reshape(-1)
+                macro_data = pack_primitives_to_macros(flattened_data, milestone=ppo_config.milestone)
+                macro_data = compute_macro_gae(
+                    macro_data,
+                    critic=actor_critic_module.critic,
+                    milestone=ppo_config.milestone,
+                    gamma=ppo_config.gamma,
+                    lmbda=ppo_config.lmbda,
+                )
+
+                valid = macro_data["valid_mask"]
+                MB, X = valid.shape
+                adv_tok = macro_data["macro_advantage"].expand(MB, X)
+                vt_tok = macro_data["macro_value_target"].expand(MB, X)
+                valid_flat = valid.reshape(-1)
+                flattened_data.set("advantage", adv_tok.reshape(-1)[valid_flat].unsqueeze(-1))
+                flattened_data.set("value_target", vt_tok.reshape(-1)[valid_flat].unsqueeze(-1))
+            else:
+                print("DEFAULT")
+                advantage_module(tensordict_data)
+                flattened_data = tensordict_data.reshape(-1)
 
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
         training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")
-
-        flattened_data = tensordict_data.reshape(-1)
-        samples_in_collection = flattened_data.shape[0]
+        samples_in_collection = macro_data.shape[0] if ppo_config.milestone > 0 else flattened_data.shape[0]
         n_samples += samples_in_collection
 
         # print("SANITY CHECK OF SIZES IN OBSERVATION")
@@ -509,16 +1168,31 @@ def run_ppo(
         # print("value target shape", flattened_data["value_target"].shape)
         # print("reward shape", flattened_data["next", "reward"].shape)
         # print("done shape", flattened_data["next", "done"].shape)
-        replay_buffer.extend(flattened_data)
+        if ppo_config.milestone > 0:
+            replay_buffer.extend(macro_data)
+        else:
+            replay_buffer.extend(flattened_data)
 
         update_start_t = time.perf_counter()
-        loss_module.actor_network.train()
-        loss_module.critic_network.train()
+        actor_net = loss_module.actor_network if hasattr(loss_module, "actor_network") else loss_module.actor
+        critic_net = loss_module.critic_network if hasattr(loss_module, "critic_network") else loss_module.critic
+        actor_net.train()
+        critic_net.train()
         for j in range(ppo_config.epochs_per_collection):
-            for k in range(n_batch):
+            if ppo_config.milestone > 0:
+                buffer_len = len(replay_buffer)
+                if buffer_len <= 0:
+                    continue
+                effective_batch = min(ppo_config.minibatch_size, buffer_len)
+                n_batch_local = max(1, buffer_len // effective_batch)
+            else:
+                effective_batch = ppo_config.minibatch_size
+                n_batch_local = n_batch
+
+            for k in range(n_batch_local):
                 n_updates += 1
-                batch = replay_buffer.sample(ppo_config.minibatch_size)
-                batch.to(ppo_config.update_device, non_blocking=True)
+                batch = replay_buffer.sample(effective_batch)
+                batch = batch.to(ppo_config.update_device, non_blocking=True)
                 loss = update(batch, loss_module, optimizer, ppo_config)
 
                 if should_log(n_updates, logging_config):
@@ -533,7 +1207,8 @@ def run_ppo(
                         n_samples,
                     )
 
-        collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
+        actor_net = loss_module.actor_network if hasattr(loss_module, "actor_network") else loss_module.actor
+        collector.update_policy_weights_(TensorDict.from_module(actor_net).to(ppo_config.collect_device))
         update_end_t = time.perf_counter()
         update_elapsed_time = update_end_t - update_start_t
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
@@ -549,10 +1224,11 @@ def run_ppo(
                     max_performance = metrics[f"eval/DETERMINISTIC"]["mean_vsEFT"]
                     training.info(f"New max performance: {max_performance:.4f}. Saving checkpoint.")
                     if logging_config.best_policy_dir is not None:
+                        critic_net = loss_module.critic_network if hasattr(loss_module, "critic_network") else loss_module.critic
                         save_checkpoint(
                             n_collections,
                             policy_module=collector.policy,
-                            value_module=loss_module.critic_network,
+                            value_module=critic_net,
                             optimizer=optimizer,
                             lr_scheduler=lr_scheduler,
                             filename=f"{logging_config.best_policy_name if logging_config.best_policy_name else 'checkpoint'}_{max_performance:.3f}_{seed}.pt",
@@ -561,10 +1237,11 @@ def run_ppo(
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at collection {n_collections}")
+            critic_net = loss_module.critic_network if hasattr(loss_module, "critic_network") else loss_module.critic
             save_checkpoint(
                 n_collections,
                 policy_module=collector.policy,
-                value_module=loss_module.critic_network,
+                value_module=critic_net,
                 optimizer=optimizer,
                 lr_scheduler=lr_scheduler,
             )
@@ -579,7 +1256,8 @@ def run_ppo(
         training.info("Running final evaluation after training")
         run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
 
-    save_checkpoint(n_collections, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
+    critic_net = loss_module.critic_network if hasattr(loss_module, "critic_network") else loss_module.critic
+    save_checkpoint(n_collections, policy_module=collector.policy, value_module=critic_net, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
     collector.shutdown()
 
@@ -612,8 +1290,12 @@ def run_ppo_lstm(
 
     print(f"Max tasks in env constructors: {max_tasks}")
 
+    rollout_env_steps = 0
     if ppo_config.rollout_steps > 0:
-        max_tasks = ppo_config.rollout_steps
+        if ppo_config.milestone <= 0:
+            raise ValueError("rollout_steps is in milestones; set a positive milestone size.")
+        rollout_env_steps = milestones_to_env_steps(ppo_config.rollout_steps, ppo_config.milestone, max_candidates)
+        max_tasks = rollout_env_steps
 
     max_states_per_collection = ppo_config.graphs_per_collection * max_tasks
 
@@ -639,6 +1321,16 @@ def run_ppo_lstm(
             deactivate_vmap=True,
         )
 
+    if ppo_config.milestone > 0 and ppo_config.sample_slices:
+        training.warning("Milestone macro replay is incompatible with slice sampling; disabling sample_slices.")
+        ppo_config.sample_slices = False
+
+    max_macro_per_collection = (
+        int(math.ceil(max_states_per_collection / ppo_config.milestone))
+        if ppo_config.milestone > 0
+        else max_states_per_collection
+    )
+
     if ppo_config.sample_slices:
         replay_buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(
@@ -656,7 +1348,7 @@ def run_ppo_lstm(
     else:
         replay_buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(
-                max_size=max_states_per_collection,
+                max_size=max_macro_per_collection if ppo_config.milestone > 0 else max_states_per_collection,
                 device=ppo_config.update_device,
             ),
             sampler=SamplerWithoutReplacement(),
@@ -675,7 +1367,7 @@ def run_ppo_lstm(
             actor_critic_module.actor,
             frames_per_batch=max_states_per_collection,
             cat_results="stack",
-            reset_at_each_iter=False if ppo_config.rollout_steps > 0 else True,
+            reset_at_each_iter=False if rollout_env_steps > 0 else True,
             policy_device=ppo_config.collect_device,
             storing_device=ppo_config.storing_device,
             env_device="cpu",
@@ -687,7 +1379,7 @@ def run_ppo_lstm(
             env_workers()[0],
             policy=actor_critic_module.actor,
             frames_per_batch=max_states_per_collection,
-            reset_at_each_iter=False,
+            reset_at_each_iter=False if rollout_env_steps > 0 else True,
             policy_device=ppo_config.collect_device,
             storing_device=ppo_config.storing_device,
             env_device="cpu",
@@ -698,22 +1390,32 @@ def run_ppo_lstm(
 
     collector.set_seed(seed)
 
-    loss_module = ClipPPOLoss(
-        actor_network=actor_critic_module.actor,
-        critic_network=actor_critic_module.critic,
-        clip_epsilon=ppo_config.clip_eps,
-        entropy_bonus=True,
-        entropy_coeff=ppo_config.ent_coef,
-        critic_coeff=ppo_config.val_coef,
-        loss_critic_type=ppo_config.value_norm,
-        clip_value=ppo_config.clip_vloss,
-        normalize_advantage=ppo_config.normalize_advantage,
-    )
+    if ppo_config.milestone > 0:
+        loss_module = MacroReplayPPOLoss(
+            actor=actor_critic_module.actor,
+            critic=actor_critic_module.critic,
+            clip_eps=ppo_config.clip_eps,
+            ent_coef=ppo_config.ent_coef,
+            val_coef=ppo_config.val_coef,
+            normalize_advantage=ppo_config.normalize_advantage,
+        )
+    else:
+        loss_module = ClipPPOLoss(
+            actor_network=actor_critic_module.actor,
+            critic_network=actor_critic_module.critic,
+            clip_epsilon=ppo_config.clip_eps,
+            entropy_bonus=True,
+            entropy_coeff=ppo_config.ent_coef,
+            critic_coeff=ppo_config.val_coef,
+            loss_critic_type=ppo_config.value_norm,
+            clip_value=ppo_config.clip_vloss,
+            normalize_advantage=ppo_config.normalize_advantage,
+        )
 
-    if ppo_config.advantage_type == "gae":
-        loss_module.make_value_estimator(ValueEstimators.GAE)
-    elif ppo_config.advantage_type == "vtrace":
-        loss_module.make_value_estimator(ValueEstimators.VTrace)
+        if ppo_config.advantage_type == "gae":
+            loss_module.make_value_estimator(ValueEstimators.GAE)
+        elif ppo_config.advantage_type == "vtrace":
+            loss_module.make_value_estimator(ValueEstimators.VTrace)
 
     if optimizer is None:
         optimizer = torch.optim.AdamW(
@@ -734,10 +1436,8 @@ def run_ppo_lstm(
         print(f"Using learning rate scheduler: {lr_scheduler}")
 
     def update(batch, i, j, k):
-
         if ppo_config.sample_slices:
             batch = batch.reshape(num_slices, -1)
-            # print(batch.shape)
 
         loss_vals = loss_module(batch)
         loss_value = loss_vals["loss_objective"] + loss_vals["loss_critic"] + loss_vals["loss_entropy"]
@@ -757,7 +1457,7 @@ def run_ppo_lstm(
 
         return loss_vals
 
-    if ppo_config.compile_advantage:
+    if ppo_config.compile_advantage and ppo_config.milestone <= 0:
         advantage_module = compile_with_warmup(advantage_module, mode="reduce-overhead", warmup=8)
 
     if ppo_config.compile_update:
@@ -765,7 +1465,10 @@ def run_ppo_lstm(
 
     states_per_collection = min(ppo_config.states_per_collection, max_states_per_collection)
 
-    if ppo_config.sample_slices:
+    if ppo_config.milestone > 0:
+        states_per_collection_macro = int(math.ceil(states_per_collection / ppo_config.milestone))
+        n_batch = max(1, states_per_collection_macro // ppo_config.minibatch_size)
+    elif ppo_config.sample_slices:
         n_batch = max(1, states_per_collection // ppo_config.minibatch_size)
     else:
         n_batch = max(1, ppo_config.graphs_per_collection // ppo_config.minibatch_size)
@@ -810,14 +1513,34 @@ def run_ppo_lstm(
 
         adv_start_t = time.perf_counter()
         with torch.no_grad():
-            advantage_module(tensordict_data)
+            if ppo_config.milestone > 0:
+                flattened_data = tensordict_data.reshape(-1)
+                macro_data = pack_primitives_to_macros(flattened_data, milestone=ppo_config.milestone)
+                macro_data = compute_macro_gae(
+                    macro_data,
+                    critic=actor_critic_module.critic,
+                    milestone=ppo_config.milestone,
+                    gamma=ppo_config.gamma,
+                    lmbda=ppo_config.lmbda,
+                )
+
+                valid = macro_data["valid_mask"]
+                MB, X = valid.shape
+                adv_tok = macro_data["macro_advantage"].expand(MB, X)
+                vt_tok = macro_data["macro_value_target"].expand(MB, X)
+                valid_flat = valid.reshape(-1)
+                flattened_data.set("advantage", adv_tok.reshape(-1)[valid_flat].unsqueeze(-1))
+                flattened_data.set("value_target", vt_tok.reshape(-1)[valid_flat].unsqueeze(-1))
+            else:
+                advantage_module(tensordict_data)
+                flattened_data = tensordict_data.reshape(-1)
         adv_end_t = time.perf_counter()
         adv_elapsed_time = adv_end_t - adv_start_t
         training.info(f"Computed advantages {i + 1} in {adv_elapsed_time:.2f} seconds")
 
-        flattened_data = tensordict_data.reshape(-1)
-
-        if ppo_config.sample_slices:
+        if ppo_config.milestone > 0:
+            replay_buffer.extend(macro_data)
+        elif ppo_config.sample_slices:
             if max_candidates > 1:
                 flattened_data["advantage"] = flattened_data["advantage"].expand(-1, max_candidates)
                 flattened_data["advantage"] = flattened_data["advantage"].unsqueeze(-1)
@@ -829,15 +1552,24 @@ def run_ppo_lstm(
                 tensordict_data["advantage"] = tensordict_data["advantage"].unsqueeze(-1)
             replay_buffer.extend(tensordict_data)
 
-        n_samples += flattened_data.shape[0]
+        n_samples += macro_data.shape[0] if ppo_config.milestone > 0 else flattened_data.shape[0]
 
         update_start_t = time.perf_counter()
         for j in range(ppo_config.epochs_per_collection):
-            for k in range(n_batch):
-                n_updates += 1
-                batch, info = replay_buffer.sample(ppo_config.minibatch_size, return_info=True)
+            if ppo_config.milestone > 0:
+                buffer_len = len(replay_buffer)
+                if buffer_len <= 0:
+                    continue
+                effective_batch = min(ppo_config.minibatch_size, buffer_len)
+                n_batch_local = max(1, buffer_len // effective_batch)
+            else:
+                effective_batch = ppo_config.minibatch_size
+                n_batch_local = n_batch
 
-                batch.to(ppo_config.update_device, non_blocking=True)
+            for k in range(n_batch_local):
+                n_updates += 1
+                batch, info = replay_buffer.sample(effective_batch, return_info=True)
+                batch = batch.to(ppo_config.update_device, non_blocking=True)
                 loss = update(batch, i, j, k)
 
                 if should_log(n_updates, logging_config):
@@ -852,7 +1584,8 @@ def run_ppo_lstm(
                         n_samples,
                     )
 
-        collector.update_policy_weights_(TensorDict.from_module(loss_module.actor_network).to(ppo_config.collect_device))
+        actor_net = loss_module.actor_network if hasattr(loss_module, "actor_network") else loss_module.actor
+        collector.update_policy_weights_(TensorDict.from_module(actor_net).to(ppo_config.collect_device))
         update_end_t = time.perf_counter()
         update_elapsed_time = update_end_t - update_start_t
         training.info(f"Updated policy {i + 1} in {update_elapsed_time:.2f} seconds")
@@ -865,7 +1598,8 @@ def run_ppo_lstm(
 
         if should_checkpoint(n_collections, logging_config):
             training.info(f"Checkpointing at update: {n_updates}")
-            save_checkpoint(n_updates, policy_module=collector.policy, value_module=loss_module.critic_network, optimizer=optimizer, lr_scheduler=lr_scheduler)
+            critic_net = loss_module.critic_network if hasattr(loss_module, "critic_network") else loss_module.critic
+            save_checkpoint(n_updates, policy_module=collector.policy, value_module=critic_net, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
         current_t = time.perf_counter()
         elapsed_time = current_t - start_t
@@ -877,10 +1611,11 @@ def run_ppo_lstm(
         training.info("Running final evaluation after training")
         run_evaluation(collector.policy, eval_envs, eval_config, n_collections, n_updates, n_samples, eval_location=eval_location)
 
+    critic_net = loss_module.critic_network if hasattr(loss_module, "critic_network") else loss_module.critic
     save_checkpoint(
         n_collections,
         policy_module=collector.policy,
-        value_module=loss_module.critic_network,
+        value_module=critic_net,
         optimizer=optimizer,
         lr_scheduler=lr_scheduler,
     )

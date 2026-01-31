@@ -6,6 +6,7 @@ from .graph import GraphBuilder
 import hydra
 from omegaconf import DictConfig, OmegaConf, ListConfig
 from task4feedback.ml.env import RuntimeEnv
+from task4feedback.ml.util import milestones_to_env_steps
 from torchrl.envs import (
     TransformedEnv,
     Compose,
@@ -20,6 +21,7 @@ from dataclasses import dataclass
 import torch
 from pathlib import Path
 import numpy as np
+import math
 
 
 def create_system(cfg: DictConfig):
@@ -41,23 +43,36 @@ def create_observer_factory(cfg: DictConfig):
     graph_spec = hydra.utils.instantiate(cfg.feature.observer.spec)
     graph_config = hydra.utils.instantiate(cfg.graph.config)
 
-    if cfg.feature.observer.get("grid_override", False):
-        width = graph_config.n
-        length = get_length_from_config(graph_config)
+    observer_target = str(cfg.feature.observer.get("_target_", ""))
+    grid_override = bool(cfg.feature.observer.get("grid_override", False) or cfg.feature.observer.get("graph_override", False))
+    if "CnnTaskObserverFactory" in observer_target and not grid_override:
+        if graph_config.__class__.__name__.lower().startswith("cholesky"):
+            grid_override = True
+
+    width = graph_config.n
+    length = get_length_from_config(graph_config)
+
+    observer_kwargs = {}
+    if OmegaConf.select(cfg.feature.observer, "width") is not None:
+        observer_kwargs["width"] = width
+    if OmegaConf.select(cfg.feature.observer, "length") is not None:
+        observer_kwargs["length"] = length
+
+    if grid_override:
         graph_spec.max_candidates = width * length 
 
         observer_factory = hydra.utils.instantiate(
             cfg.feature.observer,
             spec=graph_spec,
-            width=width,
-            length=length,
             prev_frames=cfg.feature.observer.prev_frames,
             grid_override=True,
+            graph_override=True,
+            **observer_kwargs,
         )
     else:
         graph_spec.max_candidates = cfg.feature.observer.get("n_candidates", 1)
         print(f"Setting max candidates to {graph_spec.max_candidates}")
-        observer_factory = hydra.utils.instantiate(cfg.feature.observer)
+        observer_factory = hydra.utils.instantiate(cfg.feature.observer, **observer_kwargs)
         observer_factory.set_graph_spec(graph_spec)
         print(observer_factory.graph_spec)
     return observer_factory, graph_spec
@@ -222,11 +237,16 @@ def make_env(
 
 
     if cfg.algorithm.rollout_steps <= 0:
-        rollout_steps = len(graph) // top_k_candidates
+        if cfg.algorithm.milestone <= 0:
+            rollout_milestones = len(graph) // max(1, top_k_candidates)
+        else:
+            rollout_milestones = math.ceil(len(graph) / cfg.algorithm.milestone)
     else:
-        rollout_steps = cfg.algorithm.rollout_steps
+        rollout_milestones = cfg.algorithm.rollout_steps
     
-    #Og én til javanissen
+    rollout_steps = milestones_to_env_steps(rollout_milestones, cfg.algorithm.milestone, top_k_candidates)
+
+    # Og én til javanissen
     rollout_steps = rollout_steps + 1
 
     env = runtime_env_t(

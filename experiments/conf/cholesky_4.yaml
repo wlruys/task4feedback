@@ -25,7 +25,6 @@ reward:
   random_start: False
   gamma: 0.999
   terminal_reward: True
-  chance: 1.0
   pbrs: True
   sparse_reward_scale: 1.0
   dense_reward_scale: 1.0

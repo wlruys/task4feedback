@@ -58,7 +58,8 @@ class JacobiConfig(GraphConfig):
 
 
 def get_length_from_config(cfg: JacobiConfig):
-    return int(np.ceil(cfg.n * cfg.domain_ratio))
+    domain_ratio = getattr(cfg, "domain_ratio", 1.0)
+    return int(np.ceil(cfg.n * domain_ratio))
 
 
 class JacobiData(DataGeometry):
@@ -1916,8 +1917,11 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         prev_frames: int,
         version: str,
         graph_override: bool = False,
+        grid_override: Optional[bool] = None,
         **_ignored,
     ):
+        if grid_override is not None:
+            graph_override = grid_override
         self.graph_override = graph_override
 
         if self.graph_override and not (spec.max_candidates == width * length):

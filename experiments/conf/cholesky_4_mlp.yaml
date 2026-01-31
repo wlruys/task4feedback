@@ -2,16 +2,19 @@ defaults:
   - cholesky_4.yaml
   - feature: candidate_coordinate
   - network: vector_baseline
+  # - feature: cnn_batch
+  # - network: cond_dilation_cnn_batch
   - _self_
 
 algorithm:
-  rollout_steps: 64
-  minibatch_size: 64
+  rollout_steps: 32
+  minibatch_size: 32
+  milestone: 32
 
 feature:
   observer:
     grid_override: False
-    n_candidates: 64
+    n_candidates: 32
     version: "E"
     add_degree: True
   normalization:
@@ -31,4 +34,4 @@ network:
 
 wandb:
   name: MLP-E_IS
-  project: chol_exp
+  project: test

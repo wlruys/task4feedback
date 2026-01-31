@@ -67,6 +67,7 @@ class RuntimeEnv(EnvBase):
         sample_z: bool = False,
         burn_in_resets: int = 10,
         extra_logging_policy: str = "EFT",
+        milestone: int = 0,
         **_ignored,
     ):
         super().__init__(device=device)
@@ -82,6 +83,7 @@ class RuntimeEnv(EnvBase):
         self.random_start = random_start
         self.sample_z = sample_z
         self.burn_in_resets = burn_in_resets
+        self.milestone = milestone
 
         if location_list is None:
             location_list = [i for i in range(int(only_gpu), len(simulator_factory.input.system))]
@@ -969,34 +971,32 @@ class IncrementalSchedule(RuntimeEnv):
         pbrs: bool = True,
         k: int = 0,
         terminal_reward: bool = True,
-        chance: float = 1.0,
         dense_reward_scale: float = 1,
         sparse_reward_scale: float = 1,
+        milestone: int = 0,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, milestone=milestone, **kwargs)
         self.gamma = gamma
         self.k = k
-        self.chance = chance
         self.terminal_reward = terminal_reward
         self.dense_reward_scale = dense_reward_scale
         self.sparse_reward_scale = sparse_reward_scale
         self.pbrs = pbrs
+        self.milestone = milestone
+        self._primitive_progress = 0
+        self._last_potential = 0.0
+        self.verbose = True
 
-        self.interval_flags = torch.zeros(self.max_length(), dtype=torch.bool)
-        # self.distance_to_last = torch.zeros(self.max_length(), dtype=torch.int32)
-        # self.distance_to_next = torch.zeros(self.max_length(), dtype=torch.int32)
-
-        self._reinitialize_intervals()
-
-    def _reinitialize_intervals(self):
-        if self.chance >= 1.0:
-            self.interval_flags = torch.ones(self.max_length() + 1, dtype=torch.bool)
-            return
-
-        sample = torch.rand(self.max_length())
-        self.interval_flags = sample <= self.chance
-        # TODO: Implement distance to last and next for gamma discounting.
+    def _step_primitives(self, td: TensorDict) -> int:
+        """Return primitive steps represented by this env step (n_candidates)."""
+        try:
+            n_candidates = int(td["observation", "aux", "candidates", "count"][0].item())
+        except Exception:
+            return 1
+        if n_candidates <= 0:
+            return 0
+        return n_candidates
 
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step", self.step_count)
@@ -1007,64 +1007,87 @@ class IncrementalSchedule(RuntimeEnv):
             self.eft_time = self.EFT_baseline
             sim_current = self.simulator.copy()
             sim_current.disable_external_mapper()
-            self.bias = 0.0
+            self._primitive_progress = 0
 
-            if self.k > 0:
-                sim_current.set_steps((self.k) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
-                sim_current.run()
             sim_current.start_drain()
             sim_current.run()
 
-            self.potential = [(-sim_current.time) / (self.EFT_baseline)]
-            self.potential_sum = 0.0
-            if self.chance < 1.0:
-                self._reinitialize_intervals()
+            self._last_potential = (-sim_current.time) / (self.EFT_baseline)
 
         self.step_count += 1
 
         self.map_tasks(td)
 
-        if not self.disable_reward_flag and self.interval_flags[self.step_count - 1]:
-            sim_current = self.simulator.copy()
-            sim_current.disable_external_mapper()
+        if self.milestone <= 0:
+            if not self.disable_reward_flag:
+                sim_current = self.simulator.copy()
+                sim_current.disable_external_mapper()
 
-            if self.k > 0:
-                sim_current.set_steps((self.k) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_current.start_drain()
                 sim_current.run()
-            sim_current.start_drain()
-            sim_current.run()
 
-            self.potential.append((-sim_current.time) / (self.EFT_baseline))
-
-            reward = self.dense_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
-            reward = reward - self.dense_reward_scale*self.bias 
-            if self.verbose:
-                print(f"Step {self.step_count} Reward: {reward:.4f} (P(s)={self.potential[-2]:.4f}, P(s+1)={self.potential[-1]:.4f})")
+                current_potential = (-sim_current.time) / (self.EFT_baseline)
+                reward = self.dense_reward_scale * (self.gamma * current_potential - self._last_potential)
+                self._last_potential = current_potential
+                if self.verbose:
+                    print(f"Step {self.step_count} Reward: {reward:.4f}")
+            else:
+                reward = 0.0
         else:
-            self.potential.append(0.0)
-            reward = 0.0
+            step_primitives = self._step_primitives(td)
+            #print("step_prim", step_primitives)
+            if step_primitives <= 0:
+                reward = 0.0
+            else:
+                self._primitive_progress += step_primitives
+
+                milestone_ticks = self._primitive_progress // self.milestone
+                if milestone_ticks > 0:
+                    self._primitive_progress = self._primitive_progress % self.milestone
+
+                #print(f"prim_prog: {self._primitive_progress}, milestone_ticks: {milestone_ticks}")
+
+                if not self.disable_reward_flag and milestone_ticks > 0:
+                    sim_current = self.simulator.copy()
+                    sim_current.disable_external_mapper()
+
+                    sim_current.start_drain()
+                    sim_current.run()
+
+                    current_potential = (-sim_current.time) / (self.EFT_baseline)
+                    prev_potential = self._last_potential
+                    reward = self.dense_reward_scale * (
+                        (self.gamma ** milestone_ticks) * current_potential - prev_potential
+                    )
+                    self._last_potential = current_potential
+
+                    if self.verbose:
+                        print(
+                            f"Milestone {self.step_count} Reward: {reward:.4f} "
+                            f"(P_prev={prev_potential:.4f}, ticks={milestone_ticks})"
+                        )
+                else:
+                    reward = 0.0
 
         simulator_status = self.simulator.run_until_external_mapping()
         done = simulator_status == fastsim.ExecutionState.COMPLETE
 
         obs = self._get_observation()
         if done:
-            self.potential_sum -= reward
             obs, r, time, improvement = self._handle_done(obs)
+            if self.milestone > 0 and self._primitive_progress > 0 and not self.disable_reward_flag:
+                final_potential = (-time) / (self.EFT_baseline)
+                fractional_ticks = self._primitive_progress / self.milestone
+                prev_potential = self._last_potential
+                dense_partial = self.dense_reward_scale * (
+                    (self.gamma ** fractional_ticks) * final_potential - prev_potential
+                )
+                reward += dense_partial
+                self._last_potential = final_potential
             if self.terminal_reward:
-                reward = self.sparse_reward_scale * r
-                if self.pbrs:
-                    reward = reward + self.dense_reward_scale * (0 - self.potential[-2])
-                    reward = reward - self.dense_reward_scale*self.bias
-                    self.potential_sum += self.dense_reward_scale * (0 - self.potential[-2])
+                reward = reward + self.sparse_reward_scale * r
             if self.verbose:
-                print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f} Sum(Potential): {self.potential_sum:.4f}")
-                # print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f}")
-                deltas = []
-                for i in range(1, len(self.potential)):
-                    deltas.append(self.dense_reward_scale * (self.gamma * self.potential[i] - self.potential[i - 1]))
-                if not self.disable_reward_flag:
-                    print(f"Max pbrs: {max(deltas):.4f}, Min pbrs: {min(deltas):.4f}")
+                print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f}")
 
         buf = td.empty()
         buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())

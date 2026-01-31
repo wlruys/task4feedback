@@ -22,6 +22,11 @@ class MultiHeadCategoricalMasked(Independent):
     has_rsample = False
 
     def __init__(self, *, logits=None, probs=None, head_mask=None, inactive_action: int = -2, validate_args=None):
+        if logits is not None:
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0).clamp(-30.0, 30.0)
+        if probs is not None:
+            probs = torch.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)
+            probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-8)
         base = Categorical(logits=logits, probs=probs, validate_args=validate_args)
         super().__init__(base, reinterpreted_batch_ndims=1, validate_args=validate_args)
 

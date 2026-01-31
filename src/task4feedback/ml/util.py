@@ -24,6 +24,15 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 
+def milestones_to_env_steps(milestones: int, milestone_size: int, max_candidates: int) -> int:
+    """Convert milestone count into an approximate env-step count."""
+    if milestones <= 0:
+        return 0
+    if milestone_size <= 0 or max_candidates <= 0:
+        return int(milestones)
+    return int(math.ceil((milestones * milestone_size) / max_candidates))
+
+
 def compute_advantage(td: TensorDict):
     with torch.no_grad():
         state_values = td["state_value"].view(-1)

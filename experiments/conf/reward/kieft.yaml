@@ -1,5 +1,6 @@
 _target_: task4feedback.ml.env.KStepIncrementalEFT
 _partial_: true
+milestone: ${algorithm.milestone}
 k: 5
 drain: True
 random_start: False

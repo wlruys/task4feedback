@@ -1,5 +1,6 @@
 _target_: task4feedback.ml.env.GeneralizedIncrementalEFT
 _partial_: true
+milestone: ${algorithm.milestone}
 gamma: 0.4
 flip: True
 clip_total: False
