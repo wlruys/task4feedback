@@ -1630,11 +1630,27 @@ class ExternalObserver:
     def get_candidate_action_map(self, output: TensorDict):
         if not self.remapped_candidates:
             return # No remapping needed
-        
-        n_candidates = output["aux", "candidates", "count"][0]
+
+        n_candidates = int(output["aux", "candidates", "count"][0].item())
+        if n_candidates <= 0:
+            return
+
         action_map = output["aux", "candidate_action_map"]
-        action_map.fill_(-1)
-        torch.arange(n_candidates, dtype=torch.int64, out=action_map[:n_candidates])
+        cached_identity = getattr(self, "_candidate_identity_action_map", None)
+        if (
+            cached_identity is None
+            or cached_identity.device != action_map.device
+            or cached_identity.dtype != action_map.dtype
+            or cached_identity.numel() < action_map.numel()
+        ):
+            cached_identity = torch.arange(
+                action_map.numel(),
+                dtype=action_map.dtype,
+                device=action_map.device,
+            )
+            self._candidate_identity_action_map = cached_identity
+
+        action_map[:n_candidates].copy_(cached_identity[:n_candidates])
 
 
     def candidate_observation(self, output: TensorDict):
@@ -1736,11 +1752,11 @@ class CandidateObserver(ExternalObserver):
         #print("Candidate ids:", output["aux", "candidates", "idx"])
         #print("Candidate count:", output["aux", "candidates", "count"][0])
 
-
+        n_candidates = output["aux", "candidates", "count"][0].item()
         output.set_(("nodes", "tasks", "glb"), output["aux", "candidates", "idx"])
         output.set_at_(("nodes", "tasks", "count"), output["aux", "candidates", "count"][0], 0)
 
-        self.get_task_features(output["nodes", "tasks", "glb"], output["nodes", "tasks", "attr"])
+        self.get_task_features(output["nodes", "tasks", "glb"][:n_candidates], output["nodes", "tasks", "attr"][:n_candidates])
 
         #print(output["nodes", "tasks", "attr"])
 
@@ -1878,6 +1894,27 @@ class CnnBatchTaskObserver(ExternalObserver):
         super().__init__(*args, **kwargs)
         # Always remap candidates for CNN batch observer to grid order
         self.remapped_candidates = True 
+        self._task_to_grid_index = None
+
+    def _ensure_task_to_grid_index(self, device: torch.device) -> torch.Tensor:
+        cached = self._task_to_grid_index
+        if cached is not None and cached.device == device:
+            return cached
+
+        graph = self.simulator.input.graph
+        if hasattr(graph, "tasks") and len(graph.tasks) > 0:
+            max_task_id = int(max(graph.tasks.keys()))
+            task_ids = list(graph.tasks.keys())
+        else:
+            max_task_id = int(graph.nx * graph.ny - 1)
+            task_ids = list(range(max_task_id + 1))
+
+        lookup = torch.full((max_task_id + 1,), -1, dtype=torch.int64, device=device)
+        for task_id in task_ids:
+            lookup[int(task_id)] = _grid_index_for_task(graph, int(task_id))
+
+        self._task_to_grid_index = lookup
+        return lookup
 
     def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
         if spec is None:
@@ -1923,12 +1960,37 @@ class CnnBatchTaskObserver(ExternalObserver):
         return obs_tensor
     
     def get_candidate_action_map(self, output):
-        n_candidates = output["aux", "candidates", "count"][0]
-        candidate_ids = output["aux", "candidates", "idx"][:n_candidates]
+        n_candidates = int(output["aux", "candidates", "count"][0].item())
+        if n_candidates <= 0:
+            return
 
-        for i, task_id in enumerate(candidate_ids):
-            idx = _grid_index_for_task(self.simulator.input.graph, task_id.item())
-            output["aux", "candidate_action_map"][i] = idx
+        action_map = output["aux", "candidate_action_map"]
+        candidate_ids = output["aux", "candidates", "idx"][:n_candidates]
+        lookup = self._ensure_task_to_grid_index(candidate_ids.device)
+
+        max_id = int(candidate_ids.max().item())
+        min_id = int(candidate_ids.min().item())
+        if min_id < 0 or max_id >= lookup.numel():
+            graph = self.simulator.input.graph
+            for i, task_id in enumerate(candidate_ids):
+                action_map[i] = _grid_index_for_task(graph, int(task_id.item()))
+            return
+
+        mapped = lookup.index_select(0, candidate_ids.to(torch.int64))
+        if bool((mapped < 0).any()):
+            graph = self.simulator.input.graph
+            missing_ids = torch.unique(candidate_ids[mapped < 0]).tolist()
+            grow_to = int(max(missing_ids))
+            if grow_to >= lookup.numel():
+                grown = torch.full((grow_to + 1,), -1, dtype=lookup.dtype, device=lookup.device)
+                grown[: lookup.numel()] = lookup
+                lookup = grown
+            for task_id in missing_ids:
+                lookup[int(task_id)] = _grid_index_for_task(graph, int(task_id))
+            self._task_to_grid_index = lookup
+            mapped = lookup.index_select(0, candidate_ids.to(torch.int64))
+
+        action_map[:n_candidates].copy_(mapped)
 
     def get_observation(self, output: Optional[TensorDict] = None):
         graph = self.simulator.input.graph

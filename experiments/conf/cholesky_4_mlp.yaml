@@ -11,7 +11,7 @@ algorithm:
 feature:
   observer:
     grid_override: False
-    n_candidates: 2
+    n_candidates: 64
     version: "C"
     add_degree: True
   normalization:
