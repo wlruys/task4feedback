@@ -1,11 +1,11 @@
-cli_base: "python experiments/train.py --config-name 4x4x16_static_mlp.yaml"
+cli_base: "python experiments/train.py --config-name 8x8x128_dynamic_circle_cnn.yaml"
 
 packs:
   - name: wbconfig
     options:
       - wandb:
-          project: stencil_mlp_feature
-        tag: "stencil-MLP-Reward"
+          project: stencil_cnn_feature_dynamic_circle
+        tag: "stencil-CNN-Feature"
   - name: collections
     options:
       - algorithm:
@@ -26,32 +26,23 @@ packs:
     options:
       - graph:
           config:
-            n: 4
-        tag: "b4"
-  - name: batch
-    options:
-      - feature:
-          observer:
-            n_candidates: 1
-        tag: "c1"
-      - feature:
-          observer:
-            n_candidates: 16
-        tag: "c16"
+            n: 8
+            steps: 128
+        tag: "b8"
   - name: architecture
     options:
-        - feature:
-            observer:
-              version: "A"
-          tag: "Top-Pred-Device"
-        - feature:
-            observer:
-              version: "B"
-          tag: "Top-Pred-Device-Residency"
-        - feature:
-            observer:
-              version: "C"
-          tag: "Top-Pred-Device-Residency-Coord"
+      - feature:
+          observer:
+            version: "A"
+        tag: "Top-Pred-Device"
+      - feature:
+          observer:
+            version: "B"
+        tag: "Top-Pred-Device-Residency"
+      - feature:
+          observer:
+            version: "C"
+        tag: "Top-Pred-Device-Residency-Coord"
   - name: reward
     options:
       - reward:
@@ -69,10 +60,16 @@ packs:
         tag: "1:1:0.1"
       - graph:
           config:
-            boundary_time: 2500
-            interior_time: 20000
+            boundary_time: 250
+            interior_time: 100000
             task_time: 10000
-        tag: "1:2:1"
+        tag: "1:10:0.1"
+      - graph:
+          config:
+            boundary_time: 2500
+            interior_time: 100000
+            task_time: 10000
+        tag: "1:10:1"
   - name: seed
     options:
       - seed: 42

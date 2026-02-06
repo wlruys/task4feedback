@@ -1,0 +1,32 @@
+defaults:
+  - 8x8x128_dynamic_circle.yaml
+  - feature: candidate_coordinate
+  - network: vector_baseline
+  - _self_
+
+algorithm:
+  rollout_steps: 32
+  minibatch_size: 32
+
+feature:
+  observer:
+    grid_override: False
+    n_candidates: 1
+    version: "C"
+  normalization:
+    warmup: 40
+  add_device_load: True
+
+network:
+  layers:
+    state:
+      hidden_channels: [16, 16]
+    actor:
+      hidden_channels: 16
+    critic:
+      hidden_channels: 128
+  critic:
+    add_progress: True
+
+wandb:
+  name: MLP-A_IEFT

@@ -23,7 +23,8 @@ deterministic_torch: true
 reward:
   verbose: False
   random_start: False
-  gamma: 0.99
+  terminal_reward: True
+  gamma: 0.999
 
 graph:
   config:
@@ -45,7 +46,7 @@ algorithm:
   ent_coef: 0.00025
   sample_slices: False
   slice_len: 16
-  gamma: 0.99
+  gamma: 0.999
   lmbda: 0.95
   minibatch_size: 32
   collector: "multi_sync"
@@ -54,7 +55,7 @@ optimizer:
   lr: 1e-3
 
 system:
-  mem: 80e9
+  mem: 999e9
 
 runtime:
   batch_size: 5
@@ -63,16 +64,15 @@ runtime:
 
 wandb:
   enabled: true
-  project: 8x8x128_bump
+  project: 8x8x128_dynamic_circle
   name: CNN-A_IEFT
 
 eval:
-  animation_interval: 0
-  eval_interval: 25
+  animation_interval: 100
+  eval_interval: 100
   max_frames: 400
   video_seconds: 15
   samples: 1
-  pickle_path: ./pickled_evaluation/8x8x128_circle_1:1:1.pkl
 
 sweep:
   n_samples: 10

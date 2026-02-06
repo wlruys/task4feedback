@@ -1,10 +1,10 @@
-cli_base: "python experiments/train.py --config-name 4x4x16_static_mlp.yaml"
+cli_base: "python experiments/train.py --config-name 8x8x128_dynamic_circle_mlp.yaml"
 
 packs:
   - name: wbconfig
     options:
       - wandb:
-          project: stencil_mlp_feature
+          project: stencil_mlp_reward_dynamic_circle
         tag: "stencil-MLP-Reward"
   - name: collections
     options:
@@ -14,8 +14,8 @@ packs:
   - name: entropy
     options:
       - algorithm:
-          ent_coef: 0.00025
-        tag: "e0.00025"
+          ent_coef: 0.0001
+        tag: "e0.0001"
   - name: rollout
     options:
       - algorithm:
@@ -26,8 +26,9 @@ packs:
     options:
       - graph:
           config:
-            n: 4
-        tag: "b4"
+            n: 8
+            steps: 128
+        tag: "b8"
   - name: batch
     options:
       - feature:
@@ -40,18 +41,10 @@ packs:
         tag: "c16"
   - name: architecture
     options:
-        - feature:
-            observer:
-              version: "A"
-          tag: "Top-Pred-Device"
-        - feature:
-            observer:
-              version: "B"
-          tag: "Top-Pred-Device-Residency"
-        - feature:
-            observer:
-              version: "C"
-          tag: "Top-Pred-Device-Residency-Coord"
+      - feature:
+          observer:
+            version: "C"
+        tag: "Top-Pred-Device-Residency-Coord"
   - name: reward
     options:
       - reward:
@@ -59,6 +52,11 @@ packs:
           sparse_reward_scale: 10
           dense_reward_scale: 10
         tag: "pbrs"
+      - reward:
+          pbrs: False
+          sparse_reward_scale: 10
+          dense_reward_scale: 0
+        tag: "sparse"
   - name: block_time
     options:
       - graph:
@@ -69,10 +67,16 @@ packs:
         tag: "1:1:0.1"
       - graph:
           config:
-            boundary_time: 2500
-            interior_time: 20000
+            boundary_time: 250
+            interior_time: 100000
             task_time: 10000
-        tag: "1:2:1"
+        tag: "1:10:0.1"
+      - graph:
+          config:
+            boundary_time: 2500
+            interior_time: 100000
+            task_time: 10000
+        tag: "1:10:1"
   - name: seed
     options:
       - seed: 42
