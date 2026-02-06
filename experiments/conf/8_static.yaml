@@ -1,0 +1,82 @@
+defaults:
+  - graph: static_jacobi
+  - reward: incremental_schedule
+  - system: 4h100
+  - algorithm: ppo
+  - runtime: batch
+  - wandb: default
+  - logging: default
+  - lr_scheduler: none
+  - noise: none
+  - optimizer: adamw
+  - eval: default
+  - _self_
+
+hydra:
+  callbacks:
+    git_info:
+      _target_: train.GitInfo
+
+seed: 256
+deterministic_torch: true
+
+reward:
+  verbose: False
+  random_start: False
+  gamma: 0.999
+  terminal_reward: True
+
+graph:
+  config:
+    n: 8
+    steps: 64
+    level_memory: 98e9
+    boundary_time: 2500
+    interior_time: 10000
+    task_time: 10000
+  env:
+    change_priority: False
+    change_location: True
+    change_duration: False
+    seed: 1
+
+algorithm:
+  num_collections: 1000
+  rollout_steps: 64
+  workers: 4
+  graphs_per_collection: 4
+  ent_coef: 0.0001
+  sample_slices: False
+  gamma: 0.999
+  lmbda: 0.95
+  minibatch_size: 32
+  collector: "multi_sync"
+
+optimizer:
+  lr: 1e-3
+
+system:
+  mem: 99999e9
+
+runtime:
+  batch_size: 5
+  queue_threshold: 5
+  max_in_flight: 64
+
+wandb:
+  enabled: true
+  project: test
+  name: test
+
+eval:
+  animation_interval: 100
+  eval_interval: 100
+  samples: 1
+
+sweep:
+  n_samples: 10
+  task_th: 0.4
+  level_size_step: 1e9
+  start_mem: 1e9
+  end_mem: 200e9
+  exps: ["EFT", "GlbAvg", "Oracle", "BlockCyclic", "ParMETIS", "Quad"]
