@@ -36,12 +36,14 @@ class MultiHeadCategoricalMasked(Independent):
         if head_mask is None:
             head_mask = torch.ones(base.batch_shape, dtype=torch.bool, device=device)
         else:
-            head_mask = head_mask.to(device).to(torch.bool)
+            head_mask = head_mask.to(device=device, dtype=torch.bool)
             try:
                 head_mask = head_mask.expand(base.batch_shape)
             except RuntimeError as e:
                 raise ValueError(f"head_mask with shape {head_mask.shape} cannot be broadcast to distribution batch shape {base.batch_shape}") from e
         self._head_mask = head_mask
+        # Cache a cheap fast-path flag for common fully-active masks.
+        self._all_heads_active = bool(head_mask.all().item())
 
     def _broadcast_to(self, t: torch.Tensor, target_shape) -> torch.Tensor:
         #print("MASKED MULTIHEAD CATEGORICAL SAMPLE")
@@ -54,20 +56,22 @@ class MultiHeadCategoricalMasked(Independent):
 
     def sample(self, sample_shape=torch.Size()):
         out = self.base_dist.sample(sample_shape)
-        mask = self._broadcast_to(out, out.shape)       
-        if mask.dtype is not torch.bool:
-            mask = mask.to(torch.bool)
+        if self._all_heads_active:
+            return out
+        mask = self._broadcast_to(out, out.shape)
         #print(f"Mask Shape: {mask.shape}, Output Shape: {out.shape}")
         #print(f"Sample Mask: {mask}")
-        out = torch.where(mask, out, torch.full_like(out, self._inactive_action))
+        out = out.masked_fill(~mask, self._inactive_action)
         #print(f"MultiHeadCategoricalMasked sample: {out}")
         return out
     
     @property
     def mode(self):
         m = self.base_dist.logits.argmax(dim=-1)
+        if self._all_heads_active:
+            return m
         mask = self._broadcast_to(m, m.shape)
-        out = torch.where(mask, m, torch.full_like(m, self._inactive_action))
+        out = m.masked_fill(~mask, self._inactive_action)
         #print(f"MultiHeadCategoricalMasked mode: {out}")
         #print(f"Mode Mask: {mask}")
         return out
@@ -75,25 +79,29 @@ class MultiHeadCategoricalMasked(Independent):
     @property
     def mean(self):
         mean = self.base_dist.mean
+        if self._all_heads_active:
+            return mean
         mask = self._broadcast_to(mean, mean.shape)
-        return torch.where(mask, mean, torch.full_like(mean, self._inactive_action))
+        return mean.masked_fill(~mask, self._inactive_action)
     
     @property
     def deterministic_sample(self):
         return self.mode
     
     def log_prob(self, value):
-        mask = self._broadcast_to(value, value.shape)      
-        if mask.dtype is not torch.bool:
-            mask = mask.to(torch.bool)
-        value = torch.where(mask, value, torch.full_like(value, self._inactive_action))
+        if self._all_heads_active:
+            return self.base_dist.log_prob(value).sum(dim=-1)
+        mask = self._broadcast_to(value, value.shape)
+        value = value.masked_fill(~mask, self._inactive_action)
         per_head = self.base_dist.log_prob(value)
-        return (per_head * mask.to(per_head.dtype)).sum(dim=-1)
+        return per_head.masked_fill(~mask, 0).sum(dim=-1)
     
     def entropy(self):
-        per_head = self.base_dist.entropy()                
+        per_head = self.base_dist.entropy()
+        if self._all_heads_active:
+            return per_head.sum(dim=-1)
         mask = self._broadcast_to(per_head, per_head.shape)
-        return (per_head * mask.to(per_head.dtype)).sum(dim=-1)
+        return per_head.masked_fill(~mask, 0).sum(dim=-1)
     
 
     def with_mask(self, head_mask: torch.Tensor):

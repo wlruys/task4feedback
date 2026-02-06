@@ -374,78 +374,59 @@ class RuntimeEnv(EnvBase):
         return max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
 
     def map_tasks(self, td: TensorDict = None):
+        if td is None:
+            raise ValueError("RuntimeEnv.map_tasks expected a TensorDict, got None.")
+
         actions = td[self.action_n]
-
         candidates = td["observation", "aux", "candidates", "idx"]
-        candidate_mask = td["observation", "aux", "candidate_mask"]
         candidate_action_map = td["observation", "aux", "candidate_action_map"]
-        num_candidates = td["observation", "aux", "candidates", "count"][0].item()
-        remapped_candidates = self.observer.remapped_candidates
+        num_candidates = int(td["observation", "aux", "candidates", "count"][0].item())
+        remapped_candidates = bool(getattr(self.observer, "remapped_candidates", False))
 
-        #candidate_workspace = self.candidate_workspace
-        #num_candidates = self.simulator.get_mappable_candidates(candidate_workspace)
-        if num_candidates == 0:
-            return # Nothing to map
-        
+        if num_candidates <= 0:
+            return
+
         candidates = candidates[:num_candidates]
-        mapping_result = []
-        # print("n:", num_candidates)
-        # print("Candidates", candidates)
-        # print("Actions", actions)
-        # print("Candidate Action Map", candidate_action_map)
-        # print("Candidate Mask", candidate_mask)
-        graph = self.simulator.input.graph
-        static_graph = graph.static_graph
-        #grid_h = static_graph.get_grid_h() if static_graph is not None and static_graph.has_grid_shape() else None
-        #grid_w = static_graph.get_grid_w() if static_graph is not None and static_graph.has_grid_shape() else None
-        # if grid_h is not None and grid_w is not None:
-        #     debug_rows = []
-        #     for i in range(num_candidates):
-        #         task_id = candidates[i].item()
-        #         tag = graph.tasks[task_id].tag if task_id in graph.tasks else -1
-        #         row = tag % grid_h if tag >= 0 else -1
-        #         col = tag // grid_h if tag >= 0 else -1
-        #         mp = self.simulator.get_mapping_priority(task_id)
-        #         debug_rows.append((task_id, tag, row, col, mp))
-        #     print("Candidate Morton Debug (task_id, tag, row, col, mapping_priority)", debug_rows)
-        #     if grid_h * grid_w <= 256:
-        #         order = sorted(debug_rows, key=lambda x: x[4])
-        #         rank_by_tag = {row[1]: rank for rank, row in enumerate(order)}
-        #         grid = [[" ." for _ in range(grid_w)] for _ in range(grid_h)]
-        #         for task_id, tag, row, col, mp in debug_rows:
-        #             if tag >= 0 and 0 <= row < grid_h and 0 <= col < grid_w:
-        #                 grid[row][col] = f"{rank_by_tag.get(tag, -1):2d}"
-        #         print("Morton order grid (rank by mapping_priority):")
-        #         for r in range(grid_h):
-        #             print(" ".join(grid[r]))
+        actions_flat = actions.reshape(-1)
+        action_count = int(actions_flat.numel())
+        device_offset = int(self.only_gpu)
+        get_mapping_priority = self.simulator.get_mapping_priority
+        mapping_result = [None] * num_candidates
 
         if remapped_candidates:
+            action_map = candidate_action_map[:num_candidates]
+            if bool((action_map < 0).any()) or bool((action_map >= action_count).any()):
+                raise RuntimeError(
+                    f"Invalid candidate_action_map values for {num_candidates} candidates: "
+                    f"valid range is [0, {max(action_count - 1, 0)}]."
+                )
+
             for i in range(num_candidates):
-                idx = candidate_action_map[i].item()
-                global_task_id = candidates[i].item()
-                chosen_device = actions[idx].item() + int(self.only_gpu)
-                mapping_priority = self.simulator.get_mapping_priority(global_task_id)
-                #print(f"Idx ({idx}), Global Task ID ({global_task_id}), Old Idx ({old_idx}), Chosen Device ({chosen_device}), Mapping Priority ({mapping_priority})")
-                action = fastsim.Action(
+                mapped_idx = int(action_map[i].item())
+                global_task_id = int(candidates[i].item())
+                chosen_device = int(actions_flat[mapped_idx].item()) + device_offset
+                mapping_priority = get_mapping_priority(global_task_id)
+                mapping_result[i] = fastsim.Action(
                     i,
                     chosen_device,
                     mapping_priority,
                     mapping_priority,
                 )
-                mapping_result.append(action)
         else:
+            if action_count < num_candidates:
+                raise RuntimeError(
+                    f"Action tensor has {action_count} entries, but {num_candidates} candidates are mappable."
+                )
             for i in range(num_candidates):
-                global_task_id = candidates[i].item()
-                chosen_device = actions[i].item() + int(self.only_gpu)
-                mapping_priority = self.simulator.get_mapping_priority(global_task_id)
-                #prnt(f"Idx ({i}), Global Task ID ({global_task_id}), Old Idx ({old_idx}), Chosen Device ({chosen_device}), Mapping Priority ({mapping_priority})")
-                action = fastsim.Action(
+                global_task_id = int(candidates[i].item())
+                chosen_device = int(actions_flat[i].item()) + device_offset
+                mapping_priority = get_mapping_priority(global_task_id)
+                mapping_result[i] = fastsim.Action(
                     i,
                     chosen_device,
                     mapping_priority,
                     mapping_priority,
                 )
-                mapping_result.append(action)
 
         self.simulator.simulator.map_tasks(mapping_result)
 
