@@ -1,0 +1,92 @@
+cli_base: "python experiments/train.py --config-name cholesky_4_mlp.yaml"
+
+packs:
+  - name: wbconfig
+    options:
+      - wandb:
+          project: chol_mlp_reward
+        tag: "Chol-MLP-Reward"
+  - name: collections
+    options:
+      - algorithm:
+          num_collections: 3000
+        tag: "3k"
+  - name: entropy
+    options:
+      - algorithm:
+          ent_coef: 0.0001
+        tag: "e0.0001"
+  - name: rollout
+    options:
+      - algorithm:
+          rollout_steps: 64
+          minibatch_size: 64
+        tag: "mb64-r64"
+  - name: size
+    options:
+      - graph:
+          config:
+            n: 6
+        tag: "b6"
+      - graph:
+          config:
+            n: 12
+        tag: "b12"
+      - graph:
+          config:
+            n: 24
+        tag: "b24"
+  - name: batch
+    options:
+      - feature:
+          observer:
+            n_candidates: 1
+        tag: "c1"
+      - feature:
+          observer:
+            n_candidates: 16
+        tag: "c16"
+      - feature:
+          observer:
+            n_candidates: 32
+        tag: "c32"
+  - name: architecture
+    options:
+        - feature:
+            observer:
+              version: "C"
+          tag: "Top-Pred-Device-Residency-Coord"
+  - name: reward
+    options:
+      - reward:
+          pbrs: True
+          sparse_reward_scale: 10
+          dense_reward_scale: 10
+        tag: "pbrs"
+      - reward:
+          pbrs: False
+          sparse_reward_scale: 10
+          dense_reward_scale: 0
+        tag: "sparse"
+  - name: block_time
+    options:
+      - graph:
+          config:
+            block_time: 1000
+            task_time: 30000
+        tag: "1:0.1"
+      - graph:
+          config:
+            block_time: 20000
+            task_time: 30000
+        tag: "1:2"
+  - name: seed
+    options:
+      - seed: 42
+        tag: "seed42"
+      - seed: 256
+        tag: "seed256"
+      - seed: 1024
+        tag: "seed1024"
+      - seed: 2024
+        tag: "seed2024"

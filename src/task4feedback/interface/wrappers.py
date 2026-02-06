@@ -1721,9 +1721,15 @@ class CandidateObserver(ExternalObserver):
         return obs_tensor
 
     def get_observation(self, output: Optional[TensorDict] = None):
+
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
             raise Warning("Allocating new observation buffer, this is not efficient!")
+
+        #Ensure output is zeroed
+        output["nodes", "tasks", "attr"].zero_()
+        output["aux", "candidates", "idx"].zero_()
+        output["aux", "candidates", "count"].zero_()
 
         # Get mappable candidates
         self.candidate_observation(output)
@@ -1735,6 +1741,8 @@ class CandidateObserver(ExternalObserver):
         output.set_at_(("nodes", "tasks", "count"), output["aux", "candidates", "count"][0], 0)
 
         self.get_task_features(output["nodes", "tasks", "glb"], output["nodes", "tasks", "attr"])
+
+        #print(output["nodes", "tasks", "attr"])
 
         # Auxiliary observations
 
@@ -1929,6 +1937,11 @@ class CnnBatchTaskObserver(ExternalObserver):
             raise Warning("Allocating new observation buffer, this is not efficient!")
         if self.task_ids is None:
             self.task_ids = torch.Tensor([-1 for _ in range(graph.nx * graph.ny)])
+
+        #Ensure output is zeroed
+        output["nodes", "tasks", "attr"].zero_()
+        output["aux", "candidates", "idx"].zero_()
+        output["aux", "candidates", "count"].zero_()
 
         # Get mappable candidates
         self.candidate_observation(output)

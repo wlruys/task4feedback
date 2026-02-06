@@ -302,6 +302,9 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_feature<InDegreeTaskFeature>(m, "InDegreeTaskFeature");
   bind_state_feature<OutDegreeTaskFeature>(m, "OutDegreeTaskFeature");
   bind_state_feature<ReadDegreeTaskFeature>(m, "ReadDegreeTaskFeature");
+  bind_state_feature<TaskInputDegreesFeature>(m, "TaskInputDegreesFeature");
+  bind_state_feature<PredecessorSizeFeature>(m, "PredecessorSizeFeature");
+  bind_state_feature<PredecessorMappedDevice>(m, "PredecessorMappedDeviceFeature");
   bind_state_feature<GPUDurationTaskFeature>(m, "DurationTaskFeature");
   bind_state_feature<OneHotMappedDeviceTaskFeature>(m, "OneHotMappedDeviceTaskFeature");
   bind_state_feature<TaskStateFeature>(m, "TaskStateFeature");
@@ -309,6 +312,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_feature<DepthTaskFeature>(m, "DepthTaskFeature");
   bind_state_feature<TaskDeviceMappedTime>(m, "TaskDeviceMappedTimeFeature");
   bind_state_feature<TaskCoordinates>(m, "TaskCoordinatesFeature");
+  bind_state_feature<TaskReadCoordinate>(m, "TaskReadCoordinateFeature");
   bind_state_feature<TaskDataMappedSize>(m, "TaskDataMappedSizeFeature");
   bind_state_feature<TaskDataMappedCoordinates>(m, "TaskDataMappedCoordinatesFeature");
   bind_state_feature<CandidateVector>(m, "CandidateVectorFeature");

@@ -764,6 +764,7 @@ protected:
   int32_t grid_h{-1};
   int32_t grid_w{-1};
   bool morton_priority_enabled{false};
+  bool random_priority_enabled{false};
 
 public:
   StaticTaskInfo(int32_t num_compute_tasks, int32_t num_data_tasks) {
@@ -1021,6 +1022,14 @@ public:
 
   [[nodiscard]] bool get_morton_priority_enabled() const {
     return morton_priority_enabled;
+  }
+
+  void set_use_random_priority(bool enabled) {
+    random_priority_enabled = enabled;
+  }
+
+  [[nodiscard]] bool use_random_priority() const {
+    return random_priority_enabled;
   }
 
   void add_compute_task(taskid_t id, const std::string &name, const ComputeTaskDepInfo &dep_info,

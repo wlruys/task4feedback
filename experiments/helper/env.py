@@ -94,6 +94,14 @@ def _parse_norm_specs(cfg: DictConfig) -> Tuple[bool, int, List[dict]]:
     return enabled and bool(specs), warmup, specs
 
 
+def _norm_cache_enabled(cfg: DictConfig) -> bool:
+    norm_cfg = getattr(cfg.feature, "normalization", None)
+    if norm_cfg is None:
+        return False
+    # Default is disabled: always recompute normalization stats per env instance.
+    return bool(_oc_to_py(getattr(norm_cfg, "cache", False)))
+
+
 def _setup_observation_norms(
     env: TransformedEnv,
     cfg: DictConfig,
@@ -103,6 +111,7 @@ def _setup_observation_norms(
     if not enabled:
         return None
 
+    use_cache = _norm_cache_enabled(cfg)
     created: Dict[str, ObservationNorm] = {}
     # Build & attach; seed shapes from saved state if available
     for spec in specs:
@@ -110,7 +119,7 @@ def _setup_observation_norms(
         in_keys = [tuple(k) for k in _oc_to_py(spec["in_keys"])]
         eps = float(spec.get("eps", 1e-4))
         standard_normal = bool(spec.get("standard_normal", True))
-        state = normalization.states.get(name) if normalization else None
+        state = normalization.states.get(name) if (use_cache and normalization) else None
 
         norm = ObservationNorm(
             in_keys=in_keys,
@@ -126,7 +135,7 @@ def _setup_observation_norms(
     to_init: List[Tuple[str, ObservationNorm, dict]] = []
     for spec in specs:
         name = spec["name"]
-        state = normalization.states.get(name) if normalization else None
+        state = normalization.states.get(name) if (use_cache and normalization) else None
         if state is not None:
             try:
                 print(f"Loading saved observation norm state {name}")
@@ -138,7 +147,16 @@ def _setup_observation_norms(
 
     if to_init:
         print(f"Initializing observation norms: {[n for n, _, _ in to_init]}")
-        num_iter = max(1, getattr(env, "size", lambda: 1)()) * max(1, int(getattr(cfg.feature.normalization, "warmup", 1)))
+        step_lb_fn = getattr(env, "min_num_steps", None)
+        if callable(step_lb_fn):
+            base_steps = int(step_lb_fn())
+        else:
+            base_env = getattr(env, "base_env", None)
+            if base_env is not None and callable(getattr(base_env, "min_num_steps", None)):
+                base_steps = int(base_env.min_num_steps())
+            else:
+                base_steps = int(getattr(env, "size", lambda: 1)())
+        num_iter = max(1, base_steps) * max(1, int(getattr(cfg.feature.normalization, "warmup", 1)))
         env.disable_reward()
         try:
             for name, norm, spec in to_init:
@@ -222,16 +240,18 @@ def make_env(
 
 
     if cfg.algorithm.rollout_steps <= 0:
-        rollout_steps = len(graph) // top_k_candidates
+        # Default to task count as a transition budget. Keep independent of candidate batch size.
+        rollout_steps = len(graph)
     else:
-        rollout_steps = cfg.algorithm.rollout_steps
-    
-    #Og én til javanissen
-    rollout_steps = rollout_steps + 1
+        # Treat rollout_steps as an explicit number of environment transitions.
+        rollout_steps = int(cfg.algorithm.rollout_steps)
 
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),
         device="cpu",
+        random_start=False,
+        random_offset=False,
+        offset=0,
         change_priority=cfg.graph.env.change_priority if hasattr(cfg.graph.env, "change_priority") else False,
         change_location=cfg.graph.env.change_location if hasattr(cfg.graph.env, "change_location") else False,
         change_duration=cfg.graph.env.change_duration if hasattr(cfg.graph.env, "change_duration") else False,
@@ -255,4 +275,9 @@ def make_env(
     else:
         new_norm = None
 
-    return (env, new_norm) if new_norm is not None else env
+    # Keep the historical API shape expected by callers:
+    # - first call (normalization=None): return (env, norm_state)
+    # - subsequent calls (normalization provided): return env
+    if normalization is None and new_norm is not None:
+        return env, new_norm
+    return env

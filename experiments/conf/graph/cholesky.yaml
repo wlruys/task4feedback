@@ -12,6 +12,8 @@ config:
   permute_idx: 0
   vcu_usage: 1.0
   task_internal_memory: 0
+  morton_priority_enabled: false
+  use_random_priority: false
   task_time: 1000 
   block_time: 500
   verbose: False 

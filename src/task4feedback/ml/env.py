@@ -184,15 +184,32 @@ class RuntimeEnv(EnvBase):
 
     def size(self):
         """
-        Return maximum number of steps in the environment.
-        This is the number of tasks in the graph.
+        Return number of tasks in the active graph.
         """
-        return int(len(self.simulator_factory[self.active_idx].input.graph) // self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+        return len(self.simulator_factory[self.active_idx].input.graph)
+
+    def min_num_steps(self) -> int:
+        """
+        Lower bound on episode steps: ceil(n_tasks / n_candidates).
+        """
+        n_tasks = self.size()
+        max_candidates = max(
+            1,
+            int(self.simulator_factory[self.active_idx].graph_spec.max_candidates),
+        )
+        if n_tasks <= 0:
+            return 0
+        return int((n_tasks + max_candidates - 1) // max_candidates)
+
+    def max_num_steps(self) -> int:
+        """
+        Upper bound on episode steps: one mapping decision per task.
+        """
+        return self.size()
 
     def __len__(self):
         """
-        Return maximum number of steps in the environment.
-        This is the number of tasks in the graph.
+        Return number of tasks in the active graph.
 
         Note: May not be available in a TransformedEnv.
         """
@@ -322,12 +339,13 @@ class RuntimeEnv(EnvBase):
             self.z_spa = sample_vector(sample=self.sample_z)
             self._rle_next_step = self.step_count + _sample_interval()
 
-        obs.set(self.z_ch_key, self.z_ch)
-        obs.set(self.z_spa_key, self.z_spa)
+        # Store per-transition copies to avoid cross-sample aliasing through shared env tensors.
+        obs.set(self.z_ch_key, self.z_ch.detach().clone())
+        obs.set(self.z_spa_key, self.z_spa.detach().clone())
 
         self.simulator.observer.get_observation(obs)
-        n_tasks = len(self.simulator_factory[self.active_idx].input.graph)
-        progress = step_count / self.size()
+        max_steps = max(1, self.max_num_steps())
+        progress = min(1.0, step_count / max_steps)
         baseline = max(1.0, self.EFT_baseline)
         obs.set_at_(self.progress_key, progress, 0)
         obs.set_at_(self.baseline_key, baseline, 0)
@@ -565,12 +583,14 @@ class RuntimeEnv(EnvBase):
         self.simulator = self.simulator_factory[self.active_idx].create(priority_seed=new_priority_seed, duration_seed=new_duration_seed)
         self.simulator.observer.reset()
         if self.resets < self.burn_in_resets and self.random_start:
-            # Run the simulator for a random number of steps
-            n_steps = random.randint(1, self.size() - 1)
-            self.simulator.disable_external_mapper()
-            self.simulator.set_steps(n_steps)
-            self.simulator.run()
-            self.simulator.enable_external_mapper()
+            # Choose a prefix guaranteed to end before completion.
+            min_steps = self.min_num_steps()
+            if min_steps > 1:
+                n_steps = random.randint(1, min_steps - 1)
+                self.simulator.disable_external_mapper()
+                self.simulator.set_steps(n_steps)
+                self.simulator.run()
+                self.simulator.enable_external_mapper()
 
         simulator_status = self.simulator.run_until_external_mapping()
         assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, f"Unexpected simulator status: {simulator_status}"
@@ -761,7 +781,7 @@ class LookbackKStep(RuntimeEnv):
 
 class SparseLookbackKStep(RuntimeEnv):
 
-    def __init__(self, *args, gamma: float = 1.0, k: int = 5, delay: int = 5, terminal_reward: bool = False, random_offset: bool = False, offset: int = 1, **kwargs):
+    def __init__(self, *args, gamma: float = 1.0, k: int = 5, delay: int = 5, terminal_reward: bool = False, random_offset: bool = False, offset: int = 0, **kwargs):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.k = k
@@ -1080,8 +1100,8 @@ class DelayIncrementalEFT(IncrementalEFT):
         self,
         *args,
         delay: int = 10,
-        random_offset: bool = True,
-        offset: int = 1,
+        random_offset: bool = False,
+        offset: int = 0,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)

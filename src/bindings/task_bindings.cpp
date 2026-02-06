@@ -76,6 +76,11 @@ void init_task_ext(nb::module_ &m) {
       .def("set_morton_priority_enabled", &StaticTaskInfo::set_morton_priority_enabled,
            "enabled"_a)
       .def("get_morton_priority_enabled", &StaticTaskInfo::get_morton_priority_enabled)
+      .def("set_use_random_priority", &StaticTaskInfo::set_use_random_priority, "enabled"_a)
+      .def("use_random_priority", &StaticTaskInfo::use_random_priority)
+      .def("set_random_priority_enabled", &StaticTaskInfo::set_use_random_priority,
+           "enabled"_a)
+      .def("get_random_priority_enabled", &StaticTaskInfo::use_random_priority)
       .def("update_variants", &StaticTaskInfo::update_variants, "graph"_a); // This is the only method that modified StaticTaskInfo once created
 
   nb::class_<RuntimeTaskInfo>(m, "RuntimeTaskInfo")

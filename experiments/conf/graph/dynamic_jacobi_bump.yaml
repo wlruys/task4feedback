@@ -14,6 +14,8 @@ config:
   permute_idx: 0
   vcu_usage: 1.0
   task_internal_memory: 0 
+  morton_priority_enabled: true
+  use_random_priority: false
   workload:
     _target_: task4feedback.graphs.base.BumpWorkload
   workload_args:

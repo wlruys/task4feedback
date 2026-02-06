@@ -32,7 +32,7 @@ reward:
 
 graph:
   config:
-    n: 20
+    n: 5
     level_memory: 99e9
     block_time: 10000
     task_time: 10000
@@ -47,12 +47,11 @@ algorithm:
   rollout_steps: 16
   workers: 4
   graphs_per_collection: 4
-  ent_coef: 0.001
+  ent_coef: 0.0001
   sample_slices: False
-  slice_len: 16 # only used if sample_slices is True (LSTM)
   gamma: 0.999
   lmbda: 0.95
-  minibatch_size: 16
+  minibatch_size: 64
   collector: "multi_sync"
 
 optimizer:
@@ -64,7 +63,7 @@ system:
 runtime:
   batch_size: 5
   queue_threshold: 5
-  max_in_flight: 64
+  max_in_flight: 16
 
 wandb:
   enabled: true

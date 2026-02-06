@@ -26,9 +26,14 @@ protected:
   std::vector<timecount_t> task_durations;
   std::vector<priority_t> mapping_priority;
 
-  [[nodiscard]] virtual timecount_t sample_priority(taskid_t task_id) const {
-    // generate uniform random number between 0 and max tasks - 1
-    std::uniform_int_distribution<timecount_t> dist(0, n_tasks - 1);
+  [[nodiscard]] virtual priority_t sample_priority(taskid_t task_id) const {
+    (void)task_id;
+    if (n_tasks <= 0) {
+      return 0;
+    }
+    // Generate a priority in [0, n_tasks - 1] from the priority RNG.
+    std::uniform_int_distribution<priority_t> dist(
+        0, static_cast<priority_t>(n_tasks - 1));
     return dist(pgen);
   }
 
@@ -190,6 +195,13 @@ public:
   }
 
   virtual void generate_priority(StaticTaskInfo &task_info) {
+    if (task_info.use_random_priority()) {
+      for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
+        set_priority(task_id, sample_priority(task_id));
+      }
+      return;
+    }
+
     if (!task_info.get_morton_priority_enabled()) {
       for (taskid_t task_id = 0; task_id < n_tasks; task_id++) {
         // TODO(wlr, jae): RESTORE THIS, add external load and save of priorities to override it

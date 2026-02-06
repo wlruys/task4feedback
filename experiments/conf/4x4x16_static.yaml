@@ -28,8 +28,8 @@ reward:
 
 graph:
   config:
-    n: 8
-    steps: 128
+    n: 4
+    steps: 16
     level_memory: 98e9
     boundary_time: 2500
     interior_time: 10000
@@ -42,12 +42,11 @@ graph:
 
 algorithm:
   num_collections: 1000
-  rollout_steps: 32
+  rollout_steps: 64
   workers: 4
   graphs_per_collection: 4
-  ent_coef: 0.00025
+  ent_coef: 0.0001
   sample_slices: False
-  slice_len: 16 # only used if sample_slices is True (LSTM)
   gamma: 0.999
   lmbda: 0.95
   minibatch_size: 32
@@ -62,7 +61,7 @@ system:
 runtime:
   batch_size: 5
   queue_threshold: 5
-  max_in_flight: 64
+  max_in_flight: 16
 
 wandb:
   enabled: true

@@ -55,6 +55,8 @@ class JacobiConfig(GraphConfig):
     bytes_per_element: int = 4  # Assuming float32 data type
     verbose: bool = True
     boundary_in_memory_calc: bool = True
+    morton_priority_enabled: bool = True
+    use_random_priority: bool = False
 
 
 def get_length_from_config(cfg: JacobiConfig):
@@ -446,7 +448,8 @@ class JacobiGraph(ComputeDataGraph):
         super().finalize()
         if self.static_graph is not None:
             self.static_graph.set_grid_shape(self.ny, self.nx)
-            self.static_graph.set_morton_priority_enabled(True)
+            self.static_graph.set_morton_priority_enabled(self.config.morton_priority_enabled)
+            self.static_graph.set_use_random_priority(self.config.use_random_priority)
 
     def _apply_workload_variant(self, system: System):
         # print("Building custom variant for system", system)
@@ -1854,25 +1857,17 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
 
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
         if "A" in version:
-            pass 
-            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
         elif "B" in version:
-            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+            task_feature_factory.add(fastsim.ReadDataLocationFeature)
         elif "C" in version:
-            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "E" in version:
-            #task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+            task_feature_factory.add(fastsim.ReadDataLocationFeature)
+            task_feature_factory.add(fastsim.TaskReadCoordinateFeature) 
 
 
         data_feature_factory = FeatureExtractorFactory()
@@ -1926,45 +1921,17 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         task_feature_factory = FeatureExtractorFactory()
 
         if "A" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
-            # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
         elif "B" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+            task_feature_factory.add(fastsim.ReadDataLocationFeature)
         elif "C" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
-            # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "D" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
-            # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "E" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "F" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "G" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
-            # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
-        elif "H" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
-            task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
-            task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+            task_feature_factory.add(fastsim.ReadDataLocationFeature)
+            task_feature_factory.add(fastsim.TaskReadCoordinateFeature) 
 
         # task_feature_factory.add(fastsim.TaskMeanDurationFeature)
         # task_feature_factory.add(fastsim.CandidateVectorFeature)

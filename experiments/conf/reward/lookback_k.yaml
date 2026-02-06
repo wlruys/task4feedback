@@ -3,3 +3,5 @@ _partial_: true
 k: 5
 random_start: False
 terminal_reward: False
+random_offset: False
+offset: 0

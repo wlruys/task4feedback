@@ -2,6 +2,6 @@ _target_: task4feedback.ml.env.DelayIncrementalEFT
 _partial_: true
 delay: 10
 random_offset: False
-offset: 1
+offset: 0
 gamma: 1
 random_start: false

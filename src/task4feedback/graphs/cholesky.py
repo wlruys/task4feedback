@@ -51,6 +51,8 @@ class CholeskyConfig(GraphConfig):
     bytes_per_element: int = 4  # Assuming float32 data type
     verbose: bool = True
     boundary_in_memory_calc: bool = True
+    morton_priority_enabled: bool = False
+    use_random_priority: bool = False
 
 
 
@@ -446,7 +448,8 @@ class CholeskyGraph(ComputeDataGraph):
         super().finalize()
         if self.static_graph is not None:
             self.static_graph.set_grid_shape(self.ny, self.nx)
-            self.static_graph.set_morton_priority_enabled(False)
+            self.static_graph.set_morton_priority_enabled(self.config.morton_priority_enabled)
+            self.static_graph.set_use_random_priority(self.config.use_random_priority)
 
     def _apply_workload_variant(self, system: System):
         # print("Building custom variant for system", system)

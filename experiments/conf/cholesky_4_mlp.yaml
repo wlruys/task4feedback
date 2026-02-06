@@ -11,11 +11,11 @@ algorithm:
 feature:
   observer:
     grid_override: False
-    n_candidates: 64
-    version: "E"
+    n_candidates: 2
+    version: "C"
     add_degree: True
   normalization:
-    warmup: 20
+    warmup: 40
   add_device_load: True
 
 network:
