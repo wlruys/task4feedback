@@ -4,7 +4,7 @@ packs:
   - name: wbconfig
     options:
       - wandb:
-          project: stencil_cnn_reward
+          project: stencil_cnn_feature
         tag: "stencil-CNN-Reward"
   - name: collections
     options:
