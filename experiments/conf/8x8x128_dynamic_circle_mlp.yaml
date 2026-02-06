@@ -8,6 +8,9 @@ algorithm:
   rollout_steps: 32
   minibatch_size: 32
 
+system:
+  mem: 999e9
+
 feature:
   observer:
     grid_override: False

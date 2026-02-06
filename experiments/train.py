@@ -130,7 +130,7 @@ def configure_training(cfg: DictConfig):
         )
 
 
-@hydra.main(config_path="conf", config_name="cholesky_4_mlp.yaml", version_base=None)
+@hydra.main(config_path="conf", config_name="8x8x128_dynamic_circle_mlp.yaml", version_base=None)
 def main(cfg: DictConfig):
     # cfg.graph.config.workload_args.traj_type exist
     # if cfg.graph.type == "jacobi":
