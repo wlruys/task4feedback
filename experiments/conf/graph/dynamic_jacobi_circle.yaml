@@ -17,9 +17,10 @@ config:
   task_internal_memory: 0 
   morton_priority_enabled: true
   use_random_priority: false
-  # task_time: 1000 
-  # boundary_time: 1000
-  # interior_time: 1000 
+  # Keep keys present so Hydra accepts command-line overrides.
+  task_time: null
+  boundary_time: null
+  interior_time: null
   workload:
     _target_: task4feedback.graphs.base.TrajectoryWorkload
   workload_args:
