@@ -36,6 +36,10 @@ packs:
           config:
             n: 24
         tag: "b24"
+      - graph:
+          config:
+            n: 48
+        tag: "b48"
   - name: batch
     options:
       - feature:
@@ -71,14 +75,14 @@ packs:
     options:
       - graph:
           config:
-            block_time: 1000
+            block_time: 40000
             task_time: 30000
-        tag: "1:0.1"
+        tag: "1:4"
       - graph:
           config:
-            block_time: 20000
+            block_time: 80000
             task_time: 30000
-        tag: "1:2"
+        tag: "1:8"
   - name: seed
     options:
       - seed: 42
