@@ -772,7 +772,14 @@ def make_random_walk_trajectory(
     return trajectory
 
 
-def make_circle_trajectory(geom: Geometry, num_steps: int, radius: float = 0.5, center=None, phase_length=None):
+def make_circle_trajectory(
+    geom: Geometry,
+    num_steps: int,
+    radius: float = 0.5,
+    center=None,
+    phase_length=None,
+    max_angle: Optional[float] = None,
+):
     if center is None:
         # Get center of mesh
         center = np.array(
@@ -788,10 +795,14 @@ def make_circle_trajectory(geom: Geometry, num_steps: int, radius: float = 0.5, 
     # Adjust radius as a fraction of the domain size
     radius = min(width, height) * radius
 
-    if phase_length is None:
-        max_angle = 2 * np.pi
-    else:
-        max_angle = (num_steps / phase_length) * 2 * np.pi
+    # Backward compatible controls:
+    # - explicit max_angle overrides everything
+    # - otherwise phase_length controls number of rotations
+    if max_angle is None:
+        if phase_length is None:
+            max_angle = 2 * np.pi
+        else:
+            max_angle = (num_steps / phase_length) * 2 * np.pi
 
     # Generate circle trajectory
     theta = np.linspace(0, max_angle, num_steps)
