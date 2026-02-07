@@ -4,6 +4,7 @@ from .base import *
 from typing import Callable, Optional, Self
 from collections import defaultdict
 from .jacobi import *
+from .jacobi import _parse_numeric_like
 from .base import register_graph
 from ..interface.types import _bytes_to_readable
 from dataclasses import dataclass, field
@@ -21,6 +22,14 @@ class DynamicJacobiConfig(JacobiConfig):
     level_chunks: int = 1
     r_interior: float = None
     r_boundary: float = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.level_chunks = _parse_numeric_like(self.level_chunks, "level_chunks", int)
+        if self.r_interior is not None:
+            self.r_interior = _parse_numeric_like(self.r_interior, "r_interior", float)
+        if self.r_boundary is not None:
+            self.r_boundary = _parse_numeric_like(self.r_boundary, "r_boundary", float)
 
 
 class DynamicJacobiData(JacobiData):

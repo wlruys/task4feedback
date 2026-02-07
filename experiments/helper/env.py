@@ -43,7 +43,7 @@ def create_observer_factory(cfg: DictConfig):
 
     if cfg.feature.observer.get("grid_override", False):
         width = graph_config.n
-        length = get_length_from_config(graph_config)
+        length = graph_config.n 
         graph_spec.max_candidates = width * length 
 
         observer_factory = hydra.utils.instantiate(
@@ -213,11 +213,8 @@ def make_env(
     normalization: Optional[NormalizationDetails] = None,
     eval=False,
 ) -> RuntimeEnv | tuple[RuntimeEnv, NormalizationDetails]:
-    from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
     import networkx as nx
     from networkx.drawing.nx_pydot import graphviz_layout
-
-    gmsh.initialize()
 
     s = create_system(cfg)
     graph = graph_builder.function(s)

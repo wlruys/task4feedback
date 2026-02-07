@@ -4,7 +4,7 @@ packs:
   - name: wbconfig
     options:
       - wandb:
-          project: stencil_mlp_feature_dynamic_circle
+          project: stencil_mlp_feature_dynamic_circle_jae
         tag: "stencil-MLP-Feature"
   - name: collections
     options:

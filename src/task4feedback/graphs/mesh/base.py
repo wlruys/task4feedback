@@ -240,10 +240,9 @@ def generate_quad_mesh(L: float = 1.0,
 
     print(f"Generating quad mesh with {nx} x {ny} elements.")
 
-    gmsh.option.set_number("Mesh.RecombineAll", 1)
-    gmsh.option.set_number("Mesh.Algorithm", 8)
-
     with pygmsh.geo.Geometry() as geom:
+        gmsh.option.set_number("Mesh.RecombineAll", 1)
+        gmsh.option.set_number("Mesh.Algorithm", 8)
         rect = geom.add_rectangle(0.0, L, 0.0, W, 0.0)
         c0, c1, c2, c3 = rect.curves
         geom.set_transfinite_curve(c0, nx + 1, "Progression", 1.0)  

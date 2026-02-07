@@ -189,7 +189,7 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
             width=graph_config.n,
             add_device_load=add_device_load,
             n_devices=cfg.system.n_devices,
-            length=get_length_from_config(graph_config),
+            length=graph_config.n,
             feature_config=feature_cfg,
             _recursive_=False,
         )
@@ -233,7 +233,7 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
         policy_output_module = instantiate(
             actor_layer,
             width=graph_config.n,
-            length=get_length_from_config(graph_config),
+            length=graph_config.n,
             input_dim=output_dim,
             output_dim=cfg.system.n_devices - 1,
             _recursive_=False,
@@ -284,7 +284,7 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
             n_devices=cfg.system.n_devices,
             _recursive_=False,
             width=graph_config.n,
-            length=get_length_from_config(graph_config),
+            length=graph_config.n,
         )
         reference_state_module = instantiate(
             state_layer,
@@ -294,7 +294,7 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
             n_devices=cfg.system.n_devices,
             _recursive_=False,
             width=graph_config.n,
-            length=get_length_from_config(graph_config),
+            length=graph_config.n,
         )
     else:
         critic_state_module = instantiate(

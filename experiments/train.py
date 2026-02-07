@@ -31,6 +31,29 @@ import random
 
 from helper.eval import EvalLocation, lookup_eval_location
 
+
+def _resolve_wandb_dir(cfg: DictConfig) -> str:
+    requested = Path(str(cfg.wandb.dir)).expanduser()
+    hydra_output_dir = Path(HydraConfig.get().runtime.output_dir)
+    candidates = [
+        requested,
+        Path.cwd() / "logs" / "wandb",
+        hydra_output_dir / "wandb",
+    ]
+
+    for path in candidates:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / ".wandb_write_test"
+            probe.touch()
+            probe.unlink()
+            return str(path)
+        except Exception:
+            continue
+
+    return str(hydra_output_dir)
+
+
 class GitInfo(Callback):
     def on_job_start(self, config: DictConfig, **kwargs) -> None:
         try:
@@ -96,7 +119,7 @@ def configure_training(cfg: DictConfig):
         try:
             arch_file = Path(HydraConfig.get().runtime.output_dir) / "model_arch.txt"
             arch_file.write_text(str(model))
-            wandb.save(str(arch_file))
+            wandb.save(str(arch_file), base_path=str(arch_file.parent))
         except Exception as e:
             print(f"Failed to save model architecture: {e}")
         try:
@@ -184,12 +207,15 @@ def main(cfg: DictConfig):
     #     print(f"Best Policy name: {cfg.logging.best_policy_name}")
 
     if cfg.wandb.enabled:
+        wandb_dir = _resolve_wandb_dir(cfg)
+        if Path(wandb_dir).resolve() != Path(str(cfg.wandb.dir)).expanduser().resolve():
+            print(f"W&B dir {cfg.wandb.dir} is not writable; using {wandb_dir}")
         wandb.init(
             project=cfg.wandb.project,
             config=OmegaConf.to_container(cfg, resolve=True),
             name=cfg.wandb.name,
             group=cfg.wandb.group,
-            dir=cfg.wandb.dir,
+            dir=wandb_dir,
             tags=cfg.wandb.tags,
         )
 
@@ -199,7 +225,7 @@ def main(cfg: DictConfig):
             for fname in ["git_sha.txt", "git_diff.patch", "git_dirty.txt"]:
                 git_file = hydra_output_dir / fname
                 if git_file.exists():
-                    wandb.save(str(git_file))
+                    wandb.save(str(git_file), base_path=str(hydra_output_dir))
 
     torch.manual_seed(cfg.seed)
     numpy.random.seed(cfg.seed)

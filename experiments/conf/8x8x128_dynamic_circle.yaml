@@ -32,9 +32,9 @@ graph:
     n: 8
     level_memory: 44e9
     boundary_width: 0.25
-    boundary_complexity: 1,
-    arithmetic_intensity: 595.5555555,
-    task_internal_memory: 0,
+    boundary_complexity: 1
+    arithmetic_intensity: 595.5555555
+    task_internal_memory: 0
     arithmetic_complexity: 1
 
   env:

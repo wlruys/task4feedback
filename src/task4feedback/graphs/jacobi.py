@@ -31,6 +31,22 @@ from collections import deque
 import math
 
 
+def _parse_numeric_like(value, name: str, cast):
+    if isinstance(value, str):
+        token = value.strip()
+        if token.endswith(","):
+            token = token[:-1].strip()
+        if token == "":
+            raise ValueError(f"{name} must not be empty")
+        try:
+            if cast is int:
+                return int(float(token))
+            return float(token)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be numeric, got {value!r}") from exc
+    return value
+
+
 @dataclass
 class JacobiConfig(GraphConfig):
     steps: int = 1
@@ -44,12 +60,12 @@ class JacobiConfig(GraphConfig):
     level_memory: int = 1000000
     randomness: float = 0.0
     permute_idx: int = 0
-    task_time: Optional[int] = None
-    interior_time: Optional[int] = None
-    boundary_time: Optional[int] = None
+    task_time: Optional[float] = None
+    interior_time: Optional[float] = None
+    boundary_time: Optional[float] = None
     interior_size: Optional[int] = None
     boundary_size: Optional[int] = None
-    compute_time: Optional[int] = None
+    compute_time: Optional[float] = None
     vcu_usage: float = 1.0
     task_internal_memory: int = 0
     bytes_per_element: int = 4  # Assuming float32 data type
@@ -57,6 +73,36 @@ class JacobiConfig(GraphConfig):
     boundary_in_memory_calc: bool = True
     morton_priority_enabled: bool = True
     use_random_priority: bool = False
+
+    def __post_init__(self):
+        self.steps = _parse_numeric_like(self.steps, "steps", int)
+        self.n = _parse_numeric_like(self.n, "n", int)
+        self.level_memory = _parse_numeric_like(self.level_memory, "level_memory", int)
+        self.permute_idx = _parse_numeric_like(self.permute_idx, "permute_idx", int)
+        self.task_internal_memory = _parse_numeric_like(self.task_internal_memory, "task_internal_memory", int)
+        self.bytes_per_element = _parse_numeric_like(self.bytes_per_element, "bytes_per_element", int)
+
+        self.domain_ratio = _parse_numeric_like(self.domain_ratio, "domain_ratio", float)
+        self.arithmetic_intensity = _parse_numeric_like(self.arithmetic_intensity, "arithmetic_intensity", float)
+        self.arithmetic_complexity = _parse_numeric_like(self.arithmetic_complexity, "arithmetic_complexity", float)
+        self.memory_intensity = _parse_numeric_like(self.memory_intensity, "memory_intensity", float)
+        self.boundary_width = _parse_numeric_like(self.boundary_width, "boundary_width", float)
+        self.boundary_complexity = _parse_numeric_like(self.boundary_complexity, "boundary_complexity", float)
+        self.randomness = _parse_numeric_like(self.randomness, "randomness", float)
+        self.vcu_usage = _parse_numeric_like(self.vcu_usage, "vcu_usage", float)
+
+        if self.task_time is not None:
+            self.task_time = _parse_numeric_like(self.task_time, "task_time", float)
+        if self.interior_time is not None:
+            self.interior_time = _parse_numeric_like(self.interior_time, "interior_time", float)
+        if self.boundary_time is not None:
+            self.boundary_time = _parse_numeric_like(self.boundary_time, "boundary_time", float)
+        if self.interior_size is not None:
+            self.interior_size = _parse_numeric_like(self.interior_size, "interior_size", int)
+        if self.boundary_size is not None:
+            self.boundary_size = _parse_numeric_like(self.boundary_size, "boundary_size", int)
+        if self.compute_time is not None:
+            self.compute_time = _parse_numeric_like(self.compute_time, "compute_time", float)
 
 
 def get_length_from_config(cfg: JacobiConfig):
@@ -178,6 +224,8 @@ class JacobiData(DataGeometry):
         system: Optional[System] = None,
     ):
         super().__init__(geometry, DataBlocks(), GeometryIDMap())
+        if hasattr(config, "__post_init__"):
+            config.__post_init__()
         self.config = config
         self._create_blocks(system=system)
 

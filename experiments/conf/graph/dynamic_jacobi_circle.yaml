@@ -11,8 +11,8 @@ config:
   boundary_complexity: 1
   memory_intensity: 0
   level_memory: 74000000000
-  r_boundary: 1,
-  r_interior: 0.1,
+  r_boundary: 1
+  r_interior: 0.1
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0

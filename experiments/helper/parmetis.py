@@ -17,7 +17,7 @@ def run_parmetis(
     d2d_bandwidth = cfg.system.d2d_bw
     graph_config = hydra.utils.instantiate(cfg.graph.config)
     width = graph_config.n
-    length = get_length_from_config(graph_config)
+    length = graph_config.n
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
