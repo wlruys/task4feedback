@@ -9,8 +9,8 @@ packs:
   - name: collections
     options:
       - algorithm:
-          num_collections: 3000
-        tag: "3k"
+          num_collections: 10000
+        tag: "10k"
   - name: entropy
     options:
       - algorithm:
@@ -19,15 +19,15 @@ packs:
   - name: rollout
     options:
       - algorithm:
-          rollout_steps: 64
-          minibatch_size: 64
-        tag: "mb64-r64"
+          rollout_steps: 32
+          minibatch_size: 32
+        tag: "mb32-r32"
   - name: size
     options:
       - graph:
           config:
             n: 8
-            steps: 128
+            steps: 256
         tag: "b8"
   - name: batch
     options:
@@ -39,6 +39,10 @@ packs:
           observer:
             n_candidates: 16
         tag: "c16"
+      - feature:
+          observer:
+            n_candidates: 64
+        tag: "c64"
   - name: architecture
     options:
       - feature:
@@ -64,29 +68,30 @@ packs:
     options:
       - graph:
           config:
-            boundary_time: 250
-            interior_time: 10000
-            task_time: 10000
+            r_interior: 1
+            r_boundary: 0.1
         tag: "1:1:0.1"
       - graph:
           config:
-            boundary_time: 250
-            interior_time: 100000
-            task_time: 10000
+            r_interior: 10
+            r_boundary: 0.1
         tag: "1:10:0.1"
       - graph:
           config:
-            boundary_time: 2500
-            interior_time: 100000
-            task_time: 10000
-        tag: "1:10:1"
+            r_interior: 1
+            r_boundary: 1
+        tag: "1:1:1"
   - name: seed
     options:
       - seed: 42
         tag: "seed42"
-      - seed: 256
-        tag: "seed256"
-      - seed: 1024
-        tag: "seed1024"
-      - seed: 2024
-        tag: "seed2024"
+      - seed: 923475
+        tag: "seed923475"
+      - seed: 23404847
+        tag: "seed23404847"
+      - seed: 1257345
+        tag: "seed1257345"
+      - seed: 1110004433
+        tag: "seed1110004433"
+      - seed: 3442234677
+        tag: "seed3442234677"

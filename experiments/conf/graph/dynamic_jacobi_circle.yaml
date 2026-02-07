@@ -2,15 +2,17 @@ mesh:
   _target_: task4feedback.graphs.mesh.generate_quad_mesh
 config:
   _target_: task4feedback.graphs.dynamic_jacobi.DynamicJacobiConfig
-  steps: 240
-  n: 16
+  steps: 256
+  n: 8
   domain_ratio: 1.0
   arithmetic_intensity: 595.5555555
   arithmetic_complexity: 1.0
   boundary_width: 0.25
   boundary_complexity: 1
   memory_intensity: 0
-  level_memory: 44e9
+  level_memory: 74000000000
+  r_boundary: 1,
+  r_interior: 0.1,
   randomness: 0.0
   permute_idx: 0
   vcu_usage: 1.0
@@ -29,8 +31,8 @@ config:
     upper_bound: 5
     scale: 0.3
     traj_specifics:
-      radius: 0.5
-      max_angle: 1
+      radius: 0.3
+      phase_length: 128
 init:
   partitioner: metis
   nparts: 4

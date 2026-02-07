@@ -1,17 +1,17 @@
 # conf/system/uniform.yaml
 _target_: task4feedback.interface.uniform_connected_devices
 n_devices: 5
-h2d_bw: 64e9
-d2d_bw: 450e9
+h2d_bw: 129000000000
+d2d_bw: 54000000000
 latency: 1
 h2d_links: 1
 d2d_links: 1
 cpu_copyengines: 2
 device_copyengines: 2
-mem: 80e9
+mem: 96000000000
 system_specs:
-  fastest_flops: 67e12
-  slowest_flops: 67e12
-  gpu_flop: 67e12
-  fastest_gmbw: 3350e9
-  slowest_gmbw: 3350e9
+  fastest_flops: 67000000000000
+  slowest_flops: 67000000000000
+  gpu_flop: 67000000000000
+  fastest_gmbw: 3350000000000
+  slowest_gmbw: 3350000000000
