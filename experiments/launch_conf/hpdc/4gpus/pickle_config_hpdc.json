@@ -1,0 +1,160 @@
+{
+    "seed_start": 1000,
+    "seed_step": 100000000,
+    "num_seeds": 1,
+    "start_mem": 76e9,
+    "end_mem": 29e9,
+    "step_mem": 1e9,
+    "horizon": 40000,
+    "obs_ver": "F",
+    "dmem": 96e9,
+    "experiments": {
+        "corners": [
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9",
+                    "42e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9",
+                    "42e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9",
+                    "46e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9"
+                ]
+            }
+        ]
+    },
+    "cores_per_job": 2,
+    "command_template": [
+        "mpirun",
+        "-n",
+        "4",
+        "python3",
+        "pickle_eval.py",
+        "--config-name=8x8x128_dynamic_{exp_name}_cnn",
+        "graph.config.r_interior={interior}",
+        "graph.config.r_boundary={boundary}",
+        "feature.observer.version={obs_ver}",
+        "seed={seed_val}",
+        "graph.config.level_memory={mem}",
+        "system.mem={dmem_int}",
+        "+extend=2"
+    ]
+}

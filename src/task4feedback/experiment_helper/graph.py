@@ -30,17 +30,26 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
         partition = graph.make_partition(
             arch=DeviceType.GPU,
             bandwidth=cfg.system.d2d_bw,
-            n_parts=4,
+            n_parts=cfg.system.n_devices - 1,
             offset=0,
         )
-        partition = graph.maximize_matches(partition)
-
-        # print(partition)
+        # print(f"Initial partition: {partition}")
         # if isinstance(graph, DynamicJacobiGraph):
         #     for x in range(graph.nx):
         #         for y in range(graph.ny):
         #             print(f"{partition[graph.xy_from_id(x * graph.ny + y)]}", end=" ")
         #         print()
+        # print()
+        partition = graph.maximize_matches(partition)
+        # print(f"Maximized partition: {partition}")
+        # print(graph.reference_partition)
+
+        # if isinstance(graph, DynamicJacobiGraph):
+        #     for x in range(graph.nx):
+        #         for y in range(graph.ny):
+        #             print(f"{partition[graph.xy_from_id(x * graph.ny + y)]}", end=" ")
+        #         print()
+        # exit()
 
         if cfg.graph.init.gpu_only:
             partition = [x + 1 for x in partition]  # offset by 1 to ignore cpu

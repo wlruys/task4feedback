@@ -8,7 +8,7 @@ defaults:
   - runtime: batch
   - wandb: default
   - logging: default
-  - lr_scheduler: none 
+  - lr_scheduler: none
   - noise: none
   - optimizer: adamw
   - eval: default
@@ -28,7 +28,7 @@ parmetis:
 hydra:
   callbacks:
     git_info:
-      _target_: train.GitInfo
+      _target_: task4feedback.experiment_helper.hydra.GitInfo
 seed: 256
 deterministic_torch: true
 
@@ -58,7 +58,7 @@ algorithm:
   ent_coef: 0.001
   sample_slices: True
   slice_len: 16
-  gamma: 1 
+  gamma: 1
   lmbda: 0.7
 
 optimizer:
@@ -90,4 +90,3 @@ wandb:
 
 eval:
   eval_interval: 0
-

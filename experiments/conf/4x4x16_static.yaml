@@ -15,7 +15,7 @@ defaults:
 hydra:
   callbacks:
     git_info:
-      _target_: train.GitInfo
+      _target_: task4feedback.experiment_helper.hydra.GitInfo
 
 seed: 256
 deterministic_torch: true

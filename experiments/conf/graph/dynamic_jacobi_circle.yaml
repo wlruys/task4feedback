@@ -28,7 +28,7 @@ config:
     upper_bound: 5
     scale: 0.3
     traj_specifics:
-      radius: 0.5
+      radius: 0.3
       phase_length: 128
 init:
   partitioner: quad

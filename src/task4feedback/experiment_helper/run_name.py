@@ -56,7 +56,7 @@ def calculate_ratio(interior, boundary):
     return arithmetic_intensity, boundary_width
 
 
-def make_folder_name(cfg: DictConfig):
+def make_folder_name(cfg: DictConfig, change_name=True):
     """
     Create a folder name based on configuration.
     Returns:
@@ -86,12 +86,12 @@ def make_folder_name(cfg: DictConfig):
         graph_name = cfg.graph.config.workload_args.traj_type
     else:
         graph_name = "static"
-
-    if cfg.graph.env.change_duration:
-        if cfg.graph.config.workload_args.traj_type == "circle":
-            graph_name = "ncircle"
-        elif cfg.graph.config.workload_args.traj_type == "corners":
-            graph_name = "noise"
+    if change_name:
+        if cfg.graph.env.change_duration:
+            if cfg.graph.config.workload_args.traj_type == "circle":
+                graph_name = "ncircle"
+            elif cfg.graph.config.workload_args.traj_type == "corners":
+                graph_name = "noise"
     if cfg.graph.config.steps > 256:
         graph_name = "l" + graph_name
 

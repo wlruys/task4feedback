@@ -996,9 +996,11 @@ public:
   bool should_map(SchedulerState &state, SchedulerQueues &queues) override {
     MONUnusedParameter(queues);
     auto &counts = state.counts;
-    auto n_mapped = counts.n_mapped();
+    auto n_mapped = counts.n_mapped(); // Number of mapped - Number of completed
     bool space_flag = (n_mapped <= max_in_flight + active_batch);
     bool workqueue_flag = false;
+
+    // Check if any device has low workqueue
     const devid_t n_devices = state.get_devices().size();
     for (int i = 1; i < n_devices; i++) {
       if (counts.n_mapped(i) < queue_threshold) {

@@ -7,7 +7,7 @@ import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
 from dataclasses import dataclass
-from typing import Optional, Literal 
+from typing import Optional, Literal
 from .base import Cell, Edge
 from ..base import DataBlocks, DataKey
 from collections import defaultdict
@@ -21,16 +21,19 @@ import matplotlib.colors as mcolors
 import wandb
 import os
 from pathlib import Path
+import json
 
 OKABE_ITO_COLORS = [
-    "#56B4E9",  
-    "#E69F00",  
-    "#009E73",  
-    "#0072B2",
-    "#CC79A7",    
-    "#D55E00",  
-    "#F0E442",  
-    "#000000",
+    "#56B4E9",  # sky blue
+    "#E69F00",  # orange
+    "#009E73",  # bluish green
+    "#0072B2",  # blue
+    "#CC79A7",  # reddish purple
+    "#D55E00",  # vermillion
+    "#F0E442",  # yellow
+    "#7B3294",  # deep purple
+    "#008837",  # dark green
+    "#000000",  # black (use sparingly)
 ]
 
 TRANSPARENT = np.array([0, 0, 0, 0], dtype=np.float32)
@@ -39,28 +42,32 @@ BLACK = np.array([0, 0, 0, 1], dtype=np.float32)
 
 device_to_color = OKABE_ITO_COLORS.copy()
 
+
 def create_okabe_ito_cmap():
-    return mcolors.ListedColormap(OKABE_ITO_COLORS, name='okabe_ito')
+    return mcolors.ListedColormap(OKABE_ITO_COLORS, name="okabe_ito")
+
 
 def _auto_text_color(rgb: np.ndarray) -> np.ndarray:
     lum = 0.2126 * rgb[:, 0] + 0.7152 * rgb[:, 1] + 0.0722 * rgb[:, 2]
     return np.where(lum > 0.55, "black", "white")
 
+
 @dataclass(slots=True)
 class ColorConfig:
     # Device partition colors
-    device_colors: Optional[list[str]] = field(default_factory=lambda: OKABE_ITO_COLORS.copy())         
-    device_cmap: str | mcolors.Colormap = "tab20"     
-    unknown_color: str = "#8a8a8a"                     
-    running_color: str = "#808080"                     
+    device_colors: Optional[list[str]] = field(default_factory=lambda: OKABE_ITO_COLORS.copy())
+    device_cmap: str | mcolors.Colormap = "tab20"
+    unknown_color: str = "#8a8a8a"
+    running_color: str = "#808080"
 
     # Duration shading
-    duration_cmap: str | mcolors.Colormap = "viridis" 
+    duration_cmap: str | mcolors.Colormap = "viridis"
     duration_mode: Literal["overlay", "to_white", "duration_only"] = "to_white"
-    duration_gamma: float = 0.4              
-    duration_alpha: float = 0.65                       
-    duration_percentile_max: float = 0.98             
-    ema_tau_frames: int = 5    
+    duration_gamma: float = 0.4
+    duration_alpha: float = 0.65
+    duration_percentile_max: float = 0.98
+    ema_tau_frames: int = 5
+
 
 @dataclass(slots=True)
 class PlotConfig:
@@ -68,8 +75,8 @@ class PlotConfig:
     use_labels: bool = False
     use_blit: bool = False
     use_duration_shading: bool = True
-    dpi: int = 300 
-    bitrate: int = 300 
+    dpi: int = 300
+    bitrate: int = 300
     figsize: tuple[float, float] = (8.0, 8.0)
     video_seconds: int = 30
     n_frames: int = 100
@@ -84,17 +91,19 @@ class PercentileEMANormalizer:
 
     def update_and_get(self, x: np.ndarray) -> float:
         if x.size == 0:
-            return (self._vmax if self._vmax is not None else 1.0)
+            return self._vmax if self._vmax is not None else 1.0
         m = float(np.quantile(x, self.p)) if np.any(np.isfinite(x)) else 1.0
         if self._vmax is None:
             self._vmax = max(m, self.eps)
         else:
             self._vmax += (m - self._vmax) / max(self.tau, 1)
             self._vmax = max(self._vmax, self.eps)
-        return self._vmax                
+        return self._vmax
+
 
 def _get_cmap(name_or_obj) -> mcolors.Colormap:
     return name_or_obj if isinstance(name_or_obj, mcolors.Colormap) else cm.get_cmap(name_or_obj)
+
 
 def _build_device_palette(n_devices: int, cfg: ColorConfig) -> np.ndarray:
     unknown = np.array(mcolors.to_rgba(cfg.unknown_color), dtype=np.float32)
@@ -107,8 +116,9 @@ def _build_device_palette(n_devices: int, cfg: ColorConfig) -> np.ndarray:
 
     palette = np.empty((n_devices + 1, 4), dtype=np.float32)
     palette[0] = unknown
-    palette[1:1+n_devices] = base[:n_devices]
+    palette[1 : 1 + n_devices] = base[:n_devices]
     return palette
+
 
 @dataclass(slots=True)
 class EnvStaticState:
@@ -125,29 +135,33 @@ class EnvStaticState:
     dt_virtual: np.ndarray
     dt_block: np.ndarray
     dt_duration_us: np.ndarray
-    dt_launch_time: np.ndarray 
+    dt_launch_time: np.ndarray
     dt_complete_time: np.ndarray
+
 
 @dataclass(slots=True)
 class EnvDynamicState:
-    ct_state: np.ndarray       
+    ct_state: np.ndarray
     dt_state: np.ndarray
-    partition: np.ndarray 
+    partition: np.ndarray
     last_duration: np.ndarray
     last_label: list[str]
-    ct_running: np.ndarray 
-    ct_changed: np.ndarray 
+    ct_running: np.ndarray
+    ct_changed: np.ndarray
     time: int
     last_time: int
     last_cell_update: np.ndarray
 
+
 def get_total_work(static_state: EnvStaticState, device: int) -> float:
-    mask = (static_state.ct_device == device)
+    mask = static_state.ct_device == device
     return float(np.sum(static_state.ct_duration_us[mask])) if np.any(mask) else 0.0
+
 
 def get_total_work_in_interval(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
     mask = (static_state.ct_device == device) & (static_state.ct_launch_time >= start_time) & (static_state.ct_complete_time <= end_time)
     return float(np.sum(static_state.ct_duration_us[mask])) if np.any(mask) else 0.0
+
 
 def get_instantaneous_work(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
     mask = (static_state.ct_device == device) & (static_state.ct_launch_time < end_time) & (static_state.ct_complete_time > start_time)
@@ -160,13 +174,16 @@ def get_instantaneous_work(static_state: EnvStaticState, device: int, start_time
             total += overlap_duration
     return float(total)
 
+
 def get_total_in_communication(static_state: EnvStaticState, device: int) -> float:
     mask = (static_state.dt_device == device) & (~static_state.dt_virtual)
     return float(np.sum(static_state.dt_duration_us[mask])) if np.any(mask) else 0.0
 
+
 def get_total_in_communication_in_interval(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
     mask = (static_state.dt_device == device) & (~static_state.dt_virtual) & (static_state.dt_launch_time >= start_time) & (static_state.dt_complete_time <= end_time)
     return float(np.sum(static_state.dt_duration_us[mask])) if np.any(mask) else 0.0
+
 
 def get_instantaneous_in_communication(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
     mask = (static_state.dt_device == device) & (~static_state.dt_virtual) & (static_state.dt_launch_time < end_time) & (static_state.dt_complete_time > start_time)
@@ -179,9 +196,11 @@ def get_instantaneous_in_communication(static_state: EnvStaticState, device: int
             total += overlap_duration
     return float(total)
 
+
 def get_total_out_communication(static_state: EnvStaticState, device: int) -> float:
     mask = (static_state.dt_source == device) & (~static_state.dt_virtual)
     return float(np.sum(static_state.dt_duration_us[mask])) if np.any(mask) else 0.0
+
 
 def get_total_out_communication_in_interval(static_state: EnvStaticState, device: int, start_time: int, end_time: int) -> float:
     mask = (static_state.dt_source == device) & (~static_state.dt_virtual) & (static_state.dt_launch_time >= start_time) & (static_state.dt_complete_time <= end_time)
@@ -199,6 +218,7 @@ def get_instantaneous_out_communication(static_state: EnvStaticState, device: in
             total += overlap_duration
     return float(total)
 
+
 @dataclass(slots=True)
 class LoadBalanceResult:
     load_balance: float
@@ -208,8 +228,9 @@ class LoadBalanceResult:
     total_in_communication: float
     total_out_communication: float
 
+
 def compute_load_balance(static_state: EnvStaticState, start_time: Optional[int] = None, end_time: Optional[int] = None) -> LoadBalanceResult:
-    
+
     if start_time is None:
         start_time = 0
     if end_time is None:
@@ -230,7 +251,7 @@ def compute_load_balance(static_state: EnvStaticState, start_time: Optional[int]
             total_in_communication=0.0,
             total_out_communication=0.0,
         )
-    
+
     work = np.zeros((n_devices,), dtype=np.float64)
     in_comm = np.zeros((n_devices,), dtype=np.float64)
     out_comm = np.zeros((n_devices,), dtype=np.float64)
@@ -239,11 +260,9 @@ def compute_load_balance(static_state: EnvStaticState, start_time: Optional[int]
         in_comm[device] = get_instantaneous_in_communication(static_state, device, start_time, end_time)
         out_comm[device] = get_instantaneous_out_communication(static_state, device, start_time, end_time)
 
-    
-
-    avg_work = float(np.sum(work))/n_compute_devices if np.any(work) else 0.0
-    avg_in_comm = float(np.sum(in_comm))/n_data_devices if np.any(in_comm) else 0.0
-    avg_out_comm = float(np.sum(out_comm))/n_data_devices if np.any(out_comm) else 0.0
+    avg_work = float(np.sum(work)) / n_compute_devices if np.any(work) else 0.0
+    avg_in_comm = float(np.sum(in_comm)) / n_data_devices if np.any(in_comm) else 0.0
+    avg_out_comm = float(np.sum(out_comm)) / n_data_devices if np.any(out_comm) else 0.0
     max_work = float(np.max(work)) if np.any(work) else 0.0
     max_in_comm = float(np.max(in_comm)) if np.any(in_comm) else 0.0
     max_out_comm = float(np.max(out_comm)) if np.any(out_comm) else 0.0
@@ -264,6 +283,7 @@ def compute_load_balance(static_state: EnvStaticState, start_time: Optional[int]
         total_out_communication=total_out_communication,
     )
 
+
 def load_balance_over_time(static_state: EnvStaticState, interval: int) -> list[LoadBalanceResult]:
     n_devices = max(np.max(static_state.ct_device), np.max(static_state.dt_device), np.max(static_state.dt_source)) + 1
 
@@ -278,6 +298,7 @@ def load_balance_over_time(static_state: EnvStaticState, interval: int) -> list[
         results.append(lb)
     return results
 
+
 def plot_load_balance_over_time(env, interval: int):
     static_state, dynamic_state = _build_state(env)
     results = load_balance_over_time(static_state, interval)
@@ -288,12 +309,12 @@ def plot_load_balance_over_time(env, interval: int):
     out_comm_balances = [r.out_comm_balance for r in results]
 
     plt.figure(figsize=(10, 6))
-    plt.plot(times, load_balances, label='Load Balance', color='blue')
-    plt.plot(times, in_comm_balances, label='In Communication Balance', color='orange')
-    plt.plot(times, out_comm_balances, label='Out Communication Balance', color='green')
-    plt.xlabel('Time (us)')
-    plt.ylabel('Balance Ratio')
-    plt.title('Load Balance Over Time')
+    plt.plot(times, load_balances, label="Load Balance", color="blue")
+    plt.plot(times, in_comm_balances, label="In Communication Balance", color="orange")
+    plt.plot(times, out_comm_balances, label="Out Communication Balance", color="green")
+    plt.xlabel("Time (us)")
+    plt.ylabel("Balance Ratio")
+    plt.title("Load Balance Over Time")
     plt.ylim(0, 1.05)
     plt.legend()
     plt.grid(True)
@@ -305,29 +326,28 @@ class IdleType:
     compute: bool = True
     in_comm: bool = True
     out_comm: bool = True
-    
 
 
-def get_total_idle_time(static_state: EnvStaticState, idle_type: Optional[IdleType]=None, simulation_end_time: Optional[int] = None) -> np.ndarray:
+def get_total_idle_time(static_state: EnvStaticState, idle_type: Optional[IdleType] = None, simulation_end_time: Optional[int] = None) -> np.ndarray:
     def _collect(device_count: int, idle_type: IdleType) -> list[list[tuple[int, int]]]:
         intervals = [[] for _ in range(device_count)]
         if idle_type.compute:
             for launch, finish, device in zip(static_state.ct_launch_time, static_state.ct_complete_time, static_state.ct_device):
                 if device >= 0 and launch >= 0 and finish > launch:
                     intervals[device].append((int(launch), int(finish)))
-        if idle_type.in_comm:
-            for launch, finish, device, is_virtual in zip(static_state.dt_launch_time, static_state.dt_complete_time, static_state.dt_device, static_state.dt_virtual):
-                if device >= 0 and not is_virtual and launch >= 0 and finish > launch:
-                    intervals[device].append((int(launch), int(finish)))
-        if idle_type.out_comm:
-            for launch, finish, device, is_virtual in zip(static_state.dt_launch_time, static_state.dt_complete_time, static_state.dt_source, static_state.dt_virtual):
-                if device >= 0 and not is_virtual and launch >= 0 and finish > launch:
-                    intervals[device].append((int(launch), int(finish)))
+        # if idle_type.in_comm:
+        #     for launch, finish, device, is_virtual in zip(static_state.dt_launch_time, static_state.dt_complete_time, static_state.dt_device, static_state.dt_virtual):
+        #         if device >= 0 and not is_virtual and launch >= 0 and finish > launch:
+        #             intervals[device].append((int(launch), int(finish)))
+        # if idle_type.out_comm:
+        #     for launch, finish, device, is_virtual in zip(static_state.dt_launch_time, static_state.dt_complete_time, static_state.dt_source, static_state.dt_virtual):
+        #         if device >= 0 and not is_virtual and launch >= 0 and finish > launch:
+        #             intervals[device].append((int(launch), int(finish)))
         return intervals
-    
+
     if idle_type is None:
         idle_type = IdleType(compute=True, in_comm=True, out_comm=True)
-    
+
     compute_devices = set(static_state.ct_device[static_state.ct_device >= 0])
     data_devices = set(static_state.dt_device[static_state.dt_device >= 0]) | set(static_state.dt_source[static_state.dt_source >= 0])
     n_devices = max(compute_devices | data_devices) + 1 if (compute_devices | data_devices) else 0
@@ -355,13 +375,14 @@ def get_total_idle_time(static_state: EnvStaticState, idle_type: Optional[IdleTy
         idle[device] = max(0.0, float(total_end - busy))
     return idle
 
+
 def get_idle_from_env(env) -> np.ndarray:
     static_state, _ = _build_state(env)
     return get_total_idle_time(static_state, simulation_end_time=env.simulator.time if env.simulator is not None else None)
 
 
 def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
-    assert(env.simulator is not None)
+    assert env.simulator is not None
     sim = env.simulator
     simulator_state = sim.state
     task_runtime = simulator_state.get_task_runtime()
@@ -420,8 +441,9 @@ def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
         dt_virtual=dt_virtual,
         dt_launch_time=dt_launch_time,
         dt_complete_time=dt_complete_time,
-        dt_block=dt_block,    
-        dt_duration_us=dt_duration_us)
+        dt_block=dt_block,
+        dt_duration_us=dt_duration_us,
+    )
 
     geom = env.get_graph().data.geometry
     n_cells = len(geom.cells)
@@ -433,8 +455,8 @@ def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
     last_cell_update = np.full((n_cells,), -1, dtype=np.int64)
 
     dynamic_state = EnvDynamicState(
-        last_time = -1,
-        time = 0,
+        last_time=-1,
+        time=0,
         ct_state=ct_state,
         dt_state=dt_state,
         partition=partition,
@@ -447,12 +469,13 @@ def _build_state(env) -> tuple[EnvStaticState, EnvDynamicState]:
 
     return static_state, dynamic_state
 
+
 def _update_dynamic_state(env, time: int, static_state: EnvStaticState, dynamic_state: EnvDynamicState, gather_data_tasks: bool = True):
-    assert(env.simulator is not None)
+    assert env.simulator is not None
     sim = env.simulator
     simulator_state = sim.state
     task_runtime = simulator_state.get_task_runtime()
-    assert(time <= sim.time)
+    assert time <= sim.time
 
     n_compute_tasks = static_state.n_compute_tasks
     n_data_tasks = static_state.n_data_tasks
@@ -474,8 +497,8 @@ def _update_dynamic_state(env, time: int, static_state: EnvStaticState, dynamic_
             dynamic_state.dt_state[i] = task_runtime.get_data_task_state_at_time(i, time)
 
     dynamic_state.ct_changed.fill(False)
-    dynamic_state.ct_changed = (dynamic_state.ct_state != prev_state)
-    dynamic_state.ct_running = (dynamic_state.ct_state == fastsim.TaskState.LAUNCHED)
+    dynamic_state.ct_changed = dynamic_state.ct_state != prev_state
+    dynamic_state.ct_running = dynamic_state.ct_state == fastsim.TaskState.LAUNCHED
 
     return dynamic_state
 
@@ -483,7 +506,6 @@ def _update_dynamic_state(env, time: int, static_state: EnvStaticState, dynamic_
 def _update_initial_partition(env, current_time: int, static_state: EnvStaticState, dynamic_state: EnvDynamicState, *, labels: bool = False):
     graph = env.get_graph()
     cell_locations = np.asarray(graph.get_cell_locations(as_dict=False), dtype=np.int32)
-
 
     if cell_locations is None or len(cell_locations) == 0:
         print("No initial partition found, using default partition.")
@@ -494,7 +516,7 @@ def _update_initial_partition(env, current_time: int, static_state: EnvStaticSta
 
     if len(cell_locations) != len(dynamic_state.partition):
         raise ValueError(f"Cell locations length {len(cell_locations)} does not match partition length {len(dynamic_state.partition)}")
-    
+
     dynamic_state.partition[:] = cell_locations
 
     dynamic_state.last_duration.fill(0.0)
@@ -518,32 +540,23 @@ def _update_initial_partition(env, current_time: int, static_state: EnvStaticSta
     dynamic_state.ct_changed.fill(False)
     dynamic_state.ct_state.fill(-1)
     dynamic_state.dt_state.fill(-1)
-    dynamic_state.ct_running = (dynamic_state.ct_state == fastsim.TaskState.LAUNCHED)
+    dynamic_state.ct_running = dynamic_state.ct_state == fastsim.TaskState.LAUNCHED
 
     return dynamic_state.partition, dynamic_state.last_duration, dynamic_state.last_label, changed_cells
 
 
-def _update_dynamic_paritition(env, current_time: int,
-                                    static_state: EnvStaticState,
-                                    dynamic_state: EnvDynamicState,
-                                    *,
-                                    labels: bool = False):
+def _update_dynamic_paritition(env, current_time: int, static_state: EnvStaticState, dynamic_state: EnvDynamicState, *, labels: bool = False):
     graph = env.get_graph()
     dy = dynamic_state
 
-    changed_idx = np.where(
-        dy.ct_changed & (
-            (dy.ct_state == fastsim.TaskState.COMPLETED) |
-            (dy.ct_state == fastsim.TaskState.LAUNCHED)
-        )
-    )[0]
-    
+    changed_idx = np.where(dy.ct_changed & ((dy.ct_state == fastsim.TaskState.COMPLETED) | (dy.ct_state == fastsim.TaskState.LAUNCHED)))[0]
+
     if changed_idx.size == 0:
         return dy.ct_running, dy.partition, dy.last_duration, dy.last_label, np.empty((0,), dtype=np.int64)
 
     launch_time = static_state.ct_launch_time[changed_idx]
     completed_time = static_state.ct_complete_time[changed_idx]
-    
+
     valid_completed_mask = completed_time <= current_time
     valid_launched_mask = launch_time <= current_time
 
@@ -575,7 +588,8 @@ def _update_dynamic_paritition(env, current_time: int,
 
     return dy.ct_running, dy.partition, dy.last_duration, dy.last_label, changed_cells
 
-def _create_axes(_geom, _figsize=(8,8), pad=0.05):
+
+def _create_axes(_geom, _figsize=(8, 8), pad=0.05):
     fig, ax = plt.subplots(figsize=_figsize)
     pts = _geom.cell_points
     xmin, ymin = np.min(pts, axis=0)
@@ -587,6 +601,7 @@ def _create_axes(_geom, _figsize=(8,8), pad=0.05):
     ax.set_yticks([])
     return fig, ax
 
+
 def _save_animation(ani, path: str, dpi: Optional[int] = None, bitrate: Optional[int] = None):
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -596,15 +611,24 @@ def _save_animation(ani, path: str, dpi: Optional[int] = None, bitrate: Optional
             codec="libx264",
             bitrate=bitrate if bitrate is not None else -1,
             extra_args=[
-                "-preset", "veryfast",
-                "-crf", "23",
-                "-pix_fmt", "yuv420p",
-                "-movflags", "+faststart",
-                "-g", "24",
-                "-threads", str(os.cpu_count() or 2),
-                "-bf", "2",
-                "-refs", "2",
-                "-x264-params", "sync-lookahead=0",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                "-g",
+                "24",
+                "-threads",
+                str(os.cpu_count() or 2),
+                "-bf",
+                "2",
+                "-refs",
+                "2",
+                "-x264-params",
+                "sync-lookahead=0",
             ],
         )
         ani.save(path, writer=writer, dpi=dpi)
@@ -629,35 +653,26 @@ def _save_animation(ani, path: str, dpi: Optional[int] = None, bitrate: Optional
             pass
         del ani
 
+
 def plot_edges(ax, points, edge_array, color="k", linewidth=1, alpha=0.5):
     lines = points[edge_array]  # shape: (num_edges, 2, 2)
-    collection = LineCollection(
-        lines, colors=color, linewidths=linewidth, zorder=2, alpha=alpha
-    )
+    collection = LineCollection(lines, colors=color, linewidths=linewidth, zorder=2, alpha=alpha)
     ax.add_collection(collection)
 
 
 def plot_vertices(ax, points, color="red", markersize=4, alpha=1.0):
-    ax.scatter(
-        points[:, 0], points[:, 1], color=color, s=markersize, zorder=3, alpha=alpha
-    )
+    ax.scatter(points[:, 0], points[:, 1], color=color, s=markersize, zorder=3, alpha=alpha)
 
 
-def plot_cells(
-    ax, points, cells, facecolor="lightblue", edgecolor="black", alpha=0.5, label=False
-):
+def plot_cells(ax, points, cells, facecolor="lightblue", edgecolor="black", alpha=0.5, label=False):
     polys = points[cells]  # shape: (num_cells, vertices, 2)
-    collection = PolyCollection(
-        polys, facecolors=facecolor, edgecolors=edgecolor, alpha=alpha, zorder=1
-    )
+    collection = PolyCollection(polys, facecolors=facecolor, edgecolors=edgecolor, alpha=alpha, zorder=1)
     ax.add_collection(collection)
 
     if label:
         for i, poly in enumerate(polys):
             centroid = np.mean(poly, axis=0)
-            ax.text(
-                centroid[0], centroid[1], f"{i}", ha="center", va="center", zorder=4
-            )
+            ax.text(centroid[0], centroid[1], f"{i}", ha="center", va="center", zorder=4)
 
 
 def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = None, plot_cfg: Optional[PlotConfig] = None):
@@ -666,42 +681,43 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
     video_seconds = plot_cfg.video_seconds
     n_frames = plot_cfg.n_frames
 
-
     static_state, dynamic_state = _build_state(env)
     n_devices = int(max(0, static_state.ct_device.max() + 1))
 
-
     device_palette_rgba = _build_device_palette(n_devices, color_cfg)
     duration_cmap = _get_cmap(color_cfg.duration_cmap)
-    dur_norm = PercentileEMANormalizer(
-            p=color_cfg.duration_percentile_max,
-            tau=color_cfg.ema_tau_frames
-    )
+    dur_norm = PercentileEMANormalizer(p=color_cfg.duration_percentile_max, tau=color_cfg.ema_tau_frames)
 
     _update_dynamic_state(env, env.simulator.time, static_state, dynamic_state)
     _update_initial_partition(env, 0, static_state, dynamic_state, labels=plot_cfg.use_labels)
 
     geom = env.get_graph().data.geometry
 
-    fig, ax = _create_axes(geom, _figsize=(8,8), pad=0.05)
+    fig, ax = _create_axes(geom, _figsize=(8, 8), pad=0.05)
 
     points = geom.cell_points
-    cells = geom.cells 
+    cells = geom.cells
     edges = geom.edges
-    polys =  points[cells]
+    polys = points[cells]
 
     face_colors = np.zeros((len(polys), 4), dtype=np.float32)
     edge_colors = np.zeros((len(edges), 4), dtype=np.float32)
     line_width = np.zeros((len(edges),), dtype=np.float32)
 
-    part_index = (dynamic_state.partition.astype(np.int64) + 1).clip(0, device_palette_rgba.shape[0]-1)
-    base_colors = device_palette_rgba[part_index]                 
+    part_index = (dynamic_state.partition.astype(np.int64) + 1).clip(0, device_palette_rgba.shape[0] - 1)
+    base_colors = device_palette_rgba[part_index]
     face_colors[:] = base_colors
     edge_colors[:] = mcolors.to_rgba("black")
     line_width[:] = 3.0
-    
+
     interior_polys = PolyCollection(
-        polys, facecolors=face_colors, edgecolors=edge_colors, linewidths=line_width, zorder=9, alpha=1, antialiased=False,
+        polys,
+        facecolors=face_colors,
+        edgecolors=edge_colors,
+        linewidths=line_width,
+        zorder=9,
+        alpha=1,
+        antialiased=False,
     )
     interior_polys.set_animated(True)
 
@@ -710,8 +726,7 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
     if plot_cfg.use_labels:
         label_artists = np.empty((len(polys),), dtype=object)
         for i, (cx, cy) in enumerate(centroids):
-            t = ax.text(cx, cy, "", ha="center", va="center",
-                        fontsize=plot_cfg.fontsize, zorder=12, color="black", alpha=0.9)
+            t = ax.text(cx, cy, "", ha="center", va="center", fontsize=plot_cfg.fontsize, zorder=12, color="black", alpha=0.9)
             t.set_animated(True)
             label_artists[i] = t
 
@@ -722,7 +737,6 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
     shade_lw = interior_polys.get_linewidths()
 
     fps = max(1, round(n_frames / max(1, video_seconds)))
-    
 
     T = int(env.simulator.time)
     if n_frames <= 1:
@@ -732,11 +746,11 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
         time_list[-1] = T
     time_interval = int(env.simulator.time / n_frames)
 
-    background = None 
+    background = None
 
     def frame_builder(frame):
         time = time_list[frame]
-        #print(f"Frame {frame+1}/{n_frames}, time={time:.2f}/{env.simulator.time:.2f}")
+        # print(f"Frame {frame+1}/{n_frames}, time={time:.2f}/{env.simulator.time:.2f}")
         _update_dynamic_state(env, time, static_state, dynamic_state, gather_data_tasks=False)
         _, _, _, _, changed_cells = _update_dynamic_paritition(env, time, static_state, dynamic_state, labels=plot_cfg.use_labels)
 
@@ -761,33 +775,33 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
         if plot_cfg.use_labels and label_artists is not None:
             return tuple([interior_polys, *label_artists.tolist()])
         return (interior_polys,)
-    
+
     max_duration = 100
 
     def _update(frame):
-        nonlocal background 
+        nonlocal background
         nonlocal shade_fc
         nonlocal max_duration
 
         ct_running, partition, last_duration, last_label, changed_cells = frame_builder(frame)
 
-        part_index = (partition.astype(np.int64) + 1).clip(0, device_palette_rgba.shape[0]-1)
-        base_colors = device_palette_rgba[part_index]                 
-        shade_fc[:] = base_colors                                      
+        part_index = (partition.astype(np.int64) + 1).clip(0, device_palette_rgba.shape[0] - 1)
+        base_colors = device_palette_rgba[part_index]
+        shade_fc[:] = base_colors
 
         if plot_cfg.use_duration_shading:
             vmax = dur_norm.update_and_get(last_duration)
             norm = np.clip((last_duration / vmax), 0.0, 1.0)
             norm = norm[:, None]
-            
+
             norm[last_duration <= 0.0] = 1.0
 
-            if frame<=1:
+            if frame <= 1:
                 shade_fc[:, :3] = base_colors[:, :3]
             else:
                 if color_cfg.duration_mode == "overlay":
-                    dur_colors = duration_cmap(norm.squeeze()).astype(np.float32)  
-                    a = (color_cfg.duration_alpha * norm).astype(np.float32)       
+                    dur_colors = duration_cmap(norm.squeeze()).astype(np.float32)
+                    a = (color_cfg.duration_alpha * norm).astype(np.float32)
                     shade_fc[:, :3] = (1.0 - a) * shade_fc[:, :3] + a * dur_colors[:, :3]
                 elif color_cfg.duration_mode == "to_white":
                     WHITE = np.array([1, 1, 1], dtype=np.float32)
@@ -796,7 +810,6 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
                 elif color_cfg.duration_mode == "duration_only":
                     dur_colors = duration_cmap(norm.squeeze()).astype(np.float32)
                     shade_fc[:, :3] = dur_colors[:, :3]
-
 
         running_task_idx = np.where(ct_running)[0]
         if running_task_idx.size > 0:
@@ -822,20 +835,23 @@ def animate_mesh_execution(env, path: str, color_cfg: Optional[ColorConfig] = No
         return tuple(artists)
 
     ani = animation.FuncAnimation(
-        fig, _update, init_func=_init, 
-        frames=n_frames, 
-        interval=time_interval, 
+        fig,
+        _update,
+        init_func=_init,
+        frames=n_frames,
+        interval=time_interval,
         blit=bool(plot_cfg.use_blit),
-        repeat=False, 
+        repeat=False,
         cache_frame_data=False,
     )
 
-    ani._fig_ref = fig 
+    ani._fig_ref = fig
     ani._nframes = n_frames
-    ani._fps = fps 
+    ani._fps = fps
     ani._disconnect_resize = lambda: fig.canvas.mpl_disconnect(cid_resize)
 
     _save_animation(ani, path=path, dpi=plot_cfg.dpi, bitrate=plot_cfg.bitrate)
+
 
 @dataclass
 class MeshPlotConfig:
@@ -927,8 +943,8 @@ def shade_geometry_by_partition(
         z_order=z_order,
     )
 
-def shade_partitioning(ax, points, cells, partition_vector, cmap=None,
-                       edgecolor="black", alpha=0.6, z_order=5):
+
+def shade_partitioning(ax, points, cells, partition_vector, cmap=None, edgecolor="black", alpha=0.6, z_order=5):
     nparts = (max(partition_vector) + 1) if len(partition_vector) else 0
     polys = points[cells]
 
@@ -947,11 +963,9 @@ def shade_partitioning(ax, points, cells, partition_vector, cmap=None,
 
     # Safe indexing (clip) in case partition ids exceed palette length
     max_idx = len(facecolors) - 1 if facecolors else 0
-    colors = [facecolors[min(int(partition_vector[i]), max_idx)]
-              for i in range(len(cells))]
+    colors = [facecolors[min(int(partition_vector[i]), max_idx)] for i in range(len(cells))]
 
-    collection = PolyCollection(polys, facecolors=colors, edgecolors=edgecolor,
-                                alpha=alpha, zorder=z_order)
+    collection = PolyCollection(polys, facecolors=colors, edgecolors=edgecolor, alpha=alpha, zorder=z_order)
     ax.add_collection(collection)
     return collection
 
@@ -990,6 +1004,7 @@ def label_cells(ax, points, cells, cell_labels, z_order=8):
 
     return artists
 
+
 def random_color(map: Optional[dict] = None):
     """
     Generate a random color string.
@@ -1007,6 +1022,7 @@ def random_color(map: Optional[dict] = None):
         if color not in map:
             map[color] = True
             return color
+
 
 def animate_mesh_graph(
     env,

@@ -1,0 +1,167 @@
+{
+    "seed_start": 11000000,
+    "seed_step": 1000000,
+    "num_seeds": 40,
+    "start_mem": 50e9,
+    "end_mem": 70e9,
+    "step_mem": 1e9,
+    "horizon": 40000,
+    "obs_ver": "F",
+    "dmem": 96e9,
+    "experiments": {
+        "corners": [
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9",
+                    "42e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9",
+                    "42e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9",
+                    "46e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 1,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": [
+                    "21e9",
+                    "22e9",
+                    "23e9",
+                    "25e9",
+                    "26e9",
+                    "27e9",
+                    "29e9",
+                    "30e9",
+                    "31e9",
+                    "33e9",
+                    "34e9",
+                    "35e9",
+                    "37e9",
+                    "38e9",
+                    "39e9"
+                ]
+            }
+        ]
+    },
+    "cores_per_job": 4,
+    "command_template": [
+        "python3",
+        "train.py",
+        "--config-name",
+        "8x8x128_dynamic_{exp_name}_cnn",
+        "wandb.project={exp_name}_{interior}-{boundary}",
+        "reward.gamma=0.99",
+        "graph.config.level_memory={mem}",
+        "reward.uniform_reward_scale=10",
+        "algorithm.num_collections={horizon}",
+        "lr_scheduler.total_iters={horizon}",
+        "wandb.name={obs_ver}_{mem}",
+        "wandb.group={obs_ver}_{mem}",
+        "seed={seed_val}",
+        "system.mem={dmem}",
+        "graph.config.r_interior={interior}",
+        "graph.config.r_boundary={boundary}",
+        "feature.observer.version={obs_ver}",
+        "eval.eval_interval=50",
+        "eval.exploration_types=['DETERMINISTIC']",
+        "system=4h100"
+    ]
+}

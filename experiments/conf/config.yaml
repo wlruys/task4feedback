@@ -7,16 +7,16 @@ defaults:
   - network: vector_baseline
   - algorithm: ppo
   - runtime: batch
-  - noise: none 
+  - noise: none
   - wandb: default
   - logging: default
-  - lr_scheduler: none 
+  - lr_scheduler: none
   - optimizer: adamw
   - eval: default
 
 hydra:
   callbacks:
     git_info:
-      _target_: train.GitInfo
+      _target_: task4feedback.experiment_helper.hydra.GitInfo
 seed: 101
 deterministic_torch: true

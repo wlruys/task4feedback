@@ -267,17 +267,28 @@ class DynamicJacobiGraph(JacobiGraph):
         self.workload.generate_workload(config.steps, **config.workload_args)
         super(JacobiGraph, self).__init__()  # Call base ComputeDataGraph constructor (not JacobiGraph constructor)
         self.reference_partition = []
-        half = config.n // 2
+        num_partitions = system.devices.size() - 1
+        assert config.domain_ratio == 1.0, "DynamicJacobiGraph only supports square domains for now."
+        # Find a grid (rows × cols) that exactly matches
+        rows = int(math.sqrt(num_partitions))
+        while rows > 0 and num_partitions % rows != 0:
+            rows -= 1
+
+        cols = num_partitions // rows
+
+        # Enforce perfect fit
+        if config.n % rows != 0 or config.n % cols != 0:
+            raise ValueError(f"Perfect partitioning impossible: " f"config.n={config.n}, rows={rows}, cols={cols}")
+
+        block_h = config.n // rows
+        block_w = config.n // cols
+
         for j in range(config.n):  # column-wise unrolling
             for i in range(config.n):
-                if i < half and j < half:
-                    self.reference_partition.append(0)  # top-left
-                elif i < half and j >= half:
-                    self.reference_partition.append(1)  # top-right
-                elif i >= half and j < half:
-                    self.reference_partition.append(2)  # bottom-left
-                else:
-                    self.reference_partition.append(3)  # bottom-right
+                block_row = i // block_h
+                block_col = j // block_w
+                partition_id = block_row * cols + block_col
+                self.reference_partition.append(partition_id)
         self.config = config
         self.data: DynamicJacobiData = DynamicJacobiData.from_mesh(geometry, config, self.workload, system=system)
 

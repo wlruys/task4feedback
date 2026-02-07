@@ -1,0 +1,162 @@
+{
+    "seed_start": 0,
+    "seed_step": 1,
+    "num_seeds": 1,
+    "start_mem": 71e9,
+    "end_mem": 75e9,
+    "step_mem": 1e9,
+    "horizon": 40000,
+    "obs_ver": "F",
+    "dmem": 96e9,
+    "experiments": {
+        "ncircle": [
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": [
+                    "47e9",
+                    "53e9",
+                    "59e9",
+                    "65e9",
+                    "71e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1,
+                "mem": [
+                    "26e9",
+                    "30e9",
+                    "33e9",
+                    "36e9",
+                    "40e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 1,
+                "mem": [
+                    "26e9",
+                    "30e9",
+                    "33e9",
+                    "36e9",
+                    "40e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1,
+                "mem": [
+                    "26e9",
+                    "30e9",
+                    "33e9",
+                    "36e9",
+                    "40e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 1,
+                "mem": [
+                    "26e9",
+                    "30e9",
+                    "33e9",
+                    "36e9",
+                    "40e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": [
+                    "26e9",
+                    "30e9",
+                    "33e9",
+                    "36e9",
+                    "40e9"
+                ]
+            }
+        ],
+        "noise": [
+            {
+                "interior": 1,
+                "boundary": 0.1,
+                "mem": [
+                    "36e9",
+                    "41e9",
+                    "45e9",
+                    "50e9",
+                    "54e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 0.1,
+                "mem": [
+                    "32e9",
+                    "36e9",
+                    "40e9",
+                    "44e9",
+                    "48e9"
+                ]
+            },
+            {
+                "interior": 10,
+                "boundary": 1,
+                "mem": [
+                    "32e9",
+                    "36e9",
+                    "40e9",
+                    "44e9",
+                    "48e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 0.1,
+                "mem": [
+                    "33e9",
+                    "37e9",
+                    "41e9",
+                    "45e9",
+                    "49e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 1,
+                "mem": [
+                    "33e9",
+                    "37e9",
+                    "41e9",
+                    "45e9",
+                    "49e9"
+                ]
+            },
+            {
+                "interior": 100,
+                "boundary": 10,
+                "mem": [
+                    "33e9",
+                    "37e9",
+                    "41e9",
+                    "45e9",
+                    "49e9"
+                ]
+            }
+        ]
+    },
+    "cores_per_job": 1,
+    "command_template": [
+        "python3",
+        "run_model.py",
+        "--config-name",
+        "8x8x128_dynamic_{exp_name}_cnn",
+        "graph.config.level_memory={mem}",
+        "system.mem={dmem}",
+        "graph.config.r_interior={interior}",
+        "graph.config.r_boundary={boundary}",
+        "feature.observer.version={obs_ver}",
+        "system=4h100"
+    ]
+}

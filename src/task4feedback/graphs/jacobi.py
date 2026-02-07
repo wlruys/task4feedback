@@ -385,18 +385,30 @@ class JacobiGraph(ComputeDataGraph):
         self.config = config
         self._build_graph()
         self.dynamic = False
-        self.reference_partition = []
-        half = config.n // 2
+        self.reference_partition = []  # Zero indexed partition list
+        assert config.domain_ratio == 1.0, "DynamicJacobiGraph only supports square domains for now."
+        num_partitions = system.devices.size() - 1
+
+        # Find a grid (rows × cols) that exactly matches
+        rows = int(math.sqrt(num_partitions))
+        while rows > 0 and num_partitions % rows != 0:
+            rows -= 1
+
+        cols = num_partitions // rows
+
+        # Enforce perfect fit
+        if config.n % rows != 0 or config.n % cols != 0:
+            raise ValueError(f"Perfect partitioning impossible: " f"config.n={config.n}, rows={rows}, cols={cols}")
+
+        block_h = config.n // rows
+        block_w = config.n // cols
+
         for j in range(config.n):  # column-wise unrolling
             for i in range(config.n):
-                if i < half and j < half:
-                    self.reference_partition.append(0)  # top-left
-                elif i < half and j >= half:
-                    self.reference_partition.append(1)  # top-right
-                elif i >= half and j < half:
-                    self.reference_partition.append(2)  # bottom-left
-                else:
-                    self.reference_partition.append(3)  # bottom-right
+                block_row = i // block_h
+                block_col = j // block_w
+                partition_id = block_row * cols + block_col
+                self.reference_partition.append(partition_id)
 
         if variant is not None:
             self.apply_variant(variant)
@@ -979,19 +991,7 @@ class JacobiGraph(ComputeDataGraph):
         n_parts: int = 4,
         offset: int = 1,  # 1 to ignore cpu
     ):
-        partition = []
-        half = self.config.n // 2
-        for j in range(self.config.n):  # column-wise unrolling
-            for i in range(self.config.n):
-                if i < half and j < half:
-                    partition.append(0 + offset)  # top-left
-                elif i < half and j >= half:
-                    partition.append(1 + offset)  # top-right
-                elif i >= half and j < half:
-                    partition.append(2 + offset)  # bottom-left
-                else:
-                    partition.append(3 + offset)  # bottom-right
-        return partition
+        return self.reference_partition
 
 
 register_graph(JacobiGraph, JacobiConfig)
@@ -1149,7 +1149,7 @@ class PartitionMapper:
 
 
 class BlockCyclicMapper(PartitionMapper):
-    def __init__(self, mapper: Optional[Self] = None, geometry: Optional[Geometry] = None, n_devices: int = 4, block_size: int = 2, offset: int = 1):
+    def __init__(self, mapper: Optional[Self] = None, geometry: Optional[Geometry] = None, n_devices: int = 4, block_size: int = 2, offset: int = 1, verbose=False):
         self.level_start = 0
         self.offset = offset
         self.geometry = geometry
@@ -1164,6 +1164,13 @@ class BlockCyclicMapper(PartitionMapper):
             n_cells = len(geometry.cells)
             partition = block_cyclic(geometry, n_row_parts=x_dev, n_col_parts=y_dev, parts_per_column=block_size, parts_per_row=block_size, n_devices=n_devices)
             self.cell_to_mapping = {cell: device + self.offset for cell, device in enumerate(partition)}
+            if verbose:
+                print("\nBlockCyclicMapper: Block Cyclic Partitioning:")
+                for i in range(8):
+                    for j in range(8):
+                        print(partition[i * 8 + j], end=" ")
+                    print()
+                print("################################\n")
         else:
             raise ValueError("Either mapper or geometry must be provided for BlockCyclicMapper")
 
@@ -1338,7 +1345,7 @@ class JacobiQuadrantMapper:
         self.n_devices = n_devices
         self.width = graph.nx
         self.length = graph.ny
-        self.n_tasks = self.width * self.width
+        self.n_tasks = self.width * self.length
         self.graph = graph
         self.offset = offset
 
@@ -1350,17 +1357,13 @@ class JacobiQuadrantMapper:
         mapping_result = []
         for i in range(num_candidates):
             global_task_id = candidates[i].item()
-            x = global_task_id % self.n_tasks // self.width // (self.width // 2)
-            y = global_task_id % self.n_tasks % self.width // (self.width // 2)
-            device = x * 2 + y + self.offset
+            device = graph.reference_partition[global_task_id % self.n_tasks] + self.offset
             mapping_priority = simulator.simulator.get_state().get_mapping_priority(global_task_id)
             mapping_result.append(fastsim.Action(i, device, mapping_priority, mapping_priority))
         return mapping_result
 
     def mapping_from_id(self, global_task_id: int) -> int:
-        x = global_task_id % self.n_tasks // self.width // (self.width // 2)
-        y = global_task_id % self.n_tasks % self.width // (self.width // 2)
-        device = x * 2 + y + self.offset
+        device = self.graph.reference_partition[global_task_id % self.n_tasks] + self.offset
         return device
 
 
