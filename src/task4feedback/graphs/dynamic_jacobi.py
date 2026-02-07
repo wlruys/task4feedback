@@ -57,6 +57,7 @@ class DynamicJacobiData(JacobiData):
         return self.workload
 
     def _create_blocks(self, system: System):
+        self.config.__post_init__()
         interior_data = []
         boundary_data = []
         step_data_sum = [0 for _ in range(self.config.steps + 1)]
@@ -197,6 +198,7 @@ class DynamicJacobiData(JacobiData):
         """
         Reset the data size of all blocks to a new trajectory.
         """
+        self.config.__post_init__()
         interior_data = []
         boundary_data = []
         step_data_sum = [0 for _ in range(self.config.steps + 1)]
