@@ -170,8 +170,8 @@ class Scheduler:
         self.job_counter += 1
 
         try:
-            proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
-            # proc = subprocess.Popen(full_cmd, text=True)
+            # proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+            proc = subprocess.Popen(full_cmd, text=True)
             self.running_jobs.append({"proc": proc, "cores": cores, "cmd_str": cmd_str})
         except Exception as e:
             tqdm.write(f"[ERROR] Failed to launch: {cmd_str}\n{e}")
@@ -253,38 +253,37 @@ def main():
                 # Start with the base range
                 # Filter out points "close" to specified "mem" in params
 
-                job_specific_mem_points = []
-                if "mem" in params:
-                    spec_mem = parse_mem(params["mem"])
-                    job_specific_mem_points.append(spec_mem)
+                if "mem" in params and isinstance(params["mem"], list):
+                    final_mem_points = [parse_mem(m) for m in params["mem"]]
+                else:
+                    job_specific_mem_points = []
+                    final_mem_points = []
+                    # Add base points that are NOT covered by specific points
+                    # specific point covers range [spec_mem - step_mem, spec_mem + step_mem] ?
+                    # User said: "if there is a memory that difference is less then step mem wrt specified "mem" aggregate that point into specified "mem""
 
-                final_mem_points = []
-                # Add base points that are NOT covered by specific points
-                # specific point covers range [spec_mem - step_mem, spec_mem + step_mem] ?
-                # User said: "if there is a memory that difference is less then step mem wrt specified "mem" aggregate that point into specified "mem""
+                    # We want to iterate through base_mem_range.
+                    # If a base_mem is within step_mem of ANY spec_mem, we skip it (it's "aggregated" into spec_mem)
+                    # Then we add all spec_mem points.
 
-                # We want to iterate through base_mem_range.
-                # If a base_mem is within step_mem of ANY spec_mem, we skip it (it's "aggregated" into spec_mem)
-                # Then we add all spec_mem points.
+                    # Wait, "aggregate" means the user wants to run the specific mem INSTEAD of the nearby base points.
 
-                # Wait, "aggregate" means the user wants to run the specific mem INSTEAD of the nearby base points.
+                    for base_m in base_mem_range:
+                        covered = False
+                        # for spec_m in job_specific_mem_points:
+                        #     if base_m - spec_m < step_mem and base_m - spec_m > 0:
+                        #         covered = True
+                        #         break
+                        if not covered:
+                            final_mem_points.append(base_m)
 
-                for base_m in base_mem_range:
-                    covered = False
-                    # for spec_m in job_specific_mem_points:
-                    #     if base_m - spec_m < step_mem and base_m - spec_m > 0:
-                    #         covered = True
-                    #         break
-                    if not covered:
-                        final_mem_points.append(base_m)
+                    # Add specific points
+                    final_mem_points.extend(job_specific_mem_points)
+                    final_mem_points = sorted(list(set(final_mem_points)))
 
-                # Add specific points
-                final_mem_points.extend(job_specific_mem_points)
-                final_mem_points = sorted(list(set(final_mem_points)))
-
-                # If no memory config at all, just run once with params as is?
-                # The prompt implies we are generating sweeps over memory.
-                # If final_mem_points is empty (no start/end/step config), we just run params once
+                    # If no memory config at all, just run once with params as is?
+                    # The prompt implies we are generating sweeps over memory.
+                    # If final_mem_points is empty (no start/end/step config), we just run params once
 
                 if not final_mem_points:
                     final_mem_points = [None]  # Dummy to run loop once
