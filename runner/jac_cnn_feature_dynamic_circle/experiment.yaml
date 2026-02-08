@@ -4,7 +4,7 @@ packs:
   - name: wbconfig
     options:
       - wandb:
-          project: stencil_cnn_feature_dynamic_circle
+          project: stencil_cnn_feature_dynamic_circle_random
         tag: "stencil-CNN-Feature"
   - name: collections
     options:
@@ -16,6 +16,14 @@ packs:
       - algorithm:
           ent_coef: 0.00025
         tag: "e0.00025"
+  - name: gamma
+    options:
+      - algorithm:
+          gamma: 0.99
+        tag: "g0.99"
+      - algorithm:
+          gamma: 0.999
+        tag: "g0.999"
   - name: rollout
     options:
       - algorithm:
@@ -54,11 +62,6 @@ packs:
     options:
       - graph:
           config:
-            r_interior: 1
-            r_boundary: 0.1
-          tag: "1:1:0.1"
-      - graph:
-          config:
             r_interior: 10
             r_boundary: 0.1
           tag: "1:10:0.1"
@@ -67,13 +70,35 @@ packs:
             r_interior: 1
             r_boundary: 1
           tag: "1:1:1"
+  - name: morton
+    options:
+      - graph:
+          config:
+            morton_priority_enabled: False
+        tag: "morton_disabled"
+      - graph:
+          config:
+            morton_priority_enabled: True
+        tag: "morton_enabled"
   - name: seed
     options:
       - seed: 42
         tag: "seed42"
-      - seed: 256
-        tag: "seed256"
-      - seed: 1024
-        tag: "seed1024"
-      - seed: 2024
-        tag: "seed2024"
+      - seed: 923475
+        tag: "seed923475"
+      - seed: 1110004433
+        tag: "seed1110004433"
+      - seed: 3442234677
+        tag: "seed3442234677"
+      - seed: 81087672
+        tag: "seed81087672"
+      - seed: 1765963171
+        tag: "seed1765963171"
+      - seed: 1253822285
+        tag: "seed1253822285"
+      - seed: 810132442
+        tag: "seed810132442"
+      - seed: 2017945801
+        tag: "seed2017945801"
+      - seed: 3169876321
+        tag: "seed3169876321"

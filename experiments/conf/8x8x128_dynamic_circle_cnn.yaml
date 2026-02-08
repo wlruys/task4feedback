@@ -15,10 +15,11 @@ feature:
   observer:
     prev_frames: 1
     grid_override: False
-    n_candidates: 1
-    version: A
+    graph_override: True
+    n_candidates: 64
+    version: "C"
   normalization:
-    warmup: 10
+    warmup: 40
   add_device_load: True
 
 network:

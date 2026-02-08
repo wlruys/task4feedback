@@ -41,10 +41,14 @@ def create_observer_factory(cfg: DictConfig):
     graph_spec = hydra.utils.instantiate(cfg.feature.observer.spec)
     graph_config = hydra.utils.instantiate(cfg.graph.config)
 
-    if cfg.feature.observer.get("grid_override", False):
+    grid_override = bool(cfg.feature.observer.get("grid_override", False))
+    graph_override = bool(cfg.feature.observer.get("graph_override", False))
+    use_grid_observer = grid_override or graph_override
+
+    if use_grid_observer:
         width = graph_config.n
-        length = graph_config.n 
-        graph_spec.max_candidates = width * length 
+        length = graph_config.n
+        graph_spec.max_candidates = width * length
 
         observer_factory = hydra.utils.instantiate(
             cfg.feature.observer,
@@ -52,12 +56,13 @@ def create_observer_factory(cfg: DictConfig):
             width=width,
             length=length,
             prev_frames=cfg.feature.observer.prev_frames,
-            grid_override=True,
+            grid_override=use_grid_observer,
+            graph_override=use_grid_observer,
         )
     else:
         graph_spec.max_candidates = cfg.feature.observer.get("n_candidates", 1)
         print(f"Setting max candidates to {graph_spec.max_candidates}")
-        observer_factory = hydra.utils.instantiate(cfg.feature.observer)
+        observer_factory = hydra.utils.instantiate(cfg.feature.observer, spec=graph_spec)
         observer_factory.set_graph_spec(graph_spec)
         print(observer_factory.graph_spec)
     return observer_factory, graph_spec
