@@ -41,16 +41,8 @@ packs:
     options:
       - feature:
           observer:
-            n_candidates: 1
-        tag: "c1"
-      - feature:
-          observer:
-            n_candidates: 4
-        tag: "c4"
-      - feature:
-          observer:
-            n_candidates: 16
-        tag: "c16"
+            n_candidates: 64
+        tag: "c64"
   - name: architecture
     options:
       - feature:
@@ -76,24 +68,14 @@ packs:
     options:
       - graph:
           config:
-            r_interior: 10
+            r_interior: 0.1
             r_boundary: 0.1
-        tag: "1:10:0.1"
+        tag: "1:0.1:0.1"
       - graph:
           config:
-            r_interior: 1
-            r_boundary: 1
-        tag: "1:1:1"
-  - name: morton
-    options:
-      - graph:
-          config:
-            morton_priority_enabled: False
-        tag: "morton_disabled"
-      - graph:
-          config:
-            morton_priority_enabled: True
-        tag: "morton_enabled"
+            r_interior: 2
+            r_boundary: 2
+        tag: "1:2:2"
   - name: seed
     options:
       - seed: 42
