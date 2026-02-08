@@ -21,9 +21,6 @@ packs:
       - algorithm:
           gamma: 0.99
         tag: "g0.99"
-      - algorithm:
-          gamma: 0.999
-        tag: "g0.999"
   - name: rollout
     options:
       - algorithm:
@@ -64,22 +61,22 @@ packs:
           config:
             r_interior: 10
             r_boundary: 0.1
-          tag: "1:10:0.1"
+        tag: "1:10:0.1"
       - graph:
           config:
             r_interior: 1
             r_boundary: 1
-          tag: "1:1:1"
-  - name: morton
-    options:
+        tag: "1:1:1"
       - graph:
           config:
-            morton_priority_enabled: False
-        tag: "morton_disabled"
+            r_interior: 2
+            r_boundary: 2
+        tag: "1:2:2"
       - graph:
           config:
-            morton_priority_enabled: True
-        tag: "morton_enabled"
+            r_interior: 0.1
+            r_boundary: 0.1
+        tag: "1:0.1:0.1"
   - name: seed
     options:
       - seed: 42
