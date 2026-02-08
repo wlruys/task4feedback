@@ -13,7 +13,7 @@ BATCH_SIZE=28
 K_PER_SESSION=4
 JOB_NAME="jac_cnn_feature_dynamic_circle"
 PARTITION="gg"
-TIME_LIMIT="08:00:00"
+TIME_LIMIT="16:00:00"
 LAUNCHER="${RUNNER_DIR}/run_tmux_launcher.sh"
 NONSTRICT=true
 
