@@ -279,7 +279,7 @@ def eval_pickled_env(
 ):
     env_rewards = []
     env_times = []
-    env_vsEFT = []
+    env_vsEFT = [] if pickled_states.get("eft_times") is not None else None
     env_vsPolicy = []
     metrics = {}
     last_env = None
@@ -307,8 +307,8 @@ def eval_pickled_env(
             #         training.warning(f"Environment {i} EFT time mismatch: {pickled_states['eft_times'][i]} " f"!= {env._get_baseline('EFT')}")
             #     else:
             #         training.info(f"Environment {i} EFT time match: {pickled_states['eft_times'][i]} == {env._get_baseline('EFT')}")
-
-        env_vsEFT.append(pickled_states["eft_times"][i] / completion_time if completion_time > 0 else 0.0)
+        if env_vsEFT is not None:
+            env_vsEFT.append(pickled_states["eft_times"][i] / completion_time if completion_time > 0 else 0.0)
         env_vsPolicy.append(pickled_states["policy_times"][i] / completion_time if completion_time > 0 else 0.0)
         env.enable_reward()
 

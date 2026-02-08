@@ -2,7 +2,6 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
 from hydra.utils import instantiate
-
 from task4feedback.experiment_helper.graph import make_graph_builder
 from task4feedback.experiment_helper.env import make_env
 from task4feedback.experiment_helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
@@ -15,42 +14,14 @@ from task4feedback.ml.models import *
 
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
-
-from hydra.experimental.callbacks import Callback
-from hydra.core.utils import JobReturn
 from omegaconf import DictConfig, open_dict
 from pathlib import Path
-import git
 import os
 from hydra.core.hydra_config import HydraConfig
-from task4feedback.experiment_helper.run_name import make_run_name, cfg_hash
-
 import torch
 import numpy
 import random
 import pickle
-
-
-class GitInfo(Callback):
-    def on_job_start(self, config: DictConfig, **kwargs) -> None:
-        try:
-            repo = git.Repo(search_parent_directories=True)
-            outdir = Path(config.hydra.runtime.output_dir)
-            outdir.mkdir(parents=True, exist_ok=True)
-            (outdir / "git_sha.txt").write_text(repo.head.commit.hexsha)
-            (outdir / "git_dirty.txt").write_text(str(repo.is_dirty()))
-            diff = repo.git.diff(None)
-            (outdir / "git_diff.patch").write_text(diff)
-
-            print(
-                "Git SHA:",
-                repo.head.commit.hexsha,
-                " (dirty)" if repo.is_dirty() else " (clean)",
-                flush=True,
-            )
-
-        except Exception as e:
-            print(f"GitInfo callback failed: {e}")
 
 
 def configure_training(cfg: DictConfig, normalization=None):

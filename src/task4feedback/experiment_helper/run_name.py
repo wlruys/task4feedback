@@ -88,10 +88,7 @@ def make_folder_name(cfg: DictConfig, change_name=True):
         graph_name = "static"
     if change_name:
         if cfg.graph.env.change_duration:
-            if cfg.graph.config.workload_args.traj_type == "circle":
-                graph_name = "ncircle"
-            elif cfg.graph.config.workload_args.traj_type == "corners":
-                graph_name = "noise"
+            graph_name = "n" + graph_name
     if cfg.graph.config.steps > 256:
         graph_name = "l" + graph_name
 
