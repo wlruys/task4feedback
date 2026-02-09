@@ -4,7 +4,7 @@ packs:
   - name: wbconfig
     options:
       - wandb:
-          project: stencil_mlp_reward_dynamic_circle_jae_random
+          project: stencil_mlp_reward_dynamic_circle_jae_random_corrected
         tag: "stencil-MLP-Reward"
   - name: collections
     options:
@@ -67,8 +67,8 @@ packs:
         tag: "pbrs"
       - reward:
           pbrs: True
-          sparse_reward_scale: 0
-          dense_reward_scale: 10
+          sparse_reward_scale: 10
+          dense_reward_scale: 0
         tag: "sparse"
   - name: block_time
     options:
