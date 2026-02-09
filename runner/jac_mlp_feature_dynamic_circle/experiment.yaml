@@ -41,8 +41,16 @@ packs:
     options:
       - feature:
           observer:
-            n_candidates: 64
-        tag: "c64"
+            n_candidates: 1
+        tag: "c1"
+      - feature:
+          observer:
+            n_candidates: 4
+        tag: "c4"
+      - feature:
+          observer:
+            n_candidates: 16
+        tag: "c16"
   - name: architecture
     options:
       - feature:
