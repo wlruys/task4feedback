@@ -21,9 +21,6 @@ packs:
       - algorithm:
           gamma: 0.99
         tag: "g0.99"
-      - algorithm:
-          gamma: 0.999
-        tag: "g0.999"
   - name: rollout
     options:
       - algorithm:
