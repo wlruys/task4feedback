@@ -4,12 +4,12 @@ from omegaconf import DictConfig, OmegaConf
 import wandb
 from hydra.utils import instantiate
 
-from helper.graph import make_graph_builder
-from helper.env import make_env
-from helper.model import create_td_actor_critic_models
-from helper.algorithm import create_optimizer, create_lr_scheduler
+from task4feedback.experiment_helper.graph import make_graph_builder
+from task4feedback.experiment_helper.env import make_env
+from task4feedback.experiment_helper.model import create_td_actor_critic_models
+from task4feedback.experiment_helper.algorithm import create_optimizer, create_lr_scheduler
 
-from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
+from task4feedback.ml.algorithms.ppo import run_ppo
 from task4feedback.interface.wrappers import *
 from task4feedback.ml.models import *
 from task4feedback.graphs.jacobi import (
@@ -32,7 +32,7 @@ from pathlib import Path
 import git
 import os
 from hydra.core.hydra_config import HydraConfig
-from helper.run_name import make_run_name, cfg_hash
+from task4feedback.experiment_helper.run_name import make_run_name, cfg_hash
 import torch
 import numpy
 import random
@@ -40,7 +40,7 @@ from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from task4feedback.fastsim2 import ParMETIS_wrapper
 from task4feedback.graphs.mesh.plot import animate_mesh_graph
 from task4feedback.ml.util import EvaluationConfig
-from helper.parmetis import run_parmetis
+from task4feedback.experiment_helper.parmetis import run_parmetis, find_best_cfg_optuna
 from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
@@ -50,29 +50,25 @@ size = comm.Get_size()
 
 def configure_training(cfg: DictConfig):
     # start_logger()
-
-    option = "EFT"
+    option = "ParMETIS"
+    cfg.graph.config.steps = 512
     for i in range(1):
         if rank == 0:
             graph_builder = make_graph_builder(cfg)
             env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
             graph = env.get_graph()
+            # env.set_reset_counter(324)
             env.reset()
-
-            inf_cfg = cfg.copy()
-            inf_cfg.system.mem = 999999e9
-            inf_env = make_env(graph_builder=graph_builder, cfg=inf_cfg, normalization=False)
-            inf_env.reset()
             # if isinstance(graph, DynamicJacobiGraph):
             #     workload = graph.get_workload()
             #     workload.animate_workload(show=False, title="outputs/workload_animation.mp4")
             # exit()
+        else:
+            env = None
 
         if option == "EFT" and rank == 0:
             env.simulator.disable_external_mapper()
             env.simulator.run()
-            inf_env.simulator.disable_external_mapper()
-            inf_env.simulator.run()
         elif option == "Oracle" and rank == 0:
             graph.mincut_per_levels(
                 bandwidth=cfg.system.d2d_bw,
@@ -85,53 +81,31 @@ def configure_training(cfg: DictConfig):
             env.simulator.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
         elif option == "BlockCyclic":
             env.simulator.enable_external_mapper()
-            env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=1, offset=1)
+            env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=2, offset=1, verbose=True)
             env.simulator.run()
-            inf_env.simulator.enable_external_mapper()
-            inf_env.simulator.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=1, offset=1)
-            inf_env.simulator.run()
         elif option == "GraphMETISMapper":
             env.simulator.enable_external_mapper()
             env.simulator.external_mapper = GraphMETISMapper(graph=graph, n_devices=cfg.system.n_devices - 1, offset=1)
+            env.simulator.run()
         elif option == "Quad":
             env.simulator.enable_external_mapper()
             env.simulator.external_mapper = JacobiQuadrantMapper(n_devices=cfg.system.n_devices - 1, graph=graph, offset=1)
+            env.simulator.run()
         elif option == "Cyclic":
             env.simulator.enable_external_mapper()
-            env.simulator.external_mapper = JacobiRoundRobinMapper(n_devices=cfg.system.n_devices - 1, offset=1, setting=0)
+            env.simulator.external_mapper = JacobiRoundRobinMapper(n_devices=cfg.system.n_devices - 1, offset=1, setting=1)
+            env.simulator.run()
         elif option == "ParMETIS":
-            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, itr=0.0001001, ub=1.04)
-            run_parmetis(sim=inf_env.simulator if rank == 0 else None, cfg=cfg, itr=0.0001001, ub=1.04)
+            ParMETIS = ParMETIS_wrapper()
+
+            best_cfg = find_best_cfg_optuna(cfg, ParMETIS, env=env, search_new=False, mode="normal_optuna")
+            run_parmetis(sim=env.simulator if rank == 0 else None, cfg=cfg, itr=best_cfg[0], unbalance=best_cfg[1], n_compute_devices=cfg.system.n_devices - 1, ParMETIS=ParMETIS, skip_error=True)
         else:
             raise ValueError(f"Unknown option: {option}")
 
         if rank == 0:
-            const_time = env.simulator.time
-            inf_time = inf_env.simulator.time
-            print(f"{option} Time: {const_time}, Inf Time: {inf_time}, diff factor: {const_time/inf_time:.2f}")
-            print(env.simulator.max_mem_usage / 1e9, inf_env.simulator.max_mem_usage / 1e9)
-            if const_time < inf_time:
-                print("Warning: inf time is greater than Inf time!")
-
-    # # Added to check priority of each task
-    # sim: SimulatorDriver = env.simulator
-    # # for i in range(16 * 4):
-    # #     print(f"Task ID: {i} Mapping Priority: {sim.get_mapping_priority(i)}")
-
-    # if rank == 0:
-    #     config = instantiate(cfg.eval)
-    #     # start_logger()
-    #     env.simulator.run()
-    #     env.simulator.external_mapper = ExternalMapper()
-    #     eft = env._get_baseline("EFT")
-    #     print(env.simulator.time, env._get_baseline("EFT"), f"{eft/env.simulator.time:.2f}x")
-    #     print("Interval: ", int(env.simulator.time / config.max_frames))
-    #     start_t = time.perf_counter()
-    #     animate_mesh_graph(env=env, folder=Path("outputs/"))
-    #     end_t = time.perf_counter()
-    #     print("Plotting time:", end_t - start_t)
-
-    #     # animate_mesh_graph(env=env)
+            print(f"{option}: {env.simulator.time}")
+            animate_mesh_graph(env=env, folder="./", filename=f"{option}.mp4")
 
 
 @hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)

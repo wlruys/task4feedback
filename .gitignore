@@ -13,7 +13,7 @@ logs/
 log/
 .wandb/
 multirun
-*.out 
+*.out
 *.err
 sandbox/
 *.pt
@@ -195,3 +195,11 @@ test/run_tests.sh
 *.mp4
 *.pkl
 dump/
+*.csv
+*.tex
+models
+compile_commands.json
+.pre-commit-config.yaml
+*.pyi
+
+experiments/models_*

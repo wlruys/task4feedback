@@ -7,15 +7,16 @@ from task4feedback.experiment_helper.run_name import make_folder_name
 from task4feedback.graphs.jacobi import (
     JacobiRoundRobinMapper,
     BlockCyclicMapper,
+    JacobiQuadrantMapper,
 )
 import torch
 import numpy
 import random
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
-from task4feedback.experiment_helper.parmetis import run_parmetis
+from task4feedback.experiment_helper.parmetis import run_parmetis, find_best_cfg, find_best_cfg_optuna
 import pickle
 import os  # Added import
-
+from task4feedback.fastsim2 import ParMETIS_wrapper
 from mpi4py import MPI
 
 comm = MPI.COMM_WORLD
@@ -27,15 +28,14 @@ def configure_training(cfg: DictConfig):
     # start_logger()
     extend = cfg.extend
     num_samples = cfg.eval.samples
-
+    ParMETIS = ParMETIS_wrapper()
     folder_name, graph_name, interior_str, boundary_str = make_folder_name(cfg)
 
     # Define the file path consistently
-    file_path = f"./pickled_evaluation/{folder_name}.pkl"
+    file_path = f"./pickled_evaluation/{cfg.feature.observer.version}/{folder_name}.pkl"
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     cfg.graph.config.steps *= extend
-    if cfg.graph.config.workload_args.traj_type == "circle":
-        cfg.graph.config.workload_args.traj_specifics.max_angle *= extend
 
     # --- Start: Check for existing file and matching config ---
     skip_execution = False
@@ -65,42 +65,20 @@ def configure_training(cfg: DictConfig):
         return
     # --- End: Check for existing file ---
 
-    eval_state = {"cfg": OmegaConf.to_yaml(cfg), "init_locs": [], "workloads": [], "eft_times": [], "policy_times": [], "reset_counter": []}
+    eval_state = {"cfg": OmegaConf.to_yaml(cfg), "init_locs": [], "workloads": [], "eft_times": None, "policy_times": [], "reset_counter": []}
     if rank == 0:
         graph_builder = make_graph_builder(cfg)
         env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False, eval=True)
         env.set_reset_counter(9999)
+    else:
+        env = None
 
     # First find the best configuration for parmetis
-    best_cfg = (None, None, float("inf"))  # (itr, ub, time)
-    ub_cur = 1.0001
-    for itr in [0.0001001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000]:
-        if rank == 0:
-            temp = env.simulator.copy()
-        comm.barrier()
-        status = run_parmetis(sim=temp if rank == 0 else None, cfg=cfg, unbalance=ub_cur, itr=itr, n_compute_devices=cfg.system.n_devices - 1)
-        if rank == 0 and temp.time < best_cfg[2]:
-            best_cfg = (itr, ub_cur, temp.time)
-            print(f"New best ITR {itr} with time {temp.time}", flush=True)
-
+    best_cfg = None
+    if best_cfg is None:
+        best_cfg = find_best_cfg_optuna(cfg, ParMETIS, env=env, skip_search=True, mode="normal_optuna")
     best_cfg = comm.bcast(best_cfg, root=0)
-    ub_list = [1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0]
-    for ub in ub_list:
-        if rank == 0:
-            temp = env.simulator.copy()
-        comm.barrier()
-        status = run_parmetis(sim=(temp if rank == 0 else None), cfg=cfg, unbalance=ub, itr=best_cfg[0], n_compute_devices=cfg.system.n_devices - 1)
-        if not status:
-            break
-        if rank == 0:
-            print(f"Tried ub {ub:.2f} with time {temp.time}", flush=True)
-            if temp.time < best_cfg[2]:
-                # Improvement: accept move, keep direction, keep step
-                ub_cur = ub
-                best_cfg = (best_cfg[0], ub_cur, temp.time)
-                print(f"New best ub {ub_cur:.2f} with time {temp.time}", flush=True)
-
-    best_cfg = comm.bcast(best_cfg, root=0)
+    assert best_cfg is not None, "Best configuration for ParMETIS not found!"
 
     for i in range(num_samples):
         if rank == 0:
@@ -113,25 +91,34 @@ def configure_training(cfg: DictConfig):
                 eval_state["workloads"].append(dict(graph.get_workload().level_workload))
             else:
                 eval_state["workloads"].append(None)
-            copy_sim.disable_external_mapper()
-            copy_sim.run()
-            eval_state["eft_times"].append(copy_sim.time)
-            print(f"Eval {i}:\n EFT time {copy_sim.time}")
+            # copy_sim.disable_external_mapper()
+            # copy_sim.run()
+            # eval_state["eft_times"].append(99999999999)
+            # print(f"Eval {i}:\n EFT time {copy_sim.time}")
 
             copy_sim = env.simulator.copy()
         comm.barrier()
         run_parmetis(sim=(copy_sim if rank == 0 else None), cfg=cfg, itr=best_cfg[0], unbalance=best_cfg[1], n_compute_devices=cfg.system.n_devices - 1)
         if rank == 0:
-            policy_time = min(copy_sim.time, eval_state["eft_times"][-1])
+            # policy_time = min(copy_sim.time, eval_state["eft_times"][-1])
+            policy_time = copy_sim.time
             print(f"ParMETIS time: {copy_sim.time}")
 
             # Block Cyclic 4x4
-            copy_sim = env.simulator.copy()
-            copy_sim.enable_external_mapper()
-            copy_sim.external_mapper = BlockCyclicMapper(geometry=copy_sim.input.graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=4, offset=1)
-            copy_sim.run()
-            policy_time = min(copy_sim.time, policy_time)
-            print(f"Block Cyclic 4x4 time: {copy_sim.time}")
+            if cfg.system.n_devices - 1 == 4:
+                copy_sim = env.simulator.copy()
+                copy_sim.enable_external_mapper()
+                copy_sim.external_mapper = BlockCyclicMapper(geometry=copy_sim.input.graph.data.geometry, n_devices=cfg.system.n_devices - 1, block_size=4, offset=1)
+                copy_sim.run()
+                policy_time = min(copy_sim.time, policy_time)
+                print(f"Block Cyclic 4x4 time: {copy_sim.time}")
+            elif cfg.system.n_devices - 1 == 8:
+                copy_sim = env.simulator.copy()
+                copy_sim.enable_external_mapper()
+                copy_sim.external_mapper = JacobiQuadrantMapper(graph=copy_sim.input.graph, n_devices=cfg.system.n_devices - 1, offset=1)
+                copy_sim.run()
+                policy_time = min(copy_sim.time, policy_time)
+                print(f"Block Cyclic 4x4 time: {copy_sim.time}")
 
             # Block Cyclic 2x2
             copy_sim = env.simulator.copy()
@@ -158,30 +145,30 @@ def configure_training(cfg: DictConfig):
             print(f"RowCyclic time: {copy_sim.time}")
 
             eval_state["policy_times"].append(policy_time)
-            print(f"{i}: EFT {eval_state['eft_times'][-1]:.4f}, {eval_state['policy_times'][-1]:.4f} ({eval_state['eft_times'][-1]/eval_state['policy_times'][-1]:.2f}x)")
+            # print(f"{i}: EFT {eval_state['eft_times'][-1]:.4f}, {eval_state['policy_times'][-1]:.4f} ({eval_state['eft_times'][-1]/eval_state['policy_times'][-1]:.2f}x)")
     # print(eval_state)
     # pickle.dump(eval_state, open("4x4x16_static_1:1:1.pkl", "wb"))
     if rank == 0:
 
-        env.set_reset_counter(0)
-        env._reset()
+        # env.set_reset_counter(0)
+        # env._reset()
 
-        # eval_state = pickle.load(open("dynamic_bump_eval.pkl", "rb"))
-        for i in range(num_samples):
-            env.set_reset_counter(eval_state["reset_counter"][i])
-            env.reset()
-            # env.reset_to_state(saved_loc, workload)
-            print(f"Eval {i}:")
-            sim_time = env._get_baseline("EFT")
-            if eval_state["eft_times"][i] != sim_time:
-                print(f"  Warning: EFT time changed! {eval_state['eft_times'][i]} -> {sim_time}")
-                raise ValueError("EFT time mismatch")
-            else:
-                print("EFT time matches.")
-            # print("EFT:", eval_state["eft_times"][i])
-        else:
-            # Modified to use the file_path variable defined earlier
-            pickle.dump(eval_state, open(file_path, "wb"))
+        # # eval_state = pickle.load(open("dynamic_bump_eval.pkl", "rb"))
+        # for i in range(num_samples):
+        #     env.set_reset_counter(eval_state["reset_counter"][i])
+        #     env.reset()
+        #     # env.reset_to_state(saved_loc, workload)
+        #     print(f"Eval {i}:")
+        #     sim_time = env._get_baseline("EFT")
+        #     if eval_state["eft_times"][i] != sim_time:
+        #         print(f"  Warning: EFT time changed! {eval_state['eft_times'][i]} -> {sim_time}")
+        #         raise ValueError("EFT time mismatch")
+        #     else:
+        #         print("EFT time matches.")
+        #     # print("EFT:", eval_state["eft_times"][i])
+        # else:
+        #     # Modified to use the file_path variable defined earlier
+        pickle.dump(eval_state, open(file_path, "wb"))
 
 
 @hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)

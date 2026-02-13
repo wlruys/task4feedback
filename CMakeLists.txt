@@ -11,6 +11,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS  OFF)
 set(CMAKE_UNITY_BUILD_BATCH_SIZE 0)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 
 # ---- project options -------------------------------------------------------
 option(ENABLE_ASAN          "Compile with AddressSanitizer"          OFF)
@@ -38,7 +40,7 @@ endif()
 
 
 # Make martinus/unordered_dense ankerl::unordered_map available
-#TODO(wlr): This fails if offlien 
+#TODO(wlr): This fails if offlien
 FetchContent_Declare(
     ankerl_unordered_dense
     GIT_REPOSITORY https://github.com/martinus/unordered_dense.git
@@ -63,19 +65,19 @@ if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)  # Don't use with AddressSanitizer
             GIT_PROGRESS   TRUE
             GIT_TAG        v2.1.7
         )
-        
+
         # Configure mimalloc build options
         set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
         set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
         set(MI_BUILD_STATIC ON CACHE BOOL "" FORCE)
         set(MI_OVERRIDE ON CACHE BOOL "" FORCE)
-        
+
 
         FetchContent_MakeAvailable(mimalloc)
         add_library(mimalloc::mimalloc ALIAS mimalloc-static)
     endif()
-    
+
     message(STATUS "mimalloc enabled - automatic malloc/free override")
 endif()
 
@@ -85,7 +87,7 @@ FetchContent_Declare(tracy
     GIT_SHALLOW    TRUE
     GIT_PROGRESS TRUE
     GIT_TAG master
-)     
+)
 
 add_library(tracy_headers INTERFACE)
 
@@ -100,25 +102,25 @@ if(ENABLE_TRACY)
     else()
         set(TRACY_DEBUGINFOD OFF CACHE BOOL "" FORCE)
     endif()
-    FetchContent_MakeAvailable(tracy)     
+    FetchContent_MakeAvailable(tracy)
 
-    target_link_libraries(tracy_headers    
+    target_link_libraries(tracy_headers
         INTERFACE Tracy::TracyClient)
     target_compile_definitions(tracy_headers
         INTERFACE TRACY_ENABLE TRACY_LTO TRACY_ON_DEMAND)
     target_compile_options(tracy_headers
         INTERFACE -fno-omit-frame-pointer -g)
     if(ENABLE_TRACY_LIBDEBUG)
-        target_compile_definitions(tracy_headers 
+        target_compile_definitions(tracy_headers
             INTERFACE TRACY_DEBUGINFOD)
         include(FindPkgConfig)
         pkg_check_modules(debuginfod REQUIRED libdebuginfod)
         target_include_directories(tracy_headers INTERFACE ${debuginfod_INCLUDE_DIRS})
-        target_link_libraries(tracy_headers INTERFACE ${debuginfod_LINK_LIBRARIES})   
+        target_link_libraries(tracy_headers INTERFACE ${debuginfod_LINK_LIBRARIES})
     endif()
 else()
     set(TRACY_ENABLE OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(tracy)     
+    FetchContent_MakeAvailable(tracy)
 endif()
 
 target_include_directories(tracy_headers
@@ -164,7 +166,7 @@ else()
       GIT_REPOSITORY https://github.com/gabime/spdlog.git
       GIT_TAG        v1.14.1
       GIT_SHALLOW    TRUE
-      GIT_PROGRESS   TRUE          
+      GIT_PROGRESS   TRUE
   )
 
   FetchContent_MakeAvailable(spdlog)
@@ -195,7 +197,7 @@ if(ENABLE_NATIVE_TUNING)
 endif()
 
 add_subdirectory(src/backend)      # builds simulator library
-add_subdirectory(src/bindings)     # builds python module 
+add_subdirectory(src/bindings)     # builds python module
 
 include(CPack)                     #for packaging
 include(GNUInstallDirs)            #for install dirs

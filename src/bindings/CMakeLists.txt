@@ -113,6 +113,14 @@ nanobind_add_stub(fastsim2_stub
     MARKER_FILE py.typed
     DEPENDS fastsim2)
 
+# Copy the generated stub to the Python source directory for editable installs/IDE support
+add_custom_command(TARGET fastsim2_stub POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_BINARY_DIR}/fastsim2.pyi
+        ${CMAKE_SOURCE_DIR}/src/task4feedback/fastsim2.pyi
+    COMMENT "Copying fastsim2.pyi to source tree"
+)
+
 install(TARGETS fastsim2
         COMPONENT python
         LIBRARY DESTINATION task4feedback)

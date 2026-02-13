@@ -1,359 +1,468 @@
-import csv
-import re
-import hydra
-from omegaconf import DictConfig, OmegaConf
-import wandb
-from hydra.utils import instantiate
-
-from helper.graph import make_graph_builder
-from helper.env import make_env
-from helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
-from helper.algorithm import create_optimizer, create_lr_scheduler
-
-from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
-from task4feedback.interface.wrappers import *
-from task4feedback.ml.models import *
-from task4feedback.ml.util import *
-from task4feedback.graphs.jacobi import JacobiRoundRobinMapper, LevelPartitionMapper, BlockCyclicMapper
-from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
-
-from hydra.experimental.callbacks import Callback
-from hydra.core.utils import JobReturn
-from omegaconf import DictConfig, open_dict
-from pathlib import Path
-import git
 import os
-from hydra.core.hydra_config import HydraConfig
-from helper.run_name import make_run_name, cfg_hash
-import torch
-import numpy as np
 import random
 import pickle
+import fcntl
+from pathlib import Path
+from typing import Iterable, Tuple, List
+
+import hydra
+import torch
+import numpy as np
+from omegaconf import DictConfig
 from torchrl.envs import set_exploration_type, ExplorationType
-from helper.parmetis import run_parmetis
-from mpi4py import MPI
+from task4feedback.graphs.mesh.plot import _build_state
+from task4feedback.experiment_helper.graph import make_graph_builder
+from task4feedback.experiment_helper.env import make_env, RuntimeEnv
+from task4feedback.experiment_helper.model import (
+    create_td_actor_critic_models,
+    load_policy_from_checkpoint,
+)
+from task4feedback.interface.wrappers import *
+from task4feedback.experiment_helper.run_name import make_folder_name
+from task4feedback.ml.models import FeatureDimConfig
+from task4feedback.graphs.mesh.plot import animate_mesh_graph
 
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-size = comm.Get_size()
+# =============================================================================
+# Constants
+# =============================================================================
 
 
-class GitInfo(Callback):
-    def on_job_start(self, config: DictConfig, **kwargs) -> None:
-        try:
-            repo = git.Repo(search_parent_directories=True)
-            outdir = Path(config.hydra.runtime.output_dir)
-            outdir.mkdir(parents=True, exist_ok=True)
-            (outdir / "git_sha.txt").write_text(repo.head.commit.hexsha)
-            (outdir / "git_dirty.txt").write_text(str(repo.is_dirty()))
-            diff = repo.git.diff(None)
-            (outdir / "git_diff.patch").write_text(diff)
+MAX_ROLLOUT_STEPS = 1_000_000
+EVAL_GRAPH_STEPS = 512
+PHASE_LENGTH = 128
+SYSTEM_MEMORY = 96e9
+INFINITE_MEMORY = 9999e9
 
-            print(
-                "Git SHA:",
-                repo.head.commit.hexsha,
-                " (dirty)" if repo.is_dirty() else " (clean)",
-                flush=True,
+# =============================================================================
+# File Utilities
+# =============================================================================
+
+
+def write_results_atomic(path: str, lines: Iterable[str]) -> None:
+    """
+    Append lines to a file using an exclusive file lock.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        for line in lines:
+            f.write(line + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+        fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def csv_entry_exists(path: str, key: Tuple[str, ...]) -> bool:
+    """
+    Check whether a CSV file already contains an entry starting with `key`.
+    """
+    if not os.path.exists(path):
+        return False
+
+    with open(path, "r") as f:
+        for line in f:
+            parts = line.strip().split(",")
+            if len(parts) >= len(key) and tuple(parts[: len(key)]) == tuple(map(str, key)):
+                return True
+    return False
+
+
+# =============================================================================
+# Model / Environment Setup
+# =============================================================================
+
+
+def load_normalization(folder_name: str, observer_version: str):
+    norm_path = f"./norms/{folder_name}/{observer_version}_norm.pkl"
+    with open(norm_path, "rb") as f:
+        return pickle.load(f)
+
+
+def prepare_eval_cfg(cfg: DictConfig) -> int:
+    """
+    Mutate cfg for evaluation and return number of evaluation runs.
+    """
+    cfg.system.mem = SYSTEM_MEMORY
+    cfg.graph.config.steps = EVAL_GRAPH_STEPS
+    cfg.graph.config.workload_args.traj_specifics.phase_length = PHASE_LENGTH
+
+    return 20 if cfg.graph.env.change_duration else 12 if cfg.graph.env.change_workload else 1
+
+
+def build_env_and_model(cfg: DictConfig, norm, model_path: Path):
+    graph_builder = make_graph_builder(cfg)
+    env = make_env(
+        graph_builder=graph_builder,
+        cfg=cfg,
+        normalization=norm,
+        eval=True,
+    )
+
+    cfg.system.mem = INFINITE_MEMORY
+
+    infenv = make_env(
+        graph_builder=graph_builder,
+        cfg=cfg,
+        normalization=norm,
+        eval=True,
+    )
+
+    cfg.system.mem = SYSTEM_MEMORY
+
+    feature_config = FeatureDimConfig.from_observer(env.get_observer())
+    model, _, _ = create_td_actor_critic_models(cfg, feature_config)
+
+    if not load_policy_from_checkpoint(model, model_path):
+        raise RuntimeError(f"Failed to load model from {model_path}")
+
+    return env, infenv, model
+
+
+# =============================================================================
+# Evaluation Logic
+# =============================================================================
+
+import numpy as np
+from collections import defaultdict
+from typing import Dict, Any, List, Tuple
+
+
+class ReplayMapper:
+    def __init__(self, history):
+        self.history = history
+
+    def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
+        candidates = torch.zeros((simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+        num_candidates = simulator.simulator.get_mappable_candidates(candidates)
+        mapping_result = []
+        for i in range(num_candidates):
+            global_task_id = candidates[i].item()
+            device = self.history[global_task_id]
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(global_task_id)
+            mapping_result.append(fastsim.Action(i, device, mapping_priority, mapping_priority))
+        return mapping_result
+
+
+# ------------------------------------------------------------
+# Interval helpers
+# ------------------------------------------------------------
+def merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    if not intervals:
+        return []
+    intervals = sorted(intervals)
+    merged = [intervals[0]]
+    for s, e in intervals[1:]:
+        ps, pe = merged[-1]
+        if s <= pe:
+            merged[-1] = (ps, max(pe, e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def interval_length(intervals: List[Tuple[int, int]]) -> int:
+    return sum(e - s for s, e in intervals)
+
+
+def interval_overlap(a: List[Tuple[int, int]], b: List[Tuple[int, int]]) -> int:
+    i = j = 0
+    overlap = 0
+    while i < len(a) and j < len(b):
+        s1, e1 = a[i]
+        s2, e2 = b[j]
+        s = max(s1, s2)
+        e = min(e1, e2)
+        if s < e:
+            overlap += e - s
+        if e1 < e2:
+            i += 1
+        else:
+            j += 1
+    return overlap
+
+
+# ------------------------------------------------------------
+# Main analysis
+# ------------------------------------------------------------
+def analyze_policy_run(env) -> Dict[str, Any]:
+    static_state, dynamic_state = _build_state(env)
+    graph = env.get_graph()
+
+    # ------------------------------------------------------------
+    # Collect intervals
+    # ------------------------------------------------------------
+    compute_intervals_per_device = defaultdict(list)
+    all_compute_intervals = []
+
+    for i in range(static_state.n_compute_tasks):
+        s = static_state.ct_launch_time[i]
+        e = static_state.ct_complete_time[i]
+        if s < 0 or e < 0:
+            continue
+        dev = int(static_state.ct_device[i]) - 1
+        interval = (int(s), int(e))
+        compute_intervals_per_device[dev].append(interval)
+        all_compute_intervals.append(interval)
+
+    comm_intervals = []
+    comm_intervals_per_link = defaultdict(list)
+
+    for i in range(static_state.n_data_tasks):
+        if static_state.dt_virtual[i]:
+            continue
+        s = static_state.dt_launch_time[i]
+        e = static_state.dt_complete_time[i]
+        if s < 0 or e < 0:
+            continue
+        src = int(static_state.dt_source[i]) - 1
+        dst = int(static_state.dt_device[i]) - 1
+        interval = (int(s), int(e))
+        comm_intervals.append(interval)
+        comm_intervals_per_link[(src, dst)].append(interval)
+
+    # ------------------------------------------------------------
+    # Merge intervals
+    # ------------------------------------------------------------
+    all_compute_merged = merge_intervals(all_compute_intervals)
+    all_comm_merged = merge_intervals(comm_intervals)
+
+    per_device_compute = {d: merge_intervals(v) for d, v in compute_intervals_per_device.items()}
+
+    # ------------------------------------------------------------
+    # Makespan
+    # ------------------------------------------------------------
+    t0 = min(
+        [s for s, _ in all_compute_intervals + comm_intervals],
+        default=0,
+    )
+    t1 = max(
+        [e for _, e in all_compute_intervals + comm_intervals],
+        default=0,
+    )
+    makespan = t1 - t0
+
+    # ------------------------------------------------------------
+    # Utilization metrics
+    # ------------------------------------------------------------
+    total_compute_time = interval_length(all_compute_merged)
+    total_comm_time = interval_length(all_comm_merged)
+    overlap_time = interval_overlap(all_compute_merged, all_comm_merged)
+
+    exposed_comm_time = total_comm_time - overlap_time
+    gpu_idle_time = makespan - total_compute_time
+    gpu_idle_frac = gpu_idle_time / makespan if makespan > 0 else 0.0
+
+    # ------------------------------------------------------------
+    # Critical path (approximate but effective)
+    # ------------------------------------------------------------
+    # Assumption: anything exposed (not overlapped) is on the critical path
+    critical_path_length = total_compute_time + exposed_comm_time
+
+    # ------------------------------------------------------------
+    # Per-device utilization
+    # ------------------------------------------------------------
+    per_device_stats = {}
+    for dev, intervals in per_device_compute.items():
+        busy = interval_length(intervals)
+        per_device_stats[dev] = {
+            "busy_time": busy,
+            "utilization": busy / makespan if makespan > 0 else 0.0,
+        }
+
+    # ------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------
+    return {
+        "makespan": makespan,
+        "total_compute_time": total_compute_time,
+        "total_comm_time": total_comm_time,
+        "overlap_time": overlap_time,
+        "overlap_ratio": overlap_time / total_comm_time if total_comm_time > 0 else 0.0,
+        "exposed_comm_time": exposed_comm_time,
+        "gpu_idle_time": gpu_idle_time,
+        "gpu_idle_fraction": gpu_idle_frac,
+        "critical_path_length": critical_path_length,
+        "per_device": per_device_stats,
+    }
+
+
+def evaluate_model(env: RuntimeEnv, infenv: RuntimeEnv, model, num_runs: int) -> Tuple[float, float]:
+    """
+    Run evaluation rollouts and return (avg_time, avg_evictions).
+    """
+    model.eval()
+    results: List[Tuple[float, float]] = []
+    # eft_results: List[Tuple[float, float]] = []
+    # inf_results: List[Tuple[float, float]] = []
+
+    with torch.no_grad(), set_exploration_type(ExplorationType.DETERMINISTIC):
+        for run_idx in range(num_runs):
+            td = env.reset()
+            # infenv.reset()
+
+            # copy_sim = env.simulator.copy()
+            # copy_sim.disable_external_mapper()
+            # copy_sim.run()
+            # print(copy_sim.time, flush=True)
+            # eft_results.append((copy_sim.time, sum(list(copy_sim.total_eviction_movement())[1:]), sum(copy_sim.total_data_movement())))
+
+            env.rollout(
+                max_steps=MAX_ROLLOUT_STEPS,
+                policy=model.actor,
+                auto_reset=False,
+                tensordict=td,
             )
 
-        except Exception as e:
-            print(f"GitInfo callback failed: {e}")
+            # infsim = infenv.simulator
+            # runtime = env.simulator.state.get_task_runtime()
+            # history = {}
+            # for task_id in range(8 * 8 * EVAL_GRAPH_STEPS):
+            # history[task_id] = runtime.get_compute_task_mapped_device(task_id)
+            # infsim.external_mapper = ReplayMapper(history)
+            # infsim.enable_external_mapper()
+            # infsim.run()
+            # inf_results.append((infsim.time, sum(list(infsim.total_eviction_movement())[1:]), sum(infsim.total_data_movement())))
+
+            sim = env.simulator
+            eviction_cost = sum(list(sim.total_eviction_movement())[1:])
+            data_movement = sum(sim.total_data_movement())
+            results.append((sim.time, eviction_cost, data_movement))
+
+    avg_time = sum(r[0] for r in results) / len(results)
+    avg_eviction = sum(r[1] for r in results) / len(results)
+    avg_data_movement = sum(r[2] for r in results) / len(results)
+
+    # eft_avg_time = sum(r[0] for r in eft_results) / len(eft_results)
+    # eft_avg_eviction = sum(r[1] for r in eft_results) / len(eft_results)
+    # eft_avg_data_movement = sum(r[2] for r in eft_results) / len(eft_results)
+
+    # inf_avg_time = sum(r[0] for r in inf_results) / len(inf_results)
+    # inf_avg_eviction = sum(r[1] for r in inf_results) / len(inf_results)
+    # inf_avg_data_movement = sum(r[2] for r in inf_results) / len(inf_results)
+
+    return {
+        "rl": {"time": avg_time, "eviction": avg_eviction, "data_movement": avg_data_movement},
+        # "eft": {"time": eft_avg_time, "eviction": eft_avg_eviction, "data_movement": eft_avg_data_movement},
+        # "inf": {"time": inf_avg_time, "eviction": inf_avg_eviction, "data_movement": inf_avg_data_movement},
+    }
 
 
-def parse_policy(policy_str: str):
-    """
-    Parse cfg.sweep.policy string into its components.
-    Supports Oracle(k), ParMETIS(ub,itr), BlockCyclic, EFT.
-    """
-    # Regex to capture function-like calls
-    match = re.match(r"([A-Za-z]+)\(([^)]*)\)", policy_str)
+# =============================================================================
+# Main Evaluation Driver
+# =============================================================================
 
-    if match:
-        name = match.group(1)
-        args_str = match.group(2)
-        # Split args by comma, convert to int or float
-        args = []
-        for arg in args_str.split(","):
-            arg = arg.strip()
-            if arg.isdigit():
-                args.append(int(arg))
-            else:
-                try:
-                    args.append(float(arg))
-                except ValueError:
-                    args.append(arg)  # fallback as string
-        return name, args
+
+def configure_training(cfg: DictConfig) -> None:
+    folder_name, _, _, _ = make_folder_name(cfg, change_name=False)
+    model_dir = Path(f"./models_{EVAL_GRAPH_STEPS}") / folder_name
+    graph_name = cfg.graph.config.workload_args.traj_type
+    if cfg.graph.env.change_duration:
+        RESULTS_CSV = f"./results/{cfg.system.n_devices-1}gpus/noise_results_rl_{EVAL_GRAPH_STEPS}.csv"
     else:
-        # Just a string (BlockCyclic, EFT, etc.)
-        return policy_str, []
+        RESULTS_CSV = f"./results/{cfg.system.n_devices-1}gpus/results_rl_{EVAL_GRAPH_STEPS}.csv"
 
+    norm = load_normalization(
+        folder_name,
+        cfg.feature.observer.version,
+    )
 
-def configure_training(cfg: DictConfig):
-    # start_logger()
-    # Attempt to load policy weights from a local checkpoint next to this file
-    n_samples = 100
-    if not cfg.graph.env.change_priority and not cfg.graph.env.change_location and not cfg.graph.env.change_workload and not cfg.graph.env.change_duration:
-        n_samples = 1
+    num_runs = prepare_eval_cfg(cfg)
+    output_lines: List[str] = []
+    output_lines_with_eft: List[str] = []
 
-    def closest_ratio_string(value: float) -> str:
-        mapping = {10: "10", 1: "1", 0.1: "0.1"}
-        closest = min(mapping.keys(), key=lambda x: abs(value - x))
-        return mapping[closest]
-
-    interior_ratio = 595.5555555 / (cfg.graph.config.arithmetic_intensity)
-    boundary_ratio = interior_ratio * cfg.graph.config.boundary_width * 4
-
-    interior_ratio = closest_ratio_string(interior_ratio)
-    boundary_ratio = closest_ratio_string(boundary_ratio)
-
-    best_policy, best_args = parse_policy(cfg.sweep.policy)
-
-    if OmegaConf.select(cfg, "graph.config.workload_args.traj_type") is not None:
-        graph_name = cfg.graph.config.workload_args.traj_type
-    else:
-        graph_name = "static"
-    if "Dilation" in cfg.network.layers.state._target_:
-        if "Uncond" in cfg.network.layers.state._target_:
-            network = "UncondCNN"
-        else:
-            network = "CNN"
-    elif "Vector" in cfg.network.layers.state._target_:
-        network = "Vector"
-    elif "GNN" in cfg.network.layers.state._target_:
-        network = "GNN"
-    else:
-        print(cfg.network.layers.state._target_)
-        raise ValueError("Unknown network type in cfg.network.layers.state._target_")
-
-    proceed = False
-    results = []
-
-    if rank == 0:
-        root_dir = Path(__file__).resolve().parent / "saved_models" / f"8x8x128_{interior_ratio}-{boundary_ratio}-1_{graph_name}_{network}"
-
-        saved_models_dir = root_dir / "models"
-        norms_dir = root_dir / "norms"
-        results_dir = root_dir / "results"
-
-        root_dir.mkdir(parents=True, exist_ok=True)
-        saved_models_dir.mkdir(parents=True, exist_ok=True)
-        norms_dir.mkdir(parents=True, exist_ok=True)
-        results_dir.mkdir(parents=True, exist_ok=True)
-
-        print(f"Looking for models in {saved_models_dir}")
-
-        pattern = re.compile(
-            r"(?P<grid>\d+x\d+x\d+)_"  # grid
-            r"(?P<interior>\d+(?:\.\d+)?)[\:\-]"  # interior
-            r"(?P<boundary>\d+(?:\.\d+)?)[\:\-]1_"  # boundary
-            r"(?P<traj_type>[^_]+)_"  # traj_type
-            r"CNN_(?P<observer_version>[^_]+)_"  # observer version
-            r"Device(?P<device>\w+)_"  # device flag
-            r"(?P<frames>\d+)Frames"  # frames
-            r"(?:_.*)?"  # <-- allow dots in extra metadata
-            r"\.pt$"  # extension
+    for model_path in model_dir.glob("*.pt"):
+        key = (
+            graph_name,
+            cfg.graph.config.level_memory,
+            cfg.graph.config.r_interior,
+            cfg.graph.config.r_boundary,
+            model_path.stem,
         )
 
-        for file in saved_models_dir.rglob("*.pt"):
-            print(f"Checking file {file.name}")
-            match = pattern.match(file.name)
-            if match:
-                info = match.groupdict()
-                info["path"] = str(file)
-                results.append(info)
+        if csv_entry_exists(RESULTS_CSV, key):
+            print(f"[SKIP] CSV entry already exists for {model_path.name}", flush=True)
+            # vid_path = model_path.with_suffix(".mp4")
+            # if vid_path.exists():
+            #     print(f"[SKIP] Video already exists for {model_path.name}", flush=True)
+            # else:
+            #     env, infenv, model = build_env_and_model(cfg, norm, model_path)
+            #     env.rollout(policy=model.actor, max_steps=MAX_ROLLOUT_STEPS)
+            #     result = analyze_policy_run(env)
+            #     animate_mesh_graph(env=env, folder=model_path.parent, filename=vid_path.name)
+            #     print(f"[SAVE] Animation saved to {vid_path}", flush=True)
+            #     # save analysis result as json
+            #     result_path = model_path.with_suffix(".json")
+            #     with open(result_path, "w") as f:
+            #         import json
 
-    results = comm.bcast(results, root=0)
+            #         json.dump(result, f, indent=4)
+            #         print(f"[SAVE] Analysis result saved to {result_path}", flush=True)
+            continue
 
-    for item in results:
-        if rank == 0:
-            if interior_ratio != item["interior"] or boundary_ratio != item["boundary"]:
-                raise ValueError(f"Loaded model with different ratio: {item['interior']}:{item['boundary']}:1 (expected {interior_ratio}:{boundary_ratio}:1)")
-            if cfg.graph.config.workload_args.traj_type != item["traj_type"]:
-                raise ValueError(f"Loaded model with different traj_type: {item['traj_type']} (expected {cfg.graph.config.workload_args.traj_type})")
+        try:
+            env, infenv, model = build_env_and_model(cfg, norm, model_path)
+            results = evaluate_model(env, infenv, model, num_runs)
+        except Exception as e:
+            print(f"[ERROR] {e}", flush=True)
+            continue
 
-            cfg.feature.observer.version = item["observer_version"]
-            cfg.feature.add_device_load = item["device"] in ["1", "True", "true", "T", "t"]
-            cfg.feature.observer.prev_frames = int(item["frames"])
-            print(f"Running model: {item['path']} with observer version {item['observer_version']}, add_device_load={cfg.feature.add_device_load}, prev_frames={cfg.feature.observer.prev_frames}")
+        line = (
+            f"{graph_name},"
+            f"{cfg.graph.config.level_memory},"
+            f"{cfg.graph.config.r_interior},"
+            f"{cfg.graph.config.r_boundary},"
+            f"{model_path.stem},"
+            f"{results['rl']['time']:.0f},"
+            f"{results['rl']['eviction']:.0f},"
+            f"{results['rl']['data_movement']:.0f}"
+        )
 
-            model_name = f"8x8x128_{interior_ratio}-{boundary_ratio}-1_{cfg.graph.config.workload_args.traj_type}_CNN_{cfg.feature.observer.version}_Device{cfg.feature.add_device_load}_{cfg.feature.observer.prev_frames}Frames"
+        # line_inf = (
+        #     f"{graph_name},"
+        #     f"{cfg.graph.config.level_memory},"
+        #     f"{cfg.graph.config.r_interior},"
+        #     f"{cfg.graph.config.r_boundary},"
+        #     f"{model_path.stem}_inf,"
+        #     f"{results['inf']['time']:.0f},"
+        #     f"{results['inf']['eviction']:.0f},"
+        #     f"{results['inf']['data_movement']:.0f}"
+        # )
 
-            ckpt_path = item["path"]
-            norm_file = norms_dir / f"{model_name}_norm.pkl"
+        # line_eft = (
+        #     f"{graph_name},"
+        #     f"{cfg.graph.config.level_memory},"
+        #     f"{cfg.graph.config.r_interior},"
+        #     f"{cfg.graph.config.r_boundary},"
+        #     f"{model_path.stem},"
+        #     f"{results['rl']['time']:.0f},"
+        #     f"{results['rl']['eviction']:.0f},"
+        #     f"{results['eft']['time']:.0f},"
+        # )
+        output_lines.append(line)
+        # output_lines.append(line_inf)
+        # output_lines_with_eft.append(line_eft)
 
-            graph_builder = make_graph_builder(cfg)
-            if norm_file.exists():
-                print(f"Loading normalization from {norm_file}")
-                norm = pickle.load(open(norm_file, "rb"))
-                env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=norm, eval=True)
-            else:
-                print(f"Normalization file {norm_file} not found, creating new normalization")
-                env, norm = make_env(graph_builder=graph_builder, cfg=cfg, eval=True)
-                pickle.dump(norm, open(norm_file, "wb"))
-
-            observer = env.get_observer()
-            feature_config = FeatureDimConfig.from_observer(observer)
-            model, _, _ = create_td_actor_critic_models(cfg, feature_config)
-
-            loaded = load_policy_from_checkpoint(model, ckpt_path)
-            if not loaded:
-                print(f"Found {ckpt_path}, but not a compatible policy module to load into.")
-                proceed = False
-                break
-            else:
-                proceed = True
-
-        proceed = comm.bcast(proceed, root=0)
-        if not proceed:
-            print("No compatible model found, exiting.")
-            # print(f"Found {ckpt_path}, but not a compatible policy module to load into.")
-            exit()
-
-        if rank == 0:
-            eval_env = make_env(
-                graph_builder=graph_builder,
-                cfg=cfg,
-                normalization=norm,
-                eval=True,
-            )
-
-            model.eval()
-            eval_config = instantiate(cfg.eval)
-            vsBest = []
-            vsEFT = []
-            result_path = results_dir / "plain" / f"{model_name}_result.txt"
-            result_path.parent.mkdir(parents=True, exist_ok=True)
-            result_string = ""
-
-            def log_line(message: str) -> None:
-                print(message)
-                nonlocal result_string
-                result_string += message + "\n"
-
-            raw_rows = []  # collect raw data
-
-            log_line("Starting evaluation run")
-            log_line(f"Checkpoint: {ckpt_path}")
-
-        with set_exploration_type(ExplorationType.DETERMINISTIC), torch.no_grad():
-            for i in range(n_samples):
-                if rank == 0:
-                    td = eval_env.reset()
-                    eft_time = eval_env._get_baseline("EFT")
-                    policy_sim = eval_env.simulator.copy()
-                    policy_sim.enable_external_mapper()
-                    policy_sim.run_until_external_mapping()
-
-                if best_policy == "Oracle" and rank == 0:
-                    graph = eval_env.get_graph()
-                    graph.mincut_per_levels(
-                        bandwidth=cfg.system.d2d_bw,
-                        mode="metis",
-                        offset=1,
-                        level_chunks=best_args[0],
-                    )
-                    graph.align_partitions()
-                    policy_sim.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
-                    policy_sim.run()
-
-                elif best_policy == "ParMETIS":
-                    run_parmetis(sim=policy_sim if rank == 0 else None, cfg=cfg, unbalance=best_args[0], itr=best_args[1])
-
-                elif best_policy == "BlockCyclic" and rank == 0:
-                    print("Using BlockCyclic mapping")
-                    graph = eval_env.get_graph()
-                    policy_sim.external_mapper = BlockCyclicMapper(geometry=graph.data.geometry, n_devices=4, block_size=2, offset=1)
-                    policy_sim.run()
-                    print(f"BlockCyclic time: {policy_sim.time}")
-
-                if rank == 0:
-                    print("Running policy model")
-                    td = eval_env.rollout(policy=model.actor, max_steps=10000, auto_reset=False, tensordict=td)
-
-                    ml_time = td["observation", "aux", "time"][-1].item()
-                    vsBest.append(policy_sim.time / ml_time)
-                    vsEFT.append(eft_time / ml_time)
-
-                    raw_rows.append(
-                        {
-                            "iter": i,
-                            "eft_time": f"{eft_time:.3f}",
-                            "best_policy_time": f"{policy_sim.time:.3f}",
-                            "ml_time": f"{ml_time:.3f}",
-                            "vsEFT": f"{eft_time / ml_time:.3f}",
-                            "vsBest": f"{policy_sim.time / ml_time:.3f}",
-                        }
-                    )
-
-                    log_line(
-                        f"iter {i:03d} | eft_time={eft_time:.3f} "
-                        f"| best_policy_time={policy_sim.time:.3f} "
-                        f"| ml_time={ml_time:.3f} "
-                        f"| vsEFT={eft_time / ml_time:.2f}x "
-                        f"| vsBest={policy_sim.time / ml_time:.2f}x"
-                    )
-                    print(f"Completed {i+1}/100", flush=True)
-
-        if rank == 0:
-            # Compute summary
-            eft_q1, eft_q2, eft_q3 = np.percentile(vsEFT, [25, 50, 75])
-            policy_q1, policy_q2, policy_q3 = np.percentile(vsBest, [25, 50, 75])
-            summary = {
-                "model": model_name,
-                "eft_worst": f"{min(vsEFT):.3f}",
-                "eft_q1": f"{eft_q1:.3f}",
-                "eft_q2": f"{eft_q2:.3f}",
-                "eft_q3": f"{eft_q3:.3f}",
-                "eft_best": f"{max(vsEFT):.3f}",
-                "policy_worst": f"{min(vsBest):.3f}",
-                "policy_q1": f"{policy_q1:.3f}",
-                "policy_q2": f"{policy_q2:.3f}",
-                "policy_q3": f"{policy_q3:.3f}",
-                "policy_best": f"{max(vsBest):.3f}",
-            }
-
-            log_line(("vsEFT quartiles:    " f"Worst={min(vsEFT):.2f}  " f"Q1={eft_q1:.2f}, Q2={eft_q2:.2f}, Q3={eft_q3:.2f}, " f"Best={max(vsEFT):.2f}"))
-            log_line(("vsPolicy quartiles: " f"Worst={min(vsBest):.2f} " f"Q1={policy_q1:.2f}, Q2={policy_q2:.2f}, Q3={policy_q3:.2f}  " f"Best={max(vsBest):.2f}"))
-            log_line(f"Detailed results saved to {result_path}")
-
-            print(f"Evaluation summary written to {result_path}")
-
-            # --- Save raw data CSV ---
-            raw_csv_path = results_dir / "raw" / f"{model_name}_raw.csv"
-            raw_csv_path.parent.mkdir(parents=True, exist_ok=True)
-            with raw_csv_path.open("w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=list(raw_rows[0].keys()))
-                writer.writeheader()
-                writer.writerows(raw_rows)
-            print(f"Raw results CSV saved to {raw_csv_path}")
-
-            # --- Save summary CSV ---
-            summary_csv_path = results_dir / f"{model_name}_summary.csv"
-            with summary_csv_path.open("w", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=list(summary.keys()))
-                writer.writeheader()
-                writer.writerow(summary)
-            print(f"Summary CSV saved to {summary_csv_path}")
-
-            # --- Append to aggregated summary CSV in root_dir ---
-            aggregated_csv_path = root_dir / "aggregated_summary.csv"
-            write_header = not aggregated_csv_path.exists()
-            with aggregated_csv_path.open("a", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=list(summary.keys()))
-                if write_header:
-                    writer.writeheader()
-                writer.writerow(summary)
-            print(f"Aggregated summary updated at {aggregated_csv_path}")
+    if output_lines:
+        write_results_atomic(RESULTS_CSV, output_lines)
+        # write_results_atomic(RESULTS_SANITY, output_lines_with_eft)
 
 
-@hydra.main(config_path="conf", config_name="dynamic_batch.yaml", version_base=None)
-def main(cfg: DictConfig):
+# =============================================================================
+# Entrypoint
+# =============================================================================
 
+
+@hydra.main(
+    config_path="conf",
+    config_name="dynamic_batch.yaml",
+    version_base=None,
+)
+def main(cfg: DictConfig) -> None:
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     random.seed(cfg.seed)
-    torch.use_deterministic_algorithms(cfg.deterministic_torch)
 
+    torch.use_deterministic_algorithms(cfg.deterministic_torch)
     configure_training(cfg)
 
 

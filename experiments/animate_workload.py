@@ -3,10 +3,10 @@ from omegaconf import DictConfig, OmegaConf
 import wandb
 from hydra.utils import instantiate
 
-from helper.graph import make_graph_builder
-from helper.env import make_env
-from helper.model import create_td_actor_critic_models
-from helper.algorithm import create_optimizer, create_lr_scheduler
+from task4feedback.experiment_helper.graph import make_graph_builder
+from task4feedback.experiment_helper.env import make_env
+from task4feedback.experiment_helper.model import create_td_actor_critic_models
+from task4feedback.experiment_helper.algorithm import create_optimizer, create_lr_scheduler
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
 from task4feedback.interface.wrappers import *
@@ -21,19 +21,20 @@ from pathlib import Path
 import git
 import os
 from hydra.core.hydra_config import HydraConfig
-from helper.run_name import make_run_name, cfg_hash
+from task4feedback.experiment_helper.run_name import make_run_name, cfg_hash
 
 import torch
 import numpy
 import random
 
+
 def configure_training(cfg: DictConfig):
-    #start_logger()
+    # start_logger()
     graph_builder = make_graph_builder(cfg)
     env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=False)
 
     graph = env.get_graph()
-    if hasattr(graph, 'workload'):
+    if hasattr(graph, "workload"):
         workload = graph.get_workload()
         workload.animate_workload(show=False)
 
@@ -46,6 +47,7 @@ def main(cfg: DictConfig):
     torch.use_deterministic_algorithms(cfg.deterministic_torch)
 
     configure_training(cfg)
+
 
 if __name__ == "__main__":
     main()
