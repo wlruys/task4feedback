@@ -65,6 +65,7 @@ class Algorithm(ABC):
             compile_policy=compile_policy,
             num_threads=self.config.workers,
             cat_results="stack",
+            init_random_frames=getattr(self.config, "initial_random_frames", None),
         )
 
     def get_collection_policy(

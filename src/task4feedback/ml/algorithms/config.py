@@ -16,7 +16,6 @@ class BaseRLConfig(AlgorithmConfig):
     workers: int = 1
     threads_per_worker: int = 1
     graphs_per_collection: int = 10
-    states_per_collection: int = 1920
     num_collections: int = 1000
     timeout: int = 86400
 
@@ -42,7 +41,7 @@ class OnPolicyConfig(BaseRLConfig):
     """Configuration for on-policy algorithms (PPO, A2C)."""
 
     type: str = "on_policy"
-    rollout_steps: int = 0  # 0 = auto from states_per_collection / workers
+    rollout_steps: int = 16
     minibatch_size: int = 64
     epochs_per_collection: int = 4
     normalize_advantage: bool = False
@@ -54,7 +53,8 @@ class OffPolicyConfig(BaseRLConfig):
     """Configuration for off-policy algorithms (SAC, DQN)."""
 
     type: str = "off_policy"
+    rollout_steps: int = 16
     replay_buffer_size: int = 1000000
     batch_size: int = 256
     updates_per_collection: int = 1
-    collector_reset_at_each_iter: bool = True
+    collector_reset_at_each_iter: bool = False

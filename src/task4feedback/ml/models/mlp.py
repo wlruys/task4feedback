@@ -9,7 +9,7 @@ from omegaconf import DictConfig
 from tensordict import TensorDict
 from torch import Tensor
 
-from task4feedback.ml.models.common import build_aux_features
+from task4feedback.ml.models.common import build_aux_features, get_aux_feature_dim, masked_mean_pool
 from task4feedback.ml.models.nn_utils import FeatureDimConfig, _expand_to_batch, _flatten_last_dim, _tiny_last_linear, kaiming_init
 
 
@@ -191,27 +191,36 @@ class OutputHead(nn.Module):
         input_dim: int | None,
         hidden_channels: int,
         output_dim: int,
-        activation: DictConfig = None,
-        initialization: DictConfig = None,
+        activation: DictConfig | None = None,
+        initialization: DictConfig | None = None,
         layer_norm: bool = True,
         debug: bool = False,
-        **_ignored,
+        **kwargs,
     ):
         super().__init__()
         self.debug = bool(debug)
-        if initialization is None:
-            layer1_init = kaiming_init
-            layer2_init = kaiming_init
-        else:
-            layer1_init = call(initialization["layer1"])
-            layer2_init = call(initialization["layer2"])
+
+        layer1_init = kaiming_init
+        layer2_init = kaiming_init
+
+        if initialization is not None:
+            if "layer1" in initialization:
+                layer1_init = call(initialization["layer1"])
+                layer2_init = call(initialization["layer2"])
+            else:
+                common_init = call(initialization)
+                layer1_init = common_init
+                layer2_init = common_init
 
         self._layer1_init = layer1_init
         self._lazy_layer1_initialized = False
+        self._lazy_layer = None
 
         act = _make_act(activation)
+
         if input_dim is None:
             layer1: nn.Module = nn.LazyLinear(hidden_channels)
+            self._lazy_layer = layer1
         else:
             layer1 = layer1_init(nn.Linear(input_dim, hidden_channels))
             self._lazy_layer1_initialized = True
@@ -224,18 +233,13 @@ class OutputHead(nn.Module):
         self.network = nn.Sequential(*layers)
 
     def forward(self, x: Tensor) -> Tensor:
-        if self.debug:
-            print(f"[OutputHead] input {tuple(x.shape)}")
         out = self.network(x)
-        # Initialize lazy layer after first materialization.
-        layer1 = self.network[0]
-        if (
-            not self._lazy_layer1_initialized
-            and hasattr(layer1, "has_uninitialized_params")
-            and not layer1.has_uninitialized_params()  # type: ignore[attr-defined]
-        ):
-            self._layer1_init(layer1)  # type: ignore[arg-type]
-            self._lazy_layer1_initialized = True
+
+        if self._lazy_layer is not None and not self._lazy_layer1_initialized:
+            if not hasattr(self._lazy_layer, "has_uninitialized_params") or not self._lazy_layer.has_uninitialized_params():
+                self._layer1_init(self._lazy_layer)
+                self._lazy_layer1_initialized = True
+
         return out
 
 
@@ -246,7 +250,9 @@ class MLPCriticHead(nn.Module):
     def __init__(
         self,
         input_dim: int | None = None,
+        input_proj: int = 32,
         hidden_channels: int = 64,
+        factored: bool = False,
         output_dim: int = 1,
         activation: DictConfig = None,
         initialization: DictConfig = None,
@@ -262,30 +268,26 @@ class MLPCriticHead(nn.Module):
 
         self.add_progress = add_progress
         self.add_device_load = add_device_load
+        self.factored = factored
 
         self.input_dim = input_dim
         self.output_dim = output_dim
+        self.input_proj = input_proj
         self.hidden_channels = hidden_channels
-        self.side_info_dim = 0
+        self.side_info_dim = get_aux_feature_dim(add_device_load=add_device_load, add_progress=add_progress, n_devices=n_devices)
 
-        if self.add_progress:
-            self.side_info_dim += 2
+        self.stem = nn.Sequential(
+            nn.LazyLinear(input_proj),
+            nn.LeakyReLU(negative_slope=0.01, inplace=False),
+        )
 
-        if self.add_device_load:
-            self.side_info_dim += 3 * n_devices
-
-        if self.side_info_dim > 0:
-            self.side_info_mlp = nn.Sequential(
-                nn.Linear(self.side_info_dim, self.side_info_dim),
-                nn.LeakyReLU(negative_slope=0.01, inplace=False),
-            )
-        else:
-            self.side_info_mlp = nn.Identity()
-
-        pooled_dim = None if input_dim is None else input_dim + self.side_info_dim
+        self.side_info_mlp = nn.Sequential(
+            nn.LazyLinear(self.input_proj),
+            nn.LeakyReLU(negative_slope=0.01, inplace=False),
+        )
 
         self.value_mlp = OutputHead(
-            input_dim=pooled_dim,
+            input_dim=3*self.input_proj,
             hidden_channels=hidden_channels,
             output_dim=output_dim,
             activation=activation,
@@ -296,69 +298,52 @@ class MLPCriticHead(nn.Module):
 
     def forward(self, obs: TensorDict, emb: Tensor) -> Tensor:
         emb_flat, batch_shape, B, C, _ = _flatten_candidates(emb)
-        mask = obs["aux", "candidate_mask"].reshape(B, C)
+        mask = obs["aux", "candidate_mask"].reshape(-1, C)
 
-        aux_flat, _, _ = build_aux_features(
+        aux, _, _ = build_aux_features(
             obs,
             add_device_load=self.add_device_load,
             add_progress=self.add_progress,
-        )
-        if aux_flat is not None:
-            aux_flat = _expand_to_batch(aux_flat, B)
-            aux_emb = self.side_info_mlp(aux_flat).unsqueeze(1).expand(-1, C, -1)
-            emb_flat = torch.cat([emb_flat, aux_emb], dim=-1)
+        ) # (..., D)
+        if aux is not None:
+            aux = aux.reshape(-1, aux.shape[-1])
+            aux = self.side_info_mlp(aux) # (B*N, H)
+        
+        emb_flat = self.stem(emb_flat) # (B*N, C, H)
+        pooled = masked_mean_pool(emb_flat, mask)
+        pooled = pooled.view(-1, self.input_proj) # (B*N, H)
 
-        # Normalize masked pooling: use masked-mean instead of masked-sum
-        # This keeps the value scale stable across different candidate counts
-        mask_f = mask.to(dtype=emb_flat.dtype).unsqueeze(-1)  # [B, C, 1]
-        counts = mask_f.sum(dim=1).clamp_min(1.0)  # [B, 1]
-        pooled = (emb_flat * mask_f).sum(dim=1) / counts  # [B, D]
-        pooled = pooled.view(*batch_shape, -1)
-        out = self.value_mlp(pooled)
-        return out
+        if aux is not None:
+            pooled = torch.cat([pooled, aux], dim=-1) # (B*N, 2H)
+        
+        # Expand to (B*N, C, H), concat with candidates, and pass through MLP.
+        pooled = pooled.reshape(-1, 1, pooled.shape[-1]).expand(-1, C, -1) # (B*N, C, H)
+        pooled = torch.cat([pooled, emb_flat], dim=-1) # (B*N, C, 2H)
+        # value_mlp maps 2H -> A
+        v = self.value_mlp(pooled) # (B*N, C, A)
+
+        if not self.factored:
+            v = v.mean(dim=1).unsqueeze(-1) # (B*N, A)
+            v =  v.view(*batch_shape, self.output_dim)
+        else:
+            v = v.view(*batch_shape, C, self.output_dim)
+            if self.output_dim == 1:
+                v = v.squeeze(-1)
+
+        return v
 
 
 class MLPQValueHead(MLPCriticHead):
     in_keys = [("observation",), ("embed",)]
     out_keys = [("action_value",)]
-
-    def __init__(
-        self,
-        input_dim: int | None = None,
-        hidden_channels: int = 64,
-        output_dim: int | None = None,
-        action_dim: int | None = None,
-        **kwargs,
-    ):
-        # For Q-value, output_dim should be action_dim (number of discrete actions)
-        if output_dim is None:
-            if action_dim is None:
-                raise ValueError("MLPQValueHead requires either output_dim or action_dim")
-            output_dim = action_dim
-            
-        super().__init__(
-            input_dim=input_dim,
-            hidden_channels=hidden_channels,
-            output_dim=output_dim,
-            **kwargs,
-        )
+    
+    def __init__(self, *args, **kwargs):
+        kwargs["factored"] = True
+        super().__init__(*args, **kwargs)
 
     def forward(self, obs: TensorDict, emb: Tensor) -> Tensor:
-        # Do not pool over candidates. Return Q-values for each candidate-action pair.
-        emb_flat, batch_shape, B, C, aux_cand = _prepare_candidate_inputs(
-            obs, add_device_load=self.add_device_load, add_progress=self.add_progress
-        )
-        
-        if aux_cand is not None:
-            emb_flat = torch.cat([emb_flat, aux_cand], dim=-1)
-            
-        # emb_flat is (B, C, D)
-        # value_mlp maps D -> A
-        out = self.value_mlp(emb_flat) # (B, C, A)
-        
-        # Reshape to match batch shape if needed, but usually B is enough
-        out = out.view(*batch_shape, C, -1)
-        return out
+        q = super().forward(obs, emb) # (B, C, A)
+        return q
 
 
 class MLPActorHead(OutputHead):
@@ -394,6 +379,8 @@ class MLPActorHead(OutputHead):
         return out
     
 class MLPEncoder(nn.Module):
+    in_keys = [("observation",)]
+    out_keys = [("embed",)]
 
     def __init__(
         self,
@@ -427,10 +414,6 @@ class MLPEncoder(nn.Module):
             initialization=initialization,
             layer_norm=layer_norm,
         )
-        if self.k > 0:
-            self.output_keys = ["embed"]
-        self.in_keys = [("observation",)]
-        self.out_keys = [("embed",)]
 
     def forward(self, tensordict: TensorDict) -> Tensor:
         x_flat, batch_shape, _, C, aux_cand = _prepare_candidate_inputs(
@@ -514,7 +497,7 @@ class MLPFiLMEncoder(nn.Module):
             add_progress=self.add_progress,
         )
 
-        cand_mask_f = tensordict["aux", "candidate_mask"].reshape(B, C).unsqueeze(-1)
+        cand_mask_f = tensordict["aux", "candidate_mask"].reshape(-1, C).unsqueeze(-1)
 
         if self.k == 0:
             return x_flat.view(*batch_shape, C, self.output_dim)
@@ -527,71 +510,3 @@ class MLPFiLMEncoder(nn.Module):
             x_flat = x_flat * cand_mask_f
 
         return x_flat.view(*batch_shape, C, self.output_dim)
-    
-
-# class MLPStateNet(nn.Module):
-
-#     def __init__(
-#         self,
-#         feature_config: FeatureDimConfig,
-#         hidden_channels: list[int] | int,
-#         add_progress: bool = False,
-#         activation: DictConfig = None,
-#         initialization: DictConfig = None,
-#         layer_norm: bool = True,
-#         add_device_load: bool = True,
-#         n_devices: int = 5,
-#         **_ignored,
-#     ):
-#         super().__init__()
-#         self.feature_config = feature_config
-#         self.hidden_channels = _as_list(hidden_channels)
-#         self.k = len(self.hidden_channels)
-#         self.add_progress = bool(add_progress)
-#         self.add_device_load = bool(add_device_load)
-
-#         input_dim = feature_config.task_feature_dim
-
-#         if add_progress:
-#             input_dim += 2
-
-#         if add_device_load:
-#             input_dim += 3 * n_devices
-
-#         self.layers, self.output_dim = _build_mlp(
-#             input_dim,
-#             self.hidden_channels,
-#             activation=activation,
-#             initialization=initialization,
-#             layer_norm=layer_norm,
-#         )
-#         if self.k > 0:
-#             self.output_keys = ["embed"]
-#         self.in_keys = [("observation",)]
-#         self.out_keys = [("embed",)]
-
-#     @staticmethod
-#     def _squeeze_task_features(task_features: Tensor) -> Tensor:
-#         if task_features.ndim == 2 and task_features.shape[0] == 1:
-#             return task_features.squeeze(0)
-#         if task_features.ndim == 3 and task_features.shape[1] == 1:
-#             return task_features.squeeze(1)
-#         if task_features.ndim == 4 and task_features.shape[2] == 1:
-#             return task_features.squeeze(2)
-#         raise ValueError(f"Unexpected shape {tuple(task_features.shape)}")
-
-#     def forward(self, tensordict: TensorDict) -> Tensor:
-#         task_features = self._squeeze_task_features(tensordict["nodes", "tasks", "attr"])
-#         task_flat, batch_shape, B = _flatten_last_dim(task_features)
-
-#         aux_flat, _, _ = build_aux_features(
-#             tensordict,
-#             add_device_load=self.add_device_load,
-#             add_progress=self.add_progress,
-#         )
-#         if aux_flat is not None:
-#             aux_flat = _expand_to_batch(aux_flat, B)
-#             task_flat = torch.cat([task_flat, aux_flat], dim=-1)
-
-#         out_flat = self.layers(task_flat)
-#         return out_flat.squeeze(0) if not batch_shape else out_flat.view(*batch_shape, -1)

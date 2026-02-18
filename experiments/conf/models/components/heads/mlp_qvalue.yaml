@@ -3,7 +3,7 @@ defaults:
   - /models/components/shared/initialization/orthogonal@initialization.layer2
   - /models/components/shared/activation/leaky_relu@activation
 
-_target_: task4feedback.ml.models.cnn.CNNCriticHead
+_target_: task4feedback.ml.models.mlp.MLPQValueHead
 hidden_channels: 128
 layer_norm: true
 

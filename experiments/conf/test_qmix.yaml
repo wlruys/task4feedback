@@ -2,14 +2,14 @@ defaults:
   - graph: dynamic_jacobi
   - env: batch_deterministic
   - system: 4h100
-  - algorithm: sac
+  - algorithm: qmix
   - wandb: default
   - logging: default
   - optimizer: adamw
   - eval: default
   - timing: default
-  - feature: cnn
-  - models: sac_mlp
+  - feature: mlp
+  - models: qmix_mlp
   - _self_
 
 hydra:
@@ -42,23 +42,14 @@ env:
 wandb:
   enabled: false
 
-# Make eval run frequently for testing (every 2 collections)
+# Make eval run frequently for testing
 eval:
   eval_interval: 2
   animation_interval: 5
   max_frames: 100
   samples: 2
 
-# Override algorithm settings for short test
 algorithm:
-  num_collections: 10
-  graphs_per_collection: 2
-  workers: 1
-  rollout_steps: 128
-  batch_size: 64
-  updates_per_collection: 1
-
-# Override normalization warmup
-feature:
-  normalization:
-    warmup: 5
+  batch_size: 128
+  num_collections: 100
+  initial_random_frames: 1000

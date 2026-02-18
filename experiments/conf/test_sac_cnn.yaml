@@ -9,7 +9,7 @@ defaults:
   - eval: default
   - timing: default
   - feature: cnn
-  - models: sac_mlp
+  - models: sac_cnn
   - _self_
 
 hydra:

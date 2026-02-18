@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from task4feedback.ml.models.nn_utils import FeatureDimConfig, _choose_gn_groups, _expand_to_batch
-from task4feedback.ml.models.common import build_aux_features, flatten_task_grid
+from task4feedback.ml.models.common import build_aux_features, flatten_task_grid, get_aux_feature_dim
 
 
 class ResidualBlock(nn.Module):
@@ -26,85 +26,6 @@ class ResidualBlock(nn.Module):
         out = self.conv2(out)
         out = self.act2(out)
         return out + residual
-
-
-class CNNEncoder(nn.Module):
-    def __init__(
-        self,
-        feature_config: FeatureDimConfig,
-        hidden_channels: int,
-        add_progress: bool = False,
-        activation=None,
-        initialization=None,
-        width: int = 4,
-        length: int = 4,
-    ):
-        super().__init__()
-        self.in_channels = feature_config.task_feature_dim
-        self.add_progress = add_progress
-        kernel_size = 3
-        hidden_ch = hidden_channels
-        n_layers = width - 1
-        self.width = width
-        self.length = length
-
-        blocks = []
-        ch = self.in_channels
-
-        pad = kernel_size // 2
-        blocks += [
-            nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
-            nn.LeakyReLU(inplace=True, negative_slope=0.01),
-        ]
-        ch = hidden_ch
-
-        for _ in range((n_layers - 2) // 2):
-            blocks.append(ResidualBlock(ch, hidden_ch, kernel_size))
-            ch = hidden_ch
-
-        if n_layers % 2 == 1:
-            blocks += [
-                nn.Conv2d(ch, hidden_ch, kernel_size, padding=pad),
-                nn.LeakyReLU(inplace=True, negative_slope=0.01),
-            ]
-            ch = hidden_ch
-        blocks.append(nn.Conv2d(ch, 1, kernel_size, padding=pad))
-        blocks.append(nn.LeakyReLU(inplace=True, negative_slope=0.01))
-        ch = 1
-
-        self.net = nn.Sequential(*blocks)
-        self.output_dim = ((self.width * self.length) * ch + 1) if self.add_progress else ((self.width * self.length) * ch)
-        self.output_keys = ["embed"]
-        self.in_keys = [("observation",)]
-        self.out_keys = [("embed",)]
-        for m in self.net.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="leaky_relu")
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-
-    def forward(self, x):
-        width = self.width
-        length = self.length
-
-        x_tasks = x["nodes", "tasks", "attr"]
-        h, batch_shape, single = flatten_task_grid(x_tasks, length=length, width=width, in_channels=self.in_channels)
-        B = h.size(0)
-
-        h = self.net(h).flatten(1)
-
-        if self.add_progress:
-            progress_feature = x["aux", "progress"]
-            if progress_feature.dim() == 0:
-                progress_feature = progress_feature.view(1, 1)
-            elif progress_feature.dim() == 1:
-                progress_feature = progress_feature.unsqueeze(-1)
-            else:
-                progress_feature = progress_feature.reshape(-1, progress_feature.shape[-1])
-            progress_feature = _expand_to_batch(progress_feature, B)
-            h = torch.cat([h, progress_feature], dim=-1)
-
-        return h.squeeze(0) if single else h.view(*batch_shape, -1)
 
 
 class ConvNormAct(nn.Module):
@@ -274,7 +195,10 @@ class DilatedResBlock_SPADE(nn.Module):
         return x + h
 
 
-class DilationEncoder(nn.Module):
+class CNNEncoder(nn.Module):
+    in_keys = [("observation",)]
+    out_keys = [("embed",)]
+
     def __init__(
         self,
         feature_config,
@@ -311,9 +235,6 @@ class DilationEncoder(nn.Module):
         self.hidden_channels = int(hidden_channels)
         self.debug = bool(debug)
         self.output_dim = self.hidden_channels
-        self.output_keys = ["embed"]
-        self.in_keys = [("observation",)]
-        self.out_keys = [("embed",)]
         self.add_progress = bool(add_progress)
         self.add_device_load = bool(add_device_load)
         self.add_z = bool(add_z)
@@ -427,7 +348,7 @@ class DilationEncoder(nn.Module):
         return (h,)
 
 
-class DilationActorHead(nn.Module):
+class CNNActorHead(nn.Module):
     in_keys = [("observation",), ("embed",)]
     out_keys = [("logits",)]
 
@@ -449,7 +370,6 @@ class DilationActorHead(nn.Module):
         self.A = int(output_dim)
         self.debug = bool(debug)
 
-        self.input_keys = ["embed"]
         self.output_dim = self.A
 
         self._init_mode = init_mode.lower()
@@ -498,7 +418,7 @@ class DilationActorHead(nn.Module):
         return logits[0] if single else logits
 
 
-class DilationCriticHead(nn.Module):
+class CNNCriticHead(nn.Module):
     in_keys = [("observation",), ("embed",)]
     out_keys = [("state_value",)]
 
@@ -506,7 +426,9 @@ class DilationCriticHead(nn.Module):
         self,
         input_dim: int | None = None,
         z_dim: int = 8,
+        output_dim: int = 1,
         proj_dim: int = 8,
+        factored: bool = False,
         hidden_channels: int = 128,
         tiny_std: float = 1e-3,
         add_gap: bool = True,
@@ -520,6 +442,9 @@ class DilationCriticHead(nn.Module):
         super().__init__()
         P = int(proj_dim)
         Dz = int(z_dim) * 2
+        self.P = P
+        self.Dz = Dz
+        self.factored = bool(factored)
 
         self._mix_initialized = input_dim is not None
         if input_dim is None:
@@ -542,13 +467,12 @@ class DilationCriticHead(nn.Module):
         mlp_in = (
             (2 * P if self.add_gap else P)
             + (Dz if add_z else 0)
-            + (3 * n_devices if add_device_load else 0)
-            + (2 if add_progress else 0)
+            + get_aux_feature_dim(add_device_load=self.add_device_load, n_devices=n_devices, add_progress=self.add_progress)
         )
         self.mlp = nn.Sequential(
-            nn.Linear(mlp_in, hidden_channels),
+            nn.Linear(mlp_in + P, hidden_channels),
             nn.SiLU(inplace=True),
-            nn.Linear(hidden_channels, 1),
+            nn.Linear(hidden_channels, output_dim),
         )
         nn.init.normal_(self.mlp[-1].weight, std=tiny_std)
         nn.init.zeros_(self.mlp[-1].bias)
@@ -564,14 +488,14 @@ class DilationCriticHead(nn.Module):
         B = math.prod(batch) if batch else 1
         embed_f = embed.reshape(-1, C, H, W)
 
-        Fm = F.silu(self.mix(embed_f), inplace=True)
+        Fm = F.silu(self.mix(embed_f), inplace=True) # (B, P, H, W)
         if not self._mix_initialized:
             if not hasattr(self.mix, "has_uninitialized_params") or not self.mix.has_uninitialized_params():  # type: ignore[attr-defined]
                 nn.init.kaiming_normal_(self.mix.weight, nonlinearity="relu")
                 self._mix_initialized = True
-        scores = self.attn(Fm)
+        scores = self.attn(Fm) # (B, 1, H, W)
         attn = scores.flatten(2).softmax(dim=-1).view(B, 1, H, W)
-        pooled_attn = (Fm * attn).sum(dim=(2, 3))
+        pooled_attn = (Fm * attn).sum(dim=(2, 3)) # (B, P)
 
         if self.add_gap:
             pooled_gap = Fm.mean(dim=(2, 3))
@@ -580,13 +504,38 @@ class DilationCriticHead(nn.Module):
             pooled = pooled_attn
 
         if self.add_z:
-            pooled = torch.cat([pooled, z_f], dim=-1)
+            pooled = torch.cat([pooled, z_f], dim=-1) #(B, P + Dz)
 
         aux_flat, _, _ = build_aux_features(obs, add_device_load=self.add_device_load, add_progress=self.add_progress)
         if aux_flat is not None:
             aux_flat = _expand_to_batch(aux_flat, pooled.size(0))
-            pooled = torch.cat([pooled, aux_flat], dim=-1)
+            pooled = torch.cat([pooled, aux_flat], dim=-1) #(B, mlp_in)
 
-        v = self.mlp(pooled).squeeze(-1)
-        v = v.view(*batch, 1)
+        #Expand pooled to (B, C, mlp_in), concat with Fm (as B, H*W, P)
+        pooled = pooled.unsqueeze(1).expand(-1, H*W, -1) # (B, H*W, mlp_in)
+        Fm = Fm.permute(0, 2, 3, 1).reshape(B, H*W, self.P)
+        pooled = torch.cat([pooled, Fm], dim=-1) # (B, H*W, mlp_in + P)
+        v = self.mlp(pooled) # (B, H*W, 1)
+        
+        if not self.factored:
+            v = v.mean(dim=1) # (B, A)
+            v = v.view(*batch, -1)
+        else:
+            v = v.view(*batch, H*W, -1) # (B, H*W, A)
+
         return v
+    
+
+class CNNQValueHead(CNNCriticHead):
+    _keys = [("observation",), ("embed",)]
+    out_keys = [("action_value",)]
+
+    def __init__(self, *args, **kwargs):
+        kwargs["factored"] = True
+        super().__init__(*args, **kwargs)
+    
+    def forward(self, obs, emb):
+        q = super().forward(obs, emb) # (B, H*W, 1)
+        return q
+
+            

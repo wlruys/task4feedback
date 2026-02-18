@@ -21,6 +21,130 @@ import torch.nn as nn
 from tensordict import TensorDict
 
 from task4feedback.logging import training
+
+
+def has_uninitialized_params(model: nn.Module) -> bool:
+    """Return True if any Lazy module parameters are still uninitialized."""
+    from torch.nn.parameter import UninitializedParameter
+
+    for param in model.parameters():
+        if isinstance(param, UninitializedParameter):
+            return True
+
+    for module in model.modules():
+        if hasattr(module, "has_uninitialized_params"):
+            try:
+                if module.has_uninitialized_params():
+                    return True
+            except Exception:
+                continue
+
+    return False
+
+
+def warmup_lazy_modules(
+    model: nn.Module,
+    env: Any,
+    *,
+    warmup_steps: int = 2,
+    policy: Optional[nn.Module] = None,
+) -> bool:
+    """Initialize Lazy modules by stepping an env and running model submodules."""
+    if not has_uninitialized_params(model):
+        return False
+
+    if env is None:
+        training.warning("Lazy parameter warmup skipped: env is unavailable.")
+        return False
+
+    policy_module = policy or getattr(model, "policy", None) or getattr(model, "qvalue", None) or model
+
+    def _sample_action(td: TensorDict) -> Optional[torch.Tensor]:
+        action_spec = getattr(env, "action_spec", None)
+        if action_spec is None:
+            return None
+        try:
+            return action_spec.rand(td.batch_size)
+        except Exception:
+            try:
+                return action_spec.rand()
+            except Exception:
+                return None
+
+    def _ensure_action(td: TensorDict) -> TensorDict:
+        if "action" in td.keys():
+            return td
+        if policy_module is not None:
+            try:
+                td = policy_module(td)
+            except Exception as exc:
+                training.debug("Lazy warmup policy forward failed: %s", exc)
+        if "action" in td.keys():
+            return td
+        action = _sample_action(td)
+        if action is not None:
+            try:
+                td.set("action", action)
+            except Exception:
+                td["action"] = action
+        return td
+
+    with torch.no_grad():
+        try:
+            td = env.reset()
+        except Exception as exc:
+            training.warning("Lazy warmup reset failed: %s", exc)
+            return False
+
+        steps = max(1, int(warmup_steps))
+        for _ in range(steps):
+            try:
+                action = _sample_action(td)
+                if action is not None:
+                    try:
+                        td.set("action", action)
+                    except Exception:
+                        td["action"] = action
+                td = env.step(td)
+                if isinstance(td, TensorDict) and "next" in td.keys():
+                    td = td.get("next")
+            except Exception as exc:
+                training.warning("Lazy warmup step failed: %s", exc)
+                break
+
+        try:
+            sample_td = td.reshape(-1)
+        except Exception:
+            sample_td = td
+
+        policy_module_local = getattr(model, "policy", None)
+        value_module_local = getattr(model, "value", None)
+        qvalue_module_local = getattr(model, "qvalue", None)
+
+        if policy_module_local is not None:
+            try:
+                policy_module_local(sample_td)
+            except Exception as exc:
+                training.debug("Lazy warmup skipped for policy: %s", exc)
+
+        if value_module_local is not None:
+            try:
+                value_module_local(sample_td)
+            except Exception as exc:
+                training.debug("Lazy warmup skipped for value: %s", exc)
+
+        if qvalue_module_local is not None:
+            try:
+                q_td = _ensure_action(sample_td)
+                qvalue_module_local(q_td)
+            except Exception as exc:
+                training.debug("Lazy warmup skipped for qvalue: %s", exc)
+
+    if has_uninitialized_params(model):
+        training.warning("Lazy warmup did not initialize all parameters.")
+        return False
+
+    return True
 from task4feedback.utils.atomic import atomic_torch_save, atomic_write_text
 
 
@@ -326,4 +450,3 @@ __all__ = [
     "log_parameter_and_gradient_norms",
     "save_checkpoint",
 ]
-

@@ -1,0 +1,44 @@
+_target_: task4feedback.ml.algorithms.qmix.config.QMIXConfig
+type: off_policy
+implementation: torchrl
+
+# Q-Learning
+loss_function: smooth_l1
+target_update_polyak: 0.995
+action_space: categorical
+gamma: 0.99
+
+# Exploration
+eps_init: 1.0
+eps_end: 0.05
+eps_decay: 500000
+
+# Replay & Training
+replay_buffer_size: 1000000
+batch_size: 256
+updates_per_collection: 64
+initial_random_frames: 10000
+
+# Learning
+lr: 3e-4
+
+# Collection
+graphs_per_collection: 4
+rollout_steps: 256
+workers: 4
+threads_per_worker: 1
+collect_device: cpu
+update_device: cpu
+storing_device: cpu
+
+# Optimization
+max_grad_norm: 0.5
+compile_loss_networks: false
+
+# Training Loop
+num_collections: 5000
+timeout: 86400
+
+# Multi-agent
+multi_agent: true
+collector_actor: qvalue

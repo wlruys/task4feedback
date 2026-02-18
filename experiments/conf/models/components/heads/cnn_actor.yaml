@@ -3,7 +3,7 @@ defaults:
   - /models/components/shared/initialization/orthogonal@initialization
 
 
-_target_: task4feedback.ml.models.cnn.DilationActorHead
+_target_: task4feedback.ml.models.cnn.CNNActorHead
 hidden_channels: 16
 width: null  # Injected from graph config at runtime
 length: null  # Injected from graph config at runtime

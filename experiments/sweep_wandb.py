@@ -6,6 +6,7 @@ from hydra.utils import instantiate
 from task4feedback.exp_utils.graph import make_graph_builder
 from task4feedback.exp_utils.env import make_env
 from task4feedback.exp_utils.model import create_td_models
+from task4feedback.ml.rl_utils import warmup_lazy_modules
 from task4feedback.exp_utils.algorithm import create_optimizer, create_lr_scheduler
 
 from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
@@ -36,11 +37,9 @@ def configure_training(cfg: DictConfig):
 
     network = reference
 
-    # Warm up once to materialize Lazy* parameters before logging.
+    # Warm up to materialize Lazy* parameters before logging or cloning.
     try:
-        with torch.no_grad():
-            td0 = env.reset()
-            model(td0)
+        warmup_lazy_modules(model, env, warmup_steps=2)
     except Exception as exc:
         print(f"Model warmup for lazy init failed: {exc}")
 

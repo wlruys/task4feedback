@@ -176,7 +176,7 @@ class KeyMappedNode(nn.Module):
         return td
 
 
-class TDGraph(nn.Module):
+class TDGraph(td_nn.TensorDictModuleBase):
     """TensorDict-keyed DAG"""
 
     def __init__(

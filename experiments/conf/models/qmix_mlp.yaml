@@ -1,34 +1,15 @@
 defaults:
-  - components/encoders/mlp@policy.encoder
-  - components/heads/mlp_actor@policy.head
   - components/encoders/mlp@qvalue.encoder
+  - components/heads/mlp_qvalue@qvalue.head
   - _self_
 
 _target_: task4feedback.ml.builders.build_model
 
-policy:
-  name: policy
-  inputs:
-    - [observation]
-  nodes:
-    encode:
-      _target_: task4feedback.ml.nodes.ModuleNode
-      module: ${models.policy.encoder}
-    head:
-      _target_: task4feedback.ml.nodes.ModuleNode
-      module: ${models.policy.head}
-  outputs:
-    - [logits]
-  encoder:
-    hidden_channels: [32, 32, 32]
-  head:
-    hidden_channels: 32
-
+# Q-Value Network (Per-Agent)
 qvalue:
   name: qvalue
   inputs:
     - [observation]
-    - [action]
   nodes:
     encode:
       _target_: task4feedback.ml.nodes.ModuleNode
@@ -39,13 +20,13 @@ qvalue:
   outputs:
     - [action_value]
   encoder:
-    hidden_channels: [32, 32, 32]
+    hidden_channels: [64, 64, 64]  # Larger for multi-agent
   head:
-    _target_: task4feedback.ml.models.MLPQValueHead
     hidden_channels: 128
+    output_dim: 4
 
 meta:
-  name: sac_mlp_model
+  name: qmix_mlp_model
 
 namespacing:
   local_prefix: [net]
@@ -56,10 +37,9 @@ namespacing:
     - [truncated]
     - [reward]
     - [candidate_mask]
-    - [logits]
     - [action]
-    - [sample_log_prob]
     - [action_value]
+    - [state]  # For global state (mixing network)
   public_prefixes:
     - [rnn]
 

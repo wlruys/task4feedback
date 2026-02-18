@@ -15,7 +15,7 @@ class SACConfig(OffPolicyConfig):
 
     # Entropy Regularization
     alpha_init: float = 1.0
-    target_entropy: Union[str, float] = "auto"  # "auto" = -log(num_actions) * num_heads
+    target_entropy: Union[str, float] = "auto"  # "auto" = log(num_actions) * num_heads (scaled by 0.98)
 
     # Q-Learning
     num_qvalue_nets: int = 2
@@ -26,6 +26,7 @@ class SACConfig(OffPolicyConfig):
     replay_buffer_size: int = 1000000
     batch_size: int = 256
     updates_per_collection: int = 64
+    initial_random_frames: int = 1000
 
     # Learning Rates
     lr: float = 3e-4
@@ -34,3 +35,5 @@ class SACConfig(OffPolicyConfig):
 
     # Defaults
     gamma: float = 0.99
+
+    rollout_steps: int = 16

@@ -1,33 +1,32 @@
-_target_: task4feedback.ml.algorithms.sac.config.SACConfig
+_target_: task4feedback.ml.algorithms.dqn.config.DQNConfig
 type: off_policy
 implementation: torchrl
-replay_buffer_size: 10000
+replay_buffer_size: 1000000
 batch_size: 256
-gamma: 0.999
-alpha_init: 1.0
-target_entropy: auto
-lr: 1e-3
-q_lr: 1e-3
-alpha_lr: 1e-3
+gamma: 0.99
+loss_function: smooth_l1
 target_update_polyak: 0.995
-num_qvalue_nets: 2
-loss_function: l1
+action_space: categorical
+eps_init: 1.0
+eps_end: 0.05
+eps_decay: 100000
+lr: 3e-4
+collector_actor: qvalue_epsilon_greedy
 
 # Collection
 graphs_per_collection: 4
-rollout_steps: 32
+rollout_steps: 64
 workers: 4
 threads_per_worker: 1
 collect_device: cpu
 update_device: cpu
 storing_device: cpu
-initial_random_frames: 5000
 
 # Optimization
 max_grad_norm: 0.5
 compile_loss_networks: false
 
 # Training Loop
-num_collections: 5000
-updates_per_collection: 32
+num_collections: 1000
+updates_per_collection: 64
 timeout: 86400

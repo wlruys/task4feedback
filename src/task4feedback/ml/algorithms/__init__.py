@@ -8,3 +8,4 @@ from . import collectors
 from .ppo import PPOAlgorithm, PPOConfig
 from .sac import SACAlgorithm, SACConfig
 from .dqn import DQNAlgorithm, DQNConfig
+from .qmix import QMIXAlgorithm, QMIXConfig

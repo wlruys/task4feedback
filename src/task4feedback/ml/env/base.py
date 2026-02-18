@@ -288,6 +288,8 @@ class RuntimeEnv(EnvBase):
         return Unbounded(shape=[1], device=self.device, dtype=torch.float32)
 
     def _create_action_spec(self, n_devices: int = 5) -> TensorSpec:
+        self.max_candidates = self.simulator_factory[self.active_idx].graph_spec.max_candidates
+        self.n_devices = n_devices
         out = Categorical(
             n=n_devices,
             shape=[self.simulator_factory[self.active_idx].graph_spec.max_candidates],
@@ -335,7 +337,7 @@ class RuntimeEnv(EnvBase):
     def _zero_last_action_onehot(self) -> torch.Tensor:
         spec = self.simulator_factory[self.active_idx].graph_spec
         return torch.zeros(
-            (spec.max_candidates, spec.max_devices),
+            (self.max_candidates, self.n_devices),
             device=self.device,
             dtype=torch.float32,
         )
@@ -364,7 +366,7 @@ class RuntimeEnv(EnvBase):
 
         spec = self.simulator_factory[self.active_idx].graph_spec
         last_action_onehot = torch.zeros(
-            (spec.max_candidates, spec.max_devices),
+            (self.max_candidates, self.n_devices),
             device=self.device,
             dtype=torch.float32,
         )
@@ -379,7 +381,8 @@ class RuntimeEnv(EnvBase):
         for i in range(num_candidates):
             global_task_id = candidate_workspace[i].item()
             idx = observer.get_candidate_to_action(i, global_task_id)
-            chosen_device = actions[idx].item() + int(self.only_gpu)
+            device_idx = actions[idx].item()
+            chosen_device = device_idx + int(self.only_gpu)
             mapping_priority = self.simulator.get_mapping_priority(global_task_id)
             action = trip.Action(
                 i,
@@ -388,8 +391,8 @@ class RuntimeEnv(EnvBase):
                 mapping_priority,
             )
             mapping_result.append(action)
-            if 0 <= idx < spec.max_candidates and 0 <= chosen_device < spec.max_devices:
-                last_action_onehot[idx, chosen_device] = 1.0
+            if 0 <= idx < self.max_candidates and 0 <= device_idx < self.n_devices:
+                last_action_onehot[idx, device_idx] = 1.0
 
         self._last_action_onehot = last_action_onehot
         self.simulator.simulator.map_tasks(mapping_result)

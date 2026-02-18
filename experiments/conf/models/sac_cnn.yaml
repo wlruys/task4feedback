@@ -1,7 +1,8 @@
 defaults:
-  - components/encoders/mlp@policy.encoder
-  - components/heads/mlp_actor@policy.head
-  - components/encoders/mlp@qvalue.encoder
+  - components/encoders/cnn@policy.encoder
+  - components/heads/cnn_actor@policy.head
+  - components/encoders/cnn@qvalue.encoder
+  - components/heads/cnn_qvalue@qvalue.head
   - _self_
 
 _target_: task4feedback.ml.builders.build_model
@@ -19,10 +20,6 @@ policy:
       module: ${models.policy.head}
   outputs:
     - [logits]
-  encoder:
-    hidden_channels: [32, 32, 32]
-  head:
-    hidden_channels: 32
 
 qvalue:
   name: qvalue
@@ -38,14 +35,9 @@ qvalue:
       module: ${models.qvalue.head}
   outputs:
     - [action_value]
-  encoder:
-    hidden_channels: [32, 32, 32]
-  head:
-    _target_: task4feedback.ml.models.MLPQValueHead
-    hidden_channels: 128
 
 meta:
-  name: sac_mlp_model
+  name: sac_cnn_model
 
 namespacing:
   local_prefix: [net]

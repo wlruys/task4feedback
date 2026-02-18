@@ -80,7 +80,7 @@ class PPOAlgorithm(Algorithm):
             return loss_vals, skipped
 
         return _core
-
+    
     def make_loss_module(self, model: torch.nn.Module) -> ClipPPOLoss:
         model.validate_for_algorithm("ppo")
 

@@ -38,7 +38,6 @@ def _timing_options(cfg: DictConfig) -> dict:
     }
 
 def create_td_models(cfg: DictConfig, feature_cfg: FeatureDimConfig) -> tuple[nn.Module, nn.Module, LSTMModule | None]:
-    # New DAG-based model configs expose a top-level Hydra builder target.
     model_cfg = OmegaConf.select(cfg, "models", default=None)
     if model_cfg is None:
         model_cfg = OmegaConf.select(cfg, "network", default=None)  # legacy name

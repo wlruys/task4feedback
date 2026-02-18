@@ -156,14 +156,6 @@ def build_unified_model(
 ) -> Tuple[nn.Module, None, None]:
     """Unified builder for all RL model architectures.
 
-    Inspects the provided DictConfig and builds any combination of policy,
-    value, and qvalue networks. Returns UnifiedRLModule containing the
-    built components.
-
-    This replaces build_actor_critic, build_off_policy_model, and build_model
-    with a single unified pathway that reads the Hydra config and builds
-    whatever components are defined.
-
     Args:
         policy: Policy network configuration (if building actor/policy)
         value: Value network configuration (if building critic/value)
@@ -178,17 +170,6 @@ def build_unified_model(
 
     Returns:
         Tuple of (UnifiedRLModule, None, None)
-
-    Example runtime distribution config:
-        runtime = {
-            "distribution": {
-                "class": MultiHeadCategoricalMasked,  # or MaskedCategorical
-                "kwargs": {"inactive_action": 0},
-                "mask_key_name": "head_mask",  # or "mask"
-                "mask_key_value": ("observation", "aux", "candidate_mask"),
-                "return_log_prob": True,  # or False
-            }
-        }
     """
     ns = NamespacingConf.from_cfg(namespacing)
     val = ValidationConf.from_cfg(validation)
@@ -240,90 +221,6 @@ def build_unified_model(
     return UnifiedRLModule(policy=policy_module, value=value_module, qvalue=qvalue_module), None, None
 
 
-# Backward compatibility aliases - these now delegate to the unified builder
-def build_actor_critic(
-    *,
-    actor: DictConfig,
-    critic: DictConfig,
-    namespacing: DictConfig | Mapping[str, Any] | None = None,
-    validation: DictConfig | Mapping[str, Any] | None = None,
-    runtime: dict | None = None,
-    actor_runtime: dict | None = None,
-    critic_runtime: dict | None = None,
-    **_ignored,
-) -> Tuple[nn.Module, None, None]:
-    """Legacy builder for actor/critic models - delegates to build_unified_model.
-
-    Maintained for backward compatibility with existing configs that use
-    _target_: build_actor_critic.
-    """
-    # Create a copy to avoid modifying OmegaConf-wrapped dicts
-    # Don't include class objects that OmegaConf can't wrap
-    base_rt = dict(runtime) if runtime else {}
-    if "distribution" not in base_rt:
-        base_rt["distribution"] = {
-            "kwargs": {"inactive_action": 0},
-            "mask_key_name": "head_mask",
-            "mask_key_value": ("observation", "aux", "candidate_mask"),
-            "return_log_prob": True,
-        }
-
-    return build_unified_model(
-        policy=actor,
-        value=critic,
-        qvalue=None,
-        namespacing=namespacing,
-        validation=validation,
-        runtime=base_rt,
-        policy_runtime=actor_runtime,
-        value_runtime=critic_runtime,
-        **_ignored,
-    )
-
-
-def build_off_policy_model(
-    *,
-    actor: DictConfig | None = None,
-    qvalue: DictConfig | None = None,
-    value: DictConfig | None = None,
-    namespacing: DictConfig | Mapping[str, Any] | None = None,
-    validation: DictConfig | Mapping[str, Any] | None = None,
-    runtime: dict | None = None,
-    actor_runtime: dict | None = None,
-    qvalue_runtime: dict | None = None,
-    value_runtime: dict | None = None,
-    **_ignored,
-) -> Tuple[nn.Module, None, None]:
-    """Legacy builder for off-policy models - delegates to build_unified_model.
-
-    Maintained for backward compatibility with existing configs that use
-    _target_: build_off_policy_model.
-    """
-    # Create a copy to avoid modifying OmegaConf-wrapped dicts
-    # Don't include class objects that OmegaConf can't wrap
-    base_rt = dict(runtime) if runtime else {}
-    if actor is not None and "distribution" not in base_rt:
-        base_rt["distribution"] = {
-            "kwargs": {"inactive_action": 0},
-            "mask_key_name": "head_mask",
-            "mask_key_value": ("observation", "aux", "candidate_mask"),
-            "return_log_prob": True,  # SAC/off-policy needs sample_log_prob for temperature/actor losses
-        }
-
-    return build_unified_model(
-        policy=actor,
-        value=value,
-        qvalue=qvalue,
-        namespacing=namespacing,
-        validation=validation,
-        runtime=base_rt,
-        policy_runtime=actor_runtime,
-        value_runtime=value_runtime,
-        qvalue_runtime=qvalue_runtime,
-        **_ignored,
-    )
-
-
 def build_model(
     *,
     policy: DictConfig | None = None,
@@ -338,12 +235,7 @@ def build_model(
     qvalue_runtime: dict | None = None,
     **_ignored,
 ) -> Tuple[nn.Module, None, None]:
-    """Legacy generic builder - delegates to build_unified_model.
-
-    Maintained for backward compatibility with existing configs that use
-    _target_: build_model.
-    """
-    # Don't modify the incoming runtime dict (it may be from OmegaConf)
+    
     # Create a copy and avoid storing class objects that OmegaConf can't wrap
     base_rt = dict(runtime) if runtime else {}
     if policy is not None and "distribution" not in base_rt:
@@ -352,10 +244,9 @@ def build_model(
             "kwargs": {"inactive_action": 0, "reinterpreted_batch_ndims": 0},
             "mask_key_name": "head_mask",
             "mask_key_value": ("observation", "aux", "candidate_mask"),
-            "return_log_prob": True,  # Changed to True - needed for PPO and on-policy algorithms
+            "return_log_prob": True # PPO needs sample_log_prob for actor loss
         }
 
-    # Support legacy actor_runtime by mapping it to policy_runtime.
     # If both are provided, policy_runtime takes precedence.
     merged_policy_runtime = None
     if actor_runtime or policy_runtime:

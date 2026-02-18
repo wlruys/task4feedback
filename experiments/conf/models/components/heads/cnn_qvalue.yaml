@@ -1,0 +1,7 @@
+defaults:
+  - /models/components/shared/activation/leaky_relu@activation
+  - /models/components/shared/initialization/orthogonal@initialization
+
+_target_: task4feedback.ml.models.cnn.CNNQValueHead
+hidden_channels: 128
+add_gap: true

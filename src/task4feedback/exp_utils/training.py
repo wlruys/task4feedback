@@ -26,7 +26,7 @@ from .model import create_td_models
 from .run_name import make_run_name
 from task4feedback.logging import training
 from task4feedback.ml.models import FeatureDimConfig
-from task4feedback.ml.rl_utils import compute_model_fingerprint
+from task4feedback.ml.rl_utils import compute_model_fingerprint, warmup_lazy_modules
 
 
 @dataclass
@@ -76,11 +76,9 @@ def initialize_env_and_model(
     feature_config = FeatureDimConfig.from_observer(observer)
     model, reference, lstm = create_td_models(cfg, feature_config)
 
-    # Warm up once to materialize Lazy* parameters before logging.
+    # Warm up to materialize Lazy* parameters before logging or cloning.
     try:
-        with torch.no_grad():
-            td0 = env.reset()
-            model(td0)
+        warmup_lazy_modules(model, env, warmup_steps=2)
     except Exception as exc:
         training.warning("Model warmup for lazy init failed: %s", exc)
 

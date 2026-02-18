@@ -14,10 +14,6 @@ from torch.distributions import Categorical, Independent, constraints
 class MultiHeadCategoricalMasked(Independent):
     """Multi-head categorical distribution with dynamic head masking.
 
-    This distribution extends Independent(Categorical) to support per-head masking,
-    where each "head" is an independent categorical choice. Masked heads are forced
-    to select a designated inactive action.
-
     Args:
         logits: Unnormalized log probabilities of shape (..., num_heads, num_actions)
         probs: Normalized probabilities of shape (..., num_heads, num_actions)
@@ -47,34 +43,24 @@ class MultiHeadCategoricalMasked(Independent):
     ) -> None:
         # Process mask first to apply to logits before creating the distribution
         if head_mask is not None and logits is not None:
-            # Convert to boolean mask
             mask = head_mask.to(device=logits.device, dtype=torch.bool)
             # Expand mask to match logits batch shape if needed
             if mask.shape != logits.shape[:-1]:
                 mask = mask.expand(logits.shape[:-1])
 
-            # For masked heads: set inactive_action to 0 and all other actions to -inf
-            # This gives zero entropy and ensures the inactive_action is always selected
             masked_logits = logits.clone()
             num_actions = logits.shape[-1]
-
-            # Create mask for inactive heads: shape (..., num_heads)
             inactive_mask = ~mask
 
             if inactive_mask.any():
-                # Set all logits for inactive heads to -inf first
                 masked_logits = torch.where(
                     inactive_mask.unsqueeze(-1),
                     torch.tensor(float('-inf'), device=logits.device, dtype=logits.dtype),
                     masked_logits
                 )
-                # Then set the inactive_action for inactive heads to 0 (or any finite value)
-                # This creates a deterministic distribution for masked heads with zero entropy
-                # Create a mask for the inactive_action position: shape (num_actions,)
                 action_mask = torch.zeros(num_actions, dtype=torch.bool, device=logits.device)
                 action_mask[inactive_action] = True
 
-                # Combine with inactive head mask: shape (..., num_heads, num_actions)
                 inactive_action_mask = inactive_mask.unsqueeze(-1) & action_mask
 
                 masked_logits = torch.where(
@@ -85,41 +71,27 @@ class MultiHeadCategoricalMasked(Independent):
 
             logits = masked_logits
 
-        # Create base categorical distribution with masked logits
         base = Categorical(logits=logits, probs=probs, validate_args=validate_args)
 
-        # Initialize Independent wrapper
         super().__init__(
             base,
             reinterpreted_batch_ndims=reinterpreted_batch_ndims,
             validate_args=validate_args,
         )
 
-        # Store configuration
         self._inactive = inactive_action
         self._logits = base.logits
         self._device = self._logits.device
         self._batch_shape = base.batch_shape
 
-        # Process and cache mask
         if head_mask is None:
-            self._mask = None  # Fast path: no masking needed
+            self._mask = None 
         else:
-            # Convert to boolean and move to correct device
             self._mask = head_mask.to(device=self._device, dtype=torch.bool)
-            # Expand mask to match batch shape if needed
             if self._mask.shape != self._batch_shape:
                 self._mask = self._mask.expand(self._batch_shape)
 
     def _expand_mask(self, shape: tuple[int, ...]) -> Tensor:
-        """Expand mask to match sample shape.
-
-        Args:
-            shape: Target shape for the mask
-
-        Returns:
-            Mask tensor expanded to target shape
-        """
         m = self._mask
         lead = len(shape) - m.ndim
         if lead > 0:
@@ -128,30 +100,15 @@ class MultiHeadCategoricalMasked(Independent):
         return m
 
     def sample(self, sample_shape: torch.Size = torch.Size()) -> Tensor:
-        """Sample actions from the distribution.
-
-        Masked heads will always return the inactive_action.
-
-        Args:
-            sample_shape: Shape of samples to draw
-
-        Returns:
-            Sampled actions with masked heads set to inactive_action
-        """
         out = self.base_dist.sample(sample_shape)
         if self._mask is None:
             return out
 
-        # Expand mask if needed and apply masking
         mask = self._expand_mask(out.shape) if out.shape != self._mask.shape else self._mask
         return out.masked_fill_(~mask, self._inactive)
 
     @property
     def mode(self) -> Tensor:
-        """Return the mode (argmax) of the distribution.
-
-        Masked heads return the inactive_action.
-        """
         m = self._logits.argmax(dim=-1)
         if self._mask is None:
             return m
@@ -174,27 +131,12 @@ class MultiHeadCategoricalMasked(Independent):
 
     @property
     def mean(self) -> Tensor:
-        """Return mean of the distribution.
-
-        For categorical distributions, this is the expected index.
-        Masked heads return the inactive_action as mean.
-        """
         m = self.base_dist.mean
         if self._mask is None:
             return m
         return m.masked_fill(~self._mask, float(self._inactive))
 
     def log_prob(self, value: Tensor) -> Tensor:
-        """Compute log probability of actions.
-
-        For masked heads, log probability contribution is zero.
-
-        Args:
-            value: Actions to compute log probability for
-
-        Returns:
-            Sum of log probabilities across heads
-        """
         if self._mask is None:
             return self.base_dist.log_prob(value).sum(dim=-1)
 
@@ -208,13 +150,6 @@ class MultiHeadCategoricalMasked(Independent):
         return lp.mul_(mask.float()).sum(dim=-1)
 
     def entropy(self) -> Tensor:
-        """Compute entropy of the distribution.
-
-        For masked heads, entropy contribution is zero.
-
-        Returns:
-            Sum of entropies across active heads
-        """
         ent = self.base_dist.entropy()
         if self._mask is None:
             return ent.sum(dim=-1)

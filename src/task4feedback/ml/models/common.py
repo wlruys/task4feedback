@@ -28,6 +28,26 @@ def flatten_task_grid(x: torch.Tensor, length: int, width: int, in_channels: int
     return h, tuple(batch_shape), single
 
 
+def masked_mean_pool(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    mask_f = mask.to(x.dtype).unsqueeze(-1) #[B, C, 1]
+    counts = mask_f.sum(dim=1).clamp_min(1.0) #[B, 1]
+    return (x * mask_f).sum(dim=1) / counts #[B, C]
+
+def get_aux_feature_dim(
+    *,
+    add_device_load: bool = False,
+    add_progress: bool = False,
+    n_devices: int = 5,
+) -> int:
+    """Compute total number of auxiliary features."""
+    n = 0
+    if add_device_load:
+        n += 3 * n_devices
+    if add_progress:
+        n += 2
+    return n
+
+
 def build_aux_features(
     obs,
     *,
@@ -59,6 +79,7 @@ def build_aux_features(
         device_load = obs["aux", "device_load"]
         device_memory = obs["aux", "device_memory"]
         device_feat = torch.cat([device_load, device_memory], dim=-1)
+        
         if device_feat.ndim == 0:
             device_feat = device_feat.view(1, 1)
         elif device_feat.ndim == 1:

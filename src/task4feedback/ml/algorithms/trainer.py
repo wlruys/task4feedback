@@ -12,7 +12,7 @@ from torchrl.objectives import SoftUpdate
 
 from task4feedback.logging import training
 from task4feedback.ml.eval import EvaluationConfig, make_eval_envs, run_evaluation
-from task4feedback.ml.rl_utils import save_checkpoint
+from task4feedback.ml.rl_utils import save_checkpoint, warmup_lazy_modules, has_uninitialized_params
 from .base import (
     AlgorithmConfig,
     LoggingConfig,
@@ -114,11 +114,60 @@ class Trainer:
         self.optimizer.add_param_group({**base_group, "params": missing})
         training.info("Added %d loss-module parameters to optimizer.", len(missing))
 
+    def _make_sac_param_groups(
+        self,
+        loss_module: LossModule,
+    ) -> Optional[List[Dict[str, Any]]]:
+        actor_params = None
+        qvalue_params = None
+        alpha_params = None
+
+        if hasattr(loss_module, "actor_network_params"):
+            actor_params = list(loss_module.actor_network_params.parameters())
+        if hasattr(loss_module, "qvalue_network_params"):
+            qvalue_params = list(loss_module.qvalue_network_params.parameters())
+
+        log_alpha = getattr(loss_module, "log_alpha", None)
+        if isinstance(log_alpha, torch.nn.Parameter) and log_alpha.requires_grad:
+            alpha_params = [log_alpha]
+
+        if not actor_params or not qvalue_params:
+            return None
+
+        param_groups: List[Dict[str, Any]] = [
+            {"params": actor_params, "name": "actor"},
+            {"params": qvalue_params, "name": "qvalue"},
+        ]
+        if alpha_params:
+            param_groups.append({"params": alpha_params, "name": "alpha"})
+
+        initial_lr = None
+        if isinstance(self._optimizer_spec, functools.partial):
+            initial_lr = self._optimizer_spec.keywords.get("lr", None)
+        if initial_lr is None:
+            initial_lr = getattr(self.alg_config, "lr", None)
+        if initial_lr is not None:
+            for group in param_groups:
+                group["lr"] = initial_lr
+
+        return param_groups
+
     def train(self):
         training.info(f"Starting training with {self.algorithm.__class__.__name__}")
 
         self.algorithm.initialize(self.model, self.update_device, self.env_constructors)
         self._setup_wandb_logging()
+
+        if has_uninitialized_params(self.model) and self.env_constructors:
+            warmup_env = None
+            try:
+                warmup_env = self.env_constructors[0]()
+                warmup_lazy_modules(self.model, warmup_env, warmup_steps=2)
+            except Exception as exc:
+                training.warning("Lazy parameter warmup failed: %s", exc)
+            finally:
+                if warmup_env is not None:
+                    warmup_env.close()
 
         loss_module = self.algorithm.make_loss_module(self.model)
         loss_module.to(self.update_device)
@@ -127,7 +176,13 @@ class Trainer:
         if self.optimizer is None:
             if not isinstance(self._optimizer_spec, functools.partial):
                 raise TypeError("Trainer requires an optimizer or a functools.partial optimizer factory.")
-            self.optimizer = self._optimizer_spec(params=loss_module.parameters())
+            param_groups = None
+            if getattr(self.alg_config, "name", None) == "sac":
+                param_groups = self._make_sac_param_groups(loss_module)
+            if param_groups:
+                self.optimizer = self._optimizer_spec(params=param_groups)
+            else:
+                self.optimizer = self._optimizer_spec(params=loss_module.parameters())
         else:
             self._maybe_add_missing_optimizer_params(loss_module)
 

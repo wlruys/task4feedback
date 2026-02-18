@@ -53,7 +53,6 @@ eval:
 algorithm:
   num_collections: 10
   graphs_per_collection: 2
-  states_per_collection: 128
   workers: 2
   rollout_steps: 8
   minibatch_size: 32
