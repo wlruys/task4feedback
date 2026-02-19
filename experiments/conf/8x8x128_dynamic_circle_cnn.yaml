@@ -4,9 +4,26 @@ defaults:
   - network: cond_dilation_gnn_batch
   - _self_
 
+
 algorithm:
   rollout_steps: 32
   minibatch_size: 32
+  gamma: 0.99
+  ent_coef: 0.00025
+
+reward:
+  pbrs: True
+  sparse_reward_scale: 10
+  dense_reward_scale: 10
+
+
+
+graph:
+  config:
+    steps: 256
+    n: 8
+    r_interior: 2
+    r_boundary: 2
 
 optimizer:
   lr: 1e-3
@@ -19,7 +36,7 @@ feature:
     n_candidates: 64
     version: "C"
   normalization:
-    warmup: 1
+    warmup: 20
   add_device_load: True
 
 network:
