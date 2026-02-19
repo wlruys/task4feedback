@@ -56,7 +56,6 @@ def configure_training(cfg: DictConfig, normalization=None):
         loaded = load_policy_from_checkpoint(model, ckpt_path)
         assert loaded, f"Failed to load model from {ckpt_path}"
         print(f"Successfully loaded model from {ckpt_path}")
-        exit()
     # ckpt_path = Path("/home/cc/task4feedback_torchrl/experiments/saved_models_test")
     # folder_name, _, _, _ = make_folder_name(cfg)
     # model_path = Path("./") / folder_name
@@ -121,7 +120,7 @@ def configure_training(cfg: DictConfig, normalization=None):
         optimizer=optimizer,
         lr_scheduler=lr_scheduler,
         seed=cfg.seed,
-        resume_from=cfg.resume_from,
+        resume_from=cfg.get("resume_from", None),
     )
 
 
