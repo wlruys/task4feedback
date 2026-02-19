@@ -22,7 +22,13 @@ from task4feedback.graphs.base import TaskGraph, DataBlocks, ComputeDataGraph
 import random
 from task4feedback.graphs.mesh.plot import *
 from task4feedback.legacy_graphs import *
-from task4feedback.graphs.jacobi import JacobiGraph, JacobiRoundRobinMapper, JacobiQuadrantMapper, LevelPartitionMapper, BlockCyclicMapper
+from task4feedback.graphs.jacobi import (
+    JacobiGraph,
+    JacobiRoundRobinMapper,
+    JacobiQuadrantMapper,
+    LevelPartitionMapper,
+    BlockCyclicMapper,
+)
 from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
 from torch_geometric.data import HeteroData
 from torchrl.data import Categorical
@@ -67,6 +73,7 @@ class RuntimeEnv(EnvBase):
         sample_z: bool = False,
         burn_in_resets: int = 10,
         extra_logging_policy: str = "EFT",
+        fixed_baseline: Optional[float] = None,
         **_ignored,
     ):
         super().__init__(device=device)
@@ -82,9 +89,12 @@ class RuntimeEnv(EnvBase):
         self.random_start = random_start
         self.sample_z = sample_z
         self.burn_in_resets = burn_in_resets
+        self.fixed_baseline = fixed_baseline
 
         if location_list is None:
-            location_list = [i for i in range(int(only_gpu), len(simulator_factory.input.system))]
+            location_list = [
+                i for i in range(int(only_gpu), len(simulator_factory.input.system))
+            ]
         self.location_list = location_list
         self.only_gpu = only_gpu
         self.n_compute_devices = len(simulator_factory.input.system) - int(only_gpu)
@@ -111,9 +121,13 @@ class RuntimeEnv(EnvBase):
             simulator_factory = [simulator_factory]
 
         self.simulator_factory: list[SimulatorFactory] = simulator_factory
-        self.active_idx = 0  # Index of the active simulator factory in case of multiple factories
+        self.active_idx = (
+            0  # Index of the active simulator factory in case of multiple factories
+        )
 
-        self.simulator: SimulatorDriver = simulator_factory[self.active_idx].create(seed, priority_seed=priority_seed)
+        self.simulator: SimulatorDriver = simulator_factory[self.active_idx].create(
+            seed, priority_seed=priority_seed
+        )
 
         self.buffer_idx = 0
         self.resets = 0
@@ -125,12 +139,20 @@ class RuntimeEnv(EnvBase):
         if self.change_location:
             graph = simulator_factory[self.active_idx].input.graph
             if self.only_gpu and (0 in self.location_list):
-                print("Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data.")
-            if hasattr(graph, "get_cell_locations") and hasattr(graph, "set_cell_locations") and hasattr(graph, "randomize_locations"):
+                print(
+                    "Warning: CPU is in the location list. Although only_gpu is set to True, the CPU will be assigned data."
+                )
+            if (
+                hasattr(graph, "get_cell_locations")
+                and hasattr(graph, "set_cell_locations")
+                and hasattr(graph, "randomize_locations")
+            ):
                 self.legacy_graph = False
             else:
                 self.legacy_graph = True
-                print("Warning: Randomizing locations on a legacy graph. This may not work as expected. location_randomness is ignored.")
+                print(
+                    "Warning: Randomizing locations on a legacy graph. This may not work as expected. location_randomness is ignored."
+                )
 
         self.observation = self._get_new_observation_buffer()
         observation_spec = self._create_observation_spec(self.observation)
@@ -155,11 +177,16 @@ class RuntimeEnv(EnvBase):
             self.observations.append(obs)
 
         self._buf = spec.zeros()
-        self.candidate_workspace = torch.zeros(self.simulator_factory[self.active_idx].graph_spec.max_candidates, dtype=torch.int64)
+        self.candidate_workspace = torch.zeros(
+            self.simulator_factory[self.active_idx].graph_spec.max_candidates,
+            dtype=torch.int64,
+        )
         self.baseline_time = baseline_time
 
         if change_location:
-            graph.randomize_locations(self.location_randomness, self.location_list, verbose=False)
+            graph.randomize_locations(
+                self.location_randomness, self.location_list, verbose=False
+            )
 
         self.batch_size = torch.Size([])
 
@@ -181,7 +208,10 @@ class RuntimeEnv(EnvBase):
         Return maximum number of steps in the environment.
         This is the number of tasks in the graph.
         """
-        return int(len(self.simulator_factory[self.active_idx].input.graph) // self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+        return int(
+            len(self.simulator_factory[self.active_idx].input.graph)
+            // self.simulator_factory[self.active_idx].graph_spec.max_candidates
+        )
 
     def __len__(self):
         """
@@ -205,7 +235,9 @@ class RuntimeEnv(EnvBase):
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
+            assert final_state == fastsim.ExecutionState.COMPLETE, (
+                f"Baseline returned unexpected final state: {final_state}"
+            )
             return simulator_copy.time
         elif "BlockCyclic" in policy:
             parts = policy.split("(")
@@ -220,27 +252,44 @@ class RuntimeEnv(EnvBase):
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.enable_external_mapper()
-            simulator_copy.external_mapper = BlockCyclicMapper(geometry=simulator_copy.input.graph.data.geometry, n_devices=self.n_compute_devices, block_size=setting, offset=int(self.only_gpu))
+            simulator_copy.external_mapper = BlockCyclicMapper(
+                geometry=simulator_copy.input.graph.data.geometry,
+                n_devices=self.n_compute_devices,
+                block_size=setting,
+                offset=int(self.only_gpu),
+            )
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
+            assert final_state == fastsim.ExecutionState.COMPLETE, (
+                f"Baseline returned unexpected final state: {final_state}"
+            )
             return simulator_copy.time
         elif policy == "Cyclic":
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.enable_external_mapper()
-            simulator_copy.external_mapper = JacobiRoundRobinMapper(n_devices=self.n_compute_devices, setting=1, offset=int(self.only_gpu))
+            simulator_copy.external_mapper = JacobiRoundRobinMapper(
+                n_devices=self.n_compute_devices, setting=1, offset=int(self.only_gpu)
+            )
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
+            assert final_state == fastsim.ExecutionState.COMPLETE, (
+                f"Baseline returned unexpected final state: {final_state}"
+            )
             return simulator_copy.time
         elif policy == "Quad":
             simulator_copy = self.simulator.fresh_copy()
             simulator_copy.initialize()
             simulator_copy.initialize_data()
             simulator_copy.enable_external_mapper()
-            simulator_copy.external_mapper = JacobiQuadrantMapper(n_devices=self.n_compute_devices, graph=self.simulator.input.graph, offset=int(self.only_gpu))
+            simulator_copy.external_mapper = JacobiQuadrantMapper(
+                n_devices=self.n_compute_devices,
+                graph=self.simulator.input.graph,
+                offset=int(self.only_gpu),
+            )
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
+            assert final_state == fastsim.ExecutionState.COMPLETE, (
+                f"Baseline returned unexpected final state: {final_state}"
+            )
             return simulator_copy.time
         elif policy.startswith("Oracle(") and policy.endswith(")"):
             k = int(policy[len("Oracle(") : -1])
@@ -256,9 +305,13 @@ class RuntimeEnv(EnvBase):
                 offset=1,
             )
             graph.align_partitions()
-            simulator_copy.external_mapper = LevelPartitionMapper(level_cell_mapping=graph.partitions)
+            simulator_copy.external_mapper = LevelPartitionMapper(
+                level_cell_mapping=graph.partitions
+            )
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
+            assert final_state == fastsim.ExecutionState.COMPLETE, (
+                f"Baseline returned unexpected final state: {final_state}"
+            )
             return simulator_copy.time
         else:
             raise ValueError(f"Unknown baseline policy: {policy}")
@@ -361,7 +414,12 @@ class RuntimeEnv(EnvBase):
         return obs, reward, time, improvement
 
     def max_length(self) -> int:
-        return max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
+        return max(
+            [
+                len(self.simulator_factory[i].input.graph)
+                for i in range(len(self.simulator_factory))
+            ]
+        )
 
     def map_tasks(self, actions: torch.Tensor):
         candidate_workspace = self.candidate_workspace
@@ -369,7 +427,9 @@ class RuntimeEnv(EnvBase):
         graph = self.simulator_factory[self.active_idx].input.graph
         if num_candidates > 1:
             mapping_result = []
-            assert isinstance(graph, JacobiGraph), "Graph must be a JacobiGraph for batched mapping."
+            assert isinstance(graph, JacobiGraph), (
+                "Graph must be a JacobiGraph for batched mapping."
+            )
             for i in range(num_candidates):
                 global_task_id = candidate_workspace[i].item()
 
@@ -390,7 +450,9 @@ class RuntimeEnv(EnvBase):
             chosen_device = actions.item() + int(self.only_gpu)
             global_task_id = candidate_workspace[0].item()
             mapping_priority = self.simulator.get_mapping_priority(global_task_id)
-            self.simulator.simulator.map_tasks([fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)])
+            self.simulator.simulator.map_tasks(
+                [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+            )
 
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step {self.step_count+1}/{self.size()}", flush=True)
@@ -413,7 +475,9 @@ class RuntimeEnv(EnvBase):
         buf = td.empty()
         obs = obs if self.max_samples_per_iter > 0 else obs.clone()
         buf.set(self.observation_n, obs)
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
@@ -424,20 +488,23 @@ class RuntimeEnv(EnvBase):
         graph.set_cell_locations(cell_location, step=0)
 
         if workload_state is not None:
-            graph.load_workload(self.simulator_factory[self.active_idx].input.system, workload_state)
+            graph.load_workload(
+                self.simulator_factory[self.active_idx].input.system, workload_state
+            )
 
         self.simulator = self.simulator_factory[self.active_idx].create()
         self.simulator.observer.reset()
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, f"Unexpected simulator status: {simulator_status}"
+        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
+            f"Unexpected simulator status: {simulator_status}"
+        )
         gc.collect()
 
     def set_reset_counter(self, count):
         self.resets = count
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        # start_t = perf_counter()
         training.info("Resetting environment (reset count: {})".format(self.resets))
         self.resets += 1
         self.step_count = 0
@@ -453,7 +520,9 @@ class RuntimeEnv(EnvBase):
                 for i in range(data.size()):
                     data.set_location(i, random.choice(self.location_list))
             else:
-                assert hasattr(graph, "randomize_locations"), "Graph does not have randomize_locations method."
+                assert hasattr(graph, "randomize_locations"), (
+                    "Graph does not have randomize_locations method."
+                )
 
                 if isinstance(graph, JacobiGraph):
                     graph.set_cell_locations([-1 for _ in range(graph.nx * graph.ny)])
@@ -472,10 +541,15 @@ class RuntimeEnv(EnvBase):
 
         if self.change_workload:
             graph = self.simulator_factory[self.active_idx].input.graph
-            assert isinstance(graph, DynamicJacobiGraph), "Graph must be a DynamicJacobiGraph to randomize workload."
+            assert isinstance(graph, DynamicJacobiGraph), (
+                "Graph must be a DynamicJacobiGraph to randomize workload."
+            )
             new_workload_seed = self.workload_seed + self.resets
             random.seed(new_workload_seed)
-            graph.randomize_workload(seed=new_workload_seed, system=self.simulator_factory[self.active_idx].input.system)
+            graph.randomize_workload(
+                seed=new_workload_seed,
+                system=self.simulator_factory[self.active_idx].input.system,
+            )
             partition = graph.make_partition(
                 arch=DeviceType.GPU,
                 bandwidth=450e9,
@@ -497,7 +571,9 @@ class RuntimeEnv(EnvBase):
         else:
             new_duration_seed = int(current_duration_seed)
 
-        self.simulator = self.simulator_factory[self.active_idx].create(priority_seed=new_priority_seed, duration_seed=new_duration_seed)
+        self.simulator = self.simulator_factory[self.active_idx].create(
+            priority_seed=new_priority_seed, duration_seed=new_duration_seed
+        )
         self.simulator.observer.reset()
         if self.resets < self.burn_in_resets and self.random_start:
             # Run the simulator for a random number of steps
@@ -508,7 +584,9 @@ class RuntimeEnv(EnvBase):
             self.simulator.enable_external_mapper()
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, f"Unexpected simulator status: {simulator_status}"
+        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
+            f"Unexpected simulator status: {simulator_status}"
+        )
 
         if td is None:
             td = TensorDict()
@@ -518,8 +596,6 @@ class RuntimeEnv(EnvBase):
         obs = self._get_observation(reset=True).clone()
 
         td.set(self.observation_n, obs)
-        # end_t = perf_counter()
-        # print("Reset took %.2f ms", (end_t - start_t) * 1000, flush=True)
         gc.collect()
         return td
 
@@ -573,8 +649,14 @@ class RuntimeEnv(EnvBase):
 
 
 class IncrementalEFT(RuntimeEnv):
-
-    def __init__(self, *args, gamma: float = 1.0, scaling_factor: float = 1.0, terminal_reward: bool = True, **kwargs):
+    def __init__(
+        self,
+        *args,
+        gamma: float = 1.0,
+        scaling_factor: float = 1.0,
+        terminal_reward: bool = True,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.scaling_factor = scaling_factor
@@ -592,7 +674,6 @@ class IncrementalEFT(RuntimeEnv):
         self.map_tasks(td[self.action_n])
 
         if not self.disable_reward_flag:
-
             start_time = perf_counter()
             sim_ml = self.simulator.copy()
             sim_ml.disable_external_mapper()
@@ -604,7 +685,9 @@ class IncrementalEFT(RuntimeEnv):
 
             ml_time = sim_ml.time
 
-            reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / self.scaling_factor)
+            reward = (self.eft_time - self.gamma * ml_time) / (
+                self.EFT_baseline / self.scaling_factor
+            )
             self.eft_time = ml_time
         else:
             reward = 0.0
@@ -621,21 +704,36 @@ class IncrementalEFT(RuntimeEnv):
             reward += _reward
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         # print(f"Progress : {buf['observation','aux','progress'].item():.3f}, Reward: {buf['reward'].item():.3f}, {_reward}", flush=True)
         return buf
 
 
 class LookbackKStep(RuntimeEnv):
-
-    def __init__(self, *args, gamma: float = 1.0, k: int = 5, terminal_reward: bool = False, **kwargs):
+    def __init__(
+        self,
+        *args,
+        gamma: float = 1.0,
+        k: int = 5,
+        terminal_reward: bool = False,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.k = k
         self.step_count = 0
-        max_length = max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
+        max_length = max(
+            [
+                len(self.simulator_factory[i].input.graph)
+                for i in range(len(self.simulator_factory))
+            ]
+        )
         self.kstep_record = torch.zeros(max_length + 2, dtype=torch.int64)
         self.current_record = torch.zeros(max_length + 2, dtype=torch.int64)
         self.terminal_reward = terminal_reward
@@ -653,7 +751,10 @@ class LookbackKStep(RuntimeEnv):
             sim_k_step = self.simulator.copy()
             sim_k_step.disable_external_mapper()
             if self.k > 0:
-                sim_k_step.set_steps(self.k * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_k_step.set_steps(
+                    self.k
+                    * self.simulator_factory[self.active_idx].graph_spec.max_candidates
+                )
                 sim_k_step.run()
             sim_k_step.start_drain()
             sim_k_step.run()
@@ -662,7 +763,6 @@ class LookbackKStep(RuntimeEnv):
         self.map_tasks(td[self.action_n])
 
         if not self.disable_reward_flag:
-
             sim_current = self.simulator.copy()
             sim_current.start_drain()
             sim_current.disable_external_mapper()
@@ -674,7 +774,9 @@ class LookbackKStep(RuntimeEnv):
             else:
                 predicted_time = self.kstep_record[self.step_count - self.k]
                 agent_time = self.current_record[self.step_count]
-                reward = (predicted_time - self.gamma * agent_time) / (self.EFT_baseline / self.size())
+                reward = (predicted_time - self.gamma * agent_time) / (
+                    self.EFT_baseline / self.size()
+                )
         else:
             reward = 0.0
 
@@ -688,20 +790,38 @@ class LookbackKStep(RuntimeEnv):
                 reward = reward + r
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
 
 class SparseLookbackKStep(RuntimeEnv):
-
-    def __init__(self, *args, gamma: float = 1.0, k: int = 5, delay: int = 5, terminal_reward: bool = False, random_offset: bool = False, offset: int = 1, **kwargs):
+    def __init__(
+        self,
+        *args,
+        gamma: float = 1.0,
+        k: int = 5,
+        delay: int = 5,
+        terminal_reward: bool = False,
+        random_offset: bool = False,
+        offset: int = 1,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.k = k
         self.step_count = 0
-        max_length = max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
+        max_length = max(
+            [
+                len(self.simulator_factory[i].input.graph)
+                for i in range(len(self.simulator_factory))
+            ]
+        )
         self.kstep_record = torch.zeros(max_length + 2, dtype=torch.int64)
         self.current_record = torch.zeros(max_length + 2, dtype=torch.int64)
         self.terminal_reward = terminal_reward
@@ -721,13 +841,18 @@ class SparseLookbackKStep(RuntimeEnv):
         self.step_count += 1
 
         flag_predict = (self.step_count + self.offset) % self.delay == 0
-        flag_check = (self.step_count > self.delay) and ((self.step_count - self.delay + self.offset) % self.delay == 0)
+        flag_check = (self.step_count > self.delay) and (
+            (self.step_count - self.delay + self.offset) % self.delay == 0
+        )
 
         if not self.disable_reward_flag and flag_predict:
             sim_k_step = self.simulator.copy()
             sim_k_step.disable_external_mapper()
             if self.k > 0:
-                sim_k_step.set_steps(self.reference_steps * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_k_step.set_steps(
+                    self.reference_steps
+                    * self.simulator_factory[self.active_idx].graph_spec.max_candidates
+                )
                 sim_k_step.run()
             sim_k_step.start_drain()
             sim_k_step.run()
@@ -737,18 +862,23 @@ class SparseLookbackKStep(RuntimeEnv):
         self.map_tasks(td[self.action_n])
 
         if not self.disable_reward_flag and flag_check:
-
             sim_current = self.simulator.copy()
             sim_current.disable_external_mapper()
             if self.look_ahead > 0:
-                sim_current.set_steps((self.look_ahead) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_current.set_steps(
+                    (self.look_ahead)
+                    * self.simulator_factory[self.active_idx].graph_spec.max_candidates
+                )
                 sim_current.run()
             sim_current.start_drain()
             sim_current.run()
             self.current_record[self.step_count] = sim_current.time
             # print("Checking", self.step_count, "Looking at", self.step_count + self.look_ahead)
 
-            reward = (self.kstep_record[self.step_count - self.delay] - self.current_record[self.step_count]) / (self.EFT_baseline / self.size())
+            reward = (
+                self.kstep_record[self.step_count - self.delay]
+                - self.current_record[self.step_count]
+            ) / (self.EFT_baseline / self.size())
         else:
             reward = 0.0
 
@@ -763,8 +893,12 @@ class SparseLookbackKStep(RuntimeEnv):
                 reward = reward + r
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
@@ -775,13 +909,25 @@ class SparseLookbackKStep(RuntimeEnv):
 
 
 class LookaheadKStep(RuntimeEnv):
-
-    def __init__(self, *args, gamma: float = 1.0, k: int = 5, terminal_reward: bool = False, chance: float = 1.0, **kwargs):
+    def __init__(
+        self,
+        *args,
+        gamma: float = 1.0,
+        k: int = 5,
+        terminal_reward: bool = False,
+        chance: float = 1.0,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.k = k
         self.step_count = 0
-        max_length = max([len(self.simulator_factory[i].input.graph) for i in range(len(self.simulator_factory))])
+        max_length = max(
+            [
+                len(self.simulator_factory[i].input.graph)
+                for i in range(len(self.simulator_factory))
+            ]
+        )
         self.kstep_record = torch.zeros(max_length + 2, dtype=torch.int64)
         self.current_record = torch.zeros(max_length + 2, dtype=torch.int64)
         self.terminal_reward = terminal_reward
@@ -800,7 +946,10 @@ class LookaheadKStep(RuntimeEnv):
             sim_k_step = self.simulator.copy()
             sim_k_step.disable_external_mapper()
             if self.k > 0:
-                sim_k_step.set_steps(self.k * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_k_step.set_steps(
+                    self.k
+                    * self.simulator_factory[self.active_idx].graph_spec.max_candidates
+                )
                 sim_k_step.run()
             sim_k_step.start_drain()
             sim_k_step.run()
@@ -809,17 +958,22 @@ class LookaheadKStep(RuntimeEnv):
         self.map_tasks(td[self.action_n])
 
         if not self.disable_reward_flag and check_s:
-
             sim_current = self.simulator.copy()
             sim_current.disable_external_mapper()
             if self.k > 0:
-                sim_current.set_steps((self.k - 1) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_current.set_steps(
+                    (self.k - 1)
+                    * self.simulator_factory[self.active_idx].graph_spec.max_candidates
+                )
                 sim_current.run()
             sim_current.start_drain()
             sim_current.run()
             self.current_record[self.step_count] = sim_current.time
 
-            reward = (self.kstep_record[self.step_count] - self.current_record[self.step_count]) / (self.EFT_baseline / self.size())
+            reward = (
+                self.kstep_record[self.step_count]
+                - self.current_record[self.step_count]
+            ) / (self.EFT_baseline / self.size())
         else:
             reward = 0.0
 
@@ -834,8 +988,12 @@ class LookaheadKStep(RuntimeEnv):
                 reward = reward + r
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
@@ -848,7 +1006,9 @@ class KStepIncrementalEFT(RuntimeEnv):
     Yet, it is still rather performant... so I am keeping it as a record.
     """
 
-    def __init__(self, *args, gamma: float = 1.0, k: int = 5, drain: bool = False, **kwargs):
+    def __init__(
+        self, *args, gamma: float = 1.0, k: int = 5, drain: bool = False, **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.gamma = gamma
         self.k = k
@@ -869,13 +1029,18 @@ class KStepIncrementalEFT(RuntimeEnv):
             sim_ml = self.simulator.copy()
             sim_ml.disable_external_mapper()
 
-            sim_ml.set_steps((self.k) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+            sim_ml.set_steps(
+                (self.k)
+                * self.simulator_factory[self.active_idx].graph_spec.max_candidates
+            )
             sim_ml.run()
             if self.drain:
                 sim_ml.start_drain()
             sim_ml.run()
             ml_time = sim_ml.time
-            reward = (self.eft_time - self.gamma * ml_time) / (self.EFT_baseline / (self.size()))
+            reward = (self.eft_time - self.gamma * ml_time) / (
+                self.EFT_baseline / (self.size())
+            )
             self.eft_time = ml_time
         else:
             reward = 0.0
@@ -889,14 +1054,17 @@ class KStepIncrementalEFT(RuntimeEnv):
             reward = reward + r
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
 
 class IncrementalSchedule(RuntimeEnv):
-
     def __init__(
         self,
         *args,
@@ -918,7 +1086,9 @@ class IncrementalSchedule(RuntimeEnv):
         self.terminal_reward = terminal_reward
         self.baseline_policy = baseline_policy
         if uniform_reward_scale != 0:
-            print("Using uniform reward scale, overriding dense and sparse reward scales.")
+            print(
+                "Using uniform reward scale, overriding dense and sparse reward scales."
+            )
             self.dense_reward_scale = uniform_reward_scale
             self.sparse_reward_scale = uniform_reward_scale
         else:
@@ -944,13 +1114,20 @@ class IncrementalSchedule(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step", self.step_count)
         if self.step_count == 0 and not self.disable_reward_flag:
-            self.EFT_baseline = self._get_baseline(policy=self.baseline_policy)
+            if self.fixed_baseline:
+                self.EFT_baseline = self.fixed_baseline
+            else:
+                print(f"Calculating baseline with policy {self.baseline_policy}...")
+                self.EFT_baseline = self._get_baseline(policy=self.baseline_policy)
             self.prev_makespan = self.EFT_baseline
             self.eft_time = self.EFT_baseline
             sim_current = self.simulator.copy()
             sim_current.disable_external_mapper()
             if self.k > 0:
-                sim_current.set_steps((self.k) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_current.set_steps(
+                    (self.k)
+                    * self.simulator_factory[self.active_idx].graph_spec.max_candidates
+                )
                 sim_current.run()
             sim_current.start_drain()
             sim_current.run()
@@ -958,7 +1135,7 @@ class IncrementalSchedule(RuntimeEnv):
             self.potential_sum = 0.0
             if self.chance < 1.0:
                 self._reinitialize_intervals()
-        else:
+        elif self.disable_reward_flag:
             self.potential = [0.0]
             self.potential_sum = 0.0
 
@@ -971,7 +1148,10 @@ class IncrementalSchedule(RuntimeEnv):
             sim_current.disable_external_mapper()
 
             if self.k > 0:
-                sim_current.set_steps((self.k) * self.simulator_factory[self.active_idx].graph_spec.max_candidates)
+                sim_current.set_steps(
+                    (self.k)
+                    * self.simulator_factory[self.active_idx].graph_spec.max_candidates
+                )
                 sim_current.run()
             sim_current.start_drain()
             sim_current.run()
@@ -979,10 +1159,14 @@ class IncrementalSchedule(RuntimeEnv):
             self.potential.append((-sim_current.time) / (self.EFT_baseline))
 
             # Normalized in per-task time observed in global baseline.
-            reward = self.sparse_reward_scale * (self.gamma * self.potential[-1] - self.potential[-2])
+            reward = self.sparse_reward_scale * (
+                self.gamma * self.potential[-1] - self.potential[-2]
+            )
             self.potential_sum += reward
             if self.verbose:
-                print(f"Step {self.step_count} Reward: {reward:.4f} (P(s)={self.potential[-2]:.4f}, P(s+1)={self.potential[-1]:.4f})")
+                print(
+                    f"Step {self.step_count} Reward: {reward:.4f} (P(s)={self.potential[-2]:.4f}, P(s+1)={self.potential[-1]:.4f})"
+                )
         else:
             self.potential.append(0.0)
             reward = 0.0
@@ -997,19 +1181,30 @@ class IncrementalSchedule(RuntimeEnv):
             if self.terminal_reward:
                 reward = self.dense_reward_scale * r
                 if self.pbrs:
-                    reward = reward + self.sparse_reward_scale * (0 - self.potential[-2])
-                    self.potential_sum += self.sparse_reward_scale * (0 - self.potential[-2])
+                    reward = reward + self.sparse_reward_scale * (
+                        0 - self.potential[-2]
+                    )
+                    self.potential_sum += self.sparse_reward_scale * (
+                        0 - self.potential[-2]
+                    )
             if self.verbose:
-                print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f} Sum(Potential): {self.potential_sum:.4f}")
+                print(
+                    f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f} Sum(Potential): {self.potential_sum:.4f}"
+                )
                 # print(f"Terminal Step {self.step_count} Reward: {reward:.4f} Terminal: {r:.4f}")
                 deltas = []
                 for i in range(1, len(self.potential)):
-                    deltas.append(self.sparse_reward_scale * (self.gamma * self.potential[i] - self.potential[i - 1]))
+                    deltas.append(
+                        self.sparse_reward_scale
+                        * (self.gamma * self.potential[i] - self.potential[i - 1])
+                    )
                 if not self.disable_reward_flag:
                     print(f"Max pbrs: {max(deltas):.4f}, Min pbrs: {min(deltas):.4f}")
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
 
         # if self.network is not None and self.use_rle:
         #     self.network(buf)
@@ -1019,13 +1214,14 @@ class IncrementalSchedule(RuntimeEnv):
         #     # print(f"r_rle", r_rle, reward)
         #     reward = reward + 0.5 * r_rle
 
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
 
 class DelayIncrementalEFT(IncrementalEFT):
-
     def __init__(
         self,
         *args,
@@ -1057,7 +1253,9 @@ class DelayIncrementalEFT(IncrementalEFT):
             sim_ml.disable_external_mapper()
             sim_ml.run()
             ml_time = sim_ml.time
-            reward = (self.eft_time - self.gamma**self.delay * ml_time) / (self.EFT_baseline / self.size())
+            reward = (self.eft_time - self.gamma**self.delay * ml_time) / (
+                self.EFT_baseline / self.size()
+            )
             self.eft_time = ml_time
         else:
             reward = 0.0
@@ -1070,8 +1268,12 @@ class DelayIncrementalEFT(IncrementalEFT):
             obs, reward, time, improvement = self._handle_done(obs)
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
@@ -1115,8 +1317,12 @@ class BaselineImprovementEFT(RuntimeEnv):
             obs, reward, time, improvement = self._handle_done(obs)
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
@@ -1167,7 +1373,9 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
                 current = max(current, 0)
 
             if not self.flip:
-                discount = self.gamma * (1 - self.gamma) ** (self.max_steps - 1 - (self.step_count - i))
+                discount = self.gamma * (1 - self.gamma) ** (
+                    self.max_steps - 1 - (self.step_count - i)
+                )
             else:
                 discount = self.gamma * (1 - self.gamma) ** (self.step_count - 1 - i)
 
@@ -1187,8 +1395,12 @@ class GeneralizedIncrementalEFT(RuntimeEnv):
             obs, _, time, improvement = self._handle_done(obs)
 
         buf = td.empty()
-        buf.set(self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone())
-        buf.set(self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32))
+        buf.set(
+            self.observation_n, obs if self.max_samples_per_iter > 0 else obs.clone()
+        )
+        buf.set(
+            self.reward_n, torch.tensor(reward, device=self.device, dtype=torch.float32)
+        )
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
@@ -1197,7 +1409,9 @@ class SanityCheckEnv(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         if self.step_count == 0:
             self.EFT_baseline = self._get_baseline(policy="EFT")
-            self.graph: JacobiGraph = self.simulator_factory[self.active_idx].input.graph
+            self.graph: JacobiGraph = self.simulator_factory[
+                self.active_idx
+            ].input.graph
         done = torch.tensor((1,), device=self.device, dtype=torch.bool)
         reward = torch.tensor((1,), device=self.device, dtype=torch.float32)
         candidate_workspace = torch.zeros(
@@ -1210,7 +1424,9 @@ class SanityCheckEnv(RuntimeEnv):
         global_task_id = candidate_workspace[0].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
 
-        self.simulator.simulator.map_tasks([fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)])
+        self.simulator.simulator.map_tasks(
+            [fastsim.Action(0, chosen_device, mapping_priority, mapping_priority)]
+        )
 
         cell_id = self.graph.task_to_cell[global_task_id]
 
@@ -1635,7 +1851,9 @@ def make_simple_env_from_legacy(tasks, data):
     m.finalize_tasks()
     spec = create_graph_spec()
     input = SimulatorInput(m, d, s)
-    env = RuntimeEnv(SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu")
+    env = RuntimeEnv(
+        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+    )
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
     return env
@@ -1650,7 +1868,9 @@ def make_simple_env(graph: ComputeDataGraph):
     spec = create_graph_spec()
     input = SimulatorInput(m, d, s)
 
-    env = RuntimeEnv(SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu")
+    env = RuntimeEnv(
+        SimulatorFactory(input, spec, DefaultObserverFactory), device="cpu"
+    )
 
     env = TransformedEnv(env, StepCounter())
     env = TransformedEnv(env, TrajCounter())
@@ -1696,7 +1916,9 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
         random.seed(self.location_seed)
 
         if change_location:
-            graph.randomize_locations(self.location_randomness, self.location_list, verbose=False)
+            graph.randomize_locations(
+                self.location_randomness, self.location_list, verbose=False
+            )
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.resets += 1
@@ -1710,7 +1932,9 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
             graph.set_cell_locations(self.initial_location_list)
 
             random.seed(new_location_seed)
-            graph.randomize_locations(self.location_randomness, self.location_list, verbose=False)
+            graph.randomize_locations(
+                self.location_randomness, self.location_list, verbose=False
+            )
 
         if self.change_priority:
             new_priority_seed = current_priority_seed + self.resets
@@ -1725,10 +1949,14 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
         new_priority_seed = int(new_priority_seed)
         new_duration_seed = int(new_duration_seed)
 
-        self.simulator = self.simulator_factory[self.active_idx].create(priority_seed=new_priority_seed, duration_seed=new_duration_seed)
+        self.simulator = self.simulator_factory[self.active_idx].create(
+            priority_seed=new_priority_seed, duration_seed=new_duration_seed
+        )
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, f"Unexpected simulator status: {simulator_status}"
+        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
+            f"Unexpected simulator status: {simulator_status}"
+        )
 
         obs = self._get_observation()
         return obs
@@ -1776,7 +2004,9 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
         random.seed(self.location_seed)
 
         if change_location:
-            graph.randomize_locations(self.location_randomness, self.location_list, verbose=False)
+            graph.randomize_locations(
+                self.location_randomness, self.location_list, verbose=False
+            )
 
     def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
         self.resets += 1
@@ -1790,7 +2020,9 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
             graph.set_cell_locations(self.initial_location_list)
 
             random.seed(new_location_seed)
-            graph.randomize_locations(self.location_randomness, self.location_list, verbose=False)
+            graph.randomize_locations(
+                self.location_randomness, self.location_list, verbose=False
+            )
 
         if self.change_priority:
             new_priority_seed = current_priority_seed + self.resets
@@ -1805,10 +2037,14 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
         new_priority_seed = int(new_priority_seed)
         new_duration_seed = int(new_duration_seed)
 
-        self.simulator = self.simulator_factory[self.active_idx].create(priority_seed=new_priority_seed, duration_seed=new_duration_seed)
+        self.simulator = self.simulator_factory[self.active_idx].create(
+            priority_seed=new_priority_seed, duration_seed=new_duration_seed
+        )
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, f"Unexpected simulator status: {simulator_status}"
+        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
+            f"Unexpected simulator status: {simulator_status}"
+        )
 
         obs = self._get_observation()
         return obs
@@ -1844,8 +2080,12 @@ class IncrementalMappingEnv(EnvBase):
         self.location_list = location_list
 
         self.simulator_factory = simulator_factory
-        self.simulator: SimulatorDriver = simulator_factory[self.active_idx].create(seed)
-        self.graph_extractor: GraphExtractor = GraphExtractor(self.simulator.get_state())
+        self.simulator: SimulatorDriver = simulator_factory[self.active_idx].create(
+            seed
+        )
+        self.graph_extractor: GraphExtractor = GraphExtractor(
+            self.simulator.get_state()
+        )
 
         self.buffer_idx = 0
         self.resets = 0
@@ -1866,7 +2106,9 @@ class IncrementalMappingEnv(EnvBase):
             simulator_copy.initialize_data()
             simulator_copy.disable_external_mapper()
             final_state = simulator_copy.run()
-            assert final_state == fastsim.ExecutionState.COMPLETE, f"Baseline returned unexpected final state: {final_state}"
+            assert final_state == fastsim.ExecutionState.COMPLETE, (
+                f"Baseline returned unexpected final state: {final_state}"
+            )
             return simulator_copy.time
         return self.baseline_time
 
@@ -1918,7 +2160,9 @@ class IncrementalMappingEnv(EnvBase):
     def _prealloc_step_buffers(self, n: int) -> List[TensorDict]:
         return [self._get_new_step_buffer() for _ in range(n)]
 
-    def _get_preallocated_step_buffer(self, buffers: List[TensorDict], i: int) -> TensorDict:
+    def _get_preallocated_step_buffer(
+        self, buffers: List[TensorDict], i: int
+    ) -> TensorDict:
         if i >= len(buffers):
             buffers.extend(self._prealloc_step_buffers(2 * len(buffers)))
         return buffers[i]
@@ -1940,13 +2184,17 @@ class IncrementalMappingEnv(EnvBase):
         self.simulator.get_mappable_candidates(candidate_workspace)
 
         dependents = torch.zeros(16, dtype=torch.int64)
-        dep_count = self.graph_extractor.get_k_hop_dependents(candidate_workspace, 2, dependents)
+        dep_count = self.graph_extractor.get_k_hop_dependents(
+            candidate_workspace, 2, dependents
+        )
 
         global_task_id = candidate_workspace[0].item()
         mapping_priority = self.simulator.get_mapping_priority(global_task_id)
         reserving_priority = mapping_priority
         launching_priority = mapping_priority
-        actions = [fastsim.Action(0, chosen_device, reserving_priority, launching_priority)]
+        actions = [
+            fastsim.Action(0, chosen_device, reserving_priority, launching_priority)
+        ]
         self.last_time = self.simulator.time
         self.simulator.simulator.map_tasks(actions)
 
@@ -1989,14 +2237,24 @@ class IncrementalMappingEnv(EnvBase):
         new_duration_seed = int(new_duration_seed)
 
         self.taskid_history = []
-        if self.change_location and isinstance(self.simulator_factory.input.graph, JacobiGraph):
-            self.simulator_factory.input.graph.randomize_locations(1, location_list=self.location_list)
-        self.simulator = self.simulator_factory.create(priority_seed=new_priority_seed, duration_seed=new_duration_seed)
-        self.graph_extractor: GraphExtractor = GraphExtractor(self.simulator.get_state())
+        if self.change_location and isinstance(
+            self.simulator_factory.input.graph, JacobiGraph
+        ):
+            self.simulator_factory.input.graph.randomize_locations(
+                1, location_list=self.location_list
+            )
+        self.simulator = self.simulator_factory.create(
+            priority_seed=new_priority_seed, duration_seed=new_duration_seed
+        )
+        self.graph_extractor: GraphExtractor = GraphExtractor(
+            self.simulator.get_state()
+        )
         self.EFT_baseline = self._get_baseline(policy="EFT")
 
         simulator_status = self.simulator.run_until_external_mapping()
-        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, f"Unexpected simulator status: {simulator_status}"
+        assert simulator_status == fastsim.ExecutionState.EXTERNAL_MAPPING, (
+            f"Unexpected simulator status: {simulator_status}"
+        )
 
         obs = self._get_observation()
         return obs

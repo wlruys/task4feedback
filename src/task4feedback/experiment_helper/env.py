@@ -1,3 +1,5 @@
+import os
+import pickle
 from ..interface import SimulatorFactory, SimulatorInput, create_graph_spec
 from ..interface import TaskNoise
 from ..graphs.jacobi import get_length_from_config
@@ -186,6 +188,13 @@ def make_env(
     else:
         top_k_candidates = 1
 
+    if os.path.exists(cfg.eval.pickle_path):
+        eval_log = pickle.load(open(cfg.eval.pickle_path, "rb"))
+        baselines = eval_log.get("policy_times", [])
+        fixed_baseline = sum(baselines) / len(baselines) if baselines else None
+    else:
+        fixed_baseline = None
+
     input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise, top_k_candidates=top_k_candidates)
 
     env = runtime_env_t(
@@ -201,6 +210,7 @@ def make_env(
             if cfg.feature.observer.batched
             else (len(graph) + 1 if cfg.algorithm.rollout_steps == 0 else cfg.algorithm.rollout_steps + 1)
         ),
+        fixed_baseline=fixed_baseline,
     )
     env = TransformedEnv(env, StepCounter())
     env.append_transform(TrajCounter())

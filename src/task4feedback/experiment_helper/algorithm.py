@@ -1,5 +1,6 @@
 from ..ml.algorithms import *
 import hydra
+from omegaconf import DictConfig
 
 
 def create_optimizer(cfg: DictConfig):

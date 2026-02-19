@@ -5,3 +5,4 @@ checkpoint_interval: 500
 best_policy_dir: null
 best_policy_name: null
 log_best_policy: true
+checkpoint_dir: null

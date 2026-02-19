@@ -1,20 +1,25 @@
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 import wandb
 from hydra.utils import instantiate
 from task4feedback.experiment_helper.graph import make_graph_builder
 from task4feedback.experiment_helper.env import make_env
-from task4feedback.experiment_helper.model import create_td_actor_critic_models, load_policy_from_checkpoint
-from task4feedback.experiment_helper.algorithm import create_optimizer, create_lr_scheduler
+from task4feedback.experiment_helper.model import (
+    create_td_actor_critic_models,
+    load_policy_from_checkpoint,
+)
+from task4feedback.experiment_helper.algorithm import (
+    create_optimizer,
+    create_lr_scheduler,
+)
 from task4feedback.experiment_helper.run_name import make_folder_name
 
-from task4feedback.ml.algorithms.ppo import run_ppo, run_ppo_lstm
+from task4feedback.ml.algorithms.ppo import run_ppo
 from task4feedback.interface.wrappers import *
 from task4feedback.ml.models import *
 
 # torch.multiprocessing.set_sharing_strategy("file_descriptor")
 # torch.multiprocessing.set_sharing_strategy("file_system")
-from omegaconf import DictConfig, open_dict
 from pathlib import Path
 import os
 from hydra.core.hydra_config import HydraConfig
@@ -33,14 +38,25 @@ def configure_training(cfg: DictConfig, normalization=None):
         norm_dir = os.path.join("./norms", run_name)
         os.makedirs(norm_dir, exist_ok=True)
 
-        with open(os.path.join(norm_dir, f"{cfg.feature.observer.version}_norm.pkl"), "wb") as f:
+        with open(
+            os.path.join(norm_dir, f"{cfg.feature.observer.version}_norm.pkl"), "wb"
+        ) as f:
             pickle.dump(normalization, f)
     else:
-        env = make_env(graph_builder=graph_builder, cfg=cfg, normalization=normalization)
+        env = make_env(
+            graph_builder=graph_builder, cfg=cfg, normalization=normalization
+        )
     observer = env.get_observer()
     feature_config = FeatureDimConfig.from_observer(observer)
     model, reference, lstm = create_td_actor_critic_models(cfg, feature_config)
 
+    if cfg.get("load_policy", None):
+        ckpt_path = Path(cfg.load_policy)
+        print(f"Loading policy from checkpoint: {ckpt_path}")
+        loaded = load_policy_from_checkpoint(model, ckpt_path)
+        assert loaded, f"Failed to load model from {ckpt_path}"
+        print(f"Successfully loaded model from {ckpt_path}")
+        exit()
     # ckpt_path = Path("/home/cc/task4feedback_torchrl/experiments/saved_models_test")
     # folder_name, _, _, _ = make_folder_name(cfg)
     # model_path = Path("./") / folder_name
@@ -96,47 +112,17 @@ def configure_training(cfg: DictConfig, normalization=None):
         except Exception as e:
             print(f"wandb.watch failed: {e}")
 
-    if cfg.eval.expert_path is not None:
-        expert_demonstration = pickle.load(open(cfg.eval.expert_path, "rb"))
-        if isinstance(expert_demonstration, list):
-            if len(expert_demonstration) == 0:
-                raise ValueError("Loaded empty expert demonstration list")
-
-            if isinstance(expert_demonstration[0], TensorDict):
-                expert_demonstration = torch.cat(
-                    [ep.reshape(-1) for ep in expert_demonstration],
-                    dim=0,
-                )
-            else:
-                expert_demonstration = torch.cat(
-                    [ep.reshape(ep.shape[0], -1) if hasattr(ep, "shape") else ep for ep in expert_demonstration],
-                    dim=0,
-                )
-    else:
-        expert_demonstration = None
-    if lstm is not None:
-        run_ppo_lstm(
-            actor_critic_module=model,
-            env_constructors=[env_fn],
-            logging_config=logging_config,
-            ppo_config=alg_config,
-            eval_config=eval_config,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-            seed=cfg.seed,
-        )
-    else:
-        run_ppo(
-            actor_critic_module=model,
-            env_constructors=[env_fn],
-            logging_config=logging_config,
-            ppo_config=alg_config,
-            eval_config=eval_config,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-            seed=cfg.seed,
-            expert_demonstration=expert_demonstration,
-        )
+    run_ppo(
+        actor_critic_module=model,
+        env_constructors=[env_fn],
+        logging_config=logging_config,
+        ppo_config=alg_config,
+        eval_config=eval_config,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
+        seed=cfg.seed,
+        resume_from=cfg.resume_from,
+    )
 
 
 @hydra.main(config_path="conf", config_name="static_batch.yaml", version_base=None)
@@ -156,12 +142,19 @@ def main(cfg: DictConfig):
         raise ValueError("Unknown network type in cfg.network.layers.state._target_")
 
     if cfg.graph.mesh._target_ == "task4feedback.graphs.mesh.generate_quad_mesh":
-
         run_name, _, _, _ = make_folder_name(cfg)
 
-        checkpoint_path = Path(cfg.wandb.dir).parent / "model_checkpoints" / f"{run_name}"
-        cfg.eval.pickle_path = f"./pickled_evaluation/{cfg.feature.observer.version}/{run_name}.pkl"
-        cfg.eval.expert_path = f"./dataset/{run_name}/{cfg.eval.expert_path}.pkl" if cfg.eval.expert_path is not None else None
+        best_policy_dir = Path(cfg.wandb.dir).parent / "best_policies" / f"{run_name}"
+        checkpoint_dir = Path(cfg.wandb.dir).parent / "checkpoints" / f"{run_name}"
+
+        cfg.eval.pickle_path = (
+            f"./pickled_evaluation/{cfg.feature.observer.version}/{run_name}.pkl"
+        )
+        cfg.eval.expert_path = (
+            f"./dataset/{run_name}/{cfg.eval.expert_path}.pkl"
+            if cfg.eval.expert_path is not None
+            else None
+        )
         norm_path = f"./norms/{run_name}/{cfg.feature.observer.version}_norm.pkl"
 
         if not os.path.exists(cfg.eval.pickle_path):
@@ -183,8 +176,11 @@ def main(cfg: DictConfig):
             normalization = None
 
         # Make a dir if not exists
-        checkpoint_path.mkdir(parents=True, exist_ok=True)
-        cfg.logging.best_policy_dir = str(checkpoint_path)
+        best_policy_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        cfg.logging.best_policy_dir = str(best_policy_dir)
+        cfg.logging.checkpoint_dir = str(checkpoint_dir)
+
         print(f"Best Policy dir: {cfg.logging.best_policy_dir}")
         cfg.logging.best_policy_name = f"{cfg.feature.observer.version}"
         print(f"Best Policy name: {cfg.logging.best_policy_name}")
@@ -195,7 +191,6 @@ def main(cfg: DictConfig):
             config=OmegaConf.to_container(cfg, resolve=True),
             name=cfg.wandb.name,
             group=cfg.wandb.group,
-            # name=f"{cfg.wandb.name}",
             dir=cfg.wandb.dir,
             tags=cfg.wandb.tags,
         )
