@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Optional, Type, Self
+from typing import Optional, Type, Self, Any
+from pathlib import Path
+import json
+import os
 from .types import (
     DeviceTuple,
     TaskTuple,
@@ -920,7 +923,13 @@ class DefaultObserverFactory(ExternalObserverFactory):
         )
 
 
-def observation_to_heterodata_truncate(observation: TensorDict, idx: int = 0, device="cpu", actions=None) -> HeteroData:
+def _observation_to_heterodata_counted(
+    observation: TensorDict,
+    idx: int = 0,
+    device: str = "cpu",
+    actions=None,
+    store_node_counts: bool = False,
+) -> HeteroData:
     hetero_data = HeteroData()
 
     hetero_data["time"].x = observation["aux", "time"].unsqueeze(0)
@@ -935,9 +944,15 @@ def observation_to_heterodata_truncate(observation: TensorDict, idx: int = 0, de
         hetero_data["actions"].x = actions
 
     for node_type, node_data in observation["nodes"].items():
-        count = node_data["count"][0]
-        count = max(1, count)  # Ensure at least one node to avoid empty tensors
+        max_nodes = int(node_data["attr"].shape[0])
+        if "count" in node_data:
+            count = int(node_data["count"][0].item())
+        else:
+            count = max_nodes
+        count = max(0, min(count, max_nodes))
         hetero_data[f"{node_type}"].x = node_data["attr"][:count]
+        if store_node_counts:
+            hetero_data[f"{node_type}_count"].x = torch.tensor([count], dtype=torch.int64)
 
     for edge_key, edge_data in observation["edges"].items():
         splits = edge_key.split("_")
@@ -950,8 +965,12 @@ def observation_to_heterodata_truncate(observation: TensorDict, idx: int = 0, de
         else:
             raise ValueError(f"Invalid edge key format: {edge_key}")
 
-        count = edge_data["count"][0]
-        count = max(1, count)  # Ensure at least one edge to avoid empty tensors
+        max_edges = int(edge_data["idx"].shape[1])
+        if "count" in edge_data:
+            count = int(edge_data["count"][0].item())
+        else:
+            count = max_edges
+        count = max(0, min(count, max_edges))
 
         has_attr = "attr" in edge_data
 
@@ -986,60 +1005,24 @@ def observation_to_heterodata_truncate(observation: TensorDict, idx: int = 0, de
     return hetero_data.to(device)
 
 
+def observation_to_heterodata_truncate(observation: TensorDict, idx: int = 0, device="cpu", actions=None) -> HeteroData:
+    return _observation_to_heterodata_counted(
+        observation=observation,
+        idx=idx,
+        device=device,
+        actions=actions,
+        store_node_counts=False,
+    )
+
+
 def observation_to_heterodata(observation: TensorDict, idx: int = 0, device="cpu", actions=None) -> HeteroData:
-    hetero_data = HeteroData()
-
-    hetero_data["time"].x = observation["aux", "time"].unsqueeze(0)
-    hetero_data["progress"].x = observation["aux", "progress"].unsqueeze(0)
-    hetero_data["device_load"].x = observation["aux", "device_load"].unsqueeze(0)
-    hetero_data["device_memory"].x = observation["aux", "device_memory"].unsqueeze(0)
-    hetero_data["z_ch"].x = observation["aux", "z_ch"].unsqueeze(0)
-    hetero_data["z_spa"].x = observation["aux", "z_spa"].unsqueeze(0)
-    hetero_data["baseline"].x = observation["aux", "baseline"].unsqueeze(0)
-
-    if actions is not None:
-        # print("setting actions", actions.shape)
-        hetero_data["actions"].x = actions
-
-    for node_type, node_data in observation["nodes"].items():
-        count = node_data["count"]
-        # print("node count", node_type, count)
-        hetero_data[f"{node_type}"].x = node_data["attr"]
-        hetero_data[f"{node_type}_count"].x = count
-
-    for edge_key, edge_data in observation["edges"].items():
-        splits = edge_key.split("_")
-
-        if len(splits) == 2:
-            target, source = splits
-            usage = None
-        elif len(splits) == 3:
-            target, usage, source = splits
-        else:
-            raise ValueError(f"Invalid edge key format: {edge_key}")
-
-        count = edge_data["count"]
-
-        if usage is None:
-            hetero_data[target, "to", source].edge_index = edge_data["idx"]
-            hetero_data[target, "to", source].edge_attr = edge_data["attr"]
-
-            if source != target:
-                hetero_data[source, "to", target].edge_index = hetero_data[target, "to", source].edge_index.flip(0)
-                hetero_data[source, "to", target].edge_attr = hetero_data[target, "to", source].edge_attr
-
-            if source == target:
-                hetero_data[source, "from", target].edge_index = hetero_data[target, "to", source].edge_index.flip(0)
-                hetero_data[source, "from", target].edge_attr = hetero_data[target, "to", source].edge_attr
-        else:
-            hetero_data[target, usage, source].edge_index = edge_data["idx"]
-            hetero_data[target, usage, source].edge_attr = edge_data["attr"]
-
-            if source != target:
-                hetero_data[source, usage, target].edge_index = hetero_data[target, usage, source].edge_index.flip(0)
-                hetero_data[source, usage, target].edge_attr = hetero_data[target, usage, source].edge_attr
-
-    return hetero_data.to(device)
+    return _observation_to_heterodata_counted(
+        observation=observation,
+        idx=idx,
+        device=device,
+        actions=actions,
+        store_node_counts=True,
+    )
 
 
 class AccessType(IntEnum):
@@ -1260,6 +1243,13 @@ class ExternalObserver:
 
     def get_task_task_edges(self, task_ids, workspace, global_workspace):
         length = self.graph_extractor.get_task_task_edges(task_ids, workspace, global_workspace)
+
+        if self.truncate:
+            workspace = workspace[:, :length]
+        return workspace, length
+
+    def get_task_task_shared_read_edges(self, task_ids, workspace, global_workspace):
+        length = self.graph_extractor.get_task_task_shared_read_edges(task_ids, workspace, global_workspace)
 
         if self.truncate:
             workspace = workspace[:, :length]
@@ -1660,6 +1650,7 @@ class ExternalObserver:
         output.set_at_(("aux", "candidates", "count"), count, 0)
 
         # Mark valid candidates out of max_candidates
+        output[("aux", "candidate_mask")].zero_()
         output[("aux", "candidate_mask")][:count] = True 
 
         #Get ordering of NN output for this observer
@@ -1770,6 +1761,333 @@ class CandidateObserver(ExternalObserver):
         output.set_at_(("aux", "improvement"), -100.0, 0)
 
         return output
+
+class CandidateGNNObserver(CandidateObserver):
+    """
+    Observer that collects shared read neighbors within candidate tasks.
+    """
+
+    def new_observation_buffer(self, spec = None):
+        if spec is None:
+            spec = self.graph_spec
+
+        node_tensor = TensorDict({"tasks": _make_node_tensor(spec.max_candidates, self.task_features.feature_dim)})
+        edge_tensor = TensorDict({"tasks_tasks": _make_edge_tensor(spec.max_candidates*spec.max_candidates, self.task_task_features.feature_dim)})
+        mapping_size = spec.max_candidates if self.remapped_candidates else 1
+
+        aux_tensor = TensorDict(
+            {
+                "candidates": _make_index_tensor(spec.max_candidates),
+                "candidate_mask": torch.zeros((spec.max_candidates), dtype=torch.bool),
+                "candidate_action_map": torch.zeros((mapping_size), dtype=torch.int64),
+                "time": torch.zeros((1), dtype=torch.int64),
+                "improvement": torch.zeros((1), dtype=torch.float32),
+                "progress": torch.zeros((1), dtype=torch.float32),
+                "baseline": torch.ones((1), dtype=torch.float32),
+                "device_memory": torch.zeros(1 * (spec.max_devices), dtype=torch.float32),
+                "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
+                "z_ch": torch.zeros((8), dtype=torch.float32),
+                "z_spa": torch.zeros((8), dtype=torch.float32),
+            }
+        )
+
+        obs_tensor = TensorDict(
+            {
+                "nodes": node_tensor,
+                "edges": edge_tensor,
+                "aux": aux_tensor,
+            }
+        )
+
+        return obs_tensor
+    
+
+    def shared_read_edges(self, output: TensorDict):
+        ntasks = output["nodes", "tasks", "count"][0]
+        _, count = self.get_task_task_shared_read_edges(
+            output["nodes", "tasks", "glb"][:ntasks],
+            output["edges", "tasks_tasks", "idx"],
+            output["edges", "tasks_tasks", "glb"],
+        )
+
+        output.set_at_(("edges", "tasks_tasks", "count"), count, 0)
+
+    @staticmethod
+    def _edge_tensor_to_pairs(edge_tensor: torch.Tensor, count: int) -> list[tuple[int, int]]:
+        if count <= 0:
+            return []
+        edge_list = edge_tensor[:, :count].t().tolist()
+        return [(int(src), int(dst)) for src, dst in edge_list]
+
+    def _candidate_read_sets(self, task_ids: list[int]) -> dict[int, set[int]]:
+        graph = getattr(getattr(self.simulator, "input", None), "graph", None)
+        if graph is None:
+            raise RuntimeError("Cannot debug shared-read edges: simulator.input.graph is unavailable.")
+
+        read_sets: dict[int, set[int]] = {}
+
+        tasks = getattr(graph, "tasks", None)
+        if isinstance(tasks, dict):
+            for task_id in task_ids:
+                task = tasks.get(int(task_id))
+                reads = [] if task is None else getattr(task, "read", [])
+                read_sets[int(task_id)] = {int(data_id) for data_id in reads}
+            return read_sets
+
+        static_graph = getattr(graph, "graph", None)
+        if static_graph is not None and hasattr(static_graph, "get_read"):
+            for task_id in task_ids:
+                reads = static_graph.get_read(int(task_id))
+                read_sets[int(task_id)] = {int(data_id) for data_id in reads}
+            return read_sets
+
+        raise RuntimeError("Cannot debug shared-read edges: graph does not expose task read sets.")
+
+    def _candidate_grid_coords(self, task_ids: list[int]) -> tuple[dict[int, dict[str, int]], tuple[int, int] | None]:
+        graph = getattr(getattr(self.simulator, "input", None), "graph", None)
+        if graph is None:
+            return {}, None
+
+        ncols = int(getattr(graph, "nx", -1))
+        nrows = int(getattr(graph, "ny", -1))
+        has_grid = nrows > 0 and ncols > 0
+
+        tasks = getattr(graph, "tasks", None)
+        coords: dict[int, dict[str, int]] = {}
+        for task_id in task_ids:
+            task_id = int(task_id)
+            if hasattr(graph, "xy_from_id"):
+                local_lid = int(graph.xy_from_id(task_id))
+            elif isinstance(tasks, dict) and task_id in tasks and getattr(tasks[task_id], "tag", None) is not None:
+                local_lid = int(tasks[task_id].tag)
+            elif has_grid:
+                local_lid = int(task_id % (nrows * ncols))
+            else:
+                local_lid = task_id
+
+            if has_grid:
+                row = int(local_lid % nrows)
+                col = int(local_lid // nrows)
+            else:
+                row = -1
+                col = -1
+            coords[task_id] = {"local_lid": local_lid, "row": row, "col": col}
+
+        if has_grid:
+            return coords, (nrows, ncols)
+        return coords, None
+
+    def debug_shared_read_edges(self, output: TensorDict, dump_dir: Optional[str] = None, max_shared_data_per_edge: int = 8) -> dict[str, Any]:
+        """
+        Compare observed shared-read edges against an independently rebuilt
+        candidate-only shared-read graph, and optionally dump visualization artifacts.
+        """
+        n_candidates = int(output["nodes", "tasks", "count"][0].item())
+        candidate_ids = [int(v) for v in output["nodes", "tasks", "glb"][:n_candidates].tolist()]
+
+        observed_count = int(output["edges", "tasks_tasks", "count"][0].item())
+        max_edges = int(output["edges", "tasks_tasks", "idx"].shape[1])
+
+        observed_global_pairs = set(
+            self._edge_tensor_to_pairs(output["edges", "tasks_tasks", "glb"], observed_count)
+        )
+        observed_local_pairs = set(
+            self._edge_tensor_to_pairs(output["edges", "tasks_tasks", "idx"], observed_count)
+        )
+
+        read_sets = self._candidate_read_sets(candidate_ids)
+        grid_coords, grid_shape = self._candidate_grid_coords(candidate_ids)
+        expected_global_pairs: set[tuple[int, int]] = set()
+        expected_local_pairs: set[tuple[int, int]] = set()
+        shared_data_preview: dict[str, list[int]] = {}
+
+        for src_idx in range(n_candidates):
+            src_id = candidate_ids[src_idx]
+            src_reads = read_sets.get(src_id, set())
+            for dst_idx in range(src_idx + 1, n_candidates):
+                dst_id = candidate_ids[dst_idx]
+                if src_id == dst_id:
+                    continue
+                shared = src_reads.intersection(read_sets.get(dst_id, set()))
+                if len(shared) == 0:
+                    continue
+                expected_local_pairs.add((src_idx, dst_idx))
+                expected_global_pairs.add((src_id, dst_id))
+                shared_data_preview[f"{src_id}->{dst_id}"] = sorted(shared)[: int(max_shared_data_per_edge)]
+
+        missing_global = sorted(expected_global_pairs - observed_global_pairs)
+        extra_global = sorted(observed_global_pairs - expected_global_pairs)
+        missing_local = sorted(expected_local_pairs - observed_local_pairs)
+        extra_local = sorted(observed_local_pairs - expected_local_pairs)
+
+        expected_count = len(expected_global_pairs)
+        capacity_limited = expected_count > max_edges
+        is_exact_match = len(missing_global) == 0 and len(extra_global) == 0
+
+        observed_adj = torch.zeros((n_candidates, n_candidates), dtype=torch.int64)
+        expected_adj = torch.zeros((n_candidates, n_candidates), dtype=torch.int64)
+        for src_idx, dst_idx in observed_local_pairs:
+            if 0 <= src_idx < n_candidates and 0 <= dst_idx < n_candidates:
+                observed_adj[src_idx, dst_idx] = 1
+        for src_idx, dst_idx in expected_local_pairs:
+            if 0 <= src_idx < n_candidates and 0 <= dst_idx < n_candidates:
+                expected_adj[src_idx, dst_idx] = 1
+
+        observed_adj_sym = torch.maximum(observed_adj, observed_adj.T)
+        expected_adj_sym = torch.maximum(expected_adj, expected_adj.T)
+
+        report: dict[str, Any] = {
+            "candidate_count": n_candidates,
+            "candidate_ids": candidate_ids,
+            "max_edges": max_edges,
+            "observed_edge_count": observed_count,
+            "expected_edge_count": expected_count,
+            "capacity_limited": capacity_limited,
+            "is_exact_match": is_exact_match,
+            "missing_global_edges": [[int(s), int(d)] for s, d in missing_global],
+            "extra_global_edges": [[int(s), int(d)] for s, d in extra_global],
+            "missing_local_edges": [[int(s), int(d)] for s, d in missing_local],
+            "extra_local_edges": [[int(s), int(d)] for s, d in extra_local],
+            "shared_data_preview": shared_data_preview,
+            "read_counts": {str(task_id): int(len(read_sets.get(task_id, set()))) for task_id in candidate_ids},
+            "grid_shape": [int(grid_shape[0]), int(grid_shape[1])] if grid_shape is not None else None,
+            "candidate_grid": {
+                str(task_id): {
+                    "local_lid": int(grid_coords.get(task_id, {}).get("local_lid", -1)),
+                    "row": int(grid_coords.get(task_id, {}).get("row", -1)),
+                    "col": int(grid_coords.get(task_id, {}).get("col", -1)),
+                }
+                for task_id in candidate_ids
+            },
+            "observed_adjacency_symmetric": observed_adj_sym.tolist(),
+            "expected_adjacency_symmetric": expected_adj_sym.tolist(),
+        }
+
+        if dump_dir is not None:
+            root = Path(dump_dir)
+            root.mkdir(parents=True, exist_ok=True)
+            sim_time = int(output["aux", "time"][0].item()) if "time" in output["aux"] else -1
+            out_dir = root / f"shared_read_t{sim_time}_n{n_candidates}"
+            suffix = 1
+            while out_dir.exists():
+                out_dir = root / f"shared_read_t{sim_time}_n{n_candidates}_{suffix}"
+                suffix += 1
+            out_dir.mkdir(parents=True, exist_ok=False)
+
+            candidate_lines = ["local_idx,task_id,read_count,grid_lid,row,col"]
+            for idx, task_id in enumerate(candidate_ids):
+                grid = grid_coords.get(task_id, {"local_lid": -1, "row": -1, "col": -1})
+                candidate_lines.append(
+                    f"{idx},{task_id},{len(read_sets.get(task_id, set()))},{grid['local_lid']},{grid['row']},{grid['col']}"
+                )
+            (out_dir / "candidates.csv").write_text("\n".join(candidate_lines) + "\n", encoding="ascii")
+
+            edge_lines = ["src_idx,dst_idx,src_task,dst_task,src_row,src_col,dst_row,dst_col,status"]
+            for src_idx, dst_idx in sorted(expected_local_pairs.intersection(observed_local_pairs)):
+                src_grid = grid_coords.get(candidate_ids[src_idx], {"row": -1, "col": -1})
+                dst_grid = grid_coords.get(candidate_ids[dst_idx], {"row": -1, "col": -1})
+                edge_lines.append(
+                    f"{src_idx},{dst_idx},{candidate_ids[src_idx]},{candidate_ids[dst_idx]},{src_grid['row']},{src_grid['col']},{dst_grid['row']},{dst_grid['col']},match"
+                )
+            for src_idx, dst_idx in missing_local:
+                src_grid = grid_coords.get(candidate_ids[src_idx], {"row": -1, "col": -1})
+                dst_grid = grid_coords.get(candidate_ids[dst_idx], {"row": -1, "col": -1})
+                edge_lines.append(
+                    f"{src_idx},{dst_idx},{candidate_ids[src_idx]},{candidate_ids[dst_idx]},{src_grid['row']},{src_grid['col']},{dst_grid['row']},{dst_grid['col']},missing"
+                )
+            for src_idx, dst_idx in extra_local:
+                src_grid = grid_coords.get(candidate_ids[src_idx], {"row": -1, "col": -1})
+                dst_grid = grid_coords.get(candidate_ids[dst_idx], {"row": -1, "col": -1})
+                edge_lines.append(
+                    f"{src_idx},{dst_idx},{candidate_ids[src_idx]},{candidate_ids[dst_idx]},{src_grid['row']},{src_grid['col']},{dst_grid['row']},{dst_grid['col']},extra"
+                )
+            (out_dir / "edges.csv").write_text("\n".join(edge_lines) + "\n", encoding="ascii")
+
+            dot_lines = ["graph SharedRead {", "  rankdir=LR;"]
+            for idx, task_id in enumerate(candidate_ids):
+                grid = grid_coords.get(task_id, {"row": -1, "col": -1})
+                label = f"{idx}:{task_id}"
+                if grid["row"] >= 0 and grid["col"] >= 0:
+                    dot_lines.append(f'  n{idx} [label="{label}", pos="{grid["col"]},{-grid["row"]}!"];')
+                else:
+                    dot_lines.append(f'  n{idx} [label="{label}"];')
+            for src_idx, dst_idx in sorted(expected_local_pairs.intersection(observed_local_pairs)):
+                dot_lines.append(f"  n{src_idx} -- n{dst_idx} [color=black];")
+            for src_idx, dst_idx in missing_local:
+                dot_lines.append(f"  n{src_idx} -- n{dst_idx} [color=red, style=dashed];")
+            for src_idx, dst_idx in extra_local:
+                dot_lines.append(f"  n{src_idx} -- n{dst_idx} [color=blue, style=dotted];")
+            dot_lines.append("}")
+            (out_dir / "shared_read.dot").write_text("\n".join(dot_lines) + "\n", encoding="ascii")
+
+            np.savetxt(out_dir / "observed_adj.csv", observed_adj_sym.numpy(), fmt="%d", delimiter=",")
+            np.savetxt(out_dir / "expected_adj.csv", expected_adj_sym.numpy(), fmt="%d", delimiter=",")
+            (out_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="ascii")
+            report["dump_dir"] = str(out_dir)
+
+        return report
+
+    def _run_shared_read_debug_hook(self, output: TensorDict):
+        if os.getenv("TASK4FEEDBACK_DEBUG_SHARED_READ", "0") != "1":
+            return
+
+        dump_root = os.getenv("TASK4FEEDBACK_DEBUG_SHARED_READ_DIR")
+        report = self.debug_shared_read_edges(output, dump_dir=dump_root)
+
+        print(
+            "[CandidateGNNObserver][shared-read] "
+            f"observed={report['observed_edge_count']} expected={report['expected_edge_count']} "
+            f"missing={len(report['missing_global_edges'])} extra={len(report['extra_global_edges'])} "
+            f"capacity_limited={report['capacity_limited']}"
+        )
+
+        strict = os.getenv("TASK4FEEDBACK_DEBUG_SHARED_READ_STRICT", "0") == "1"
+        if strict and not report["capacity_limited"] and not report["is_exact_match"]:
+            raise RuntimeError(
+                "Shared-read edge mismatch detected. "
+                f"Missing={len(report['missing_global_edges'])}, extra={len(report['extra_global_edges'])}."
+            )
+
+    
+    def get_observation(self, output = None):
+        
+        if output is None:
+            output = self.new_observation_buffer(self.graph_spec)
+            raise Warning("Allocating new observation buffer, this is not efficient!")
+    
+        #Ensure output is zeroed
+        output["nodes", "tasks", "attr"].zero_()
+        output["edges", "tasks_tasks", "idx"].zero_()
+        output["edges", "tasks_tasks", "glb"].zero_()
+        output["edges", "tasks_tasks", "count"].zero_()
+        output["edges", "tasks_tasks", "attr"].zero_()
+        output["aux", "candidates", "idx"].zero_()
+        output["aux", "candidates", "count"].zero_()
+
+        # Get mappable candidates
+        self.candidate_observation(output)
+        n_candidates = output["aux", "candidates", "count"][0].item()
+
+        output.set_(("nodes", "tasks", "glb"), output["aux", "candidates", "idx"])
+        output.set_at_(("nodes", "tasks", "count"), n_candidates, 0)
+
+        self.get_task_features(output["nodes", "tasks", "glb"][:n_candidates], output["nodes", "tasks", "attr"][:n_candidates])
+
+        # Get candidate-candidate shared read edges
+        self.shared_read_edges(output)
+        self._run_shared_read_debug_hook(output)
+
+        # Auxiliary observations
+
+        self.get_device_load(output)
+        self.get_device_memory(output)
+
+        output.set_at_(("aux", "progress"), -2.0, 0)
+        output.set_at_(("aux", "time"), self.simulator.time, 0)
+        output.set_at_(("aux", "improvement"), -100.0, 0)
+
+        return output
+
 
 
 class CnnSingleTaskObserver(ExternalObserver):

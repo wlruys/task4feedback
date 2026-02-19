@@ -1,7 +1,9 @@
+from torch_geometric.utils import coalesce, remove_self_loops, to_dense_adj
+
 from task4feedback import fastsim2 as fastsim
 from task4feedback.interface import *
 import torch
-from typing import Optional, Self, Any
+from typing import Dict, Optional, Self, Any
 from typing import Optional, Callable, Union
 from torchrl.envs import EnvBase
 from task4feedback.interface.wrappers import observation_to_heterodata, observation_to_heterodata_truncate
@@ -10,12 +12,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, List, Sequence
-from torch_geometric.nn.norm import GraphNorm, MessageNorm
+from torch_geometric.nn.norm import GraphNorm, LayerNorm, MessageNorm
+from torch_geometric.nn import MessagePassing 
 
 # from task4feedback.interface.wrappers import (
 #     observation_to_heterodata_truncate as observation_to_heterodata,
 # )
-from torch import Tensor
+from torch import Tensor, dtype
 from torch_geometric.data import HeteroData
 from torch_geometric.nn import HeteroConv, SAGEConv, Linear
 from torch.profiler import record_function
@@ -105,11 +108,18 @@ def orthogonal_init(layer, gain=1.0):
 def masked_softmax(scores: torch.Tensor, mask: torch.Tensor | None, dim: int = -1):
     if mask is None:
         return F.softmax(scores, dim=dim)
+    mask = mask.to(dtype=torch.bool)
     mask_f = mask.to(dtype=scores.dtype)
-    weights = torch.softmax(scores.masked_fill(~mask, torch.finfo(scores.dtype).min), dim=dim)
-    weights = weights * mask_f
+    all_masked = ~mask.any(dim=dim, keepdim=True)
+
+    masked_scores = scores.masked_fill(~mask, torch.finfo(scores.dtype).min)
+    # Avoid NaNs from softmax(all -inf): use a harmless value for fully-masked rows.
+    masked_scores = masked_scores.masked_fill(all_masked, 0.0)
+
+    weights = torch.softmax(masked_scores, dim=dim) * mask_f
     Z = weights.sum(dim=dim, keepdim=True).clamp_min(1e-8)
-    return weights / Z  #
+    out = weights / Z
+    return torch.where(all_masked, torch.zeros_like(out), out)
 
 def masked_mean(x: torch.Tensor, mask: torch.Tensor | None, dim: int = 1, keepdim: bool = False):
     if mask is None:
@@ -213,6 +223,8 @@ class HeteroDataWrapper(nn.Module):
         self.batch_size = obs.batch_size
         # print("1 BATCH SHAPE obs", obs.shape, obs.batch_size, self.batch_size)
         obs = obs.reshape(-1)
+        if actions is not None and hasattr(actions, "reshape"):
+            actions = actions.reshape(-1)
 
         _h_data = []
 
@@ -3268,216 +3280,1033 @@ class UnconditionedDilationValueHead(nn.Module):
             raise ValueError("ValueHead expects at least one encoder feature.")
         return self.head(obs, *features)
 
+#-------GNN prototypes-------
+from dataclasses import dataclass
+from typing import Dict, Optional, Sequence, Any
+from collections import deque
+from pathlib import Path
+import json
+import os
 
-class OriginalUNetState(nn.Module):
-    def __init__(self, feature_config: FeatureDimConfig, hidden_channels: int, width: int, add_progress: bool = False, **_ignored):
-        super().__init__()
-        self.output_keys = []
-        self.width = width
-        self.in_channels = feature_config.task_feature_dim
-        self.hidden_channels = hidden_channels
-        self.add_progress = add_progress
-        # Determine number of downsampling layers based on width
-        self.num_layers = int(math.floor(math.log2(width)))
-        # Create encoder conv blocks dynamically
-        self.enc_blocks = nn.ModuleList()
+import torch
+import torch.nn as nn
+from torch_geometric.nn import MessagePassing
+from torch_geometric.nn.norm import GraphNorm
+from torch_geometric.utils import coalesce, remove_self_loops, to_dense_adj
 
-        channels = self.in_channels
-        for i in range(self.num_layers):
-            out_channels = hidden_channels * (2**i)
-            block = nn.Sequential(
-                nn.Conv2d(channels, out_channels, kernel_size=3, padding=1),
-                nn.LeakyReLU(
-                    inplace=True,
-                    negative_slope=0.01,
-                ),
-            )
-            self.enc_blocks.append(block)
-            channels = out_channels
-            self.output_keys.append(f"enc_{i}")
-        self.pool = nn.MaxPool2d(2, 2)
-        # Bottleneck
-        self.bottleneck = nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=1, padding=0),
-            nn.LeakyReLU(
-                inplace=True,
-                negative_slope=0.01,
-            ),
+
+# ============================================================
+# Exact k-hop edges for a PyG Batch (variable topology + N)
+# ============================================================
+
+@torch.no_grad()
+def exact_k_hop_edge_index_batched_dense(
+    edge_index: torch.Tensor,   # (2, E) over the batched disjoint union
+    batch: torch.Tensor,        # (N,) graph id per node
+    k: int,
+    *,
+    undirected: bool = True,
+    remove_self: bool = True,
+    max_num_nodes: Optional[int] = None,  # if None, PyG pads to max nodes in batch
+) -> torch.Tensor:
+    assert edge_index.dim() == 2 and edge_index.size(0) == 2
+    assert batch.dim() == 1
+    assert k >= 1
+
+    device = edge_index.device
+    N = int(batch.numel())
+    if N == 0:
+        return edge_index.new_zeros((2, 0))
+
+    B = int(batch.max().item()) + 1
+
+    ei = edge_index
+    if undirected:
+        ei = torch.cat([ei, ei.flip(0)], dim=1)
+
+    ei = coalesce(ei, num_nodes=N)
+
+    A = to_dense_adj(ei, batch=batch, max_num_nodes=max_num_nodes).to(torch.bool)
+    B2, Nmax, Nmax2 = A.shape
+    assert B2 == B and Nmax == Nmax2
+
+    counts = torch.bincount(batch, minlength=B)  # (B,)
+    idx = torch.arange(Nmax, device=device)
+    valid = idx.unsqueeze(0) < counts.unsqueeze(1)         
+    valid_ij = valid.unsqueeze(2) & valid.unsqueeze(1)      
+
+    A = A & valid_ij
+
+    if remove_self:
+        diag = torch.arange(Nmax, device=device)
+        A[:, diag, diag] = False
+
+    if k == 1:
+        exact = A
+    else:
+        A_f = A.to(torch.float32)
+        reach = A.clone()           
+        reach_lt = reach.clone()    
+
+        for i in range(2, k + 1):
+            reach = (reach.to(torch.float32).bmm(A_f) > 0)
+            reach = reach & valid_ij
+            if remove_self:
+                diag = torch.arange(Nmax, device=device)
+                reach[:, diag, diag] = False
+            if i < k:
+                reach_lt |= reach
+
+        exact = reach & (~reach_lt)
+
+    offsets = torch.zeros(B, device=device, dtype=torch.long)
+    offsets[1:] = torch.cumsum(counts, dim=0)[:-1]
+
+    rows_all = []
+    cols_all = []
+    for b in range(B):
+        nb = int(counts[b].item())
+        if nb <= 0:
+            continue
+        row, col = exact[b, :nb, :nb].nonzero(as_tuple=True)
+        if row.numel() == 0:
+            continue
+        off = offsets[b]
+        rows_all.append(row + off)
+        cols_all.append(col + off)
+
+    if len(rows_all) == 0:
+        out = edge_index.new_zeros((2, 0))
+    else:
+        out = torch.stack([torch.cat(rows_all), torch.cat(cols_all)], dim=0)
+
+    if remove_self:
+        out, _ = remove_self_loops(out)
+
+    out = coalesce(out, num_nodes=N)
+    return out
+
+
+def _edge_index_to_pair_set(edge_index: torch.Tensor) -> set[tuple[int, int]]:
+    if edge_index.numel() == 0:
+        return set()
+    return {
+        (int(src), int(dst))
+        for src, dst in edge_index.t().tolist()
+    }
+
+
+@torch.no_grad()
+def exact_k_hop_edge_index_batched_bfs(
+    edge_index: torch.Tensor,
+    batch: torch.Tensor,
+    k: int,
+    *,
+    undirected: bool = True,
+    remove_self: bool = True,
+) -> torch.Tensor:
+    """
+    Independent exact-k-hop builder using shortest-path BFS per source node.
+    Intended for debug/validation against the dense boolean-matmul implementation.
+    """
+    assert edge_index.dim() == 2 and edge_index.size(0) == 2
+    assert batch.dim() == 1
+    assert k >= 1
+
+    N = int(batch.numel())
+    if N == 0:
+        return edge_index.new_zeros((2, 0))
+
+    ei = edge_index
+    if undirected:
+        ei = torch.cat([ei, ei.flip(0)], dim=1)
+    ei = coalesce(ei, num_nodes=N)
+    if remove_self:
+        ei, _ = remove_self_loops(ei)
+
+    batch_ids = [int(v) for v in batch.tolist()]
+    neighbors: list[set[int]] = [set() for _ in range(N)]
+    for src, dst in ei.t().tolist():
+        src_i = int(src)
+        dst_i = int(dst)
+        if batch_ids[src_i] != batch_ids[dst_i]:
+            continue
+        neighbors[src_i].add(dst_i)
+
+    B = int(batch.max().item()) + 1
+    nodes_per_graph: list[list[int]] = [[] for _ in range(B)]
+    for node_id, graph_id in enumerate(batch_ids):
+        nodes_per_graph[graph_id].append(node_id)
+
+    rows: list[int] = []
+    cols: list[int] = []
+    for graph_nodes in nodes_per_graph:
+        for src in graph_nodes:
+            dist: dict[int, int] = {src: 0}
+            queue: deque[int] = deque([src])
+            while queue:
+                current = queue.popleft()
+                current_dist = dist[current]
+                if current_dist >= k:
+                    continue
+                for nxt in neighbors[current]:
+                    next_dist = current_dist + 1
+                    prev_dist = dist.get(nxt)
+                    if prev_dist is None or next_dist < prev_dist:
+                        dist[nxt] = next_dist
+                        if next_dist < k:
+                            queue.append(nxt)
+            for dst, hop in dist.items():
+                if hop != k:
+                    continue
+                if remove_self and src == dst:
+                    continue
+                rows.append(int(src))
+                cols.append(int(dst))
+
+    if len(rows) == 0:
+        out = edge_index.new_zeros((2, 0))
+    else:
+        out = edge_index.new_tensor([rows, cols], dtype=edge_index.dtype)
+    if remove_self:
+        out, _ = remove_self_loops(out)
+    out = coalesce(out, num_nodes=N)
+    return out
+
+
+@torch.no_grad()
+def validate_exact_k_hop_edge_index_batched(
+    edge_index: torch.Tensor,
+    batch: torch.Tensor,
+    k_values: Sequence[int],
+    *,
+    undirected: bool = True,
+    remove_self: bool = True,
+    max_num_nodes: Optional[int] = None,
+) -> dict[int, dict[str, Any]]:
+    """
+    Validate exact-k-hop edges by comparing the dense implementation against an
+    independent BFS shortest-path implementation.
+    """
+    report: dict[int, dict[str, Any]] = {}
+    unique_k = sorted({int(v) for v in k_values})
+    B = int(batch.max().item()) + 1 if batch.numel() > 0 else 0
+
+    for k in unique_k:
+        dense_edges = exact_k_hop_edge_index_batched_dense(
+            edge_index=edge_index,
+            batch=batch,
+            k=k,
+            undirected=undirected,
+            remove_self=remove_self,
+            max_num_nodes=max_num_nodes,
         )
-        self.output_dim = channels + (1 if add_progress else 0)
-        self.output_keys.append("embed")
+        bfs_edges = exact_k_hop_edge_index_batched_bfs(
+            edge_index=edge_index,
+            batch=batch,
+            k=k,
+            undirected=undirected,
+            remove_self=remove_self,
+        )
 
-    def forward(self, x):
-        # x is a TensorDict; x.batch_size might be [], [N], [N,M], etc.
-        single = x.batch_size == torch.Size([])
-        width = self.width
+        dense_set = _edge_index_to_pair_set(dense_edges)
+        bfs_set = _edge_index_to_pair_set(bfs_edges)
+        missing = sorted(bfs_set - dense_set)
+        extra = sorted(dense_set - bfs_set)
 
-        # 1) Pull out the tasks tensor: shape = (*batch_shape, tasks, in_channels)
-        x_tasks = x["nodes", "tasks", "attr"]
-        if single:
-            # If single sample, add a batch dimension
-            x_tasks = x_tasks.unsqueeze(0)
+        dense_counts = [0 for _ in range(B)]
+        bfs_counts = [0 for _ in range(B)]
+        if dense_edges.numel() > 0:
+            dense_counts = torch.bincount(batch[dense_edges[0]], minlength=B).tolist()
+            dense_counts = [int(v) for v in dense_counts]
+        if bfs_edges.numel() > 0:
+            bfs_counts = torch.bincount(batch[bfs_edges[0]], minlength=B).tolist()
+            bfs_counts = [int(v) for v in bfs_counts]
 
-        *batch_shape, tasks, in_channels = x_tasks.shape
+        report[k] = {
+            "is_exact_match": len(missing) == 0 and len(extra) == 0,
+            "dense_edge_count": int(dense_edges.size(1)),
+            "bfs_edge_count": int(bfs_edges.size(1)),
+            "dense_counts_by_graph": dense_counts,
+            "bfs_counts_by_graph": bfs_counts,
+            "missing_edges": [[int(src), int(dst)] for src, dst in missing],
+            "extra_edges": [[int(src), int(dst)] for src, dst in extra],
+        }
 
-        # 2) Flatten all leading batch dims into one:
-        flat_bs = 1
-        for d in batch_shape:
-            flat_bs *= d
+    return report
 
-        # 3) Reshape into (flat_bs, tasks, in_channels)
-        x_flat = x_tasks.reshape(flat_bs, tasks, in_channels)
+# ============================================================
+# Channel-only FiLM (per-graph) + GraphNorm
+# ============================================================
 
-        # 4) Convert 'tasks' → spatial dims (width × width), then to (flat_bs, C_in, W, W)
-        x_flat = x_flat.view(flat_bs, width, width, in_channels).permute(0, 3, 1, 2)  # (flat_bs, W, W, C_in)  # (flat_bs, C_in, W, W)
-
-        # 5) Run through encoder blocks + pooling, collecting intermediate feats
-        enc_feats_flat = []
-        x_enc = x_flat
-        for block in self.enc_blocks:
-            x_enc = block(x_enc)
-            enc_feats_flat.append(x_enc)
-            x_enc = self.pool(x_enc)
-
-        # 6) Bottleneck + flatten spatial → (flat_bs, feat_dim)
-        b_flat = self.bottleneck(x_enc).flatten(start_dim=1)
-
-        # 7) Un-flatten back to original batch_shape:
-        #    a) intermediate feature maps
-        enc_feats = []
-        for feat in enc_feats_flat:
-            # feat is (flat_bs, C, H, W) → reshape to (*batch_shape, C, H, W)
-            enc_feats.append(feat.view(*batch_shape, *feat.shape[1:]))
-
-        #    b) bottleneck vector
-        if single:
-            b = b_flat.squeeze(0)
-        else:
-            b = b_flat.view(*batch_shape, -1)
-
-        # 8) Optionally concat progress feature
-        if self.add_progress:
-            prog = x["aux", "progress"]
-            b = torch.cat([b, prog], dim=-1)
-
-        return (*enc_feats, b)
-
-
-class OriginalUNetPolicyHead(nn.Module):
-
-    def __init__(self, input_dim: int, hidden_channels: int, width: int, output_dim: int, **_ignored):
-        super().__init__()
-        self.width = width
-        self.hidden_channels = hidden_channels
-        self.output_dim = output_dim
-        self.input_dim = input_dim
-        self.num_layers = int(math.floor(math.log2(width)))
-
-        # Create upsampling and decoder blocks dynamically
-        self.up_blocks = nn.ModuleList()
-        self.dec_blocks = nn.ModuleList()
-        for i in reversed(range(self.num_layers)):
-            in_ch = hidden_channels * (2 ** (i + 1)) if i < self.num_layers - 1 else hidden_channels * (2**i)
-            out_ch = hidden_channels * (2**i)
-            self.up_blocks.append(nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2))
-            self.dec_blocks.append(
-                nn.Sequential(
-                    nn.Conv2d(out_ch * 2, out_ch, kernel_size=3, padding=1),
-                    nn.ReLU(inplace=True),
-                )
-            )
-
-        self.input_keys = []
-        for i in range(self.num_layers):
-            self.input_keys.append(f"enc_{i}")
-        self.input_keys.append("embed")
-        self.out_conv = nn.Conv2d(hidden_channels, output_dim, kernel_size=1)
-
-    def _align_and_concat(self, up_feat, enc_feat):
-        uh, uw = up_feat.shape[-2:]
-        eh, ew = enc_feat.shape[-2:]
-        dh, dw = eh - uh, ew - uw
-        if dh > 0 or dw > 0:
-            pad = [dw // 2, dw - dw // 2, dh // 2, dh - dh // 2]
-            up_feat = F.pad(up_feat, pad)
-        elif dh < 0 or dw < 0:
-            top, left = (-dh) // 2, (-dw) // 2
-            up_feat = up_feat[..., top : top + eh, left : left + ew]
-        return torch.cat([up_feat, enc_feat], dim=1)
-
-    def forward(self, obs, *features):
-        single = obs.batch_size == torch.Size([])
-        enc_feats = features[:-1]
-        b = features[-1]
-
-        if not single:
-            *batch_shape, embed_dim = b.shape
-            flat_bs = 1
-            for d in batch_shape:
-                flat_bs *= d
-
-            b = b.reshape(flat_bs, embed_dim, 1, 1)
-            b = b.view(
-                flat_bs,
-                self.hidden_channels * (2 ** (self.num_layers - 1)),
-                self.width // (2**self.num_layers),
-                self.width // (2**self.num_layers),
-            )
-        else:
-            b = b.unsqueeze(0)
-            b = b.view(
-                1,
-                self.hidden_channels * (2 ** (self.num_layers - 1)),
-                self.width // (2**self.num_layers),
-                self.width // (2**self.num_layers),
-            )
-
-        for up, dec, enc in zip(self.up_blocks, self.dec_blocks, reversed(enc_feats)):
-            b = up(b)
-            if not single:
-                enc = enc.view(flat_bs, *enc.shape[len(batch_shape) :])
-            b = self._align_and_concat(b, enc)
-            b = dec(b)
-        logits = self.out_conv(b)
-        logits = logits.permute(0, 2, 3, 1).flatten(1, 2)
-        if single:
-            logits = logits.squeeze(0)
-        else:
-            logits = logits.view(*batch_shape, self.width * self.width, -1)
-        return logits
-
-
-class OriginalUNetValueHead(nn.Module):
+class GraphFiLM(nn.Module):
     """
-    Wrapper for OutputHead to match UNet interface
+    GraphNorm + per-graph channel FiLM:
+      x -> GraphNorm -> gamma(z_ch), beta(z_ch) -> broadcast to nodes using batch
     """
-
     def __init__(
         self,
-        input_dim: int,
+        channels: int,
+        z_ch_dim: int,
+        *,
+        hidden: int = 16,
+        init_scale_gamma_c: float = 0.05,
+        init_scale_beta_c: float = 0.05,
+        enable_channel: bool = True,
+    ):
+        super().__init__()
+        self.norm = GraphNorm(channels)
+        self.enable_channel = bool(enable_channel)
+
+        self.to_gb = nn.Sequential(
+            nn.Linear(z_ch_dim, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, 2 * channels),
+        )
+        nn.init.normal_(self.to_gb[-1].weight, std=1e-4)
+        nn.init.zeros_(self.to_gb[-1].bias)
+
+        self.scale_gamma_c = nn.Parameter(torch.tensor(float(init_scale_gamma_c)), requires_grad=False)
+        self.scale_beta_c = nn.Parameter(torch.tensor(float(init_scale_beta_c)), requires_grad=False)
+
+    @torch.no_grad()
+    def set_strength(self, gamma_c: Optional[float] = None, beta_c: Optional[float] = None):
+        if gamma_c is not None:
+            self.scale_gamma_c.fill_(float(gamma_c))
+        if beta_c is not None:
+            self.scale_beta_c.fill_(float(beta_c))
+
+    def forward(self, x: torch.Tensor, batch: torch.Tensor, z_ch: torch.Tensor) -> torch.Tensor:
+        x = self.norm(x, batch=batch)
+        if not self.enable_channel:
+            return x
+
+        g_raw, b_raw = self.to_gb(z_ch).chunk(2, dim=-1)  # (B,C) each
+
+        gamma = 1.0 + self.scale_gamma_c * torch.tanh(g_raw)
+        beta = self.scale_beta_c * b_raw
+
+        return x * gamma[batch] + beta[batch]
+
+
+
+class LinearMessagePassing(MessagePassing):
+    """
+    Minimal "conv-like" message passing:
+      message: linear(x_j)
+      aggregate: aggr (add/mean/max)
+    """
+    def __init__(self, channels: int, aggr: str = "add"):
+        super().__init__(aggr=aggr)
+        self.lin = nn.Linear(channels, channels, bias=False)
+        nn.init.kaiming_normal_(self.lin.weight, nonlinearity="linear")
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        return self.propagate(edge_index, x=x)
+
+    def message(self, x_j: torch.Tensor) -> torch.Tensor:
+        return self.lin(x_j)
+
+
+# ============================================================
+# DilatedResBlockGNN that mirrors DilatedResBlock_SPADE
+#   conv1: exact hop r
+#   conv2: 1-hop
+#   norm/act at both sites
+#   conv2 zero-init for identity-at-init
+# ============================================================
+
+class DilatedResBlockGNN(nn.Module):
+    def __init__(
+        self,
+        channels: int,
+        *,
+        dilation: int,
+        norm1: GraphFiLM,
+        norm2: GraphFiLM,
+        aggr: str = "add",
+        zero_init_conv2: bool = True,
+    ):
+        super().__init__()
+        self.dilation = int(dilation)
+
+        self.conv1 = LinearMessagePassing(channels, aggr=aggr)  # will be used on exact-r edges
+        self.norm1 = norm1
+        self.act1 = nn.SiLU()
+
+        self.conv2 = LinearMessagePassing(channels, aggr=aggr)  # used on 1-hop edges
+        if zero_init_conv2:
+            nn.init.zeros_(self.conv2.lin.weight)
+        self.norm2 = norm2
+        self.act2 = nn.SiLU()
+
+    def forward(
+        self,
+        x: torch.Tensor,            # (N,C)
+        batch: torch.Tensor,        # (N,)
+        *,
+        edge_index_r: torch.Tensor, # exact hop r
+        edge_index_1: torch.Tensor, # 1-hop adjacency
+        z_ch: torch.Tensor,         # (B,z_ch_dim)
+    ) -> torch.Tensor:
+        h = self.conv1(x, edge_index_r)
+        h = self.act1(self.norm1(h, batch=batch, z_ch=z_ch))
+
+        h = self.conv2(h, edge_index_1)
+        h = self.act2(self.norm2(h, batch=batch, z_ch=z_ch))
+
+        return x + h
+
+class GraphECA(nn.Module):
+    """
+    Per-graph global mean pool -> 1D conv over channels -> sigmoid -> gate node features.
+    """
+    def __init__(self, channels: int, k_size: int = 3):
+        super().__init__()
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=k_size // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
+        if batch.numel() == 0:
+            return x
+        B = int(batch.max().item()) + 1
+        C = x.size(-1)
+
+        pooled = x.new_zeros((B, C))
+        pooled.index_add_(0, batch, x)
+        counts = torch.bincount(batch, minlength=B).clamp_min(1).to(x.dtype).unsqueeze(-1)
+        pooled = pooled / counts
+
+        y = pooled.unsqueeze(1)         # (B,1,C)
+        y = self.sigmoid(self.conv(y))  # (B,1,C)
+        gate = y.squeeze(1)[batch]      # (N,C)
+        return x * gate
+
+
+
+class DilationStateGNN(nn.Module):
+    def __init__(
+        self,
+        feature_config,
         hidden_channels: int,
-        output_dim: int,
-        activation: Optional[nn.Module] = None,
-        initialization: Optional[dict] = None,
-        layer_norm: bool = True,
+        *,
+        num_blocks: int = 3,
+        dilation_schedule: Optional[Sequence[int]] = None,
+        use_eca: bool = True,
+        add_z: bool = False,
+        z_ch_dim: int = 8,
+        add_device_load: bool = True,
+        add_progress: bool = False,
+        n_devices: int = 5,
+        film_in_all_blocks: bool = False,
+        film_last_k: int = 2,
+        init_gamma_c: float = 0.05,
+        init_beta_c: float = 0.05,
+        undirected: bool = True,
+        aggr: str = "add",
+        max_num_nodes: Optional[int] = None,
         debug: bool = False,
         **_ignored,
     ):
         super().__init__()
-        self.input_dim = int(input_dim)
+        if not hasattr(feature_config, "task_feature_dim"):
+            raise AttributeError("feature_config must have attribute 'task_feature_dim'")
+
+        self.in_channels = int(feature_config.task_feature_dim)
         self.hidden_channels = int(hidden_channels)
-        self.output_dim = int(output_dim)
         self.debug = bool(debug)
 
-        self.head = OutputHead(
-            input_dim=self.input_dim,
-            hidden_channels=self.hidden_channels,
-            output_dim=self.output_dim,
-            activation=activation,
-            initialization=initialization,
-            layer_norm=layer_norm,
-        )
-        self.output_dim = output_dim
+        self.convert_data = HeteroDataWrapper()
 
-    def forward(self, obs, *features):
-        return self.head(features[-1])  # use only bottleneck features
+        if dilation_schedule is None or len(dilation_schedule) == 0:
+            dilation_schedule = [1, 2, 3, 1]
+        self.dilation_schedule = list(map(int, dilation_schedule))
+
+        self.add_z = bool(add_z)
+        self.add_device_load = bool(add_device_load)
+        self.add_progress = bool(add_progress)
+        self.n_devices = int(n_devices)
+        self.output_dim = self.hidden_channels
+        self.output_keys = ["embed"]
+
+        self.undirected = bool(undirected)
+        self.aggr = str(aggr)
+        self.max_num_nodes = max_num_nodes
+
+        g_dim = 0
+        if self.add_z:
+            g_dim += int(z_ch_dim)
+        if self.add_device_load:
+            g_dim += 3 * self.n_devices
+        if self.add_progress:
+            g_dim += 2
+
+        C_in = self.in_channels
+        C = self.hidden_channels
+
+        self.proj = nn.Linear(C_in, C, bias=False)
+        self.stem_mp = LinearMessagePassing(C, aggr=self.aggr)
+        self.stem_norm = GraphNorm(C)
+        self.stem_act = nn.SiLU()
+
+        self.blocks = nn.ModuleList()
+        for i in range(int(num_blocks)):
+            use_film = bool(film_in_all_blocks or (i >= num_blocks - int(film_last_k)))
+
+            norm1 = GraphFiLM(channels=C, z_ch_dim=g_dim, hidden=16, init_scale_gamma_c=init_gamma_c, init_scale_beta_c=init_beta_c, enable_channel=use_film)
+            norm2 = GraphFiLM(channels=C, z_ch_dim=g_dim, hidden=16, init_scale_gamma_c=init_gamma_c, init_scale_beta_c=init_beta_c, enable_channel=use_film)
+
+            dil = self.dilation_schedule[i % len(self.dilation_schedule)]
+            self.blocks.append(DilatedResBlockGNN(channels=C, dilation=dil, norm1=norm1, norm2=norm2, aggr=self.aggr, zero_init_conv2=True))
+
+        self.eca = GraphECA(C, k_size=3) if use_eca else nn.Identity()
+
+    @torch.no_grad()
+    def set_noise_strength(self, gamma_c: Optional[float] = None, beta_c: Optional[float] = None):
+        for blk in self.blocks:
+            blk.norm1.set_strength(gamma_c, beta_c)
+            blk.norm2.set_strength(gamma_c, beta_c)
+
+    def _build_g(self, observation: TensorDict, B: int) -> torch.Tensor:
+        g_list = []
+        if self.add_z:
+            z_ch = observation[("aux", "z_ch")].reshape(B, -1)
+            g_list.append(z_ch)
+            
+        if self.add_device_load:
+            device_load = observation[("aux", "device_load")].reshape(-1, 2 * self.n_devices)
+            device_memory = observation[("aux", "device_memory")].reshape(-1, self.n_devices)
+            g_list.extend([device_load, device_memory])
+
+        if self.add_progress:
+            progress = observation[("aux", "progress")].reshape(-1, 1)
+            baseline = observation[("aux", "baseline")].reshape(-1, 1)
+            time = observation[("aux", "time")].reshape(-1, 1)
+            perc = time / baseline.clamp_min(1e-12)
+            g_list.extend([progress, perc])
+
+        if len(g_list) > 0:
+            return torch.cat(g_list, dim=-1)
+        
+        return torch.zeros((B, 0), device=observation["nodes", "tasks", "attr"].device)
+
+    def _flatten_task_ids_from_observation(self, observation: TensorDict, B_flat: int) -> list[int]:
+        try:
+            task_glb = observation["nodes", "tasks", "glb"].reshape(B_flat, -1)
+            task_counts = observation["nodes", "tasks", "count"].reshape(B_flat, -1)[:, 0]
+        except Exception:
+            return []
+
+        flat_task_ids: list[int] = []
+        for graph_id in range(B_flat):
+            count = int(task_counts[graph_id].item())
+            if count <= 0:
+                continue
+            flat_task_ids.extend([int(v) for v in task_glb[graph_id, :count].tolist()])
+        return flat_task_ids
+
+    @staticmethod
+    def _jacobi_row_col_from_task_id(task_id: int, rows: int, cols: int) -> tuple[int, int]:
+        total_cells = int(rows * cols)
+        if total_cells <= 0:
+            return -1, -1
+        cell_id = int(task_id) % total_cells
+        row = int(cell_id % rows)
+        col = int(cell_id // rows)
+        return row, col
+
+    @torch.no_grad()
+    def debug_dilation_edges(
+        self,
+        observation: TensorDict,
+        dump_dir: Optional[str] = None,
+        k_values: Optional[Sequence[int]] = None,
+        grid_shape: Optional[Sequence[int]] = None,
+    ) -> dict[str, Any]:
+        """
+        Validate k-hop edge construction against an independent BFS baseline and
+        optionally dump CSV/DOT artifacts for visualization.
+        """
+        batch_shape = observation.batch_size
+        B_flat = int(math.prod(batch_shape)) if len(batch_shape) > 0 else 1
+        data = self.convert_data(observation)
+
+        x = data["tasks"].x
+        batch = data["tasks"].batch if isinstance(data, Batch) else None
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
+
+        N = int(x.size(0))
+        edge_index = data["tasks", "to", "tasks"].edge_index
+
+        ei1 = edge_index
+        if self.undirected:
+            ei1 = torch.cat([ei1, ei1.flip(0)], dim=1)
+        ei1 = coalesce(ei1, num_nodes=N)
+        ei1, _ = remove_self_loops(ei1)
+
+        ks = sorted({int(v) for v in (k_values if k_values is not None else self.dilation_schedule)})
+        k_report = validate_exact_k_hop_edge_index_batched(
+            edge_index=ei1,
+            batch=batch,
+            k_values=ks,
+            undirected=False,
+            remove_self=True,
+            max_num_nodes=self.max_num_nodes,
+        )
+
+        node_task_ids = self._flatten_task_ids_from_observation(observation, B_flat)
+        if len(node_task_ids) != N:
+            node_task_ids = []
+
+        grid_rows = -1
+        grid_cols = -1
+        if grid_shape is not None and len(grid_shape) == 2:
+            grid_rows = int(grid_shape[0])
+            grid_cols = int(grid_shape[1])
+
+        report: dict[str, Any] = {
+            "num_nodes": N,
+            "num_1hop_edges": int(ei1.size(1)),
+            "k_hop": {str(k): v for k, v in k_report.items()},
+            "grid_shape": [grid_rows, grid_cols] if grid_rows > 0 and grid_cols > 0 else None,
+        }
+
+        if dump_dir is not None:
+            root = Path(dump_dir)
+            root.mkdir(parents=True, exist_ok=True)
+            out_dir = root / "dilation_debug"
+            suffix = 1
+            while out_dir.exists():
+                out_dir = root / f"dilation_debug_{suffix}"
+                suffix += 1
+            out_dir.mkdir(parents=True, exist_ok=False)
+
+            node_lines = ["node_id,batch_id,task_id,row,col"]
+            batch_list = [int(v) for v in batch.tolist()]
+            for node_id in range(N):
+                task_id = int(node_task_ids[node_id]) if len(node_task_ids) == N else -1
+                row = -1
+                col = -1
+                if task_id >= 0 and grid_rows > 0 and grid_cols > 0:
+                    row, col = self._jacobi_row_col_from_task_id(task_id, grid_rows, grid_cols)
+                node_lines.append(f"{node_id},{batch_list[node_id]},{task_id},{row},{col}")
+            (out_dir / "nodes.csv").write_text("\n".join(node_lines) + "\n", encoding="ascii")
+
+            for k in ks:
+                exact_edges = exact_k_hop_edge_index_batched_dense(
+                    edge_index=ei1,
+                    batch=batch,
+                    k=int(k),
+                    undirected=False,
+                    remove_self=True,
+                    max_num_nodes=self.max_num_nodes,
+                )
+                exact_set = _edge_index_to_pair_set(exact_edges)
+                missing_set = {tuple(edge) for edge in k_report[k]["missing_edges"]}
+                extra_set = {tuple(edge) for edge in k_report[k]["extra_edges"]}
+
+                edge_lines = ["src,dst,src_task,dst_task,src_row,src_col,dst_row,dst_col,status"]
+                for src, dst in sorted(exact_set):
+                    src_task = int(node_task_ids[src]) if len(node_task_ids) == N else -1
+                    dst_task = int(node_task_ids[dst]) if len(node_task_ids) == N else -1
+                    src_row = -1
+                    src_col = -1
+                    dst_row = -1
+                    dst_col = -1
+                    if grid_rows > 0 and grid_cols > 0 and src_task >= 0 and dst_task >= 0:
+                        src_row, src_col = self._jacobi_row_col_from_task_id(src_task, grid_rows, grid_cols)
+                        dst_row, dst_col = self._jacobi_row_col_from_task_id(dst_task, grid_rows, grid_cols)
+                    status = "exact"
+                    if (src, dst) in extra_set:
+                        status = "extra_vs_bfs"
+                    edge_lines.append(
+                        f"{src},{dst},{src_task},{dst_task},{src_row},{src_col},{dst_row},{dst_col},{status}"
+                    )
+                for src, dst in sorted(missing_set):
+                    src_task = int(node_task_ids[src]) if len(node_task_ids) == N else -1
+                    dst_task = int(node_task_ids[dst]) if len(node_task_ids) == N else -1
+                    src_row = -1
+                    src_col = -1
+                    dst_row = -1
+                    dst_col = -1
+                    if grid_rows > 0 and grid_cols > 0 and src_task >= 0 and dst_task >= 0:
+                        src_row, src_col = self._jacobi_row_col_from_task_id(src_task, grid_rows, grid_cols)
+                        dst_row, dst_col = self._jacobi_row_col_from_task_id(dst_task, grid_rows, grid_cols)
+                    edge_lines.append(
+                        f"{src},{dst},{src_task},{dst_task},{src_row},{src_col},{dst_row},{dst_col},missing_vs_bfs"
+                    )
+                (out_dir / f"k{k}_edges.csv").write_text("\n".join(edge_lines) + "\n", encoding="ascii")
+
+                dot_lines = ["digraph KHop {", "  rankdir=LR;"]
+                for node_id in range(N):
+                    batch_id = batch_list[node_id]
+                    task_id = int(node_task_ids[node_id]) if len(node_task_ids) == N else -1
+                    label = f"{node_id}|b{batch_id}|t{task_id}" if task_id >= 0 else f"{node_id}|b{batch_id}"
+                    if grid_rows > 0 and grid_cols > 0 and task_id >= 0:
+                        row, col = self._jacobi_row_col_from_task_id(task_id, grid_rows, grid_cols)
+                        dot_lines.append(
+                            f'  n{node_id} [label="{label}", pos="{col},{-row}!"];'
+                        )
+                    else:
+                        dot_lines.append(f'  n{node_id} [label="{label}"];')
+                for src, dst in sorted(exact_set - extra_set):
+                    dot_lines.append(f"  n{src} -> n{dst} [color=black];")
+                for src, dst in sorted(extra_set):
+                    dot_lines.append(f"  n{src} -> n{dst} [color=blue, style=dotted];")
+                for src, dst in sorted(missing_set):
+                    dot_lines.append(f"  n{src} -> n{dst} [color=red, style=dashed];")
+                dot_lines.append("}")
+                (out_dir / f"k{k}_edges.dot").write_text("\n".join(dot_lines) + "\n", encoding="ascii")
+
+            (out_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="ascii")
+            report["dump_dir"] = str(out_dir)
+
+        return report
+
+    def _run_dilation_debug_hook(self, observation: TensorDict, needed: Sequence[int]):
+        if os.getenv("TASK4FEEDBACK_DEBUG_DILATION", "0") != "1":
+            return
+
+        grid_shape = None
+        grid_shape_raw = os.getenv("TASK4FEEDBACK_DEBUG_GRID_SHAPE")
+        if grid_shape_raw:
+            parts = [p.strip() for p in grid_shape_raw.split(",")]
+            if len(parts) == 2 and all(p.isdigit() for p in parts):
+                grid_shape = (int(parts[0]), int(parts[1]))
+
+        dump_root = os.getenv("TASK4FEEDBACK_DEBUG_DILATION_DIR")
+        report = self.debug_dilation_edges(
+            observation=observation,
+            dump_dir=dump_root,
+            k_values=needed,
+            grid_shape=grid_shape,
+        )
+
+        mismatched = [k for k, info in report["k_hop"].items() if not info["is_exact_match"]]
+        print(
+            "[DilationStateGNN][k-hop] "
+            f"nodes={report['num_nodes']} base_edges={report['num_1hop_edges']} "
+            f"mismatched_hops={mismatched}"
+        )
+
+        strict = os.getenv("TASK4FEEDBACK_DEBUG_DILATION_STRICT", "0") == "1"
+        if strict and len(mismatched) > 0:
+            raise RuntimeError(f"DilationStateGNN k-hop mismatch for hops: {mismatched}")
+
+    def forward(self, observation: TensorDict) -> torch.Tensor:
+        batch_shape = observation.batch_size
+        B_flat = int(math.prod(batch_shape)) if len(batch_shape) > 0 else 1
+        data = self.convert_data(observation)
+
+        x = data["tasks"].x
+        batch = data["tasks"].batch if isinstance(data, Batch) else None
+        
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
+            
+        edge_index = data["tasks", "to", "tasks"].edge_index
+        # `batch.max()+1` undercounts when some graphs have zero task nodes.
+        # Prefer full graph count from observation batch shape when available.
+        B = B_flat
+        if len(batch_shape) == 0:
+            # Unbatched path: derive graph count from PyG metadata.
+            ptr = getattr(data["tasks"], "ptr", None)
+            if ptr is not None and ptr.numel() >= 2:
+                B = int(ptr.numel()) - 1
+            elif batch.numel() > 0:
+                B = int(batch.max().item()) + 1
+
+        if batch.numel() > 0:
+            max_gid = int(batch.max().item())
+            if max_gid >= B:
+                raise RuntimeError(
+                    f"Invalid task batch ids in DilationStateGNN: max gid {max_gid} >= B={B}."
+                )
+
+        g = self._build_g(observation, B)
+
+        N = int(x.size(0))
+        M_max = int(observation["nodes", "tasks", "attr"].shape[-2])
+        if N == 0:
+            if len(batch_shape) == 0:
+                return x.new_zeros((M_max, self.hidden_channels))
+            return x.new_zeros((*batch_shape, M_max, self.hidden_channels))
+
+        ei1 = edge_index
+        if self.undirected:
+            ei1 = torch.cat([ei1, ei1.flip(0)], dim=1)
+        ei1 = coalesce(ei1, num_nodes=N)
+        ei1, _ = remove_self_loops(ei1)
+
+        needed = sorted(set(self.dilation_schedule))
+        exact_edges: Dict[int, torch.Tensor] = {}
+        for r in needed:
+            exact_edges[r] = exact_k_hop_edge_index_batched_dense(
+                edge_index=ei1, batch=batch, k=int(r), undirected=False, remove_self=True, max_num_nodes=self.max_num_nodes
+            ).to(x.device)
+        self._run_dilation_debug_hook(observation, needed)
+
+        h = self.proj(x)
+        h = self.stem_mp(h, ei1)
+        h = self.stem_act(self.stem_norm(h, batch=batch))
+
+        for blk in self.blocks:
+            r = blk.dilation
+            h = blk(h, batch=batch, edge_index_r=exact_edges[r], edge_index_1=ei1, z_ch=g)
+
+        if not isinstance(self.eca, nn.Identity):
+            h = self.eca(h, batch=batch)
+
+        # Pack ragged node features to a fixed candidate axis.
+        # `observation_to_heterodata_truncate` drops inactive nodes per graph, so
+        # we cannot reshape by batch size directly.
+        C = self.hidden_channels
+
+        if B != B_flat:
+            raise RuntimeError(
+                f"Inconsistent graph batch size in DilationStateGNN: "
+                f"PyG batch has {B} graphs, observation batch has {B_flat} ({batch_shape})."
+            )
+
+        counts = torch.bincount(batch, minlength=B_flat)
+        max_count = int(counts.max().item()) if counts.numel() > 0 else 0
+        if max_count > M_max:
+            raise RuntimeError(
+                f"Task count ({max_count}) exceeds padded candidate axis ({M_max}) "
+                "in DilationStateGNN."
+            )
+
+        h_dense = h.new_zeros((B_flat, M_max, C))
+        if h.numel() > 0:
+            starts = torch.cumsum(counts, dim=0) - counts
+            local_idx = torch.arange(h.size(0), device=h.device) - starts[batch]
+            valid = local_idx < M_max
+            h_dense[batch[valid], local_idx[valid]] = h[valid]
+
+        if len(batch_shape) == 0:
+            return h_dense[0]
+        return h_dense.view(*batch_shape, M_max, C)
+
+from typing import Optional, Tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+# ============================================================
+# Helpers: per-graph pooling on a PyG Batch
+# ============================================================
+
+def global_mean_pool(x: torch.Tensor, batch: torch.Tensor, B: Optional[int] = None) -> torch.Tensor:
+    """
+    x: (N,C), batch: (N,)
+    returns: (B,C)
+    """
+    if x.numel() == 0:
+        B = 1 if B is None else int(B)
+        return x.new_zeros((B, x.size(-1)))
+    if B is None:
+        B = int(batch.max().item()) + 1
+    C = x.size(-1)
+    out = x.new_zeros((B, C))
+    out.index_add_(0, batch, x)
+    counts = torch.bincount(batch, minlength=B).clamp_min(1).to(x.dtype).unsqueeze(-1)
+    return out / counts
+
+
+def global_add_pool(x: torch.Tensor, batch: torch.Tensor, B: Optional[int] = None) -> torch.Tensor:
+    """
+    x: (N,C), batch: (N,)
+    returns: (B,C)
+    """
+    if x.numel() == 0:
+        B = 1 if B is None else int(B)
+        return x.new_zeros((B, x.size(-1)))
+    if B is None:
+        B = int(batch.max().item()) + 1
+    C = x.size(-1)
+    out = x.new_zeros((B, C))
+    out.index_add_(0, batch, x)
+    return out
+
+
+def global_softmax_attention_pool(
+    x: torch.Tensor,
+    batch: torch.Tensor,
+    scores: torch.Tensor,
+    B: Optional[int] = None,
+) -> torch.Tensor:
+    if x.numel() == 0:
+        B = 1 if B is None else int(B)
+        return x.new_zeros((B, x.size(-1)))
+
+    if scores.dim() == 2 and scores.size(-1) == 1:
+        scores = scores.squeeze(-1)  # (N,)
+
+    if B is None:
+        B = int(batch.max().item()) + 1
+
+    # Native PyTorch scatter_reduce for fast segment max
+    max_scores = torch.zeros(B, dtype=scores.dtype, device=scores.device)
+    max_scores.scatter_reduce_(0, batch, scores, reduce="amax", include_self=False)
+    
+    scores_shifted = scores - max_scores[batch]
+    exp_scores = scores_shifted.exp()
+    
+    sum_exp = torch.zeros(B, dtype=scores.dtype, device=scores.device)
+    sum_exp.scatter_add_(0, batch, exp_scores)
+    
+    attn = exp_scores / sum_exp[batch].clamp_min(1e-12)
+
+    weighted = x * attn.unsqueeze(-1)  # (N,P)
+    pooled = global_add_pool(weighted, batch, B=B)  # (B,P)
+    return pooled
+
+# ============================================================
+# Policy head: node embeddings -> per-node logits
+#   CNN: (B,C,H,W) -> (B,H*W,A)
+#   GNN: (N,C) with batch -> (N,A) OR ragged (B, n_i, A)
+# ============================================================
+
+class GNNDilationPolicyHead(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        init_mode: str = "tiny",
+        tiny_std: float = 1e-3,
+        debug: bool = False,
+        **_ignored,
+    ):
+        super().__init__()
+        self.Cin = int(input_dim)
+        self.A = int(output_dim)
+        self.debug = bool(debug)
+
+        self.input_keys = ["embed"]
+        self.output_dim = self.A
+
+        self.proj = nn.Linear(self.Cin, self.A, bias=True)
+
+        init_mode = init_mode.lower()
+        if init_mode == "zero":
+            nn.init.zeros_(self.proj.weight)
+            nn.init.zeros_(self.proj.bias)
+        elif init_mode == "tiny":
+            nn.init.normal_(self.proj.weight, std=float(tiny_std))
+            nn.init.zeros_(self.proj.bias)
+        elif init_mode == "kaiming":
+            nn.init.kaiming_normal_(self.proj.weight, nonlinearity="linear")
+            nn.init.zeros_(self.proj.bias)
+
+    def forward(self, obs, embed: torch.Tensor) -> torch.Tensor:
+        logits = self.proj(embed)
+        if self.debug:
+            print(f"Shape of logits before reshape: {logits.shape}")
+        return logits
+
+
+class GNNDilationValueHead(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        z_dim: int = 8,
+        proj_dim: int = 8,
+        hidden_channels: int = 128,
+        tiny_std: float = 1e-3,
+        add_gap: bool = True,
+        add_progress: bool = True,
+        add_device_load: bool = False,
+        n_devices: int = 5,
+        add_z: bool = False,
+        **_ignored,
+    ):
+        super().__init__()
+        C = int(input_dim)
+        P = int(proj_dim)
+        Dz = int(z_dim) * 2
+
+        self.mix = nn.Linear(C, P, bias=False)
+        nn.init.kaiming_normal_(self.mix.weight, nonlinearity="relu")
+
+        self.add_device_load = bool(add_device_load)
+        self.add_progress = bool(add_progress)
+        self.add_gap = bool(add_gap)
+        self.add_z = bool(add_z)
+        self.output_dim = 1
+
+        self.attn = nn.Linear(P, 1, bias=True)
+        nn.init.normal_(self.attn.weight, std=float(tiny_std))
+        nn.init.zeros_(self.attn.bias)
+
+        mlp_in = (2 * P if self.add_gap else P) \
+                 + (Dz if self.add_z else 0) \
+                 + (3 * int(n_devices) if self.add_device_load else 0) \
+                 + (2 if self.add_progress else 0)
+
+        self.mlp = nn.Sequential(
+            nn.Linear(mlp_in, int(hidden_channels)),
+            nn.SiLU(),
+            nn.Linear(int(hidden_channels), 1),
+        )
+        nn.init.normal_(self.mlp[-1].weight, std=float(tiny_std))
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, obs, embed: torch.Tensor) -> torch.Tensor:
+        batch_shape = obs.batch_size
+
+        # Fixed-shape masked path: embed is (M, C) or (..., M, C).
+        if embed.dim() == 2:
+            embed_bmc = embed.unsqueeze(0)
+            B_flat = 1
+        elif embed.dim() >= 3:
+            B_flat = int(math.prod(batch_shape)) if len(batch_shape) > 0 else int(embed.shape[0])
+            M = int(embed.shape[-2])
+            C = int(embed.shape[-1])
+            embed_bmc = embed.view(B_flat, M, C)
+        else:
+            raise RuntimeError(
+                f"GNNDilationValueHead expected embed with rank >= 2, got shape {tuple(embed.shape)}"
+            )
+
+        if embed_bmc.numel() == 0:
+            return embed.new_zeros((*batch_shape, 1))
+
+        M = int(embed_bmc.shape[-2])
+        cand_mask = obs["aux", "candidate_mask"].reshape(B_flat, M).to(torch.bool)
+
+        # Avoid NaNs when a sample has no valid candidates.
+        has_valid = cand_mask.any(dim=1)
+        if not bool(has_valid.all()):
+            cand_mask = cand_mask.clone()
+            cand_mask[~has_valid, 0] = True
+
+        Fm = F.silu(self.mix(embed_bmc))  # (B, M, P)
+        scores = self.attn(Fm).squeeze(-1)  # (B, M)
+        weights = masked_softmax(scores, cand_mask, dim=1)
+        pooled = (Fm * weights.unsqueeze(-1)).sum(dim=1)  # (B, P)
+
+        if self.add_gap:
+            pooled_gap = masked_mean(Fm, cand_mask, dim=1)
+            pooled = torch.cat([pooled, pooled_gap], dim=-1)  # (B, 2P)
+
+        if self.add_z:
+            z_f = torch.cat([obs[("aux", "z_ch")], obs[("aux", "z_spa")]], dim=-1).reshape(B_flat, -1)
+            pooled = torch.cat([pooled, z_f], dim=-1)
+
+        if self.add_device_load:
+            device_feat = torch.cat([obs["aux", "device_load"], obs["aux", "device_memory"]], dim=-1).reshape(B_flat, -1)
+            pooled = torch.cat([pooled, device_feat], dim=-1)
+
+        if self.add_progress:
+            progress = obs["aux", "progress"].reshape(B_flat, -1)
+            baseline = obs["aux", "baseline"].reshape(B_flat, -1)
+            time = obs["aux", "time"].reshape(B_flat, -1)
+            perc = time / baseline.clamp_min(1e-12)
+            prog_feat = torch.cat([progress, perc], dim=-1)  
+            pooled = torch.cat([pooled, prog_feat], dim=-1)
+
+        v = self.mlp(pooled).squeeze(-1)  
+        return v.view(*batch_shape, 1)

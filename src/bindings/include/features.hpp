@@ -524,6 +524,106 @@ public:
     return edge_count;
   }
 
+  size_t get_task_task_shared_read_edges(TorchInt64Arr1D &sources, TorchInt64Arr2D &output,
+                                     TorchInt64Arr2D &global_output) {
+
+    //Sources is a list of task ids. 
+    //We want to form Nx2 edges where edge (i, j) exists if task i and task j share a read dependency on at least one data block.
+    //The global output uses the global task ids instead of the local indices. So global_output(0, k) is the source task id and global_output(1, k) is the target task id for edge k.
+
+
+    // Check first dimension is 2
+    if (output.shape(0) != 2) {
+      throw std::runtime_error("Edge output shape must be 2 x N");
+    }
+
+    if (global_output.shape(0) != 2) {
+      throw std::runtime_error("Global edge output shape must be 2 x N");
+    }
+
+    if (global_output.shape(1) < output.shape(1)) {
+      throw std::runtime_error("Global edge output second dimension must be >= edge output second dimension");
+    }
+
+    auto v = output.view();
+    auto gv = global_output.view();
+    static bool has_warned = false;
+    const auto max_edges = output.shape(1);
+    if (max_edges == 0) {
+      return 0;
+    }
+    const auto &static_graph = state.get().get_tasks();
+
+    std::span<int64_t> sources_span(sources.data(), sources.size());
+    std::vector<std::vector<dataid_t>> normalized_reads;
+    normalized_reads.resize(sources_span.size());
+
+    for (int64_t i = 0; i < static_cast<int64_t>(sources_span.size()); i++) {
+      const taskid_t task_id = static_cast<taskid_t>(sources_span[i]);
+      const auto &read = static_graph.get_read(task_id);
+      auto &normalized = normalized_reads[i];
+      normalized.assign(read.begin(), read.end());
+      std::sort(normalized.begin(), normalized.end());
+      normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+    }
+
+    auto has_shared_read = [](const std::vector<dataid_t> &lhs, const std::vector<dataid_t> &rhs) {
+      size_t i = 0;
+      size_t j = 0;
+      while (i < lhs.size() && j < rhs.size()) {
+        if (lhs[i] < rhs[j]) {
+          ++i;
+        } else if (rhs[j] < lhs[i]) {
+          ++j;
+        } else {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    std::size_t edge_count = 0;
+    bool hit_edge_limit = false;
+
+    for (int64_t source_idx = 0; source_idx < static_cast<int64_t>(sources_span.size()); source_idx++) {
+      const auto source_id = static_cast<taskid_t>(sources_span[source_idx]);
+      const auto &source_read = normalized_reads[source_idx];
+
+      for (int64_t target_idx = source_idx + 1;
+           target_idx < static_cast<int64_t>(sources_span.size()); target_idx++) {
+        const auto target_id = static_cast<taskid_t>(sources_span[target_idx]);
+        if (source_id == target_id) {
+          continue; // Avoid self edges when duplicate IDs are present.
+        }
+        const auto &target_read = normalized_reads[target_idx];
+
+        if (has_shared_read(source_read, target_read)) {
+          v(0, edge_count) = static_cast<int64_t>(source_idx);
+          v(1, edge_count) = static_cast<int64_t>(target_idx);
+          gv(0, edge_count) = static_cast<int64_t>(source_id);
+          gv(1, edge_count) = static_cast<int64_t>(target_id);
+          edge_count++;
+
+          if (edge_count >= max_edges) {
+            hit_edge_limit = true;
+            break;
+          }
+        }
+      }
+      if (hit_edge_limit) {
+        break;
+      }
+    }
+
+    if (hit_edge_limit && !has_warned) {
+      spdlog::warn("TaskTask shared read edge count exceeded max edges: {}", edge_count);
+      has_warned = true;
+    }
+
+    return edge_count;
+  }
+
+
   size_t get_task_task_edges_reverse(TorchInt64Arr1D &sources, TorchInt64Arr2D &output,
                                      TorchInt64Arr2D &global_output) {
     // Check first dimension is 2

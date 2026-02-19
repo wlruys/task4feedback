@@ -1,7 +1,7 @@
 defaults:
   - 8x8x128_dynamic_circle.yaml
-  - feature: cnn_batch
-  - network: cond_dilation_cnn_batch
+  - feature: gnn_batch
+  - network: cond_dilation_gnn_batch
   - _self_
 
 algorithm:
@@ -19,7 +19,7 @@ feature:
     n_candidates: 64
     version: "C"
   normalization:
-    warmup: 40
+    warmup: 1
   add_device_load: True
 
 network:

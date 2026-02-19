@@ -1628,6 +1628,33 @@ class CandidateExternalObserverFactory(ExternalObserverFactory):
             task_device_feature_extractor,
             data_device_feature_extractor,
         )
+    
+@dataclass(kw_only=True)
+class CandidateGNNExternalObserverFactory(ExternalObserverFactory):
+    def create(self, simulator: SimulatorDriver):
+        state = simulator.get_state()
+        graph_spec = self.graph_spec
+        graph_extractor = self.graph_extractor_t(state)
+        task_feature_extractor = self.task_feature_factory.create(state)
+        data_feature_extractor = self.data_feature_factory.create(state)
+        device_feature_extractor = self.device_feature_factory.create(state)
+        task_task_feature_extractor = self.task_task_feature_factory.create(state)
+        task_data_feature_extractor = self.task_data_feature_factory.create(state)
+        task_device_feature_extractor = self.task_device_feature_factory.create(state) if self.task_device_feature_factory is not None else None
+        data_device_feature_extractor = self.data_device_feature_factory.create(state) if self.data_device_feature_factory is not None else None
+
+        return CandidateGNNObserver(
+            simulator,
+            graph_spec,
+            graph_extractor,
+            task_feature_extractor,
+            data_feature_extractor,
+            device_feature_extractor,
+            task_task_feature_extractor,
+            task_data_feature_extractor,
+            task_device_feature_extractor,
+            data_device_feature_extractor,
+        )
 
 
 @dataclass(kw_only=True)
@@ -1947,6 +1974,71 @@ class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
             task_device_feature_factory,
             data_device_feature_factory,
         )
+
+class CandidateTaskGNNObserverFactory(CandidateGNNExternalObserverFactory):
+
+    def __init__(self,
+                 spec: fastsim.GraphSpec,
+                 width: int,
+                 length: int,
+                 prev_frames: int,
+                 version: str,
+                 graph_override: bool = False,
+                 **_ignored,
+                 ):
+        self.graph_override = bool(graph_override)
+        if self.graph_override and not (spec.max_candidates == width * length):
+            raise ValueError(
+                f"When graph_override is True, max_candidates must be {width * length}, "
+                f"but got {spec.max_candidates}"
+            )
+
+        task_feature_factory = FeatureExtractorFactory()
+
+        
+        if "A" in version:
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+        elif "B" in version:
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+            task_feature_factory.add(fastsim.ReadDataLocationFeature)
+        elif "C" in version:
+            task_feature_factory.add(fastsim.TaskInputDegreesFeature)
+            task_feature_factory.add(fastsim.PredecessorMappedDeviceFeature)
+            task_feature_factory.add(fastsim.ReadDataLocationFeature)
+            task_feature_factory.add(fastsim.TaskReadCoordinateFeature) 
+
+        data_feature_factory = FeatureExtractorFactory()
+        data_feature_factory.add(fastsim.EmptyDataFeature, 1)
+
+        device_feature_factory = FeatureExtractorFactory()
+        device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
+
+        task_task_feature_factory = EdgeFeatureExtractorFactory()
+        task_task_feature_factory.add(fastsim.EmptyTaskTaskFeature, 1)
+
+        task_data_feature_factory = EdgeFeatureExtractorFactory()
+        task_data_feature_factory.add(fastsim.EmptyTaskDataFeature, 1)
+
+        task_device_feature_factory = EdgeFeatureExtractorFactory()
+        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
+
+        data_device_feature_factory = EdgeFeatureExtractorFactory()
+        data_device_feature_factory.add(fastsim.DataDeviceDefaultEdgeFeature)
+
+        super().__init__(
+            spec,
+            fastsim.GraphExtractor,
+            task_feature_factory,
+            data_feature_factory,
+            device_feature_factory,
+            task_task_feature_factory,
+            task_data_feature_factory,
+            task_device_feature_factory,
+            data_device_feature_factory,
+        )
+
 
 
 @dataclass(kw_only=True)

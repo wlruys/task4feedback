@@ -320,7 +320,7 @@ def create_td_actor_critic_models(cfg: DictConfig, feature_cfg: FeatureDimConfig
         out_keys=state_output_keys,
     )
     _td_reference_state = td_nn.TensorDictModule(
-        critic_state_module,
+        reference_state_module,
         in_keys=["observation"],
         out_keys=state_output_keys,
     )

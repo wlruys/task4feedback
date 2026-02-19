@@ -70,7 +70,7 @@ runtime:
 
 wandb:
   enabled: true
-  project: 8x8x128_dynamic_circle
+  project: gnn_test
   name: CNN-A_IEFT
 
 eval:
