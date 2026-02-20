@@ -196,5 +196,10 @@ endif()
 add_subdirectory(src/backend)      # builds simulator library
 add_subdirectory(src/bindings)     # builds python module 
 
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(test/cpp)
+endif()
+
 include(CPack)                     #for packaging
 include(GNUInstallDirs)            #for install dirs

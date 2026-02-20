@@ -105,7 +105,7 @@ taskid_t Scheduler::map_task(taskid_t compute_task_id, Action &action) {
     unique_count_map[d]++;
   }
 
-  // Maintain write index: data_id → set of mapped-not-reserved writers (avoids roaring bitmap scan)
+  // Maintain write index: data_id -> set of mapped-not-reserved writers.
   for (auto d : static_graph.get_write(compute_task_id)) {
     s.mapped_write_by_data[d].insert(compute_task_id);
   }

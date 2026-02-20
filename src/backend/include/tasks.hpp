@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <iostream>
 #include <ostream>
-#include <roaring/roaring.h>
 #include <set>
 #include <span>
 #include <stack>
@@ -739,89 +738,6 @@ struct DataTaskTimeRecord {
   timecount_t completed_time{};
 };
 
-class RoaringBitmap {
-private:
-  roaring_bitmap_t *bitmap_{nullptr};
-
-public:
-  RoaringBitmap() : bitmap_(roaring_bitmap_create()) {
-  }
-
-  ~RoaringBitmap() {
-    if (bitmap_ != nullptr) {
-      roaring_bitmap_free(bitmap_);
-      bitmap_ = nullptr;
-    }
-  }
-
-  RoaringBitmap(const RoaringBitmap &other)
-      : bitmap_(other.bitmap_ != nullptr ? roaring_bitmap_copy(other.bitmap_)
-                                         : roaring_bitmap_create()) {
-  }
-
-  RoaringBitmap &operator=(const RoaringBitmap &other) {
-    if (this == &other) {
-      return *this;
-    }
-    roaring_bitmap_t *copied = other.bitmap_ != nullptr ? roaring_bitmap_copy(other.bitmap_)
-                                                         : roaring_bitmap_create();
-    if (bitmap_ != nullptr) {
-      roaring_bitmap_free(bitmap_);
-    }
-    bitmap_ = copied;
-    return *this;
-  }
-
-  RoaringBitmap(RoaringBitmap &&other) noexcept : bitmap_(other.bitmap_) {
-    other.bitmap_ = nullptr;
-  }
-
-  RoaringBitmap &operator=(RoaringBitmap &&other) noexcept {
-    if (this == &other) {
-      return *this;
-    }
-    if (bitmap_ != nullptr) {
-      roaring_bitmap_free(bitmap_);
-    }
-    bitmap_ = other.bitmap_;
-    other.bitmap_ = nullptr;
-    return *this;
-  }
-
-  void add(uint32_t value) {
-    roaring_bitmap_add(bitmap_, value);
-  }
-
-  void finalize() {
-    if (bitmap_ != nullptr) {
-      roaring_bitmap_run_optimize(bitmap_);
-    }
-  }
-
-  [[nodiscard]] bool contains(uint32_t value) const {
-    return bitmap_ != nullptr && roaring_bitmap_contains(bitmap_, value);
-  }
-
-  [[nodiscard]] std::size_t serialized_size() const {
-    return bitmap_ == nullptr ? 0 : roaring_bitmap_portable_size_in_bytes(bitmap_);
-  }
-};
-
-struct TaskDataMembershipBitmapView {
-  const RoaringBitmap *bitmap{nullptr};
-
-  [[nodiscard]] bool valid() const {
-    return bitmap != nullptr;
-  }
-
-  [[nodiscard]] bool contains(dataid_t data_id) const {
-    if (!valid() || data_id < 0) {
-      return false;
-    }
-    return bitmap->contains(static_cast<uint32_t>(data_id));
-  }
-};
-
 class StaticTaskInfo {
 
 protected:
@@ -851,13 +767,11 @@ protected:
   std::vector<int32_t> compute_task_shared_read_offsets;
   std::vector<taskid_t> compute_task_shared_read_neighbors;
 
-  // Task/data membership index for hot read/write/unique checks (Roaring bitmaps).
-  std::vector<RoaringBitmap> compute_task_read_membership;
-  std::vector<RoaringBitmap> compute_task_write_membership;
-  std::vector<RoaringBitmap> compute_task_unique_membership;
+  // Task/data membership index for hot read/write/unique checks.
+  std::vector<ankerl::unordered_dense::set<dataid_t>> compute_task_read_membership;
+  std::vector<ankerl::unordered_dense::set<dataid_t>> compute_task_write_membership;
+  std::vector<ankerl::unordered_dense::set<dataid_t>> compute_task_unique_membership;
   ankerl::unordered_dense::map<uint64_t, int32_t> read_index_by_task_data;
-  bool membership_index_enabled{false};
-  std::size_t membership_index_bytes{0};
 
   std::vector<taskid_t> data_task_dependencies;
   std::vector<taskid_t> data_task_dependents;
@@ -881,28 +795,23 @@ protected:
            static_cast<uint64_t>(static_cast<uint32_t>(data_id));
   }
 
-  void set_membership_value(std::vector<RoaringBitmap> &bitmaps, taskid_t task_id,
+  void set_membership_value(std::vector<ankerl::unordered_dense::set<dataid_t>> &bitmaps,
+                            taskid_t task_id,
                             dataid_t data_id) {
     if (data_id < 0 || task_id < 0 || task_id >= get_n_compute_tasks()) {
       return;
     }
-    bitmaps[static_cast<std::size_t>(task_id)].add(static_cast<uint32_t>(data_id));
+    bitmaps[static_cast<std::size_t>(task_id)].insert(data_id);
   }
 
-  [[nodiscard]] bool contains_membership_value(const std::vector<RoaringBitmap> &bitmaps,
+  [[nodiscard]] bool
+  contains_membership_value(const std::vector<ankerl::unordered_dense::set<dataid_t>> &bitmaps,
                                                taskid_t task_id, dataid_t data_id) const {
-    if (!membership_index_enabled || task_id < 0 || task_id >= get_n_compute_tasks() || data_id < 0) {
+    if (task_id < 0 || task_id >= get_n_compute_tasks() || data_id < 0) {
       return false;
     }
-    return bitmaps[static_cast<std::size_t>(task_id)].contains(static_cast<uint32_t>(data_id));
-  }
-
-  [[nodiscard]] TaskDataMembershipBitmapView
-  get_membership_view(const std::vector<RoaringBitmap> &bitmaps, taskid_t task_id) const {
-    if (!membership_index_enabled || task_id < 0 || task_id >= get_n_compute_tasks()) {
-      return {};
-    }
-    return {.bitmap = &bitmaps[static_cast<std::size_t>(task_id)]};
+    const auto &membership = bitmaps[static_cast<std::size_t>(task_id)];
+    return membership.find(data_id) != membership.end();
   }
 
   void build_task_data_membership_index() {
@@ -910,8 +819,6 @@ protected:
     compute_task_write_membership.clear();
     compute_task_unique_membership.clear();
     read_index_by_task_data.clear();
-    membership_index_enabled = false;
-    membership_index_bytes = 0;
 
     const auto n_compute_tasks = get_n_compute_tasks();
     if (n_compute_tasks <= 0) {
@@ -925,49 +832,28 @@ protected:
 
     for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
       const auto read_span = get_read(task_id);
+      auto &read_membership = compute_task_read_membership[static_cast<std::size_t>(task_id)];
+      read_membership.reserve(read_span.size());
       for (int32_t idx = 0; idx < static_cast<int32_t>(read_span.size()); ++idx) {
         const auto data_id = read_span[idx];
         set_membership_value(compute_task_read_membership, task_id, data_id);
-        const auto key = task_data_key(task_id, data_id);
-        if (read_index_by_task_data.find(key) == read_index_by_task_data.end()) {
-          read_index_by_task_data.emplace(key, idx);
-        }
+        read_index_by_task_data.try_emplace(task_data_key(task_id, data_id), idx);
       }
 
       const auto write_span = get_write(task_id);
+      auto &write_membership = compute_task_write_membership[static_cast<std::size_t>(task_id)];
+      write_membership.reserve(write_span.size());
       for (const auto data_id : write_span) {
         set_membership_value(compute_task_write_membership, task_id, data_id);
       }
 
       const auto unique_span = get_unique(task_id);
+      auto &unique_membership = compute_task_unique_membership[static_cast<std::size_t>(task_id)];
+      unique_membership.reserve(unique_span.size());
       for (const auto data_id : unique_span) {
         set_membership_value(compute_task_unique_membership, task_id, data_id);
       }
     }
-
-    for (auto &bitmap : compute_task_read_membership) {
-      bitmap.finalize();
-    }
-    for (auto &bitmap : compute_task_write_membership) {
-      bitmap.finalize();
-    }
-    for (auto &bitmap : compute_task_unique_membership) {
-      bitmap.finalize();
-    }
-
-    std::size_t total_bytes = 0;
-    for (const auto &bitmap : compute_task_read_membership) {
-      total_bytes += bitmap.serialized_size();
-    }
-    for (const auto &bitmap : compute_task_write_membership) {
-      total_bytes += bitmap.serialized_size();
-    }
-    for (const auto &bitmap : compute_task_unique_membership) {
-      total_bytes += bitmap.serialized_size();
-    }
-
-    membership_index_enabled = true;
-    membership_index_bytes = total_bytes;
   }
 
 public:
@@ -1604,57 +1490,20 @@ public:
   }
 
   [[nodiscard]] bool has_read_data(taskid_t task_id, dataid_t data_id) const {
-    if (membership_index_enabled) {
-      return contains_membership_value(compute_task_read_membership, task_id, data_id);
-    }
-    const auto read = get_read(task_id);
-    return std::find(read.begin(), read.end(), data_id) != read.end();
+    return contains_membership_value(compute_task_read_membership, task_id, data_id);
   }
 
   [[nodiscard]] bool has_write_data(taskid_t task_id, dataid_t data_id) const {
-    if (membership_index_enabled) {
-      return contains_membership_value(compute_task_write_membership, task_id, data_id);
-    }
-    const auto write = get_write(task_id);
-    return std::find(write.begin(), write.end(), data_id) != write.end();
+    return contains_membership_value(compute_task_write_membership, task_id, data_id);
   }
 
   [[nodiscard]] bool has_unique_data(taskid_t task_id, dataid_t data_id) const {
-    if (membership_index_enabled) {
-      return contains_membership_value(compute_task_unique_membership, task_id, data_id);
-    }
-    const auto unique = get_unique(task_id);
-    return std::find(unique.begin(), unique.end(), data_id) != unique.end();
+    return contains_membership_value(compute_task_unique_membership, task_id, data_id);
   }
 
   [[nodiscard]] int32_t get_read_data_index(taskid_t task_id, dataid_t data_id) const {
-    if (membership_index_enabled) {
-      const auto it = read_index_by_task_data.find(task_data_key(task_id, data_id));
-      return it == read_index_by_task_data.end() ? -1 : it->second;
-    }
-    const auto read = get_read(task_id);
-    const auto it = std::find(read.begin(), read.end(), data_id);
-    return it == read.end() ? -1 : static_cast<int32_t>(it - read.begin());
-  }
-
-  [[nodiscard]] TaskDataMembershipBitmapView get_read_membership(taskid_t task_id) const {
-    return get_membership_view(compute_task_read_membership, task_id);
-  }
-
-  [[nodiscard]] TaskDataMembershipBitmapView get_write_membership(taskid_t task_id) const {
-    return get_membership_view(compute_task_write_membership, task_id);
-  }
-
-  [[nodiscard]] TaskDataMembershipBitmapView get_unique_membership(taskid_t task_id) const {
-    return get_membership_view(compute_task_unique_membership, task_id);
-  }
-
-  [[nodiscard]] bool task_data_membership_enabled() const {
-    return membership_index_enabled;
-  }
-
-  [[nodiscard]] std::size_t get_task_data_membership_bytes() const {
-    return membership_index_bytes;
+    const auto it = read_index_by_task_data.find(task_data_key(task_id, data_id));
+    return it == read_index_by_task_data.end() ? -1 : it->second;
   }
 
   [[nodiscard]] int32_t get_out_degree(taskid_t compute_task_id) const {

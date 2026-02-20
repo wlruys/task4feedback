@@ -479,7 +479,7 @@ protected:
   // Per-(device, data): count of mapped-but-not-reserved tasks on that device with data in unique set
   std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> mapped_unique_count;
   // Per-data: set of mapped-but-not-reserved tasks that write it (across all devices)
-  // Avoids O(|mapped| × roaring_bitmap_contains) scan in get_eviction_invalidation_info
+  // Avoids scanning all mapped tasks in get_eviction_invalidation_info.
   ankerl::unordered_dense::map<dataid_t, ankerl::unordered_dense::set<taskid_t>> mapped_write_by_data;
   // Per-(device, data): count of mapped-but-not-reserved tasks on device that READ data_id
   // Enables O(1) precheck — skip dependency DFS when no local reader exists

@@ -513,7 +513,7 @@ public:
 
   // getLRUids: fill id_buffer with the LRU data_ids (excluding used_ids) until their cumulative
   // size >= mem_size. Single-pass: collects victims and verifies total evictable capacity together.
-  // Uses hash set (not roaring bitmap) as the primary membership check path.
+  // Uses a hash set as the primary membership check path.
   const std::span<const dataid_t>
   getLRUids(devid_t device_id, std::size_t mem_size, std::span<const dataid_t> used_ids) const {
     assert(device_id >= 0 && device_id < n_devices_);
@@ -524,7 +524,7 @@ public:
       return id_buffer;
     }
 
-    // Build used membership once — hash set is the primary path (no roaring bitmap)
+    // Build used membership once for O(1) membership checks.
     const bool use_hash_membership = initialize_used_id_membership(used_ids);
 
     // Single pass: collect victims and stop as soon as enough memory has been selected.
