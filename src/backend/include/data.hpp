@@ -323,50 +323,44 @@ public:
   }
 };
 
-struct MovementPair {
-  dataid_t data_id{};
-  devid_t destination{};
-
-  MovementPair(dataid_t data_id, devid_t destination) : data_id(data_id), destination(destination) {
-  }
-
-  auto operator==(const MovementPair &other) const -> bool {
-    return data_id == other.data_id && destination == other.destination;
-  }
-};
-
-struct mp_hash {
-  using is_avalanching = void;
-
-  [[nodiscard]] auto operator()(MovementPair const &f) const noexcept -> uint64_t {
-    static_assert(std::has_unique_object_representations_v<MovementPair>);
-    return ankerl::unordered_dense::detail::wyhash::hash(&f, sizeof(f));
-  }
-};
+[[nodiscard]] inline uint64_t pack_movement_key(dataid_t data_id, devid_t destination) {
+  return (static_cast<uint64_t>(static_cast<uint32_t>(destination)) << 32U) |
+         static_cast<uint32_t>(data_id);
+}
 
 class MovementManager {
 protected:
-  ankerl::unordered_dense::map<MovementPair, timecount_t, mp_hash> movement_times;
+  ankerl::unordered_dense::map<uint64_t, timecount_t> movement_times;
 
 public:
   MovementManager() = default;
 
   bool is_moving(dataid_t data_id, devid_t destination) const {
-    return movement_times.find({data_id, destination}) != movement_times.end();
+    return movement_times.find(pack_movement_key(data_id, destination)) != movement_times.end();
   }
 
   [[nodiscard]] inline timecount_t get_time(dataid_t data_id, devid_t destination) const {
-    auto it = movement_times.find({data_id, destination});
+    auto it = movement_times.find(pack_movement_key(data_id, destination));
     return it == movement_times.end() ? 0 : it->second;
+  }
+
+  [[nodiscard]] inline bool try_get_time(dataid_t data_id, devid_t destination,
+                                         timecount_t &completion_time) const {
+    auto it = movement_times.find(pack_movement_key(data_id, destination));
+    if (it == movement_times.end()) {
+      return false;
+    }
+    completion_time = it->second;
+    return true;
   }
 
   inline void set_completion(dataid_t data_id, devid_t destination,
                              timecount_t global_completion_time) {
-    movement_times[{data_id, destination}] = global_completion_time;
+    movement_times[pack_movement_key(data_id, destination)] = global_completion_time;
   }
 
   inline void remove(dataid_t data_id, devid_t destination) {
-    movement_times.erase({data_id, destination});
+    movement_times.erase(pack_movement_key(data_id, destination));
   }
 };
 
@@ -377,20 +371,24 @@ struct MovementStatus {
 
 class LRU_manager {
 private:
+  struct LRUNode {
+    dataid_t id;
+    mem_t size;
+  };
+
   mem_t evicted_size = 0;
   mem_t max_usage = 0;
   uint32_t n_devices_{0};
   // For each device:
-  //  - a list maintaining LRU (front) → MRU (back)
+  //  - a list maintaining LRU (front) → MRU (back), each node stores (id, size)
   //  - a map from data_id → its position in that list
-  //  - a map from data_id → its mem_size
-  std::vector<std::list<dataid_t>> lru_lists_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<dataid_t>::iterator>>
+  std::vector<std::list<LRUNode>> lru_lists_;
+  std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<LRUNode>::iterator>>
       position_maps_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, mem_t>> size_maps_;
   std::vector<mem_t> sizes_;
   std::vector<mem_t> max_sizes_;
   mutable DataIDList id_buffer;
+  mutable ankerl::unordered_dense::set<dataid_t> used_id_scratch;
 
 public:
   LRU_manager() = default;
@@ -398,7 +396,7 @@ public:
   // Constructor: initialize for n_devices [0 .. n_devices-1]
   explicit LRU_manager(const Devices &devices)
       : n_devices_(devices.size()), lru_lists_(devices.size()), position_maps_(devices.size()),
-        size_maps_(devices.size()), sizes_(devices.size()), max_sizes_(devices.size()) {
+        sizes_(devices.size()), max_sizes_(devices.size()) {
     for (auto &size : sizes_) {
       size = 0;
     }
@@ -406,52 +404,52 @@ public:
       max_sizes_[i] = devices.get_max_resources(i).mem;
     }
     id_buffer.reserve(20);
+    used_id_scratch.reserve(64);
   }
 
-  // read: add (device_id, data_id, mem_size). If present, update MRU; else insert.
+  // read: add (device_id, data_id, mem_size). If present, update size and move to MRU; else insert.
   void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
     assert(device_id >= 0 && device_id < n_devices_);
 
     auto &lst = lru_lists_[device_id];
     auto &pos = position_maps_[device_id];
-    auto &smap = size_maps_[device_id];
     auto &size = sizes_[device_id];
     auto &max_size = max_sizes_[device_id];
     auto it = pos.find(data_id);
     if (it != pos.end()) {
-      // already present: move to MRU
-      lst.erase(it->second);
-    } else {
-      size += mem_size;
-      if (size > max_usage && device_id > 0) {
-        max_usage = size;
-      }
-      if (size > max_size) {
-        SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
-                     data_id, mem_size);
-        assert(size <= max_size && "LRU_manager::read(): size exceeds max size");
-      }
+      // already present: update size in node and move to MRU in O(1)
+      it->second->size = mem_size;
+      lst.splice(lst.end(), lst, it->second);
+      return;
+    }
+    size += mem_size;
+    if (size > max_usage && device_id > 0) {
+      max_usage = size;
+    }
+    if (size > max_size) {
+      SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
+                   data_id, mem_size);
+      assert(size <= max_size && "LRU_manager::read(): size exceeds max size");
     }
     // insert at MRU (back)
-    lst.push_back(data_id);
-    auto new_it = std::prev(lst.end());
-    pos[data_id] = new_it;
-    smap[data_id] = mem_size; // update size
+    lst.push_back(LRUNode{data_id, mem_size});
+    pos[data_id] = std::prev(lst.end());
   }
 
   LRU_manager(const LRU_manager &other)
       : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
-        position_maps_(other.n_devices_), size_maps_(other.size_maps_), sizes_(other.sizes_),
+        position_maps_(other.n_devices_), sizes_(other.sizes_),
         max_sizes_(other.max_sizes_), evicted_size(other.evicted_size), max_usage(other.max_usage) {
     ZoneScoped;
-    // Rebuild position_maps_
+    // Rebuild position_maps_ since iterators are invalidated by list copy
     for (devid_t dev = 0; dev < n_devices_; ++dev) {
       position_maps_[dev].reserve(other.position_maps_[dev].size());
       for (auto it = lru_lists_[dev].begin(); it != lru_lists_[dev].end(); ++it) {
-        position_maps_[dev][*it] = it;
+        position_maps_[dev][it->id] = it;
       }
     }
     id_buffer.reserve(other.id_buffer.capacity());
+    used_id_scratch.reserve(other.used_id_scratch.size());
   }
 
   // invalidate: remove (device_id, data_id); assert if missing
@@ -460,43 +458,103 @@ public:
 
     auto &lst = lru_lists_[device_id];
     auto &pos = position_maps_[device_id];
-    auto &smap = size_maps_[device_id];
     auto &size = sizes_[device_id];
 
     auto it = pos.find(data_id);
     assert(it != pos.end() && "invalidate(): data_id not present");
 
-    lst.erase(it->second);
-    pos.erase(it);
-    size -= smap[data_id]; // update size
+    auto node_it = it->second;
+    const mem_t node_size = node_it->size;
+    size -= node_size;
     if (evict)
-      evicted_size += smap[data_id];
-    smap.erase(data_id);
+      evicted_size += node_size;
+    lst.erase(node_it);
+    pos.erase(it);
   }
 
-  // getLRUids: fill id_buffer[device_id] with the least-recently-used data_ids
-  // until their cumulative mem_size ≥ requested mem_size, and return it.
-  const std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
-                                            std::span<const dataid_t> used_ids) const {
+  [[nodiscard]] mem_t get_evictable_size(devid_t device_id,
+                                         std::span<const dataid_t> used_ids) const {
     assert(device_id >= 0 && device_id < n_devices_);
 
-    auto &lst = lru_lists_[device_id];
-    auto &smap = size_maps_[device_id];
-    id_buffer.clear();
-    std::size_t accumulated = 0;
-
-    for (auto it = lst.begin(); it != lst.end() && accumulated < mem_size; ++it) {
-      dataid_t did = *it;
-      if (std::find(used_ids.begin(), used_ids.end(), did) != used_ids.end()) {
-        continue; // skip if used by the task
+    const auto &lst = lru_lists_[device_id];
+    constexpr std::size_t small_used_threshold = 8;
+    const bool use_hash_membership = used_ids.size() > small_used_threshold;
+    auto &used_set = used_id_scratch;
+    used_set.clear();
+    if (use_hash_membership) {
+      used_set.reserve(used_ids.size());
+      for (const auto used_id : used_ids) {
+        used_set.insert(used_id);
       }
-      auto sz_it = smap.find(did);
-      assert(sz_it != smap.end() && "size missing for data_id");
-      accumulated += sz_it->second;
-      id_buffer.push_back(did);
     }
-    assert(accumulated >= mem_size &&
-           "getLRUids(): evictable memory isze is smaller than the requested size");
+
+    const auto is_used = [&](dataid_t did) {
+      if (!use_hash_membership) {
+        return std::find(used_ids.begin(), used_ids.end(), did) != used_ids.end();
+      }
+      return used_set.contains(did);
+    };
+
+    mem_t evictable = 0;
+    for (const auto &node : lst) {
+      if (is_used(node.id)) {
+        continue;
+      }
+      evictable += node.size;
+    }
+    return evictable;
+  }
+
+  // getLRUids: fill id_buffer with the LRU data_ids (excluding used_ids) until their cumulative
+  // size >= mem_size. Single-pass: collects victims and verifies total evictable capacity together.
+  // Uses hash set (not roaring bitmap) as the primary membership check path.
+  const std::span<const dataid_t>
+  getLRUids(devid_t device_id, std::size_t mem_size, std::span<const dataid_t> used_ids) const {
+    assert(device_id >= 0 && device_id < n_devices_);
+
+    const auto &lst = lru_lists_[device_id];
+    id_buffer.clear();
+    if (mem_size == 0) {
+      return id_buffer;
+    }
+
+    // Build used membership once — hash set is the primary path (no roaring bitmap)
+    constexpr std::size_t small_used_threshold = 8;
+    const bool use_hash_membership = used_ids.size() > small_used_threshold;
+    auto &used_set = used_id_scratch;
+    used_set.clear();
+    if (use_hash_membership) {
+      used_set.reserve(used_ids.size());
+      for (const auto used_id : used_ids) {
+        used_set.insert(used_id);
+      }
+    }
+
+    const auto is_used = [&](dataid_t did) {
+      if (!use_hash_membership) {
+        return std::find(used_ids.begin(), used_ids.end(), did) != used_ids.end();
+      }
+      return used_set.contains(did);
+    };
+
+    // Single pass: collect victims and stop as soon as enough memory has been selected.
+    mem_t accumulated = 0;
+    for (const auto &node : lst) {
+      if (is_used(node.id)) {
+        continue;
+      }
+      accumulated += node.size;
+      id_buffer.push_back(node.id);
+      if (accumulated >= static_cast<mem_t>(mem_size)) {
+        return id_buffer;
+      }
+    }
+
+    assert(accumulated >= static_cast<mem_t>(mem_size) &&
+           "getLRUids(): evictable memory size is smaller than requested size");
+    if (accumulated < static_cast<mem_t>(mem_size)) {
+      id_buffer.clear();
+    }
     return id_buffer;
   }
 
@@ -1005,7 +1063,6 @@ public:
 
   void complete_move(CommunicationManager &comm_manager, dataid_t data_id, devid_t source,
                      devid_t destination, bool is_virtual, timecount_t current_time) {
-
     if (is_virtual) {
       SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
                    "device {}",
@@ -1039,7 +1096,6 @@ public:
 
   void complete_eviction_move(CommunicationManager &comm_manager, dataid_t data_id, devid_t source,
                               devid_t destination, bool is_virtual, timecount_t current_time) {
-
     if (is_virtual) {
       SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
                    "device {}",

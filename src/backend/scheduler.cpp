@@ -8,9 +8,15 @@
 #include "tasks.hpp"
 #include <cstdint>
 #include <iostream>
-#include <stack>
 
 // Scheduler
+
+namespace {
+[[nodiscard]] inline uint64_t pack_eviction_key(dataid_t data_id, devid_t device_id) {
+  return (static_cast<uint64_t>(static_cast<uint32_t>(device_id)) << 32) |
+         static_cast<uint32_t>(data_id);
+}
+} // namespace
 
 size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
 
@@ -83,6 +89,24 @@ taskid_t Scheduler::map_task(taskid_t compute_task_id, Action &action) {
   // If there are, it means that
 
   s.mapped_but_not_reserved_tasks.insert(compute_task_id);
+  s.is_mapped_not_reserved[static_cast<std::size_t>(compute_task_id)] = 1;
+
+  // Maintain incremental future_usage counters for eviction
+  auto &unique_count_map = s.mapped_unique_count[chosen_device];
+  for (auto d : static_graph.get_unique(compute_task_id)) {
+    unique_count_map[d]++;
+  }
+
+  // Maintain write index: data_id → set of mapped-not-reserved writers (avoids roaring bitmap scan)
+  for (auto d : static_graph.get_write(compute_task_id)) {
+    s.mapped_write_by_data[d].insert(compute_task_id);
+  }
+
+  // Maintain read-count index: enables O(1) precheck to skip dependency DFS
+  auto &read_count_map = s.mapped_read_count_by_data_device[chosen_device];
+  for (auto d : static_graph.get_read(compute_task_id)) {
+    read_count_map[d]++;
+  }
 
   // Notify dependents and enqueue newly mappable tasks
   task_runtime.compute_notify_mapped(compute_task_id, chosen_device, rp, lp, current_time,
@@ -278,6 +302,34 @@ bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
 
   // erase task_id from s.mapped_but_not_reserved_tasks
   mapped.erase(mapped.find(compute_task_id));
+  s.is_mapped_not_reserved[static_cast<std::size_t>(compute_task_id)] = 0;
+
+  // Maintain incremental future_usage counters for eviction
+  auto &unique_count_map = s.mapped_unique_count[device_id];
+  for (auto d : static_graph.get_unique(compute_task_id)) {
+    auto &cnt = unique_count_map[d];
+    if (--cnt == 0) {
+      unique_count_map.erase(d);
+    }
+  }
+
+  // Remove from write index
+  for (auto d : static_graph.get_write(compute_task_id)) {
+    auto &writers = s.mapped_write_by_data[d];
+    writers.erase(compute_task_id);
+    if (writers.empty()) {
+      s.mapped_write_by_data.erase(d);
+    }
+  }
+
+  // Remove from read-count index
+  auto &read_count_map = s.mapped_read_count_by_data_device[device_id];
+  for (auto d : static_graph.get_read(compute_task_id)) {
+    auto &cnt = read_count_map[d];
+    if (--cnt == 0) {
+      read_count_map.erase(d);
+    }
+  }
 
   task_runtime.compute_notify_reserved(compute_task_id, device_id, current_time, static_graph,
                                        compute_task_buffer);
@@ -610,7 +662,6 @@ bool Scheduler::launch_data_tasks(EventManager &event_manager) {
   bool break_flag = false;
 
   while (queues.has_active_data_launchable() && conditions.get().should_launch_data(s, queues)) {
-
     if (data_launchable.get_active().empty()) {
       data_launchable.next();
       continue;
@@ -659,7 +710,6 @@ bool Scheduler::launch_eviction_tasks(EventManager &event_manager) {
 
   while (queues.has_active_eviction_launchable() &&
          conditions.get().should_launch_data(s, queues)) {
-
     if (eviction_launchable.get_active().empty()) {
       eviction_launchable.next();
       continue;
@@ -710,6 +760,7 @@ void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_ma
         SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
         event_manager.create_event(EventType::RESERVER, current_time);
         this->eviction_state = EvictionState::NONE;
+        clear_eviction_invalidation_cache();
       } else
         return;
     } else
@@ -719,17 +770,110 @@ void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_ma
   }
 }
 
+Scheduler::EvictionInvalidationInfo
+Scheduler::get_eviction_invalidation_info(dataid_t data_id, devid_t invalidate_device) {
+  const auto cache_key = pack_eviction_key(data_id, invalidate_device);
+  if (auto it = eviction_invalidation_cache.find(cache_key);
+      it != eviction_invalidation_cache.end()) {
+    return {
+        .future_usage = (it->second & 0x01) != 0,
+        .write_after_read = (it->second & 0x02) != 0,
+    };
+  }
+
+  const auto &mapped = state.mapped_but_not_reserved_tasks;
+  auto &task_runtime = state.task_runtime;
+  const auto &static_graph = state.get_tasks();
+
+  // O(1): use incremental mapped_unique_count instead of scanning all mapped tasks
+  const auto &ucount = state.mapped_unique_count[invalidate_device];
+  bool future_usage = ucount.count(data_id) > 0;
+
+  bool write_after_read = false;
+  auto write_it = state.mapped_write_by_data.find(data_id);
+  if (write_it != state.mapped_write_by_data.end() && !write_it->second.empty()) {
+    taskid_t top;
+
+    if (write_it->second.size() == 1) {
+      top = *write_it->second.begin();
+    } else {
+      // Writers of the same data form a dependency chain — the topmost (earliest) writer
+      // has the minimum topological depth. O(|buffer_set|) scan, no DFS needed.
+      top = *write_it->second.begin();
+      int32_t top_depth = static_graph.get_depth(top);
+      for (auto tid : write_it->second) {
+        int32_t d = static_graph.get_depth(tid);
+        if (d < top_depth) {
+          top_depth = d;
+          top = tid;
+        }
+      }
+    }
+
+    if (task_runtime.get_compute_task_mapped_device(top) != invalidate_device) {
+      // O(1) precheck: are there any mapped tasks on invalidate_device that read data_id?
+      // If not, no dependency DFS is needed — write_after_read = true immediately.
+      const auto &rcount = state.mapped_read_count_by_data_device[invalidate_device];
+      if (rcount.count(data_id) > 0) {
+        // Local readers exist — do interleaved DFS checking reader status during traversal.
+        // Early exit as soon as a local reader is found among mapped predecessors.
+        write_after_read = true;
+        const auto readers_span = static_graph.get_tasks_reading_data(data_id);
+        auto &stack = eviction_scratch_stack;
+        reset_eviction_scratch_visited();
+        stack.clear();
+        stack.reserve(16);
+
+        bool done = false;
+        for (auto dep0 : static_graph.get_compute_task_dependencies(top)) {
+          if (!state.is_mapped_not_reserved[static_cast<std::size_t>(dep0)]) continue;
+          if (!mark_eviction_visited(dep0)) continue;
+          if (task_runtime.get_compute_task_mapped_device(dep0) == invalidate_device &&
+              std::binary_search(readers_span.begin(), readers_span.end(), dep0)) {
+            write_after_read = false;
+            done = true;
+            break;
+          }
+          stack.push_back(dep0);
+        }
+
+        while (!done && !stack.empty()) {
+          auto curr = stack.back();
+          stack.pop_back();
+          for (auto dep : static_graph.get_compute_task_dependencies(curr)) {
+            if (!state.is_mapped_not_reserved[static_cast<std::size_t>(dep)]) continue;
+            if (!mark_eviction_visited(dep)) continue;
+            if (task_runtime.get_compute_task_mapped_device(dep) == invalidate_device &&
+                std::binary_search(readers_span.begin(), readers_span.end(), dep)) {
+              write_after_read = false;
+              done = true;
+              break;
+            }
+            stack.push_back(dep);
+          }
+        }
+      } else {
+        // No local readers — skip DFS, WAR = true by default
+        write_after_read = true;
+      }
+    }
+  }
+
+  uint8_t encoded = 0;
+  encoded |= static_cast<uint8_t>(future_usage ? 0x01 : 0);
+  encoded |= static_cast<uint8_t>(write_after_read ? 0x02 : 0);
+  eviction_invalidation_cache[cache_key] = encoded;
+  return {.future_usage = future_usage, .write_after_read = write_after_read};
+}
+
 // TODO(wlr, jae): We need to work together to check this after the refactor
 void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
-  auto &launchable = queues.launchable;
   auto &task_runtime = s.task_runtime;
   const auto &static_graph = s.get_tasks();
-  auto &data_launchable = queues.data_launchable;
   const auto &data_manager = s.data_manager;
   const auto &lru_manager = s.data_manager.get_lru_manager();
-  const auto &mapped = s.mapped_but_not_reserved_tasks;
 
   auto current_time = s.global_time;
 
@@ -742,6 +886,8 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
     } else {
       SPDLOG_DEBUG("Starting evictor at {}", current_time);
       eviction_count = 0;
+      clear_eviction_invalidation_cache();
+      reset_eviction_planned_victims();
 
       for (auto &taskdevice : tasks_requesting_eviction) {
         auto [compute_task_id, device_id] = taskdevice;
@@ -750,6 +896,10 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
           const auto unique_data = static_graph.get_unique(compute_task_id);
           auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, unique_data);
           for (auto data_id : data_ids) {
+            // Skip victims already handled by an earlier requesting task in this cycle
+            if (!mark_eviction_planned_victim(data_id, device_id)) {
+              continue;
+            }
             auto location_flags = data_manager.get_launched_location_flags(data_id);
             // count set bits in location_flags
             devid_t n_sources = __builtin_popcount(location_flags);
@@ -766,121 +916,15 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
               state.update_eviction_reserved_cost(eviction_task_id, 0);
               push_launchable_eviction(eviction_task_id);
             } else { // There are multiple sources for this data
-              // We need to invalidate the data on the device
-              // Invalidate the data
-              bool future_usage = false;
-              for (auto unreserved_compute_task_id : mapped) {
-                if (task_runtime.get_compute_task_mapped_device(unreserved_compute_task_id) ==
-                    device_id) {
-                  auto uniq = static_graph.get_unique(unreserved_compute_task_id);
-                  if (std::find(uniq.begin(), uniq.end(), data_id) != uniq.end()) {
-                    future_usage = true;
-                    break;
-                  }
-                }
-              }
-
-              bool write_after_read = false;
-              std::unordered_set<taskid_t> buffer_set;
-              for (auto unreserved_task_id : mapped) {
-                auto write = static_graph.get_write(unreserved_task_id);
-                if (std::find(write.begin(), write.end(), data_id) != write.end()) {
-                  buffer_set.insert(unreserved_task_id);
-                }
-              }
-
-              if (!buffer_set.empty()) {
-                // 1) Find the unique “top” task in buffer_set
-                std::vector<taskid_t> top_tasks;
-
-                for (auto tid : buffer_set) {
-                  bool has_buffer_predecessor = false;
-                  std::stack<taskid_t> stk;
-                  std::unordered_set<taskid_t> visited;
-
-                  stk.push(tid);
-                  visited.insert(tid);
-
-                  while (!stk.empty() && !has_buffer_predecessor) {
-                    auto curr = stk.top();
-                    stk.pop();
-
-                    for (auto dep : static_graph.get_compute_task_dependencies(curr)) {
-                      if (!mapped.count(dep))
-                        continue;
-
-                      if (buffer_set.count(dep) && dep != tid) {
-                        has_buffer_predecessor = true;
-                        break;
-                      }
-                      if (visited.insert(dep).second) {
-                        stk.push(dep);
-                      }
-                    }
-                  }
-
-                  if (!has_buffer_predecessor) {
-                    top_tasks.push_back(tid);
-                  }
-                }
-
-                assert(top_tasks.size() == 1);
-                taskid_t top = top_tasks.front();
-
-                // 2) Now do a full DFS from top down its .get_dependencies(),
-                //    collecting all reachable deps that are in mapped
-                std::vector<taskid_t> top_task_dependencies;
-                std::stack<taskid_t> stk;
-                std::unordered_set<taskid_t> visited;
-
-                // start from each direct dependency
-                for (auto dep0 : static_graph.get_compute_task_dependencies(top)) {
-                  if (mapped.count(dep0) && visited.insert(dep0).second) {
-                    top_task_dependencies.push_back(dep0);
-                    stk.push(dep0);
-                  }
-                }
-
-                while (!stk.empty()) {
-                  auto curr = stk.top();
-                  stk.pop();
-
-                  for (auto dep : static_graph.get_compute_task_dependencies(curr)) {
-                    if (!mapped.count(dep))
-                      continue;
-                    if (visited.insert(dep).second) {
-                      top_task_dependencies.push_back(dep);
-                      stk.push(dep);
-                    }
-                  }
-                }
-
-                // 'top' is your head write-task
-                // 'top_task_dependencies' now contains *all* of its dependencies
-                // (direct and indirect), in the order first discovered.
-                if (task_runtime.get_compute_task_mapped_device(top) != device_id) {
-                  write_after_read = true;
-                  for (auto dep : top_task_dependencies) {
-                    if (task_runtime.get_compute_task_mapped_device(dep) == device_id) {
-                      bool is_read = false;
-                      for (auto read_data_id : static_graph.get_read(dep)) {
-                        if (read_data_id == data_id)
-                          is_read = true;
-                      }
-                      if (!is_read)
-                        continue;
-                      write_after_read = false;
-                      break;
-                    }
-                  }
-                }
-              }
+              const auto invalidation =
+                  get_eviction_invalidation_info(data_id, static_cast<devid_t>(device_id));
 
               SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}", current_time,
                            data_id, static_graph.get_compute_task_name(compute_task_id), device_id);
               s.data_manager.evict_on_update_launched(s.get_data(), s.get_device_manager(), data_id,
-                                                      device_id, current_time, future_usage,
-                                                      write_after_read);
+                                                      device_id, current_time,
+                                                      invalidation.future_usage,
+                                                      invalidation.write_after_read);
             }
           }
         } else {
@@ -903,6 +947,7 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
       SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
       event_manager.create_event(EventType::RESERVER, current_time);
       this->eviction_state = EvictionState::NONE;
+      clear_eviction_invalidation_cache();
     }
   }
 }
@@ -916,8 +961,9 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
                current_time, success_count, scheduler_event_count,
                static_cast<int>(this->eviction_state));
 
-  const auto eviction_state = this->eviction_state;
-  if (scheduler_event_count == 0) {
+  const bool can_emit_scheduler_event = (scheduler_event_count == 0);
+  if (can_emit_scheduler_event) {
+    const auto eviction_state = this->eviction_state;
     if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
       event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
     } else if (eviction_state == EvictionState::RUNNING) {
@@ -926,6 +972,7 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
       } else {
         event_manager.create_event(EventType::RESERVER, current_time + SCHEDULER_TIME_GAP);
         this->eviction_state = EvictionState::NONE;
+        clear_eviction_invalidation_cache();
       }
     } else {
       event_manager.create_event(EventType::MAPPER,
@@ -939,20 +986,22 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
 
 #ifdef DEBUG
   // check memory state, whether it is consistent for debugging purpose
-  bool flag = false;
-  for (devid_t i = 0; i < device_manager.n_devices; i++) {
-    mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i);
-    mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i);
-    mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i);
-    mem_t lru_mem = lru_manager.get_mem(i);
-    SPDLOG_DEBUG("Device {}: launched {}, lru {}, reserved {}, mapped {}", i, launched_mem, lru_mem,
-                 reserved_mem, mapped_mem);
-    if (i > 0 && mapped_mem < launched_mem)
-      flag = true;
-    assert(launched_mem == lru_mem);
-  }
-  if (flag) {
-    SPDLOG_DEBUG("Memory state is inconsistent");
+  if (can_emit_scheduler_event) {
+    bool flag = false;
+    for (devid_t i = 0; i < device_manager.n_devices; i++) {
+      mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i);
+      mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i);
+      mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i);
+      mem_t lru_mem = lru_manager.get_mem(i);
+      SPDLOG_DEBUG("Device {}: launched {}, lru {}, reserved {}, mapped {}", i, launched_mem, lru_mem,
+                   reserved_mem, mapped_mem);
+      if (i > 0 && mapped_mem < launched_mem)
+        flag = true;
+      assert(launched_mem == lru_mem);
+    }
+    if (flag) {
+      SPDLOG_DEBUG("Memory state is inconsistent");
+    }
   }
 #endif
 }
@@ -1034,7 +1083,9 @@ void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &even
   SPDLOG_DEBUG("Time:{} Newly launchable compute tasks: {}", current_time,
                compute_task_buffer.size());
 
-  push_launchable(compute_task_buffer);
+  if (!compute_task_buffer.empty()) {
+    push_launchable(compute_task_buffer);
+  }
 
   // Updates task counter tables in scheduler
   s.update_data_completed_cost(data_task_id, destination_id);
@@ -1048,7 +1099,6 @@ void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManage
   auto &task_runtime = s.task_runtime;
   auto &data_manager = s.data_manager;
   auto &device_manager = s.device_manager;
-  auto &static_graph = s.get_tasks();
   auto &comm_manager = s.get_communication_manager();
 
   const taskid_t eviction_task_id = event.task;
@@ -1070,119 +1120,12 @@ void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManage
   device_manager.add_mem<TaskState::RESERVED>(destination_id, data_size, current_time);
 
   auto invalidate_device_id = task_runtime.get_eviction_task_evicting_on(eviction_task_id);
-
-  bool future_usage = false;
-  const auto &mapped = s.mapped_but_not_reserved_tasks;
-
-  for (auto unreserved_compute_task_id : mapped) {
-    if (task_runtime.get_compute_task_mapped_device(unreserved_compute_task_id) ==
-        invalidate_device_id) {
-      auto uniq = static_graph.get_unique(unreserved_compute_task_id);
-      if (std::find(uniq.begin(), uniq.end(), data_id) != uniq.end()) {
-        future_usage = true;
-        break;
-      }
-    }
-  }
-
-  bool write_after_read = false;
-  std::unordered_set<taskid_t> buffer_set;
-  for (auto unreserved_compute_task_id : mapped) {
-    auto write = static_graph.get_write(unreserved_compute_task_id);
-    if (std::find(write.begin(), write.end(), data_id) != write.end()) {
-      buffer_set.insert(unreserved_compute_task_id);
-    }
-  }
-
-  if (!buffer_set.empty()) {
-    // 1) Find the unique “top” task in buffer_set
-    std::vector<taskid_t> top_tasks;
-
-    for (auto tid : buffer_set) {
-      bool has_buffer_predecessor = false;
-      std::stack<taskid_t> stk;
-      std::unordered_set<taskid_t> visited;
-
-      stk.push(tid);
-      visited.insert(tid);
-
-      while (!stk.empty() && !has_buffer_predecessor) {
-        auto curr = stk.top();
-        stk.pop();
-
-        for (auto dep : static_graph.get_compute_task_dependencies(curr)) {
-          if (!mapped.count(dep))
-            continue;
-
-          if (buffer_set.count(dep) && dep != tid) {
-            has_buffer_predecessor = true;
-            break;
-          }
-          if (visited.insert(dep).second) {
-            stk.push(dep);
-          }
-        }
-      }
-
-      if (!has_buffer_predecessor) {
-        top_tasks.push_back(tid);
-      }
-    }
-
-    assert(top_tasks.size() == 1);
-    taskid_t top = top_tasks.front();
-
-    // 2) Now do a full DFS from top down its .get_dependencies(),
-    //    collecting all reachable deps that are in mapped
-    std::vector<taskid_t> top_task_dependencies;
-    std::stack<taskid_t> stk;
-    std::unordered_set<taskid_t> visited;
-
-    // start from each direct dependency
-    for (auto dep0 : static_graph.get_compute_task_dependencies(top)) {
-      if (mapped.count(dep0) && visited.insert(dep0).second) {
-        top_task_dependencies.push_back(dep0);
-        stk.push(dep0);
-      }
-    }
-
-    while (!stk.empty()) {
-      auto curr = stk.top();
-      stk.pop();
-
-      for (auto dep : static_graph.get_compute_task_dependencies(curr)) {
-        if (!mapped.count(dep))
-          continue;
-        if (visited.insert(dep).second) {
-          top_task_dependencies.push_back(dep);
-          stk.push(dep);
-        }
-      }
-    }
-
-    // 'top' is your head write-task
-    // 'top_task_dependencies' now contains *all* of its dependencies
-    // (direct and indirect), in the order first discovered.
-    if (task_runtime.get_compute_task_mapped_device(top) != invalidate_device_id) {
-      write_after_read = true;
-      for (auto dep : top_task_dependencies) {
-        if (task_runtime.get_compute_task_mapped_device(dep) == invalidate_device_id) {
-          bool is_read = false;
-          for (auto read_data_id : static_graph.get_read(dep)) {
-            if (read_data_id == data_id)
-              is_read = true;
-          }
-          if (!is_read)
-            continue;
-          write_after_read = false;
-          break;
-        }
-      }
-    }
-  }
+  const auto invalidation =
+      get_eviction_invalidation_info(data_id, static_cast<devid_t>(invalidate_device_id));
 
   data_manager.evict_on_update_launched(s.get_data(), device_manager, data_id, invalidate_device_id,
-                                        current_time, future_usage, write_after_read);
+                                        current_time, invalidation.future_usage,
+                                        invalidation.write_after_read);
 
   eviction_count -= 1;
   SPDLOG_DEBUG("Time:{} Eviction task {} completed {} left", current_time, eviction_task_id,

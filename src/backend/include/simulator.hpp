@@ -99,6 +99,17 @@ public:
     use_python_mapper = use_python_mapper_;
   }
 
+  void enable_profiling(bool enabled = true) {
+    (void)enabled;
+  }
+
+  void reset_profiling() {
+  }
+
+  [[nodiscard]] bool is_profiling_enabled() const {
+    return false;
+  }
+
   void set_steps(int32_t steps) {
     scheduler.set_steps(steps);
   }
@@ -226,8 +237,8 @@ public:
         event);
   }
 
-  void update_time(EventVariant &event) {
-    scheduler.update_time(get_time(event));
+  void update_time(timecount_t time) {
+    scheduler.update_time(time);
   }
 
   size_t get_mappable_candidates(std::span<int64_t> v) {
@@ -330,6 +341,21 @@ public:
     EventVariant current_event = MapperEvent(0);
     ExecutionState execution_state = ExecutionState::RUNNING;
 
+    auto run_inline_phase_events = [&](ExecutionState state) {
+      while (state == ExecutionState::RUNNING && event_manager.has_inline_phase_events()) {
+        current_event = event_manager.pop_inline_phase_event();
+        events_processed++;
+        const auto [event_type, event_time] = get_event_info(current_event);
+        update_time(event_time);
+        event_manager.begin_dispatch(event_time, event_type);
+        state = handle_event(current_event);
+        event_manager.end_dispatch();
+        scheduler.check_time_breakpoint();
+        state = check_breakpoints(state);
+      }
+      return state;
+    };
+
     while (execution_state == ExecutionState::RUNNING) {
       execution_state = check_complete(execution_state);
       execution_state = check_breakpoints(execution_state);
@@ -341,9 +367,48 @@ public:
 
       current_event = event_manager.pop_event();
       events_processed++;
-      update_time(current_event);
-      execution_state = handle_event(current_event);
-      scheduler.check_time_breakpoint();
+      const auto [event_type, event_time] = get_event_info(current_event);
+      update_time(event_time);
+
+      if (event_type == EventType::DATA_COMPLETER) {
+        // Batch same-time DATA_COMPLETER events in a tight loop while preserving
+        // per-event completion semantics and side effects.
+        while (execution_state == ExecutionState::RUNNING) {
+          auto *completer = std::get_if<CompleterVariant>(&current_event);
+          assert(completer != nullptr && std::holds_alternative<DataCompleterEvent>(*completer));
+
+          event_manager.begin_dispatch(event_time, EventType::DATA_COMPLETER);
+          scheduler.complete_data_task(std::get<DataCompleterEvent>(*completer), event_manager);
+          execution_state = ExecutionState::RUNNING;
+          event_manager.end_dispatch();
+
+          scheduler.check_time_breakpoint();
+          execution_state = check_breakpoints(execution_state);
+          if (execution_state != ExecutionState::RUNNING) {
+            break;
+          }
+
+          execution_state = run_inline_phase_events(execution_state);
+          if (execution_state != ExecutionState::RUNNING || !event_manager.has_events()) {
+            break;
+          }
+
+          const auto &next_event = event_manager.peek_next_event();
+          if (get_time(next_event) != event_time || get_type(next_event) != EventType::DATA_COMPLETER) {
+            break;
+          }
+          current_event = event_manager.pop_event();
+          events_processed++;
+          update_time(get_time(current_event));
+        }
+      } else {
+        event_manager.begin_dispatch(event_time, event_type);
+        execution_state = handle_event(current_event);
+        event_manager.end_dispatch();
+        scheduler.check_time_breakpoint();
+        execution_state = check_breakpoints(execution_state);
+        execution_state = run_inline_phase_events(execution_state);
+      }
     }
 
     last_state = execution_state;

@@ -2,7 +2,12 @@
 
 #include "resources.hpp"
 #include "settings.hpp"
+#include <ankerl/unordered_dense.h>
+#include <array>
+#include <cassert>
 #include <cstddef>
+#include <deque>
+#include <functional>
 #include <queue>
 #include <utility>
 #include <variant>
@@ -137,36 +142,173 @@ inline timecount_t get_time(EventVariant const &v) {
       v);
 }
 
-// Comparator for our min-heap priority queue (earlier time ⇒ higher priority);
-// on tie, larger EventType -> higher priority so COMPLETER (4) goes first)
-struct EventVariantCompare {
-  bool operator()(EventVariant const &a, EventVariant const &b) const {
-    auto ta = get_time(a), tb = get_time(b);
-    if (ta != tb)
-      return ta > tb;
-    // if same time, we want the one with larger EventType first:
-    return get_type(a) < get_type(b);
+inline constexpr bool is_phase_event_type(EventType t) {
+  return t == EventType::MAPPER || t == EventType::RESERVER || t == EventType::LAUNCHER;
+}
+
+struct EventInfo {
+  EventType type;
+  timecount_t time;
+};
+
+inline EventInfo get_event_info(const EventVariant &v) {
+  return std::visit(
+      [](const auto &e) -> EventInfo {
+        if constexpr (std::is_same_v<std::decay_t<decltype(e)>, CompleterVariant>) {
+          return std::visit(
+              [](const auto &ce) -> EventInfo { return {ce.type, ce.time}; }, e);
+        } else {
+          return {e.type, e.time};
+        }
+      },
+      v);
+}
+
+class EventQueue {
+  using TimeMinHeap =
+      std::priority_queue<timecount_t, std::vector<timecount_t>, std::greater<timecount_t>>;
+
+  struct TimeBucket {
+    std::array<std::deque<EventVariant>, num_event_types> by_type;
+    std::size_t size = 0;
+
+    [[nodiscard]] bool empty() const {
+      return size == 0;
+    }
+  };
+
+  TimeMinHeap times_;
+  ankerl::unordered_dense::map<timecount_t, TimeBucket> buckets_;
+  std::size_t event_count_{0};
+
+  [[nodiscard]] static std::size_t event_type_index(const EventVariant &ev) {
+    return static_cast<std::size_t>(get_type(ev));
+  }
+
+public:
+  EventQueue() = default;
+
+  void push(EventVariant ev) {
+    const auto t = get_time(ev);
+    auto it = buckets_.find(t);
+    if (it == buckets_.end()) {
+      times_.push(t);
+      it = buckets_.emplace(t, TimeBucket{}).first;
+    }
+    const auto type_idx = event_type_index(ev);
+    it->second.by_type[type_idx].push_back(std::move(ev));
+    it->second.size += 1;
+    event_count_ += 1;
+  }
+
+  [[nodiscard]] bool empty() const {
+    return event_count_ == 0;
+  }
+
+  [[nodiscard]] std::size_t size() const {
+    return event_count_;
+  }
+
+  [[nodiscard]] const EventVariant &top() const {
+    assert(event_count_ > 0);
+    const auto t = times_.top();
+    const auto &bucket = buckets_.at(t);
+    for (std::size_t type_idx = num_event_types; type_idx > 0; --type_idx) {
+      const auto &q = bucket.by_type[type_idx - 1];
+      if (!q.empty()) {
+        return q.front();
+      }
+    }
+    assert(false && "EventQueue::top() encountered empty bucket");
+    return bucket.by_type[0].front();
+  }
+
+  EventVariant pop() {
+    assert(event_count_ > 0);
+    const auto t = times_.top();
+    auto it = buckets_.find(t);
+    assert(it != buckets_.end());
+    auto &bucket = it->second;
+
+    for (std::size_t type_idx = num_event_types; type_idx > 0; --type_idx) {
+      auto &q = bucket.by_type[type_idx - 1];
+      if (q.empty()) {
+        continue;
+      }
+      auto ev = std::move(q.front());
+      q.pop_front();
+      bucket.size -= 1;
+      event_count_ -= 1;
+      if (bucket.empty()) {
+        buckets_.erase(it);
+        times_.pop();
+      }
+      return ev;
+    }
+
+    assert(false && "EventQueue::pop() encountered empty bucket");
+    return MapperEvent(0);
   }
 };
 
-using EventQueue =
-    std::priority_queue<EventVariant, std::vector<EventVariant>, EventVariantCompare>;
-
 class EventManager {
   EventQueue events_;
+  std::deque<EventVariant> inline_phase_events_;
+  bool dispatch_active_{false};
+  timecount_t dispatch_time_{0};
+  bool inline_phase_allowed_{false};
+
+  inline bool should_inline_phase(EventType t, timecount_t time) const {
+    return dispatch_active_ && inline_phase_allowed_ && (time == dispatch_time_) &&
+           is_phase_event_type(t);
+  }
 
 public:
+  void begin_dispatch(timecount_t time, EventType dispatch_type) {
+    dispatch_active_ = true;
+    dispatch_time_ = time;
+    inline_phase_allowed_ = is_phase_event_type(dispatch_type);
+  }
+
+  void end_dispatch() {
+    dispatch_active_ = false;
+    inline_phase_allowed_ = false;
+  }
+
+  [[nodiscard]] bool has_inline_phase_events() const {
+    return !inline_phase_events_.empty();
+  }
+
+  EventVariant pop_inline_phase_event() {
+    assert(!inline_phase_events_.empty());
+    auto ev = std::move(inline_phase_events_.front());
+    inline_phase_events_.pop_front();
+    return ev;
+  }
+
   // No-payload events:
   inline void create_event(EventType t, timecount_t time) {
     switch (t) {
     case EventType::MAPPER:
-      events_.push(MapperEvent{time});
+      if (should_inline_phase(t, time)) {
+        inline_phase_events_.push_back(MapperEvent{time});
+      } else {
+        events_.push(MapperEvent{time});
+      }
       break;
     case EventType::RESERVER:
-      events_.push(ReserverEvent{time});
+      if (should_inline_phase(t, time)) {
+        inline_phase_events_.push_back(ReserverEvent{time});
+      } else {
+        events_.push(ReserverEvent{time});
+      }
       break;
     case EventType::LAUNCHER:
-      events_.push(LauncherEvent{time});
+      if (should_inline_phase(t, time)) {
+        inline_phase_events_.push_back(LauncherEvent{time});
+      } else {
+        events_.push(LauncherEvent{time});
+      }
       break;
     case EventType::EVICTOR:
       events_.push(EvictorEvent{time});
@@ -198,25 +340,37 @@ public:
 
   // Push an existing variant:
   inline void add_event(EventVariant ev) {
-    events_.push(std::move(ev));
+    const auto t = get_type(ev);
+    const auto time = get_time(ev);
+    if (should_inline_phase(t, time)) {
+      inline_phase_events_.push_back(std::move(ev));
+    } else {
+      events_.push(std::move(ev));
+    }
   }
 
   [[nodiscard]] bool has_events() const {
-    return !events_.empty();
+    return !inline_phase_events_.empty() || !events_.empty();
   }
   std::size_t num_events() const {
-    return events_.size();
+    return inline_phase_events_.size() + events_.size();
   }
 
   // Peek at the next event (by const‐ref):
   [[nodiscard]] inline EventVariant const &peek_next_event() const {
+    if (!inline_phase_events_.empty()) {
+      return inline_phase_events_.front();
+    }
     return events_.top();
   }
 
   // Pop and return by value:
   inline EventVariant pop_event() {
-    auto ev = events_.top();
-    events_.pop();
-    return ev;
+    if (!inline_phase_events_.empty()) {
+      auto ev = std::move(inline_phase_events_.front());
+      inline_phase_events_.pop_front();
+      return ev;
+    }
+    return events_.pop();
   }
 };

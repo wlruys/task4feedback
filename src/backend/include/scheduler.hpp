@@ -118,26 +118,26 @@ public:
   }
 
   void push_reservable(taskid_t id, priority_t p, devid_t device) {
-    reservable[device].push(id, p);
+    reservable.push_priority_at(device, id, p);
     SPDLOG_DEBUG("Pushing reservable compute task {} with priority {} on device {} top {}", id, p,
                  device, reservable[device].top_element().value);
   }
 
   void push_launchable(taskid_t id, priority_t p, devid_t device) {
     SPDLOG_DEBUG("Pushing launchable compute task {} with priority {} on device {}", id, p, device);
-    launchable[device].push(id, p);
+    launchable.push_priority_at(device, id, p);
   }
 
   void push_launchable_data(taskid_t id, priority_t p, devid_t device) {
     // TODO: change this to normal queue if needed keeping priority queue semantics for now
-    data_launchable[device].push(id, data_queue_count++);
+    data_launchable.push_priority_at(device, id, data_queue_count++);
     SPDLOG_DEBUG("Pushing launchable data task {} with priority {} on device {} data_queue_count "
                  "{} current_top {}",
                  id, p, device, data_queue_count - 1, data_launchable[device].top_element().value);
   }
 
   void push_launchable_eviction(taskid_t id, priority_t p, devid_t device) {
-    eviction_launchable[device].push(id, p);
+    eviction_launchable.push_priority_at(device, id, p);
   }
 
   [[nodiscard]] std::size_t n_mappable() const {
@@ -473,6 +473,17 @@ protected:
   CommunicationManager communication_manager;
   DataManager data_manager;
   ankerl::unordered_dense::set<taskid_t> mapped_but_not_reserved_tasks;
+  // Parallel bool array for O(1) array access in eviction DFS
+  // Kept in sync with mapped_but_not_reserved_tasks
+  std::vector<uint8_t> is_mapped_not_reserved;
+  // Per-(device, data): count of mapped-but-not-reserved tasks on that device with data in unique set
+  std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> mapped_unique_count;
+  // Per-data: set of mapped-but-not-reserved tasks that write it (across all devices)
+  // Avoids O(|mapped| × roaring_bitmap_contains) scan in get_eviction_invalidation_info
+  ankerl::unordered_dense::map<dataid_t, ankerl::unordered_dense::set<taskid_t>> mapped_write_by_data;
+  // Per-(device, data): count of mapped-but-not-reserved tasks on device that READ data_id
+  // Enables O(1) precheck — skip dependency DFS when no local reader exists
+  std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> mapped_read_count_by_data_device;
   std::reference_wrapper<Graph> graph;
   std::reference_wrapper<StaticTaskInfo> tasks;
   std::reference_wrapper<Data> data;
@@ -555,14 +566,22 @@ public:
         task_runtime(RuntimeTaskInfo(input.tasks)), device_manager(DeviceManager(input.devices)),
         communication_manager(input.topology, input.devices),
         data_manager(input.data, input.devices), counts(input.devices.get().size()),
-        costs(input.devices.get().size()) {
+        costs(input.devices.get().size()),
+        mapped_unique_count(input.devices.get().size()),
+        mapped_read_count_by_data_device(input.devices.get().size()) {
+    is_mapped_not_reserved.assign(
+        static_cast<std::size_t>(input.tasks.get().get_n_compute_tasks()), 0);
   }
 
   SchedulerState(const SchedulerState &other)
       : global_time(other.global_time), task_runtime(other.task_runtime),
         device_manager(other.device_manager), communication_manager(other.communication_manager),
         data_manager(other.data_manager),
-        mapped_but_not_reserved_tasks(other.mapped_but_not_reserved_tasks), graph(other.graph),
+        mapped_but_not_reserved_tasks(other.mapped_but_not_reserved_tasks),
+        is_mapped_not_reserved(other.is_mapped_not_reserved),
+        mapped_unique_count(other.mapped_unique_count),
+        mapped_write_by_data(other.mapped_write_by_data),
+        mapped_read_count_by_data_device(other.mapped_read_count_by_data_device), graph(other.graph),
         tasks(other.tasks), data(other.data), devices(other.devices), topology(other.topology),
         task_noise(other.task_noise), counts(other.counts), costs(other.costs), flags(other.flags) {
     // ZoneScoped;
@@ -1036,14 +1055,76 @@ enum class EvictionState : int8_t {
 class Scheduler {
 
 protected:
+  struct EvictionInvalidationInfo {
+    bool future_usage = false;
+    bool write_after_read = false;
+  };
+
   SchedulerState state;
   SchedulerQueues queues;
   TaskDeviceList tasks_requesting_eviction;
   int64_t success_count = 0;
   int64_t eviction_count = 0;
   EvictionState eviction_state = EvictionState::NONE;
+  ankerl::unordered_dense::map<uint64_t, uint8_t> eviction_invalidation_cache;
+  std::vector<uint32_t> eviction_scratch_visited_marks;
+  uint32_t eviction_scratch_visited_epoch = 1;
+  TaskIDList eviction_scratch_stack;
+  TaskIDList eviction_scratch_dependencies;
+  std::vector<uint32_t> eviction_planned_victim_marks;
+  uint32_t eviction_planned_victim_epoch = 1;
+  std::size_t eviction_planned_victim_stride = 0;
+
+  inline void reset_eviction_scratch_visited() {
+    eviction_scratch_visited_epoch += 1;
+    if (eviction_scratch_visited_epoch == 0) {
+      std::fill(eviction_scratch_visited_marks.begin(), eviction_scratch_visited_marks.end(), 0);
+      eviction_scratch_visited_epoch = 1;
+    }
+  }
+
+  [[nodiscard]] inline bool mark_eviction_visited(taskid_t task_id) {
+    const auto idx = static_cast<std::size_t>(task_id);
+    if (idx >= eviction_scratch_visited_marks.size()) {
+      return false;
+    }
+    auto &mark = eviction_scratch_visited_marks[idx];
+    if (mark == eviction_scratch_visited_epoch) {
+      return false;
+    }
+    mark = eviction_scratch_visited_epoch;
+    return true;
+  }
+
+  inline void reset_eviction_planned_victims() {
+    eviction_planned_victim_epoch += 1;
+    if (eviction_planned_victim_epoch == 0) {
+      std::fill(eviction_planned_victim_marks.begin(), eviction_planned_victim_marks.end(), 0);
+      eviction_planned_victim_epoch = 1;
+    }
+  }
+
+  [[nodiscard]] inline bool mark_eviction_planned_victim(dataid_t data_id, devid_t device_id) {
+    const auto idx =
+        static_cast<std::size_t>(device_id) * eviction_planned_victim_stride +
+        static_cast<std::size_t>(data_id);
+    if (idx >= eviction_planned_victim_marks.size()) {
+      return false;
+    }
+    auto &mark = eviction_planned_victim_marks[idx];
+    if (mark == eviction_planned_victim_epoch) {
+      return false;
+    }
+    mark = eviction_planned_victim_epoch;
+    return true;
+  }
 
   void enqueue_data_tasks(taskid_t task_id);
+  [[nodiscard]] EvictionInvalidationInfo get_eviction_invalidation_info(dataid_t data_id,
+                                                                         devid_t invalidate_device);
+  void clear_eviction_invalidation_cache() {
+    eviction_invalidation_cache.clear();
+  }
 
 public:
   BreakpointManager breakpoints;
@@ -1057,9 +1138,18 @@ public:
   Scheduler(SchedulerInput &input)
       : state(input), queues(input.devices), conditions(input.conditions) {
     const auto &static_graph = state.get_tasks();
+    const auto n_compute_tasks = static_graph.get_n_compute_tasks();
+    const auto n_data = state.get_data().size();
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
+    eviction_invalidation_cache.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
+    eviction_scratch_visited_marks.assign(static_cast<std::size_t>(n_compute_tasks), 0);
+    eviction_scratch_stack.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
+    eviction_scratch_dependencies.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
+    eviction_planned_victim_stride = static_cast<std::size_t>(n_data);
+    eviction_planned_victim_marks.assign(
+        static_cast<std::size_t>(state.get_devices().size()) * eviction_planned_victim_stride, 0);
     if (input.top_k_candidates > 0) {
       queues.mappable.set_k(static_cast<int>(input.top_k_candidates));
     }

@@ -3,13 +3,15 @@
 #include "resources.hpp"
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
+#include <algorithm>
 #include <ankerl/unordered_dense.h>
 #include <array>
-#include <bitset>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <ostream>
+#include <roaring/roaring.h>
 #include <set>
 #include <span>
 #include <stack>
@@ -737,6 +739,89 @@ struct DataTaskTimeRecord {
   timecount_t completed_time{};
 };
 
+class RoaringBitmap {
+private:
+  roaring_bitmap_t *bitmap_{nullptr};
+
+public:
+  RoaringBitmap() : bitmap_(roaring_bitmap_create()) {
+  }
+
+  ~RoaringBitmap() {
+    if (bitmap_ != nullptr) {
+      roaring_bitmap_free(bitmap_);
+      bitmap_ = nullptr;
+    }
+  }
+
+  RoaringBitmap(const RoaringBitmap &other)
+      : bitmap_(other.bitmap_ != nullptr ? roaring_bitmap_copy(other.bitmap_)
+                                         : roaring_bitmap_create()) {
+  }
+
+  RoaringBitmap &operator=(const RoaringBitmap &other) {
+    if (this == &other) {
+      return *this;
+    }
+    roaring_bitmap_t *copied = other.bitmap_ != nullptr ? roaring_bitmap_copy(other.bitmap_)
+                                                         : roaring_bitmap_create();
+    if (bitmap_ != nullptr) {
+      roaring_bitmap_free(bitmap_);
+    }
+    bitmap_ = copied;
+    return *this;
+  }
+
+  RoaringBitmap(RoaringBitmap &&other) noexcept : bitmap_(other.bitmap_) {
+    other.bitmap_ = nullptr;
+  }
+
+  RoaringBitmap &operator=(RoaringBitmap &&other) noexcept {
+    if (this == &other) {
+      return *this;
+    }
+    if (bitmap_ != nullptr) {
+      roaring_bitmap_free(bitmap_);
+    }
+    bitmap_ = other.bitmap_;
+    other.bitmap_ = nullptr;
+    return *this;
+  }
+
+  void add(uint32_t value) {
+    roaring_bitmap_add(bitmap_, value);
+  }
+
+  void finalize() {
+    if (bitmap_ != nullptr) {
+      roaring_bitmap_run_optimize(bitmap_);
+    }
+  }
+
+  [[nodiscard]] bool contains(uint32_t value) const {
+    return bitmap_ != nullptr && roaring_bitmap_contains(bitmap_, value);
+  }
+
+  [[nodiscard]] std::size_t serialized_size() const {
+    return bitmap_ == nullptr ? 0 : roaring_bitmap_portable_size_in_bytes(bitmap_);
+  }
+};
+
+struct TaskDataMembershipBitmapView {
+  const RoaringBitmap *bitmap{nullptr};
+
+  [[nodiscard]] bool valid() const {
+    return bitmap != nullptr;
+  }
+
+  [[nodiscard]] bool contains(dataid_t data_id) const {
+    if (!valid() || data_id < 0) {
+      return false;
+    }
+    return bitmap->contains(static_cast<uint32_t>(data_id));
+  }
+};
+
 class StaticTaskInfo {
 
 protected:
@@ -755,8 +840,33 @@ protected:
   std::vector<dataid_t> compute_task_retire;
   std::vector<dataid_t> compute_task_recent_writers;
   std::vector<dataid_t> compute_task_unique;
+
+  // CSR cache for read usage: data_id -> compute tasks that read data_id
+  std::vector<dataid_t> read_usage_data_ids;
+  std::vector<int32_t> read_usage_offsets;
+  std::vector<taskid_t> read_usage_tasks;
+  ankerl::unordered_dense::map<dataid_t, int32_t> read_usage_row_by_data_id;
+
+  // CSR cache for shared-read topology: compute task -> compute tasks sharing a read data id
+  std::vector<int32_t> compute_task_shared_read_offsets;
+  std::vector<taskid_t> compute_task_shared_read_neighbors;
+
+  // Task/data membership index for hot read/write/unique checks (Roaring bitmaps).
+  std::vector<RoaringBitmap> compute_task_read_membership;
+  std::vector<RoaringBitmap> compute_task_write_membership;
+  std::vector<RoaringBitmap> compute_task_unique_membership;
+  ankerl::unordered_dense::map<uint64_t, int32_t> read_index_by_task_data;
+  bool membership_index_enabled{false};
+  std::size_t membership_index_bytes{0};
+
   std::vector<taskid_t> data_task_dependencies;
   std::vector<taskid_t> data_task_dependents;
+  // Hot-path lookup caches: built once during static graph construction.
+  std::vector<int32_t> compute_task_dependents_offsets;
+  std::vector<int32_t> compute_task_data_dependents_offsets;
+  std::vector<int32_t> data_task_dependents_offsets;
+  std::vector<dataid_t> data_task_data_id_cache;
+  std::vector<taskid_t> data_task_compute_task_cache;
 
   std::vector<std::string> compute_task_names;
   std::vector<std::string> data_task_names;
@@ -765,6 +875,100 @@ protected:
   int32_t grid_w{-1};
   bool morton_priority_enabled{false};
   bool random_priority_enabled{false};
+
+  [[nodiscard]] static uint64_t task_data_key(taskid_t task_id, dataid_t data_id) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(task_id)) << 32U) |
+           static_cast<uint64_t>(static_cast<uint32_t>(data_id));
+  }
+
+  void set_membership_value(std::vector<RoaringBitmap> &bitmaps, taskid_t task_id,
+                            dataid_t data_id) {
+    if (data_id < 0 || task_id < 0 || task_id >= get_n_compute_tasks()) {
+      return;
+    }
+    bitmaps[static_cast<std::size_t>(task_id)].add(static_cast<uint32_t>(data_id));
+  }
+
+  [[nodiscard]] bool contains_membership_value(const std::vector<RoaringBitmap> &bitmaps,
+                                               taskid_t task_id, dataid_t data_id) const {
+    if (!membership_index_enabled || task_id < 0 || task_id >= get_n_compute_tasks() || data_id < 0) {
+      return false;
+    }
+    return bitmaps[static_cast<std::size_t>(task_id)].contains(static_cast<uint32_t>(data_id));
+  }
+
+  [[nodiscard]] TaskDataMembershipBitmapView
+  get_membership_view(const std::vector<RoaringBitmap> &bitmaps, taskid_t task_id) const {
+    if (!membership_index_enabled || task_id < 0 || task_id >= get_n_compute_tasks()) {
+      return {};
+    }
+    return {.bitmap = &bitmaps[static_cast<std::size_t>(task_id)]};
+  }
+
+  void build_task_data_membership_index() {
+    compute_task_read_membership.clear();
+    compute_task_write_membership.clear();
+    compute_task_unique_membership.clear();
+    read_index_by_task_data.clear();
+    membership_index_enabled = false;
+    membership_index_bytes = 0;
+
+    const auto n_compute_tasks = get_n_compute_tasks();
+    if (n_compute_tasks <= 0) {
+      return;
+    }
+
+    compute_task_read_membership.resize(static_cast<std::size_t>(n_compute_tasks));
+    compute_task_write_membership.resize(static_cast<std::size_t>(n_compute_tasks));
+    compute_task_unique_membership.resize(static_cast<std::size_t>(n_compute_tasks));
+    read_index_by_task_data.reserve(compute_task_read.size());
+
+    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
+      const auto read_span = get_read(task_id);
+      for (int32_t idx = 0; idx < static_cast<int32_t>(read_span.size()); ++idx) {
+        const auto data_id = read_span[idx];
+        set_membership_value(compute_task_read_membership, task_id, data_id);
+        const auto key = task_data_key(task_id, data_id);
+        if (read_index_by_task_data.find(key) == read_index_by_task_data.end()) {
+          read_index_by_task_data.emplace(key, idx);
+        }
+      }
+
+      const auto write_span = get_write(task_id);
+      for (const auto data_id : write_span) {
+        set_membership_value(compute_task_write_membership, task_id, data_id);
+      }
+
+      const auto unique_span = get_unique(task_id);
+      for (const auto data_id : unique_span) {
+        set_membership_value(compute_task_unique_membership, task_id, data_id);
+      }
+    }
+
+    for (auto &bitmap : compute_task_read_membership) {
+      bitmap.finalize();
+    }
+    for (auto &bitmap : compute_task_write_membership) {
+      bitmap.finalize();
+    }
+    for (auto &bitmap : compute_task_unique_membership) {
+      bitmap.finalize();
+    }
+
+    std::size_t total_bytes = 0;
+    for (const auto &bitmap : compute_task_read_membership) {
+      total_bytes += bitmap.serialized_size();
+    }
+    for (const auto &bitmap : compute_task_write_membership) {
+      total_bytes += bitmap.serialized_size();
+    }
+    for (const auto &bitmap : compute_task_unique_membership) {
+      total_bytes += bitmap.serialized_size();
+    }
+
+    membership_index_enabled = true;
+    membership_index_bytes = total_bytes;
+  }
 
 public:
   StaticTaskInfo(int32_t num_compute_tasks, int32_t num_data_tasks) {
@@ -777,6 +981,16 @@ public:
 
     compute_task_names.resize(num_compute_tasks);
     data_task_names.resize(num_data_tasks);
+    compute_task_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    compute_task_data_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    data_task_dependents_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
+    data_task_data_id_cache.resize(num_data_tasks, 0);
+    data_task_compute_task_cache.resize(num_data_tasks, 0);
+
+    // Keep CSR structures valid even when no precomputation has been run yet.
+    read_usage_offsets.resize(1, 0);
+    compute_task_shared_read_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    build_task_data_membership_index();
   }
 
   StaticTaskInfo(Graph &graph) {
@@ -793,6 +1007,14 @@ public:
 
     compute_task_names.resize(num_compute_tasks);
     data_task_names.resize(num_data_tasks);
+    compute_task_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    compute_task_data_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    data_task_dependents_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
+    data_task_data_id_cache.resize(num_data_tasks, 0);
+    data_task_compute_task_cache.resize(num_data_tasks, 0);
+
+    read_usage_offsets.resize(1, 0);
+    compute_task_shared_read_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
 
     // std::cout << "Creating static graph..." << std::endl;
     // std::cout << "Number of compute tasks: " << num_compute_tasks << std::endl;
@@ -800,8 +1022,6 @@ public:
 
     auto &tasks = graph.tasks;
     auto &data_tasks = graph.data_tasks;
-
-    StaticTaskInfo static_info(tasks.size(), data_tasks.size());
 
     taskid_t compute_dependency_offset = 0;
     taskid_t compute_dependent_offset = 0;
@@ -936,6 +1156,9 @@ public:
       add_data_task_dependencies(data_task.id, as_vector(data_task.dependencies));
       add_data_task_dependents(data_task.id, as_vector(data_task.dependents));
     }
+
+    build_read_usage_and_shared_read_topology();
+    build_task_data_membership_index();
   }
 
   // Update variants
@@ -947,6 +1170,115 @@ public:
         const auto arch = static_cast<DeviceType>(task.arch[i]);
         add_compute_variant(task.id, arch, task.mem[i], task.vcu[i], task.time[i]);
       }
+    }
+  }
+
+  void build_read_usage_and_shared_read_topology() {
+    const auto n_compute_tasks = get_n_compute_tasks();
+
+    ankerl::unordered_dense::map<dataid_t, std::vector<taskid_t>> readers_by_data;
+    readers_by_data.reserve(compute_task_read.size());
+
+    std::vector<dataid_t> unique_reads_buffer;
+    unique_reads_buffer.reserve(32);
+
+    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
+      const auto read_span = get_read(task_id);
+      if (read_span.empty()) {
+        continue;
+      }
+
+      unique_reads_buffer.assign(read_span.begin(), read_span.end());
+      std::sort(unique_reads_buffer.begin(), unique_reads_buffer.end());
+      unique_reads_buffer.erase(
+          std::unique(unique_reads_buffer.begin(), unique_reads_buffer.end()),
+          unique_reads_buffer.end());
+
+      for (const auto data_id : unique_reads_buffer) {
+        readers_by_data[data_id].push_back(task_id);
+      }
+    }
+
+    read_usage_row_by_data_id.clear();
+    read_usage_data_ids.clear();
+    read_usage_tasks.clear();
+    read_usage_offsets.clear();
+    read_usage_offsets.push_back(0);
+    read_usage_tasks.reserve(compute_task_read.size());
+
+    std::vector<dataid_t> sorted_data_ids;
+    sorted_data_ids.reserve(readers_by_data.size());
+    for (const auto &entry : readers_by_data) {
+      sorted_data_ids.push_back(entry.first);
+    }
+    std::sort(sorted_data_ids.begin(), sorted_data_ids.end());
+    read_usage_row_by_data_id.reserve(sorted_data_ids.size());
+    read_usage_data_ids.reserve(sorted_data_ids.size());
+
+    std::vector<uint64_t> shared_pair_keys;
+    for (const auto data_id : sorted_data_ids) {
+      auto &readers = readers_by_data[data_id];
+      std::sort(readers.begin(), readers.end());
+      readers.erase(std::unique(readers.begin(), readers.end()), readers.end());
+
+      read_usage_row_by_data_id[data_id] = static_cast<int32_t>(read_usage_data_ids.size());
+      read_usage_data_ids.push_back(data_id);
+      read_usage_tasks.insert(read_usage_tasks.end(), readers.begin(), readers.end());
+      read_usage_offsets.push_back(static_cast<int32_t>(read_usage_tasks.size()));
+
+      const auto n_readers = readers.size();
+      if (n_readers < 2) {
+        continue;
+      }
+
+      shared_pair_keys.reserve(shared_pair_keys.size() + ((n_readers * (n_readers - 1)) / 2));
+      for (std::size_t i = 0; i < n_readers; ++i) {
+        const auto lhs = static_cast<uint64_t>(static_cast<uint32_t>(readers[i]));
+        for (std::size_t j = i + 1; j < n_readers; ++j) {
+          const auto rhs = static_cast<uint64_t>(static_cast<uint32_t>(readers[j]));
+          shared_pair_keys.push_back((lhs << 32U) | rhs);
+        }
+      }
+    }
+
+    compute_task_shared_read_offsets.assign(static_cast<std::size_t>(n_compute_tasks) + 1, 0);
+    compute_task_shared_read_neighbors.clear();
+
+    if (shared_pair_keys.empty()) {
+      return;
+    }
+
+    std::sort(shared_pair_keys.begin(), shared_pair_keys.end());
+    shared_pair_keys.erase(std::unique(shared_pair_keys.begin(), shared_pair_keys.end()),
+                           shared_pair_keys.end());
+
+    for (const auto key : shared_pair_keys) {
+      const auto lhs = static_cast<taskid_t>(key >> 32U);
+      const auto rhs = static_cast<taskid_t>(key & 0xFFFFFFFFULL);
+      compute_task_shared_read_offsets[lhs + 1] += 1;
+      compute_task_shared_read_offsets[rhs + 1] += 1;
+    }
+
+    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
+      compute_task_shared_read_offsets[task_id + 1] += compute_task_shared_read_offsets[task_id];
+    }
+
+    compute_task_shared_read_neighbors.resize(
+        static_cast<std::size_t>(compute_task_shared_read_offsets.back()), -1);
+    auto write_offsets = compute_task_shared_read_offsets;
+
+    for (const auto key : shared_pair_keys) {
+      const auto lhs = static_cast<taskid_t>(key >> 32U);
+      const auto rhs = static_cast<taskid_t>(key & 0xFFFFFFFFULL);
+      compute_task_shared_read_neighbors[write_offsets[lhs]++] = rhs;
+      compute_task_shared_read_neighbors[write_offsets[rhs]++] = lhs;
+    }
+
+    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
+      const auto begin = static_cast<std::size_t>(compute_task_shared_read_offsets[task_id]);
+      const auto end = static_cast<std::size_t>(compute_task_shared_read_offsets[task_id + 1]);
+      std::sort(compute_task_shared_read_neighbors.begin() + begin,
+                compute_task_shared_read_neighbors.begin() + end);
     }
   }
 
@@ -1039,11 +1371,23 @@ public:
     compute_task_data_info[id] = data_info;
     compute_task_static_info[id] = compute_info;
     compute_task_names[id] = name;
+
+    const auto idx = static_cast<std::size_t>(id);
+    compute_task_dependents_offsets[idx] = dep_info.s_dependents;
+    compute_task_dependents_offsets[idx + 1] = dep_info.e_dependents;
+    compute_task_data_dependents_offsets[idx] = dep_info.s_data_dependents;
+    compute_task_data_dependents_offsets[idx + 1] = dep_info.e_data_dependents;
   }
 
   void add_data_task(taskid_t id, const std::string &name, const DataTaskStaticInfo &static_info) {
     data_task_static_info[id] = static_info;
     data_task_names[id] = name;
+
+    const auto idx = static_cast<std::size_t>(id);
+    data_task_dependents_offsets[idx] = static_info.s_dependents;
+    data_task_dependents_offsets[idx + 1] = static_info.e_dependents;
+    data_task_data_id_cache[idx] = static_info.data_id;
+    data_task_compute_task_cache[idx] = static_info.compute_task;
   }
 
   void add_compute_task_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
@@ -1183,9 +1527,10 @@ public:
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_dependents(taskid_t id) const {
-    auto &info = compute_task_dep_info[id];
-    return {compute_task_dependents.data() + info.s_dependents,
-            compute_task_dependents.data() + info.e_dependents};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(compute_task_dependents_offsets[idx]);
+    const auto end = static_cast<std::size_t>(compute_task_dependents_offsets[idx + 1]);
+    return std::span<const taskid_t>(compute_task_dependents).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t> get_data_task_dependencies(taskid_t id) const {
@@ -1195,9 +1540,10 @@ public:
   }
 
   [[nodiscard]] std::span<const taskid_t> get_data_task_dependents(taskid_t id) const {
-    auto &info = data_task_static_info[id];
-    return {data_task_dependents.data() + info.s_dependents,
-            data_task_dependents.data() + info.e_dependents};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(data_task_dependents_offsets[idx]);
+    const auto end = static_cast<std::size_t>(data_task_dependents_offsets[idx + 1]);
+    return std::span<const taskid_t>(data_task_dependents).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_data_dependencies(taskid_t id) const {
@@ -1207,9 +1553,34 @@ public:
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_data_dependents(taskid_t id) const {
-    auto &info = compute_task_dep_info[id];
-    return {compute_task_data_dependents.data() + info.s_data_dependents,
-            compute_task_data_dependents.data() + info.e_data_dependents};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(compute_task_data_dependents_offsets[idx]);
+    const auto end = static_cast<std::size_t>(compute_task_data_dependents_offsets[idx + 1]);
+    return std::span<const taskid_t>(compute_task_data_dependents).subspan(begin, end - begin);
+  }
+
+  [[nodiscard]] std::span<const dataid_t> get_read_usage_data_ids() const {
+    return read_usage_data_ids;
+  }
+
+  [[nodiscard]] std::span<const taskid_t> get_tasks_reading_data(dataid_t data_id) const {
+    auto it = read_usage_row_by_data_id.find(data_id);
+    if (it == read_usage_row_by_data_id.end()) {
+      return {};
+    }
+    const auto row = static_cast<std::size_t>(it->second);
+    const auto begin = static_cast<std::size_t>(read_usage_offsets[row]);
+    const auto end = static_cast<std::size_t>(read_usage_offsets[row + 1]);
+    return std::span<const taskid_t>(read_usage_tasks).subspan(begin, end - begin);
+  }
+
+  [[nodiscard]] std::span<const taskid_t>
+  get_compute_task_shared_read_neighbors(taskid_t id) const {
+    assert(id >= 0 && id < get_n_compute_tasks() && "Task ID is out of bounds");
+    const auto begin = static_cast<std::size_t>(compute_task_shared_read_offsets[id]);
+    const auto end = static_cast<std::size_t>(compute_task_shared_read_offsets[id + 1]);
+    return std::span<const taskid_t>(compute_task_shared_read_neighbors)
+        .subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const dataid_t> get_read(taskid_t id) const {
@@ -1230,6 +1601,60 @@ public:
   [[nodiscard]] std::span<const dataid_t> get_unique(taskid_t id) const {
     auto &info = compute_task_data_info[id];
     return {compute_task_unique.data() + info.s_unique, compute_task_unique.data() + info.e_unique};
+  }
+
+  [[nodiscard]] bool has_read_data(taskid_t task_id, dataid_t data_id) const {
+    if (membership_index_enabled) {
+      return contains_membership_value(compute_task_read_membership, task_id, data_id);
+    }
+    const auto read = get_read(task_id);
+    return std::find(read.begin(), read.end(), data_id) != read.end();
+  }
+
+  [[nodiscard]] bool has_write_data(taskid_t task_id, dataid_t data_id) const {
+    if (membership_index_enabled) {
+      return contains_membership_value(compute_task_write_membership, task_id, data_id);
+    }
+    const auto write = get_write(task_id);
+    return std::find(write.begin(), write.end(), data_id) != write.end();
+  }
+
+  [[nodiscard]] bool has_unique_data(taskid_t task_id, dataid_t data_id) const {
+    if (membership_index_enabled) {
+      return contains_membership_value(compute_task_unique_membership, task_id, data_id);
+    }
+    const auto unique = get_unique(task_id);
+    return std::find(unique.begin(), unique.end(), data_id) != unique.end();
+  }
+
+  [[nodiscard]] int32_t get_read_data_index(taskid_t task_id, dataid_t data_id) const {
+    if (membership_index_enabled) {
+      const auto it = read_index_by_task_data.find(task_data_key(task_id, data_id));
+      return it == read_index_by_task_data.end() ? -1 : it->second;
+    }
+    const auto read = get_read(task_id);
+    const auto it = std::find(read.begin(), read.end(), data_id);
+    return it == read.end() ? -1 : static_cast<int32_t>(it - read.begin());
+  }
+
+  [[nodiscard]] TaskDataMembershipBitmapView get_read_membership(taskid_t task_id) const {
+    return get_membership_view(compute_task_read_membership, task_id);
+  }
+
+  [[nodiscard]] TaskDataMembershipBitmapView get_write_membership(taskid_t task_id) const {
+    return get_membership_view(compute_task_write_membership, task_id);
+  }
+
+  [[nodiscard]] TaskDataMembershipBitmapView get_unique_membership(taskid_t task_id) const {
+    return get_membership_view(compute_task_unique_membership, task_id);
+  }
+
+  [[nodiscard]] bool task_data_membership_enabled() const {
+    return membership_index_enabled;
+  }
+
+  [[nodiscard]] std::size_t get_task_data_membership_bytes() const {
+    return membership_index_bytes;
   }
 
   [[nodiscard]] int32_t get_out_degree(taskid_t compute_task_id) const {
@@ -1313,11 +1738,11 @@ public:
   }
 
   [[nodiscard]] const dataid_t get_data_id(taskid_t id) const {
-    return data_task_static_info[id].data_id;
+    return data_task_data_id_cache[static_cast<std::size_t>(id)];
   }
 
   [[nodiscard]] const taskid_t get_compute_task(taskid_t id) const {
-    return data_task_static_info[id].compute_task;
+    return data_task_compute_task_cache[static_cast<std::size_t>(id)];
   }
 
   // Getters for static task info
@@ -1963,19 +2388,42 @@ public:
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);
     my_time_record.completed_time = time;
+    const auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
+    const auto dependent_count = static_cast<taskid_t>(my_dependents.size());
+    if (dependent_count == 0) {
+      if (!compute_task_buffer.empty()) {
+        compute_task_buffer.clear();
+      }
+      return 0;
+    }
+    if (dependent_count == 1) {
+      const auto dependent_id = my_dependents.front();
+      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      if (is_launchable) {
+        compute_task_buffer.resize(1);
+        compute_task_buffer[0] = dependent_id;
+        return 1;
+      }
+      if (!compute_task_buffer.empty()) {
+        compute_task_buffer.clear();
+      }
+      return 0;
+    }
     taskid_t write_idx = 0;
-
-    auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
     compute_task_buffer.resize(my_dependents.size());
 
     for (const auto &dependent_id : my_dependents) {
-      bool is_launchable = decrement_compute_task_incomplete(dependent_id);
-      compute_task_buffer[write_idx] = dependent_id;
-      write_idx += is_launchable ? 1 : 0;
+      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      if (is_launchable) {
+        compute_task_buffer[write_idx] = dependent_id;
+        write_idx += 1;
+      }
       SPDLOG_DEBUG("compute_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
                    dependent_id, is_launchable, write_idx);
     }
-    compute_task_buffer.resize(write_idx);
+    if (write_idx != dependent_count) {
+      compute_task_buffer.resize(write_idx);
+    }
 
     return write_idx;
   }
@@ -1984,21 +2432,45 @@ public:
                                          const StaticTaskInfo &static_info,
                                          TaskIDList &data_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
-    taskid_t write_idx = 0;
 
     // state and time assumed to be updated by prior call to notify_completed
-    auto my_data_dependents = static_info.get_compute_task_data_dependents(compute_task_id);
+    const auto my_data_dependents = static_info.get_compute_task_data_dependents(compute_task_id);
+    const auto dependent_count = static_cast<taskid_t>(my_data_dependents.size());
+    if (dependent_count == 0) {
+      if (!data_task_buffer.empty()) {
+        data_task_buffer.clear();
+      }
+      return 0;
+    }
+    if (dependent_count == 1) {
+      const auto dependent_id = my_data_dependents.front();
+      const bool is_launchable = decrement_data_task_incomplete(dependent_id);
+      if (is_launchable) {
+        data_task_buffer.resize(1);
+        data_task_buffer[0] = dependent_id;
+        return 1;
+      }
+      if (!data_task_buffer.empty()) {
+        data_task_buffer.clear();
+      }
+      return 0;
+    }
+    taskid_t write_idx = 0;
     data_task_buffer.resize(my_data_dependents.size());
 
     for (const auto &dependent_id : my_data_dependents) {
-      bool is_launchable = decrement_data_task_incomplete(dependent_id);
-      data_task_buffer[write_idx] = dependent_id;
-      write_idx += is_launchable ? 1 : 0;
+      const bool is_launchable = decrement_data_task_incomplete(dependent_id);
+      if (is_launchable) {
+        data_task_buffer[write_idx] = dependent_id;
+        write_idx += 1;
+      }
       SPDLOG_DEBUG("compute_notify_data_completed: dependent_id: {}, is_launchable: {}, "
                    "write_idx: {}",
                    dependent_id, is_launchable, write_idx);
     }
-    data_task_buffer.resize(write_idx);
+    if (write_idx != dependent_count) {
+      data_task_buffer.resize(write_idx);
+    }
 
     return write_idx;
   }
@@ -2031,16 +2503,37 @@ public:
     taskid_t write_idx = 0;
 
     auto my_dependents = static_info.get_data_task_dependents(data_task_id);
+    if (my_dependents.empty()) {
+      compute_task_buffer.clear();
+      return 0;
+    }
+
+    if (my_dependents.size() == 1) {
+      const auto dependent_id = my_dependents.front();
+      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      if (is_launchable) {
+        compute_task_buffer.resize(1);
+        compute_task_buffer[0] = dependent_id;
+        return 1;
+      }
+      compute_task_buffer.clear();
+      return 0;
+    }
+
     compute_task_buffer.resize(my_dependents.size());
 
     for (const auto &dependent_id : my_dependents) {
-      bool is_launchable = decrement_compute_task_incomplete(dependent_id);
-      compute_task_buffer[write_idx] = dependent_id;
-      write_idx += is_launchable ? 1 : 0;
+      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      if (is_launchable) {
+        compute_task_buffer[write_idx] = dependent_id;
+        write_idx += 1;
+      }
       SPDLOG_DEBUG("data_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
                    dependent_id, is_launchable, write_idx);
     }
-    compute_task_buffer.resize(write_idx);
+    if (write_idx != static_cast<taskid_t>(compute_task_buffer.size())) {
+      compute_task_buffer.resize(write_idx);
+    }
 
     return write_idx;
   }
