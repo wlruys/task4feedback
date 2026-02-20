@@ -1056,8 +1056,8 @@ class Scheduler {
 
 protected:
   struct EvictionInvalidationInfo {
-    bool future_usage = false;
-    bool write_after_read = false;
+    bool has_pending_readers = false;
+    bool next_write_from_other_device = false;
   };
 
   SchedulerState state;
@@ -1070,10 +1070,7 @@ protected:
   std::vector<uint32_t> eviction_scratch_visited_marks;
   uint32_t eviction_scratch_visited_epoch = 1;
   TaskIDList eviction_scratch_stack;
-  TaskIDList eviction_scratch_dependencies;
-  std::vector<uint32_t> eviction_planned_victim_marks;
-  uint32_t eviction_planned_victim_epoch = 1;
-  std::size_t eviction_planned_victim_stride = 0;
+  ankerl::unordered_dense::set<uint64_t> eviction_planned_victim_keys;
 
   inline void reset_eviction_scratch_visited() {
     eviction_scratch_visited_epoch += 1;
@@ -1096,30 +1093,17 @@ protected:
     return true;
   }
 
-  inline void reset_eviction_planned_victims() {
-    eviction_planned_victim_epoch += 1;
-    if (eviction_planned_victim_epoch == 0) {
-      std::fill(eviction_planned_victim_marks.begin(), eviction_planned_victim_marks.end(), 0);
-      eviction_planned_victim_epoch = 1;
-    }
-  }
-
-  [[nodiscard]] inline bool mark_eviction_planned_victim(dataid_t data_id, devid_t device_id) {
-    const auto idx =
-        static_cast<std::size_t>(device_id) * eviction_planned_victim_stride +
-        static_cast<std::size_t>(data_id);
-    if (idx >= eviction_planned_victim_marks.size()) {
-      return false;
-    }
-    auto &mark = eviction_planned_victim_marks[idx];
-    if (mark == eviction_planned_victim_epoch) {
-      return false;
-    }
-    mark = eviction_planned_victim_epoch;
-    return true;
-  }
+  void reset_eviction_planned_victims();
+  [[nodiscard]] bool mark_eviction_planned_victim(dataid_t data_id, devid_t device_id);
 
   void enqueue_data_tasks(taskid_t task_id);
+  enum class PostCompletionDispatchSource : uint8_t {
+    FROM_LAUNCHER = 0,
+    FROM_COMPLETER = 1,
+  };
+  void select_and_enqueue_victims(timecount_t current_time);
+  bool emit_post_completion_scheduler_event(EventManager &event_manager, timecount_t current_time,
+                                            PostCompletionDispatchSource source);
   [[nodiscard]] EvictionInvalidationInfo get_eviction_invalidation_info(dataid_t data_id,
                                                                          devid_t invalidate_device);
   void clear_eviction_invalidation_cache() {
@@ -1139,17 +1123,13 @@ public:
       : state(input), queues(input.devices), conditions(input.conditions) {
     const auto &static_graph = state.get_tasks();
     const auto n_compute_tasks = static_graph.get_n_compute_tasks();
-    const auto n_data = state.get_data().size();
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
     eviction_invalidation_cache.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
     eviction_scratch_visited_marks.assign(static_cast<std::size_t>(n_compute_tasks), 0);
     eviction_scratch_stack.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
-    eviction_scratch_dependencies.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
-    eviction_planned_victim_stride = static_cast<std::size_t>(n_data);
-    eviction_planned_victim_marks.assign(
-        static_cast<std::size_t>(state.get_devices().size()) * eviction_planned_victim_stride, 0);
+    eviction_planned_victim_keys.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
     if (input.top_k_candidates > 0) {
       queues.mappable.set_k(static_cast<int>(input.top_k_candidates));
     }

@@ -389,6 +389,28 @@ private:
   std::vector<mem_t> max_sizes_;
   mutable DataIDList id_buffer;
   mutable ankerl::unordered_dense::set<dataid_t> used_id_scratch;
+  static constexpr std::size_t k_small_used_id_threshold = 8;
+
+  [[nodiscard]] bool initialize_used_id_membership(std::span<const dataid_t> used_ids) const {
+    const bool use_hash_membership = used_ids.size() > k_small_used_id_threshold;
+    auto &used_set = used_id_scratch;
+    used_set.clear();
+    if (use_hash_membership) {
+      used_set.reserve(used_ids.size());
+      for (const auto used_id : used_ids) {
+        used_set.insert(used_id);
+      }
+    }
+    return use_hash_membership;
+  }
+
+  [[nodiscard]] bool is_used_id(dataid_t data_id, std::span<const dataid_t> used_ids,
+                                bool use_hash_membership) const {
+    if (!use_hash_membership) {
+      return std::find(used_ids.begin(), used_ids.end(), data_id) != used_ids.end();
+    }
+    return used_id_scratch.contains(data_id);
+  }
 
 public:
   LRU_manager() = default;
@@ -477,27 +499,11 @@ public:
     assert(device_id >= 0 && device_id < n_devices_);
 
     const auto &lst = lru_lists_[device_id];
-    constexpr std::size_t small_used_threshold = 8;
-    const bool use_hash_membership = used_ids.size() > small_used_threshold;
-    auto &used_set = used_id_scratch;
-    used_set.clear();
-    if (use_hash_membership) {
-      used_set.reserve(used_ids.size());
-      for (const auto used_id : used_ids) {
-        used_set.insert(used_id);
-      }
-    }
-
-    const auto is_used = [&](dataid_t did) {
-      if (!use_hash_membership) {
-        return std::find(used_ids.begin(), used_ids.end(), did) != used_ids.end();
-      }
-      return used_set.contains(did);
-    };
+    const bool use_hash_membership = initialize_used_id_membership(used_ids);
 
     mem_t evictable = 0;
     for (const auto &node : lst) {
-      if (is_used(node.id)) {
+      if (is_used_id(node.id, used_ids, use_hash_membership)) {
         continue;
       }
       evictable += node.size;
@@ -519,28 +525,12 @@ public:
     }
 
     // Build used membership once — hash set is the primary path (no roaring bitmap)
-    constexpr std::size_t small_used_threshold = 8;
-    const bool use_hash_membership = used_ids.size() > small_used_threshold;
-    auto &used_set = used_id_scratch;
-    used_set.clear();
-    if (use_hash_membership) {
-      used_set.reserve(used_ids.size());
-      for (const auto used_id : used_ids) {
-        used_set.insert(used_id);
-      }
-    }
-
-    const auto is_used = [&](dataid_t did) {
-      if (!use_hash_membership) {
-        return std::find(used_ids.begin(), used_ids.end(), did) != used_ids.end();
-      }
-      return used_set.contains(did);
-    };
+    const bool use_hash_membership = initialize_used_id_membership(used_ids);
 
     // Single pass: collect victims and stop as soon as enough memory has been selected.
     mem_t accumulated = 0;
     for (const auto &node : lst) {
-      if (is_used(node.id)) {
+      if (is_used_id(node.id, used_ids, use_hash_membership)) {
         continue;
       }
       accumulated += node.size;
@@ -568,7 +558,11 @@ public:
   }
 
   mem_t get_max_memory_usage() const {
-    return sizes_[0] + sizes_[1] + sizes_[2] + sizes_[3];
+    mem_t total_usage = 0;
+    for (devid_t device_id = 1; device_id < n_devices_; ++device_id) {
+      total_usage += sizes_[device_id];
+    }
+    return total_usage;
   }
 };
 class MovementCounter {
@@ -653,6 +647,26 @@ protected:
                               timecount_t current_time) {
     auto updated_ids = locations.invalidate_on(data_id, device_id, current_time);
     return updated_ids;
+  }
+
+  bool complete_virtual_move_common(dataid_t data_id, devid_t source, devid_t destination,
+                                    const char *move_kind) {
+    SPDLOG_DEBUG("Completing virtual {} of data block {} from device {} to device {}", move_kind,
+                 data_id, source, destination);
+
+    if (movement_manager.is_moving(data_id, destination)) {
+      SPDLOG_DEBUG("Virtual {} of data block {} from device {} to device {} beat the real move",
+                   move_kind, data_id, source, destination);
+      // Update will happen in the real move
+      // Not valid until the real move is completed
+      return true;
+    }
+
+    // NOTE(wlr): I'm not 100% sure about the source check.
+    // Could something that starts at the same time as the move completes be a problem?
+    assert(launched_locations.is_valid(data_id, source));
+    assert(launched_locations.is_valid(data_id, destination));
+    return true;
   }
 
 public:
@@ -926,8 +940,9 @@ public:
   }
 
   void evict_on_update_launched(const Data &data, DeviceManager &device_manager, dataid_t data_id,
-                                devid_t device_id, timecount_t current_time, bool future_usage,
-                                bool write_after_read) {
+                                devid_t device_id, timecount_t current_time,
+                                bool has_pending_readers,
+                                bool next_write_from_other_device) {
     auto updated_devices_launched =
         evict_on_update(data_id, device_id, launched_locations, current_time);
     evict_on_update(data_id, device_id, reserved_locations, current_time);
@@ -942,45 +957,16 @@ public:
         lru_manager.invalidate(device, data_id, true);
       }
     }
-    if (!future_usage) {
+    if (!has_pending_readers) {
       // If there are no further usage for the data block (in mapped but not reserved tasks).
       // Invalidate for future mapping decisions.
       device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
       mapped_locations.set_invalid(data_id, device_id, current_time);
     }
-    // else if (mapped_locations.is_invalid(data_id, device_id) || write_after_read) {
-    else if (write_after_read) {
-      // write_after_read is needed to handle a case where the next usage for the data block is
-      // write from the other device. Since launched_location is invalidated by the eviction
-      // this redundant mapped_memory will not be removed. (Which should be).
-      // mapped_locations.is_invalid(data_id, device_id) is only checking a subset of above
-      // cases since to be valid in launced_location and invalid in mapped_location there is
-      // only one scenario.
-      // -> the last operation to the data block in mapped_but_not_reserved_tasks is a write
-      // from another device.
-      //   GPU0   |   GPU1
-      // ---------|----------
-      // read B0  |
-      // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
-      // read B0  |
-      // ~~~~~~~~~~~~~~~~~~~~~ < other ops
-      //          |  Write B0
-      // ---------|---------- <- Mapped but not reserved: B0 invalid in mapped_location GPU0
-      //
-      // However below case is not handeled
-      //
-      //   GPU0   |   GPU1
-      // ---------|----------
-      // read B0  |
-      // ------EVICTION------ <- Mapped and completed B0 valid in launched_location GPU0
-      //          |  Write B0
-      // ~~~~~~~~~~~~~~~~~~~~~ < other ops
-      // read B0  |
-      // ---------|---------- <- Mapped but not reserved: B0 valid in mapped_location GPU0
-      //
-      // Write B0 from the GPU should have removed the mapped memory from GPU0 since
-      // launched_location is valid (without eviction).
-      // After eviction launched_location has changed and the removal doesn't happen.
+    else if (next_write_from_other_device) {
+      // NOTE: when the next mapped usage is a write from another device, eviction invalidates
+      // launched state before later writer-side cleanup would remove this mapped byte accounting.
+      // Remove mapped bytes here to keep memory accounting consistent.
       device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
     }
   }
@@ -1064,23 +1050,7 @@ public:
   void complete_move(CommunicationManager &comm_manager, dataid_t data_id, devid_t source,
                      devid_t destination, bool is_virtual, timecount_t current_time) {
     if (is_virtual) {
-      SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
-                   "device {}",
-                   data_id, source, destination);
-
-      if (movement_manager.is_moving(data_id, destination)) {
-        SPDLOG_DEBUG("Virtual move of data block {} from device {} to device {} "
-                     "beat the real move",
-                     data_id, source, destination);
-        // Update will happen in the real move
-        // Not valid until the real move is completed
-      } else {
-        // NOTE(wlr): I'm not 100% sure about the source check
-        // Could something that starts at the same time as the move completes be
-        // a problem?
-        assert(launched_locations.is_valid(data_id, source));
-        assert(launched_locations.is_valid(data_id, destination));
-      }
+      complete_virtual_move_common(data_id, source, destination, "move");
       return;
     }
 
@@ -1097,23 +1067,7 @@ public:
   void complete_eviction_move(CommunicationManager &comm_manager, dataid_t data_id, devid_t source,
                               devid_t destination, bool is_virtual, timecount_t current_time) {
     if (is_virtual) {
-      SPDLOG_DEBUG("Completing virtual move of data block {} from device {} to "
-                   "device {}",
-                   data_id, source, destination);
-
-      if (movement_manager.is_moving(data_id, destination)) {
-        SPDLOG_DEBUG("Virtual move of data block {} from device {} to device {} "
-                     "beat the real move",
-                     data_id, source, destination);
-        // Update will happen in the real move
-        // Not valid until the real move is completed
-      } else {
-        // NOTE(wlr): I'm not 100% sure about the source check
-        // Could something that starts at the same time as the move completes be
-        // a problem?
-        assert(launched_locations.is_valid(data_id, source));
-        assert(launched_locations.is_valid(data_id, destination));
-      }
+      complete_virtual_move_common(data_id, source, destination, "eviction move");
       return;
     }
 

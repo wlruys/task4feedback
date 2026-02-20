@@ -18,6 +18,14 @@ namespace {
 }
 } // namespace
 
+void Scheduler::reset_eviction_planned_victims() {
+  eviction_planned_victim_keys.clear();
+}
+
+bool Scheduler::mark_eviction_planned_victim(dataid_t data_id, devid_t device_id) {
+  return eviction_planned_victim_keys.emplace(pack_eviction_key(data_id, device_id)).second;
+}
+
 size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
 
   auto &s = this->state;
@@ -91,7 +99,7 @@ taskid_t Scheduler::map_task(taskid_t compute_task_id, Action &action) {
   s.mapped_but_not_reserved_tasks.insert(compute_task_id);
   s.is_mapped_not_reserved[static_cast<std::size_t>(compute_task_id)] = 1;
 
-  // Maintain incremental future_usage counters for eviction
+  // Maintain incremental pending-reader counters for eviction invalidation decisions
   auto &unique_count_map = s.mapped_unique_count[chosen_device];
   for (auto d : static_graph.get_unique(compute_task_id)) {
     unique_count_map[d]++;
@@ -304,7 +312,7 @@ bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
   mapped.erase(mapped.find(compute_task_id));
   s.is_mapped_not_reserved[static_cast<std::size_t>(compute_task_id)] = 0;
 
-  // Maintain incremental future_usage counters for eviction
+  // Maintain incremental pending-reader counters for eviction invalidation decisions
   auto &unique_count_map = s.mapped_unique_count[device_id];
   for (auto d : static_graph.get_unique(compute_task_id)) {
     auto &cnt = unique_count_map[d];
@@ -733,6 +741,54 @@ bool Scheduler::launch_eviction_tasks(EventManager &event_manager) {
   return break_flag;
 }
 
+bool Scheduler::emit_post_completion_scheduler_event(
+    EventManager &event_manager, timecount_t current_time,
+    PostCompletionDispatchSource source) {
+  const bool from_launcher = (source == PostCompletionDispatchSource::FROM_LAUNCHER);
+  const auto eviction_state = this->eviction_state;
+
+  if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
+    // Preserve existing behavior:
+    // - completer emits an EVICTOR event
+    // - launcher emits nothing
+    if (from_launcher) {
+      return false;
+    }
+    event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
+    scheduler_event_count += 1;
+    return true;
+  }
+
+  if (eviction_state == EvictionState::RUNNING) {
+    if (eviction_count > 0) {
+      // Preserve existing behavior:
+      // - completer emits a LAUNCHER event
+      // - launcher emits nothing
+      if (from_launcher) {
+        return false;
+      }
+      event_manager.create_event(EventType::LAUNCHER, current_time + SCHEDULER_TIME_GAP);
+      scheduler_event_count += 1;
+      return true;
+    }
+
+    // Preserve timing difference:
+    // - launcher path emits RESERVER at current_time
+    // - completer path emits RESERVER at current_time + SCHEDULER_TIME_GAP
+    SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
+    const auto event_time = current_time + (from_launcher ? 0 : SCHEDULER_TIME_GAP);
+    event_manager.create_event(EventType::RESERVER, event_time);
+    this->eviction_state = EvictionState::NONE;
+    clear_eviction_invalidation_cache();
+    scheduler_event_count += 1;
+    return true;
+  }
+
+  event_manager.create_event(EventType::MAPPER, current_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
+  scheduler_event_count += 1;
+  return true;
+}
+
 void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_manager) {
   ZoneScoped;
   auto current_time = this->state.global_time;
@@ -754,19 +810,9 @@ void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_ma
   assert(scheduler_event_count >= 0);
 
   if (scheduler_event_count == 0 and success_count > 0) {
-    if (this->eviction_state != EvictionState::NONE) {
-      if (this->eviction_state == EvictionState::RUNNING &&
-          eviction_count == 0) { // Sometimes eviction completes before launcher
-        SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
-        event_manager.create_event(EventType::RESERVER, current_time);
-        this->eviction_state = EvictionState::NONE;
-        clear_eviction_invalidation_cache();
-      } else
-        return;
-    } else
-      event_manager.create_event(EventType::MAPPER,
-                                 current_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
-    scheduler_event_count += 1;
+    // No-op return is intentional for launcher-triggered WAITING/RUNNING dispatch states.
+    emit_post_completion_scheduler_event(event_manager, current_time,
+                                         PostCompletionDispatchSource::FROM_LAUNCHER);
   }
 }
 
@@ -776,8 +822,8 @@ Scheduler::get_eviction_invalidation_info(dataid_t data_id, devid_t invalidate_d
   if (auto it = eviction_invalidation_cache.find(cache_key);
       it != eviction_invalidation_cache.end()) {
     return {
-        .future_usage = (it->second & 0x01) != 0,
-        .write_after_read = (it->second & 0x02) != 0,
+        .has_pending_readers = (it->second & 0x01) != 0,
+        .next_write_from_other_device = (it->second & 0x02) != 0,
     };
   }
 
@@ -787,9 +833,9 @@ Scheduler::get_eviction_invalidation_info(dataid_t data_id, devid_t invalidate_d
 
   // O(1): use incremental mapped_unique_count instead of scanning all mapped tasks
   const auto &ucount = state.mapped_unique_count[invalidate_device];
-  bool future_usage = ucount.count(data_id) > 0;
+  bool has_pending_readers = ucount.count(data_id) > 0;
 
-  bool write_after_read = false;
+  bool next_write_from_other_device = false;
   auto write_it = state.mapped_write_by_data.find(data_id);
   if (write_it != state.mapped_write_by_data.end() && !write_it->second.empty()) {
     taskid_t top;
@@ -812,12 +858,12 @@ Scheduler::get_eviction_invalidation_info(dataid_t data_id, devid_t invalidate_d
 
     if (task_runtime.get_compute_task_mapped_device(top) != invalidate_device) {
       // O(1) precheck: are there any mapped tasks on invalidate_device that read data_id?
-      // If not, no dependency DFS is needed — write_after_read = true immediately.
+      // If not, no dependency DFS is needed — the next write must come from another device.
       const auto &rcount = state.mapped_read_count_by_data_device[invalidate_device];
       if (rcount.count(data_id) > 0) {
         // Local readers exist — do interleaved DFS checking reader status during traversal.
         // Early exit as soon as a local reader is found among mapped predecessors.
-        write_after_read = true;
+        next_write_from_other_device = true;
         const auto readers_span = static_graph.get_tasks_reading_data(data_id);
         auto &stack = eviction_scratch_stack;
         reset_eviction_scratch_visited();
@@ -830,7 +876,7 @@ Scheduler::get_eviction_invalidation_info(dataid_t data_id, devid_t invalidate_d
           if (!mark_eviction_visited(dep0)) continue;
           if (task_runtime.get_compute_task_mapped_device(dep0) == invalidate_device &&
               std::binary_search(readers_span.begin(), readers_span.end(), dep0)) {
-            write_after_read = false;
+            next_write_from_other_device = false;
             done = true;
             break;
           }
@@ -845,7 +891,7 @@ Scheduler::get_eviction_invalidation_info(dataid_t data_id, devid_t invalidate_d
             if (!mark_eviction_visited(dep)) continue;
             if (task_runtime.get_compute_task_mapped_device(dep) == invalidate_device &&
                 std::binary_search(readers_span.begin(), readers_span.end(), dep)) {
-              write_after_read = false;
+              next_write_from_other_device = false;
               done = true;
               break;
             }
@@ -853,97 +899,113 @@ Scheduler::get_eviction_invalidation_info(dataid_t data_id, devid_t invalidate_d
           }
         }
       } else {
-        // No local readers — skip DFS, WAR = true by default
-        write_after_read = true;
+        // No local readers — skip DFS, mark that next write is from another device
+        next_write_from_other_device = true;
       }
     }
   }
 
   uint8_t encoded = 0;
-  encoded |= static_cast<uint8_t>(future_usage ? 0x01 : 0);
-  encoded |= static_cast<uint8_t>(write_after_read ? 0x02 : 0);
+  encoded |= static_cast<uint8_t>(has_pending_readers ? 0x01 : 0);
+  encoded |= static_cast<uint8_t>(next_write_from_other_device ? 0x02 : 0);
   eviction_invalidation_cache[cache_key] = encoded;
-  return {.future_usage = future_usage, .write_after_read = write_after_read};
+  return {.has_pending_readers = has_pending_readers,
+          .next_write_from_other_device = next_write_from_other_device};
 }
 
-// TODO(wlr, jae): We need to work together to check this after the refactor
-void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager) {
-  ZoneScoped;
+void Scheduler::select_and_enqueue_victims(timecount_t current_time) {
   auto &s = this->state;
   auto &task_runtime = s.task_runtime;
   const auto &static_graph = s.get_tasks();
   const auto &data_manager = s.data_manager;
   const auto &lru_manager = s.data_manager.get_lru_manager();
 
+  // Preconditions:
+  // - evictor is in WAITING_FOR_COMPLETION state
+  // - no compute/data tasks remain reserved
+  assert(eviction_state == EvictionState::WAITING_FOR_COMPLETION);
+  assert(s.counts.n_reserved() + s.counts.n_data_reserved() == 0);
+  eviction_count = 0;
+  clear_eviction_invalidation_cache();
+  reset_eviction_planned_victims();
+
+  for (auto &taskdevice : tasks_requesting_eviction) {
+    auto [compute_task_id, device_id] = taskdevice;
+    const auto [requested, missing] = s.request_reserve_resources(compute_task_id, device_id);
+    if (missing.mem) { // There is still memory to evict
+      const auto unique_data = static_graph.get_unique(compute_task_id);
+      auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, unique_data);
+      for (auto data_id : data_ids) {
+        // Skip victims already handled by an earlier requesting task in this cycle
+        if (!mark_eviction_planned_victim(data_id, device_id)) {
+          continue;
+        }
+        auto location_flags = data_manager.get_launched_location_flags(data_id);
+        // count set bits in location_flags
+        devid_t n_sources = __builtin_popcount(location_flags);
+        assert(n_sources > 0);
+        if (n_sources == 1) {
+          eviction_count += 1;
+          auto eviction_task_id = task_runtime.add_eviction_task(compute_task_id, data_id, device_id);
+
+          SPDLOG_DEBUG("Time:{} Launching eviction task {} to evict block {} for task {} on device {} ",
+                       current_time, eviction_task_id, data_id,
+                       static_graph.get_compute_task_name(compute_task_id), device_id);
+          state.update_eviction_reserved_cost(eviction_task_id, 0);
+          push_launchable_eviction(eviction_task_id);
+        } else { // There are multiple sources for this data
+          const auto invalidation =
+              get_eviction_invalidation_info(data_id, static_cast<devid_t>(device_id));
+
+          SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}", current_time, data_id,
+                       static_graph.get_compute_task_name(compute_task_id), device_id);
+          s.data_manager.evict_on_update_launched(s.get_data(), s.get_device_manager(), data_id,
+                                                  device_id, current_time,
+                                                  invalidation.has_pending_readers,
+                                                  invalidation.next_write_from_other_device);
+        }
+      }
+    } else {
+      SPDLOG_DEBUG("Time:{} No need to evict for task {} on device {}", current_time,
+                   static_graph.get_compute_task_name(compute_task_id), device_id);
+    }
+  }
+
+  SPDLOG_DEBUG("Time:{} Evictor pushed {} eviction tasks to launch queue", current_time,
+               eviction_count);
+  eviction_state = EvictionState::RUNNING;
+}
+
+// TODO(wlr, jae): We need to work together to check this after the refactor
+void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager) {
+  ZoneScoped;
+  auto &s = this->state;
   auto current_time = s.global_time;
 
   if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
+    // WAITING phase:
+    // - wait until all reserved compute/data tasks drain
+    // - then select victims and transition to RUNNING
     if (s.counts.n_reserved() + s.counts.n_data_reserved() > 0) {
       SPDLOG_DEBUG("Time:{} Evictor waiting for all {} compute and {} data task to finish",
                    current_time, s.counts.n_reserved(), s.counts.n_data_reserved());
       event_manager.create_event(EventType::LAUNCHER, current_time);
       return;
-    } else {
-      SPDLOG_DEBUG("Starting evictor at {}", current_time);
-      eviction_count = 0;
-      clear_eviction_invalidation_cache();
-      reset_eviction_planned_victims();
-
-      for (auto &taskdevice : tasks_requesting_eviction) {
-        auto [compute_task_id, device_id] = taskdevice;
-        const auto [requested, missing] = s.request_reserve_resources(compute_task_id, device_id);
-        if (missing.mem) { // There is still memory to evict
-          const auto unique_data = static_graph.get_unique(compute_task_id);
-          auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, unique_data);
-          for (auto data_id : data_ids) {
-            // Skip victims already handled by an earlier requesting task in this cycle
-            if (!mark_eviction_planned_victim(data_id, device_id)) {
-              continue;
-            }
-            auto location_flags = data_manager.get_launched_location_flags(data_id);
-            // count set bits in location_flags
-            devid_t n_sources = __builtin_popcount(location_flags);
-            assert(n_sources > 0);
-            if (n_sources == 1) {
-              eviction_count += 1;
-              auto eviction_task_id =
-                  task_runtime.add_eviction_task(compute_task_id, data_id, device_id);
-
-              SPDLOG_DEBUG(
-                  "Time:{} Launching eviction task {} to evict block {} for task {} on device {} ",
-                  current_time, eviction_task_id, data_id,
-                  static_graph.get_compute_task_name(compute_task_id), device_id);
-              state.update_eviction_reserved_cost(eviction_task_id, 0);
-              push_launchable_eviction(eviction_task_id);
-            } else { // There are multiple sources for this data
-              const auto invalidation =
-                  get_eviction_invalidation_info(data_id, static_cast<devid_t>(device_id));
-
-              SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}", current_time,
-                           data_id, static_graph.get_compute_task_name(compute_task_id), device_id);
-              s.data_manager.evict_on_update_launched(s.get_data(), s.get_device_manager(), data_id,
-                                                      device_id, current_time,
-                                                      invalidation.future_usage,
-                                                      invalidation.write_after_read);
-            }
-          }
-        } else {
-          SPDLOG_DEBUG("Time:{} No need to evict for task {} on device {}", current_time,
-                       static_graph.get_compute_task_name(compute_task_id), device_id);
-        }
-      }
-
-      SPDLOG_DEBUG("Time:{} Evictor pushed {} eviction tasks to launch queue", current_time,
-                   eviction_count);
-      eviction_state = EvictionState::RUNNING;
     }
+    SPDLOG_DEBUG("Starting evictor at {}", current_time);
+    select_and_enqueue_victims(current_time);
   }
+
   if (eviction_state == EvictionState::RUNNING) {
+    // RUNNING phase:
+    // - wait until all eviction tasks complete
+    // - then transition to NONE and resume normal reserving
     if (eviction_count) {
       SPDLOG_DEBUG("Time:{} Evictor waiting for all eviction tasks to finish", current_time);
       event_manager.create_event(EventType::LAUNCHER, current_time);
       return;
     } else {
+      assert(eviction_count == 0);
       SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
       event_manager.create_event(EventType::RESERVER, current_time);
       this->eviction_state = EvictionState::NONE;
@@ -963,22 +1025,8 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
 
   const bool can_emit_scheduler_event = (scheduler_event_count == 0);
   if (can_emit_scheduler_event) {
-    const auto eviction_state = this->eviction_state;
-    if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
-      event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
-    } else if (eviction_state == EvictionState::RUNNING) {
-      if (eviction_count) {
-        event_manager.create_event(EventType::LAUNCHER, current_time + SCHEDULER_TIME_GAP);
-      } else {
-        event_manager.create_event(EventType::RESERVER, current_time + SCHEDULER_TIME_GAP);
-        this->eviction_state = EvictionState::NONE;
-        clear_eviction_invalidation_cache();
-      }
-    } else {
-      event_manager.create_event(EventType::MAPPER,
-                                 s.global_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
-    }
-    scheduler_event_count += 1;
+    emit_post_completion_scheduler_event(event_manager, current_time,
+                                         PostCompletionDispatchSource::FROM_COMPLETER);
   }
 
   auto &device_manager = s.get_device_manager();
@@ -1124,10 +1172,11 @@ void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManage
       get_eviction_invalidation_info(data_id, static_cast<devid_t>(invalidate_device_id));
 
   data_manager.evict_on_update_launched(s.get_data(), device_manager, data_id, invalidate_device_id,
-                                        current_time, invalidation.future_usage,
-                                        invalidation.write_after_read);
+                                        current_time, invalidation.has_pending_readers,
+                                        invalidation.next_write_from_other_device);
 
   eviction_count -= 1;
+  assert(eviction_count >= 0);
   SPDLOG_DEBUG("Time:{} Eviction task {} completed {} left", current_time, eviction_task_id,
                eviction_count);
   task_runtime.eviction_notify_completed(eviction_task_id, current_time);
