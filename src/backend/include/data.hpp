@@ -1,6 +1,7 @@
 #pragma once
 #include "communication.hpp"
 #include "devices.hpp"
+#include "eviction.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
@@ -369,202 +370,6 @@ struct MovementStatus {
   timecount_t duration = 0;
 };
 
-class LRU_manager {
-private:
-  struct LRUNode {
-    dataid_t id;
-    mem_t size;
-  };
-
-  mem_t evicted_size = 0;
-  mem_t max_usage = 0;
-  uint32_t n_devices_{0};
-  // For each device:
-  //  - a list maintaining LRU (front) → MRU (back), each node stores (id, size)
-  //  - a map from data_id → its position in that list
-  std::vector<std::list<LRUNode>> lru_lists_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<LRUNode>::iterator>>
-      position_maps_;
-  std::vector<mem_t> sizes_;
-  std::vector<mem_t> max_sizes_;
-  mutable DataIDList id_buffer;
-  mutable ankerl::unordered_dense::set<dataid_t> used_id_scratch;
-  static constexpr std::size_t k_small_used_id_threshold = 8;
-
-  [[nodiscard]] bool initialize_used_id_membership(std::span<const dataid_t> used_ids) const {
-    const bool use_hash_membership = used_ids.size() > k_small_used_id_threshold;
-    auto &used_set = used_id_scratch;
-    used_set.clear();
-    if (use_hash_membership) {
-      used_set.reserve(used_ids.size());
-      for (const auto used_id : used_ids) {
-        used_set.insert(used_id);
-      }
-    }
-    return use_hash_membership;
-  }
-
-  [[nodiscard]] bool is_used_id(dataid_t data_id, std::span<const dataid_t> used_ids,
-                                bool use_hash_membership) const {
-    if (!use_hash_membership) {
-      return std::find(used_ids.begin(), used_ids.end(), data_id) != used_ids.end();
-    }
-    return used_id_scratch.contains(data_id);
-  }
-
-public:
-  LRU_manager() = default;
-
-  // Constructor: initialize for n_devices [0 .. n_devices-1]
-  explicit LRU_manager(const Devices &devices)
-      : n_devices_(devices.size()), lru_lists_(devices.size()), position_maps_(devices.size()),
-        sizes_(devices.size()), max_sizes_(devices.size()) {
-    for (auto &size : sizes_) {
-      size = 0;
-    }
-    for (int i = 0; i < devices.size(); i++) {
-      max_sizes_[i] = devices.get_max_resources(i).mem;
-    }
-    id_buffer.reserve(20);
-    used_id_scratch.reserve(64);
-  }
-
-  // read: add (device_id, data_id, mem_size). If present, update size and move to MRU; else insert.
-  void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
-    assert(device_id >= 0 && device_id < n_devices_);
-
-    auto &lst = lru_lists_[device_id];
-    auto &pos = position_maps_[device_id];
-    auto &size = sizes_[device_id];
-    auto &max_size = max_sizes_[device_id];
-    auto it = pos.find(data_id);
-    if (it != pos.end()) {
-      // already present: update size in node and move to MRU in O(1)
-      it->second->size = mem_size;
-      lst.splice(lst.end(), lst, it->second);
-      return;
-    }
-    size += mem_size;
-    if (size > max_usage && device_id > 0) {
-      max_usage = size;
-    }
-    if (size > max_size) {
-      SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
-                   data_id, mem_size);
-      assert(size <= max_size && "LRU_manager::read(): size exceeds max size");
-    }
-    // insert at MRU (back)
-    lst.push_back(LRUNode{data_id, mem_size});
-    pos[data_id] = std::prev(lst.end());
-  }
-
-  LRU_manager(const LRU_manager &other)
-      : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
-        position_maps_(other.n_devices_), sizes_(other.sizes_),
-        max_sizes_(other.max_sizes_), evicted_size(other.evicted_size), max_usage(other.max_usage) {
-    ZoneScoped;
-    // Rebuild position_maps_ since iterators are invalidated by list copy
-    for (devid_t dev = 0; dev < n_devices_; ++dev) {
-      position_maps_[dev].reserve(other.position_maps_[dev].size());
-      for (auto it = lru_lists_[dev].begin(); it != lru_lists_[dev].end(); ++it) {
-        position_maps_[dev][it->id] = it;
-      }
-    }
-    id_buffer.reserve(other.id_buffer.capacity());
-    used_id_scratch.reserve(other.used_id_scratch.size());
-  }
-
-  // invalidate: remove (device_id, data_id); assert if missing
-  void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
-    assert(device_id >= 0 && device_id < n_devices_);
-
-    auto &lst = lru_lists_[device_id];
-    auto &pos = position_maps_[device_id];
-    auto &size = sizes_[device_id];
-
-    auto it = pos.find(data_id);
-    assert(it != pos.end() && "invalidate(): data_id not present");
-
-    auto node_it = it->second;
-    const mem_t node_size = node_it->size;
-    size -= node_size;
-    if (evict)
-      evicted_size += node_size;
-    lst.erase(node_it);
-    pos.erase(it);
-  }
-
-  [[nodiscard]] mem_t get_evictable_size(devid_t device_id,
-                                         std::span<const dataid_t> used_ids) const {
-    assert(device_id >= 0 && device_id < n_devices_);
-
-    const auto &lst = lru_lists_[device_id];
-    const bool use_hash_membership = initialize_used_id_membership(used_ids);
-
-    mem_t evictable = 0;
-    for (const auto &node : lst) {
-      if (is_used_id(node.id, used_ids, use_hash_membership)) {
-        continue;
-      }
-      evictable += node.size;
-    }
-    return evictable;
-  }
-
-  // getLRUids: fill id_buffer with the LRU data_ids (excluding used_ids) until their cumulative
-  // size >= mem_size. Single-pass: collects victims and verifies total evictable capacity together.
-  // Uses a hash set as the primary membership check path.
-  const std::span<const dataid_t>
-  getLRUids(devid_t device_id, std::size_t mem_size, std::span<const dataid_t> used_ids) const {
-    assert(device_id >= 0 && device_id < n_devices_);
-
-    const auto &lst = lru_lists_[device_id];
-    id_buffer.clear();
-    if (mem_size == 0) {
-      return id_buffer;
-    }
-
-    // Build used membership once for O(1) membership checks.
-    const bool use_hash_membership = initialize_used_id_membership(used_ids);
-
-    // Single pass: collect victims and stop as soon as enough memory has been selected.
-    mem_t accumulated = 0;
-    for (const auto &node : lst) {
-      if (is_used_id(node.id, used_ids, use_hash_membership)) {
-        continue;
-      }
-      accumulated += node.size;
-      id_buffer.push_back(node.id);
-      if (accumulated >= static_cast<mem_t>(mem_size)) {
-        return id_buffer;
-      }
-    }
-
-    assert(accumulated >= static_cast<mem_t>(mem_size) &&
-           "getLRUids(): evictable memory size is smaller than requested size");
-    if (accumulated < static_cast<mem_t>(mem_size)) {
-      id_buffer.clear();
-    }
-    return id_buffer;
-  }
-
-  mem_t get_mem(devid_t device_id) const {
-    assert((device_id >= 0) && (device_id < n_devices_));
-    return sizes_[device_id];
-  }
-
-  mem_t get_evicted_memory_size() const {
-    return evicted_size;
-  }
-
-  mem_t get_max_memory_usage() const {
-    mem_t total_usage = 0;
-    for (devid_t device_id = 1; device_id < n_devices_; ++device_id) {
-      total_usage += sizes_[device_id];
-    }
-    return total_usage;
-  }
-};
 class MovementCounter {
 private:
   std::vector<mem_t> total_data_movement;
@@ -614,12 +419,17 @@ public:
 
 class DataManager {
 protected:
+  using EvictionResidencyManager = eviction::ResidencyManager;
+
   LocationManager mapped_locations;
   LocationManager reserved_locations;
   LocationManager launched_locations;
   MovementManager movement_manager;
-  LRU_manager lru_manager;
+  // Residency/eviction tracking policy storage (LRU for now).
+  EvictionResidencyManager residency_manager;
+  eviction::RuntimeStack eviction_stack;
   MovementCounter movement_counter;
+  devid_t n_devices = 0;
   bool initialized = false;
 
   static bool check_valid(size_t data_id, const LocationManager &locations, devid_t device_id) {
@@ -669,6 +479,27 @@ protected:
     return true;
   }
 
+  void complete_real_move_common(CommunicationManager &comm_manager, dataid_t data_id,
+                                 devid_t source, devid_t destination, timecount_t current_time,
+                                 const char *move_kind, bool mark_reserved, bool mark_mapped,
+                                 mem_t data_size) {
+    SPDLOG_DEBUG("Completing real {} of data block {} from device {} to device {}", move_kind,
+                 data_id, source, destination);
+    assert(movement_manager.is_moving(data_id, destination));
+
+    // Only completed transfers become evictable residency entries.
+    residency_manager.read(destination, data_id, data_size);
+    launched_locations.set_valid(data_id, destination, current_time);
+    if (mark_reserved) {
+      reserved_locations.set_valid(data_id, destination, current_time);
+    }
+    if (mark_mapped) {
+      mapped_locations.set_valid(data_id, destination, current_time);
+    }
+    movement_manager.remove(data_id, destination);
+    comm_manager.release_connection(source, destination);
+  }
+
 public:
   std::vector<devid_t> valid_location_buffer;
 
@@ -677,12 +508,13 @@ public:
   DataManager(const Data &data, const Devices &devices)
       : mapped_locations(data.size(), devices.size()),
         reserved_locations(data.size(), devices.size()),
-        launched_locations(data.size(), devices.size()), lru_manager(devices),
-        movement_counter(devices.size()) {
+        launched_locations(data.size(), devices.size()), residency_manager(devices),
+        movement_counter(devices.size()), n_devices(devices.size()) {
   }
 
   DataManager(const DataManager &o_)
-      : lru_manager(o_.lru_manager), movement_counter(o_.movement_counter) {
+      : residency_manager(o_.residency_manager), eviction_stack(o_.eviction_stack),
+        movement_counter(o_.movement_counter), n_devices(o_.n_devices) {
     ZoneScopedN("Copy DataManager");
     {
       ZoneScopedN("Copy Mapped Locations");
@@ -712,11 +544,12 @@ public:
       return;
     }
     initialized = true;
+    n_devices = devices.size();
     for (dataid_t i = 0; i < data.size(); i++) {
       auto initial_location = data.get_location(i);
       const auto data_size = data.get_size(i);
 
-      if (initial_location > -1 && (lru_manager.get_mem(initial_location) + data_size) <=
+      if (initial_location > -1 && (residency_manager.get_mem(initial_location) + data_size) <=
                                        devices.get_max_resources(initial_location).mem) {
         mapped_locations.set_valid(i, initial_location, 0);
         reserved_locations.set_valid(i, initial_location, 0);
@@ -724,7 +557,7 @@ public:
         device_manager.add_mem<TaskState::MAPPED>(initial_location, data_size, 0);
         device_manager.add_mem<TaskState::RESERVED>(initial_location, data_size, 0);
         device_manager.add_mem<TaskState::LAUNCHED>(initial_location, data_size, 0);
-        lru_manager.read(initial_location, i, data_size);
+        residency_manager.read(initial_location, i, data_size);
       } else {
         mapped_locations.set_valid(i, 0, 0);
         reserved_locations.set_valid(i, 0, 0);
@@ -732,12 +565,12 @@ public:
         device_manager.add_mem<TaskState::MAPPED>(0, data_size, 0);
         device_manager.add_mem<TaskState::RESERVED>(0, data_size, 0);
         device_manager.add_mem<TaskState::LAUNCHED>(0, data_size, 0);
-        lru_manager.read(0, i, data_size);
+        residency_manager.read(0, i, data_size);
       }
     }
     for (devid_t i = 0; i < devices.size(); i++) {
       SPDLOG_DEBUG("DataManager: Device {} initialized with {}/{} memory", devices.get_name(i),
-                   lru_manager.get_mem(i), devices.get_max_resources(i).mem);
+                   residency_manager.get_mem(i), devices.get_max_resources(i).mem);
     }
     valid_location_buffer.reserve(devices.size());
   }
@@ -747,7 +580,7 @@ public:
                                  devid_t device_id) {
     const auto data_size = data.get_size(data_id);
     if (device_id > -1 &&
-        (lru_manager.get_mem(device_id) + data_size) <= devices.get_max_resources(device_id).mem &&
+        (residency_manager.get_mem(device_id) + data_size) <= devices.get_max_resources(device_id).mem &&
         !mapped_locations.is_valid(data_id, device_id)) {
       mapped_locations.set_valid(data_id, device_id, 0);
       reserved_locations.set_valid(data_id, device_id, 0);
@@ -755,12 +588,33 @@ public:
       device_manager.add_mem<TaskState::MAPPED>(device_id, data_size, 0);
       device_manager.add_mem<TaskState::RESERVED>(device_id, data_size, 0);
       device_manager.add_mem<TaskState::LAUNCHED>(device_id, data_size, 0);
-      lru_manager.read(device_id, data_id, data_size);
+      residency_manager.read(device_id, data_id, data_size);
     }
   }
 
-  [[nodiscard]] const LRU_manager &get_lru_manager() const {
-    return lru_manager;
+  [[nodiscard]] EvictionResidencyManager &eviction_residency() {
+    return residency_manager;
+  }
+
+  [[nodiscard]] const EvictionResidencyManager &eviction_residency() const {
+    return residency_manager;
+  }
+
+  void initialize_eviction_stack(std::size_t n_compute_tasks, std::size_t reserve_hint = 0) {
+    eviction_stack.initialize(static_cast<std::size_t>(n_devices), n_compute_tasks, reserve_hint);
+  }
+
+  template <class StaticGraphT>
+  void build_eviction_ancestor_index(const StaticGraphT &static_graph) {
+    eviction_stack.build_compute_task_ancestor_index(static_graph);
+  }
+
+  [[nodiscard]] eviction::RuntimeStack &eviction_runtime() {
+    return eviction_stack;
+  }
+
+  [[nodiscard]] const eviction::RuntimeStack &eviction_runtime() const {
+    return eviction_stack;
   }
 
   [[nodiscard]] const MovementCounter &get_movement_counter() const {
@@ -921,7 +775,7 @@ public:
                             timecount_t current_time) {
     for (auto data_id : list) {
       const auto size = data.get_size(data_id);
-      lru_manager.read(device_id, data_id, size);
+      residency_manager.read(device_id, data_id, size);
       bool changed = read_update(data_id, device_id, launched_locations, current_time);
       if (changed) {
         add_memory(device_manager, device_id, data_id, size, current_time);
@@ -941,8 +795,7 @@ public:
 
   void evict_on_update_launched(const Data &data, DeviceManager &device_manager, dataid_t data_id,
                                 devid_t device_id, timecount_t current_time,
-                                bool has_pending_readers,
-                                bool next_write_from_other_device) {
+                                const eviction::InvalidationInfo &invalidation) {
     auto updated_devices_launched =
         evict_on_update(data_id, device_id, launched_locations, current_time);
     evict_on_update(data_id, device_id, reserved_locations, current_time);
@@ -954,19 +807,17 @@ public:
         SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
         device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        lru_manager.invalidate(device, data_id, true);
+        residency_manager.invalidate(device, data_id, true);
       }
     }
-    if (!has_pending_readers) {
-      // If there are no further usage for the data block (in mapped but not reserved tasks).
-      // Invalidate for future mapping decisions.
+    if (invalidation.mapped_cleanup ==
+        eviction::InvalidationInfo::MappedCleanupDecision::REMOVE_MAPPED_AND_LOCATION) {
+      // No pending local users: remove mapped bytes and mapped validity.
       device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
       mapped_locations.set_invalid(data_id, device_id, current_time);
-    }
-    else if (next_write_from_other_device) {
-      // NOTE: when the next mapped usage is a write from another device, eviction invalidates
-      // launched state before later writer-side cleanup would remove this mapped byte accounting.
-      // Remove mapped bytes here to keep memory accounting consistent.
+    } else if (invalidation.mapped_cleanup ==
+               eviction::InvalidationInfo::MappedCleanupDecision::REMOVE_MAPPED_BYTES_ONLY) {
+      // Remote-next-writer optimization: drop mapped bytes now while preserving mapped validity.
       device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
     }
   }
@@ -1019,7 +870,6 @@ public:
 
     const auto size = data.get_size(data_id);
 
-    lru_manager.read(destination, data_id, size);
     add_memory(device_manager, destination, data_id, size, current_time);
 
     timecount_t duration = comm_manager.ideal_time_to_transfer(topology, size, source, destination);
@@ -1048,39 +898,26 @@ public:
   }
 
   void complete_move(CommunicationManager &comm_manager, dataid_t data_id, devid_t source,
-                     devid_t destination, bool is_virtual, timecount_t current_time) {
+                     devid_t destination, bool is_virtual, timecount_t current_time,
+                     mem_t data_size) {
     if (is_virtual) {
       complete_virtual_move_common(data_id, source, destination, "move");
       return;
     }
-
-    SPDLOG_DEBUG("Completing real move of data block {} from device {} to device {}", data_id,
-                 source, destination);
-
-    assert(movement_manager.is_moving(data_id, destination));
-    launched_locations.set_valid(data_id, destination, current_time);
-    movement_manager.remove(data_id, destination);
-
-    comm_manager.release_connection(source, destination);
+    complete_real_move_common(comm_manager, data_id, source, destination, current_time, "move",
+                              /*mark_reserved=*/false, /*mark_mapped=*/false, data_size);
   }
 
   void complete_eviction_move(CommunicationManager &comm_manager, dataid_t data_id, devid_t source,
-                              devid_t destination, bool is_virtual, timecount_t current_time) {
+                              devid_t destination, bool is_virtual, timecount_t current_time,
+                              mem_t data_size) {
     if (is_virtual) {
       complete_virtual_move_common(data_id, source, destination, "eviction move");
       return;
     }
-
-    SPDLOG_DEBUG("Completing eviction move of data block {} from device {} to device {}", data_id,
-                 source, destination);
-
-    assert(movement_manager.is_moving(data_id, destination));
-    launched_locations.set_valid(data_id, destination, current_time);
-    reserved_locations.set_valid(data_id, destination, current_time);
-    mapped_locations.set_valid(data_id, destination, current_time);
-    movement_manager.remove(data_id, destination);
-
-    comm_manager.release_connection(source, destination);
+    complete_real_move_common(comm_manager, data_id, source, destination, current_time,
+                              "eviction move",
+                              /*mark_reserved=*/true, /*mark_mapped=*/true, data_size);
   }
 
   void remove_memory(DeviceManager &device_manager, const devicemask_t changed_flags,
@@ -1092,7 +929,7 @@ public:
         device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
         device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        lru_manager.invalidate(device, data_id);
+        residency_manager.invalidate(device, data_id);
       }
     }
   }
@@ -1117,7 +954,7 @@ public:
       }
       if (launched_flags & device_mask) {
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        lru_manager.invalidate(device, data_id);
+        residency_manager.invalidate(device, data_id);
       }
     }
   }

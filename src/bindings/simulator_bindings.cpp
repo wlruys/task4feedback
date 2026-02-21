@@ -29,6 +29,24 @@ void init_simulator_ext(nb::module_ &m) {
       .value("ERROR", ExecutionState::ERROR)
       .export_values();
 
+  nb::enum_<StopReason>(m, "StopReason", nb::is_arithmetic())
+      .value("NONE", StopReason::NONE)
+      .value("BREAKPOINT_MAPPER_BOUNDARY", StopReason::BREAKPOINT_MAPPER_BOUNDARY)
+      .value("BREAKPOINT_STEPS", StopReason::BREAKPOINT_STEPS)
+      .value("BREAKPOINT_TIME", StopReason::BREAKPOINT_TIME)
+      .value("BREAKPOINT_TASK", StopReason::BREAKPOINT_TASK)
+      .value("BREAKPOINT_DRAIN", StopReason::BREAKPOINT_DRAIN)
+      .value("EXTERNAL_MAPPING", StopReason::EXTERNAL_MAPPING)
+      .value("COMPLETE", StopReason::COMPLETE)
+      .value("ERROR", StopReason::ERROR)
+      .export_values();
+
+  nb::class_<StopInfo>(m, "StopInfo")
+      .def_ro("state", &StopInfo::state)
+      .def_ro("reason", &StopInfo::reason)
+      .def_ro("event_type", &StopInfo::event_type)
+      .def_ro("time", &StopInfo::time);
+
   nb::class_<SchedulerInput>(m, "SchedulerInput")
       .def(nb::init<Graph &, StaticTaskInfo &, Data &, Devices &, Topology &, TaskNoise &,
                     TransitionConditions &>(),
@@ -46,6 +64,7 @@ void init_simulator_ext(nb::module_ &m) {
       .def_ro("initialized", &Simulator::initialized)
       .def_ro("use_python_mapper", &Simulator::use_python_mapper)
       .def_ro("last_execution_state", &Simulator::last_state)
+      .def_ro("last_stop_info", &Simulator::last_stop_info)
       .def_ro("data_initialized", &Simulator::data_initialized)
       .def_ro("events_processed", &Simulator::events_processed)
       .def(nb::init<SchedulerInput &, Mapper &>(), nb::keep_alive<1, 2>(),
@@ -54,6 +73,7 @@ void init_simulator_ext(nb::module_ &m) {
       .def("initialize", &Simulator::initialize, "create_data_tasks"_a = true,
            "initialize_data_manager"_a = false)
       .def("set_steps", &Simulator::set_steps, "steps"_a)
+      .def("set_mapper_boundary_steps", &Simulator::set_mapper_boundary_steps, "boundaries"_a)
       .def("start_drain", &Simulator::start_drain)
       .def("stop_drain", &Simulator::stop_drain)
       .def("initialize_data", &Simulator::initialize_data_manager)
@@ -67,6 +87,7 @@ void init_simulator_ext(nb::module_ &m) {
       .def("get_state", nb::overload_cast<>(&Simulator::get_state, nb::const_),
            nb::rv_policy::reference_internal)
       .def("run", &Simulator::run)
+      .def("get_last_stop_info", &Simulator::get_last_stop_info)
       .def("get_current_time", &Simulator::get_current_time)
       .def("get_evicted_memory_size", &Simulator::get_evicted_memory_size)
       .def("get_max_memory_usage", &Simulator::get_max_memory_usage)
@@ -79,6 +100,12 @@ void init_simulator_ext(nb::module_ &m) {
            })
       .def("get_mappable_candidates", &Simulator::get_mappable_candidates)
       .def("map_tasks", &Simulator::map_tasks)
+      .def("map_tasks_soa",
+           [](Simulator &s, TorchInt64Arr1D &positions, TorchInt64Arr1D &devices) {
+             std::span<const int64_t> pos_span(positions.data(), positions.size());
+             std::span<const int64_t> dev_span(devices.data(), devices.size());
+             s.map_tasks_soa(pos_span, dev_span);
+           })
       .def("add_task_breakpoint", &Simulator::add_task_breakpoint)
       .def("clear_breakpoints", &Simulator::clear_breakpoints);
 }

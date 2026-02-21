@@ -2416,6 +2416,10 @@ class SimulatorDriver:
     def status(self):
         return self.simulator.last_execution_state
 
+    @property
+    def stop_info(self):
+        return self.simulator.last_stop_info
+
     def get_mappable_candidates(self, candidates: torch.Tensor):
         """
         Get the mappable candidates from the simulator.
@@ -2505,6 +2509,13 @@ class SimulatorDriver:
         """
         self.simulator.set_steps(steps)
 
+    def set_mapper_boundary_steps(self, boundaries: int):
+        """
+        Set the number of mapper boundaries to cross before breaking.
+        This interrupts at mapper event boundaries for both internal and external mapping modes.
+        """
+        self.simulator.set_mapper_boundary_steps(boundaries)
+
     def start_drain(self):
         self.simulator.start_drain()
 
@@ -2568,36 +2579,38 @@ class SimulatorDriver:
         )
         return new_sim_driver
 
-    def run_until_external_mapping(self) -> ExecutionState:
+    def run_until_external_mapping(self):
         """
         Run the simulator until a breakpoint, error, completion, or external mapping is reached.
-        Will return the current state of the simulator at the exitpoint.
+        Returns a StopInfo with state/reason/event_type/time at the exitpoint.
         """
-        sim_state = self.simulator.run()
-        return sim_state
+        return self.simulator.run()
 
-    def run(self) -> ExecutionState:
+    def run(self):
         """
         Run the simulator until a breakpoint, error, or completion is reached.
         This DOES NOT STOP for external mapping. Use run_until_external_mapping() for that.
         External mapping will be called, if enabled, inside this function.
-        Will return the current state of the simulator at the exitpoint.
+        Returns a StopInfo with state/reason/event_type/time at the exitpoint.
         """
-        sim_state = ExecutionState.RUNNING
-        while sim_state == ExecutionState.RUNNING:
-            sim_state = self.simulator.run()
+        while True:
+            stop_info = self.simulator.run()
 
-            if sim_state == ExecutionState.BREAKPOINT:
-                return sim_state
+            if stop_info.state == ExecutionState.BREAKPOINT:
+                return stop_info
 
-            if sim_state == ExecutionState.ERROR:
-                return sim_state
+            if stop_info.state == ExecutionState.ERROR:
+                return stop_info
 
-            if sim_state == ExecutionState.EXTERNAL_MAPPING:
+            if stop_info.state == ExecutionState.EXTERNAL_MAPPING:
                 actions = self.external_mapper.map_tasks(self)
                 self.simulator.map_tasks(actions)
-                sim_state = ExecutionState.RUNNING
-        return sim_state
+                continue
+
+            if stop_info.state == ExecutionState.RUNNING:
+                continue
+
+            return stop_info
 
 
 def create_graph_spec(

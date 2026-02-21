@@ -12,18 +12,185 @@
 // Scheduler
 
 namespace {
-[[nodiscard]] inline uint64_t pack_eviction_key(dataid_t data_id, devid_t device_id) {
-  return (static_cast<uint64_t>(static_cast<uint32_t>(device_id)) << 32) |
-         static_cast<uint32_t>(data_id);
+inline void schedule_event(EventManager &event_manager, EventType type, timecount_t event_time) {
+  event_manager.create_event(type, event_time);
 }
 } // namespace
 
-void Scheduler::reset_eviction_planned_victims() {
-  eviction_planned_victim_keys.clear();
+void Scheduler::finalize_mapping_phase(EventManager &event_manager, timecount_t current_time,
+                                       bool hit_breakpoint) {
+  if (hit_breakpoint) {
+    schedule_event(event_manager, EventType::MAPPER, current_time);
+    return;
+  }
+  schedule_event(event_manager, EventType::RESERVER, current_time + SCHEDULER_TIME_GAP);
 }
 
-bool Scheduler::mark_eviction_planned_victim(dataid_t data_id, devid_t device_id) {
-  return eviction_planned_victim_keys.emplace(pack_eviction_key(data_id, device_id)).second;
+ExecutionState Scheduler::finalize_external_mapping_phase(EventManager &event_manager) {
+  const auto current_time = state.global_time;
+  if (should_run_mapper_phase()) {
+    return ExecutionState::EXTERNAL_MAPPING;
+  }
+
+  const bool hit_breakpoint = has_pending_step_breakpoint();
+  if (hit_breakpoint) {
+    SPDLOG_DEBUG("Time:{} Breaking from mapper", current_time);
+  } else {
+    SPDLOG_DEBUG("Time:{} Ending mapper", current_time);
+  }
+  finalize_mapping_phase(event_manager, current_time, hit_breakpoint);
+  return hit_breakpoint ? ExecutionState::BREAKPOINT : ExecutionState::RUNNING;
+}
+
+void Scheduler::finalize_reserve_phase(EventManager &event_manager, timecount_t current_time,
+                                       bool hit_breakpoint) {
+  if (hit_breakpoint) [[unlikely]] {
+    schedule_event(event_manager, EventType::RESERVER, current_time);
+    return;
+  }
+
+  auto &s = this->state;
+  if (!tasks_requesting_eviction.empty()) {
+    // Eviction is a quiescent phase: we only enter it after all currently reserved work
+    // has either launched or drained to avoid mixing reserve and eviction accounting.
+    // Should not start eviction if there are tasks not launchable due to data movement.
+    if (s.counts.n_unlaunched_reserved() == 0) {
+      enter_eviction_waiting(event_manager, current_time);
+      return;
+    }
+
+    SPDLOG_DEBUG("Time:{} Eviction will start after launching {} tasks", current_time,
+                 s.counts.n_unlaunched_reserved());
+  }
+
+  schedule_event(event_manager, EventType::LAUNCHER, current_time + TIME_TO_LAUNCH);
+}
+
+void Scheduler::finalize_launch_phase(EventManager &event_manager, timecount_t current_time,
+                                      bool hit_breakpoint) {
+  if (hit_breakpoint) [[unlikely]] {
+    schedule_event(event_manager, EventType::LAUNCHER, current_time);
+    return;
+  }
+
+  scheduler_event_count -= 1;
+  assert(scheduler_event_count >= 0);
+
+  const auto &counts = state.counts;
+  const uint64_t state_signature =
+      (static_cast<uint64_t>(static_cast<uint32_t>(counts.n_active())) << 0) ^
+      (static_cast<uint64_t>(static_cast<uint32_t>(counts.n_mapped())) << 8) ^
+      (static_cast<uint64_t>(static_cast<uint32_t>(counts.n_reserved())) << 16) ^
+      (static_cast<uint64_t>(static_cast<uint32_t>(counts.n_launched())) << 24) ^
+      (static_cast<uint64_t>(static_cast<uint32_t>(counts.n_data_reserved())) << 32) ^
+      (static_cast<uint64_t>(static_cast<uint32_t>(counts.n_data_launched())) << 40) ^
+      (static_cast<uint64_t>(static_cast<uint8_t>(eviction_state)) << 48) ^
+      (static_cast<uint64_t>(static_cast<uint16_t>(eviction_count)) << 56);
+  const bool state_changed_since_last_dispatch =
+      state_signature != last_launcher_dispatch_signature;
+
+  if (scheduler_event_count == 0 && (success_count > 0 || state_changed_since_last_dispatch)) {
+    // No-op return is intentional for launcher-triggered WAITING/RUNNING dispatch states.
+    emit_post_completion_scheduler_event(event_manager, current_time,
+                                         PostCompletionDispatchSource::FROM_LAUNCHER);
+    last_launcher_dispatch_signature = state_signature;
+  } else if (scheduler_event_count == 0) {
+    SPDLOG_DEBUG(
+        "Time:{} finalize_launch_phase made no dispatch (success_count={}, state_changed={}, "
+        "eviction_state={}, eviction_count={}, active={}, mapped={}, reserved={}, launched={}, "
+        "data_reserved={}, data_launched={})",
+        current_time, success_count, state_changed_since_last_dispatch,
+        static_cast<int>(eviction_state), eviction_count, counts.n_active(), counts.n_mapped(),
+        counts.n_reserved(), counts.n_launched(), counts.n_data_reserved(), counts.n_data_launched());
+  }
+}
+
+bool Scheduler::process_eviction_waiting_phase(EventManager &event_manager,
+                                               timecount_t current_time) {
+  auto &s = this->state;
+  assert(eviction_state == eviction::State::WAITING_FOR_COMPLETION);
+  if (s.counts.n_reserved() + s.counts.n_data_reserved() > 0) {
+    SPDLOG_DEBUG("Time:{} Evictor waiting for all {} compute and {} data task to finish",
+                 current_time, s.counts.n_reserved(), s.counts.n_data_reserved());
+    schedule_event(event_manager, EventType::LAUNCHER, current_time);
+    return false;
+  }
+
+  SPDLOG_DEBUG("Starting evictor at {}", current_time);
+  select_and_enqueue_victims(current_time);
+  return true;
+}
+
+void Scheduler::enter_eviction_waiting(EventManager &event_manager, timecount_t current_time) {
+  SPDLOG_DEBUG("Time:{} Eviction will start for {} tasks", current_time,
+               tasks_requesting_eviction.size());
+  this->eviction_state = eviction::State::WAITING_FOR_COMPLETION;
+  schedule_event(event_manager, EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
+}
+
+void Scheduler::enter_eviction_running() {
+  eviction_state = eviction::State::RUNNING;
+}
+
+void Scheduler::exit_eviction_running(EventManager &event_manager, timecount_t reserve_event_time) {
+  schedule_event(event_manager, EventType::RESERVER, reserve_event_time);
+  this->eviction_state = eviction::State::NONE;
+  state.get_data_manager().eviction_runtime().clear_invalidation_caches();
+}
+
+bool Scheduler::request_and_start_transfer(dataid_t data_id, devid_t destination_device_id,
+                                           timecount_t current_time, devid_t &source_device_id,
+                                           MovementStatus &duration) {
+  auto &s = this->state;
+  auto &data_manager = s.data_manager;
+  auto &comm_manager = s.get_communication_manager();
+  const auto &topology = s.get_topology();
+
+  auto [found, source] =
+      data_manager.request_source(topology, comm_manager, data_id, destination_device_id);
+  if (!found) {
+    return false;
+  }
+
+  source_device_id = source;
+  duration =
+      data_manager.start_move(topology, comm_manager, s.get_device_manager(), s.get_data(), data_id,
+                              source_device_id, destination_device_id, current_time);
+  return true;
+}
+
+void Scheduler::complete_transfer_move(dataid_t data_id, devid_t source_id, devid_t destination_id,
+                                       bool is_virtual, timecount_t current_time,
+                                       bool is_eviction_move) {
+  auto &s = this->state;
+  auto &data_manager = s.data_manager;
+  auto &comm_manager = s.get_communication_manager();
+  const auto data_size = s.get_data().get_size(data_id);
+  if (is_eviction_move) {
+    data_manager.complete_eviction_move(comm_manager, data_id, source_id, destination_id, is_virtual,
+                                        current_time, data_size);
+    return;
+  }
+  data_manager.complete_move(comm_manager, data_id, source_id, destination_id, is_virtual, current_time,
+                             data_size);
+}
+
+bool Scheduler::process_eviction_running_phase(EventManager &event_manager, timecount_t current_time) {
+  assert(eviction_state == eviction::State::RUNNING);
+  if (eviction_count > 0) {
+    SPDLOG_DEBUG("Time:{} Evictor waiting for all eviction tasks to finish", current_time);
+    schedule_event(event_manager, EventType::LAUNCHER, current_time);
+    return false;
+  }
+
+  assert(eviction_count == 0);
+  SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
+  exit_eviction_running(event_manager, current_time);
+  return true;
+}
+
+bool Scheduler::should_run_mapper_phase() {
+  return state.not_draining() && queues.has_mappable() && conditions.get().should_map(state, queues);
 }
 
 size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
@@ -96,25 +263,8 @@ taskid_t Scheduler::map_task(taskid_t compute_task_id, Action &action) {
   // We check if there are any usage of the data by the victim device.
   // If there are, it means that
 
-  s.mapped_but_not_reserved_tasks.insert(compute_task_id);
-  s.is_mapped_not_reserved[static_cast<std::size_t>(compute_task_id)] = 1;
-
-  // Maintain incremental pending-reader counters for eviction invalidation decisions
-  auto &unique_count_map = s.mapped_unique_count[chosen_device];
-  for (auto d : static_graph.get_unique(compute_task_id)) {
-    unique_count_map[d]++;
-  }
-
-  // Maintain write index: data_id -> set of mapped-not-reserved writers.
-  for (auto d : static_graph.get_write(compute_task_id)) {
-    s.mapped_write_by_data[d].insert(compute_task_id);
-  }
-
-  // Maintain read-count index: enables O(1) precheck to skip dependency DFS
-  auto &read_count_map = s.mapped_read_count_by_data_device[chosen_device];
-  for (auto d : static_graph.get_read(compute_task_id)) {
-    read_count_map[d]++;
-  }
+  s.get_data_manager().eviction_runtime().on_compute_mapped(static_graph, compute_task_id,
+                                                            chosen_device);
 
   // Notify dependents and enqueue newly mappable tasks
   task_runtime.compute_notify_mapped(compute_task_id, chosen_device, rp, lp, current_time,
@@ -154,7 +304,14 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
   python_mapper_buffer.clear();
 
   if (!action_list.empty()) {
+    const auto n_candidates = top_k_tasks.size();
     for (auto &action : action_list) {
+      if (action.pos >= n_candidates) {
+        SPDLOG_CRITICAL("Invalid action position {}. Candidate count is {}", action.pos,
+                        n_candidates);
+        assert(false);
+        return ExecutionState::ERROR;
+      }
       const auto task_id = top_k_tasks[action.pos];
       map_task(task_id, action);
 
@@ -169,43 +326,70 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
     push_mappable(python_mapper_buffer);
   }
 
-  /*If we still should be mapping, continue making calls to the mapper */
+  return finalize_external_mapping_phase(event_manager);
+}
 
-  if (queues.has_mappable() && conditions.get().should_map(state, queues)) {
-    return ExecutionState::EXTERNAL_MAPPING;
-  } else {
-
-    if (is_breakpoint()) {
-      // TODO(wlr): Currently breakpoints of Python mappers are broken.
-      // TODO(wlr): Not sure if this is still true. Need to test.
-      SPDLOG_DEBUG("Time:{} Breaking from mapper", state.global_time);
-      timecount_t mapper_time = state.global_time;
-      event_manager.create_event(EventType::MAPPER, mapper_time);
-      return ExecutionState::BREAKPOINT;
-    } else {
-      SPDLOG_DEBUG("Time:{} Ending mapper", state.global_time);
-      timecount_t reserver_time = state.global_time + TIME_TO_RESERVE;
-      event_manager.create_event(EventType::RESERVER, reserver_time);
-      return ExecutionState::RUNNING;
-    }
+ExecutionState Scheduler::map_tasks_from_python_soa(std::span<const int64_t> positions,
+                                                    std::span<const int64_t> devices,
+                                                    EventManager &event_manager) {
+  if (positions.size() != devices.size()) {
+    SPDLOG_CRITICAL("map_tasks_from_python_soa expects same-length positions/devices arrays ({} vs "
+                    "{})",
+                    positions.size(), devices.size());
+    assert(false);
+    return ExecutionState::ERROR;
   }
+
+  ActionList action_list;
+  action_list.reserve(positions.size());
+
+  const auto top_k_tasks = queues.mappable.get_top_k();
+  const auto n_candidates = top_k_tasks.size();
+  const auto n_devices = static_cast<int64_t>(state.get_devices().size());
+
+  for (std::size_t i = 0; i < positions.size(); ++i) {
+    const auto pos = positions[i];
+    const auto device = devices[i];
+    if (pos < 0 || static_cast<std::size_t>(pos) >= n_candidates) {
+      SPDLOG_CRITICAL("Invalid SOA action position {}. Candidate count is {}", pos, n_candidates);
+      assert(false);
+      return ExecutionState::ERROR;
+    }
+    if (device < 0 || device >= n_devices) {
+      SPDLOG_CRITICAL("Invalid SOA mapped device {}. Device count is {}", device, n_devices);
+      assert(false);
+      return ExecutionState::ERROR;
+    }
+
+    const auto task_id = top_k_tasks[static_cast<std::size_t>(pos)];
+    const auto mapping_priority = state.get_mapping_priority(task_id);
+    action_list.push_back(Action{.pos = static_cast<std::size_t>(pos),
+                                 .device = static_cast<devid_t>(device),
+                                 .reservable_priority = mapping_priority,
+                                 .launchable_priority = mapping_priority});
+  }
+
+  return map_tasks_from_python(action_list, event_manager);
 }
 
 void Scheduler::skip_map_tasks(MapperEvent &map_event, EventManager &event_manager) {
+  MONUnusedParameter(map_event);
   success_count = 0;
-  SPDLOG_DEBUG("Time:{} Skipping mapper", state.global_time);
-  timecount_t reserver_time = state.global_time + SCHEDULER_TIME_GAP;
-  event_manager.create_event(EventType::RESERVER, reserver_time);
+  const auto current_time = state.global_time;
+  SPDLOG_DEBUG("Time:{} Skipping mapper", current_time);
+  finalize_mapping_phase(event_manager, current_time, false);
 }
 
 void Scheduler::skip_reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
-  SPDLOG_DEBUG("Time:{} Skipping reserver", state.global_time);
-  timecount_t launcher_time = state.global_time + SCHEDULER_TIME_GAP;
-  event_manager.create_event(EventType::LAUNCHER, launcher_time);
+  MONUnusedParameter(reserve_event);
+  const auto current_time = state.global_time;
+  SPDLOG_DEBUG("Time:{} Skipping reserver", current_time);
+  schedule_event(event_manager, EventType::LAUNCHER, current_time + SCHEDULER_TIME_GAP);
 }
 
 void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper) {
   ZoneScoped;
+  MONUnusedParameter(map_event);
 
   success_count = 0;
   auto &s = this->state;
@@ -218,7 +402,7 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
 
   while (queues.has_mappable() && conditions.get().should_map(s, queues)) {
 
-    if (is_breakpoint()) {
+    if (has_pending_step_breakpoint()) {
       break_flag = true;
       SPDLOG_DEBUG("Time:{} Breaking from mapper", current_time);
       break;
@@ -233,13 +417,7 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
     push_mappable(compute_task_buffer);
   }
 
-  if (break_flag) {
-    timecount_t mapper_time = current_time;
-    event_manager.create_event(EventType::MAPPER, mapper_time);
-  } else {
-    timecount_t reserver_time = current_time + SCHEDULER_TIME_GAP;
-    event_manager.create_event(EventType::RESERVER, reserver_time);
-  }
+  finalize_mapping_phase(event_manager, current_time, break_flag);
 }
 
 void Scheduler::enqueue_data_tasks(taskid_t compute_task_id) {
@@ -273,7 +451,6 @@ bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
   auto &task_runtime = s.task_runtime;
   auto &static_graph = s.get_tasks();
   auto current_time = s.global_time;
-  auto &mapped = s.mapped_but_not_reserved_tasks;
   auto &device_manager = s.get_device_manager();
   const auto &data = s.get_data();
 
@@ -308,36 +485,8 @@ bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
   s.data_manager.write_update_reserved(
       data, device_manager, static_graph.get_write(compute_task_id), device_id, current_time);
 
-  // erase task_id from s.mapped_but_not_reserved_tasks
-  mapped.erase(mapped.find(compute_task_id));
-  s.is_mapped_not_reserved[static_cast<std::size_t>(compute_task_id)] = 0;
-
-  // Maintain incremental pending-reader counters for eviction invalidation decisions
-  auto &unique_count_map = s.mapped_unique_count[device_id];
-  for (auto d : static_graph.get_unique(compute_task_id)) {
-    auto &cnt = unique_count_map[d];
-    if (--cnt == 0) {
-      unique_count_map.erase(d);
-    }
-  }
-
-  // Remove from write index
-  for (auto d : static_graph.get_write(compute_task_id)) {
-    auto &writers = s.mapped_write_by_data[d];
-    writers.erase(compute_task_id);
-    if (writers.empty()) {
-      s.mapped_write_by_data.erase(d);
-    }
-  }
-
-  // Remove from read-count index
-  auto &read_count_map = s.mapped_read_count_by_data_device[device_id];
-  for (auto d : static_graph.get_read(compute_task_id)) {
-    auto &cnt = read_count_map[d];
-    if (--cnt == 0) {
-      read_count_map.erase(d);
-    }
-  }
+  s.get_data_manager().eviction_runtime().on_compute_reserved(static_graph, compute_task_id,
+                                                              device_id);
 
   task_runtime.compute_notify_reserved(compute_task_id, device_id, current_time, static_graph,
                                        compute_task_buffer);
@@ -358,9 +507,10 @@ bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
 
 void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
   ZoneScoped;
+  MONUnusedParameter(reserve_event);
   // Can't reserve tasks if we are in the middle of an eviction
   auto current_time = this->state.global_time;
-  assert(this->eviction_state == EvictionState::NONE);
+  assert(this->eviction_state == eviction::State::NONE);
 
   auto &s = this->state;
 
@@ -372,12 +522,10 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
   SPDLOG_DEBUG("Time:{} Reservable Queue Size: {}", current_time,
                queues.reservable.total_active_size());
   bool break_flag = false;
-  bool success_flag = false;
-
   tasks_requesting_eviction.clear();
   while (queues.has_active_reservable() && conditions.get().should_reserve(s, queues)) {
 
-    if (is_breakpoint()) {
+    if (has_pending_step_breakpoint()) {
       break_flag = true;
       SPDLOG_DEBUG("Time:{} Breaking from reserver", current_time);
       break;
@@ -396,8 +544,6 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
       reservable.next();
       continue;
     }
-    success_flag = true;
-
     reservable.pop();
 
     push_reservable(compute_task_buffer);
@@ -406,33 +552,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
     reservable.next();
   }
 
-  if (break_flag) [[unlikely]] {
-    timecount_t reserver_time = current_time;
-    event_manager.create_event(EventType::RESERVER, reserver_time);
-    return;
-  }
-
-  // NOTE(wlr): Shouldn't eviction pause new tasks from being reserved? We can just wait for current
-  // tasks to complete?
-
-  if (!tasks_requesting_eviction.empty()) {
-    // Should not start eviction if there are tasks not launchable due to data movement.
-    if (s.counts.n_unlaunched_reserved() == 0) {
-      SPDLOG_DEBUG("Time:{} Eviction will start for {} tasks", current_time,
-                   tasks_requesting_eviction.size());
-      this->eviction_state = EvictionState::WAITING_FOR_COMPLETION; // This should be set to false
-                                                                    // after the eviction is over
-      // Create an event to start the eviction process
-      event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
-      return;
-    } else {
-      SPDLOG_DEBUG("Time:{} Eviction will start after launching {} tasks", current_time,
-                   s.counts.n_unlaunched_reserved());
-    }
-  }
-
-  timecount_t launcher_time = current_time + TIME_TO_LAUNCH;
-  event_manager.create_event(EventType::LAUNCHER, launcher_time);
+  finalize_reserve_phase(event_manager, current_time, break_flag);
 }
 
 bool Scheduler::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
@@ -497,11 +617,7 @@ bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_devi
   auto &s = this->state;
   auto current_time = s.global_time;
   auto &task_runtime = s.task_runtime;
-  auto &data_manager = s.data_manager;
   const auto &static_graph = s.get_tasks();
-  const auto &data = s.get_data();
-  auto &comm_manager = s.get_communication_manager();
-  auto &device_manager = s.get_device_manager();
 
   SPDLOG_DEBUG("Time:{} Attempting to launch data task {}:{} on device {}", current_time,
                static_graph.get_data_task_name(data_task_id), data_task_id, destination_device_id);
@@ -510,17 +626,23 @@ bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_devi
   assert(task_runtime.get_data_task_mapped_device(data_task_id) == destination_device_id);
 
   const dataid_t data_id = static_graph.get_data_id(data_task_id);
-  const auto &topology = s.get_topology();
-  auto [found, source_device_id] =
-      data_manager.request_source(topology, comm_manager, data_id, destination_device_id);
-
-  if (!found) {
+  devid_t source_device_id = 0;
+  MovementStatus duration{};
+  if (!request_and_start_transfer(data_id, destination_device_id, current_time, source_device_id,
+                                  duration)) {
     SPDLOG_DEBUG("Time:{} Data task {}:{} missing available source", current_time,
                  static_graph.get_data_task_name(data_task_id), data_task_id);
+    SPDLOG_DEBUG(
+        "Time:{} Data task {}:{} source-miss detail: data_id={}, dst={}, launched_flags={:#x}, "
+        "reserved_flags={:#x}, mapped_flags={:#x}, counts(res={}, launched={}, data_res={}, "
+        "data_launched={})",
+        current_time, static_graph.get_data_task_name(data_task_id), data_task_id, data_id,
+        destination_device_id, static_cast<uint64_t>(s.data_manager.get_launched_location_flags(data_id)),
+        static_cast<uint64_t>(s.data_manager.get_reserved_location_flags(data_id)),
+        static_cast<uint64_t>(s.data_manager.get_mapped_location_flags(data_id)), s.counts.n_reserved(),
+        s.counts.n_launched(), s.counts.n_data_reserved(), s.counts.n_data_launched());
     return false;
   }
-  auto duration = data_manager.start_move(topology, comm_manager, device_manager, data, data_id,
-                                          source_device_id, destination_device_id, current_time);
 
   if (duration.is_virtual) {
     SPDLOG_DEBUG("Time:{} Data task {}:{} is virtual", current_time,
@@ -551,8 +673,6 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
   auto &s = this->state;
   auto current_time = s.global_time;
   auto &task_runtime = s.task_runtime;
-  auto &data_manager = s.data_manager;
-  const auto &static_graph = s.get_tasks();
 
   SPDLOG_DEBUG("Time:{} Attempting to launch eviction task {} on device {}", current_time,
                eviction_task_id, destination_device_id);
@@ -561,14 +681,20 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
 
   const dataid_t data_id = task_runtime.get_eviction_task_data_id(eviction_task_id);
 
-  auto &comm_manager = s.get_communication_manager();
-  const auto &topology = s.get_topology();
-  auto [found, source_device_id] =
-      data_manager.request_source(topology, comm_manager, data_id, destination_device_id);
-
-  if (!found) {
+  devid_t source_device_id = 0;
+  MovementStatus duration{};
+  if (!request_and_start_transfer(data_id, destination_device_id, current_time, source_device_id,
+                                  duration)) {
     SPDLOG_DEBUG("Time:{} Eviction task {} missing available source for block {}", current_time,
                  eviction_task_id, data_id);
+    SPDLOG_DEBUG(
+        "Time:{} Eviction task {} source-miss detail: data_id={}, dst={}, launched_flags={:#x}, "
+        "reserved_flags={:#x}, mapped_flags={:#x}, eviction_state={}, eviction_count={}",
+        current_time, eviction_task_id, data_id, destination_device_id,
+        static_cast<uint64_t>(s.data_manager.get_launched_location_flags(data_id)),
+        static_cast<uint64_t>(s.data_manager.get_reserved_location_flags(data_id)),
+        static_cast<uint64_t>(s.data_manager.get_mapped_location_flags(data_id)),
+        static_cast<int>(eviction_state), eviction_count);
     return false;
   }
 
@@ -576,9 +702,6 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
                eviction_task_id, source_device_id, data_id);
 
   task_runtime.set_eviction_task_source_device(eviction_task_id, source_device_id);
-  auto duration =
-      data_manager.start_move(topology, comm_manager, s.get_device_manager(), s.get_data(), data_id,
-                              source_device_id, destination_device_id, current_time);
 
   if (duration.is_virtual) {
     SPDLOG_DEBUG("Time:{} Eviction task {} is virtual", current_time, eviction_task_id);
@@ -590,7 +713,7 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
 
   // Record launching time
   task_runtime.eviction_notify_launched(eviction_task_id, source_device_id, current_time,
-                                        static_graph);
+                                        s.get_tasks());
   s.update_eviction_launched_cost(eviction_task_id, 0);
   success_count += 1;
 
@@ -622,7 +745,7 @@ bool Scheduler::launch_compute_tasks(EventManager &event_manager) {
 
     SPDLOG_DEBUG("Time:{} Checking device queue {}", current_time, launchable.get_active_index());
 
-    if (is_breakpoint()) {
+    if (has_pending_step_breakpoint()) {
       SPDLOG_DEBUG("Time:{} Breaking from launcher", current_time);
       break_flag = true;
       break;
@@ -653,7 +776,7 @@ bool Scheduler::launch_compute_tasks(EventManager &event_manager) {
   return break_flag;
 }
 
-bool Scheduler::launch_data_tasks(EventManager &event_manager) {
+void Scheduler::launch_data_tasks(EventManager &event_manager) {
   ZoneScoped;
 
   auto &s = this->state;
@@ -666,8 +789,6 @@ bool Scheduler::launch_data_tasks(EventManager &event_manager) {
   SPDLOG_DEBUG("Time:{} Launching data tasks", current_time);
   SPDLOG_DEBUG("Time:{} Data Launchable Queue Size: {}", current_time,
                queues.data_launchable.total_active_size());
-
-  bool break_flag = false;
 
   while (queues.has_active_data_launchable() && conditions.get().should_launch_data(s, queues)) {
     if (data_launchable.get_active().empty()) {
@@ -687,11 +808,9 @@ bool Scheduler::launch_data_tasks(EventManager &event_manager) {
     data_launchable.pop();
     data_launchable.next();
   }
-
-  return break_flag;
 }
 
-bool Scheduler::launch_eviction_tasks(EventManager &event_manager) {
+void Scheduler::launch_eviction_tasks(EventManager &event_manager) {
   ZoneScoped;
 
   auto &s = this->state;
@@ -704,17 +823,6 @@ bool Scheduler::launch_eviction_tasks(EventManager &event_manager) {
   SPDLOG_DEBUG("Time:{} Launching eviction tasks", current_time);
   SPDLOG_DEBUG("Time:{} Eviction Launchable Queue Size: {}", current_time,
                queues.eviction_launchable.total_active_size());
-
-  // if (this->eviction_state == EvictionState::WAITING_FOR_COMPLETION &&
-  //     queues.eviction_launchable.total_active_size() == 0) {
-  //   // If the scheduler is waiting for eviction completion and there are no active eviction
-  //   tasks,
-  //   // it means that evictor has not been launched yet.
-  //   // We need to launch the evictor to start the eviction process.
-  //   event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
-  // }
-
-  bool break_flag = false;
 
   while (queues.has_active_eviction_launchable() &&
          conditions.get().should_launch_data(s, queues)) {
@@ -737,8 +845,6 @@ bool Scheduler::launch_eviction_tasks(EventManager &event_manager) {
     eviction_launchable.pop();
     eviction_launchable.next();
   }
-
-  return break_flag;
 }
 
 bool Scheduler::emit_post_completion_scheduler_event(
@@ -747,7 +853,7 @@ bool Scheduler::emit_post_completion_scheduler_event(
   const bool from_launcher = (source == PostCompletionDispatchSource::FROM_LAUNCHER);
   const auto eviction_state = this->eviction_state;
 
-  if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
+  if (eviction_state == eviction::State::WAITING_FOR_COMPLETION) {
     // Preserve existing behavior:
     // - completer emits an EVICTOR event
     // - launcher emits nothing
@@ -759,7 +865,7 @@ bool Scheduler::emit_post_completion_scheduler_event(
     return true;
   }
 
-  if (eviction_state == EvictionState::RUNNING) {
+  if (eviction_state == eviction::State::RUNNING) {
     if (eviction_count > 0) {
       // Preserve existing behavior:
       // - completer emits a LAUNCHER event
@@ -777,9 +883,7 @@ bool Scheduler::emit_post_completion_scheduler_event(
     // - completer path emits RESERVER at current_time + SCHEDULER_TIME_GAP
     SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
     const auto event_time = current_time + (from_launcher ? 0 : SCHEDULER_TIME_GAP);
-    event_manager.create_event(EventType::RESERVER, event_time);
-    this->eviction_state = EvictionState::NONE;
-    clear_eviction_invalidation_cache();
+    exit_eviction_running(event_manager, event_time);
     scheduler_event_count += 1;
     return true;
   }
@@ -791,227 +895,140 @@ bool Scheduler::emit_post_completion_scheduler_event(
 
 void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_manager) {
   ZoneScoped;
+  MONUnusedParameter(launch_event);
   auto current_time = this->state.global_time;
 
   auto break_flag = launch_compute_tasks(event_manager);
 
-  if (break_flag) [[unlikely]] {
-    event_manager.create_event(EventType::LAUNCHER, current_time);
-    return;
+  if (!break_flag) {
+    // Eviction and data tasks cannot break the launcher phase.
+    launch_eviction_tasks(event_manager);
+    launch_data_tasks(event_manager);
   }
 
-  // Eviction tasks cannot break
-  launch_eviction_tasks(event_manager);
-
-  // Data tasks cannot break
-  launch_data_tasks(event_manager);
-
-  scheduler_event_count -= 1;
-  assert(scheduler_event_count >= 0);
-
-  if (scheduler_event_count == 0 and success_count > 0) {
-    // No-op return is intentional for launcher-triggered WAITING/RUNNING dispatch states.
-    emit_post_completion_scheduler_event(event_manager, current_time,
-                                         PostCompletionDispatchSource::FROM_LAUNCHER);
-  }
+  finalize_launch_phase(event_manager, current_time, break_flag);
 }
 
-Scheduler::EvictionInvalidationInfo
-Scheduler::get_eviction_invalidation_info(dataid_t data_id, devid_t invalidate_device) {
-  const auto cache_key = pack_eviction_key(data_id, invalidate_device);
-  if (auto it = eviction_invalidation_cache.find(cache_key);
-      it != eviction_invalidation_cache.end()) {
-    return {
-        .has_pending_readers = (it->second & 0x01) != 0,
-        .next_write_from_other_device = (it->second & 0x02) != 0,
-    };
-  }
+void Scheduler::enqueue_eviction_move_task(taskid_t compute_task_id, devid_t device_id,
+                                           dataid_t data_id, timecount_t current_time) {
+  auto &s = this->state;
+  auto &task_runtime = s.task_runtime;
+  const auto &static_graph = s.get_tasks();
 
-  const auto &mapped = state.mapped_but_not_reserved_tasks;
-  auto &task_runtime = state.task_runtime;
-  const auto &static_graph = state.get_tasks();
+  eviction_count += 1;
+  auto eviction_task_id = task_runtime.add_eviction_task(compute_task_id, data_id, device_id);
 
-  // O(1): use incremental mapped_unique_count instead of scanning all mapped tasks
-  const auto &ucount = state.mapped_unique_count[invalidate_device];
-  bool has_pending_readers = ucount.count(data_id) > 0;
+  SPDLOG_DEBUG("Time:{} Launching eviction task {} to evict block {} for task {} on device {} ",
+               current_time, eviction_task_id, data_id,
+               static_graph.get_compute_task_name(compute_task_id), device_id);
+  state.update_eviction_reserved_cost(eviction_task_id, 0);
+  push_launchable_eviction(eviction_task_id);
+}
 
-  bool next_write_from_other_device = false;
-  auto write_it = state.mapped_write_by_data.find(data_id);
-  if (write_it != state.mapped_write_by_data.end() && !write_it->second.empty()) {
-    taskid_t top;
+void Scheduler::apply_eviction_invalidation(taskid_t compute_task_id, devid_t device_id,
+                                            dataid_t data_id, timecount_t current_time,
+                                            const eviction::InvalidationInfo *invalidation_info) {
+  auto &s = this->state;
+  const auto &static_graph = s.get_tasks();
+  auto &eviction_runtime = s.get_data_manager().eviction_runtime();
+  const eviction::InvalidationInfo invalidation = (invalidation_info != nullptr)
+                                                      ? *invalidation_info
+                                                      : eviction_runtime.get_invalidation_info(
+                                                            s, data_id,
+                                                            static_cast<devid_t>(device_id));
 
-    if (write_it->second.size() == 1) {
-      top = *write_it->second.begin();
-    } else {
-      // Writers of the same data form a dependency chain — the topmost (earliest) writer
-      // has the minimum topological depth. O(|buffer_set|) scan, no DFS needed.
-      top = *write_it->second.begin();
-      int32_t top_depth = static_graph.get_depth(top);
-      for (auto tid : write_it->second) {
-        int32_t d = static_graph.get_depth(tid);
-        if (d < top_depth) {
-          top_depth = d;
-          top = tid;
-        }
-      }
-    }
-
-    if (task_runtime.get_compute_task_mapped_device(top) != invalidate_device) {
-      // O(1) precheck: are there any mapped tasks on invalidate_device that read data_id?
-      // If not, no dependency DFS is needed — the next write must come from another device.
-      const auto &rcount = state.mapped_read_count_by_data_device[invalidate_device];
-      if (rcount.count(data_id) > 0) {
-        // Local readers exist — do interleaved DFS checking reader status during traversal.
-        // Early exit as soon as a local reader is found among mapped predecessors.
-        next_write_from_other_device = true;
-        const auto readers_span = static_graph.get_tasks_reading_data(data_id);
-        auto &stack = eviction_scratch_stack;
-        reset_eviction_scratch_visited();
-        stack.clear();
-        stack.reserve(16);
-
-        bool done = false;
-        for (auto dep0 : static_graph.get_compute_task_dependencies(top)) {
-          if (!state.is_mapped_not_reserved[static_cast<std::size_t>(dep0)]) continue;
-          if (!mark_eviction_visited(dep0)) continue;
-          if (task_runtime.get_compute_task_mapped_device(dep0) == invalidate_device &&
-              std::binary_search(readers_span.begin(), readers_span.end(), dep0)) {
-            next_write_from_other_device = false;
-            done = true;
-            break;
-          }
-          stack.push_back(dep0);
-        }
-
-        while (!done && !stack.empty()) {
-          auto curr = stack.back();
-          stack.pop_back();
-          for (auto dep : static_graph.get_compute_task_dependencies(curr)) {
-            if (!state.is_mapped_not_reserved[static_cast<std::size_t>(dep)]) continue;
-            if (!mark_eviction_visited(dep)) continue;
-            if (task_runtime.get_compute_task_mapped_device(dep) == invalidate_device &&
-                std::binary_search(readers_span.begin(), readers_span.end(), dep)) {
-              next_write_from_other_device = false;
-              done = true;
-              break;
-            }
-            stack.push_back(dep);
-          }
-        }
-      } else {
-        // No local readers — skip DFS, mark that next write is from another device
-        next_write_from_other_device = true;
-      }
-    }
-  }
-
-  uint8_t encoded = 0;
-  encoded |= static_cast<uint8_t>(has_pending_readers ? 0x01 : 0);
-  encoded |= static_cast<uint8_t>(next_write_from_other_device ? 0x02 : 0);
-  eviction_invalidation_cache[cache_key] = encoded;
-  return {.has_pending_readers = has_pending_readers,
-          .next_write_from_other_device = next_write_from_other_device};
+  SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}", current_time, data_id,
+               static_graph.get_compute_task_name(compute_task_id), device_id);
+  s.data_manager.evict_on_update_launched(s.get_data(), s.get_device_manager(), data_id, device_id,
+                                          current_time, invalidation);
 }
 
 void Scheduler::select_and_enqueue_victims(timecount_t current_time) {
   auto &s = this->state;
-  auto &task_runtime = s.task_runtime;
-  const auto &static_graph = s.get_tasks();
-  const auto &data_manager = s.data_manager;
-  const auto &lru_manager = s.data_manager.get_lru_manager();
+  auto &eviction_runtime = s.get_data_manager().eviction_runtime();
 
   // Preconditions:
   // - evictor is in WAITING_FOR_COMPLETION state
   // - no compute/data tasks remain reserved
-  assert(eviction_state == EvictionState::WAITING_FOR_COMPLETION);
+  assert(eviction_state == eviction::State::WAITING_FOR_COMPLETION);
   assert(s.counts.n_reserved() + s.counts.n_data_reserved() == 0);
   eviction_count = 0;
-  clear_eviction_invalidation_cache();
-  reset_eviction_planned_victims();
-
-  for (auto &taskdevice : tasks_requesting_eviction) {
-    auto [compute_task_id, device_id] = taskdevice;
-    const auto [requested, missing] = s.request_reserve_resources(compute_task_id, device_id);
-    if (missing.mem) { // There is still memory to evict
-      const auto unique_data = static_graph.get_unique(compute_task_id);
-      auto &data_ids = lru_manager.getLRUids(device_id, missing.mem, unique_data);
-      for (auto data_id : data_ids) {
-        // Skip victims already handled by an earlier requesting task in this cycle
-        if (!mark_eviction_planned_victim(data_id, device_id)) {
-          continue;
-        }
-        auto location_flags = data_manager.get_launched_location_flags(data_id);
-        // count set bits in location_flags
-        devid_t n_sources = __builtin_popcount(location_flags);
-        assert(n_sources > 0);
-        if (n_sources == 1) {
-          eviction_count += 1;
-          auto eviction_task_id = task_runtime.add_eviction_task(compute_task_id, data_id, device_id);
-
-          SPDLOG_DEBUG("Time:{} Launching eviction task {} to evict block {} for task {} on device {} ",
-                       current_time, eviction_task_id, data_id,
-                       static_graph.get_compute_task_name(compute_task_id), device_id);
-          state.update_eviction_reserved_cost(eviction_task_id, 0);
-          push_launchable_eviction(eviction_task_id);
-        } else { // There are multiple sources for this data
-          const auto invalidation =
-              get_eviction_invalidation_info(data_id, static_cast<devid_t>(device_id));
-
-          SPDLOG_DEBUG("Time:{} Invalidating block {} for task {} on device {}", current_time, data_id,
-                       static_graph.get_compute_task_name(compute_task_id), device_id);
-          s.data_manager.evict_on_update_launched(s.get_data(), s.get_device_manager(), data_id,
-                                                  device_id, current_time,
-                                                  invalidation.has_pending_readers,
-                                                  invalidation.next_write_from_other_device);
-        }
-      }
-    } else {
-      SPDLOG_DEBUG("Time:{} No need to evict for task {} on device {}", current_time,
-                   static_graph.get_compute_task_name(compute_task_id), device_id);
-    }
-  }
+  eviction_runtime.clear_cycle_state();
+  SPDLOG_DEBUG("Time:{} Selecting eviction victims with {} policy", current_time,
+               eviction_policy_name);
+  assert(eviction_victim_selector_fn != nullptr);
+  (this->*eviction_victim_selector_fn)(current_time);
 
   SPDLOG_DEBUG("Time:{} Evictor pushed {} eviction tasks to launch queue", current_time,
                eviction_count);
-  eviction_state = EvictionState::RUNNING;
+  enter_eviction_running();
 }
 
 // TODO(wlr, jae): We need to work together to check this after the refactor
 void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager) {
   ZoneScoped;
+  MONUnusedParameter(eviction_event);
+  const auto current_time = state.global_time;
+
+  if (eviction_state == eviction::State::WAITING_FOR_COMPLETION &&
+      !process_eviction_waiting_phase(event_manager, current_time)) {
+    return;
+  }
+
+  if (eviction_state == eviction::State::RUNNING) {
+    process_eviction_running_phase(event_manager, current_time);
+  }
+}
+
+bool Scheduler::can_emit_post_completion_scheduler_event() const {
+  return scheduler_event_count == 0;
+}
+
+void Scheduler::log_completion_mismatch() const {
+  const auto &counts = state.counts;
+  const auto &runtime = state.task_runtime;
+  spdlog::critical(
+      "Completion mismatch: n_events=0 scheduler_event_count={} success_count={} "
+      "eviction_count={} eviction_state={} "
+      "compute_completed={}/{} data_completed={}/{} "
+      "active={} mapped={} reserved={} launched={} data_reserved={} data_launched={}",
+      scheduler_event_count, success_count, eviction_count, static_cast<int>(eviction_state),
+      counts.n_completed(), runtime.get_n_compute_tasks(), counts.n_data_completed(),
+      runtime.get_n_data_tasks() + runtime.get_n_eviction_tasks(), counts.n_active(),
+      counts.n_mapped(), counts.n_reserved(), counts.n_launched(), counts.n_data_reserved(),
+      counts.n_data_launched());
+}
+
+void Scheduler::debug_check_post_completion_memory_state(bool can_emit_scheduler_event) const {
+#ifdef DEBUG
+  if (!can_emit_scheduler_event) {
+    return;
+  }
+
   auto &s = this->state;
-  auto current_time = s.global_time;
+  const auto &device_manager = s.get_device_manager();
+  const auto &residency_manager = s.get_data_manager().eviction_residency();
 
-  if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
-    // WAITING phase:
-    // - wait until all reserved compute/data tasks drain
-    // - then select victims and transition to RUNNING
-    if (s.counts.n_reserved() + s.counts.n_data_reserved() > 0) {
-      SPDLOG_DEBUG("Time:{} Evictor waiting for all {} compute and {} data task to finish",
-                   current_time, s.counts.n_reserved(), s.counts.n_data_reserved());
-      event_manager.create_event(EventType::LAUNCHER, current_time);
-      return;
+  bool flag = false;
+  for (devid_t i = 0; i < device_manager.n_devices; i++) {
+    mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i);
+    mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i);
+    mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i);
+    mem_t residency_mem = residency_manager.get_mem(i);
+    SPDLOG_DEBUG("Device {}: launched {}, residency {}, reserved {}, mapped {}", i, launched_mem,
+                 residency_mem,
+                 reserved_mem, mapped_mem);
+    if (i > 0 && mapped_mem < launched_mem) {
+      flag = true;
     }
-    SPDLOG_DEBUG("Starting evictor at {}", current_time);
-    select_and_enqueue_victims(current_time);
+    assert(launched_mem == residency_mem);
   }
-
-  if (eviction_state == EvictionState::RUNNING) {
-    // RUNNING phase:
-    // - wait until all eviction tasks complete
-    // - then transition to NONE and resume normal reserving
-    if (eviction_count) {
-      SPDLOG_DEBUG("Time:{} Evictor waiting for all eviction tasks to finish", current_time);
-      event_manager.create_event(EventType::LAUNCHER, current_time);
-      return;
-    } else {
-      assert(eviction_count == 0);
-      SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
-      event_manager.create_event(EventType::RESERVER, current_time);
-      this->eviction_state = EvictionState::NONE;
-      clear_eviction_invalidation_cache();
-    }
+  if (flag) {
+    SPDLOG_DEBUG("Memory state is inconsistent");
   }
+#else
+  MONUnusedParameter(can_emit_scheduler_event);
+#endif
 }
 
 void Scheduler::complete_task_postmatter(EventManager &event_manager) {
@@ -1023,35 +1040,12 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
                current_time, success_count, scheduler_event_count,
                static_cast<int>(this->eviction_state));
 
-  const bool can_emit_scheduler_event = (scheduler_event_count == 0);
+  const bool can_emit_scheduler_event = can_emit_post_completion_scheduler_event();
   if (can_emit_scheduler_event) {
     emit_post_completion_scheduler_event(event_manager, current_time,
                                          PostCompletionDispatchSource::FROM_COMPLETER);
   }
-
-  auto &device_manager = s.get_device_manager();
-  auto &lru_manager = s.get_data_manager().get_lru_manager();
-
-#ifdef DEBUG
-  // check memory state, whether it is consistent for debugging purpose
-  if (can_emit_scheduler_event) {
-    bool flag = false;
-    for (devid_t i = 0; i < device_manager.n_devices; i++) {
-      mem_t launched_mem = device_manager.get_mem<TaskState::LAUNCHED>(i);
-      mem_t reserved_mem = device_manager.get_mem<TaskState::RESERVED>(i);
-      mem_t mapped_mem = device_manager.get_mem<TaskState::MAPPED>(i);
-      mem_t lru_mem = lru_manager.get_mem(i);
-      SPDLOG_DEBUG("Device {}: launched {}, lru {}, reserved {}, mapped {}", i, launched_mem, lru_mem,
-                   reserved_mem, mapped_mem);
-      if (i > 0 && mapped_mem < launched_mem)
-        flag = true;
-      assert(launched_mem == lru_mem);
-    }
-    if (flag) {
-      SPDLOG_DEBUG("Memory state is inconsistent");
-    }
-  }
-#endif
+  debug_check_post_completion_memory_state(can_emit_scheduler_event);
 }
 
 void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager &event_manager) {
@@ -1107,8 +1101,6 @@ void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &even
   auto current_time = s.global_time;
   const auto &static_graph = s.get_tasks();
   auto &task_runtime = s.task_runtime;
-  auto &comm_manager = s.get_communication_manager();
-  taskid_t last_compute_idx = 0;
 
   const taskid_t data_task_id = event.task;
   const devid_t destination_id = event.device;
@@ -1121,8 +1113,8 @@ void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &even
   const auto source_id = task_runtime.get_data_task_source_device(data_task_id);
   const auto is_virtual = task_runtime.is_data_task_virtual(data_task_id);
   const auto data_id = static_graph.get_data_id(data_task_id);
-  s.data_manager.complete_move(comm_manager, data_id, source_id, destination_id, is_virtual,
-                               current_time);
+  complete_transfer_move(data_id, source_id, destination_id, is_virtual, current_time,
+                         /*is_eviction_move=*/false);
 
   // Notify dependents that the data task has completed
   // (uses task static info, dependents, and task runtime info of dependents)
@@ -1147,7 +1139,6 @@ void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManage
   auto &task_runtime = s.task_runtime;
   auto &data_manager = s.data_manager;
   auto &device_manager = s.device_manager;
-  auto &comm_manager = s.get_communication_manager();
 
   const taskid_t eviction_task_id = event.task;
   const devid_t destination_id = 0; // This is always the host device
@@ -1161,19 +1152,19 @@ void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManage
   auto is_virtual = task_runtime.is_eviction_task_virtual(eviction_task_id);
   auto data_id = task_runtime.get_eviction_task_data_id(eviction_task_id);
 
-  data_manager.complete_eviction_move(comm_manager, data_id, source_id, destination_id, is_virtual,
-                                      current_time);
+  complete_transfer_move(data_id, source_id, destination_id, is_virtual, current_time,
+                         /*is_eviction_move=*/true);
   const auto data_size = s.get_data().get_size(data_id);
   device_manager.add_mem<TaskState::MAPPED>(destination_id, data_size, current_time);
   device_manager.add_mem<TaskState::RESERVED>(destination_id, data_size, current_time);
 
   auto invalidate_device_id = task_runtime.get_eviction_task_evicting_on(eviction_task_id);
+  auto &eviction_runtime = s.get_data_manager().eviction_runtime();
   const auto invalidation =
-      get_eviction_invalidation_info(data_id, static_cast<devid_t>(invalidate_device_id));
+      eviction_runtime.get_invalidation_info(s, data_id, static_cast<devid_t>(invalidate_device_id));
 
   data_manager.evict_on_update_launched(s.get_data(), device_manager, data_id, invalidate_device_id,
-                                        current_time, invalidation.has_pending_readers,
-                                        invalidation.next_write_from_other_device);
+                                        current_time, invalidation);
 
   eviction_count -= 1;
   assert(eviction_count >= 0);

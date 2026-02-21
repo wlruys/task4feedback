@@ -110,7 +110,7 @@ SimulationResult run_to_completion(Simulator &simulator) {
 
 } // namespace
 
-TEST_CASE("LRU_manager get_max_memory_usage sums all accelerator devices") {
+TEST_CASE("LRUManager get_max_memory_usage sums all accelerator devices") {
   Devices devices(6);
   devices.create_device(0, "host", DeviceType::CPU, 2, 2, 100000);
   for (devid_t device_id = 1; device_id < 6; ++device_id) {
@@ -118,7 +118,7 @@ TEST_CASE("LRU_manager get_max_memory_usage sums all accelerator devices") {
                           100000);
   }
 
-  LRU_manager lru(devices);
+  eviction::LRUManager lru(devices);
   lru.read(0, 100, 1000); // Host memory should not count.
   lru.read(1, 1, 10);
   lru.read(2, 2, 20);

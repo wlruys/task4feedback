@@ -5,6 +5,7 @@
 #include "communication.hpp"
 #include "data.hpp"
 #include "devices.hpp"
+#include "eviction.hpp"
 #include "events.hpp"
 #include "iterator.hpp"
 #include "macros.hpp"
@@ -14,10 +15,15 @@
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
 #include "tasks.hpp"
+#include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <numeric>
 #include <random>
+#include <span>
 #include <stack>
 #include <tracy/Tracy.hpp>
 #include <unordered_map>
@@ -472,18 +478,6 @@ protected:
   DeviceManager device_manager;
   CommunicationManager communication_manager;
   DataManager data_manager;
-  ankerl::unordered_dense::set<taskid_t> mapped_but_not_reserved_tasks;
-  // Parallel bool array for O(1) array access in eviction DFS
-  // Kept in sync with mapped_but_not_reserved_tasks
-  std::vector<uint8_t> is_mapped_not_reserved;
-  // Per-(device, data): count of mapped-but-not-reserved tasks on that device with data in unique set
-  std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> mapped_unique_count;
-  // Per-data: set of mapped-but-not-reserved tasks that write it (across all devices)
-  // Avoids scanning all mapped tasks in get_eviction_invalidation_info.
-  ankerl::unordered_dense::map<dataid_t, ankerl::unordered_dense::set<taskid_t>> mapped_write_by_data;
-  // Per-(device, data): count of mapped-but-not-reserved tasks on device that READ data_id
-  // Enables O(1) precheck — skip dependency DFS when no local reader exists
-  std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> mapped_read_count_by_data_device;
   std::reference_wrapper<Graph> graph;
   std::reference_wrapper<StaticTaskInfo> tasks;
   std::reference_wrapper<Data> data;
@@ -566,22 +560,15 @@ public:
         task_runtime(RuntimeTaskInfo(input.tasks)), device_manager(DeviceManager(input.devices)),
         communication_manager(input.topology, input.devices),
         data_manager(input.data, input.devices), counts(input.devices.get().size()),
-        costs(input.devices.get().size()),
-        mapped_unique_count(input.devices.get().size()),
-        mapped_read_count_by_data_device(input.devices.get().size()) {
-    is_mapped_not_reserved.assign(
-        static_cast<std::size_t>(input.tasks.get().get_n_compute_tasks()), 0);
+        costs(input.devices.get().size()) {
+    const auto n_compute_tasks = static_cast<std::size_t>(input.tasks.get().get_n_compute_tasks());
+    data_manager.initialize_eviction_stack(n_compute_tasks);
   }
 
   SchedulerState(const SchedulerState &other)
       : global_time(other.global_time), task_runtime(other.task_runtime),
         device_manager(other.device_manager), communication_manager(other.communication_manager),
-        data_manager(other.data_manager),
-        mapped_but_not_reserved_tasks(other.mapped_but_not_reserved_tasks),
-        is_mapped_not_reserved(other.is_mapped_not_reserved),
-        mapped_unique_count(other.mapped_unique_count),
-        mapped_write_by_data(other.mapped_write_by_data),
-        mapped_read_count_by_data_device(other.mapped_read_count_by_data_device), graph(other.graph),
+        data_manager(other.data_manager), graph(other.graph),
         tasks(other.tasks), data(other.data), devices(other.devices), topology(other.topology),
         task_noise(other.task_noise), counts(other.counts), costs(other.costs), flags(other.flags) {
     // ZoneScoped;
@@ -921,6 +908,55 @@ public:
     return data_manager;
   }
 
+  [[nodiscard]] mem_t get_missing_reserve_memory(taskid_t compute_task_id,
+                                                 devid_t device_id) const {
+    return request_reserve_resources(compute_task_id, device_id).missing.mem;
+  }
+
+  [[nodiscard]] std::span<const dataid_t> get_task_unique_data(taskid_t compute_task_id) const {
+    return get_tasks().get_unique(compute_task_id);
+  }
+
+  [[nodiscard]] const auto &eviction_residency() const {
+    return data_manager.eviction_residency();
+  }
+
+  [[nodiscard]] devicemask_t get_launched_location_flags(dataid_t data_id) const {
+    return data_manager.get_launched_location_flags(data_id);
+  }
+
+  [[nodiscard]] bool has_pending_local_users(dataid_t data_id,
+                                             devid_t invalidate_device) const {
+    return data_manager.eviction_runtime().has_pending_local_users(data_id, invalidate_device);
+  }
+
+  [[nodiscard]] const ankerl::unordered_dense::set<taskid_t> &
+  get_mapped_writers(dataid_t data_id) const {
+    return data_manager.eviction_runtime().get_mapped_writers(data_id);
+  }
+
+  [[nodiscard]] int32_t get_task_depth(taskid_t task_id) const {
+    return get_tasks().get_depth(task_id);
+  }
+
+  [[nodiscard]] devid_t get_task_mapped_device(taskid_t task_id) const {
+    return task_runtime.get_compute_task_mapped_device(task_id);
+  }
+
+  [[nodiscard]] bool has_local_mapped_readers(dataid_t data_id,
+                                              devid_t invalidate_device) const {
+    return data_manager.eviction_runtime().has_local_mapped_readers(data_id, invalidate_device);
+  }
+
+  [[nodiscard]] uint32_t get_mapped_write_generation(dataid_t data_id) const {
+    return data_manager.eviction_runtime().get_mapped_write_generation(data_id);
+  }
+
+  [[nodiscard]] uint32_t get_mapped_read_generation(dataid_t data_id,
+                                                    devid_t invalidate_device) const {
+    return data_manager.eviction_runtime().get_mapped_read_generation(data_id, invalidate_device);
+  }
+
   friend class Scheduler;
   friend class TransitionConstraints;
 };
@@ -1046,55 +1082,46 @@ public:
 //   taskid_t last_idx = 0;
 // };
 
-enum class EvictionState : int8_t {
-  NONE = 0,
-  WAITING_FOR_COMPLETION = 2,
-  RUNNING = 4,
-};
-
 class Scheduler {
 
 protected:
-  struct EvictionInvalidationInfo {
-    bool has_pending_readers = false;
-    bool next_write_from_other_device = false;
-  };
-
   SchedulerState state;
   SchedulerQueues queues;
   TaskDeviceList tasks_requesting_eviction;
   int64_t success_count = 0;
   int64_t eviction_count = 0;
-  EvictionState eviction_state = EvictionState::NONE;
-  ankerl::unordered_dense::map<uint64_t, uint8_t> eviction_invalidation_cache;
-  std::vector<uint32_t> eviction_scratch_visited_marks;
-  uint32_t eviction_scratch_visited_epoch = 1;
-  TaskIDList eviction_scratch_stack;
-  ankerl::unordered_dense::set<uint64_t> eviction_planned_victim_keys;
+  eviction::State eviction_state = eviction::State::NONE;
+  eviction::PolicyKind eviction_policy_kind = eviction::PolicyKind::LRU;
+  const char *eviction_policy_name = eviction::LRUPolicy::name();
+  using EvictionVictimSelectorFn = void (Scheduler::*)(timecount_t);
+  EvictionVictimSelectorFn eviction_victim_selector_fn = nullptr;
 
-  inline void reset_eviction_scratch_visited() {
-    eviction_scratch_visited_epoch += 1;
-    if (eviction_scratch_visited_epoch == 0) {
-      std::fill(eviction_scratch_visited_marks.begin(), eviction_scratch_visited_marks.end(), 0);
-      eviction_scratch_visited_epoch = 1;
-    }
-  }
-
-  [[nodiscard]] inline bool mark_eviction_visited(taskid_t task_id) {
-    const auto idx = static_cast<std::size_t>(task_id);
-    if (idx >= eviction_scratch_visited_marks.size()) {
-      return false;
-    }
-    auto &mark = eviction_scratch_visited_marks[idx];
-    if (mark == eviction_scratch_visited_epoch) {
-      return false;
-    }
-    mark = eviction_scratch_visited_epoch;
-    return true;
-  }
-
-  void reset_eviction_planned_victims();
-  [[nodiscard]] bool mark_eviction_planned_victim(dataid_t data_id, devid_t device_id);
+  void finalize_mapping_phase(EventManager &event_manager, timecount_t current_time,
+                              bool hit_breakpoint);
+  [[nodiscard]] ExecutionState finalize_external_mapping_phase(EventManager &event_manager);
+  void finalize_reserve_phase(EventManager &event_manager, timecount_t current_time,
+                              bool hit_breakpoint);
+  void finalize_launch_phase(EventManager &event_manager, timecount_t current_time,
+                             bool hit_breakpoint);
+  bool process_eviction_waiting_phase(EventManager &event_manager, timecount_t current_time);
+  bool process_eviction_running_phase(EventManager &event_manager, timecount_t current_time);
+  void enter_eviction_waiting(EventManager &event_manager, timecount_t current_time);
+  void enter_eviction_running();
+  void exit_eviction_running(EventManager &event_manager, timecount_t reserve_event_time);
+  bool request_and_start_transfer(dataid_t data_id, devid_t destination_device_id,
+                                  timecount_t current_time, devid_t &source_device_id,
+                                  MovementStatus &duration);
+  void complete_transfer_move(dataid_t data_id, devid_t source_id, devid_t destination_id,
+                              bool is_virtual, timecount_t current_time, bool is_eviction_move);
+  template <class PolicyT>
+  void select_and_enqueue_victims_for_policy(timecount_t current_time);
+  void enqueue_eviction_move_task(taskid_t compute_task_id, devid_t device_id, dataid_t data_id,
+                                  timecount_t current_time);
+  void apply_eviction_invalidation(taskid_t compute_task_id, devid_t device_id, dataid_t data_id,
+                                   timecount_t current_time,
+                                   const eviction::InvalidationInfo *invalidation_info = nullptr);
+  [[nodiscard]] bool can_emit_post_completion_scheduler_event() const;
+  void debug_check_post_completion_memory_state(bool can_emit_scheduler_event) const;
 
   void enqueue_data_tasks(taskid_t task_id);
   enum class PostCompletionDispatchSource : uint8_t {
@@ -1104,11 +1131,6 @@ protected:
   void select_and_enqueue_victims(timecount_t current_time);
   bool emit_post_completion_scheduler_event(EventManager &event_manager, timecount_t current_time,
                                             PostCompletionDispatchSource source);
-  [[nodiscard]] EvictionInvalidationInfo get_eviction_invalidation_info(dataid_t data_id,
-                                                                         devid_t invalidate_device);
-  void clear_eviction_invalidation_cache() {
-    eviction_invalidation_cache.clear();
-  }
 
 public:
   BreakpointManager breakpoints;
@@ -1117,19 +1139,33 @@ public:
   TaskIDList python_mapper_buffer;
   std::reference_wrapper<TransitionConditions> conditions;
   int64_t scheduler_event_count = 1;
+  uint64_t last_launcher_dispatch_signature = std::numeric_limits<uint64_t>::max();
   bool initialized = false;
 
-  Scheduler(SchedulerInput &input)
+  Scheduler(SchedulerInput &input, eviction::PolicyKind policy_kind = eviction::PolicyKind::LRU)
       : state(input), queues(input.devices), conditions(input.conditions) {
     const auto &static_graph = state.get_tasks();
     const auto n_compute_tasks = static_graph.get_n_compute_tasks();
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
-    eviction_invalidation_cache.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
-    eviction_scratch_visited_marks.assign(static_cast<std::size_t>(n_compute_tasks), 0);
-    eviction_scratch_stack.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
-    eviction_planned_victim_keys.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
+    auto &eviction_stack = state.get_data_manager().eviction_runtime();
+    eviction_stack.reserve(INITIAL_TASK_BUFFER_SIZE);
+    eviction_stack.build_compute_task_ancestor_index(static_graph);
+    if (!eviction_stack.has_precomputed_ancestors()) {
+      SPDLOG_DEBUG("Eviction ancestor index disabled for {} compute tasks (fallback predecessor "
+                   "scan enabled)",
+                   n_compute_tasks);
+    }
+    eviction_policy_kind = policy_kind;
+    switch (eviction_policy_kind) {
+    case eviction::PolicyKind::LRU:
+      eviction_policy_name = eviction::LRUPolicy::name();
+      eviction_victim_selector_fn = &Scheduler::select_and_enqueue_victims_for_policy<eviction::LRUPolicy>;
+      break;
+    default:
+      assert(false && "Unsupported eviction policy kind");
+    }
     if (input.top_k_candidates > 0) {
       queues.mappable.set_k(static_cast<int>(input.top_k_candidates));
     }
@@ -1141,8 +1177,16 @@ public:
     conditions = conditions_;
   }
 
+  [[nodiscard]] eviction::PolicyKind get_eviction_policy() const {
+    return eviction_policy_kind;
+  }
+
   void set_steps(int32_t steps) {
     breakpoints.set_steps_to_go(steps);
+  }
+
+  void set_mapper_boundary_steps(int32_t boundaries) {
+    breakpoints.set_mapper_boundaries_to_go(boundaries);
   }
 
   void start_drain() {
@@ -1182,7 +1226,11 @@ public:
   void skip_map_tasks(MapperEvent &map_event, EventManager &event_manager);
   void map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper);
   ExecutionState map_tasks_from_python(ActionList &action_list, EventManager &event_manager);
+  ExecutionState map_tasks_from_python_soa(std::span<const int64_t> positions,
+                                           std::span<const int64_t> devices,
+                                           EventManager &event_manager);
   void remove_mapped_tasks(ActionList &action_list);
+  [[nodiscard]] bool should_run_mapper_phase();
 
   bool reserve_task(taskid_t task_id, devid_t device_id);
   void skip_reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager);
@@ -1192,8 +1240,8 @@ public:
   bool launch_data_task(taskid_t task_id, devid_t device_id, EventManager &event_manager);
   bool launch_eviction_task(taskid_t task_id, devid_t device_id, EventManager &event_manager);
   bool launch_compute_tasks(EventManager &event_manager);
-  bool launch_data_tasks(EventManager &event_manager);
-  bool launch_eviction_tasks(EventManager &event_manager);
+  void launch_data_tasks(EventManager &event_manager);
+  void launch_eviction_tasks(EventManager &event_manager);
   void launch_tasks(LauncherEvent &launch_event, EventManager &event_manager);
 
   void evict(EvictorEvent &eviction_event, EventManager &event_manager);
@@ -1293,18 +1341,55 @@ public:
     return state.is_drain_complete();
   }
 
-  [[nodiscard]] bool is_breakpoint() const {
-    bool breakpoint_status = breakpoints.check_breakpoint();
-    return breakpoint_status;
+  void log_completion_mismatch() const;
+
+  [[nodiscard]] bool has_pending_step_breakpoint() const {
+    return breakpoints.has_pending_step_stop();
   }
 
-  void check_time_breakpoint() {
-    breakpoints.check_time_breakpoint(state.get_global_time());
+  bool consume_step_breakpoint() {
+    return breakpoints.consume_step_stop();
+  }
+
+  bool hit_mapper_boundary_breakpoint() {
+    return breakpoints.decrement_mapper_boundaries();
+  }
+
+  [[nodiscard]] bool has_time_breakpoint() const {
+    return breakpoints.has_time_breakpoint();
+  }
+
+  [[nodiscard]] bool hit_time_breakpoint(timecount_t time) const {
+    return breakpoints.check_time_breakpoint(time);
+  }
+
+  [[nodiscard]] bool hit_task_breakpoint(EventType type, taskid_t task_id) {
+    return breakpoints.check_task_breakpoint(type, task_id);
+  }
+
+  [[nodiscard]] bool needs_event_breakpoint_poll() const {
+    return breakpoints.needs_event_poll();
   }
 
   friend class SchedulerState;
   friend class SchedulerQueues;
 };
+
+template <class PolicyT>
+void Scheduler::select_and_enqueue_victims_for_policy(timecount_t current_time) {
+  auto &eviction_stack = state.get_data_manager().eviction_runtime();
+  eviction_stack.template plan_with_policy<PolicyT>(state, tasks_requesting_eviction);
+
+  for (const auto &plan : eviction_stack.plan_buffer()) {
+    if (plan.action == eviction::VictimAction::MOVE_TO_HOST) {
+      enqueue_eviction_move_task(plan.compute_task_id, plan.device_id, plan.data_id, current_time);
+      continue;
+    }
+    assert(plan.has_invalidation_info);
+    apply_eviction_invalidation(plan.compute_task_id, plan.device_id, plan.data_id, current_time,
+                                &plan.invalidation);
+  }
+}
 
 class Mapper {
 
