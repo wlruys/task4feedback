@@ -27,7 +27,6 @@
 #include <stack>
 #include <tracy/Tracy.hpp>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 #define TIME_TO_MAP 0
