@@ -217,6 +217,10 @@ public:
   dataid_t data_id{-1};      // Unique ID for the data
   ankerl::unordered_dense::set<taskid_t> dependencies;
   ankerl::unordered_dense::set<taskid_t> dependents;
+
+  // Sorted caches built during Graph::finalize() — reused by StaticTaskInfo constructor.
+  std::vector<taskid_t> sorted_dependencies_cache;
+  std::vector<taskid_t> sorted_dependents_cache;
 };
 
 class Graph {
@@ -229,8 +233,23 @@ public:
 
   Graph() = default;
 
-  ankerl::unordered_dense::map<dataid_t, taskid_t>
-      writers; // Maps data IDs to their most recent writer task ID
+  // Dense vector indexed by data_id; value -1 means no writer yet.
+  // Sized to max_data_id+1 during finalize().
+  std::vector<taskid_t> writers;
+  dataid_t max_data_id{-1}; // computed once in finalize() before any data processing
+
+  // Cached totals populated by build_sorted_dependency_caches() — used by StaticTaskInfo ctor
+  // to avoid a separate counting pass.
+  int32_t total_compute_dependencies_cached{0};
+  int32_t total_compute_dependents_cached{0};
+  int32_t total_compute_data_dependencies_cached{0};
+  int32_t total_compute_data_dependents_cached{0};
+  int32_t total_reads_cached{0};
+  int32_t total_writes_cached{0};
+  int32_t total_retire_cached{0};
+  int32_t total_unique_cached{0};
+  int32_t total_data_task_dependencies_cached{0};
+  int32_t total_data_task_dependents_cached{0};
 
   taskid_t add_task(const std::string &name) {
     taskid_t id = static_cast<taskid_t>(tasks.size());
@@ -358,16 +377,18 @@ public:
   }
 
   void populate_dependencies_from_dataflow() {
-    ankerl::unordered_dense::map<dataid_t, taskid_t> last_writer;
+    // Dense vector indexed by data_id; -1 = no writer yet.
+    if (max_data_id < 0) return;
+    std::vector<taskid_t> last_writer(static_cast<std::size_t>(max_data_id) + 1, -1);
     for (auto &task : tasks) {
-      for (const auto &data_id : task.read) {
-        auto it = last_writer.find(data_id);
-        if (it != last_writer.end()) {
-          add_dependency(task.id, it->second);
+      for (const auto data_id : task.read) {
+        const taskid_t w = last_writer[static_cast<std::size_t>(data_id)];
+        if (w != taskid_t(-1)) {
+          add_dependency(task.id, w);
         }
       }
-      for (const auto &data_id : task.write) {
-        last_writer[data_id] = task.id;
+      for (const auto data_id : task.write) {
+        last_writer[static_cast<std::size_t>(data_id)] = task.id;
       }
     }
   }
@@ -401,14 +422,19 @@ public:
   }
 
   void populate_unique_data() {
-    // sorted_read_cache and sorted_write_cache are populated by populate_data_dependencies()
-    // which is called before this in finalize(). Use set_union for O(D) merge of sorted arrays.
+    // sorted_read_cache and sorted_write_cache are built by populate_data_dependencies() above.
     for (auto &task : tasks) {
       task.unique.clear();
-      task.unique.reserve(task.sorted_read_cache.size() + task.sorted_write_cache.size());
-      std::set_union(task.sorted_read_cache.begin(), task.sorted_read_cache.end(),
-                     task.sorted_write_cache.begin(), task.sorted_write_cache.end(),
-                     std::back_inserter(task.unique));
+      if (task.sorted_read_cache.empty()) {
+        task.unique = task.sorted_write_cache;
+      } else if (task.sorted_write_cache.empty()) {
+        task.unique = task.sorted_read_cache;
+      } else {
+        task.unique.reserve(task.sorted_read_cache.size() + task.sorted_write_cache.size());
+        std::set_union(task.sorted_read_cache.begin(), task.sorted_read_cache.end(),
+                       task.sorted_write_cache.begin(), task.sorted_write_cache.end(),
+                       std::back_inserter(task.unique));
+      }
     }
   }
 
@@ -537,9 +563,12 @@ public:
   }
 
   void populate_data_dependencies(bool ensure_dependencies = false, bool create_data_tasks = true) {
-    writers.clear();
-    ankerl::unordered_dense::map<dataid_t, uint32_t> read_generation_by_data;
-    ankerl::unordered_dense::map<dataid_t, uint32_t> write_generation_by_data;
+    // Dense vectors indexed by data_id — O(1) lookup with no hashing overhead.
+    // Enables auto-vectorization of the inner read/write loops.
+    const std::size_t sz = (max_data_id >= 0) ? static_cast<std::size_t>(max_data_id) + 1 : 0;
+    writers.assign(sz, taskid_t(-1));
+    std::vector<uint32_t> read_gen_vec(sz, 0);
+    std::vector<uint32_t> write_gen_vec(sz, 0);
 
     // Iterate in a valid topological order
     for (auto task_id : sorted) {
@@ -556,20 +585,10 @@ public:
       task.sorted_read_gen_cache.reserve(sorted_read.size());
 
       for (const auto data_id : sorted_read) {
-        auto it = writers.find(data_id);
-        taskid_t writer_id = -1;
-        const bool has_writer = it != writers.end();
-        if (has_writer) {
-          writer_id = it->second;
-        }
+        const taskid_t writer_id = writers[static_cast<std::size_t>(data_id)];
+        const bool has_writer = (writer_id != taskid_t(-1));
         task.sorted_recent_writer_cache.push_back(writer_id);
-
-        auto read_it = read_generation_by_data.find(data_id);
-        if (read_it == read_generation_by_data.end()) {
-          read_it = read_generation_by_data.try_emplace(data_id, 0).first;
-        }
-        task.sorted_read_gen_cache.push_back(read_it->second);
-        read_it->second += 1;
+        task.sorted_read_gen_cache.push_back(read_gen_vec[static_cast<std::size_t>(data_id)]++);
 
         // Create data tasks for all reads from current task.
         if (create_data_tasks) {
@@ -578,31 +597,26 @@ public:
       }
 
       if (ensure_dependencies) {
-        // writers are compute tasks
-        // Ensure that the compute task depends on all writers of the data it reads
-        for (const auto &data_id : task.read) {
-          auto it = writers.find(data_id);
-          if (it != writers.end()) {
-            task.dependencies.insert(it->second);
-            tasks[it->second].dependents.insert(task_id);
+        // Ensure that the compute task depends on all writers of the data it reads/writes/retires.
+        for (const auto data_id : task.read) {
+          const taskid_t w = writers[static_cast<std::size_t>(data_id)];
+          if (w != taskid_t(-1)) {
+            task.dependencies.insert(w);
+            tasks[w].dependents.insert(task_id);
           }
         }
-
-        // Ensure that the compute task depends on all writers of the data it writes
-        for (const auto &data_id : task.write) {
-          auto it = writers.find(data_id);
-          if (it != writers.end()) {
-            task.dependencies.insert(it->second);
-            tasks[it->second].dependents.insert(task_id);
+        for (const auto data_id : task.write) {
+          const taskid_t w = writers[static_cast<std::size_t>(data_id)];
+          if (w != taskid_t(-1)) {
+            task.dependencies.insert(w);
+            tasks[w].dependents.insert(task_id);
           }
         }
-
-        // Ensure that the compute task depends on all writers of the data it retires
-        for (const auto &data_id : task.retire) {
-          auto it = writers.find(data_id);
-          if (it != writers.end()) {
-            task.dependencies.insert(it->second);
-            tasks[it->second].dependents.insert(task_id);
+        for (const auto data_id : task.retire) {
+          const taskid_t w = writers[static_cast<std::size_t>(data_id)];
+          if (w != taskid_t(-1)) {
+            task.dependencies.insert(w);
+            tasks[w].dependents.insert(task_id);
           }
         }
       }
@@ -614,26 +628,52 @@ public:
       task.sorted_write_gen_cache.clear();
       task.sorted_write_gen_cache.reserve(sorted_write.size());
 
-      // Update write generations and writers map with current task's writes.
+      // Update write generations and writers with current task's writes.
       for (const auto data_id : sorted_write) {
-        auto write_it = write_generation_by_data.find(data_id);
-        if (write_it == write_generation_by_data.end()) {
-          write_it = write_generation_by_data.try_emplace(data_id, 0).first;
-        }
-        task.sorted_write_gen_cache.push_back(write_it->second);
-        write_it->second += 1;
-        writers[data_id] = task_id;
+        const std::size_t idx = static_cast<std::size_t>(data_id);
+        task.sorted_write_gen_cache.push_back(write_gen_vec[idx]++);
+        writers[idx] = task_id;
       }
     }
   }
 
   void build_sorted_dependency_caches() {
+    // Build sorted caches for compute tasks.
+    total_compute_dependencies_cached = 0;
+    total_compute_dependents_cached = 0;
+    total_compute_data_dependencies_cached = 0;
+    total_compute_data_dependents_cached = 0;
+    total_reads_cached = 0;
+    total_writes_cached = 0;
+    total_retire_cached = 0;
+    total_unique_cached = 0;
+
     for (auto &task : tasks) {
       task.sorted_dependencies_cache = as_sorted_vector(task.dependencies);
       task.sorted_dependents_cache = as_sorted_vector(task.dependents);
       task.sorted_data_dependencies_cache = as_sorted_vector(task.data_dependencies);
       task.sorted_data_dependents_cache = as_sorted_vector(task.data_dependents);
       task.sorted_retire_cache = as_sorted_vector(task.retire);
+
+      total_compute_dependencies_cached += static_cast<int32_t>(task.sorted_dependencies_cache.size());
+      total_compute_dependents_cached += static_cast<int32_t>(task.sorted_dependents_cache.size());
+      total_compute_data_dependencies_cached += static_cast<int32_t>(task.sorted_data_dependencies_cache.size());
+      total_compute_data_dependents_cached += static_cast<int32_t>(task.sorted_data_dependents_cache.size());
+      total_reads_cached += static_cast<int32_t>(task.sorted_read_cache.size());
+      total_writes_cached += static_cast<int32_t>(task.sorted_write_cache.size());
+      total_retire_cached += static_cast<int32_t>(task.sorted_retire_cache.size());
+      total_unique_cached += static_cast<int32_t>(task.unique.size());
+    }
+
+    // Build sorted caches for data tasks.
+    total_data_task_dependencies_cached = 0;
+    total_data_task_dependents_cached = 0;
+
+    for (auto &dt : data_tasks) {
+      dt.sorted_dependencies_cache = as_sorted_vector(dt.dependencies);
+      dt.sorted_dependents_cache = as_sorted_vector(dt.dependents);
+      total_data_task_dependencies_cached += static_cast<int32_t>(dt.sorted_dependencies_cache.size());
+      total_data_task_dependents_cached += static_cast<int32_t>(dt.sorted_dependents_cache.size());
     }
   }
 
@@ -646,6 +686,17 @@ public:
       return;
     }
     finalized = true;
+
+    // Compute max_data_id first — required for dense-vector allocation in subsequent steps.
+    max_data_id = -1;
+    std::size_t total_read_count = 0;
+    for (const auto &task : tasks) {
+      for (const auto d : task.read)   { if (d > max_data_id) max_data_id = d; }
+      for (const auto d : task.write)  { if (d > max_data_id) max_data_id = d; }
+      for (const auto d : task.retire) { if (d > max_data_id) max_data_id = d; }
+      total_read_count += task.read.size();
+    }
+
     populate_dependencies_from_dataflow();
     populate_dependents();
     populate_initial_tasks();
@@ -654,17 +705,14 @@ public:
 
     // Reserve data_tasks to avoid repeated reallocations.
     if (create_data_tasks_flag) {
-      std::size_t total_reads = 0;
-      for (const auto &task : tasks) {
-        total_reads += task.read.size();
-      }
-      data_tasks.reserve(total_reads);
+      data_tasks.reserve(total_read_count);
     }
 
     populate_data_dependencies(ensure_dependencies, create_data_tasks_flag);
     // populate_unique_data uses sorted caches built by populate_data_dependencies above.
     populate_unique_data();
     // Build sorted caches for deps/dependents/retire after all sets are fully populated.
+    // Also accumulates total counts used by StaticTaskInfo constructor.
     build_sorted_dependency_caches();
     // populate_data_dependents();
   }
@@ -815,13 +863,15 @@ protected:
   std::vector<dataid_t> read_usage_data_ids;
   std::vector<int32_t> read_usage_offsets;
   std::vector<taskid_t> read_usage_tasks;
-  ankerl::unordered_dense::map<dataid_t, int32_t> read_usage_row_by_data_id;
+  // Dense row-index vector indexed by data_id; -1 means data_id has no readers.
+  std::vector<int32_t> read_usage_row_by_data_id;
 
   // CSR cache for write usage: data_id -> compute tasks that write data_id
   std::vector<dataid_t> write_usage_data_ids;
   std::vector<int32_t> write_usage_offsets;
   std::vector<taskid_t> write_usage_tasks;
-  ankerl::unordered_dense::map<dataid_t, int32_t> write_usage_row_by_data_id;
+  // Dense row-index vector indexed by data_id; -1 means data_id has no writers.
+  std::vector<int32_t> write_usage_row_by_data_id;
 
   // Secondary CSR: same rows as read/write_usage_*, but entries sorted by generation.
   // Shares offsets and row maps with the primary CSR above.
@@ -926,73 +976,62 @@ public:
     taskid_t data_dependency_offset = 0;
     taskid_t data_dependent_offset = 0;
 
-    taskid_t total_compute_dependencies = 0;
-    taskid_t total_compute_dependents = 0;
-    taskid_t total_compute_data_dependencies = 0;
-    taskid_t total_compute_data_dependents = 0;
-    taskid_t total_reads = 0;
-    taskid_t total_writes = 0;
-    taskid_t total_retire = 0;
-    taskid_t total_unique = 0;
-
-    for (const auto &task : tasks) {
-      total_compute_dependencies += task.dependencies.size();
-      total_compute_dependents += task.dependents.size();
-      total_compute_data_dependencies += task.data_dependencies.size();
-      total_compute_data_dependents += task.data_dependents.size();
-      total_reads += task.read.size();
-      total_writes += task.write.size();
-      total_retire += task.retire.size();
-      total_unique += task.unique.size();
-    }
-
-    set_total_compute_task_dependencies(total_compute_dependencies);
-    set_total_compute_task_dependents(total_compute_dependents);
-    set_total_compute_task_data_dependencies(total_compute_data_dependencies);
-    set_total_compute_task_data_dependents(total_compute_data_dependents);
-    set_total_reads(total_reads);
-    set_total_writes(total_writes);
-    set_total_retires(total_retire);
-    set_total_unique(total_unique);
+    // Use totals pre-computed by Graph::build_sorted_dependency_caches() — avoids a separate pass.
+    set_total_compute_task_dependencies(graph.total_compute_dependencies_cached);
+    set_total_compute_task_dependents(graph.total_compute_dependents_cached);
+    set_total_compute_task_data_dependencies(graph.total_compute_data_dependencies_cached);
+    set_total_compute_task_data_dependents(graph.total_compute_data_dependents_cached);
+    set_total_reads(graph.total_reads_cached);
+    set_total_writes(graph.total_writes_cached);
+    set_total_retires(graph.total_retire_cached);
+    set_total_unique(graph.total_unique_cached);
 
     for (const auto &task : tasks) {
       auto compute_dep_info = ComputeTaskDepInfo();
       auto compute_data_info = ComputeTaskDataInfo();
       auto compute_task_info = ComputeTaskStaticInfo();
 
+      // Use sorted-cache sizes (vector size) rather than hash-set sizes for all offsets.
+      const int32_t n_deps      = static_cast<int32_t>(task.sorted_dependencies_cache.size());
+      const int32_t n_deps_end  = static_cast<int32_t>(task.sorted_dependents_cache.size());
+      const int32_t n_ddeps     = static_cast<int32_t>(task.sorted_data_dependencies_cache.size());
+      const int32_t n_ddeps_end = static_cast<int32_t>(task.sorted_data_dependents_cache.size());
+      const int32_t n_read      = static_cast<int32_t>(task.sorted_read_cache.size());
+      const int32_t n_write     = static_cast<int32_t>(task.sorted_write_cache.size());
+      const int32_t n_retire    = static_cast<int32_t>(task.sorted_retire_cache.size());
+      const int32_t n_unique    = static_cast<int32_t>(task.unique.size());
+
       compute_dep_info.s_dependencies = compute_dependency_offset;
-      compute_dep_info.e_dependencies = compute_dependency_offset + task.dependencies.size();
-      compute_dependency_offset += task.dependencies.size();
+      compute_dep_info.e_dependencies = compute_dependency_offset + n_deps;
+      compute_dependency_offset += n_deps;
 
       compute_dep_info.s_dependents = compute_dependent_offset;
-      compute_dep_info.e_dependents = compute_dependent_offset + task.dependents.size();
-      compute_dependent_offset += task.dependents.size();
+      compute_dep_info.e_dependents = compute_dependent_offset + n_deps_end;
+      compute_dependent_offset += n_deps_end;
 
       compute_dep_info.s_data_dependencies = compute_data_dependency_offset;
-      compute_dep_info.e_data_dependencies =
-          compute_data_dependency_offset + task.data_dependencies.size();
-      compute_data_dependency_offset += task.data_dependencies.size();
+      compute_dep_info.e_data_dependencies = compute_data_dependency_offset + n_ddeps;
+      compute_data_dependency_offset += n_ddeps;
 
       compute_dep_info.s_data_dependents = compute_data_dependent_offset;
-      compute_dep_info.e_data_dependents =
-          compute_data_dependent_offset + task.data_dependents.size();
-      compute_data_dependent_offset += task.data_dependents.size();
+      compute_dep_info.e_data_dependents = compute_data_dependent_offset + n_ddeps_end;
+      compute_data_dependent_offset += n_ddeps_end;
 
       compute_data_info.s_read = read_offset;
-      compute_data_info.e_read = read_offset + task.read.size();
-      read_offset += task.read.size();
+      compute_data_info.e_read = read_offset + n_read;
+      read_offset += n_read;
 
       compute_data_info.s_write = write_offset;
-      compute_data_info.e_write = write_offset + task.write.size();
-      write_offset += task.write.size();
+      compute_data_info.e_write = write_offset + n_write;
+      write_offset += n_write;
 
       compute_data_info.s_retire = retire_offset;
-      compute_data_info.e_retire = retire_offset + task.retire.size();
-      retire_offset += task.retire.size();
+      compute_data_info.e_retire = retire_offset + n_retire;
+      retire_offset += n_retire;
 
       compute_data_info.s_unique = unique_offset;
-      compute_data_info.e_unique = unique_offset + task.unique.size();
-      unique_offset += task.unique.size();
+      compute_data_info.e_unique = unique_offset + n_unique;
+      unique_offset += n_unique;
 
       compute_task_info.tag = task.tag;
       compute_task_info.type = task.type;
@@ -1020,37 +1059,32 @@ public:
       }
     }
 
-    taskid_t total_data_task_dependencies = 0;
-    taskid_t total_data_task_dependents = 0;
-    for (const auto &data_task : data_tasks) {
-      total_data_task_dependencies += data_task.dependencies.size();
-      total_data_task_dependents += data_task.dependents.size();
-    }
-
-    set_total_data_task_dependencies(total_data_task_dependencies);
-    set_total_data_task_dependents(total_data_task_dependents);
+    // Use totals cached by Graph::build_sorted_dependency_caches().
+    set_total_data_task_dependencies(graph.total_data_task_dependencies_cached);
+    set_total_data_task_dependents(graph.total_data_task_dependents_cached);
 
     for (const auto &data_task : data_tasks) {
       auto data_task_info = DataTaskStaticInfo();
 
+      const int32_t n_dt_deps = static_cast<int32_t>(data_task.sorted_dependencies_cache.size());
+      const int32_t n_dt_dpts = static_cast<int32_t>(data_task.sorted_dependents_cache.size());
+
       data_task_info.s_dependencies = data_dependency_offset;
-      data_task_info.e_dependencies = data_dependency_offset + data_task.dependencies.size();
-      data_dependency_offset += data_task.dependencies.size();
+      data_task_info.e_dependencies = data_dependency_offset + n_dt_deps;
+      data_dependency_offset += n_dt_deps;
 
       data_task_info.s_dependents = data_dependent_offset;
-      data_task_info.e_dependents = data_dependent_offset + data_task.dependents.size();
-      data_dependent_offset += data_task.dependents.size();
+      data_task_info.e_dependents = data_dependent_offset + n_dt_dpts;
+      data_dependent_offset += n_dt_dpts;
 
       data_task_info.data_id = data_task.data_id;
       data_task_info.compute_task = data_task.compute_task;
 
       add_data_task(data_task.id, data_task.name, data_task_info);
 
-      auto sorted_dependencies = as_sorted_vector(data_task.dependencies);
-      auto sorted_dependents = as_sorted_vector(data_task.dependents);
-
-      add_data_task_dependencies(data_task.id, sorted_dependencies);
-      add_data_task_dependents(data_task.id, sorted_dependents);
+      // Use pre-sorted caches built during Graph::finalize() — no temporary allocations.
+      add_data_task_dependencies(data_task.id, data_task.sorted_dependencies_cache);
+      add_data_task_dependents(data_task.id, data_task.sorted_dependents_cache);
     }
 
     build_usage_caches_and_shared_read_topology();
@@ -1071,14 +1105,14 @@ public:
   void build_usage_caches_and_shared_read_topology() {
     const auto n_compute_tasks = get_n_compute_tasks();
 
-    // Flat triple: (data_id, gen, task_id) — avoids per-data-id vector allocations.
+    // Flat triple: (data_id, gen, task_id).
     struct DataGenTask {
       dataid_t data_id;
       uint32_t gen;
       taskid_t task_id;
     };
 
-    // Build flat arrays of triples from all tasks.
+    // Build flat arrays of triples from all tasks in one pass.
     std::vector<DataGenTask> read_triples;
     read_triples.reserve(compute_task_read.size());
     std::vector<DataGenTask> write_triples;
@@ -1090,7 +1124,6 @@ public:
       for (std::size_t i = 0; i < read_span.size(); ++i) {
         read_triples.push_back({read_span[i], read_gen_span[i], task_id});
       }
-
       const auto write_span = get_write(task_id);
       const auto write_gen_span = get_write_generations(task_id);
       for (std::size_t i = 0; i < write_span.size(); ++i) {
@@ -1098,82 +1131,45 @@ public:
       }
     }
 
-    // Sort by data_id (primary), then task_id (secondary) for primary CSR.
+    // Comparators for the two sort passes.
     auto by_data_task = [](const DataGenTask &a, const DataGenTask &b) {
-      return a.data_id < b.data_id || (a.data_id == b.data_id && a.task_id < b.task_id);
+      if (a.data_id != b.data_id) return a.data_id < b.data_id;
+      return a.task_id < b.task_id;
     };
-    std::sort(read_triples.begin(), read_triples.end(), by_data_task);
-    std::sort(write_triples.begin(), write_triples.end(), by_data_task);
-
-    // Helper lambda to build CSR from sorted flat triples.
-    auto build_csr = [](const std::vector<DataGenTask> &triples,
-                        ankerl::unordered_dense::map<dataid_t, int32_t> &row_map,
-                        std::vector<dataid_t> &data_ids_out,
-                        std::vector<int32_t> &offsets_out,
-                        std::vector<taskid_t> &tasks_out,
-                        std::vector<taskid_t> &gen_tasks_out,
-                        std::vector<uint32_t> &gen_generations_out) {
-      row_map.clear();
-      data_ids_out.clear();
-      offsets_out.clear();
-      offsets_out.push_back(0);
-      tasks_out.clear();
-      tasks_out.reserve(triples.size());
-      gen_tasks_out.clear();
-      gen_tasks_out.reserve(triples.size());
-      gen_generations_out.clear();
-      gen_generations_out.reserve(triples.size());
-
-      if (triples.empty()) return;
-
-      // Identify group boundaries (groups share the same data_id).
-      // triples are sorted by (data_id, task_id).
-      std::size_t group_start = 0;
-      while (group_start < triples.size()) {
-        const dataid_t cur_data = triples[group_start].data_id;
-        std::size_t group_end = group_start + 1;
-        while (group_end < triples.size() && triples[group_end].data_id == cur_data) {
-          ++group_end;
-        }
-
-        row_map[cur_data] = static_cast<int32_t>(data_ids_out.size());
-        data_ids_out.push_back(cur_data);
-
-        // Primary CSR: already sorted by task_id within group.
-        for (std::size_t i = group_start; i < group_end; ++i) {
-          tasks_out.push_back(triples[i].task_id);
-        }
-        offsets_out.push_back(static_cast<int32_t>(tasks_out.size()));
-
-        // Gen-sorted CSR: sort group slice by (gen, task_id).
-        // Copy to a temp for sorting since we need different order.
-        // The group is typically very small so this is cheap.
-        std::vector<DataGenTask> gen_group(triples.begin() + group_start,
-                                            triples.begin() + group_end);
-        std::sort(gen_group.begin(), gen_group.end(),
-                  [](const DataGenTask &a, const DataGenTask &b) {
-                    return a.gen < b.gen || (a.gen == b.gen && a.task_id < b.task_id);
-                  });
-        for (const auto &t : gen_group) {
-          gen_tasks_out.push_back(t.task_id);
-          gen_generations_out.push_back(t.gen);
-        }
-
-        group_start = group_end;
-      }
+    auto by_data_gen_task = [](const DataGenTask &a, const DataGenTask &b) {
+      if (a.data_id != b.data_id) return a.data_id < b.data_id;
+      if (a.gen != b.gen) return a.gen < b.gen;
+      return a.task_id < b.task_id;
     };
 
-    build_csr(read_triples, read_usage_row_by_data_id, read_usage_data_ids,
-              read_usage_offsets, read_usage_tasks,
-              read_usage_by_gen_tasks, read_usage_by_gen_generations);
+    // Helper: compute max data_id across a sorted triples array (last element's data_id).
+    auto max_data_id_in = [](const std::vector<DataGenTask> &triples) -> dataid_t {
+      return triples.empty() ? dataid_t(-1) : triples.back().data_id;
+    };
 
-    build_csr(write_triples, write_usage_row_by_data_id, write_usage_data_ids,
-              write_usage_offsets, write_usage_tasks,
-              write_usage_by_gen_tasks, write_usage_by_gen_generations);
+    // ---- Build read usage CSRs (two-sort, no per-group allocations) ----
 
-    // Build shared-read pairs from read_triples (already sorted by data_id, task_id).
+    read_usage_data_ids.clear();
+    read_usage_offsets.clear();
+    read_usage_offsets.push_back(0);
+    read_usage_tasks.clear();
+    read_usage_tasks.reserve(read_triples.size());
+    read_usage_by_gen_tasks.clear();
+    read_usage_by_gen_tasks.reserve(read_triples.size());
+    read_usage_by_gen_generations.clear();
+    read_usage_by_gen_generations.reserve(read_triples.size());
+
     std::vector<uint64_t> shared_pair_keys;
-    {
+
+    if (!read_triples.empty()) {
+      // Pass 1: sort by (data_id, task_id) → primary CSR + shared pairs.
+      std::sort(read_triples.begin(), read_triples.end(), by_data_task);
+
+      // Compute max read data_id and size dense row map accordingly.
+      const dataid_t max_read_id = max_data_id_in(read_triples);
+      read_usage_row_by_data_id.assign(static_cast<std::size_t>(max_read_id) + 1, -1);
+      read_usage_data_ids.reserve(read_triples.size()); // upper bound
+
       std::size_t group_start = 0;
       while (group_start < read_triples.size()) {
         const dataid_t cur_data = read_triples[group_start].data_id;
@@ -1181,6 +1177,15 @@ public:
         while (group_end < read_triples.size() && read_triples[group_end].data_id == cur_data) {
           ++group_end;
         }
+        read_usage_row_by_data_id[static_cast<std::size_t>(cur_data)] =
+            static_cast<int32_t>(read_usage_data_ids.size());
+        read_usage_data_ids.push_back(cur_data);
+        for (std::size_t i = group_start; i < group_end; ++i) {
+          read_usage_tasks.push_back(read_triples[i].task_id);
+        }
+        read_usage_offsets.push_back(static_cast<int32_t>(read_usage_tasks.size()));
+
+        // Collect shared-read pairs while triples are task_id-sorted.
         const auto n_readers = group_end - group_start;
         if (n_readers >= 2) {
           shared_pair_keys.reserve(shared_pair_keys.size() + ((n_readers * (n_readers - 1)) / 2));
@@ -1194,7 +1199,63 @@ public:
         }
         group_start = group_end;
       }
+
+      // Pass 2: re-sort by (data_id, gen, task_id) → gen CSR.
+      // Group structure (data_id groups and their sizes) is unchanged; only internal order differs.
+      // No per-group allocation: just stream all re-sorted triples.
+      std::sort(read_triples.begin(), read_triples.end(), by_data_gen_task);
+      for (const auto &t : read_triples) {
+        read_usage_by_gen_tasks.push_back(t.task_id);
+        read_usage_by_gen_generations.push_back(t.gen);
+      }
     }
+
+    // ---- Build write usage CSRs (same two-sort pattern) ----
+
+    write_usage_data_ids.clear();
+    write_usage_offsets.clear();
+    write_usage_offsets.push_back(0);
+    write_usage_tasks.clear();
+    write_usage_tasks.reserve(write_triples.size());
+    write_usage_by_gen_tasks.clear();
+    write_usage_by_gen_tasks.reserve(write_triples.size());
+    write_usage_by_gen_generations.clear();
+    write_usage_by_gen_generations.reserve(write_triples.size());
+
+    if (!write_triples.empty()) {
+      // Pass 1: sort by (data_id, task_id) → primary CSR.
+      std::sort(write_triples.begin(), write_triples.end(), by_data_task);
+
+      const dataid_t max_write_id = max_data_id_in(write_triples);
+      write_usage_row_by_data_id.assign(static_cast<std::size_t>(max_write_id) + 1, -1);
+      write_usage_data_ids.reserve(write_triples.size());
+
+      std::size_t group_start = 0;
+      while (group_start < write_triples.size()) {
+        const dataid_t cur_data = write_triples[group_start].data_id;
+        std::size_t group_end = group_start + 1;
+        while (group_end < write_triples.size() && write_triples[group_end].data_id == cur_data) {
+          ++group_end;
+        }
+        write_usage_row_by_data_id[static_cast<std::size_t>(cur_data)] =
+            static_cast<int32_t>(write_usage_data_ids.size());
+        write_usage_data_ids.push_back(cur_data);
+        for (std::size_t i = group_start; i < group_end; ++i) {
+          write_usage_tasks.push_back(write_triples[i].task_id);
+        }
+        write_usage_offsets.push_back(static_cast<int32_t>(write_usage_tasks.size()));
+        group_start = group_end;
+      }
+
+      // Pass 2: re-sort by (data_id, gen, task_id) → gen CSR.
+      std::sort(write_triples.begin(), write_triples.end(), by_data_gen_task);
+      for (const auto &t : write_triples) {
+        write_usage_by_gen_tasks.push_back(t.task_id);
+        write_usage_by_gen_generations.push_back(t.gen);
+      }
+    }
+
+    // ---- Build shared-read topology CSR ----
 
     compute_task_shared_read_offsets.assign(static_cast<std::size_t>(n_compute_tasks) + 1, 0);
     compute_task_shared_read_neighbors.clear();
@@ -1220,13 +1281,13 @@ public:
 
     compute_task_shared_read_neighbors.resize(
         static_cast<std::size_t>(compute_task_shared_read_offsets.back()), -1);
-    auto write_offsets = compute_task_shared_read_offsets;
+    auto write_offsets_scatter = compute_task_shared_read_offsets;
 
     for (const auto key : shared_pair_keys) {
       const auto lhs = static_cast<taskid_t>(key >> 32U);
       const auto rhs = static_cast<taskid_t>(key & 0xFFFFFFFFULL);
-      compute_task_shared_read_neighbors[write_offsets[lhs]++] = rhs;
-      compute_task_shared_read_neighbors[write_offsets[rhs]++] = lhs;
+      compute_task_shared_read_neighbors[write_offsets_scatter[lhs]++] = rhs;
+      compute_task_shared_read_neighbors[write_offsets_scatter[rhs]++] = lhs;
     }
 
     for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
@@ -1539,13 +1600,12 @@ public:
   }
 
   [[nodiscard]] std::span<const taskid_t> get_tasks_reading_data(dataid_t data_id) const {
-    auto it = read_usage_row_by_data_id.find(data_id);
-    if (it == read_usage_row_by_data_id.end()) {
-      return {};
-    }
-    const auto row = static_cast<std::size_t>(it->second);
-    const auto begin = static_cast<std::size_t>(read_usage_offsets[row]);
-    const auto end = static_cast<std::size_t>(read_usage_offsets[row + 1]);
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= read_usage_row_by_data_id.size()) return {};
+    const auto row = read_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row) + 1]);
     return std::span<const taskid_t>(read_usage_tasks).subspan(begin, end - begin);
   }
 
@@ -1554,13 +1614,12 @@ public:
   }
 
   [[nodiscard]] std::span<const taskid_t> get_tasks_writing_data(dataid_t data_id) const {
-    auto it = write_usage_row_by_data_id.find(data_id);
-    if (it == write_usage_row_by_data_id.end()) {
-      return {};
-    }
-    const auto row = static_cast<std::size_t>(it->second);
-    const auto begin = static_cast<std::size_t>(write_usage_offsets[row]);
-    const auto end = static_cast<std::size_t>(write_usage_offsets[row + 1]);
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= write_usage_row_by_data_id.size()) return {};
+    const auto row = write_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row) + 1]);
     return std::span<const taskid_t>(write_usage_tasks).subspan(begin, end - begin);
   }
 
@@ -1570,49 +1629,45 @@ public:
 
   [[nodiscard]] std::span<const taskid_t>
   get_tasks_reading_data_by_gen(dataid_t data_id) const {
-    auto it = read_usage_row_by_data_id.find(data_id);
-    if (it == read_usage_row_by_data_id.end()) {
-      return {};
-    }
-    const auto row = static_cast<std::size_t>(it->second);
-    const auto begin = static_cast<std::size_t>(read_usage_offsets[row]);
-    const auto end = static_cast<std::size_t>(read_usage_offsets[row + 1]);
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= read_usage_row_by_data_id.size()) return {};
+    const auto row = read_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row) + 1]);
     return std::span<const taskid_t>(read_usage_by_gen_tasks).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const uint32_t>
   get_read_generations_for_data(dataid_t data_id) const {
-    auto it = read_usage_row_by_data_id.find(data_id);
-    if (it == read_usage_row_by_data_id.end()) {
-      return {};
-    }
-    const auto row = static_cast<std::size_t>(it->second);
-    const auto begin = static_cast<std::size_t>(read_usage_offsets[row]);
-    const auto end = static_cast<std::size_t>(read_usage_offsets[row + 1]);
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= read_usage_row_by_data_id.size()) return {};
+    const auto row = read_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row) + 1]);
     return std::span<const uint32_t>(read_usage_by_gen_generations).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t>
   get_tasks_writing_data_by_gen(dataid_t data_id) const {
-    auto it = write_usage_row_by_data_id.find(data_id);
-    if (it == write_usage_row_by_data_id.end()) {
-      return {};
-    }
-    const auto row = static_cast<std::size_t>(it->second);
-    const auto begin = static_cast<std::size_t>(write_usage_offsets[row]);
-    const auto end = static_cast<std::size_t>(write_usage_offsets[row + 1]);
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= write_usage_row_by_data_id.size()) return {};
+    const auto row = write_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row) + 1]);
     return std::span<const taskid_t>(write_usage_by_gen_tasks).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const uint32_t>
   get_write_generations_for_data(dataid_t data_id) const {
-    auto it = write_usage_row_by_data_id.find(data_id);
-    if (it == write_usage_row_by_data_id.end()) {
-      return {};
-    }
-    const auto row = static_cast<std::size_t>(it->second);
-    const auto begin = static_cast<std::size_t>(write_usage_offsets[row]);
-    const auto end = static_cast<std::size_t>(write_usage_offsets[row + 1]);
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= write_usage_row_by_data_id.size()) return {};
+    const auto row = write_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row) + 1]);
     return std::span<const uint32_t>(write_usage_by_gen_generations).subspan(begin, end - begin);
   }
 

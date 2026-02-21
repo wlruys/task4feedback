@@ -163,3 +163,144 @@ TEST_CASE("Simulator copy keeps parity under eviction pressure") {
   CHECK_EQ(original.total_movement, branched.total_movement);
   CHECK_EQ(original.eviction_movement, branched.eviction_movement);
 }
+
+TEST_CASE("StaticTaskInfo sorts CSR rows and aligns read writers") {
+  Graph graph;
+
+  const auto t0 = graph.add_task("t0");
+  const auto t1 = graph.add_task("t1");
+  const auto t2 = graph.add_task("t2");
+  const auto t3 = graph.add_task("t3");
+
+  std::vector<dataid_t> write0{5};
+  std::vector<dataid_t> write1{3};
+  graph.add_write_data(t0, write0);
+  graph.add_write_data(t1, write1);
+
+  std::vector<dataid_t> read2{7, 3, 5};
+  std::vector<dataid_t> write2{9, 1};
+  std::vector<dataid_t> retire2{8, 2};
+  graph.add_read_data(t2, read2);
+  graph.add_write_data(t2, write2);
+  graph.add_retire_data(t2, retire2);
+  graph.add_dependency(t2, t1);
+  graph.add_dependency(t2, t0);
+
+  std::vector<dataid_t> read3{6, 5, 3};
+  graph.add_read_data(t3, read3);
+  graph.add_dependency(t3, t1);
+  graph.add_dependency(t3, t0);
+
+  graph.finalize();
+  StaticTaskInfo static_info(graph);
+
+  const auto deps2 = static_info.get_compute_task_dependencies(t2);
+  CHECK(std::vector<taskid_t>(deps2.begin(), deps2.end()) == std::vector<taskid_t>{0, 1});
+
+  const auto deps3 = static_info.get_compute_task_dependencies(t3);
+  CHECK(std::vector<taskid_t>(deps3.begin(), deps3.end()) == std::vector<taskid_t>{0, 1});
+
+  const auto dependents0 = static_info.get_compute_task_dependents(t0);
+  CHECK(std::vector<taskid_t>(dependents0.begin(), dependents0.end()) ==
+        std::vector<taskid_t>{2, 3});
+
+  const auto read2_sorted = static_info.get_read(t2);
+  CHECK(std::vector<dataid_t>(read2_sorted.begin(), read2_sorted.end()) ==
+        std::vector<dataid_t>{3, 5, 7});
+
+  const auto recent_writers2 = static_info.get_most_recent_writers(t2);
+  CHECK(std::vector<taskid_t>(recent_writers2.begin(), recent_writers2.end()) ==
+        std::vector<taskid_t>{1, 0, -1});
+  const auto read_generations2 = static_info.get_read_generations(t2);
+  CHECK(read_generations2.size() == 3);
+  CHECK(read_generations2[2] == 0);
+
+  const auto write2_sorted = static_info.get_write(t2);
+  CHECK(std::vector<dataid_t>(write2_sorted.begin(), write2_sorted.end()) ==
+        std::vector<dataid_t>{1, 9});
+  const auto write_generations2 = static_info.get_write_generations(t2);
+  CHECK(std::vector<uint32_t>(write_generations2.begin(), write_generations2.end()) ==
+        std::vector<uint32_t>{0, 0});
+
+  const auto retire2_sorted = static_info.get_retire(t2);
+  CHECK(std::vector<dataid_t>(retire2_sorted.begin(), retire2_sorted.end()) ==
+        std::vector<dataid_t>{2, 8});
+
+  const auto unique2_sorted = static_info.get_unique(t2);
+  CHECK(std::vector<dataid_t>(unique2_sorted.begin(), unique2_sorted.end()) ==
+        std::vector<dataid_t>{1, 3, 5, 7, 9});
+
+  const auto data_deps2 = static_info.get_compute_task_data_dependencies(t2);
+  CHECK(std::vector<taskid_t>(data_deps2.begin(), data_deps2.end()) ==
+        std::vector<taskid_t>{0, 1, 2});
+
+  const auto read_usage_ids = static_info.get_read_usage_data_ids();
+  CHECK(std::vector<dataid_t>(read_usage_ids.begin(), read_usage_ids.end()) ==
+        std::vector<dataid_t>{3, 5, 6, 7});
+
+  const auto readers_3 = static_info.get_tasks_reading_data(3);
+  CHECK(std::vector<taskid_t>(readers_3.begin(), readers_3.end()) ==
+        std::vector<taskid_t>{2, 3});
+
+  const auto readers_5 = static_info.get_tasks_reading_data(5);
+  CHECK(std::vector<taskid_t>(readers_5.begin(), readers_5.end()) ==
+        std::vector<taskid_t>{2, 3});
+
+  const auto write_usage_ids = static_info.get_write_usage_data_ids();
+  CHECK(std::vector<dataid_t>(write_usage_ids.begin(), write_usage_ids.end()) ==
+        std::vector<dataid_t>{1, 3, 5, 9});
+
+  const auto writers_3 = static_info.get_tasks_writing_data(3);
+  CHECK(std::vector<taskid_t>(writers_3.begin(), writers_3.end()) ==
+        std::vector<taskid_t>{1});
+
+  const auto writers_5 = static_info.get_tasks_writing_data(5);
+  CHECK(std::vector<taskid_t>(writers_5.begin(), writers_5.end()) ==
+        std::vector<taskid_t>{0});
+}
+
+TEST_CASE("StaticTaskInfo stores aligned read/write generations") {
+  Graph graph;
+
+  const auto t0 = graph.add_task("t0");
+  const auto t1 = graph.add_task("t1");
+  const auto t2 = graph.add_task("t2");
+
+  std::vector<dataid_t> write0{4};
+  graph.add_write_data(t0, write0);
+
+  std::vector<dataid_t> read1{4};
+  std::vector<dataid_t> write1{4};
+  graph.add_read_data(t1, read1);
+  graph.add_write_data(t1, write1);
+  graph.add_dependency(t1, t0);
+
+  std::vector<dataid_t> read2{4};
+  std::vector<dataid_t> write2{4};
+  graph.add_read_data(t2, read2);
+  graph.add_write_data(t2, write2);
+  graph.add_dependency(t2, t1);
+
+  graph.finalize();
+  StaticTaskInfo static_info(graph);
+
+  const auto recent_writers1 = static_info.get_most_recent_writers(t1);
+  CHECK(std::vector<taskid_t>(recent_writers1.begin(), recent_writers1.end()) ==
+        std::vector<taskid_t>{0});
+  const auto read_generations1 = static_info.get_read_generations(t1);
+  CHECK(std::vector<uint32_t>(read_generations1.begin(), read_generations1.end()) ==
+        std::vector<uint32_t>{0});
+  const auto write_generations1 = static_info.get_write_generations(t1);
+  CHECK(std::vector<uint32_t>(write_generations1.begin(), write_generations1.end()) ==
+        std::vector<uint32_t>{1});
+
+  const auto recent_writers2 = static_info.get_most_recent_writers(t2);
+  CHECK(std::vector<taskid_t>(recent_writers2.begin(), recent_writers2.end()) ==
+        std::vector<taskid_t>{1});
+  const auto read_generations2 = static_info.get_read_generations(t2);
+  CHECK(std::vector<uint32_t>(read_generations2.begin(), read_generations2.end()) ==
+        std::vector<uint32_t>{1});
+  const auto write_generations2 = static_info.get_write_generations(t2);
+  CHECK(std::vector<uint32_t>(write_generations2.begin(), write_generations2.end()) ==
+        std::vector<uint32_t>{2});
+}
