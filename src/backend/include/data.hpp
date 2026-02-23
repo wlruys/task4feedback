@@ -419,15 +419,11 @@ public:
 
 class DataManager {
 protected:
-  using EvictionResidencyManager = eviction::ResidencyManager;
-
   LocationManager mapped_locations;
   LocationManager reserved_locations;
   LocationManager launched_locations;
   MovementManager movement_manager;
-  // Residency/eviction tracking policy storage (LRU for now).
-  EvictionResidencyManager residency_manager;
-  eviction::RuntimeStack eviction_stack;
+  eviction::LRUEvictionPolicy eviction_policy;
   MovementCounter movement_counter;
   devid_t n_devices = 0;
   bool initialized = false;
@@ -488,7 +484,7 @@ protected:
     assert(movement_manager.is_moving(data_id, destination));
 
     // Only completed transfers become evictable residency entries.
-    residency_manager.read(destination, data_id, data_size);
+    eviction_policy.residency().read(destination, data_id, data_size);
     launched_locations.set_valid(data_id, destination, current_time);
     if (mark_reserved) {
       reserved_locations.set_valid(data_id, destination, current_time);
@@ -508,13 +504,13 @@ public:
   DataManager(const Data &data, const Devices &devices)
       : mapped_locations(data.size(), devices.size()),
         reserved_locations(data.size(), devices.size()),
-        launched_locations(data.size(), devices.size()), residency_manager(devices),
+        launched_locations(data.size(), devices.size()), eviction_policy(devices),
         movement_counter(devices.size()), n_devices(devices.size()) {
   }
 
   DataManager(const DataManager &o_)
-      : residency_manager(o_.residency_manager), eviction_stack(o_.eviction_stack),
-        movement_counter(o_.movement_counter), n_devices(o_.n_devices) {
+      : eviction_policy(o_.eviction_policy), movement_counter(o_.movement_counter),
+        n_devices(o_.n_devices) {
     ZoneScopedN("Copy DataManager");
     {
       ZoneScopedN("Copy Mapped Locations");
@@ -545,11 +541,13 @@ public:
     }
     initialized = true;
     n_devices = devices.size();
+    eviction_policy.initialize_residency(devices);
     for (dataid_t i = 0; i < data.size(); i++) {
       auto initial_location = data.get_location(i);
       const auto data_size = data.get_size(i);
 
-      if (initial_location > -1 && (residency_manager.get_mem(initial_location) + data_size) <=
+      if (initial_location > -1 &&
+          (eviction_policy.residency().get_mem(initial_location) + data_size) <=
                                        devices.get_max_resources(initial_location).mem) {
         mapped_locations.set_valid(i, initial_location, 0);
         reserved_locations.set_valid(i, initial_location, 0);
@@ -557,7 +555,7 @@ public:
         device_manager.add_mem<TaskState::MAPPED>(initial_location, data_size, 0);
         device_manager.add_mem<TaskState::RESERVED>(initial_location, data_size, 0);
         device_manager.add_mem<TaskState::LAUNCHED>(initial_location, data_size, 0);
-        residency_manager.read(initial_location, i, data_size);
+        eviction_policy.residency().read(initial_location, i, data_size);
       } else {
         mapped_locations.set_valid(i, 0, 0);
         reserved_locations.set_valid(i, 0, 0);
@@ -565,12 +563,12 @@ public:
         device_manager.add_mem<TaskState::MAPPED>(0, data_size, 0);
         device_manager.add_mem<TaskState::RESERVED>(0, data_size, 0);
         device_manager.add_mem<TaskState::LAUNCHED>(0, data_size, 0);
-        residency_manager.read(0, i, data_size);
+        eviction_policy.residency().read(0, i, data_size);
       }
     }
     for (devid_t i = 0; i < devices.size(); i++) {
       SPDLOG_DEBUG("DataManager: Device {} initialized with {}/{} memory", devices.get_name(i),
-                   residency_manager.get_mem(i), devices.get_max_resources(i).mem);
+                   eviction_policy.residency().get_mem(i), devices.get_max_resources(i).mem);
     }
     valid_location_buffer.reserve(devices.size());
   }
@@ -580,7 +578,8 @@ public:
                                  devid_t device_id) {
     const auto data_size = data.get_size(data_id);
     if (device_id > -1 &&
-        (residency_manager.get_mem(device_id) + data_size) <= devices.get_max_resources(device_id).mem &&
+        (eviction_policy.residency().get_mem(device_id) + data_size) <=
+            devices.get_max_resources(device_id).mem &&
         !mapped_locations.is_valid(data_id, device_id)) {
       mapped_locations.set_valid(data_id, device_id, 0);
       reserved_locations.set_valid(data_id, device_id, 0);
@@ -588,33 +587,29 @@ public:
       device_manager.add_mem<TaskState::MAPPED>(device_id, data_size, 0);
       device_manager.add_mem<TaskState::RESERVED>(device_id, data_size, 0);
       device_manager.add_mem<TaskState::LAUNCHED>(device_id, data_size, 0);
-      residency_manager.read(device_id, data_id, data_size);
+      eviction_policy.residency().read(device_id, data_id, data_size);
     }
   }
 
-  [[nodiscard]] EvictionResidencyManager &eviction_residency() {
-    return residency_manager;
+  [[nodiscard]] eviction::ResidencyManager &eviction_residency() {
+    return eviction_policy.residency();
   }
 
-  [[nodiscard]] const EvictionResidencyManager &eviction_residency() const {
-    return residency_manager;
+  [[nodiscard]] const eviction::ResidencyManager &eviction_residency() const {
+    return eviction_policy.residency();
   }
 
-  void initialize_eviction_stack(std::size_t n_compute_tasks, std::size_t reserve_hint = 0) {
-    eviction_stack.initialize(static_cast<std::size_t>(n_devices), n_compute_tasks, reserve_hint);
+  void initialize_eviction_policy(std::size_t reserve_hint = 0) {
+    // Keep residency and policy state co-located in the eviction policy object.
+    eviction_policy.initialize(static_cast<std::size_t>(n_devices), reserve_hint);
   }
 
-  template <class StaticGraphT>
-  void build_eviction_ancestor_index(const StaticGraphT &static_graph) {
-    eviction_stack.build_compute_task_ancestor_index(static_graph);
+  [[nodiscard]] eviction::LRUEvictionPolicy &eviction_policy_runtime() {
+    return eviction_policy;
   }
 
-  [[nodiscard]] eviction::RuntimeStack &eviction_runtime() {
-    return eviction_stack;
-  }
-
-  [[nodiscard]] const eviction::RuntimeStack &eviction_runtime() const {
-    return eviction_stack;
+  [[nodiscard]] const eviction::LRUEvictionPolicy &eviction_policy_runtime() const {
+    return eviction_policy;
   }
 
   [[nodiscard]] const MovementCounter &get_movement_counter() const {
@@ -775,7 +770,7 @@ public:
                             timecount_t current_time) {
     for (auto data_id : list) {
       const auto size = data.get_size(data_id);
-      residency_manager.read(device_id, data_id, size);
+      eviction_policy.residency().read(device_id, data_id, size);
       bool changed = read_update(data_id, device_id, launched_locations, current_time);
       if (changed) {
         add_memory(device_manager, device_id, data_id, size, current_time);
@@ -807,7 +802,7 @@ public:
         SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
         device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        residency_manager.invalidate(device, data_id, true);
+        eviction_policy.residency().invalidate(device, data_id, true);
       }
     }
     if (invalidation.mapped_cleanup ==
@@ -929,7 +924,7 @@ public:
         device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
         device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        residency_manager.invalidate(device, data_id);
+        eviction_policy.residency().invalidate(device, data_id);
       }
     }
   }
@@ -954,7 +949,7 @@ public:
       }
       if (launched_flags & device_mask) {
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        residency_manager.invalidate(device, data_id);
+        eviction_policy.residency().invalidate(device, data_id);
       }
     }
   }

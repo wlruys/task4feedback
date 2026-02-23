@@ -7,6 +7,7 @@
 #include "devices.hpp"
 #include "eviction.hpp"
 #include "events.hpp"
+#include "drain.hpp"
 #include "iterator.hpp"
 #include "macros.hpp"
 #include "noise.hpp"
@@ -163,7 +164,7 @@ public:
   }
 
   [[nodiscard]] bool has_active_reservable() const {
-    return reservable.total_active_size() > 0;
+    return reservable.has_active();
   }
 
   [[nodiscard]] bool has_reservable() const {
@@ -185,7 +186,7 @@ public:
   }
 
   [[nodiscard]] bool has_active_launchable() const {
-    return launchable.total_active_size() > 0;
+    return launchable.has_active();
   }
 
   [[nodiscard]] std::size_t n_data_launchable(devid_t device) const {
@@ -198,7 +199,7 @@ public:
   }
 
   [[nodiscard]] bool has_active_data_launchable() const {
-    return data_launchable.total_active_size() > 0;
+    return data_launchable.has_active();
   }
 
   [[nodiscard]] std::size_t n_eviction_launchable(devid_t device) const {
@@ -211,7 +212,7 @@ public:
   }
 
   [[nodiscard]] bool has_active_eviction_launchable() const {
-    return eviction_launchable.total_active_size() > 0;
+    return eviction_launchable.has_active();
   }
 
   [[nodiscard]] bool has_eviction_launchable() const {
@@ -561,7 +562,7 @@ public:
         data_manager(input.data, input.devices), counts(input.devices.get().size()),
         costs(input.devices.get().size()) {
     const auto n_compute_tasks = static_cast<std::size_t>(input.tasks.get().get_n_compute_tasks());
-    data_manager.initialize_eviction_stack(n_compute_tasks);
+    data_manager.initialize_eviction_policy(n_compute_tasks);
   }
 
   SchedulerState(const SchedulerState &other)
@@ -924,36 +925,12 @@ public:
     return data_manager.get_launched_location_flags(data_id);
   }
 
-  [[nodiscard]] bool has_pending_local_users(dataid_t data_id,
-                                             devid_t invalidate_device) const {
-    return data_manager.eviction_runtime().has_pending_local_users(data_id, invalidate_device);
-  }
-
-  [[nodiscard]] const ankerl::unordered_dense::set<taskid_t> &
-  get_mapped_writers(dataid_t data_id) const {
-    return data_manager.eviction_runtime().get_mapped_writers(data_id);
-  }
-
   [[nodiscard]] int32_t get_task_depth(taskid_t task_id) const {
     return get_tasks().get_depth(task_id);
   }
 
   [[nodiscard]] devid_t get_task_mapped_device(taskid_t task_id) const {
     return task_runtime.get_compute_task_mapped_device(task_id);
-  }
-
-  [[nodiscard]] bool has_local_mapped_readers(dataid_t data_id,
-                                              devid_t invalidate_device) const {
-    return data_manager.eviction_runtime().has_local_mapped_readers(data_id, invalidate_device);
-  }
-
-  [[nodiscard]] uint32_t get_mapped_write_generation(dataid_t data_id) const {
-    return data_manager.eviction_runtime().get_mapped_write_generation(data_id);
-  }
-
-  [[nodiscard]] uint32_t get_mapped_read_generation(dataid_t data_id,
-                                                    devid_t invalidate_device) const {
-    return data_manager.eviction_runtime().get_mapped_read_generation(data_id, invalidate_device);
   }
 
   friend class Scheduler;
@@ -1086,14 +1063,12 @@ class Scheduler {
 protected:
   SchedulerState state;
   SchedulerQueues queues;
-  TaskDeviceList tasks_requesting_eviction;
+  eviction::EvictionRequestBuffer eviction_requests;
   int64_t success_count = 0;
   int64_t eviction_count = 0;
   eviction::State eviction_state = eviction::State::NONE;
   eviction::PolicyKind eviction_policy_kind = eviction::PolicyKind::LRU;
-  const char *eviction_policy_name = eviction::LRUPolicy::name();
-  using EvictionVictimSelectorFn = void (Scheduler::*)(timecount_t);
-  EvictionVictimSelectorFn eviction_victim_selector_fn = nullptr;
+  const char *eviction_policy_name = eviction::LRUEvictionPolicy::kName;
 
   void finalize_mapping_phase(EventManager &event_manager, timecount_t current_time,
                               bool hit_breakpoint);
@@ -1112,8 +1087,7 @@ protected:
                                   MovementStatus &duration);
   void complete_transfer_move(dataid_t data_id, devid_t source_id, devid_t destination_id,
                               bool is_virtual, timecount_t current_time, bool is_eviction_move);
-  template <class PolicyT>
-  void select_and_enqueue_victims_for_policy(timecount_t current_time);
+  void select_and_enqueue_victims_for_current_policy(timecount_t current_time);
   void enqueue_eviction_move_task(taskid_t compute_task_id, devid_t device_id, dataid_t data_id,
                                   timecount_t current_time);
   void apply_eviction_invalidation(taskid_t compute_task_id, devid_t device_id, dataid_t data_id,
@@ -1147,20 +1121,13 @@ public:
     const auto n_compute_tasks = static_graph.get_n_compute_tasks();
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
-    tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
-    auto &eviction_stack = state.get_data_manager().eviction_runtime();
-    eviction_stack.reserve(INITIAL_TASK_BUFFER_SIZE);
-    eviction_stack.build_compute_task_ancestor_index(static_graph);
-    if (!eviction_stack.has_precomputed_ancestors()) {
-      SPDLOG_DEBUG("Eviction ancestor index disabled for {} compute tasks (fallback predecessor "
-                   "scan enabled)",
-                   n_compute_tasks);
-    }
+    eviction_requests.reserve(INITIAL_TASK_BUFFER_SIZE);
+    auto &eviction_policy = state.get_data_manager().eviction_policy_runtime();
+    eviction_policy.reserve(INITIAL_TASK_BUFFER_SIZE);
     eviction_policy_kind = policy_kind;
     switch (eviction_policy_kind) {
     case eviction::PolicyKind::LRU:
-      eviction_policy_name = eviction::LRUPolicy::name();
-      eviction_victim_selector_fn = &Scheduler::select_and_enqueue_victims_for_policy<eviction::LRUPolicy>;
+      eviction_policy_name = eviction::LRUEvictionPolicy::kName;
       break;
     default:
       assert(false && "Unsupported eviction policy kind");
@@ -1374,19 +1341,22 @@ public:
   friend class SchedulerQueues;
 };
 
-template <class PolicyT>
-void Scheduler::select_and_enqueue_victims_for_policy(timecount_t current_time) {
-  auto &eviction_stack = state.get_data_manager().eviction_runtime();
-  eviction_stack.template plan_with_policy<PolicyT>(state, tasks_requesting_eviction);
+inline void Scheduler::select_and_enqueue_victims_for_current_policy(timecount_t current_time) {
+  auto &eviction_policy = state.get_data_manager().eviction_policy_runtime();
+  eviction_policy.plan(state, eviction_requests);
+  const auto &plans = eviction_policy.plan_results();
 
-  for (const auto &plan : eviction_stack.plan_buffer()) {
-    if (plan.action == eviction::VictimAction::MOVE_TO_HOST) {
-      enqueue_eviction_move_task(plan.compute_task_id, plan.device_id, plan.data_id, current_time);
+  for (std::size_t i = 0; i < plans.size(); ++i) {
+    const auto compute_task_id = plans.compute_task_id(i);
+    const auto device_id = plans.device_id(i);
+    const auto data_id = plans.data_id(i);
+    if (plans.action(i) == eviction::VictimAction::MOVE_TO_HOST) {
+      enqueue_eviction_move_task(compute_task_id, device_id, data_id, current_time);
       continue;
     }
-    assert(plan.has_invalidation_info);
-    apply_eviction_invalidation(plan.compute_task_id, plan.device_id, plan.data_id, current_time,
-                                &plan.invalidation);
+    assert(plans.has_invalidation_info(i));
+    apply_eviction_invalidation(compute_task_id, device_id, data_id, current_time,
+                                &plans.invalidation(i));
   }
 }
 

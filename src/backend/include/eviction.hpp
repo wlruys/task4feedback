@@ -132,14 +132,7 @@ public:
   explicit ResidencyManager(const Devices &devices)
       : n_devices_(devices.size()), lru_lists_(devices.size()), position_maps_(devices.size()),
         sizes_(devices.size()), max_sizes_(devices.size()) {
-    for (auto &size : sizes_) {
-      size = 0;
-    }
-    for (int i = 0; i < devices.size(); i++) {
-      max_sizes_[i] = devices.get_max_resources(i).mem;
-    }
-    id_buffer.reserve(20);
-    used_id_scratch.reserve(64);
+    initialize_from_devices(devices);
   }
 
   ResidencyManager(const ResidencyManager &other)
@@ -154,6 +147,23 @@ public:
     }
     id_buffer.reserve(other.id_buffer.capacity());
     used_id_scratch.reserve(other.used_id_scratch.size());
+  }
+
+  void initialize_from_devices(const Devices &devices) {
+    n_devices_ = devices.size();
+    lru_lists_.assign(devices.size(), {});
+    position_maps_.assign(devices.size(), {});
+    sizes_.assign(devices.size(), 0);
+    max_sizes_.assign(devices.size(), 0);
+    evicted_size = 0;
+    max_usage = 0;
+    for (devid_t i = 0; i < devices.size(); ++i) {
+      max_sizes_[i] = devices.get_max_resources(i).mem;
+    }
+    id_buffer.clear();
+    used_id_scratch.clear();
+    id_buffer.reserve(std::max<std::size_t>(id_buffer.capacity(), 20));
+    used_id_scratch.reserve(std::max<std::size_t>(used_id_scratch.capacity(), 64));
   }
 
   void read_impl(devid_t device_id, dataid_t data_id, mem_t mem_size) {
@@ -271,538 +281,166 @@ public:
   }
 };
 
-// Backward-compatible alias while call sites migrate.
-using LRUManager = ResidencyManager;
-
 enum class PolicyKind : uint8_t {
   LRU = 0,
 };
 
-template <class Derived> class PolicyCRTP {
-public:
-  template <class ResidencyManagerT>
-  [[nodiscard]] std::span<const dataid_t>
-  select_victims(const ResidencyManagerT &residency_manager, devid_t device_id, mem_t missing_mem,
-                 std::span<const dataid_t> protected_data) const {
-    return static_cast<const Derived *>(this)->select_victims_impl(residency_manager, device_id,
-                                                                   missing_mem, protected_data);
-  }
-
-  [[nodiscard]] static constexpr PolicyKind kind() {
-    return Derived::kKind;
-  }
-
-  [[nodiscard]] static constexpr const char *name() {
-    return Derived::kName;
-  }
+enum class UsagePhase : uint8_t {
+  MAPPED = 0,
+  RESERVED = 1,
+  MOVED = 2,
+  LAUNCHED = 4,
 };
 
-class LRUPolicy final : public PolicyCRTP<LRUPolicy> {
-public:
-  static constexpr PolicyKind kKind = PolicyKind::LRU;
-  static constexpr const char *kName = "LRU";
-
-  template <class ResidencyManagerT>
-  [[nodiscard]] std::span<const dataid_t>
-  select_victims_impl(const ResidencyManagerT &residency_manager, devid_t device_id,
-                      mem_t missing_mem, std::span<const dataid_t> protected_data) const {
-    return residency_manager.select_victim_ids(device_id, missing_mem, protected_data);
-  }
+enum class UsageTransition : uint8_t {
+  SET = 0,
+  RELEASE = 1,
 };
 
-template <class WriterSetT, class DepthFnT>
-[[nodiscard]] inline taskid_t select_top_writer_by_depth(const WriterSetT &writer_tasks,
-                                                         DepthFnT &&depth_of) {
-  assert(!writer_tasks.empty());
-  if (writer_tasks.size() == 1) {
-    return *writer_tasks.begin();
-  }
-
-  taskid_t top = *writer_tasks.begin();
-  int32_t top_depth = depth_of(top);
-  for (auto tid : writer_tasks) {
-    const int32_t d = depth_of(tid);
-    if (d < top_depth) {
-      top_depth = d;
-      top = tid;
-    }
-  }
-  return top;
-}
-
-template <class WriterSetT, class ContextT>
-[[nodiscard]] inline taskid_t select_top_writer_by_depth(const WriterSetT &writer_tasks,
-                                                         const ContextT &ctx) {
-  assert(!writer_tasks.empty());
-  if (writer_tasks.size() == 1) {
-    return *writer_tasks.begin();
-  }
-
-  taskid_t top = *writer_tasks.begin();
-  int32_t top_depth = ctx.get_task_depth(top);
-  for (auto tid : writer_tasks) {
-    const int32_t d = ctx.get_task_depth(tid);
-    if (d < top_depth) {
-      top_depth = d;
-      top = tid;
-    }
-  }
-  return top;
-}
-
-class InvalidationCache {
+class EvictionRequestBuffer {
 public:
   void reserve(std::size_t n) {
-    encoded_.reserve(n);
+    compute_task_ids_.reserve(n);
+    device_ids_.reserve(n);
+    missing_mem_.reserve(n);
   }
 
   void clear() {
-    encoded_.clear();
+    compute_task_ids_.clear();
+    device_ids_.clear();
+    missing_mem_.clear();
   }
 
-  [[nodiscard]] bool get(dataid_t data_id, devid_t invalidate_device,
-                         InvalidationInfo &out_info) const {
-    const auto key = pack_key(data_id, invalidate_device);
-    auto it = encoded_.find(key);
-    if (it == encoded_.end()) {
-      return false;
-    }
-
-    const uint8_t encoded = it->second;
-    const uint8_t cleanup_bits = (encoded >> 1) & 0x03;
-    InvalidationInfo::MappedCleanupDecision mapped_cleanup =
-        InvalidationInfo::MappedCleanupDecision::KEEP_MAPPED;
-    switch (cleanup_bits) {
-    case 0:
-      mapped_cleanup = InvalidationInfo::MappedCleanupDecision::KEEP_MAPPED;
-      break;
-    case 1:
-      mapped_cleanup = InvalidationInfo::MappedCleanupDecision::REMOVE_MAPPED_BYTES_ONLY;
-      break;
-    case 2:
-      mapped_cleanup = InvalidationInfo::MappedCleanupDecision::REMOVE_MAPPED_AND_LOCATION;
-      break;
-    default:
-      mapped_cleanup = InvalidationInfo::MappedCleanupDecision::KEEP_MAPPED;
-      break;
-    }
-
-    out_info = {
-        .pending_local_users = (encoded & 0x01) != 0,
-        .mapped_cleanup = mapped_cleanup,
-    };
-    return true;
+  [[nodiscard]] bool empty() const {
+    return compute_task_ids_.empty();
   }
 
-  void put(dataid_t data_id, devid_t invalidate_device, const InvalidationInfo &info) {
-    uint8_t encoded = 0;
-    encoded |= static_cast<uint8_t>(info.pending_local_users ? 0x01 : 0);
-    encoded |= static_cast<uint8_t>(static_cast<uint8_t>(info.mapped_cleanup) << 1);
-    encoded_[pack_key(data_id, invalidate_device)] = encoded;
+  [[nodiscard]] std::size_t size() const {
+    return compute_task_ids_.size();
+  }
+
+  void push(taskid_t compute_task_id, devid_t device_id, mem_t missing_mem) {
+    compute_task_ids_.push_back(compute_task_id);
+    device_ids_.push_back(device_id);
+    missing_mem_.push_back(missing_mem);
+  }
+
+  [[nodiscard]] taskid_t compute_task_id(std::size_t i) const {
+    return compute_task_ids_[i];
+  }
+  [[nodiscard]] devid_t device_id(std::size_t i) const {
+    return device_ids_[i];
+  }
+  [[nodiscard]] mem_t missing_mem(std::size_t i) const {
+    return missing_mem_[i];
   }
 
 private:
-  ankerl::unordered_dense::map<uint64_t, uint8_t> encoded_;
+  std::vector<taskid_t> compute_task_ids_;
+  std::vector<devid_t> device_ids_;
+  std::vector<mem_t> missing_mem_;
 };
 
-class PlannedVictimSet {
+class EvictionPlanSoA {
 public:
   void reserve(std::size_t n) {
-    keys_.reserve(n);
+    compute_task_ids_.reserve(n);
+    device_ids_.reserve(n);
+    data_ids_.reserve(n);
+    actions_.reserve(n);
+    has_invalidation_info_.reserve(n);
+    invalidations_.reserve(n);
   }
 
   void clear() {
-    keys_.clear();
+    compute_task_ids_.clear();
+    device_ids_.clear();
+    data_ids_.clear();
+    actions_.clear();
+    has_invalidation_info_.clear();
+    invalidations_.clear();
   }
 
-  [[nodiscard]] bool mark(dataid_t data_id, devid_t device_id) {
-    return keys_.emplace(pack_key(data_id, device_id)).second;
+  [[nodiscard]] std::size_t size() const {
+    return data_ids_.size();
   }
 
-private:
-  ankerl::unordered_dense::set<uint64_t> keys_;
-};
-
-struct PredecessorReaderCacheEntry {
-  taskid_t top_writer = -1;
-  uint32_t write_generation = 0;
-  uint32_t read_generation = 0;
-  bool has_local_predecessor_reader = false;
-};
-
-class PredecessorReaderCache {
-public:
-  void reserve(std::size_t n) {
-    entries_.reserve(n);
+  void push(const VictimPlan &plan) {
+    compute_task_ids_.push_back(plan.compute_task_id);
+    device_ids_.push_back(plan.device_id);
+    data_ids_.push_back(plan.data_id);
+    actions_.push_back(plan.action);
+    has_invalidation_info_.push_back(plan.has_invalidation_info ? 1U : 0U);
+    invalidations_.push_back(plan.invalidation);
   }
 
-  void clear() {
-    entries_.clear();
+  [[nodiscard]] taskid_t compute_task_id(std::size_t i) const {
+    return compute_task_ids_[i];
   }
-
-  [[nodiscard]] bool get(dataid_t data_id, devid_t invalidate_device, taskid_t top_writer,
-                         uint32_t write_generation, uint32_t read_generation,
-                         bool &has_local_predecessor_reader) const {
-    auto it = entries_.find(pack_key(data_id, invalidate_device));
-    if (it == entries_.end()) {
-      return false;
-    }
-
-    const auto &entry = it->second;
-    if (entry.top_writer != top_writer || entry.write_generation != write_generation ||
-        entry.read_generation != read_generation) {
-      return false;
-    }
-
-    has_local_predecessor_reader = entry.has_local_predecessor_reader;
-    return true;
+  [[nodiscard]] devid_t device_id(std::size_t i) const {
+    return device_ids_[i];
   }
-
-  void put(dataid_t data_id, devid_t invalidate_device, taskid_t top_writer,
-           uint32_t write_generation, uint32_t read_generation,
-           bool has_local_predecessor_reader) {
-    entries_[pack_key(data_id, invalidate_device)] = {
-        .top_writer = top_writer,
-        .write_generation = write_generation,
-        .read_generation = read_generation,
-        .has_local_predecessor_reader = has_local_predecessor_reader,
-    };
+  [[nodiscard]] dataid_t data_id(std::size_t i) const {
+    return data_ids_[i];
+  }
+  [[nodiscard]] VictimAction action(std::size_t i) const {
+    return actions_[i];
+  }
+  [[nodiscard]] bool has_invalidation_info(std::size_t i) const {
+    return has_invalidation_info_[i] != 0;
+  }
+  [[nodiscard]] const InvalidationInfo &invalidation(std::size_t i) const {
+    return invalidations_[i];
   }
 
 private:
-  ankerl::unordered_dense::map<uint64_t, PredecessorReaderCacheEntry> entries_;
+  std::vector<taskid_t> compute_task_ids_;
+  std::vector<devid_t> device_ids_;
+  std::vector<dataid_t> data_ids_;
+  std::vector<VictimAction> actions_;
+  std::vector<uint8_t> has_invalidation_info_;
+  std::vector<InvalidationInfo> invalidations_;
 };
 
-template <class PolicyT, class StateT, class PredecessorQueryT, class RequestListT>
-class RequestPlanner;
-
-class RuntimeStack {
+template <class Derived> class EvictionPolicy {
 public:
-  void initialize(std::size_t n_devices, std::size_t n_compute_tasks,
-                  std::size_t reserve_hint = 0) {
-    n_devices_ = static_cast<devid_t>(n_devices);
-    is_mapped_not_reserved_.assign(n_compute_tasks, 0);
-    mapped_unique_count_.assign(n_devices, {});
-    mapped_read_count_by_data_device_.assign(n_devices, {});
-    mapped_read_tasks_by_data_device_.assign(n_devices, {});
-    mapped_read_generation_by_data_device_.assign(n_devices, {});
+  void initialize_residency(const Devices &devices) {
+    static_cast<Derived *>(this)->initialize_residency_impl(devices);
+  }
 
-    if (reserve_hint > 0) {
-      reserve(reserve_hint);
-    }
+  void initialize(std::size_t n_devices, std::size_t reserve_hint = 0) {
+    static_cast<Derived *>(this)->initialize_impl(n_devices, reserve_hint);
   }
 
   void reserve(std::size_t reserve_hint) {
-    invalidation_cache_.reserve(reserve_hint * 8);
-    predecessor_reader_cache_.reserve(reserve_hint * 16);
-    planned_victims_.reserve(reserve_hint * 8);
-    plan_buffer_.reserve(reserve_hint * 4);
-    dfs_stack_scratch_.reserve(64);
-    dfs_visited_scratch_.reserve(128);
-  }
-
-  template <class StaticGraphT>
-  void build_compute_task_ancestor_index(const StaticGraphT &static_graph) {
-    constexpr std::size_t kMaxIndexedComputeTasks = 16384;
-    const auto n_compute_tasks = static_cast<std::size_t>(static_graph.get_n_compute_tasks());
-    compute_task_ancestor_words_ = (n_compute_tasks + 63) / 64;
-
-    if (n_compute_tasks == 0 || n_compute_tasks > kMaxIndexedComputeTasks) {
-      has_precomputed_ancestors_ = false;
-      compute_task_ancestor_bits_.clear();
-      return;
-    }
-
-    compute_task_ancestor_bits_.assign(n_compute_tasks * compute_task_ancestor_words_, 0);
-    std::vector<taskid_t> topo_order(n_compute_tasks);
-    std::iota(topo_order.begin(), topo_order.end(), 0);
-    std::sort(topo_order.begin(), topo_order.end(),
-              [&static_graph](taskid_t lhs, taskid_t rhs) {
-                return static_graph.get_depth(lhs) < static_graph.get_depth(rhs);
-              });
-
-    for (auto task_id : topo_order) {
-      auto *row = compute_task_ancestor_bits_.data() +
-                  static_cast<std::size_t>(task_id) * compute_task_ancestor_words_;
-      for (auto dep : static_graph.get_compute_task_dependencies(task_id)) {
-        const auto *dep_row = compute_task_ancestor_bits_.data() +
-                              static_cast<std::size_t>(dep) * compute_task_ancestor_words_;
-        for (std::size_t w = 0; w < compute_task_ancestor_words_; ++w) {
-          row[w] |= dep_row[w];
-        }
-        const auto dep_idx = static_cast<std::size_t>(dep);
-        row[dep_idx / 64] |= (1ULL << (dep_idx % 64));
-      }
-    }
-
-    has_precomputed_ancestors_ = true;
-  }
-
-  [[nodiscard]] bool has_precomputed_ancestors() const {
-    return has_precomputed_ancestors_;
+    static_cast<Derived *>(this)->reserve_impl(reserve_hint);
   }
 
   void clear_cycle_state() {
-    invalidation_cache_.clear();
-    predecessor_reader_cache_.clear();
-    planned_victims_.clear();
-    plan_buffer_.clear();
+    static_cast<Derived *>(this)->clear_cycle_state_impl();
   }
 
-  void clear_invalidation_caches() {
-    invalidation_cache_.clear();
-    predecessor_reader_cache_.clear();
+  template <UsagePhase Phase, UsageTransition Transition>
+  void update_used(dataid_t data_id, devid_t device_id, timecount_t current_time) {
+    static_cast<Derived *>(this)->template update_used_impl<Phase, Transition>(data_id, device_id,
+                                                                               current_time);
   }
 
-  template <class StaticGraphT>
-  void on_compute_mapped(const StaticGraphT &static_graph, taskid_t compute_task_id,
-                         devid_t device_id) {
-    mapped_but_not_reserved_tasks_.insert(compute_task_id);
-    is_mapped_not_reserved_[static_cast<std::size_t>(compute_task_id)] = 1;
-
-    auto &unique_count_map = mapped_unique_count_[device_id];
-    for (auto data_id : static_graph.get_unique(compute_task_id)) {
-      unique_count_map[data_id]++;
-    }
-
-    for (auto data_id : static_graph.get_write(compute_task_id)) {
-      mapped_write_by_data_[data_id].insert(compute_task_id);
-      mapped_write_generation_by_data_[data_id] += 1;
-    }
-
-    auto &read_count_map = mapped_read_count_by_data_device_[device_id];
-    auto &read_tasks_map = mapped_read_tasks_by_data_device_[device_id];
-    auto &read_generation_map = mapped_read_generation_by_data_device_[device_id];
-    for (auto data_id : static_graph.get_read(compute_task_id)) {
-      read_count_map[data_id]++;
-      read_tasks_map[data_id].insert(compute_task_id);
-      read_generation_map[data_id] += 1;
-    }
-  }
-
-  template <class StaticGraphT>
-  void on_compute_reserved(const StaticGraphT &static_graph, taskid_t compute_task_id,
-                           devid_t device_id) {
-    mapped_but_not_reserved_tasks_.erase(compute_task_id);
-    is_mapped_not_reserved_[static_cast<std::size_t>(compute_task_id)] = 0;
-
-    auto &unique_count_map = mapped_unique_count_[device_id];
-    for (auto data_id : static_graph.get_unique(compute_task_id)) {
-      auto unique_it = unique_count_map.find(data_id);
-      assert(unique_it != unique_count_map.end());
-      if (--(unique_it->second) == 0) {
-        unique_count_map.erase(unique_it);
-      }
-    }
-
-    for (auto data_id : static_graph.get_write(compute_task_id)) {
-      auto writers_it = mapped_write_by_data_.find(data_id);
-      if (writers_it != mapped_write_by_data_.end()) {
-        writers_it->second.erase(compute_task_id);
-        if (writers_it->second.empty()) {
-          mapped_write_by_data_.erase(writers_it);
-        }
-      }
-      mapped_write_generation_by_data_[data_id] += 1;
-    }
-
-    auto &read_count_map = mapped_read_count_by_data_device_[device_id];
-    auto &read_tasks_map = mapped_read_tasks_by_data_device_[device_id];
-    auto &read_generation_map = mapped_read_generation_by_data_device_[device_id];
-    for (auto data_id : static_graph.get_read(compute_task_id)) {
-      auto read_count_it = read_count_map.find(data_id);
-      assert(read_count_it != read_count_map.end());
-      if (--(read_count_it->second) == 0) {
-        read_count_map.erase(read_count_it);
-      }
-
-      auto tasks_it = read_tasks_map.find(data_id);
-      if (tasks_it != read_tasks_map.end()) {
-        tasks_it->second.erase(compute_task_id);
-        if (tasks_it->second.empty()) {
-          read_tasks_map.erase(tasks_it);
-        }
-      }
-      read_generation_map[data_id] += 1;
-    }
-  }
-
-  [[nodiscard]] bool has_pending_local_users(dataid_t data_id, devid_t invalidate_device) const {
-    const auto &unique_count = mapped_unique_count_[invalidate_device];
-    return unique_count.find(data_id) != unique_count.end();
-  }
-
-  [[nodiscard]] const ankerl::unordered_dense::set<taskid_t> &
-  get_mapped_writers(dataid_t data_id) const {
-    static const ankerl::unordered_dense::set<taskid_t> kEmptyWriters;
-    auto it = mapped_write_by_data_.find(data_id);
-    if (it == mapped_write_by_data_.end()) {
-      return kEmptyWriters;
-    }
-    return it->second;
-  }
-
-  [[nodiscard]] bool has_local_mapped_readers(dataid_t data_id, devid_t invalidate_device) const {
-    const auto &read_count = mapped_read_count_by_data_device_[invalidate_device];
-    return read_count.find(data_id) != read_count.end();
-  }
-
-  [[nodiscard]] uint32_t get_mapped_write_generation(dataid_t data_id) const {
-    auto it = mapped_write_generation_by_data_.find(data_id);
-    return it == mapped_write_generation_by_data_.end() ? 0 : it->second;
-  }
-
-  [[nodiscard]] uint32_t get_mapped_read_generation(dataid_t data_id,
-                                                    devid_t invalidate_device) const {
-    const auto &read_generation = mapped_read_generation_by_data_device_[invalidate_device];
-    auto it = read_generation.find(data_id);
-    return it == read_generation.end() ? 0 : it->second;
-  }
-
-  [[nodiscard]] bool try_get_cached_invalidation_info(
-      dataid_t data_id, devid_t invalidate_device, InvalidationInfo &out_info) const {
-    return invalidation_cache_.get(data_id, invalidate_device, out_info);
-  }
-
-  void cache_invalidation_info(dataid_t data_id, devid_t invalidate_device,
-                               const InvalidationInfo &info) {
-    invalidation_cache_.put(data_id, invalidate_device, info);
+  template <class StateT>
+  void plan(const StateT &state, const EvictionRequestBuffer &requests) {
+    static_cast<Derived *>(this)->plan_impl(state, requests);
   }
 
   template <class StateT>
   [[nodiscard]] InvalidationInfo get_invalidation_info(const StateT &state, dataid_t data_id,
-                                                       devid_t invalidate_device) {
-    InvalidationInfo info{};
-    if (invalidation_cache_.get(data_id, invalidate_device, info)) {
-      return info;
-    }
-
-    info = compute_invalidation_info(state, *this, predecessor_reader_cache_, data_id,
-                                     invalidate_device);
-    invalidation_cache_.put(data_id, invalidate_device, info);
-    return info;
+                                                       devid_t invalidate_device) const {
+    return static_cast<const Derived *>(this)->get_invalidation_info_impl(state, data_id,
+                                                                          invalidate_device);
   }
 
-  template <class PolicyT, class StateT, class RequestListT>
-  void plan_with_policy(const StateT &state, const RequestListT &requests) {
-    static const PolicyT kPolicy{};
-    static const RequestPlanner<PolicyT, StateT, RuntimeStack, RequestListT> kPlanner{};
-    kPlanner.plan(kPolicy, state, *this, requests, planned_victims_, invalidation_cache_,
-                  predecessor_reader_cache_, plan_buffer_);
+  [[nodiscard]] const EvictionPlanSoA &plan_results() const {
+    return static_cast<const Derived *>(this)->plan_results_impl();
   }
-
-  [[nodiscard]] const std::vector<VictimPlan> &plan_buffer() const {
-    return plan_buffer_;
-  }
-
-  [[nodiscard]] std::vector<VictimPlan> &plan_buffer() {
-    return plan_buffer_;
-  }
-
-  template <class StateT>
-  [[nodiscard]] bool has_local_reader_predecessor_for_eviction(
-      const StateT &state, taskid_t top_writer_task_id, dataid_t data_id,
-      devid_t invalidate_device) {
-    bool has_local_predecessor_reader = false;
-    const auto &read_tasks_map = mapped_read_tasks_by_data_device_[invalidate_device];
-    auto readers_it = read_tasks_map.find(data_id);
-    if (readers_it == read_tasks_map.end()) {
-      return false;
-    }
-
-    if (has_precomputed_ancestors_) {
-      for (auto reader_task_id : readers_it->second) {
-        if (is_compute_task_ancestor(top_writer_task_id, reader_task_id,
-                                     state.get_tasks().get_n_compute_tasks())) {
-          has_local_predecessor_reader = true;
-          break;
-        }
-      }
-      return has_local_predecessor_reader;
-    }
-
-    const auto &static_graph = state.get_tasks();
-    auto &stack = dfs_stack_scratch_;
-    auto &visited = dfs_visited_scratch_;
-    stack.clear();
-    visited.clear();
-
-    for (auto dep0 : static_graph.get_compute_task_dependencies(top_writer_task_id)) {
-      if (!is_mapped_not_reserved_[static_cast<std::size_t>(dep0)]) {
-        continue;
-      }
-      if (!visited.emplace(dep0).second) {
-        continue;
-      }
-      if (readers_it->second.contains(dep0)) {
-        return true;
-      }
-      stack.push_back(dep0);
-    }
-
-    while (!stack.empty()) {
-      const auto curr = stack.back();
-      stack.pop_back();
-      for (auto dep : static_graph.get_compute_task_dependencies(curr)) {
-        if (!is_mapped_not_reserved_[static_cast<std::size_t>(dep)]) {
-          continue;
-        }
-        if (!visited.emplace(dep).second) {
-          continue;
-        }
-        if (readers_it->second.contains(dep)) {
-          return true;
-        }
-        stack.push_back(dep);
-      }
-    }
-
-    return false;
-  }
-
-private:
-  [[nodiscard]] bool is_compute_task_ancestor(taskid_t descendant, taskid_t ancestor,
-                                              std::size_t n_compute_tasks) const {
-    if (!has_precomputed_ancestors_) {
-      return false;
-    }
-
-    const auto desc_idx = static_cast<std::size_t>(descendant);
-    const auto anc_idx = static_cast<std::size_t>(ancestor);
-    if (desc_idx >= n_compute_tasks || anc_idx >= n_compute_tasks) {
-      return false;
-    }
-
-    const auto word_idx = anc_idx / 64;
-    const auto bit = (1ULL << (anc_idx % 64));
-    const auto *row = compute_task_ancestor_bits_.data() + desc_idx * compute_task_ancestor_words_;
-    return (row[word_idx] & bit) != 0;
-  }
-
-  devid_t n_devices_ = 0;
-  ankerl::unordered_dense::set<taskid_t> mapped_but_not_reserved_tasks_;
-  std::vector<uint8_t> is_mapped_not_reserved_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> mapped_unique_count_;
-  ankerl::unordered_dense::map<dataid_t, ankerl::unordered_dense::set<taskid_t>>
-      mapped_write_by_data_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> mapped_read_count_by_data_device_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, ankerl::unordered_dense::set<taskid_t>>>
-      mapped_read_tasks_by_data_device_;
-  ankerl::unordered_dense::map<dataid_t, uint32_t> mapped_write_generation_by_data_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, uint32_t>>
-      mapped_read_generation_by_data_device_;
-
-  InvalidationCache invalidation_cache_;
-  PlannedVictimSet planned_victims_;
-  PredecessorReaderCache predecessor_reader_cache_;
-  std::vector<VictimPlan> plan_buffer_;
-
-  std::vector<taskid_t> dfs_stack_scratch_;
-  ankerl::unordered_dense::set<taskid_t> dfs_visited_scratch_;
-
-  std::vector<uint64_t> compute_task_ancestor_bits_;
-  std::size_t compute_task_ancestor_words_ = 0;
-  bool has_precomputed_ancestors_ = false;
 };
 
 [[nodiscard]] inline VictimAction classify_victim_action(devicemask_t launched_location_flags) {
@@ -811,90 +449,80 @@ private:
   return (n_sources == 1) ? VictimAction::MOVE_TO_HOST : VictimAction::INVALIDATE_ONLY;
 }
 
-template <class StateT, class PredecessorQueryT>
-[[nodiscard]] inline bool query_predecessor_reader_oracle(
-    const StateT &state, PredecessorQueryT &predecessor_query, PredecessorReaderCache &cache,
-    taskid_t top_writer_task_id, dataid_t data_id, devid_t invalidate_device) {
-  const auto write_generation = state.get_mapped_write_generation(data_id);
-  const auto read_generation = state.get_mapped_read_generation(data_id, invalidate_device);
-
-  bool cached_has_local_reader = false;
-  if (cache.get(data_id, invalidate_device, top_writer_task_id, write_generation, read_generation,
-                cached_has_local_reader)) {
-    return cached_has_local_reader;
-  }
-
-  const bool has_local_predecessor_reader =
-      predecessor_query.has_local_reader_predecessor_for_eviction(state, top_writer_task_id,
-                                                                  data_id, invalidate_device);
-  cache.put(data_id, invalidate_device, top_writer_task_id, write_generation, read_generation,
-            has_local_predecessor_reader);
-  return has_local_predecessor_reader;
-}
-
-template <class StateT, class PredecessorQueryT>
-[[nodiscard]] inline InvalidationInfo compute_invalidation_info(
-    const StateT &state, PredecessorQueryT &predecessor_query,
-    PredecessorReaderCache &predecessor_reader_cache, dataid_t data_id, devid_t invalidate_device) {
-  // Contract:
-  // - pending_local_users: mapped-not-reserved tasks on invalidate_device may still consume data_id.
-  // - mapped_cleanup:
-  //   KEEP_MAPPED: keep mapped accounting/location untouched on invalidate_device.
-  //   REMOVE_MAPPED_BYTES_ONLY: remove mapped bytes but keep mapped validity.
-  //   REMOVE_MAPPED_AND_LOCATION: remove mapped bytes and mapped validity.
-  InvalidationInfo info{};
-  info.pending_local_users = state.has_pending_local_users(data_id, invalidate_device);
-  info.mapped_cleanup = info.pending_local_users
-                            ? InvalidationInfo::MappedCleanupDecision::KEEP_MAPPED
-                            : InvalidationInfo::MappedCleanupDecision::REMOVE_MAPPED_AND_LOCATION;
-
-  const auto &writers = state.get_mapped_writers(data_id);
-  if (writers.empty()) {
-    return info;
-  }
-
-  const taskid_t top_writer = select_top_writer_by_depth(writers, state);
-  if (state.get_task_mapped_device(top_writer) == invalidate_device) {
-    return info;
-  }
-
-  if (!state.has_local_mapped_readers(data_id, invalidate_device)) {
-    if (info.pending_local_users) {
-      info.mapped_cleanup = InvalidationInfo::MappedCleanupDecision::REMOVE_MAPPED_BYTES_ONLY;
-    }
-    return info;
-  }
-
-  const bool has_local_predecessor_reader = query_predecessor_reader_oracle(
-      state, predecessor_query, predecessor_reader_cache, top_writer, data_id, invalidate_device);
-  if (!has_local_predecessor_reader && info.pending_local_users) {
-    info.mapped_cleanup = InvalidationInfo::MappedCleanupDecision::REMOVE_MAPPED_BYTES_ONLY;
-  }
-  return info;
-}
-
-template <class PolicyT, class StateT, class PredecessorQueryT, class RequestListT>
-class RequestPlanner {
+class LRUEvictionPolicy final : public EvictionPolicy<LRUEvictionPolicy> {
 public:
-  void plan(const PolicyT &policy, const StateT &state, PredecessorQueryT &predecessor_query,
-            const RequestListT &requests, PlannedVictimSet &planned_victims,
-            InvalidationCache &invalidation_cache,
-            PredecessorReaderCache &predecessor_reader_cache,
-            std::vector<VictimPlan> &out_plans) const {
-    out_plans.clear();
+  static constexpr PolicyKind kKind = PolicyKind::LRU;
+  static constexpr const char *kName = "LRU";
 
-    for (const auto &[compute_task_id, device_id] : requests) {
-      // Planner only creates candidates for requests that still overflow reserve memory.
-      const mem_t missing_mem = state.get_missing_reserve_memory(compute_task_id, device_id);
+  LRUEvictionPolicy() = default;
+
+  explicit LRUEvictionPolicy(const Devices &devices) : residency_manager_(devices) {
+  }
+
+  void initialize_residency_impl(const Devices &devices) {
+    residency_manager_.initialize_from_devices(devices);
+  }
+
+  void initialize_impl(std::size_t n_devices, std::size_t reserve_hint) {
+    n_devices_ = static_cast<devid_t>(n_devices);
+    mapped_use_counts_by_device_.assign(n_devices, {});
+    reserved_use_counts_by_device_.assign(n_devices, {});
+    launched_use_counts_by_device_.assign(n_devices, {});
+    reserve_impl(reserve_hint);
+  }
+
+  void reserve_impl(std::size_t reserve_hint) {
+    if (reserve_hint == 0) {
+      return;
+    }
+    for (auto &m : mapped_use_counts_by_device_) {
+      m.reserve(reserve_hint * 8);
+    }
+    for (auto &m : reserved_use_counts_by_device_) {
+      m.reserve(reserve_hint * 8);
+    }
+    for (auto &m : launched_use_counts_by_device_) {
+      m.reserve(reserve_hint * 8);
+    }
+    planned_keys_.reserve(reserve_hint * 8);
+    plan_results_.reserve(reserve_hint * 4);
+  }
+
+  void clear_cycle_state_impl() {
+    planned_keys_.clear();
+    plan_results_.clear();
+  }
+
+  template <UsagePhase Phase, UsageTransition Transition>
+  void update_used_impl(dataid_t data_id, devid_t device_id, timecount_t current_time) {
+    (void)current_time;
+    assert(device_id >= 0 && device_id < n_devices_);
+    auto &counts = use_counts_by_device<Phase>()[device_id];
+    if constexpr (Transition == UsageTransition::SET) {
+      counts[data_id] += 1;
+    } else {
+      decrement_count_map(counts, data_id);
+    }
+  }
+
+  template <class StateT>
+  void plan_impl(const StateT &state, const EvictionRequestBuffer &requests) {
+    clear_cycle_state_impl();
+
+    for (std::size_t i = 0; i < requests.size(); ++i) {
+      const taskid_t compute_task_id = requests.compute_task_id(i);
+      const devid_t device_id = requests.device_id(i);
+      const mem_t missing_mem = requests.missing_mem(i);
       if (missing_mem <= 0) {
         continue;
       }
 
       const auto protected_data = state.get_task_unique_data(compute_task_id);
-      const auto victim_data_ids =
-          policy.select_victims(state.eviction_residency(), device_id, missing_mem, protected_data);
-      for (const auto data_id : victim_data_ids) {
-        if (!planned_victims.mark(data_id, device_id)) {
+      const auto victim_ids = residency_manager_.select_victim_ids(
+          device_id, static_cast<std::size_t>(missing_mem), protected_data);
+
+      for (const auto data_id : victim_ids) {
+        if (!planned_keys_.emplace(pack_key(data_id, device_id)).second) {
           continue;
         }
 
@@ -903,22 +531,71 @@ public:
         plan.device_id = device_id;
         plan.data_id = data_id;
         plan.action = classify_victim_action(state.get_launched_location_flags(data_id));
-
         if (plan.action == VictimAction::INVALIDATE_ONLY) {
-          // Invalidation decisions are shared across requesters in a cycle through cache.
-          if (!invalidation_cache.get(data_id, device_id, plan.invalidation)) {
-            plan.invalidation = compute_invalidation_info(state, predecessor_query,
-                                                          predecessor_reader_cache, data_id,
-                                                          device_id);
-            invalidation_cache.put(data_id, device_id, plan.invalidation);
-          }
+          plan.invalidation = get_invalidation_info_impl(state, data_id, device_id);
           plan.has_invalidation_info = true;
         }
-
-        out_plans.push_back(plan);
+        plan_results_.push(plan);
       }
     }
   }
+
+  template <class StateT>
+  [[nodiscard]] InvalidationInfo get_invalidation_info_impl(const StateT &state, dataid_t data_id,
+                                                            devid_t invalidate_device) const {
+    (void)state;
+    InvalidationInfo info{};
+    const auto &mapped_counts = mapped_use_counts_by_device_[invalidate_device];
+    info.pending_local_users = mapped_counts.find(data_id) != mapped_counts.end();
+    info.mapped_cleanup = info.pending_local_users
+                              ? InvalidationInfo::MappedCleanupDecision::KEEP_MAPPED
+                              : InvalidationInfo::MappedCleanupDecision::REMOVE_MAPPED_AND_LOCATION;
+    return info;
+  }
+
+  [[nodiscard]] const EvictionPlanSoA &plan_results_impl() const {
+    return plan_results_;
+  }
+
+  [[nodiscard]] ResidencyManager &residency() {
+    return residency_manager_;
+  }
+
+  [[nodiscard]] const ResidencyManager &residency() const {
+    return residency_manager_;
+  }
+
+private:
+  template <UsagePhase Phase>
+  auto &use_counts_by_device() {
+    if constexpr (Phase == UsagePhase::MAPPED) {
+      return mapped_use_counts_by_device_;
+    } else if constexpr (Phase == UsagePhase::RESERVED) {
+      return reserved_use_counts_by_device_;
+    } else {
+      static_assert(Phase == UsagePhase::LAUNCHED);
+      return launched_use_counts_by_device_;
+    }
+  }
+
+  static void decrement_count_map(ankerl::unordered_dense::map<dataid_t, int32_t> &m,
+                                  dataid_t data_id) {
+    auto it = m.find(data_id);
+    if (it == m.end()) {
+      return;
+    }
+    if (--(it->second) <= 0) {
+      m.erase(it);
+    }
+  }
+
+  devid_t n_devices_ = 0;
+  std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> mapped_use_counts_by_device_;
+  std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> reserved_use_counts_by_device_;
+  std::vector<ankerl::unordered_dense::map<dataid_t, int32_t>> launched_use_counts_by_device_;
+  ankerl::unordered_dense::set<uint64_t> planned_keys_;
+  EvictionPlanSoA plan_results_;
+  ResidencyManager residency_manager_;
 };
 
 } // namespace eviction
