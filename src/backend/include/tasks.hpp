@@ -95,6 +95,31 @@ inline std::vector<T> as_sorted_vector(const ankerl::unordered_dense::set<T> &se
   return vec;
 }
 
+template <class DecReadyFn>
+static inline taskid_t collect_ready(std::span<const taskid_t> neighbors,
+                                     DecReadyFn&& dec_ready,
+                                     TaskIDList& out)
+{
+  const auto n = neighbors.size();
+  if (n == 0) {
+    out.clear();
+    return 0;
+  }
+
+  out.resize(n);
+
+  taskid_t w = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    const taskid_t tid = neighbors[i];
+    const bool ready = dec_ready(tid);
+    out[static_cast<std::size_t>(w)] = tid;
+    w += static_cast<taskid_t>(ready);
+  }
+
+  out.resize(static_cast<std::size_t>(w));
+  return w;
+}
+
 enum class TaskType : uint8_t {
   COMPUTE = 1,
   DATA = 2,
@@ -762,49 +787,31 @@ struct ComputeTaskVariantInfo {
   std::array<Variant, num_device_types> variants{};
 };
 
-struct ComputeTaskRuntimeInfo {
-  int32_t mapped_device{-1};
-  int32_t reserve_priority{};
-  int32_t launch_priority{};
-  int16_t unmapped{};
-  int16_t unreserved{};
-  int16_t incomplete{};
-  uint8_t state{};
-  uint8_t flags{};
-};
+// Individual state bits — each flag is a distinct power-of-two bit.
+namespace StateBits {
+constexpr uint8_t SPAWNED   = 0x01;
+constexpr uint8_t MAPPED    = 0x02;
+constexpr uint8_t RESERVED  = 0x04;
+constexpr uint8_t LAUNCHED  = 0x08;
+constexpr uint8_t COMPLETED = 0x10;
+} // namespace StateBits
 
-struct DataTaskRuntimeInfo {
-  int32_t source_device{};
-  int32_t mapped_device{-1};
-  int32_t launch_priority{};
-  int16_t incomplete{};
-  uint8_t state{};
-  uint8_t flags{};
-};
+// Cumulative state values stored in the SoA state arrays.
+// Each value ORs in all prior bits so "at least MAPPED" == (state & StateBits::MAPPED) != 0.
+namespace CumulativeState {
+constexpr uint8_t SPAWNED   = StateBits::SPAWNED;
+constexpr uint8_t MAPPED    = SPAWNED   | StateBits::MAPPED;    // 0x03
+constexpr uint8_t RESERVED  = MAPPED    | StateBits::RESERVED;  // 0x07
+constexpr uint8_t LAUNCHED  = RESERVED  | StateBits::LAUNCHED;  // 0x0F
+constexpr uint8_t COMPLETED = LAUNCHED  | StateBits::COMPLETED; // 0x1F
+} // namespace CumulativeState
 
-struct EvictionTaskRuntimeInfo {
-  int32_t data_id{};
-  int32_t evicting_on{};
-  int32_t compute_task{};
-  int32_t source_device{};
-  int32_t launch_priority{};
-  uint8_t state{};
-  uint8_t flags{};
-  int16_t pad{};
-  int64_t pad2{};
-};
-
-struct TaskTimeRecord {
-  timecount_t mapped_time{};
-  timecount_t reserved_time{};
-  timecount_t launched_time{};
-  timecount_t completed_time{};
-};
-
-struct DataTaskTimeRecord {
-  timecount_t launched_time{};
-  timecount_t completed_time{};
-};
+// Readiness flags stored in ct_status — maintained incrementally as counters hit zero.
+namespace StatusBits {
+constexpr uint8_t MAPPABLE   = 0x01; // unmapped == 0 && state == SPAWNED
+constexpr uint8_t RESERVABLE = 0x02; // unreserved == 0 && state == MAPPED
+constexpr uint8_t LAUNCHABLE = 0x04; // incomplete == 0 && state == RESERVED
+} // namespace StatusBits
 
 class StaticTaskInfo {
 
@@ -1641,797 +1648,600 @@ public:
 
 class RuntimeTaskInfo {
 protected:
-  std::vector<ComputeTaskRuntimeInfo> compute_task_runtime_info;
-  std::vector<DataTaskRuntimeInfo> data_task_runtime_info;
-  std::vector<EvictionTaskRuntimeInfo> eviction_task_runtime_info;
+  // ── Compute task SoA arrays ──────────────────────────────────
+  // Hot: scanned in bulk for intersection / filtering
+  std::vector<uint8_t> ct_state;        // cumulative state bits (CumulativeState::*)
+  std::vector<uint8_t> ct_status;       // readiness flags (StatusBits::*)
+  std::vector<uint8_t> ct_flags;        // user flags
 
-  std::vector<TaskTimeRecord> compute_task_time_records;
-  std::vector<DataTaskTimeRecord> data_task_time_records;
-  std::vector<DataTaskTimeRecord> eviction_task_time_records;
+  // Warm: touched during map/reserve/launch notifications
+  std::vector<int16_t> ct_unmapped;
+  std::vector<int16_t> ct_unreserved;
+  std::vector<int16_t> ct_incomplete;
 
-  std::vector<std::string> eviction_task_names;
+  // Cold: written once per phase transition
+  std::vector<int32_t> ct_mapped_device;
+  std::vector<int32_t> ct_reserve_priority;
+  std::vector<int32_t> ct_launch_priority;
+
+  // Time records (cold — written once, read during analysis)
+  std::vector<timecount_t> ct_mapped_time;
+  std::vector<timecount_t> ct_reserved_time;
+  std::vector<timecount_t> ct_launched_time;
+  std::vector<timecount_t> ct_completed_time;
+
+  // ── Data task SoA arrays ─────────────────────────────────────
+  std::vector<uint8_t> dt_state;
+  std::vector<uint8_t> dt_flags;
+  std::vector<int16_t> dt_incomplete;
+  std::vector<int32_t> dt_source_device;
+  std::vector<int32_t> dt_mapped_device;
+  std::vector<int32_t> dt_launch_priority;
+  std::vector<timecount_t> dt_launched_time;
+  std::vector<timecount_t> dt_completed_time;
+
+  // ── Eviction task SoA arrays (dynamically grown) ─────────────
+  std::vector<uint8_t> et_state;
+  std::vector<uint8_t> et_flags;
+  std::vector<int32_t> et_data_id;
+  std::vector<int32_t> et_evicting_on;
+  std::vector<int32_t> et_compute_task;
+  std::vector<int32_t> et_source_device;
+  std::vector<int32_t> et_launch_priority;
+  std::vector<timecount_t> et_launched_time;
+  std::vector<timecount_t> et_completed_time;
+  std::vector<std::string> et_names;
+
+  int32_t n_compute{0};
+  int32_t n_data{0};
 
 public:
   RuntimeTaskInfo() = default;
 
   RuntimeTaskInfo(StaticTaskInfo &static_info) {
-    int32_t num_compute_tasks = static_cast<int32_t>(static_info.get_n_compute_tasks());
-    int32_t num_data_tasks = static_cast<int32_t>(static_info.get_n_data_tasks());
-    compute_task_runtime_info.resize(num_compute_tasks);
-    data_task_runtime_info.resize(num_data_tasks);
-    compute_task_time_records.resize(num_compute_tasks);
-    data_task_time_records.resize(num_data_tasks);
-
-    for (int32_t i = 0; i < num_compute_tasks; ++i) {
+    n_compute = static_cast<int32_t>(static_info.get_n_compute_tasks());
+    n_data = static_cast<int32_t>(static_info.get_n_data_tasks());
+    resize_compute(n_compute);
+    resize_data(n_data);
+    for (int32_t i = 0; i < n_compute; ++i) {
       initialize_compute_runtime(i, static_info);
     }
-
-    for (int32_t i = 0; i < num_data_tasks; ++i) {
+    for (int32_t i = 0; i < n_data; ++i) {
       initialize_data_runtime(i, static_info);
     }
-
-    // eviction_task_runtime_info.reserve(EXPECTED_EVICTION_TASKS);
-    // eviction_task_time_records.reserve(EXPECTED_EVICTION_TASKS);
-    // eviction_task_names.reserve(EXPECTED_EVICTION_TASKS);
   }
 
   RuntimeTaskInfo(const RuntimeTaskInfo &other) {
-
     {
-      ZoneScopedN("Copy ComputeTaskRuntimeInfo");
-      compute_task_runtime_info = other.compute_task_runtime_info;
+      ZoneScopedN("Copy ComputeTask SoA");
+      ct_state = other.ct_state;
+      ct_status = other.ct_status;
+      ct_flags = other.ct_flags;
+      ct_unmapped = other.ct_unmapped;
+      ct_unreserved = other.ct_unreserved;
+      ct_incomplete = other.ct_incomplete;
+      ct_mapped_device = other.ct_mapped_device;
+      ct_reserve_priority = other.ct_reserve_priority;
+      ct_launch_priority = other.ct_launch_priority;
+      ct_mapped_time = other.ct_mapped_time;
+      ct_reserved_time = other.ct_reserved_time;
+      ct_launched_time = other.ct_launched_time;
+      ct_completed_time = other.ct_completed_time;
     }
-
     {
-      ZoneScopedN("Copy DataTaskRuntimeInfo");
-      data_task_runtime_info = other.data_task_runtime_info;
+      ZoneScopedN("Copy DataTask SoA");
+      dt_state = other.dt_state;
+      dt_flags = other.dt_flags;
+      dt_incomplete = other.dt_incomplete;
+      dt_source_device = other.dt_source_device;
+      dt_mapped_device = other.dt_mapped_device;
+      dt_launch_priority = other.dt_launch_priority;
+      dt_launched_time = other.dt_launched_time;
+      dt_completed_time = other.dt_completed_time;
     }
-
     {
-      ZoneScopedN("Copy EvictionTaskRuntimeInfo");
-      eviction_task_runtime_info = other.eviction_task_runtime_info;
+      ZoneScopedN("Copy EvictionTask SoA");
+      et_state = other.et_state;
+      et_flags = other.et_flags;
+      et_data_id = other.et_data_id;
+      et_evicting_on = other.et_evicting_on;
+      et_compute_task = other.et_compute_task;
+      et_source_device = other.et_source_device;
+      et_launch_priority = other.et_launch_priority;
+      et_launched_time = other.et_launched_time;
+      et_completed_time = other.et_completed_time;
+      et_names = other.et_names;
     }
-
-    {
-      ZoneScopedN("Copy ComputeTaskTimeRecords");
-      compute_task_time_records = other.compute_task_time_records;
-    }
-
-    {
-      ZoneScopedN("Copy DataTaskTimeRecords");
-      data_task_time_records = other.data_task_time_records;
-    }
-
-    {
-      ZoneScopedN("Copy EvictionTaskTimeRecords");
-      eviction_task_time_records = other.eviction_task_time_records;
-    }
-
-    {
-      ZoneScopedN("Copy EvictionTaskNames");
-      eviction_task_names = other.eviction_task_names;
-    }
+    n_compute = other.n_compute;
+    n_data = other.n_data;
   }
 
-  // Creation and Initialization
+  // ── Bulk allocation ──────────────────────────────────────────
 
-  void initialize_compute_runtime(int32_t compute_task_id, const StaticTaskInfo &static_info) {
-    set_compute_task_state(compute_task_id, TaskState::SPAWNED);
-
-    const auto n_dependencies = static_info.get_compute_task_dependency_count(compute_task_id);
-    const auto n_data_dependencies =
-        static_info.get_compute_task_data_dependency_count(compute_task_id);
-    set_compute_task_unmapped(compute_task_id, n_dependencies);
-    set_compute_task_unreserved(compute_task_id, n_dependencies);
-    set_compute_task_incomplete(compute_task_id, n_dependencies + n_data_dependencies);
-    ;
+  void resize_compute(int32_t n) {
+    ct_state.resize(n, 0);
+    ct_status.resize(n, 0);
+    ct_flags.resize(n, 0);
+    ct_unmapped.resize(n, 0);
+    ct_unreserved.resize(n, 0);
+    ct_incomplete.resize(n, 0);
+    ct_mapped_device.resize(n, -1);
+    ct_reserve_priority.resize(n, 0);
+    ct_launch_priority.resize(n, 0);
+    ct_mapped_time.resize(n, 0);
+    ct_reserved_time.resize(n, 0);
+    ct_launched_time.resize(n, 0);
+    ct_completed_time.resize(n, 0);
   }
 
-  void initialize_data_runtime(int32_t data_task_id, const StaticTaskInfo &static_info) {
-    set_data_task_state(data_task_id, TaskState::SPAWNED);
+  void resize_data(int32_t n) {
+    dt_state.resize(n, 0);
+    dt_flags.resize(n, 0);
+    dt_incomplete.resize(n, 0);
+    dt_source_device.resize(n, 0);
+    dt_mapped_device.resize(n, -1);
+    dt_launch_priority.resize(n, 0);
+    dt_launched_time.resize(n, 0);
+    dt_completed_time.resize(n, 0);
+  }
 
-    const auto n_dependencies = static_info.get_data_task_dependency_count(data_task_id);
-    set_data_task_incomplete(data_task_id, n_dependencies);
+  // ── Initialization ───────────────────────────────────────────
+
+  void initialize_compute_runtime(int32_t id, const StaticTaskInfo &static_info) {
+    ct_state[id] = CumulativeState::SPAWNED;
+    const auto n_deps =
+        static_cast<int16_t>(static_info.get_compute_task_dependency_count(id));
+    const auto n_data_deps =
+        static_cast<int16_t>(static_info.get_compute_task_data_dependency_count(id));
+    ct_unmapped[id] = n_deps;
+    ct_unreserved[id] = n_deps;
+    ct_incomplete[id] = n_deps + n_data_deps;
+    ct_status[id] = (n_deps == 0) ? StatusBits::MAPPABLE : 0;
+  }
+
+  void initialize_data_runtime(int32_t id, const StaticTaskInfo &static_info) {
+    dt_state[id] = CumulativeState::SPAWNED;
+    dt_incomplete[id] =
+        static_cast<int16_t>(static_info.get_data_task_dependency_count(id));
   }
 
   int32_t add_eviction_task(int32_t compute_task_id, int32_t data_id,
                             int32_t evicting_on_device_id) {
-    taskid_t id = static_cast<taskid_t>(eviction_task_runtime_info.size());
-    eviction_task_runtime_info.emplace_back();
-    eviction_task_time_records.emplace_back();
-    std::string name = "EvictionTask_" + std::to_string(compute_task_id) + "_" +
-                       std::to_string(data_id) + "_" + std::to_string(evicting_on_device_id);
-    eviction_task_names.push_back(name);
-
-    set_eviction_task_state(id, TaskState::RESERVED);
-    set_eviction_task_evicting_on(id, evicting_on_device_id);
-    set_eviction_task_data_id(id, data_id);
-    set_eviction_task_compute_task(id, compute_task_id);
+    taskid_t id = static_cast<taskid_t>(et_state.size());
+    et_state.push_back(CumulativeState::RESERVED);
+    et_flags.push_back(0);
+    et_data_id.push_back(data_id);
+    et_evicting_on.push_back(evicting_on_device_id);
+    et_compute_task.push_back(compute_task_id);
+    et_source_device.push_back(0);
+    et_launch_priority.push_back(0);
+    et_launched_time.push_back(0);
+    et_completed_time.push_back(0);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "EvictionTask_%d_%d_%d", compute_task_id, data_id,
+                  evicting_on_device_id);
+    et_names.emplace_back(buf);
     return id;
   }
 
-  // Getters
+  // ── State checks (single AND — SIMD-friendly) ───────────────
 
-  [[nodiscard]] int32_t get_n_compute_tasks() const {
-    return static_cast<int32_t>(compute_task_runtime_info.size());
+  [[nodiscard]] bool is_compute_mapped(taskid_t id) const {
+    return (ct_state[id] & StateBits::MAPPED) != 0;
+  }
+  [[nodiscard]] bool is_compute_reserved(taskid_t id) const {
+    return (ct_state[id] & StateBits::RESERVED) != 0;
+  }
+  [[nodiscard]] bool is_compute_launched(taskid_t id) const {
+    return (ct_state[id] & StateBits::LAUNCHED) != 0;
+  }
+  [[nodiscard]] bool is_compute_completed(taskid_t id) const {
+    return (ct_state[id] & StateBits::COMPLETED) != 0;
   }
 
-  [[nodiscard]] int32_t get_n_data_tasks() const {
-    return static_cast<int32_t>(data_task_runtime_info.size());
+  // ── Status checks (precomputed — no counter reads) ──────────
+
+  [[nodiscard]] bool is_compute_mappable(taskid_t id) const {
+    return (ct_status[id] & StatusBits::MAPPABLE) != 0;
+  }
+  [[nodiscard]] bool is_compute_reservable(taskid_t id) const {
+    return (ct_status[id] & StatusBits::RESERVABLE) != 0;
+  }
+  [[nodiscard]] bool is_compute_launchable(taskid_t id) const {
+    return (ct_status[id] & StatusBits::LAUNCHABLE) != 0;
   }
 
+  [[nodiscard]] bool is_data_launchable(taskid_t id) const {
+    return dt_incomplete[id] == 0 && dt_state[id] == CumulativeState::RESERVED;
+  }
+  [[nodiscard]] bool is_data_completed(taskid_t id) const {
+    return (dt_state[id] & StateBits::COMPLETED) != 0;
+  }
+  [[nodiscard]] bool is_eviction_launchable(taskid_t id) const {
+    return (et_state[id] & StateBits::RESERVED) != 0;
+  }
+  [[nodiscard]] bool is_eviction_completed(taskid_t id) const {
+    return (et_state[id] & StateBits::COMPLETED) != 0;
+  }
+
+  [[nodiscard]] bool is_data_task_virtual(taskid_t id) const {
+    return (dt_flags[id] & 0x01) != 0;
+  }
+  [[nodiscard]] bool is_eviction_task_virtual(taskid_t id) const {
+    return (et_flags[id] & 0x01) != 0;
+  }
+
+  // ── Raw array access (for SIMD bulk operations) ─────────────
+
+  [[nodiscard]] const uint8_t *compute_state_data() const { return ct_state.data(); }
+  [[nodiscard]] const uint8_t *compute_status_data() const { return ct_status.data(); }
+  [[nodiscard]] uint8_t *compute_state_data() { return ct_state.data(); }
+  [[nodiscard]] uint8_t *compute_status_data() { return ct_status.data(); }
+
+  // ── Getters ──────────────────────────────────────────────────
+
+  [[nodiscard]] int32_t get_n_compute_tasks() const { return n_compute; }
+  [[nodiscard]] int32_t get_n_data_tasks() const { return n_data; }
   [[nodiscard]] int32_t get_n_eviction_tasks() const {
-    return static_cast<int32_t>(eviction_task_runtime_info.size());
+    return static_cast<int32_t>(et_state.size());
   }
-
   [[nodiscard]] int32_t get_n_tasks() const {
     return get_n_compute_tasks() + get_n_data_tasks() + get_n_eviction_tasks();
   }
-
   [[nodiscard]] bool empty() const {
-    return (compute_task_runtime_info.empty() && data_task_runtime_info.empty() &&
-            eviction_task_runtime_info.empty());
+    return n_compute == 0 && n_data == 0 && et_state.empty();
   }
 
-  [[nodiscard]] const std::string get_eviction_task_name(taskid_t id) const {
-    return eviction_task_names[id];
+  [[nodiscard]] TaskState get_compute_task_state(taskid_t id) const {
+    const auto s = ct_state[id];
+    if (s & StateBits::COMPLETED) return TaskState::COMPLETED;
+    if (s & StateBits::LAUNCHED)  return TaskState::LAUNCHED;
+    if (s & StateBits::RESERVED)  return TaskState::RESERVED;
+    if (s & StateBits::MAPPED)    return TaskState::MAPPED;
+    return TaskState::SPAWNED;
   }
 
-  [[nodiscard]] const int16_t get_compute_task_unmapped(taskid_t id) const {
-    return compute_task_runtime_info[id].unmapped;
+  [[nodiscard]] TaskState get_data_task_state(taskid_t id) const {
+    const auto s = dt_state[id];
+    if (s & StateBits::COMPLETED) return TaskState::COMPLETED;
+    if (s & StateBits::LAUNCHED)  return TaskState::LAUNCHED;
+    if (s & StateBits::RESERVED)  return TaskState::RESERVED;
+    return TaskState::SPAWNED;
   }
 
-  [[nodiscard]] const int16_t get_compute_task_unreserved(taskid_t id) const {
-    return compute_task_runtime_info[id].unreserved;
+  [[nodiscard]] TaskState get_eviction_task_state(taskid_t id) const {
+    const auto s = et_state[id];
+    if (s & StateBits::COMPLETED) return TaskState::COMPLETED;
+    if (s & StateBits::LAUNCHED)  return TaskState::LAUNCHED;
+    if (s & StateBits::RESERVED)  return TaskState::RESERVED;
+    return TaskState::SPAWNED;
   }
 
-  [[nodiscard]] const int16_t get_compute_task_incomplete(taskid_t id) const {
-    return compute_task_runtime_info[id].incomplete;
+  [[nodiscard]] int16_t get_compute_task_unmapped(taskid_t id) const { return ct_unmapped[id]; }
+  [[nodiscard]] int16_t get_compute_task_unreserved(taskid_t id) const {
+    return ct_unreserved[id];
+  }
+  [[nodiscard]] int16_t get_compute_task_incomplete(taskid_t id) const {
+    return ct_incomplete[id];
+  }
+  [[nodiscard]] int32_t get_compute_task_mapped_device(taskid_t id) const {
+    return ct_mapped_device[id];
+  }
+  [[nodiscard]] int32_t get_compute_task_reserve_priority(taskid_t id) const {
+    return ct_reserve_priority[id];
+  }
+  [[nodiscard]] int32_t get_compute_task_launch_priority(taskid_t id) const {
+    return ct_launch_priority[id];
+  }
+  [[nodiscard]] uint8_t get_compute_task_flags(taskid_t id) const { return ct_flags[id]; }
+
+  [[nodiscard]] int32_t get_data_task_source_device(taskid_t id) const {
+    return dt_source_device[id];
+  }
+  [[nodiscard]] int32_t get_data_task_mapped_device(taskid_t id) const {
+    return dt_mapped_device[id];
+  }
+  [[nodiscard]] int32_t get_data_task_launch_priority(taskid_t id) const {
+    return dt_launch_priority[id];
+  }
+  [[nodiscard]] uint8_t get_data_task_flags(taskid_t id) const { return dt_flags[id]; }
+
+  [[nodiscard]] const std::string &get_eviction_task_name(taskid_t id) const {
+    return et_names[id];
+  }
+  [[nodiscard]] int32_t get_eviction_task_evicting_on(taskid_t id) const {
+    return et_evicting_on[id];
+  }
+  [[nodiscard]] int32_t get_eviction_task_data_id(taskid_t id) const { return et_data_id[id]; }
+  [[nodiscard]] int32_t get_eviction_task_source_device(taskid_t id) const {
+    return et_source_device[id];
   }
 
-  [[nodiscard]] const int32_t get_compute_task_mapped_device(taskid_t id) const {
-    return compute_task_runtime_info[id].mapped_device;
+  // Time record getters
+  [[nodiscard]] timecount_t get_compute_task_mapped_time(taskid_t id) const {
+    return ct_mapped_time[id];
+  }
+  [[nodiscard]] timecount_t get_compute_task_reserved_time(taskid_t id) const {
+    return ct_reserved_time[id];
+  }
+  [[nodiscard]] timecount_t get_compute_task_launched_time(taskid_t id) const {
+    return ct_launched_time[id];
+  }
+  [[nodiscard]] timecount_t get_compute_task_completed_time(taskid_t id) const {
+    return ct_completed_time[id];
+  }
+  [[nodiscard]] timecount_t get_data_task_launched_time(taskid_t id) const {
+    return dt_launched_time[id];
+  }
+  [[nodiscard]] timecount_t get_data_task_completed_time(taskid_t id) const {
+    return dt_completed_time[id];
+  }
+  [[nodiscard]] timecount_t get_eviction_task_launched_time(taskid_t id) const {
+    return et_launched_time[id];
+  }
+  [[nodiscard]] timecount_t get_eviction_task_completed_time(taskid_t id) const {
+    return et_completed_time[id];
   }
 
-  [[nodiscard]] const int32_t get_compute_task_reserve_priority(taskid_t id) const {
-    return compute_task_runtime_info[id].reserve_priority;
+  [[nodiscard]] timecount_t get_compute_task_duration(taskid_t id) const {
+    return ct_completed_time[id] - ct_launched_time[id];
+  }
+  [[nodiscard]] timecount_t get_data_task_duration(taskid_t id) const {
+    return dt_completed_time[id] - dt_launched_time[id];
+  }
+  [[nodiscard]] timecount_t get_eviction_task_duration(taskid_t id) const {
+    return et_completed_time[id] - et_launched_time[id];
   }
 
-  [[nodiscard]] const int32_t get_compute_task_launch_priority(taskid_t id) const {
-    return compute_task_runtime_info[id].launch_priority;
+  [[nodiscard]] TaskState get_compute_task_state_at_time(taskid_t id,
+                                                         timecount_t query) const {
+    if (query < ct_mapped_time[id])    return TaskState::SPAWNED;
+    if (query < ct_reserved_time[id])  return TaskState::MAPPED;
+    if (query < ct_launched_time[id])  return TaskState::RESERVED;
+    if (query < ct_completed_time[id]) return TaskState::LAUNCHED;
+    return TaskState::COMPLETED;
   }
 
-  [[nodiscard]] const TaskState get_compute_task_state(taskid_t id) const {
-    return static_cast<TaskState>(compute_task_runtime_info[id].state);
+  [[nodiscard]] TaskState get_data_task_state_at_time(taskid_t id, timecount_t query) const {
+    if (query < dt_launched_time[id])  return TaskState::RESERVED;
+    if (query < dt_completed_time[id]) return TaskState::LAUNCHED;
+    return TaskState::COMPLETED;
   }
 
-  [[nodiscard]] const uint8_t get_compute_task_flags(taskid_t id) const {
-    return compute_task_runtime_info[id].flags;
+  [[nodiscard]] TaskState get_eviction_task_state_at_time(taskid_t id,
+                                                          timecount_t query) const {
+    if (query < et_launched_time[id])  return TaskState::MAPPED;
+    if (query < et_completed_time[id]) return TaskState::RESERVED;
+    return TaskState::COMPLETED;
   }
 
-  [[nodiscard]] const TaskState get_data_task_state(taskid_t id) const {
-    return static_cast<TaskState>(data_task_runtime_info[id].state);
+  [[nodiscard]] TaskStatus get_compute_task_status(taskid_t id) const {
+    const auto s = ct_status[id];
+    if (s & StatusBits::LAUNCHABLE) return TaskStatus::LAUNCHABLE;
+    if (s & StatusBits::RESERVABLE) return TaskStatus::RESERVABLE;
+    if (s & StatusBits::MAPPABLE)   return TaskStatus::MAPPABLE;
+    return TaskStatus::NONE;
   }
 
-  [[nodiscard]] const uint8_t get_data_task_flags(taskid_t id) const {
-    return data_task_runtime_info[id].flags;
-  }
-
-  [[nodiscard]] const int32_t get_data_task_source_device(taskid_t id) const {
-    return data_task_runtime_info[id].source_device;
-  }
-
-  [[nodiscard]] const int32_t get_data_task_mapped_device(taskid_t id) const {
-    return data_task_runtime_info[id].mapped_device;
-  }
-
-  [[nodiscard]] const int32_t get_data_task_launch_priority(taskid_t id) const {
-    return data_task_runtime_info[id].launch_priority;
-  }
-
-  [[nodiscard]] const TaskState get_eviction_task_state(taskid_t id) const {
-    return static_cast<TaskState>(eviction_task_runtime_info[id].state);
-  }
-
-  [[nodiscard]] const int32_t get_eviction_task_evicting_on(taskid_t id) const {
-    return eviction_task_runtime_info[id].evicting_on;
-  }
-
-  [[nodiscard]] const int32_t get_eviction_task_data_id(taskid_t id) const {
-    return eviction_task_runtime_info[id].data_id;
-  }
-
-  [[nodiscard]] const int32_t get_eviction_task_source_device(taskid_t id) const {
-    return eviction_task_runtime_info[id].source_device;
-  }
-
-  [[nodiscard]] const timecount_t get_compute_task_mapped_time(taskid_t id) const {
-    return compute_task_time_records[id].mapped_time;
-  }
-
-  [[nodiscard]] const timecount_t get_compute_task_reserved_time(taskid_t id) const {
-    return compute_task_time_records[id].reserved_time;
-  }
-
-  [[nodiscard]] const timecount_t get_compute_task_launched_time(taskid_t id) const {
-    return compute_task_time_records[id].launched_time;
-  }
-
-  [[nodiscard]] const timecount_t get_compute_task_completed_time(taskid_t id) const {
-    return compute_task_time_records[id].completed_time;
-  }
-
-  [[nodiscard]] const timecount_t get_data_task_launched_time(taskid_t id) const {
-    return data_task_time_records[id].launched_time;
-  }
-
-  [[nodiscard]] const timecount_t get_data_task_completed_time(taskid_t id) const {
-    return data_task_time_records[id].completed_time;
-  }
-
-  [[nodiscard]] const timecount_t get_eviction_task_launched_time(taskid_t id) const {
-    return eviction_task_time_records[id].launched_time;
-  }
-
-  [[nodiscard]] const timecount_t get_eviction_task_completed_time(taskid_t id) const {
-    return eviction_task_time_records[id].completed_time;
-  }
-
-  [[nodiscard]] TaskState get_compute_task_state_at_time(taskid_t id, timecount_t query) const {
-    if (query < compute_task_time_records[id].mapped_time) {
-      return TaskState::SPAWNED;
-    } else if (query < compute_task_time_records[id].reserved_time) {
-      return TaskState::MAPPED;
-    } else if (query < compute_task_time_records[id].launched_time) {
-      return TaskState::RESERVED;
-    } else if (query < compute_task_time_records[id].completed_time) {
-      return TaskState::LAUNCHED;
-    } else {
-      return TaskState::COMPLETED;
-    }
-  }
-
-  TaskState get_data_task_state_at_time(taskid_t id, timecount_t query) const {
-    if (query < data_task_time_records[id].launched_time) {
-      return TaskState::RESERVED;
-    } else if (query < data_task_time_records[id].completed_time) {
-      return TaskState::LAUNCHED;
-    } else {
-      return TaskState::COMPLETED;
-    }
-  }
-
-  [[nodiscard]] TaskState get_eviction_task_state_at_time(taskid_t id, timecount_t query) const {
-    if (query < eviction_task_time_records[id].launched_time) {
-      return TaskState::MAPPED;
-    } else if (query < eviction_task_time_records[id].completed_time) {
-      return TaskState::RESERVED;
-    } else {
-      return TaskState::COMPLETED;
-    }
-  }
-
-  [[nodiscard]] const bool is_data_task_virtual(taskid_t id) const {
-    // Virtual tasks have first bit of flags set to 1
-    return (data_task_runtime_info[id].flags & 0x01) != 0;
-  }
-
-  [[nodiscard]] const bool is_eviction_task_virtual(taskid_t id) const {
-    // Virtual tasks have first bit of flags set to 1
-    return (eviction_task_runtime_info[id].flags & 0x01) != 0;
-  }
-
-  // TODO(wlr): Change status to flag for bit-wise comparison
-
-  bool is_compute_mappable(taskid_t id) const {
-    auto &info = compute_task_runtime_info[id];
-    return info.unmapped == 0 && info.state == static_cast<uint8_t>(TaskState::SPAWNED);
-  }
-
-  bool is_compute_mapped(taskid_t compute_task_id) const {
-    auto &info = compute_task_runtime_info[compute_task_id];
-    return info.state >= static_cast<uint8_t>(TaskState::MAPPED);
-  }
-
-  bool is_compute_reservable(taskid_t id) const {
-    auto &info = compute_task_runtime_info[id];
-    return info.unreserved == 0 && info.state == static_cast<uint8_t>(TaskState::MAPPED);
-  }
-
-  bool is_compute_reserved(taskid_t id) const {
-    auto &info = compute_task_runtime_info[id];
-    return info.state >= static_cast<uint8_t>(TaskState::RESERVED);
-  }
-
-  bool is_compute_launchable(taskid_t id) const {
-    auto &info = compute_task_runtime_info[id];
-    return info.incomplete == 0 && info.state == static_cast<uint8_t>(TaskState::RESERVED);
-  }
-
-  bool is_compute_launched(taskid_t id) const {
-    auto &info = compute_task_runtime_info[id];
-    return info.state >= static_cast<uint8_t>(TaskState::LAUNCHED);
-  }
-
-  bool is_compute_completed(taskid_t id) const {
-    auto &info = compute_task_runtime_info[id];
-    return info.state >= static_cast<uint8_t>(TaskState::COMPLETED);
-  }
-
-  bool is_data_launchable(taskid_t id) const {
-    auto &info = data_task_runtime_info[id];
-    return info.incomplete == 0 && info.state == static_cast<uint8_t>(TaskState::RESERVED);
-  }
-
-  bool is_data_completed(taskid_t id) const {
-    auto &info = data_task_runtime_info[id];
-    return info.state >= static_cast<uint8_t>(TaskState::COMPLETED);
-  }
-
-  bool is_eviction_launchable(taskid_t id) const {
-    auto &info = eviction_task_runtime_info[id];
-    return info.state >= static_cast<uint8_t>(TaskState::RESERVED);
-  }
-
-  bool is_eviction_completed(taskid_t id) const {
-    auto &info = eviction_task_runtime_info[id];
-    return info.state >= static_cast<uint8_t>(TaskState::COMPLETED);
-  }
-
-  TaskStatus get_compute_task_status(taskid_t id) const {
-    if (is_compute_mappable(id)) {
-      return TaskStatus::MAPPABLE;
-    } else if (is_compute_reservable(id)) {
-      return TaskStatus::RESERVABLE;
-    } else if (is_compute_launchable(id)) {
-      return TaskStatus::LAUNCHABLE;
-    } else {
-      return TaskStatus::NONE;
-    }
-  }
-
-  TaskStatus get_data_task_status(taskid_t id) const {
-    if (is_data_launchable(id)) {
-      return TaskStatus::LAUNCHABLE;
-    } else if (is_data_completed(id)) {
-      return TaskStatus::NONE;
-    } else {
-      return TaskStatus::NONE;
-    }
-  }
-
-  TaskStatus get_eviction_task_status(taskid_t id) const {
-    if (is_eviction_launchable(id)) {
-      return TaskStatus::LAUNCHABLE;
-    } else if (is_eviction_completed(id)) {
-      return TaskStatus::NONE;
-    } else {
-      return TaskStatus::NONE;
-    }
-  }
-
-  // Non const grab fields
-
-  [[nodiscard]] ComputeTaskRuntimeInfo &get_compute_task_runtime_info(taskid_t id) {
-    return compute_task_runtime_info[id];
-  }
-  [[nodiscard]] DataTaskRuntimeInfo &get_data_task_runtime_info(taskid_t id) {
-    return data_task_runtime_info[id];
-  }
-  [[nodiscard]] EvictionTaskRuntimeInfo &get_eviction_task_runtime_info(taskid_t id) {
-    return eviction_task_runtime_info[id];
-  }
-
-  [[nodiscard]] TaskTimeRecord &get_compute_task_time_record(taskid_t id) {
-    return compute_task_time_records[id];
-  }
-  [[nodiscard]] DataTaskTimeRecord &get_data_task_time_record(taskid_t id) {
-    return data_task_time_records[id];
-  }
-  [[nodiscard]] DataTaskTimeRecord &get_eviction_task_time_record(taskid_t id) {
-    return eviction_task_time_records[id];
-  }
-
-  // Setters
+  // ── Setters ──────────────────────────────────────────────────
 
   void set_compute_task_state(taskid_t id, TaskState state) {
-    compute_task_runtime_info[id].state = static_cast<uint8_t>(state);
+    switch (state) {
+    case TaskState::SPAWNED:   ct_state[id] = CumulativeState::SPAWNED;   break;
+    case TaskState::MAPPED:    ct_state[id] = CumulativeState::MAPPED;    break;
+    case TaskState::RESERVED:  ct_state[id] = CumulativeState::RESERVED;  break;
+    case TaskState::LAUNCHED:  ct_state[id] = CumulativeState::LAUNCHED;  break;
+    case TaskState::COMPLETED: ct_state[id] = CumulativeState::COMPLETED; break;
+    }
   }
 
   void set_data_task_state(taskid_t id, TaskState state) {
-    data_task_runtime_info[id].state = static_cast<uint8_t>(state);
+    switch (state) {
+    case TaskState::SPAWNED:   dt_state[id] = CumulativeState::SPAWNED;   break;
+    case TaskState::MAPPED:    dt_state[id] = CumulativeState::MAPPED;    break;
+    case TaskState::RESERVED:  dt_state[id] = CumulativeState::RESERVED;  break;
+    case TaskState::LAUNCHED:  dt_state[id] = CumulativeState::LAUNCHED;  break;
+    case TaskState::COMPLETED: dt_state[id] = CumulativeState::COMPLETED; break;
+    }
   }
 
   void set_eviction_task_state(taskid_t id, TaskState state) {
-    eviction_task_runtime_info[id].state = static_cast<uint8_t>(state);
+    switch (state) {
+    case TaskState::SPAWNED:   et_state[id] = CumulativeState::SPAWNED;   break;
+    case TaskState::MAPPED:    et_state[id] = CumulativeState::MAPPED;    break;
+    case TaskState::RESERVED:  et_state[id] = CumulativeState::RESERVED;  break;
+    case TaskState::LAUNCHED:  et_state[id] = CumulativeState::LAUNCHED;  break;
+    case TaskState::COMPLETED: et_state[id] = CumulativeState::COMPLETED; break;
+    }
   }
 
-  void set_compute_task_unmapped(taskid_t id, int16_t unmapped) {
-    compute_task_runtime_info[id].unmapped = unmapped;
-  }
-  void set_compute_task_unreserved(taskid_t id, int16_t unreserved) {
-    compute_task_runtime_info[id].unreserved = unreserved;
-  }
-  void set_compute_task_incomplete(taskid_t id, int16_t incomplete) {
-    compute_task_runtime_info[id].incomplete = incomplete;
-  }
-  void set_compute_task_mapped_device(taskid_t id, int32_t mapped_device) {
-    compute_task_runtime_info[id].mapped_device = mapped_device;
-  }
-  void set_compute_task_reserve_priority(taskid_t id, int32_t reserve_priority) {
-    compute_task_runtime_info[id].reserve_priority = reserve_priority;
-  }
-  void set_compute_task_launch_priority(taskid_t id, int32_t launch_priority) {
-    compute_task_runtime_info[id].launch_priority = launch_priority;
+  void set_compute_task_unmapped(taskid_t id, int16_t v) { ct_unmapped[id] = v; }
+  void set_compute_task_unreserved(taskid_t id, int16_t v) { ct_unreserved[id] = v; }
+  void set_compute_task_incomplete(taskid_t id, int16_t v) { ct_incomplete[id] = v; }
+  void set_compute_task_mapped_device(taskid_t id, int32_t v) { ct_mapped_device[id] = v; }
+  void set_compute_task_reserve_priority(taskid_t id, int32_t v) { ct_reserve_priority[id] = v; }
+  void set_compute_task_launch_priority(taskid_t id, int32_t v) { ct_launch_priority[id] = v; }
+  void set_compute_task_flags(taskid_t id, uint8_t v) { ct_flags[id] = v; }
+
+  void set_data_task_incomplete(taskid_t id, int16_t v) { dt_incomplete[id] = v; }
+  void set_data_task_source_device(taskid_t id, int32_t v) { dt_source_device[id] = v; }
+  void set_data_task_mapped_device(taskid_t id, int32_t v) { dt_mapped_device[id] = v; }
+  void set_data_task_launch_priority(taskid_t id, int32_t v) { dt_launch_priority[id] = v; }
+  void set_data_task_virtual(taskid_t id, bool v) {
+    dt_flags[id] = v ? (dt_flags[id] | 0x01) : (dt_flags[id] & ~uint8_t{0x01});
   }
 
-  void set_compute_task_state(taskid_t id, uint8_t state) {
-    compute_task_runtime_info[id].state = state;
-  }
-  void set_compute_task_flags(taskid_t id, uint8_t flags) {
-    compute_task_runtime_info[id].flags = flags;
-  }
-  void set_data_task_state(taskid_t id, uint8_t state) {
-    data_task_runtime_info[id].state = state;
-  }
-  void set_data_task_virtual(taskid_t id, bool virtual_task) {
-    data_task_runtime_info[id].flags = virtual_task ? (data_task_runtime_info[id].flags | 0x01)
-                                                    : (data_task_runtime_info[id].flags & ~0x01);
+  void set_eviction_task_evicting_on(taskid_t id, int32_t v) { et_evicting_on[id] = v; }
+  void set_eviction_task_compute_task(taskid_t id, int32_t v) { et_compute_task[id] = v; }
+  void set_eviction_task_source_device(taskid_t id, int32_t v) { et_source_device[id] = v; }
+  void set_eviction_task_data_id(taskid_t id, int32_t v) { et_data_id[id] = v; }
+  void set_eviction_task_virtual(taskid_t id, bool v) {
+    et_flags[id] = v ? (et_flags[id] | 0x01) : (et_flags[id] & ~uint8_t{0x01});
   }
 
-  void set_data_task_incomplete(taskid_t id, int16_t incomplete) {
-    data_task_runtime_info[id].incomplete = incomplete;
-  }
+  // Time recording
+  void record_mapped(taskid_t id, timecount_t t) { ct_mapped_time[id] = t; }
+  void record_reserved(taskid_t id, timecount_t t) { ct_reserved_time[id] = t; }
+  void record_launched(taskid_t id, timecount_t t) { ct_launched_time[id] = t; }
+  void record_completed(taskid_t id, timecount_t t) { ct_completed_time[id] = t; }
+  void record_data_launched(taskid_t id, timecount_t t) { dt_launched_time[id] = t; }
+  void record_data_completed(taskid_t id, timecount_t t) { dt_completed_time[id] = t; }
+  void record_eviction_launched(taskid_t id, timecount_t t) { et_launched_time[id] = t; }
+  void record_eviction_completed(taskid_t id, timecount_t t) { et_completed_time[id] = t; }
 
-  void set_data_task_source_device(taskid_t id, int32_t source_device) {
-    data_task_runtime_info[id].source_device = source_device;
-  }
-  void set_data_task_mapped_device(taskid_t id, int32_t mapped_device) {
-    data_task_runtime_info[id].mapped_device = mapped_device;
-  }
-  void set_data_task_launch_priority(taskid_t id, int32_t launch_priority) {
-    data_task_runtime_info[id].launch_priority = launch_priority;
-  }
-  void set_eviction_task_state(taskid_t id, uint8_t state) {
-    eviction_task_runtime_info[id].state = state;
-  }
-  void set_eviction_task_virtual(taskid_t id, bool virtual_task) {
-    eviction_task_runtime_info[id].flags = virtual_task
-                                               ? (eviction_task_runtime_info[id].flags | 0x01)
-                                               : (eviction_task_runtime_info[id].flags & ~0x01);
-  }
-  void set_eviction_task_evicting_on(taskid_t id, int32_t evicting_on) {
-    eviction_task_runtime_info[id].evicting_on = evicting_on;
-  }
-
-  void set_eviction_task_compute_task(taskid_t id, int32_t compute_task_id) {
-    eviction_task_runtime_info[id].compute_task = compute_task_id;
-  }
-
-  void set_eviction_task_source_device(taskid_t id, int32_t source_device) {
-    eviction_task_runtime_info[id].source_device = source_device;
-  }
-
-  void set_eviction_task_data_id(taskid_t id, int32_t data_id) {
-    eviction_task_runtime_info[id].data_id = data_id;
-  }
-
-  void record_mapped(taskid_t id, timecount_t mapped_time) {
-    compute_task_time_records[id].mapped_time = mapped_time;
-  }
-  void record_reserved(taskid_t id, timecount_t reserved_time) {
-    compute_task_time_records[id].reserved_time = reserved_time;
-  }
-  void record_launched(taskid_t id, timecount_t launched_time) {
-    compute_task_time_records[id].launched_time = launched_time;
-  }
-  void record_completed(taskid_t id, timecount_t completed_time) {
-    compute_task_time_records[id].completed_time = completed_time;
-  }
-
-  timecount_t get_compute_task_duration(taskid_t id) const {
-    return compute_task_time_records[id].completed_time -
-           compute_task_time_records[id].launched_time;
-  }
-
-  timecount_t get_data_task_duration(taskid_t id) const {
-    return data_task_time_records[id].completed_time - data_task_time_records[id].launched_time;
-  }
-
-  timecount_t get_eviction_task_duration(taskid_t id) const {
-    return eviction_task_time_records[id].completed_time -
-           eviction_task_time_records[id].launched_time;
-  }
-
-  void record_data_launched(taskid_t id, timecount_t launched_time) {
-    data_task_time_records[id].launched_time = launched_time;
-  }
-  void record_data_completed(taskid_t id, timecount_t completed_time) {
-    data_task_time_records[id].completed_time = completed_time;
-  }
-
-  void record_eviction_launched(taskid_t id, timecount_t launched_time) {
-    eviction_task_time_records[id].launched_time = launched_time;
-  }
-
-  void record_eviction_completed(taskid_t id, timecount_t completed_time) {
-    eviction_task_time_records[id].completed_time = completed_time;
-  }
-
-  // Task State modifiers
+  // ── Counter decrements with status maintenance ───────────────
+  // These update ct_status bits incrementally so callers never need
+  // to recompute readiness from scratch.
 
   bool decrement_compute_task_unmapped(taskid_t id) {
-    auto &info = compute_task_runtime_info[id];
-    info.unmapped--;
-    assert(info.unmapped >= 0 && "Unmapped count cannot be negative");
-    SPDLOG_DEBUG("decrement_compute_task_unmapped: id: {}, unmapped: {}, state: {}", id,
-                 info.unmapped, info.state);
-    return (info.unmapped == 0) && (info.state >= static_cast<uint8_t>(TaskState::SPAWNED));
+    auto &v = ct_unmapped[id];
+    const int16_t nv = --v;
+    assert(nv >= 0 && "Unmapped count cannot be negative");
+    if (nv == 0) {
+      if (ct_state[id] == CumulativeState::SPAWNED) {
+        ct_status[id] |= StatusBits::MAPPABLE;
+        return true;
+      }
+    }
+    return false;
   }
 
   bool decrement_compute_task_unreserved(taskid_t id) {
-    auto &info = compute_task_runtime_info[id];
-    info.unreserved--;
-    SPDLOG_DEBUG("decrement_compute_task_unreserved: id: {}, unreserved: {}, state: {}", id,
-                 info.unreserved, info.state);
-    assert(info.unreserved >= 0 && "Unreserved count cannot be negative");
-    return (info.unreserved == 0) && (info.state >= static_cast<uint8_t>(TaskState::MAPPED));
+    auto &v = ct_unreserved[id];
+    const int16_t nv = --v;
+    assert(nv >= 0 && "Unreserved count cannot be negative");
+    if (nv == 0) { // boundary only
+      if (ct_state[id] == CumulativeState::MAPPED) {
+        ct_status[id] |= StatusBits::RESERVABLE;
+        return true;
+      }
+    }
+    return false;
   }
 
   bool decrement_compute_task_incomplete(taskid_t id) {
-    auto &info = compute_task_runtime_info[id];
-    info.incomplete--;
-    SPDLOG_DEBUG("decrement_compute_task_incomplete: id: {}, incomplete: {}, state: {}", id,
-                 info.incomplete, info.state);
-    assert(info.incomplete >= 0 && "Incomplete count cannot be negative");
-    return (info.incomplete == 0) && (info.state >= static_cast<uint8_t>(TaskState::RESERVED));
+    auto &v = ct_incomplete[id];
+    const int16_t nv = --v;
+    assert(nv >= 0 && "Incomplete count cannot be negative");
+    if (nv == 0) { // boundary only
+      if (ct_state[id] == CumulativeState::RESERVED) {
+        ct_status[id] |= StatusBits::LAUNCHABLE;
+        return true;
+      }
+    }
+    return false;
   }
 
   bool decrement_data_task_incomplete(taskid_t id) {
-    auto &info = data_task_runtime_info[id];
-    info.incomplete--;
-    SPDLOG_DEBUG("decrement_data_task_incomplete: id: {}, incomplete: {}, state: {}", id,
-                 info.incomplete, info.state);
-    assert(info.incomplete >= 0 && "Incomplete count cannot be negative");
-    return (info.incomplete == 0) && (info.state >= static_cast<uint8_t>(TaskState::RESERVED));
+    auto &v = dt_incomplete[id];
+    const int16_t nv = --v;
+    assert(nv >= 0 && "Data incomplete count cannot be negative");
+    if (nv == 0) { // boundary only
+      return dt_state[id] == CumulativeState::RESERVED;
+    }
+    return false;
   }
+
+  // ── Notification methods ─────────────────────────────────────
 
   taskid_t compute_notify_mapped(taskid_t compute_task_id, devid_t mapped_device,
-                                 int32_t reserve_priority, int32_t launch_priority,
+                                int32_t reserve_priority, int32_t launch_priority,
+                                timecount_t time, const StaticTaskInfo &static_info,
+                                TaskIDList &compute_task_buffer)
+  {
+    ct_mapped_device[compute_task_id] = mapped_device;
+    ct_reserve_priority[compute_task_id] = reserve_priority;
+    ct_launch_priority[compute_task_id]  = launch_priority;
+    ct_state[compute_task_id] = CumulativeState::MAPPED;
+    ct_mapped_time[compute_task_id] = time;
+    ct_status[compute_task_id] &= static_cast<uint8_t>(~StatusBits::MAPPABLE);
+
+    return collect_ready(static_info.get_compute_task_dependents(compute_task_id),
+                        [&](taskid_t dep) { return decrement_compute_task_unmapped(dep); },
+                        compute_task_buffer);
+  }
+
+taskid_t compute_notify_reserved(taskid_t compute_task_id, devid_t mapped_device,
                                  timecount_t time, const StaticTaskInfo &static_info,
-                                 TaskIDList &compute_task_buffer) {
-    auto &my_info = compute_task_runtime_info[compute_task_id];
-    auto &my_time_record = compute_task_time_records[compute_task_id];
-    my_info.mapped_device = mapped_device;
-    my_info.reserve_priority = reserve_priority;
-    my_info.launch_priority = launch_priority;
-    my_info.state = static_cast<uint8_t>(TaskState::MAPPED);
-    my_time_record.mapped_time = time;
-    taskid_t write_idx = 0;
+                                 TaskIDList &compute_task_buffer)
+{
+  ct_mapped_device[compute_task_id] = mapped_device;
+  ct_state[compute_task_id] = CumulativeState::RESERVED;
+  ct_reserved_time[compute_task_id] = time;
+  ct_status[compute_task_id] &= static_cast<uint8_t>(~StatusBits::RESERVABLE);
 
-    auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
-    compute_task_buffer.resize(my_dependents.size());
-
-    for (const auto &dependent_id : my_dependents) {
-      bool is_mappable = decrement_compute_task_unmapped(dependent_id);
-      compute_task_buffer[write_idx] = dependent_id;
-      write_idx += is_mappable ? 1 : 0;
-      SPDLOG_DEBUG("compute_notify_mapped: dependent_id: {}, is_mappable: {}, write_idx: {}",
-                   dependent_id, is_mappable, write_idx);
-    }
-    compute_task_buffer.resize(write_idx);
-    return write_idx;
-  }
-
-  taskid_t compute_notify_reserved(taskid_t compute_task_id, devid_t mapped_device,
-                                   timecount_t time, const StaticTaskInfo &static_info,
-                                   TaskIDList &compute_task_buffer) {
-    auto &my_info = compute_task_runtime_info[compute_task_id];
-    auto &my_time_record = compute_task_time_records[compute_task_id];
-    my_info.mapped_device = mapped_device;
-    my_info.state = static_cast<uint8_t>(TaskState::RESERVED);
-    my_time_record.reserved_time = time;
-
-    taskid_t write_idx = 0;
-    auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
-    compute_task_buffer.resize(my_dependents.size());
-
-    for (const auto &dependent_id : my_dependents) {
-      bool is_reservable = decrement_compute_task_unreserved(dependent_id);
-      compute_task_buffer[write_idx] = dependent_id;
-      write_idx += is_reservable ? 1 : 0;
-      SPDLOG_DEBUG("compute_notify_reserved: dependent_id: {}, is_reservable: {}, write_idx: {}",
-                   dependent_id, is_reservable, write_idx);
-    }
-    compute_task_buffer.resize(write_idx);
-    return write_idx;
-  }
+  return collect_ready(static_info.get_compute_task_dependents(compute_task_id),
+                       [&](taskid_t dep) { return decrement_compute_task_unreserved(dep); },
+                       compute_task_buffer);
+}
 
   void compute_notify_launched(taskid_t compute_task_id, timecount_t time,
-                               const StaticTaskInfo &static_info) {
-    auto &my_info = compute_task_runtime_info[compute_task_id];
-    auto &my_time_record = compute_task_time_records[compute_task_id];
-    my_info.state = static_cast<int8_t>(TaskState::LAUNCHED);
-    my_time_record.launched_time = time;
+                               const StaticTaskInfo & /*static_info*/) {
+    ct_state[compute_task_id] = CumulativeState::LAUNCHED;
+    ct_launched_time[compute_task_id] = time;
+    ct_status[compute_task_id] &= ~StatusBits::LAUNCHABLE;
   }
 
   taskid_t compute_notify_completed(taskid_t compute_task_id, timecount_t time,
                                     const StaticTaskInfo &static_info,
-                                    TaskIDList &compute_task_buffer) {
-    auto &my_info = compute_task_runtime_info[compute_task_id];
-    auto &my_time_record = compute_task_time_records[compute_task_id];
-    my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);
-    my_time_record.completed_time = time;
-    const auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
-    const auto dependent_count = static_cast<taskid_t>(my_dependents.size());
-    if (dependent_count == 0) {
-      if (!compute_task_buffer.empty()) {
-        compute_task_buffer.clear();
-      }
-      return 0;
-    }
-    if (dependent_count == 1) {
-      const auto dependent_id = my_dependents.front();
-      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
-      if (is_launchable) {
-        compute_task_buffer.resize(1);
-        compute_task_buffer[0] = dependent_id;
-        return 1;
-      }
-      if (!compute_task_buffer.empty()) {
-        compute_task_buffer.clear();
-      }
-      return 0;
-    }
-    taskid_t write_idx = 0;
-    compute_task_buffer.resize(my_dependents.size());
+                                    TaskIDList &compute_task_buffer)
+  {
+    ct_state[compute_task_id] = CumulativeState::COMPLETED;
+    ct_completed_time[compute_task_id] = time;
 
-    for (const auto &dependent_id : my_dependents) {
-      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
-      if (is_launchable) {
-        compute_task_buffer[write_idx] = dependent_id;
-        write_idx += 1;
-      }
-      SPDLOG_DEBUG("compute_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
-                   dependent_id, is_launchable, write_idx);
-    }
-    if (write_idx != dependent_count) {
-      compute_task_buffer.resize(write_idx);
-    }
-
-    return write_idx;
+    return collect_ready(static_info.get_compute_task_dependents(compute_task_id),
+                        [&](taskid_t dep) { return decrement_compute_task_incomplete(dep); },
+                        compute_task_buffer);
   }
 
-  taskid_t compute_notify_data_completed(taskid_t compute_task_id, timecount_t time,
-                                         const StaticTaskInfo &static_info,
-                                         TaskIDList &data_task_buffer) {
-    auto &my_info = compute_task_runtime_info[compute_task_id];
-
-    // state and time assumed to be updated by prior call to notify_completed
-    const auto my_data_dependents = static_info.get_compute_task_data_dependents(compute_task_id);
-    const auto dependent_count = static_cast<taskid_t>(my_data_dependents.size());
-    if (dependent_count == 0) {
-      if (!data_task_buffer.empty()) {
-        data_task_buffer.clear();
-      }
-      return 0;
-    }
-    if (dependent_count == 1) {
-      const auto dependent_id = my_data_dependents.front();
-      const bool is_launchable = decrement_data_task_incomplete(dependent_id);
-      if (is_launchable) {
-        data_task_buffer.resize(1);
-        data_task_buffer[0] = dependent_id;
-        return 1;
-      }
-      if (!data_task_buffer.empty()) {
-        data_task_buffer.clear();
-      }
-      return 0;
-    }
-    taskid_t write_idx = 0;
-    data_task_buffer.resize(my_data_dependents.size());
-
-    for (const auto &dependent_id : my_data_dependents) {
-      const bool is_launchable = decrement_data_task_incomplete(dependent_id);
-      if (is_launchable) {
-        data_task_buffer[write_idx] = dependent_id;
-        write_idx += 1;
-      }
-      SPDLOG_DEBUG("compute_notify_data_completed: dependent_id: {}, is_launchable: {}, "
-                   "write_idx: {}",
-                   dependent_id, is_launchable, write_idx);
-    }
-    if (write_idx != dependent_count) {
-      data_task_buffer.resize(write_idx);
-    }
-
-    return write_idx;
+  taskid_t compute_notify_data_completed(taskid_t compute_task_id, timecount_t /*time*/,
+                                        const StaticTaskInfo &static_info,
+                                        TaskIDList &data_task_buffer)
+  {
+    return collect_ready(static_info.get_compute_task_data_dependents(compute_task_id),
+                        [&](taskid_t dt) { return decrement_data_task_incomplete(dt); },
+                        data_task_buffer);
   }
 
-  void data_notify_reserved(taskid_t data_task_id, devid_t mapped_device, timecount_t time,
-                            const StaticTaskInfo &static_info) {
-    auto &my_info = data_task_runtime_info[data_task_id];
-    auto &my_time_record = data_task_time_records[data_task_id];
-    my_info.mapped_device = mapped_device;
-    my_info.state = static_cast<uint8_t>(TaskState::RESERVED);
+  void data_notify_reserved(taskid_t data_task_id, devid_t mapped_device,
+                            timecount_t /*time*/, const StaticTaskInfo &) {
+    dt_mapped_device[data_task_id] = mapped_device;
+    dt_state[data_task_id] = CumulativeState::RESERVED;
   }
 
   void data_notify_launched(taskid_t data_task_id, devid_t source_device, timecount_t time,
-                            const StaticTaskInfo &static_info) {
-    auto &my_info = data_task_runtime_info[data_task_id];
-    auto &my_time_record = data_task_time_records[data_task_id];
-    my_info.state = static_cast<uint8_t>(TaskState::LAUNCHED);
-    my_info.source_device = source_device;
-    my_time_record.launched_time = time;
+                            const StaticTaskInfo &) {
+    dt_state[data_task_id] = CumulativeState::LAUNCHED;
+    dt_source_device[data_task_id] = source_device;
+    dt_launched_time[data_task_id] = time;
   }
 
   taskid_t data_notify_completed(taskid_t data_task_id, timecount_t time,
-                                 const StaticTaskInfo &static_info,
-                                 TaskIDList &compute_task_buffer) {
-    auto &my_info = data_task_runtime_info[data_task_id];
-    auto &my_time_record = data_task_time_records[data_task_id];
+                                const StaticTaskInfo &static_info,
+                                TaskIDList &compute_task_buffer)
+  {
+    dt_state[data_task_id] = CumulativeState::COMPLETED;
+    dt_completed_time[data_task_id] = time;
 
-    my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);
-    my_time_record.completed_time = time;
-    taskid_t write_idx = 0;
-
-    auto my_dependents = static_info.get_data_task_dependents(data_task_id);
-    if (my_dependents.empty()) {
-      compute_task_buffer.clear();
-      return 0;
-    }
-
-    if (my_dependents.size() == 1) {
-      const auto dependent_id = my_dependents.front();
-      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
-      if (is_launchable) {
-        compute_task_buffer.resize(1);
-        compute_task_buffer[0] = dependent_id;
-        return 1;
-      }
-      compute_task_buffer.clear();
-      return 0;
-    }
-
-    compute_task_buffer.resize(my_dependents.size());
-
-    for (const auto &dependent_id : my_dependents) {
-      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
-      if (is_launchable) {
-        compute_task_buffer[write_idx] = dependent_id;
-        write_idx += 1;
-      }
-      SPDLOG_DEBUG("data_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
-                   dependent_id, is_launchable, write_idx);
-    }
-    if (write_idx != static_cast<taskid_t>(compute_task_buffer.size())) {
-      compute_task_buffer.resize(write_idx);
-    }
-
-    return write_idx;
+    return collect_ready(static_info.get_data_task_dependents(data_task_id),
+                        [&](taskid_t ct) { return decrement_compute_task_incomplete(ct); },
+                        compute_task_buffer);
   }
 
-  void eviction_notify_reserved(taskid_t eviction_task_id, timecount_t time,
-                                const StaticTaskInfo &static_info) {
-    auto &my_time_record = eviction_task_time_records[eviction_task_id];
-    auto &my_info = eviction_task_runtime_info[eviction_task_id];
-    my_info.state = static_cast<uint8_t>(TaskState::RESERVED);
+  void eviction_notify_reserved(taskid_t eviction_task_id, timecount_t,
+                                const StaticTaskInfo &) {
+    et_state[eviction_task_id] = CumulativeState::RESERVED;
   }
 
   void eviction_notify_launched(taskid_t eviction_task_id, devid_t source_device_id,
-                                timecount_t time, const StaticTaskInfo &static_info) {
-    auto &my_time_record = eviction_task_time_records[eviction_task_id];
-    auto &my_info = eviction_task_runtime_info[eviction_task_id];
-    my_info.source_device = source_device_id;
-    my_info.state = static_cast<uint8_t>(TaskState::LAUNCHED);
-    my_time_record.launched_time = time;
+                                timecount_t time, const StaticTaskInfo &) {
+    et_source_device[eviction_task_id] = source_device_id;
+    et_state[eviction_task_id] = CumulativeState::LAUNCHED;
+    et_launched_time[eviction_task_id] = time;
   }
 
   void eviction_notify_completed(taskid_t eviction_task_id, timecount_t time) {
-    auto &my_time_record = eviction_task_time_records[eviction_task_id];
-    auto &my_info = eviction_task_runtime_info[eviction_task_id];
-    my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);
-    my_time_record.completed_time = time;
+    et_state[eviction_task_id] = CumulativeState::COMPLETED;
+    et_completed_time[eviction_task_id] = time;
   }
 };

@@ -231,7 +231,6 @@ public:
 #ifdef SIM_RECORD
     if (record) {
       if (is_valid(data_id, device_id)) {
-        locations[data_id * num_devices + device_id] = 0;
         // close the current interval
         valid_intervals[data_id * num_devices + device_id].stops.back() = current_time;
       }
@@ -243,8 +242,7 @@ public:
   }
 
   [[nodiscard]] inline std::size_t count_valid(dataid_t data_id) const {
-    return std::count(locations.data() + data_id * num_devices,
-                      locations.data() + (data_id + 1) * num_devices, 1);
+    return std::popcount(static_cast<std::make_unsigned_t<devicemask_t>>(locations[data_id]));
   }
 
   [[nodiscard]] inline devicemask_t get_location_flags(dataid_t data_id) const {
@@ -256,10 +254,11 @@ public:
   }
 
   void populate_valid_locations(dataid_t data_id, std::vector<devid_t> &valid_locations) const {
-    for (devicemask_t i = 0; i < num_devices; i++) {
-      if (is_valid(data_id, i)) {
-        valid_locations.push_back(i);
-      }
+    auto mask = locations[data_id];
+    while (mask) {
+      auto bit = std::countr_zero(mask);
+      valid_locations.push_back(static_cast<devid_t>(bit));
+      mask &= (mask - 1);
     }
   }
 
@@ -875,14 +874,14 @@ public:
     evict_on_update(data_id, device_id, reserved_locations, current_time);
 
     auto size = data.get_size(data_id);
-    const devid_t n_devices = device_manager.n_devices;
-    for (devid_t device = 0; device < n_devices; device++) {
-      if (updated_devices_launched & (1 << device)) {
-        SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
-        device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
-        device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        lru_manager.invalidate(device, data_id, true);
-      }
+    auto mask = static_cast<std::make_unsigned_t<devicemask_t>>(updated_devices_launched);
+    while (mask) {
+      const auto device = static_cast<devid_t>(std::countr_zero(mask));
+      SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
+      device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
+      device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+      lru_manager.invalidate(device, data_id, true);
+      mask &= (mask - 1);
     }
     if (!future_usage) {
       // If there are no further usage for the data block (in mapped but not reserved tasks).
@@ -1075,15 +1074,15 @@ public:
 
   void remove_memory(DeviceManager &device_manager, const devicemask_t changed_flags,
                      dataid_t data_id, mem_t size, timecount_t current_time) {
-    const devid_t n_devices = device_manager.n_devices;
-    for (devid_t device = 0; device < n_devices; device++) {
-      if (changed_flags & (1 << device)) {
-        SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device, size);
-        device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
-        device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
-        device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        lru_manager.invalidate(device, data_id);
-      }
+    auto mask = static_cast<std::make_unsigned_t<devicemask_t>>(changed_flags);
+    while (mask) {
+      const auto device = static_cast<devid_t>(std::countr_zero(mask));
+      SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device, size);
+      device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
+      device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
+      device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+      lru_manager.invalidate(device, data_id);
+      mask &= (mask - 1);
     }
   }
 
@@ -1095,9 +1094,10 @@ public:
     auto mapped_flags = mapped_locations.invalidate_all(data_id, current_time);
     auto reserved_flags = reserved_locations.invalidate_all(data_id, current_time);
     auto launched_flags = launched_locations.invalidate_all(data_id, current_time);
-    const devid_t n_devices = device_manager.n_devices;
-
-    for (devid_t device = 0; device < n_devices; device++) {
+    auto mask = static_cast<std::make_unsigned_t<devicemask_t>>(
+        mapped_flags | reserved_flags | launched_flags);
+    while (mask) {
+      const auto device = static_cast<devid_t>(std::countr_zero(mask));
       const devicemask_t device_mask = (1 << device);
       if (mapped_flags & device_mask) {
         device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
@@ -1109,6 +1109,7 @@ public:
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id);
       }
+      mask &= (mask - 1);
     }
   }
 
