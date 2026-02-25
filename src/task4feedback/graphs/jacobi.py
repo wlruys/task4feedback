@@ -35,7 +35,9 @@ import math
 class JacobiConfig(GraphConfig):
     steps: int = 1
     n: int = 4  # number of cells in x direction
-    domain_ratio: float = 1.0  # ratio of n in y direction to x direction (1.0 = square grid)
+    domain_ratio: float = (
+        1.0  # ratio of n in y direction to x direction (1.0 = square grid)
+    )
     arithmetic_intensity: float = 1.0
     arithmetic_complexity: float = 1.0
     memory_intensity: float = 1.0
@@ -63,7 +65,9 @@ def get_length_from_config(cfg: JacobiConfig):
 
 class JacobiData(DataGeometry):
     @staticmethod
-    def from_mesh(geometry: Geometry, config: JacobiConfig, system: Optional[System] = None):
+    def from_mesh(
+        geometry: Geometry, config: JacobiConfig, system: Optional[System] = None
+    ):
         return JacobiData(geometry, config, system)
 
     def _create_blocks(self, system: Optional[System] = None):
@@ -72,15 +76,27 @@ class JacobiData(DataGeometry):
 
         y = sympy.symbols("y", real=True, positive=True)
         if not self.config.boundary_in_memory_calc:
-            equation = interiors_per_level * y - self.config.level_memory / self.config.bytes_per_element
+            equation = (
+                interiors_per_level * y
+                - self.config.level_memory / self.config.bytes_per_element
+            )
         else:
-            equation = interiors_per_level * y + self.config.boundary_width * edges_per_level * (y) ** self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
+            equation = (
+                interiors_per_level * y
+                + self.config.boundary_width
+                * edges_per_level
+                * (y) ** self.config.boundary_complexity
+                - self.config.level_memory / self.config.bytes_per_element
+            )
         solution = sympy.solve(equation, y)
         y_value = solution[0].evalf()
         interior_elem = int(y_value)
 
         interior_size = interior_elem * self.config.bytes_per_element
-        boundary_elem = interior_elem ** (self.config.boundary_complexity) * self.config.boundary_width
+        boundary_elem = (
+            interior_elem ** (self.config.boundary_complexity)
+            * self.config.boundary_width
+        )
         boundary_size = boundary_elem * self.config.bytes_per_element
 
         if self.config.interior_time is not None:
@@ -95,9 +111,17 @@ class JacobiData(DataGeometry):
             boundary_size = self.config.boundary_size
         if self.config.compute_time is not None:
             assert system is not None
-            assert self.config.interior_time is not None or self.config.interior_size is not None, "Interior time or size should be set to manually set compute time"
-            assert self.config.boundary_time is not None or self.config.boundary_size is not None, "Boundary time or size should be set to manually set compute time"
-            self.config.memory_intensity = self.config.compute_time / interior_size * (system.fastest_gmbw / 1e6)
+            assert (
+                self.config.interior_time is not None
+                or self.config.interior_size is not None
+            ), "Interior time or size should be set to manually set compute time"
+            assert (
+                self.config.boundary_time is not None
+                or self.config.boundary_size is not None
+            ), "Boundary time or size should be set to manually set compute time"
+            self.config.memory_intensity = (
+                self.config.compute_time / interior_size * (system.fastest_gmbw / 1e6)
+            )
 
         interior_size = int(interior_size)
         boundary_size = int(boundary_size)
@@ -125,11 +149,14 @@ class JacobiData(DataGeometry):
             )
             print(
                 "Compute time for reference interior: ",
-                interior_elem**self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6),
+                interior_elem**self.config.arithmetic_complexity
+                * self.config.arithmetic_intensity
+                / (system.fastest_flops / 1e6),
             )
             print(
                 "Memory time for reference interior: ",
-                (interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6),
+                (interior_size * self.config.memory_intensity)
+                / (system.fastest_gmbw / 1e6),
             )
 
         # Loop over cells
@@ -200,15 +227,21 @@ class JacobiData(DataGeometry):
         if isinstance(obj, Cell):
             # Update edges as well
             for edge in self.geometry.cell_edges[obj.id]:
-                id_list = self.map.key_to_block.get_leaves(DataKey(Edge(edge), (obj,)), values=step_list)
+                id_list = self.map.key_to_block.get_leaves(
+                    DataKey(Edge(edge), (obj,)), values=step_list
+                )
                 for i in id_list:
                     self.blocks.set_location(i, location)
 
-    def set_locations_from_list(self, location_list: list[int], step: Optional[int] = None):
+    def set_locations_from_list(
+        self, location_list: list[int], step: Optional[int] = None
+    ):
         for i, location in enumerate(location_list):
             self.set_location(Cell(i), location, step)
 
-    def randomize_locations(self, num_changes: int, location_list: list[int], step: Optional[int] = None):
+    def randomize_locations(
+        self, num_changes: int, location_list: list[int], step: Optional[int] = None
+    ):
         new_locations = []
 
         selected_cells = random.sample(range(len(self.geometry.cells)), num_changes)
@@ -243,7 +276,9 @@ class JacobiData(DataGeometry):
                 new_location = location_map[location]
                 self.set_location(Cell(cell_id), new_location)
 
-    def permute_locations(self, location_map: dict[int, int], permutation_idx: Optional[int] = None):
+    def permute_locations(
+        self, location_map: dict[int, int], permutation_idx: Optional[int] = None
+    ):
         # Form and apply a permutation of the location_map
         # NOTE: This is a brute force implementation (FORMS ALL PERMUTATIONS AT EVERY CALL)
         # This is terrifyingly inefficient, but it works for small location maps
@@ -269,7 +304,9 @@ class JacobiGraph(ComputeDataGraph):
         Only works for rectangular grids.
         """
         cell_id = self.task_to_cell[taskid]
-        centroid = self.data.geometry.cell_points[self.data.geometry.cells[cell_id]].mean(axis=0)
+        centroid = self.data.geometry.cell_points[
+            self.data.geometry.cells[cell_id]
+        ].mean(axis=0)
         n = self.nx
         centroid = np.floor(centroid * n)
 
@@ -337,7 +374,9 @@ class JacobiGraph(ComputeDataGraph):
                 next_interior_block = self.data.get_block_at_step(Cell(cell), i + 1)
                 next_interior_edges = []
                 for edge in edges:
-                    next_interior_edges.append(self.data.get_block_at_step((Cell(cell), Edge(edge)), i + 1))
+                    next_interior_edges.append(
+                        self.data.get_block_at_step((Cell(cell), Edge(edge)), i + 1)
+                    )
 
                 read_blocks = interior_edges + exterior_edges + [interior_block]
                 write_blocks = next_interior_edges + [next_interior_block]
@@ -353,12 +392,24 @@ class JacobiGraph(ComputeDataGraph):
 
                 assert (
                     system is None or data_req < system.arch_to_maxmem[DeviceType.GPU]
-                ), f"Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB"
+                ), (
+                    f"Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB"
+                )
                 # Raise a warning if data_req exceeds half of maxmem
-                if system is not None and data_req > system.arch_to_maxmem[DeviceType.GPU] / 2:
-                    print(f"Warning: Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds half of the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB")
-                elif system is not None and data_req > system.arch_to_maxmem[DeviceType.GPU]:
-                    print(f"Error: Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB")
+                if (
+                    system is not None
+                    and data_req > system.arch_to_maxmem[DeviceType.GPU] / 2
+                ):
+                    print(
+                        f"Warning: Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds half of the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB"
+                    )
+                elif (
+                    system is not None
+                    and data_req > system.arch_to_maxmem[DeviceType.GPU]
+                ):
+                    print(
+                        f"Error: Task {task_id} requires {data_req / 1e9:.2f} GB of data, which exceeds the maximum memory for GPU {system.arch_to_maxmem[DeviceType.GPU] / 1e9:.1f} GB"
+                    )
                     exit()
                 self.max_requirement = max(self.max_requirement, data_req)
                 # if data_req > 80e9:
@@ -386,7 +437,9 @@ class JacobiGraph(ComputeDataGraph):
         self._build_graph()
         self.dynamic = False
         self.reference_partition = []  # Zero indexed partition list
-        assert config.domain_ratio == 1.0, "DynamicJacobiGraph only supports square domains for now."
+        assert config.domain_ratio == 1.0, (
+            "DynamicJacobiGraph only supports square domains for now."
+        )
         num_partitions = system.devices.size() - 1
 
         # Find a grid (rows × cols) that exactly matches
@@ -398,7 +451,10 @@ class JacobiGraph(ComputeDataGraph):
 
         # Enforce perfect fit
         if config.n % rows != 0 or config.n % cols != 0:
-            raise ValueError(f"Perfect partitioning impossible: " f"config.n={config.n}, rows={rows}, cols={cols}")
+            raise ValueError(
+                f"Perfect partitioning impossible: "
+                f"config.n={config.n}, rows={rows}, cols={cols}"
+            )
 
         block_h = config.n // rows
         block_w = config.n // cols
@@ -415,7 +471,9 @@ class JacobiGraph(ComputeDataGraph):
         elif system is not None:
             self._apply_workload_variant(system)
         else:
-            print("Warning: No variant or system provided, using default Jacobi variant for task time and architecture specs.")
+            print(
+                "Warning: No variant or system provided, using default Jacobi variant for task time and architecture specs."
+            )
             self.apply_variant(JacobiVariant)
 
         self.finalize()
@@ -425,7 +483,9 @@ class JacobiGraph(ComputeDataGraph):
 
         class JacobiVariant(VariantBuilder):
             @staticmethod
-            def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
+            def build_variant(
+                arch: DeviceType, task: TaskTuple
+            ) -> Optional[VariantTuple]:
                 memory_usage = self.config.task_internal_memory
                 vcu_usage = self.config.vcu_usage
 
@@ -436,12 +496,21 @@ class JacobiGraph(ComputeDataGraph):
                     expected_time = self.config.task_time
                     expected_time = int(expected_time)
                 else:
-                    num_elements = self.data.interior_size // self.config.bytes_per_element
-                    expected_work = num_elements**self.config.arithmetic_complexity * self.config.arithmetic_intensity
+                    num_elements = (
+                        self.data.interior_size // self.config.bytes_per_element
+                    )
+                    expected_work = (
+                        num_elements**self.config.arithmetic_complexity
+                        * self.config.arithmetic_intensity
+                    )
                     expected_time = expected_work / system.get_flop_ms(arch)
 
-                    expected_memory = self.data.interior_size * self.config.memory_intensity
-                    expected_time = max(expected_time, expected_memory / system.get_gmbw_ms(arch))
+                    expected_memory = (
+                        self.data.interior_size * self.config.memory_intensity
+                    )
+                    expected_time = max(
+                        expected_time, expected_memory / system.get_gmbw_ms(arch)
+                    )
                     expected_time = int(max(expected_time, 1))
 
                 return VariantTuple(
@@ -464,16 +533,22 @@ class JacobiGraph(ComputeDataGraph):
     ):
         num_changes = int(perc_change * len(self.data.geometry.cells))
         if verbose:
-            print(f"Randomizing {num_changes} locations out of {len(self.data.geometry.cells)}")
+            print(
+                f"Randomizing {num_changes} locations out of {len(self.data.geometry.cells)}"
+            )
         if location_list is None:
             if max_loc is None:
                 raise ValueError("max_loc must be provided if location_list is None")
             location_list = list(range(min_loc, max_loc))
 
-        selected_cells, new_locations = self.data.randomize_locations(num_changes, location_list, step)
+        selected_cells, new_locations = self.data.randomize_locations(
+            num_changes, location_list, step
+        )
 
         if verbose:
-            print(f"Randomized locations for {len(selected_cells)} cells on step {step}:")
+            print(
+                f"Randomized locations for {len(selected_cells)} cells on step {step}:"
+            )
             for cell, new_location in zip(selected_cells, new_locations):
                 print(f"Cell {cell} -> New Location: {new_location}")
 
@@ -516,10 +591,14 @@ class JacobiGraph(ComputeDataGraph):
     def get_num_iterations(self):
         return self.num_iterations
 
-    def permute_locations(self, location_map: dict[int, int], permutation_idx: Optional[int] = None):
+    def permute_locations(
+        self, location_map: dict[int, int], permutation_idx: Optional[int] = None
+    ):
         return self.data.permute_locations(location_map, permutation_idx)
 
-    def get_weighted_cell_graph(self, arch: DeviceType, bandwidth=1000, levels: Optional[list[int]] = None):
+    def get_weighted_cell_graph(
+        self, arch: DeviceType, bandwidth=1000, levels: Optional[list[int]] = None
+    ):
         """
         Given a list of levels, return the weighted cell interactions
         """
@@ -531,7 +610,11 @@ class JacobiGraph(ComputeDataGraph):
         for level in levels:
             tasks_in_levels += self.level_to_task[level]
 
-        task_to_local, adj_list, adj_starts, vweights, eweights = self.get_weighted_graph(arch, bandwidth=bandwidth, task_ids=tasks_in_levels, symmetric=True)
+        task_to_local, adj_list, adj_starts, vweights, eweights = (
+            self.get_weighted_graph(
+                arch, bandwidth=bandwidth, task_ids=tasks_in_levels, symmetric=True
+            )
+        )
 
         cell_vertex_cost = defaultdict(int)
         cell_neighbors_cost = defaultdict(lambda: defaultdict(int))
@@ -579,7 +662,15 @@ class JacobiGraph(ComputeDataGraph):
         return WeightedCellGraph(cells, adj_list, adj_starts, vweights, eweights)
 
     def get_distributed_weighted_graph(
-        self, bandwidth: int, task_ids: List[int], partition: List[int], arch: DeviceType = DeviceType.GPU, future_levels: int = 0, width: int = 8, length: int = 8, n_compute_devices: int = 4
+        self,
+        bandwidth: int,
+        task_ids: List[int],
+        partition: List[int],
+        arch: DeviceType = DeviceType.GPU,
+        future_levels: int = 0,
+        width: int = 8,
+        length: int = 8,
+        n_compute_devices: int = 4,
     ) -> Tuple[
         List[List[int]],  # partitioned_tasks
         np.ndarray,  # vtxdist
@@ -608,7 +699,9 @@ class JacobiGraph(ComputeDataGraph):
 
         # ---------- Basic checks & setup ----------
         num_tasks = len(task_ids)
-        assert len(partition) == num_tasks, f"Length of 'partition' ({len(partition)}) must match number of tasks ({num_tasks})."
+        assert len(partition) == num_tasks, (
+            f"Length of 'partition' ({len(partition)}) must match number of tasks ({num_tasks})."
+        )
 
         min_part = min(partition)
         # assert min_part == 0, f"Partition must start from 0, got {min_part}"
@@ -625,17 +718,27 @@ class JacobiGraph(ComputeDataGraph):
         xadj: List[List[int]] = [[0] for _ in range(n_compute_devices)]
         adjncy: List[List[int]] = [[] for _ in range(n_compute_devices)]
         vwgt: List[List[int]] = [[] for _ in range(n_compute_devices)]  # compute time
-        adjwgt: List[List[int]] = [[] for _ in range(n_compute_devices)]  # data transfer time
-        vsize: List[List[int]] = [[] for _ in range(n_compute_devices)]  # internal data size proxy
+        adjwgt: List[List[int]] = [
+            [] for _ in range(n_compute_devices)
+        ]  # data transfer time
+        vsize: List[List[int]] = [
+            [] for _ in range(n_compute_devices)
+        ]  # internal data size proxy
 
-        vtxdist: List[int] = [0]  # prefix of vertex counts (will accumulate when partition changes)
+        vtxdist: List[int] = [
+            0
+        ]  # prefix of vertex counts (will accumulate when partition changes)
         partitioned_tasks: List[List[int]] = [[] for _ in range(n_compute_devices)]
 
         # Pair tasks with their partition and sort by partition to make vtxdist/xadj simpler.
-        pairs: List[Tuple[int, int]] = sorted(zip(task_ids, partition), key=lambda x: x[1])
+        pairs: List[Tuple[int, int]] = sorted(
+            zip(task_ids, partition), key=lambda x: x[1]
+        )
 
         # Map task_id -> "global-local" index (i.e., index into the sorted 'pairs' list).
-        task_to_local: Dict[int, int] = {task_id: i for i, (task_id, _) in enumerate(pairs)}
+        task_to_local: Dict[int, int] = {
+            task_id: i for i, (task_id, _) in enumerate(pairs)
+        }
 
         # ---------- Helpers ----------
         def avg_over_future(value: int) -> int:
@@ -694,7 +797,10 @@ class JacobiGraph(ComputeDataGraph):
                     # Find a future current task within current cell at current_level + fl
                     for ft_cur in self.level_to_task[current_level + fl]:
                         if self.task_to_cell[ft_cur] == self.task_to_cell[task_id]:
-                            boundary_cost += self.get_shared_data(future_dep_task_id, ft_cur) // bandwidth
+                            boundary_cost += (
+                                self.get_shared_data(future_dep_task_id, ft_cur)
+                                // bandwidth
+                            )
                             break
 
                 adjwgt[part].append(max(avg_over_future(boundary_cost), 1))
@@ -722,7 +828,9 @@ class JacobiGraph(ComputeDataGraph):
             partition_count += 1
 
         # ---------- Final checks ----------
-        assert len(vtxdist) == n_compute_devices + 1, f"vtxdist length {len(vtxdist)} does not match number of partitions + 1 ({n_compute_devices + 1})."
+        assert len(vtxdist) == n_compute_devices + 1, (
+            f"vtxdist length {len(vtxdist)} does not match number of partitions + 1 ({n_compute_devices + 1})."
+        )
 
         # ---------- Symmetry: take max weight for (u,v) and (v,u) ----------
         # Build max weight per undirected pair using global indices.
@@ -778,7 +886,9 @@ class JacobiGraph(ComputeDataGraph):
         n_parts: int = 4,
         offset: int = 1,  # 1 to ignore cpu
     ):
-        cell_graph = self.get_weighted_cell_graph(arch, bandwidth=bandwidth, levels=[0, 1])
+        cell_graph = self.get_weighted_cell_graph(
+            arch, bandwidth=bandwidth, levels=[0, 1]
+        )
         edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
         partition = [x + offset for x in partition]
         return partition
@@ -813,17 +923,25 @@ class JacobiGraph(ComputeDataGraph):
                     end = len(levels)
 
                 levels_to_compute = levels[start:end]
-                cell_graph = self.get_weighted_cell_graph(arch, bandwidth=bandwidth, levels=levels_to_compute)
+                cell_graph = self.get_weighted_cell_graph(
+                    arch, bandwidth=bandwidth, levels=levels_to_compute
+                )
 
-                edge_cut, partition = weighted_cell_partition(cell_graph, nparts=n_parts)
+                edge_cut, partition = weighted_cell_partition(
+                    cell_graph, nparts=n_parts
+                )
                 if i == 0:
                     partition = self.maximize_matches(partition)
                 partition = [x + offset for x in partition]
                 partitions[(start, end)] = partition
         # Dynamic mode changes the partitions based on the current workload if certain thresholds are met
         elif mode == "dynamic":
-            cell_graph = self.get_weighted_cell_graph(arch, bandwidth=bandwidth, levels=[0])
-            edge_cut, current_partition = weighted_cell_partition(cell_graph, nparts=n_parts)
+            cell_graph = self.get_weighted_cell_graph(
+                arch, bandwidth=bandwidth, levels=[0]
+            )
+            edge_cut, current_partition = weighted_cell_partition(
+                cell_graph, nparts=n_parts
+            )
             prev_level = 0
             for level in levels[1:]:
                 # Check load imbalance of current partition
@@ -838,13 +956,21 @@ class JacobiGraph(ComputeDataGraph):
                     current_partition = [x + offset for x in current_partition]
                     partitions[(prev_level, level)] = current_partition
                     prev_level = level
-                    cell_graph = self.get_weighted_cell_graph(arch, bandwidth=bandwidth, levels=[level])
-                    edge_cut, current_partition = weighted_cell_partition(cell_graph, nparts=n_parts)
+                    cell_graph = self.get_weighted_cell_graph(
+                        arch, bandwidth=bandwidth, levels=[level]
+                    )
+                    edge_cut, current_partition = weighted_cell_partition(
+                        cell_graph, nparts=n_parts
+                    )
             current_partition = [x + offset for x in current_partition]
             partitions[(prev_level, levels[-1] + 1)] = current_partition
         elif mode == "predict":
-            cell_graph = self.get_weighted_cell_graph(arch, bandwidth=bandwidth, levels=[0])
-            edge_cut, current_partition = weighted_cell_partition(cell_graph, nparts=n_parts)
+            cell_graph = self.get_weighted_cell_graph(
+                arch, bandwidth=bandwidth, levels=[0]
+            )
+            edge_cut, current_partition = weighted_cell_partition(
+                cell_graph, nparts=n_parts
+            )
             prev_level = 0
 
             level_size = len(levels) // level_chunks
@@ -877,14 +1003,20 @@ class JacobiGraph(ComputeDataGraph):
                     prev_level = i
                     forecast = predictor.predict_workload(k=level_size)
                     for cell in cell_graph.cells:
-                        scale = forecast[cell] / cell_graph.vweights[cell] if cell_graph.vweights[cell] > 0 else 1
+                        scale = (
+                            forecast[cell] / cell_graph.vweights[cell]
+                            if cell_graph.vweights[cell] > 0
+                            else 1
+                        )
                         # print(f"Scale for cell {cell}: {scale}")
                         cell_graph.vweights[cell] = forecast[cell]
                         start = cell_graph.xadj[cell]
                         end = cell_graph.xadj[cell + 1]
                         for j in range(start, end):
                             cell_graph.eweights[j] = int(cell_graph.eweights[j] * scale)
-                    edge_cut, current_partition = weighted_cell_partition(cell_graph, nparts=n_parts)
+                    edge_cut, current_partition = weighted_cell_partition(
+                        cell_graph, nparts=n_parts
+                    )
 
             current_partition = [x + offset for x in current_partition]
             partitions[(prev_level, levels[-1] + 1)] = current_partition
@@ -1027,7 +1159,9 @@ class PredictWorkload:
 
         # Buffers retained if you still want to keep history; otherwise you can drop this.
         if window_size is not None:
-            self.buffers: List[deque[float]] = [deque(maxlen=window_size) for _ in range(cells)]
+            self.buffers: List[deque[float]] = [
+                deque(maxlen=window_size) for _ in range(cells)
+            ]
         else:
             self.buffers: List[List[float]] = [[] for _ in range(cells)]
 
@@ -1051,7 +1185,9 @@ class PredictWorkload:
                 self.ema_values[i] = w
             else:
                 # EMA update rule
-                self.ema_values[i] = self.alpha * w + (1.0 - self.alpha) * self.ema_values[i]
+                self.ema_values[i] = (
+                    self.alpha * w + (1.0 - self.alpha) * self.ema_values[i]
+                )
 
     def compute_next_k(self, i: int, k: int) -> List[float]:
         """
@@ -1074,25 +1210,46 @@ class PredictWorkload:
 
 
 class GraphMETISMapper(StaticExternalMapper):
-
-    def __init__(self, mapper: Optional[Self] = None, n_devices: int = 4, offset: int = 1, graph: Optional[ComputeDataGraph] = None, arch: DeviceType = DeviceType.GPU, bandwidth: int = 100e9):
+    def __init__(
+        self,
+        mapper: Optional[Self] = None,
+        n_devices: int = 4,
+        offset: int = 1,
+        graph: Optional[ComputeDataGraph] = None,
+        arch: DeviceType = DeviceType.GPU,
+        bandwidth: int = 100e9,
+    ):
         self.n_devices = n_devices
         self.offset = offset
         if mapper is not None:
-            assert isinstance(mapper, GraphMETISMapper), "Mapper must be of type GraphMETISMapper, is " + str(type(mapper))
+            assert isinstance(mapper, GraphMETISMapper), (
+                "Mapper must be of type GraphMETISMapper, is " + str(type(mapper))
+            )
             self.mapping_dict = mapper.mapping_dict
         elif graph is not None:
-            task_to_local, adjacency_list, adj_starts, vweights, eweights = graph.get_weighted_graph(arch=arch, bandwidth=bandwidth, task_ids=None, symmetric=True)
-            cut_counts, part = weighted_partition(n_devices, adjacency_list, adj_starts, vweights, eweights)
+            task_to_local, adjacency_list, adj_starts, vweights, eweights = (
+                graph.get_weighted_graph(
+                    arch=arch, bandwidth=bandwidth, task_ids=None, symmetric=True
+                )
+            )
+            cut_counts, part = weighted_partition(
+                n_devices, adjacency_list, adj_starts, vweights, eweights
+            )
             print(f"GraphMETISMapper: cut counts {cut_counts}")
             for i in range(n_devices):
                 print(f"GraphMETISMapper: partition {i} has {part.count(i)} tasks")
                 # Get vertex sum per partition
-                print(f"GraphMETISMapper: partition {i} vertex sum {sum(vweights[j] for j in range(len(part)) if part[j] == i)}")
+                print(
+                    f"GraphMETISMapper: partition {i} vertex sum {sum(vweights[j] for j in range(len(part)) if part[j] == i)}"
+                )
             print(f"GraphMETISMapper: total tasks {len(task_to_local)}")
-            self.mapping_dict = {i: device + self.offset for i, device in enumerate(part)}
+            self.mapping_dict = {
+                i: device + self.offset for i, device in enumerate(part)
+            }
         else:
-            raise ValueError("Either mapper or graph must be provided for GraphMETISMapper")
+            raise ValueError(
+                "Either mapper or graph must be provided for GraphMETISMapper"
+            )
 
 
 class PartitionMapper:
@@ -1103,7 +1260,9 @@ class PartitionMapper:
         level_start: int = 0,
     ):
         if mapper is not None:
-            assert isinstance(mapper, PartitionMapper), "Mapper must be of type PartitionMapper, is " + str(type(mapper))
+            assert isinstance(mapper, PartitionMapper), (
+                "Mapper must be of type PartitionMapper, is " + str(type(mapper))
+            )
             self.cell_to_mapping = mapper.cell_to_mapping
 
         elif cell_to_mapping is not None:
@@ -1117,7 +1276,9 @@ class PartitionMapper:
         self.cell_to_mapping = cell_to_mapping
 
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
-        candidates = torch.zeros((simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
         num_candidates = simulator.simulator.get_mappable_candidates(candidates)
         mapping_result = []
         for i in range(num_candidates):
@@ -1130,12 +1291,18 @@ class PartitionMapper:
             device = self.cell_to_mapping[cell_id]
             if level < self.level_start:
                 device = np.random.randint(1, 4)
-            mapping_priority = simulator.simulator.get_state().get_mapping_priority(global_task_id)
-            mapping_result.append(fastsim.Action(local_id, device, mapping_priority, mapping_priority))
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(local_id, device, mapping_priority, mapping_priority)
+            )
         return mapping_result
 
     def get_current_mapping(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
-        candidates = torch.zeros((simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
         num_candidates = simulator.simulator.get_mappable_candidates(candidates)
         mapping_result = []
         for i in range(num_candidates):
@@ -1149,12 +1316,22 @@ class PartitionMapper:
 
 
 class BlockCyclicMapper(PartitionMapper):
-    def __init__(self, mapper: Optional[Self] = None, geometry: Optional[Geometry] = None, n_devices: int = 4, block_size: int = 2, offset: int = 1, verbose=False):
+    def __init__(
+        self,
+        mapper: Optional[Self] = None,
+        geometry: Optional[Geometry] = None,
+        n_devices: int = 4,
+        block_size: int = 2,
+        offset: int = 1,
+        verbose=False,
+    ):
         self.level_start = 0
         self.offset = offset
         self.geometry = geometry
         if mapper is not None:
-            assert isinstance(mapper, BlockCyclicMapper), "Mapper must be of type BlockCyclicMapper, is " + str(type(mapper))
+            assert isinstance(mapper, BlockCyclicMapper), (
+                "Mapper must be of type BlockCyclicMapper, is " + str(type(mapper))
+            )
             self.cell_to_mapping = mapper.cell_to_mapping
         elif geometry is not None:
             x_dev = n_devices // 2
@@ -1162,8 +1339,17 @@ class BlockCyclicMapper(PartitionMapper):
             if x_dev + y_dev != n_devices:
                 x_dev += 1
             n_cells = len(geometry.cells)
-            partition = block_cyclic(geometry, n_row_parts=x_dev, n_col_parts=y_dev, parts_per_column=block_size, parts_per_row=block_size, n_devices=n_devices)
-            self.cell_to_mapping = {cell: device + self.offset for cell, device in enumerate(partition)}
+            partition = block_cyclic(
+                geometry,
+                n_row_parts=x_dev,
+                n_col_parts=y_dev,
+                parts_per_column=block_size,
+                parts_per_row=block_size,
+                n_devices=n_devices,
+            )
+            self.cell_to_mapping = {
+                cell: device + self.offset for cell, device in enumerate(partition)
+            }
             if verbose:
                 print("\nBlockCyclicMapper: Block Cyclic Partitioning:")
                 for i in range(8):
@@ -1172,7 +1358,9 @@ class BlockCyclicMapper(PartitionMapper):
                     print()
                 print("################################\n")
         else:
-            raise ValueError("Either mapper or geometry must be provided for BlockCyclicMapper")
+            raise ValueError(
+                "Either mapper or geometry must be provided for BlockCyclicMapper"
+            )
 
 
 class RowColCyclicMapper(PartitionMapper):
@@ -1263,7 +1451,9 @@ class LevelPartitionMapper:
         graph: JacobiGraph = simulator.input.graph
         assert isinstance(graph, JacobiGraph)
 
-        candidates = torch.zeros((simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
         num_candidates = simulator.simulator.get_mappable_candidates(candidates)
         mapping_result = []
         for i in range(num_candidates):
@@ -1277,14 +1467,26 @@ class LevelPartitionMapper:
                     break
             if device == -1:
                 print(self.level_cell_mapping)
-            assert device != -1, f"Device not found for task {global_task_id} at level {level}"
-            mapping_priority = simulator.simulator.get_state().get_mapping_priority(global_task_id)
-            mapping_result.append(fastsim.Action(i, device, mapping_priority, mapping_priority))
+            assert device != -1, (
+                f"Device not found for task {global_task_id} at level {level}"
+            )
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(i, device, mapping_priority, mapping_priority)
+            )
         return mapping_result
 
 
 class JacobiRoundRobinMapper:
-    def __init__(self, n_devices: int = 4, setting: int = 0, offset: int = 1, mapper: Optional[Self] = None):
+    def __init__(
+        self,
+        n_devices: int = 4,
+        setting: int = 0,
+        offset: int = 1,
+        mapper: Optional[Self] = None,
+    ):
         """
         Initialize the JacobiRoundRobinMapper.
         setting == 2 : Row cyclic
@@ -1298,7 +1500,9 @@ class JacobiRoundRobinMapper:
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
         graph: JacobiGraph = simulator.input.graph
         assert isinstance(graph, JacobiGraph)
-        candidates = torch.zeros((simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
         num_candidates = simulator.simulator.get_mappable_candidates(candidates)
         mapping_result = []
         ny = graph.ny
@@ -1329,8 +1533,14 @@ class JacobiRoundRobinMapper:
             elif self.setting == 2:
                 # Column-major round-robin
                 device = (col * ny + row) % self.n_devices
-            mapping_priority = simulator.simulator.get_state().get_mapping_priority(global_task_id)
-            mapping_result.append(fastsim.Action(i, device + self.offset, mapping_priority, mapping_priority))
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(
+                    i, device + self.offset, mapping_priority, mapping_priority
+                )
+            )
         return mapping_result
 
 
@@ -1352,18 +1562,28 @@ class JacobiQuadrantMapper:
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
         graph: JacobiGraph = simulator.input.graph
         assert isinstance(graph, JacobiGraph)
-        candidates = torch.zeros((simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
         num_candidates = simulator.simulator.get_mappable_candidates(candidates)
         mapping_result = []
         for i in range(num_candidates):
             global_task_id = candidates[i].item()
-            device = graph.reference_partition[global_task_id % self.n_tasks] + self.offset
-            mapping_priority = simulator.simulator.get_state().get_mapping_priority(global_task_id)
-            mapping_result.append(fastsim.Action(i, device, mapping_priority, mapping_priority))
+            device = (
+                graph.reference_partition[global_task_id % self.n_tasks] + self.offset
+            )
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(i, device, mapping_priority, mapping_priority)
+            )
         return mapping_result
 
     def mapping_from_id(self, global_task_id: int) -> int:
-        device = self.graph.reference_partition[global_task_id % self.n_tasks] + self.offset
+        device = (
+            self.graph.reference_partition[global_task_id % self.n_tasks] + self.offset
+        )
         return device
 
 
@@ -1434,8 +1654,16 @@ class XYExternalObserverFactory(ExternalObserverFactory):
         device_feature_extractor = self.device_feature_factory.create(state)
         task_task_feature_extractor = self.task_task_feature_factory.create(state)
         task_data_feature_extractor = self.task_data_feature_factory.create(state)
-        task_device_feature_extractor = self.task_device_feature_factory.create(state) if self.task_device_feature_factory is not None else None
-        data_device_feature_extractor = self.data_device_feature_factory.create(state) if self.data_device_feature_factory is not None else None
+        task_device_feature_extractor = (
+            self.task_device_feature_factory.create(state)
+            if self.task_device_feature_factory is not None
+            else None
+        )
+        data_device_feature_extractor = (
+            self.data_device_feature_factory.create(state)
+            if self.data_device_feature_factory is not None
+            else None
+        )
 
         return XYNormalizedDeviceQueueObserver(
             simulator,
@@ -1498,8 +1726,16 @@ class CandidateExternalObserverFactory(ExternalObserverFactory):
         device_feature_extractor = self.device_feature_factory.create(state)
         task_task_feature_extractor = self.task_task_feature_factory.create(state)
         task_data_feature_extractor = self.task_data_feature_factory.create(state)
-        task_device_feature_extractor = self.task_device_feature_factory.create(state) if self.task_device_feature_factory is not None else None
-        data_device_feature_extractor = self.data_device_feature_factory.create(state) if self.data_device_feature_factory is not None else None
+        task_device_feature_extractor = (
+            self.task_device_feature_factory.create(state)
+            if self.task_device_feature_factory is not None
+            else None
+        )
+        data_device_feature_extractor = (
+            self.data_device_feature_factory.create(state)
+            if self.data_device_feature_factory is not None
+            else None
+        )
 
         return CandidateObserver(
             simulator,
@@ -1525,7 +1761,9 @@ class GATExternalObserverFactory(ExternalObserverFactory):
         data_feature_extractor = self.data_feature_factory.create(state)
         device_feature_extractor = self.device_feature_factory.create(state)
         task_task_feature_extractor = self.task_task_feature_factory.create(state)
-        task_read_data_feature_extractor = self.task_read_data_feature_factory.create(state)
+        task_read_data_feature_extractor = self.task_read_data_feature_factory.create(
+            state
+        )
 
         return ExternalObserver(
             simulator,
@@ -1772,51 +2010,84 @@ class CandidateObserverFactory(CandidateExternalObserverFactory):
 
 
 class CandidateCoordinateObserverFactory(CandidateExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, width: int, length: int, prev_frames: int, version: str = "E", batched: bool = False, **_ignored):
+    def __init__(
+        self,
+        spec: fastsim.GraphSpec,
+        width: int,
+        length: int,
+        prev_frames: int,
+        version: str = "E",
+        batched: bool = False,
+        **_ignored,
+    ):
         self.batched = batched
         graph_extractor_t = fastsim.GraphExtractor
         task_feature_factory = FeatureExtractorFactory()
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
         if "A" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, 1
+            )
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "B" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, 1
+            )
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "C" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, 1
+            )
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "D" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, 1
+            )
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(
+                fastsim.PrevMappedDeviceFeature, width, length, False, 1
+            )
         elif "E" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, 1
+            )
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "F" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, 1
+            )
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(
+                fastsim.PrevMappedDeviceFeature, width, length, False, 1
+            )
         elif "G" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, 1
+            )
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(
+                fastsim.PrevMappedDeviceFeature, width, length, False, 1
+            )
         elif "H" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, 1)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, 1
+            )
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(
+                fastsim.PrevMappedDeviceFeature, width, length, False, 1
+            )
 
         data_feature_factory = FeatureExtractorFactory()
         data_feature_factory.add(fastsim.EmptyDataFeature, 1)
@@ -1863,49 +2134,75 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         self.batched = batched
         assert (not batched and spec.max_candidates == 1) or (
             spec.max_candidates == width * length
-        ), f"Batched {self.batched} CNN observer requires max_candidates to be {width*length if self.batched else 1}, but got {spec.max_candidates}"
+        ), (
+            f"Batched {self.batched} CNN observer requires max_candidates to be {width * length if self.batched else 1}, but got {spec.max_candidates}"
+        )
         task_feature_factory = FeatureExtractorFactory()
 
         if "A" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, prev_frames
+            )
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "B" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, prev_frames
+            )
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "C" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, prev_frames
+            )
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "D" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, prev_frames
+            )
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(
+                fastsim.PrevMappedDeviceFeature, width, length, False, 1
+            )
         elif "E" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, prev_frames
+            )
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
             # task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
         elif "F" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, prev_frames
+            )
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             # task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(
+                fastsim.PrevMappedDeviceFeature, width, length, False, 1
+            )
         elif "G" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, prev_frames
+            )
             # task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(
+                fastsim.PrevMappedDeviceFeature, width, length, False, 1
+            )
         elif "H" in version:
-            task_feature_factory.add(fastsim.PrevReadSizeFeature, width, length, True, prev_frames)
+            task_feature_factory.add(
+                fastsim.PrevReadSizeFeature, width, length, True, prev_frames
+            )
             task_feature_factory.add(fastsim.TaskDataMappedSizeFeature)
             task_feature_factory.add(fastsim.TaskCoordinatesFeature)
-            task_feature_factory.add(fastsim.PrevMappedDeviceFeature, width, length, False, 1)
+            task_feature_factory.add(
+                fastsim.PrevMappedDeviceFeature, width, length, False, 1
+            )
 
         # task_feature_factory.add(fastsim.TaskMeanDurationFeature)
         # task_feature_factory.add(fastsim.CandidateVectorFeature)
@@ -1963,8 +2260,16 @@ class CnnTaskObserverFactory(ExternalObserverFactory):
         device_feature_extractor = self.device_feature_factory.create(state)
         task_task_feature_extractor = self.task_task_feature_factory.create(state)
         task_data_feature_extractor = self.task_data_feature_factory.create(state)
-        task_device_feature_extractor = self.task_device_feature_factory.create(state) if self.task_device_feature_factory is not None else None
-        data_device_feature_extractor = self.data_device_feature_factory.create(state) if self.data_device_feature_factory is not None else None
+        task_device_feature_extractor = (
+            self.task_device_feature_factory.create(state)
+            if self.task_device_feature_factory is not None
+            else None
+        )
+        data_device_feature_extractor = (
+            self.data_device_feature_factory.create(state)
+            if self.data_device_feature_factory is not None
+            else None
+        )
         if self.batched:
             return CnnBatchTaskObserver(
                 simulator,

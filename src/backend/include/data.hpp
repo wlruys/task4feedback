@@ -510,7 +510,7 @@ public:
   }
 
   mem_t get_max_memory_usage() const {
-    return sizes_[0] + sizes_[1] + sizes_[2] + sizes_[3];
+    return max_usage;
   }
 };
 class MovementCounter {

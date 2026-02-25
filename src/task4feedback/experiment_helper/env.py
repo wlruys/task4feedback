@@ -43,7 +43,11 @@ def create_observer_factory(cfg: DictConfig):
     graph_spec = hydra.utils.instantiate(cfg.feature.observer.spec)
     graph_config = hydra.utils.instantiate(cfg.graph.config)
 
-    if hasattr(cfg.feature.observer, "width") and hasattr(cfg.feature.observer, "prev_frames") and hasattr(cfg.feature.observer, "batched"):
+    if (
+        hasattr(cfg.feature.observer, "width")
+        and hasattr(cfg.feature.observer, "prev_frames")
+        and hasattr(cfg.feature.observer, "batched")
+    ):
         width = graph_config.n
         length = get_length_from_config(graph_config)
         if cfg.feature.observer.batched:
@@ -138,7 +142,9 @@ def _setup_observation_norms(
 
     if to_init:
         print(f"Initializing observation norms: {[n for n, _, _ in to_init]}")
-        num_iter = max(1, getattr(env, "size", lambda: 1)()) * max(1, int(getattr(cfg.feature.normalization, "warmup", 1)))
+        num_iter = max(1, getattr(env, "size", lambda: 1)()) * max(
+            1, int(getattr(cfg.feature.normalization, "warmup", 1))
+        )
         env.disable_reward()
         try:
             for name, norm, spec in to_init:
@@ -146,7 +152,12 @@ def _setup_observation_norms(
                 reduce_dim = tuple(spec.get("reduce_dim", (0, 1)))
                 cat_dim = int(spec.get("cat_dim", 0))
                 try:
-                    norm.init_stats(num_iter=num_iter, key=in_keys[0], reduce_dim=reduce_dim, cat_dim=cat_dim)
+                    norm.init_stats(
+                        num_iter=num_iter,
+                        key=in_keys[0],
+                        reduce_dim=reduce_dim,
+                        cat_dim=cat_dim,
+                    )
                 except TypeError:
                     norm.init_stats(num_iter=num_iter, key=in_keys[0])
                 if cfg.feature.observer.version in "DFGH":
@@ -154,7 +165,9 @@ def _setup_observation_norms(
                     norm.scale[-env.n_compute_devices :] = 1.0
         finally:
             env.enable_reward()
-        return NormalizationDetails(states={n: t.state_dict() for n, t in created.items()})
+        return NormalizationDetails(
+            states={n: t.state_dict() for n, t in created.items()}
+        )
 
     return None
 
@@ -195,20 +208,43 @@ def make_env(
     else:
         fixed_baseline = None
 
-    input = SimulatorInput(m, d, s, transition_conditions=transition_conditions, task_noise=task_noise, top_k_candidates=top_k_candidates)
+    input = SimulatorInput(
+        m,
+        d,
+        s,
+        transition_conditions=transition_conditions,
+        task_noise=task_noise,
+        top_k_candidates=top_k_candidates,
+    )
 
     env = runtime_env_t(
         SimulatorFactory(input, graph_spec, observer_factory),
         device="cpu",
-        change_priority=cfg.graph.env.change_priority if hasattr(cfg.graph.env, "change_priority") else False,
-        change_location=cfg.graph.env.change_location if hasattr(cfg.graph.env, "change_location") else False,
-        change_duration=cfg.graph.env.change_duration if hasattr(cfg.graph.env, "change_duration") else False,
-        change_workload=cfg.graph.env.change_workload if hasattr(cfg.graph.env, "change_workload") else False,
+        change_priority=cfg.graph.env.change_priority
+        if hasattr(cfg.graph.env, "change_priority")
+        else False,
+        change_location=cfg.graph.env.change_location
+        if hasattr(cfg.graph.env, "change_location")
+        else False,
+        change_duration=cfg.graph.env.change_duration
+        if hasattr(cfg.graph.env, "change_duration")
+        else False,
+        change_workload=cfg.graph.env.change_workload
+        if hasattr(cfg.graph.env, "change_workload")
+        else False,
         seed=cfg.seed,
         max_samples_per_iter=(
-            (len(graph) // (graph.nx * graph.ny) + 1 if cfg.algorithm.rollout_steps == 0 else cfg.algorithm.rollout_steps + 1)
+            (
+                len(graph) // (graph.nx * graph.ny) + 1
+                if cfg.algorithm.rollout_steps == 0
+                else cfg.algorithm.rollout_steps + 1
+            )
             if cfg.feature.observer.batched
-            else (len(graph) + 1 if cfg.algorithm.rollout_steps == 0 else cfg.algorithm.rollout_steps + 1)
+            else (
+                len(graph) + 1
+                if cfg.algorithm.rollout_steps == 0
+                else cfg.algorithm.rollout_steps + 1
+            )
         ),
         fixed_baseline=fixed_baseline,
     )

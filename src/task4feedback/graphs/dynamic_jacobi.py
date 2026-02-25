@@ -25,7 +25,12 @@ class DynamicJacobiConfig(JacobiConfig):
 
 class DynamicJacobiData(JacobiData):
     @staticmethod
-    def from_mesh(geometry: Geometry, config: DynamicJacobiConfig, workload: DynamicWorkload, system: Optional[System] = None) -> Self:
+    def from_mesh(
+        geometry: Geometry,
+        config: DynamicJacobiConfig,
+        workload: DynamicWorkload,
+        system: Optional[System] = None,
+    ) -> Self:
         data = DynamicJacobiData(geometry, config, workload, system=system)
         return data
 
@@ -57,7 +62,10 @@ class DynamicJacobiData(JacobiData):
         edges_per_level = self.geometry.get_num_edges()
 
         y = sympy.symbols("y", real=True, positive=True)
-        equation = interiors_per_level * y - self.config.level_memory / self.config.bytes_per_element
+        equation = (
+            interiors_per_level * y
+            - self.config.level_memory / self.config.bytes_per_element
+        )
         # equation = interiors_per_level * y + self.config.boundary_width * edges_per_level * (y)**self.config.boundary_complexity - self.config.level_memory / self.config.bytes_per_element
         solution = sympy.solve(equation, y)
         y_value = solution[0].evalf()
@@ -65,7 +73,10 @@ class DynamicJacobiData(JacobiData):
         # print("ERROR: ", interior_elem * interiors_per_level * self.config.bytes_per_element - self.config.level_memory)
 
         if (self.config.r_interior, self.config.r_boundary) == (None, None):
-            boundary_elem = self.interior_elem ** (self.config.boundary_complexity) * self.config.boundary_width
+            boundary_elem = (
+                self.interior_elem ** (self.config.boundary_complexity)
+                * self.config.boundary_width
+            )
             interior_size = self.interior_elem * self.config.bytes_per_element
             boundary_size = boundary_elem * self.config.bytes_per_element
 
@@ -85,21 +96,44 @@ class DynamicJacobiData(JacobiData):
             boundary_size = int(boundary_size)
         else:
             interior_size = self.interior_elem * self.config.bytes_per_element
-            self.boundary_elem = self.interior_elem * self.config.boundary_width * self.config.r_boundary / self.config.r_interior
+            self.boundary_elem = (
+                self.interior_elem
+                * self.config.boundary_width
+                * self.config.r_boundary
+                / self.config.r_interior
+            )
             boundary_size = self.boundary_elem * self.config.bytes_per_element
             self.config.arithmetic_complexity = 1.0
-            self.config.arithmetic_intensity = system.fastest_flops / 1e6 / system.fastest_bandwidth / self.config.r_interior * self.config.bytes_per_element
+            self.config.arithmetic_intensity = (
+                system.fastest_flops
+                / 1e6
+                / system.fastest_bandwidth
+                / self.config.r_interior
+                * self.config.bytes_per_element
+            )
             interior_size = int(interior_size)
             boundary_size = int(boundary_size)
+            print(interior_size, boundary_size)
 
         interior_elem = self.interior_elem
         boundary_elem = self.boundary_elem
 
-        print(f"Total (per-level) Interior Size: {_bytes_to_readable(interior_size * interiors_per_level)}")
-        print(f"Communication time for reference interior size: {interior_size / system.fastest_bandwidth:.2f} {_bytes_to_readable(interior_size)} {interior_elem} elements")
-        print(f"Communication time for reference boundary size: {boundary_size / system.fastest_bandwidth:.2f} {_bytes_to_readable(boundary_size)} {int(boundary_elem)} elements")
-        print(f"Compute time for reference interior: {interior_elem ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6):.2f}")
-        print(f"Memory time for reference interior: {(interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6):.2f}")
+        print(
+            f"Total (per-level) Interior Size: {_bytes_to_readable(interior_size * interiors_per_level)}"
+        )
+        print(f"Fastest bw: {system.fastest_bandwidth / 1e3:.2f} GB/s")
+        print(
+            f"Communication time for reference interior size: {interior_size / system.fastest_bandwidth:.2f} {_bytes_to_readable(interior_size)} {interior_elem} elements"
+        )
+        print(
+            f"Communication time for reference boundary size: {boundary_size / system.fastest_bandwidth:.2f} {_bytes_to_readable(boundary_size)} {int(boundary_elem)} elements"
+        )
+        print(
+            f"Compute time for reference interior: {interior_elem**self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6):.2f}"
+        )
+        print(
+            f"Memory time for reference interior: {(interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6):.2f}"
+        )
 
         # Loop over cells
         for cell in range(len(self.geometry.cells)):
@@ -111,7 +145,11 @@ class DynamicJacobiData(JacobiData):
                 cell_interior_elem = int(interior_elem * workload)
 
                 if self.config.boundary_time is None:
-                    cell_boundary_elem = int(cell_interior_elem ** (self.config.boundary_complexity) * self.config.boundary_width * workload)
+                    cell_boundary_elem = int(
+                        cell_interior_elem ** (self.config.boundary_complexity)
+                        * self.config.boundary_width
+                        * workload
+                    )
                 else:
                     cell_boundary_elem = int(boundary_elem * workload)
 
@@ -122,19 +160,33 @@ class DynamicJacobiData(JacobiData):
                 centroid = self.geometry.get_centroid(cell)
                 centroid_x = centroid[0]
                 centroid_y = centroid[1]
-                interior_size = max(interior_size, 1000)  # Ensure at least 1000 byte for non-empty cells
+                interior_size = max(
+                    interior_size, 1000
+                )  # Ensure at least 1000 byte for non-empty cells
 
-                self.add_block(DataKey(Cell(cell), i), size=interior_size, location=0, x=centroid_x, y=centroid_y)
+                self.add_block(
+                    DataKey(Cell(cell), i),
+                    size=interior_size,
+                    location=0,
+                    x=centroid_x,
+                    y=centroid_y,
+                )
                 # print(f"Adding interior data for cell {cell} at step {i}: {_bytes_to_readable(interior_size)}")
 
-                assert interior_size > 0 or i == self.config.steps, "Interior data size must be positive "
+                assert interior_size > 0 or i == self.config.steps, (
+                    "Interior data size must be positive "
+                )
                 if interior_size > 0:
                     interior_data.append(interior_size)
                     step_data_sum[i] += interior_size
                     compute_time.append(
                         max(
-                            (interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6),
-                            int(interior_size / self.config.bytes_per_element) ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6),
+                            (interior_size * self.config.memory_intensity)
+                            / (system.fastest_gmbw / 1e6),
+                            int(interior_size / self.config.bytes_per_element)
+                            ** self.config.arithmetic_complexity
+                            * self.config.arithmetic_intensity
+                            / (system.fastest_flops / 1e6),
                         )
                     )
 
@@ -145,7 +197,11 @@ class DynamicJacobiData(JacobiData):
                     cell_interior_elem = int(interior_elem * workload)
 
                     if self.config.boundary_time is None:
-                        cell_boundary_elem = int(cell_interior_elem ** (self.config.boundary_complexity) * self.config.boundary_width * workload)
+                        cell_boundary_elem = int(
+                            cell_interior_elem ** (self.config.boundary_complexity)
+                            * self.config.boundary_width
+                            * workload
+                        )
                     else:
                         cell_boundary_elem = int(boundary_elem * workload)
 
@@ -166,7 +222,9 @@ class DynamicJacobiData(JacobiData):
                         x=edge_x,
                         y=edge_y,
                     )
-                    assert boundary_size > 0 or i == self.config.steps, "Boundary data size must be positive"
+                    assert boundary_size > 0 or i == self.config.steps, (
+                        "Boundary data size must be positive"
+                    )
                     if boundary_size > 0:
                         boundary_data.append(boundary_size)
                         step_data_sum[i] += boundary_size
@@ -178,11 +236,15 @@ class DynamicJacobiData(JacobiData):
             "boundary_minimum": min(boundary_data),
             "boundary_maximum": max(boundary_data),
             "average_step_data": sum(step_data_sum) / len(step_data_sum),
-            "interior_average_comm": sum(interior_data) / len(interior_data) / system.fastest_bandwidth,
-            "boundary_average_comm": sum(boundary_data) / len(boundary_data) / system.fastest_bandwidth,
+            "interior_average_comm": sum(interior_data)
+            / len(interior_data)
+            / system.fastest_bandwidth,
+            "boundary_average_comm": sum(boundary_data)
+            / len(boundary_data)
+            / system.fastest_bandwidth,
             "compute_average": sum(compute_time) / len(compute_time),
         }
-        print(f"Average Step Size: {int(self.data_stat['average_step_data']/1e9):,}GB")
+        print(self.data_stat)
 
     def reset_data_size(self, system: System):
         """
@@ -201,15 +263,23 @@ class DynamicJacobiData(JacobiData):
                 interior_size = int(interior_size)
                 self.cell_to_interior_elems[(cell, i)] = cell_interior_elem
 
-                self.blocks.set_size(self.map.get_block(DataKey(Cell(cell), i)), interior_size)
-                assert interior_size > 0 or i == self.config.steps, "Interior data size must be positive "
+                self.blocks.set_size(
+                    self.map.get_block(DataKey(Cell(cell), i)), interior_size
+                )
+                assert interior_size > 0 or i == self.config.steps, (
+                    "Interior data size must be positive "
+                )
                 if interior_size > 0:
                     interior_data.append(interior_size)
                     step_data_sum[i] += interior_size
                     compute_time.append(
                         max(
-                            (interior_size * self.config.memory_intensity) / (system.fastest_gmbw / 1e6),
-                            int(interior_size / self.config.bytes_per_element) ** self.config.arithmetic_complexity * self.config.arithmetic_intensity / (system.fastest_flops / 1e6),
+                            (interior_size * self.config.memory_intensity)
+                            / (system.fastest_gmbw / 1e6),
+                            int(interior_size / self.config.bytes_per_element)
+                            ** self.config.arithmetic_complexity
+                            * self.config.arithmetic_intensity
+                            / (system.fastest_flops / 1e6),
                         )
                     )
 
@@ -219,7 +289,11 @@ class DynamicJacobiData(JacobiData):
                     cell_interior_elem = int(self.interior_elem * workload)
 
                     if self.config.boundary_time is None:
-                        cell_boundary_elem = int(cell_interior_elem ** (self.config.boundary_complexity) * self.config.boundary_width * workload)
+                        cell_boundary_elem = int(
+                            cell_interior_elem ** (self.config.boundary_complexity)
+                            * self.config.boundary_width
+                            * workload
+                        )
                     else:
                         cell_boundary_elem = int(self.boundary_elem * workload)
 
@@ -234,7 +308,9 @@ class DynamicJacobiData(JacobiData):
                         boundary_size,
                     )
 
-                    assert boundary_size > 0 or i == self.config.steps, "Boundary data size must be positive"
+                    assert boundary_size > 0 or i == self.config.steps, (
+                        "Boundary data size must be positive"
+                    )
                     if boundary_size > 0:
                         boundary_data.append(boundary_size)
                         step_data_sum[i] += boundary_size
@@ -247,8 +323,12 @@ class DynamicJacobiData(JacobiData):
             "boundary_minimum": min(boundary_data),
             "boundary_maximum": max(boundary_data),
             "average_step_data": sum(step_data_sum) / len(step_data_sum),
-            "interior_average_comm": sum(interior_data) / len(interior_data) / system.fastest_bandwidth,
-            "boundary_average_comm": sum(boundary_data) / len(boundary_data) / system.fastest_bandwidth,
+            "interior_average_comm": sum(interior_data)
+            / len(interior_data)
+            / system.fastest_bandwidth,
+            "boundary_average_comm": sum(boundary_data)
+            / len(boundary_data)
+            / system.fastest_bandwidth,
             "compute_average": sum(compute_time) / len(compute_time),
         }
 
@@ -265,10 +345,14 @@ class DynamicJacobiGraph(JacobiGraph):
         self.workload.set_geometry(geometry)
         self.workload.generate_initial_mass(distribution=lambda x: 1.0)
         self.workload.generate_workload(config.steps, **config.workload_args)
-        super(JacobiGraph, self).__init__()  # Call base ComputeDataGraph constructor (not JacobiGraph constructor)
+        super(
+            JacobiGraph, self
+        ).__init__()  # Call base ComputeDataGraph constructor (not JacobiGraph constructor)
         self.reference_partition = []
         num_partitions = system.devices.size() - 1
-        assert config.domain_ratio == 1.0, "DynamicJacobiGraph only supports square domains for now."
+        assert config.domain_ratio == 1.0, (
+            "DynamicJacobiGraph only supports square domains for now."
+        )
         # Find a grid (rows × cols) that exactly matches
         rows = int(math.sqrt(num_partitions))
         while rows > 0 and num_partitions % rows != 0:
@@ -278,7 +362,10 @@ class DynamicJacobiGraph(JacobiGraph):
 
         # Enforce perfect fit
         if config.n % rows != 0 or config.n % cols != 0:
-            raise ValueError(f"Perfect partitioning impossible: " f"config.n={config.n}, rows={rows}, cols={cols}")
+            raise ValueError(
+                f"Perfect partitioning impossible: "
+                f"config.n={config.n}, rows={rows}, cols={cols}"
+            )
 
         block_h = config.n // rows
         block_w = config.n // cols
@@ -290,7 +377,9 @@ class DynamicJacobiGraph(JacobiGraph):
                 partition_id = block_row * cols + block_col
                 self.reference_partition.append(partition_id)
         self.config = config
-        self.data: DynamicJacobiData = DynamicJacobiData.from_mesh(geometry, config, self.workload, system=system)
+        self.data: DynamicJacobiData = DynamicJacobiData.from_mesh(
+            geometry, config, self.workload, system=system
+        )
 
         assert system is not None, "System must be provided for DynamicJacobiGraph"
         self._build_graph(retire_data=True, system=system)
@@ -305,7 +394,9 @@ class DynamicJacobiGraph(JacobiGraph):
 
         class DynamicJacobiVariant(JacobiVariant):
             @staticmethod
-            def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
+            def build_variant(
+                arch: DeviceType, task: TaskTuple
+            ) -> Optional[VariantTuple]:
                 memory_usage = self.config.task_internal_memory
                 vcu_usage = self.config.vcu_usage
 
@@ -322,10 +413,19 @@ class DynamicJacobiGraph(JacobiGraph):
                     expected_time = int(expected_time)
                 else:
                     interior_elem = self.data.cell_to_interior_elems[(cell, level)]
-                    expected_work = interior_elem**self.config.arithmetic_complexity * self.config.arithmetic_intensity
+                    expected_work = (
+                        interior_elem**self.config.arithmetic_complexity
+                        * self.config.arithmetic_intensity
+                    )
                     expected_time = int(expected_work / system.get_flop_ms(arch))
-                    expected_memory = interior_elem * self.config.bytes_per_element * self.config.memory_intensity
-                    expected_time = max(expected_time, expected_memory / system.get_gmbw_ms(arch))
+                    expected_memory = (
+                        interior_elem
+                        * self.config.bytes_per_element
+                        * self.config.memory_intensity
+                    )
+                    expected_time = max(
+                        expected_time, expected_memory / system.get_gmbw_ms(arch)
+                    )
                     expected_time = int(max(expected_time, 1))
 
                 # print(f"Task {task.id} (Cell {cell}, Level {level}): Workload={workload:.2f}, Expected Time={expected_time}ms on {arch.name}")
@@ -340,7 +440,9 @@ class DynamicJacobiGraph(JacobiGraph):
     def randomize_workload(self, system, seed: int = 0):
         if self.workload.random:
             training.info(f"Randomizing workload with seed {seed}")
-            self.workload.generate_workload(self.config.steps, seed=seed, **self.config.workload_args)
+            self.workload.generate_workload(
+                self.config.steps, seed=seed, **self.config.workload_args
+            )
             self.data.workload = self.workload
             self.data.reset_data_size(system)
             self._apply_workload_variant(system)

@@ -15,6 +15,8 @@ from pathlib import Path
 from omegaconf import OmegaConf
 import optuna
 from enum import Enum
+from collections import defaultdict
+from ..graphs.mesh.base import Cell, Edge
 
 
 class ParMETISState(Enum):
@@ -52,7 +54,9 @@ def run_parmetis(
     size = comm.Get_size()
     target_loads = [1.0 / n_compute_devices for _ in range(n_compute_devices)]
     if size != n_compute_devices:
-        raise ValueError(f"Expected {n_compute_devices} ranks, but got {size}. Please run with {n_compute_devices} ranks.")
+        raise ValueError(
+            f"Expected {n_compute_devices} ranks, but got {size}. Please run with {n_compute_devices} ranks."
+        )
     partitioned_tasks, vtxdist, xadj, adjncy, vwgt, adjwgt, vsize = (
         [],
         [],
@@ -67,6 +71,7 @@ def run_parmetis(
     done = False
 
     if rank == 0:
+        sim.parmetis_max_mapped = 0
         graph = sim.input.graph
         assert isinstance(graph, JacobiGraph), "Graph must be a JacobiGraph"
         if cfg.graph.init.partitioner == "metis":
@@ -75,7 +80,9 @@ def run_parmetis(
                 bandwidth=d2d_bandwidth,
                 levels=[0, 1],
             )
-            edge_cut, partition = weighted_cell_partition(cell_graph, nparts=(cfg.system.n_devices - 1))
+            edge_cut, partition = weighted_cell_partition(
+                cell_graph, nparts=(cfg.system.n_devices - 1)
+            )
         elif cfg.graph.init.partitioner == "quad":
             partition = graph.quadrant_partition(
                 arch=DeviceType.GPU,
@@ -85,10 +92,13 @@ def run_parmetis(
             )
         partition = graph.maximize_matches(partition)
         cell_to_device = [x + offset for x in partition]
+        device_blocks_history = []
         partition = [-1 for _ in range(sim.observer.graph_spec.max_candidates)]
         sim.enable_external_mapper()
         done = sim.run_until_external_mapping() == fastsim.ExecutionState.COMPLETE
-        candidates = torch.zeros((sim.observer.graph_spec.max_candidates), dtype=torch.int64)
+        candidates = torch.zeros(
+            (sim.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
         sim.get_mappable_candidates(candidates)
         actions = []
         for i, id in enumerate(candidates):
@@ -116,13 +126,15 @@ def run_parmetis(
             sim.get_mappable_candidates(candidates)
             for i, id in enumerate(candidates):
                 partition[i] = cell_to_device[graph.task_to_cell[id.item()]] - offset
-            partitioned_tasks, vtxdist, xadj, adjncy, vwgt, adjwgt, vsize = graph.get_distributed_weighted_graph(
-                bandwidth=d2d_bandwidth,
-                task_ids=candidates.tolist(),
-                partition=partition,
-                future_levels=future_levels,
-                width=width,
-                n_compute_devices=n_compute_devices,
+            partitioned_tasks, vtxdist, xadj, adjncy, vwgt, adjwgt, vsize = (
+                graph.get_distributed_weighted_graph(
+                    bandwidth=d2d_bandwidth,
+                    task_ids=candidates.tolist(),
+                    partition=partition,
+                    future_levels=future_levels,
+                    width=width,
+                    n_compute_devices=n_compute_devices,
+                )
             )
         vtxdist = comm.bcast(vtxdist, root=0)
         xadj = comm.bcast(xadj, root=0)
@@ -171,18 +183,54 @@ def run_parmetis(
                     if dev == -1:
                         break
                     task_id = partitioned_tasks[i][j]
-                    cell_to_device[graph.task_to_cell[task_id]] = int(dev) + offset  # Offset by 1 to ignore CPU
+                    cell_to_device[graph.task_to_cell[task_id]] = (
+                        int(dev) + offset
+                    )  # Offset by 1 to ignore CPU
             actions = []
+            device_blocks = defaultdict(set)
             for i, id in enumerate(candidates):
+                task_id = id.item()
                 mapping_priority = sim.get_mapping_priority(id)
+                dev = cell_to_device[graph.task_to_cell[task_id]]
                 actions.append(
                     fastsim.Action(
                         i,
-                        cell_to_device[graph.task_to_cell[id.item()]],
+                        dev,
                         mapping_priority,
                         mapping_priority,
                     )
                 )
+
+                # Record mapped data size
+                for read_data_id in graph.tasks[task_id].read:
+                    device_blocks[dev].add(read_data_id)
+                for write_data_id in graph.tasks[task_id].write:
+                    device_blocks[dev].add(write_data_id)
+                # for retired_data_id in graph.tasks[task_id].retire:
+                #     device_blocks[dev].add(retired_data_id)
+            device_blocks_history.append(device_blocks.copy())
+
+            if len(device_blocks_history) > 2:
+                # Aggregate last 2 steps to smooth out fluctuations
+                last = device_blocks_history[-1]
+                prev = device_blocks_history[-2]
+
+                aggregated_blocks = defaultdict(set)
+
+                all_devices = set(last.keys()).union(prev.keys())
+
+                for dev in all_devices:
+                    aggregated_blocks[dev] = last.get(dev, set()).union(
+                        prev.get(dev, set())
+                    )
+
+                # Replace current device_blocks with aggregated version
+                device_blocks = aggregated_blocks
+
+                for dev, blocks in device_blocks.items():
+                    dev_size = sum(graph.data.blocks.data.get_size(b) for b in blocks)
+                    sim.parmetis_max_mapped = max(sim.parmetis_max_mapped, dev_size)
+
             sim.simulator.map_tasks(actions)
             done = sim.run_until_external_mapping() == fastsim.ExecutionState.COMPLETE
             if verbose:
@@ -194,7 +242,10 @@ def run_parmetis(
         time = comm.bcast(sim.time if rank == 0 else None, root=0)
         if time > best_time:
             if rank == 0:
-                print(f"Terminating early: current time {time} >= best time {best_time}", flush=True)
+                print(
+                    f"Terminating early: current time {time} >= best time {best_time}",
+                    flush=True,
+                )
             return ParMETISState.TIMEOUT
     return ParMETISState.SUCCESS
 
@@ -318,7 +369,9 @@ def hash_graph_cfg(graph_cfg) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
-def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", skip_search=False, mode="normal"):
+def find_best_cfg(
+    cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", skip_search=False, mode="normal"
+):
     cfg.graph.config.steps = 256
     cfg.graph.env.change_duration = False
     comm = MPI.COMM_WORLD
@@ -335,7 +388,9 @@ def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", skip_search
                 best_cfg = pickle.load(f)
 
             print(
-                f"Using cached ParMETIS config " f"(graph={graph_hash[:8]}): " f"itr={best_cfg[0]}, ub={best_cfg[1]}, time={best_cfg[2]}",
+                f"Using cached ParMETIS config "
+                f"(graph={graph_hash[:8]}): "
+                f"itr={best_cfg[0]}, ub={best_cfg[1]}, time={best_cfg[2]}",
                 flush=True,
             )
         else:
@@ -356,7 +411,38 @@ def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", skip_search
     best_cfg = (None, None, float("inf"))  # (itr, ub, time)
 
     itr_list = [0.0001001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000]
-    ub_list = [1.001, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9]
+    ub_list = [
+        1.001,
+        1.1,
+        1.2,
+        1.3,
+        1.4,
+        1.5,
+        1.6,
+        1.7,
+        1.8,
+        1.9,
+        2.0,
+        2.1,
+        2.2,
+        2.3,
+        2.4,
+        2.5,
+        2.6,
+        2.7,
+        2.8,
+        2.9,
+        3.0,
+        3.1,
+        3.2,
+        3.3,
+        3.4,
+        3.5,
+        3.6,
+        3.7,
+        3.8,
+        3.9,
+    ]
 
     for itr in itr_list:
         for ub in ub_list:
@@ -390,7 +476,9 @@ def find_best_cfg(cfg, ParMETIS, env=None, cache_dir="parmetis_cfg", skip_search
             pickle.dump(best_cfg, f)
 
         print(
-            f"Best ParMETIS config saved " f"(graph={graph_hash[:8]}): " f"itr={best_cfg[0]}, ub={best_cfg[1]}, time={best_cfg[2]}",
+            f"Best ParMETIS config saved "
+            f"(graph={graph_hash[:8]}): "
+            f"itr={best_cfg[0]}, ub={best_cfg[1]}, time={best_cfg[2]}",
             flush=True,
         )
 
@@ -464,7 +552,8 @@ def find_best_cfg_optuna(
                 best_cfg = pickle.load(f)
 
             print(
-                f"Using cached Optuna config (graph={graph_hash[:8]}): " f"itr={best_cfg[0]}, ub={best_cfg[1]}, time={best_cfg[2]}",
+                f"Using cached Optuna config (graph={graph_hash[:8]}): "
+                f"itr={best_cfg[0]}, ub={best_cfg[1]}, time={best_cfg[2]}",
                 flush=True,
             )
         else:
@@ -509,7 +598,10 @@ def find_best_cfg_optuna(
         # Ask Optuna for params
         if rank == 0:
             trial = study.ask()
-            itr = trial.suggest_categorical("itr", [0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000])
+            itr = trial.suggest_categorical(
+                "itr",
+                [0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000],
+            )
             # itr = trial.suggest_float("itr", 1e-4, 1e6, log=True)
             ub = trial.suggest_float("ub", 1.0, float(cfg.system.n_devices - 1))
             print(f"Trial {step}: itr={itr}, ub={ub}, best={best_time}", flush=True)
@@ -558,7 +650,8 @@ def find_best_cfg_optuna(
             pickle.dump(best_cfg, f)
 
         print(
-            f"Best Optuna config saved (graph={graph_hash[:8]}): " f"itr={itr}, ub={ub}, time={best_time}",
+            f"Best Optuna config saved (graph={graph_hash[:8]}): "
+            f"itr={itr}, ub={ub}, time={best_time}",
             flush=True,
         )
     else:

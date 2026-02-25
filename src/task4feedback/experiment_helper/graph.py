@@ -17,21 +17,31 @@ class GraphBuilder:
     function: Callable[[GraphConfig, DictConfig], Graph]
 
 
-def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[GraphConfig, DictConfig], Graph]:
+def make_graph_function(
+    graph_cfg: GraphConfig, cfg: DictConfig
+) -> Callable[[GraphConfig, DictConfig], Graph]:
     def make_graph(system: System):
-        mesh = instantiate(cfg.graph.mesh, L=1, n=graph_cfg.n, domain_ratio=graph_cfg.domain_ratio)
+        mesh = instantiate(
+            cfg.graph.mesh, L=1, n=graph_cfg.n, domain_ratio=graph_cfg.domain_ratio
+        )
 
         geom = build_geometry(mesh)
         graph = build_graph(geom, graph_cfg, system=system)
-        if cfg.graph.init.partitioner == "metis":
+        if cfg.graph.init.partitioner == "metis" and cfg.system.n_devices > 2:
             graph.make_partition = graph.initial_mincut_partition
         elif cfg.graph.init.partitioner == "quad":
+            graph.make_partition = graph.quadrant_partition
+        else:
+            # Default to quadrant partition
             graph.make_partition = graph.quadrant_partition
         partition = graph.make_partition(
             arch=DeviceType.GPU,
             bandwidth=cfg.system.d2d_bw,
             n_parts=cfg.system.n_devices - 1,
             offset=0,
+        )
+        print(
+            f"{graph.make_partition.__name__} {cfg.system.n_devices} partition: {partition}"
         )
         # print(f"Initial partition: {partition}")
         # if isinstance(graph, DynamicJacobiGraph):
@@ -55,7 +65,9 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
             partition = [x + 1 for x in partition]  # offset by 1 to ignore cpu
             location_list = [i + 1 for i in range(0, cfg.graph.init.nparts)]
         else:
-            location_list = [i for i in range(cfg.graph.init.nparts + 1)]  # include cpu as 0
+            location_list = [
+                i for i in range(cfg.graph.init.nparts + 1)
+            ]  # include cpu as 0
 
         if isinstance(graph, DynamicJacobiGraph):
             graph.set_cell_locations([-1 for _ in range(len(partition))])
@@ -76,7 +88,7 @@ def make_graph_function(graph_cfg: GraphConfig, cfg: DictConfig) -> Callable[[Gr
     return graph_function
 
 
-def make_graph_builder(cfg: DictConfig, verbose: bool = True) -> GraphBuilder:
+def make_graph_builder(cfg: DictConfig, verbose: bool = False) -> GraphBuilder:
     if verbose:
         print(f"Graph info: {OmegaConf.to_yaml(cfg.graph.config)}")
     graph_config = instantiate(cfg.graph.config)
