@@ -762,38 +762,6 @@ struct ComputeTaskVariantInfo {
   std::array<Variant, num_device_types> variants{};
 };
 
-struct ComputeTaskDepInfo {
-  int32_t s_dependencies;
-  int32_t e_dependencies;
-  int32_t s_dependents;
-  int32_t e_dependents;
-  int32_t s_data_dependencies;
-  int32_t e_data_dependencies;
-  int32_t s_data_dependents;
-  int32_t e_data_dependents;
-};
-
-struct ComputeTaskDataInfo {
-  int32_t s_read{};
-  int32_t e_read{};
-  int32_t s_write{};
-  int32_t e_write{};
-  int32_t s_retire{};
-  int32_t e_retire{};
-  int32_t s_unique{};
-  int32_t e_unique{};
-};
-
-struct DataTaskStaticInfo {
-  int32_t s_dependencies{};
-  int32_t e_dependencies{};
-  int32_t s_dependents{};
-  int32_t e_dependents{};
-  int32_t data_id{};
-  int32_t compute_task{};
-  int64_t pad{}; // padding to align to 32 bytes
-};
-
 struct ComputeTaskRuntimeInfo {
   int32_t mapped_device{-1};
   int32_t reserve_priority{};
@@ -841,11 +809,25 @@ struct DataTaskTimeRecord {
 class StaticTaskInfo {
 
 protected:
-  std::vector<ComputeTaskDepInfo> compute_task_dep_info;
-  std::vector<ComputeTaskDataInfo> compute_task_data_info;
   std::vector<ComputeTaskVariantInfo> compute_task_variant_info;
-  std::vector<DataTaskStaticInfo> data_task_static_info;
   std::vector<ComputeTaskStaticInfo> compute_task_static_info;
+
+  int32_t num_compute_tasks_{0};
+  int32_t num_data_tasks_{0};
+
+  // CSR offsets for compute-task topology/data spans (size = n_compute_tasks + 1).
+  std::vector<int32_t> ct_dependencies_offsets;
+  std::vector<int32_t> ct_dependents_offsets;
+  std::vector<int32_t> ct_data_dependencies_offsets;
+  std::vector<int32_t> ct_data_dependents_offsets;
+  std::vector<int32_t> ct_read_offsets;
+  std::vector<int32_t> ct_write_offsets;
+  std::vector<int32_t> ct_retire_offsets;
+  std::vector<int32_t> ct_unique_offsets;
+
+  // CSR offsets for data-task topology (size = n_data_tasks + 1).
+  std::vector<int32_t> dt_dependencies_offsets;
+  std::vector<int32_t> dt_dependents_offsets;
 
   std::vector<taskid_t> compute_task_dependencies;
   std::vector<taskid_t> compute_task_dependents;
@@ -888,10 +870,6 @@ protected:
   std::vector<taskid_t> data_task_dependencies;
   std::vector<taskid_t> data_task_dependents;
 
-  // Hot-path lookup caches: built once during static graph construction.
-  std::vector<int32_t> compute_task_dependents_offsets;
-  std::vector<int32_t> compute_task_data_dependents_offsets;
-  std::vector<int32_t> data_task_dependents_offsets;
   std::vector<dataid_t> data_task_data_id_cache;
   std::vector<taskid_t> data_task_compute_task_cache;
 
@@ -913,17 +891,23 @@ protected:
 
 public:
   StaticTaskInfo(int32_t num_compute_tasks, int32_t num_data_tasks) {
-    compute_task_dep_info.resize(num_compute_tasks);
-    compute_task_data_info.resize(num_compute_tasks);
+    num_compute_tasks_ = num_compute_tasks;
+    num_data_tasks_ = num_data_tasks;
     compute_task_variant_info.resize(num_compute_tasks);
-    data_task_static_info.resize(num_data_tasks);
     compute_task_static_info.resize(num_compute_tasks);
+    ct_dependencies_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_data_dependencies_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_data_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_read_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_write_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_retire_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_unique_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    dt_dependencies_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
+    dt_dependents_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
 
     compute_task_names.resize(num_compute_tasks);
     data_task_names.resize(num_data_tasks);
-    compute_task_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
-    compute_task_data_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
-    data_task_dependents_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
     data_task_data_id_cache.resize(num_data_tasks, 0);
     data_task_compute_task_cache.resize(num_data_tasks, 0);
 
@@ -938,17 +922,23 @@ public:
     taskid_t num_compute_tasks = graph.get_n_compute_tasks();
     taskid_t num_data_tasks = graph.get_n_data_tasks();
 
-    compute_task_dep_info.resize(num_compute_tasks);
-    compute_task_data_info.resize(num_compute_tasks);
+    num_compute_tasks_ = num_compute_tasks;
+    num_data_tasks_ = num_data_tasks;
     compute_task_variant_info.resize(num_compute_tasks);
-    data_task_static_info.resize(num_data_tasks);
     compute_task_static_info.resize(num_compute_tasks);
+    ct_dependencies_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_data_dependencies_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_data_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_read_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_write_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_retire_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    ct_unique_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    dt_dependencies_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
+    dt_dependents_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
 
     compute_task_names.resize(num_compute_tasks);
     data_task_names.resize(num_data_tasks);
-    compute_task_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
-    compute_task_data_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
-    data_task_dependents_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
     data_task_data_id_cache.resize(num_data_tasks, 0);
     data_task_compute_task_cache.resize(num_data_tasks, 0);
 
@@ -962,96 +952,94 @@ public:
 
     auto &tasks = graph.tasks;
     auto &data_tasks = graph.data_tasks;
+    // Fill slot [id+1] with span sizes, then prefix-sum in place.
+    for (int32_t i = 0; i < num_compute_tasks; ++i) {
+      const auto &task = tasks[static_cast<std::size_t>(i)];
+      ct_dependencies_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(task.sorted_dependencies_cache.size());
+      ct_dependents_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(task.sorted_dependents_cache.size());
+      ct_data_dependencies_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(task.sorted_data_dependencies_cache.size());
+      ct_data_dependents_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(task.sorted_data_dependents_cache.size());
+      ct_read_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(task.sorted_read_cache.size());
+      ct_write_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(task.sorted_write_cache.size());
+      ct_retire_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(task.sorted_retire_cache.size());
+      ct_unique_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(task.unique.size());
+    }
 
-    taskid_t compute_dependency_offset = 0;
-    taskid_t compute_dependent_offset = 0;
-    taskid_t compute_data_dependency_offset = 0;
-    taskid_t compute_data_dependent_offset = 0;
+    for (int32_t i = 0; i < num_data_tasks; ++i) {
+      const auto &data_task = data_tasks[static_cast<std::size_t>(i)];
+      dt_dependencies_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(data_task.sorted_dependencies_cache.size());
+      dt_dependents_offsets[static_cast<std::size_t>(i) + 1] =
+          static_cast<int32_t>(data_task.sorted_dependents_cache.size());
+    }
 
-    dataid_t read_offset = 0;
-    dataid_t write_offset = 0;
-    dataid_t retire_offset = 0;
-    dataid_t unique_offset = 0;
+    auto prefix_sum_offsets = [](std::vector<int32_t> &offsets) {
+      for (std::size_t i = 0; i + 1 < offsets.size(); ++i) {
+        offsets[i + 1] += offsets[i];
+      }
+    };
+    prefix_sum_offsets(ct_dependencies_offsets);
+    prefix_sum_offsets(ct_dependents_offsets);
+    prefix_sum_offsets(ct_data_dependencies_offsets);
+    prefix_sum_offsets(ct_data_dependents_offsets);
+    prefix_sum_offsets(ct_read_offsets);
+    prefix_sum_offsets(ct_write_offsets);
+    prefix_sum_offsets(ct_retire_offsets);
+    prefix_sum_offsets(ct_unique_offsets);
+    prefix_sum_offsets(dt_dependencies_offsets);
+    prefix_sum_offsets(dt_dependents_offsets);
 
-    taskid_t data_dependency_offset = 0;
-    taskid_t data_dependent_offset = 0;
-
-    // Use totals pre-computed by Graph::build_sorted_dependency_caches() — avoids a separate pass.
-    set_total_compute_task_dependencies(graph.total_compute_dependencies_cached);
-    set_total_compute_task_dependents(graph.total_compute_dependents_cached);
-    set_total_compute_task_data_dependencies(graph.total_compute_data_dependencies_cached);
-    set_total_compute_task_data_dependents(graph.total_compute_data_dependents_cached);
-    set_total_reads(graph.total_reads_cached);
-    set_total_writes(graph.total_writes_cached);
-    set_total_retires(graph.total_retire_cached);
-    set_total_unique(graph.total_unique_cached);
+    compute_task_dependencies.resize(static_cast<std::size_t>(ct_dependencies_offsets.back()));
+    compute_task_dependents.resize(static_cast<std::size_t>(ct_dependents_offsets.back()));
+    compute_task_data_dependencies.resize(static_cast<std::size_t>(ct_data_dependencies_offsets.back()));
+    compute_task_data_dependents.resize(static_cast<std::size_t>(ct_data_dependents_offsets.back()));
+    compute_task_read.resize(static_cast<std::size_t>(ct_read_offsets.back()));
+    compute_task_recent_writers.resize(static_cast<std::size_t>(ct_read_offsets.back()));
+    compute_task_read_generations.resize(static_cast<std::size_t>(ct_read_offsets.back()));
+    compute_task_write.resize(static_cast<std::size_t>(ct_write_offsets.back()));
+    compute_task_write_generations.resize(static_cast<std::size_t>(ct_write_offsets.back()));
+    compute_task_retire.resize(static_cast<std::size_t>(ct_retire_offsets.back()));
+    compute_task_unique.resize(static_cast<std::size_t>(ct_unique_offsets.back()));
+    data_task_dependencies.resize(static_cast<std::size_t>(dt_dependencies_offsets.back()));
+    data_task_dependents.resize(static_cast<std::size_t>(dt_dependents_offsets.back()));
 
     for (const auto &task : tasks) {
-      auto compute_dep_info = ComputeTaskDepInfo();
-      auto compute_data_info = ComputeTaskDataInfo();
-      auto compute_task_info = ComputeTaskStaticInfo();
+      const auto idx = static_cast<std::size_t>(task.id);
+      compute_task_names[idx] = task.name;
+      compute_task_static_info[idx].tag = task.tag;
+      compute_task_static_info[idx].type = task.type;
+      compute_task_static_info[idx].depth = task.depth;
 
-      // Use sorted-cache sizes (vector size) rather than hash-set sizes for all offsets.
-      const int32_t n_deps      = static_cast<int32_t>(task.sorted_dependencies_cache.size());
-      const int32_t n_deps_end  = static_cast<int32_t>(task.sorted_dependents_cache.size());
-      const int32_t n_ddeps     = static_cast<int32_t>(task.sorted_data_dependencies_cache.size());
-      const int32_t n_ddeps_end = static_cast<int32_t>(task.sorted_data_dependents_cache.size());
-      const int32_t n_read      = static_cast<int32_t>(task.sorted_read_cache.size());
-      const int32_t n_write     = static_cast<int32_t>(task.sorted_write_cache.size());
-      const int32_t n_retire    = static_cast<int32_t>(task.sorted_retire_cache.size());
-      const int32_t n_unique    = static_cast<int32_t>(task.unique.size());
-
-      compute_dep_info.s_dependencies = compute_dependency_offset;
-      compute_dep_info.e_dependencies = compute_dependency_offset + n_deps;
-      compute_dependency_offset += n_deps;
-
-      compute_dep_info.s_dependents = compute_dependent_offset;
-      compute_dep_info.e_dependents = compute_dependent_offset + n_deps_end;
-      compute_dependent_offset += n_deps_end;
-
-      compute_dep_info.s_data_dependencies = compute_data_dependency_offset;
-      compute_dep_info.e_data_dependencies = compute_data_dependency_offset + n_ddeps;
-      compute_data_dependency_offset += n_ddeps;
-
-      compute_dep_info.s_data_dependents = compute_data_dependent_offset;
-      compute_dep_info.e_data_dependents = compute_data_dependent_offset + n_ddeps_end;
-      compute_data_dependent_offset += n_ddeps_end;
-
-      compute_data_info.s_read = read_offset;
-      compute_data_info.e_read = read_offset + n_read;
-      read_offset += n_read;
-
-      compute_data_info.s_write = write_offset;
-      compute_data_info.e_write = write_offset + n_write;
-      write_offset += n_write;
-
-      compute_data_info.s_retire = retire_offset;
-      compute_data_info.e_retire = retire_offset + n_retire;
-      retire_offset += n_retire;
-
-      compute_data_info.s_unique = unique_offset;
-      compute_data_info.e_unique = unique_offset + n_unique;
-      unique_offset += n_unique;
-
-      compute_task_info.tag = task.tag;
-      compute_task_info.type = task.type;
-
-      add_compute_task(task.id, task.name, compute_dep_info, compute_data_info, compute_task_info);
-
-      // Use caches built during Graph::finalize() — avoids re-sorting and temporary allocations.
-      add_compute_task_dependencies(task.id, task.sorted_dependencies_cache);
-      add_compute_task_dependents(task.id, task.sorted_dependents_cache);
-      add_compute_task_data_dependencies(task.id, task.sorted_data_dependencies_cache);
-      add_compute_task_data_dependents(task.id, task.sorted_data_dependents_cache);
-      add_read(task.id, task.sorted_read_cache);
-      add_most_recent_writers(task.id, task.sorted_recent_writer_cache);
-      add_read_generations(task.id, task.sorted_read_gen_cache);
-      add_write(task.id, task.sorted_write_cache);
-      add_write_generations(task.id, task.sorted_write_gen_cache);
-      add_retire(task.id, task.sorted_retire_cache);
-      // task.unique is already sorted (produced by set_union in populate_unique_data).
-      add_unique(task.id, task.unique);
-      add_depth(task.id, task.depth);
+      std::copy(task.sorted_dependencies_cache.begin(), task.sorted_dependencies_cache.end(),
+                compute_task_dependencies.begin() + ct_dependencies_offsets[idx]);
+      std::copy(task.sorted_dependents_cache.begin(), task.sorted_dependents_cache.end(),
+                compute_task_dependents.begin() + ct_dependents_offsets[idx]);
+      std::copy(task.sorted_data_dependencies_cache.begin(), task.sorted_data_dependencies_cache.end(),
+                compute_task_data_dependencies.begin() + ct_data_dependencies_offsets[idx]);
+      std::copy(task.sorted_data_dependents_cache.begin(), task.sorted_data_dependents_cache.end(),
+                compute_task_data_dependents.begin() + ct_data_dependents_offsets[idx]);
+      std::copy(task.sorted_read_cache.begin(), task.sorted_read_cache.end(),
+                compute_task_read.begin() + ct_read_offsets[idx]);
+      std::copy(task.sorted_recent_writer_cache.begin(), task.sorted_recent_writer_cache.end(),
+                compute_task_recent_writers.begin() + ct_read_offsets[idx]);
+      std::copy(task.sorted_read_gen_cache.begin(), task.sorted_read_gen_cache.end(),
+                compute_task_read_generations.begin() + ct_read_offsets[idx]);
+      std::copy(task.sorted_write_cache.begin(), task.sorted_write_cache.end(),
+                compute_task_write.begin() + ct_write_offsets[idx]);
+      std::copy(task.sorted_write_gen_cache.begin(), task.sorted_write_gen_cache.end(),
+                compute_task_write_generations.begin() + ct_write_offsets[idx]);
+      std::copy(task.sorted_retire_cache.begin(), task.sorted_retire_cache.end(),
+                compute_task_retire.begin() + ct_retire_offsets[idx]);
+      std::copy(task.unique.begin(), task.unique.end(),
+                compute_task_unique.begin() + ct_unique_offsets[idx]);
 
       for (int i = 0; i < task.arch.size(); ++i) {
         const auto arch = static_cast<DeviceType>(task.arch[i]);
@@ -1059,32 +1047,16 @@ public:
       }
     }
 
-    // Use totals cached by Graph::build_sorted_dependency_caches().
-    set_total_data_task_dependencies(graph.total_data_task_dependencies_cached);
-    set_total_data_task_dependents(graph.total_data_task_dependents_cached);
-
     for (const auto &data_task : data_tasks) {
-      auto data_task_info = DataTaskStaticInfo();
+      const auto idx = static_cast<std::size_t>(data_task.id);
+      data_task_names[idx] = data_task.name;
+      data_task_data_id_cache[idx] = data_task.data_id;
+      data_task_compute_task_cache[idx] = data_task.compute_task;
 
-      const int32_t n_dt_deps = static_cast<int32_t>(data_task.sorted_dependencies_cache.size());
-      const int32_t n_dt_dpts = static_cast<int32_t>(data_task.sorted_dependents_cache.size());
-
-      data_task_info.s_dependencies = data_dependency_offset;
-      data_task_info.e_dependencies = data_dependency_offset + n_dt_deps;
-      data_dependency_offset += n_dt_deps;
-
-      data_task_info.s_dependents = data_dependent_offset;
-      data_task_info.e_dependents = data_dependent_offset + n_dt_dpts;
-      data_dependent_offset += n_dt_dpts;
-
-      data_task_info.data_id = data_task.data_id;
-      data_task_info.compute_task = data_task.compute_task;
-
-      add_data_task(data_task.id, data_task.name, data_task_info);
-
-      // Use pre-sorted caches built during Graph::finalize() — no temporary allocations.
-      add_data_task_dependencies(data_task.id, data_task.sorted_dependencies_cache);
-      add_data_task_dependents(data_task.id, data_task.sorted_dependents_cache);
+      std::copy(data_task.sorted_dependencies_cache.begin(), data_task.sorted_dependencies_cache.end(),
+                data_task_dependencies.begin() + dt_dependencies_offsets[idx]);
+      std::copy(data_task.sorted_dependents_cache.begin(), data_task.sorted_dependents_cache.end(),
+                data_task_dependents.begin() + dt_dependents_offsets[idx]);
     }
 
     build_usage_caches_and_shared_read_topology();
@@ -1294,49 +1266,6 @@ public:
     }
   }
 
-  void set_total_compute_task_dependencies(int32_t num_deps) {
-    compute_task_dependencies.resize(num_deps, 0);
-  }
-
-  void set_total_compute_task_dependents(int32_t num_deps) {
-    compute_task_dependents.resize(num_deps, 0);
-  }
-
-  void set_total_compute_task_data_dependencies(int32_t num_data_deps) {
-    compute_task_data_dependencies.resize(num_data_deps, 0);
-  }
-
-  void set_total_compute_task_data_dependents(int32_t num_data_deps) {
-    compute_task_data_dependents.resize(num_data_deps, 0);
-  }
-
-  void set_total_data_task_dependencies(int32_t num_data_deps) {
-    data_task_dependencies.resize(num_data_deps, 0);
-  }
-
-  void set_total_data_task_dependents(int32_t num_data_deps) {
-    data_task_dependents.resize(num_data_deps, 0);
-  }
-
-  void set_total_reads(int32_t num_read) {
-    compute_task_read.resize(num_read, 0);
-    compute_task_recent_writers.resize(num_read, 0);
-    compute_task_read_generations.resize(num_read, 0);
-  }
-
-  void set_total_writes(int32_t num_write) {
-    compute_task_write.resize(num_write, 0);
-    compute_task_write_generations.resize(num_write, 0);
-  }
-
-  void set_total_retires(int32_t num_retire) {
-    compute_task_retire.resize(num_retire, 0);
-  }
-
-  void set_total_unique(int32_t num_unique) {
-    compute_task_unique.resize(num_unique, 0);
-  }
-
   void set_grid_shape(int32_t h, int32_t w) {
     if (h > 0 && w > 0) {
       grid_h = h;
@@ -1375,149 +1304,6 @@ public:
     return random_priority_enabled;
   }
 
-  void add_compute_task(taskid_t id, const std::string &name, const ComputeTaskDepInfo &dep_info,
-                        const ComputeTaskDataInfo &data_info,
-                        const ComputeTaskStaticInfo &compute_info) {
-    compute_task_dep_info[id] = dep_info;
-    compute_task_data_info[id] = data_info;
-    compute_task_static_info[id] = compute_info;
-    compute_task_names[id] = name;
-
-    const auto idx = static_cast<std::size_t>(id);
-    compute_task_dependents_offsets[idx] = dep_info.s_dependents;
-    compute_task_dependents_offsets[idx + 1] = dep_info.e_dependents;
-    compute_task_data_dependents_offsets[idx] = dep_info.s_data_dependents;
-    compute_task_data_dependents_offsets[idx + 1] = dep_info.e_data_dependents;
-  }
-
-  void add_data_task(taskid_t id, const std::string &name, const DataTaskStaticInfo &static_info) {
-    data_task_static_info[id] = static_info;
-    data_task_names[id] = name;
-
-    const auto idx = static_cast<std::size_t>(id);
-    data_task_dependents_offsets[idx] = static_info.s_dependents;
-    data_task_dependents_offsets[idx + 1] = static_info.e_dependents;
-    data_task_data_id_cache[idx] = static_info.data_id;
-    data_task_compute_task_cache[idx] = static_info.compute_task;
-  }
-
-  void add_compute_task_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
-    assert(id < compute_task_dep_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_dep_info[id];
-    assert(compute_task_dependencies.size() >= info.e_dependencies &&
-           "Not enough space in compute_task_dependencies vector");
-    std::copy(dependencies.begin(), dependencies.end(),
-              compute_task_dependencies.begin() + info.s_dependencies);
-  }
-
-  void add_compute_task_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
-    assert(id < compute_task_dep_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_dep_info[id];
-    assert(compute_task_dependents.size() >= info.e_dependents &&
-           "Not enough space in compute_task_dependents vector");
-    std::copy(dependents.begin(), dependents.end(),
-              compute_task_dependents.begin() + info.s_dependents);
-  }
-
-  void add_compute_task_data_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
-    assert(id < compute_task_dep_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_dep_info[id];
-    assert(compute_task_data_dependencies.size() >= info.e_data_dependencies &&
-           "Not enough space in compute_task_data_dependencies vector");
-    std::copy(dependencies.begin(), dependencies.end(),
-              compute_task_data_dependencies.begin() + info.s_data_dependencies);
-  }
-
-  void add_compute_task_data_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
-    assert(id < compute_task_dep_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_dep_info[id];
-    assert(compute_task_data_dependents.size() >= info.e_data_dependents &&
-           "Not enough space in compute_task_data_dependents vector");
-    std::copy(dependents.begin(), dependents.end(),
-              compute_task_data_dependents.begin() + info.s_data_dependents);
-  }
-
-  void add_data_task_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
-    assert(id < data_task_static_info.size() && "Task ID is out of bounds");
-    auto &info = data_task_static_info[id];
-    assert(data_task_dependencies.size() >= info.e_dependencies &&
-           "Not enough space in data_task_dependencies vector");
-    std::copy(dependencies.begin(), dependencies.end(),
-              data_task_dependencies.begin() + info.s_dependencies);
-  }
-
-  void add_data_task_dependents(taskid_t id, const std::vector<taskid_t> &dependents) {
-    assert(id < data_task_static_info.size() && "Task ID is out of bounds");
-    auto &info = data_task_static_info[id];
-    assert(data_task_dependents.size() >= info.e_dependents &&
-           "Not enough space in data_task_dependents vector");
-    // copy dependents to corresponding location
-    std::copy(dependents.begin(), dependents.end(),
-              data_task_dependents.begin() + info.s_dependents);
-  }
-
-  void add_read(taskid_t id, const std::vector<dataid_t> &read) {
-    assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_data_info[id];
-    assert(compute_task_read.size() >= info.e_read &&
-           "Not enough space in compute_task_read vector");
-    // copy read data to corresponding location
-    std::copy(read.begin(), read.end(), compute_task_read.begin() + info.s_read);
-  }
-
-  void add_most_recent_writers(taskid_t id, const std::vector<taskid_t> &writers) {
-    assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_data_info[id];
-    assert(compute_task_recent_writers.size() >= info.e_read &&
-           "Not enough space in compute_task_recent_writers vector");
-    std::copy(writers.begin(), writers.end(), compute_task_recent_writers.begin() + info.s_read);
-  }
-
-  void add_read_generations(taskid_t id, const std::vector<uint32_t> &read_generations) {
-    assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_data_info[id];
-    assert(compute_task_read_generations.size() >= info.e_read &&
-           "Not enough space in compute_task_read_generations vector");
-    std::copy(read_generations.begin(), read_generations.end(),
-              compute_task_read_generations.begin() + info.s_read);
-  }
-
-  void add_write(taskid_t id, const std::vector<dataid_t> &write) {
-    assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_data_info[id];
-    assert(compute_task_write.size() >= info.e_write &&
-           "Not enough space in compute_task_write vector");
-    // copy write data to corresponding location
-    std::copy(write.begin(), write.end(), compute_task_write.begin() + info.s_write);
-  }
-
-  void add_write_generations(taskid_t id, const std::vector<uint32_t> &write_generations) {
-    assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_data_info[id];
-    assert(compute_task_write_generations.size() >= info.e_write &&
-           "Not enough space in compute_task_write_generations vector");
-    std::copy(write_generations.begin(), write_generations.end(),
-              compute_task_write_generations.begin() + info.s_write);
-  }
-
-  void add_retire(taskid_t id, const std::vector<dataid_t> &retire) {
-    assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_data_info[id];
-    assert(compute_task_retire.size() >= info.e_retire &&
-           "Not enough space in compute_task_retire vector");
-    // copy retire data to corresponding location
-    std::copy(retire.begin(), retire.end(), compute_task_retire.begin() + info.s_retire);
-  }
-
-  void add_unique(taskid_t id, const std::vector<dataid_t> &unique) {
-    assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
-    auto &info = compute_task_data_info[id];
-    assert(compute_task_unique.size() >= info.e_unique &&
-           "Not enough space in compute_task_unique vector");
-    // copy unique data to corresponding location
-    std::copy(unique.begin(), unique.end(), compute_task_unique.begin() + info.s_unique);
-  }
-
   void add_compute_variant(taskid_t id, DeviceType arch, mem_t mem, vcu_t vcu, timecount_t time) {
     assert(id < compute_task_variant_info.size() && "Task ID is out of bounds");
     auto &info = compute_task_variant_info[id];
@@ -1534,11 +1320,11 @@ public:
   // Getters
 
   [[nodiscard]] int32_t get_n_compute_tasks() const {
-    return static_cast<int32_t>(compute_task_dep_info.size());
+    return num_compute_tasks_;
   }
 
   [[nodiscard]] int32_t get_n_data_tasks() const {
-    return static_cast<int32_t>(data_task_static_info.size());
+    return num_data_tasks_;
   }
 
   [[nodiscard]] int32_t get_n_tasks() const {
@@ -1546,45 +1332,48 @@ public:
   }
 
   [[nodiscard]] bool empty() const {
-    return (compute_task_dep_info.empty() && data_task_static_info.empty());
+    return num_compute_tasks_ == 0 && num_data_tasks_ == 0;
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_dependencies(taskid_t id) const {
-    auto &info = compute_task_dep_info[id];
-    return {compute_task_dependencies.data() + info.s_dependencies,
-            compute_task_dependencies.data() + info.e_dependencies};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(ct_dependencies_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_dependencies_offsets[idx + 1]);
+    return std::span<const taskid_t>(compute_task_dependencies).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_dependents(taskid_t id) const {
     const auto idx = static_cast<std::size_t>(id);
-    const auto begin = static_cast<std::size_t>(compute_task_dependents_offsets[idx]);
-    const auto end = static_cast<std::size_t>(compute_task_dependents_offsets[idx + 1]);
+    const auto begin = static_cast<std::size_t>(ct_dependents_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_dependents_offsets[idx + 1]);
     return std::span<const taskid_t>(compute_task_dependents).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t> get_data_task_dependencies(taskid_t id) const {
-    auto &info = data_task_static_info[id];
-    return {data_task_dependencies.data() + info.s_dependencies,
-            data_task_dependencies.data() + info.e_dependencies};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(dt_dependencies_offsets[idx]);
+    const auto end = static_cast<std::size_t>(dt_dependencies_offsets[idx + 1]);
+    return std::span<const taskid_t>(data_task_dependencies).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t> get_data_task_dependents(taskid_t id) const {
     const auto idx = static_cast<std::size_t>(id);
-    const auto begin = static_cast<std::size_t>(data_task_dependents_offsets[idx]);
-    const auto end = static_cast<std::size_t>(data_task_dependents_offsets[idx + 1]);
+    const auto begin = static_cast<std::size_t>(dt_dependents_offsets[idx]);
+    const auto end = static_cast<std::size_t>(dt_dependents_offsets[idx + 1]);
     return std::span<const taskid_t>(data_task_dependents).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_data_dependencies(taskid_t id) const {
-    auto &info = compute_task_dep_info[id];
-    return {compute_task_data_dependencies.data() + info.s_data_dependencies,
-            compute_task_data_dependencies.data() + info.e_data_dependencies};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(ct_data_dependencies_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_data_dependencies_offsets[idx + 1]);
+    return std::span<const taskid_t>(compute_task_data_dependencies).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_data_dependents(taskid_t id) const {
     const auto idx = static_cast<std::size_t>(id);
-    const auto begin = static_cast<std::size_t>(compute_task_data_dependents_offsets[idx]);
-    const auto end = static_cast<std::size_t>(compute_task_data_dependents_offsets[idx + 1]);
+    const auto begin = static_cast<std::size_t>(ct_data_dependents_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_data_dependents_offsets[idx + 1]);
     return std::span<const taskid_t>(compute_task_data_dependents).subspan(begin, end - begin);
   }
 
@@ -1674,23 +1463,31 @@ public:
   }
 
   [[nodiscard]] std::span<const dataid_t> get_read(taskid_t id) const {
-    auto &info = compute_task_data_info[id];
-    return {compute_task_read.data() + info.s_read, compute_task_read.data() + info.e_read};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(ct_read_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_read_offsets[idx + 1]);
+    return std::span<const dataid_t>(compute_task_read).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const dataid_t> get_write(taskid_t id) const {
-    auto &info = compute_task_data_info[id];
-    return {compute_task_write.data() + info.s_write, compute_task_write.data() + info.e_write};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(ct_write_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_write_offsets[idx + 1]);
+    return std::span<const dataid_t>(compute_task_write).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const dataid_t> get_retire(taskid_t id) const {
-    auto &info = compute_task_data_info[id];
-    return {compute_task_retire.data() + info.s_retire, compute_task_retire.data() + info.e_retire};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(ct_retire_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_retire_offsets[idx + 1]);
+    return std::span<const dataid_t>(compute_task_retire).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const dataid_t> get_unique(taskid_t id) const {
-    auto &info = compute_task_data_info[id];
-    return {compute_task_unique.data() + info.s_unique, compute_task_unique.data() + info.e_unique};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(ct_unique_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_unique_offsets[idx + 1]);
+    return std::span<const dataid_t>(compute_task_unique).subspan(begin, end - begin);
   }
 
   [[nodiscard]] bool has_read_data(taskid_t task_id, dataid_t data_id) const {
@@ -1736,21 +1533,24 @@ public:
   }
 
   [[nodiscard]] std::span<const taskid_t> get_most_recent_writers(taskid_t id) const {
-    auto &info = compute_task_data_info[id];
-    return {compute_task_recent_writers.data() + info.s_read,
-            compute_task_recent_writers.data() + info.e_read};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(ct_read_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_read_offsets[idx + 1]);
+    return std::span<const taskid_t>(compute_task_recent_writers).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const uint32_t> get_read_generations(taskid_t id) const {
-    auto &info = compute_task_data_info[id];
-    return {compute_task_read_generations.data() + info.s_read,
-            compute_task_read_generations.data() + info.e_read};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(ct_read_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_read_offsets[idx + 1]);
+    return std::span<const uint32_t>(compute_task_read_generations).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const uint32_t> get_write_generations(taskid_t id) const {
-    auto &info = compute_task_data_info[id];
-    return {compute_task_write_generations.data() + info.s_write,
-            compute_task_write_generations.data() + info.e_write};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(ct_write_offsets[idx]);
+    const auto end = static_cast<std::size_t>(ct_write_offsets[idx + 1]);
+    return std::span<const uint32_t>(compute_task_write_generations).subspan(begin, end - begin);
   }
 
   [[nodiscard]] const VariantList &get_variants(taskid_t id) const {
@@ -1819,18 +1619,19 @@ public:
     return data_task_compute_task_cache[static_cast<std::size_t>(id)];
   }
 
-  // Getters for static task info
-
-  [[nodiscard]] const ComputeTaskDepInfo &get_compute_task_dep_info(taskid_t id) const {
-    return compute_task_dep_info[id];
+  [[nodiscard]] int32_t get_compute_task_dependency_count(taskid_t id) const {
+    const auto idx = static_cast<std::size_t>(id);
+    return ct_dependencies_offsets[idx + 1] - ct_dependencies_offsets[idx];
   }
 
-  [[nodiscard]] const ComputeTaskDataInfo &get_compute_task_data_info(taskid_t id) const {
-    return compute_task_data_info[id];
+  [[nodiscard]] int32_t get_compute_task_data_dependency_count(taskid_t id) const {
+    const auto idx = static_cast<std::size_t>(id);
+    return ct_data_dependencies_offsets[idx + 1] - ct_data_dependencies_offsets[idx];
   }
 
-  [[nodiscard]] const DataTaskStaticInfo &get_data_task_static_info(taskid_t id) const {
-    return data_task_static_info[id];
+  [[nodiscard]] int32_t get_data_task_dependency_count(taskid_t id) const {
+    const auto idx = static_cast<std::size_t>(id);
+    return dt_dependencies_offsets[idx + 1] - dt_dependencies_offsets[idx];
   }
 
   [[nodiscard]] const ComputeTaskStaticInfo &get_compute_task_static_info(taskid_t id) const {
@@ -1917,9 +1718,9 @@ public:
   void initialize_compute_runtime(int32_t compute_task_id, const StaticTaskInfo &static_info) {
     set_compute_task_state(compute_task_id, TaskState::SPAWNED);
 
-    auto &dep_info = static_info.get_compute_task_dep_info(compute_task_id);
-    auto n_dependencies = dep_info.e_dependencies - dep_info.s_dependencies;
-    auto n_data_dependencies = dep_info.e_data_dependencies - dep_info.s_data_dependencies;
+    const auto n_dependencies = static_info.get_compute_task_dependency_count(compute_task_id);
+    const auto n_data_dependencies =
+        static_info.get_compute_task_data_dependency_count(compute_task_id);
     set_compute_task_unmapped(compute_task_id, n_dependencies);
     set_compute_task_unreserved(compute_task_id, n_dependencies);
     set_compute_task_incomplete(compute_task_id, n_dependencies + n_data_dependencies);
@@ -1929,8 +1730,7 @@ public:
   void initialize_data_runtime(int32_t data_task_id, const StaticTaskInfo &static_info) {
     set_data_task_state(data_task_id, TaskState::SPAWNED);
 
-    auto &info = static_info.get_data_task_static_info(data_task_id);
-    auto n_dependencies = info.e_dependencies - info.s_dependencies;
+    const auto n_dependencies = static_info.get_data_task_dependency_count(data_task_id);
     set_data_task_incomplete(data_task_id, n_dependencies);
   }
 
