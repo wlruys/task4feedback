@@ -3,11 +3,13 @@
 #include "resources.hpp"
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
+#include <algorithm>
 #include <ankerl/unordered_dense.h>
 #include <array>
-#include <bitset>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <iostream>
 #include <ostream>
 #include <set>
@@ -17,7 +19,6 @@
 #include <tracy/Tracy.hpp>
 #include <type_traits>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -84,6 +85,13 @@ inline std::vector<V> as_vector(const ankerl::unordered_dense::map<K, V> &map) {
   for (const auto &item : map) {
     vec.push_back(item.second);
   }
+  return vec;
+}
+
+template <typename T>
+inline std::vector<T> as_sorted_vector(const ankerl::unordered_dense::set<T> &set) {
+  auto vec = as_vector(set);
+  std::sort(vec.begin(), vec.end());
   return vec;
 }
 
@@ -171,16 +179,25 @@ public:
   ankerl::unordered_dense::set<taskid_t> data_dependencies;
   ankerl::unordered_dense::set<taskid_t> data_dependents;
 
-  ankerl::unordered_dense::set<taskid_t> temp_dependencies;
-  ankerl::unordered_dense::set<taskid_t> temp_dependents;
-
   ankerl::unordered_dense::set<dataid_t> read;
   ankerl::unordered_dense::set<dataid_t> write;
   ankerl::unordered_dense::set<dataid_t> retire;
 
   std::vector<dataid_t> unique;
-  std::vector<dataid_t> v_read;
-  std::vector<taskid_t> most_recent_writers;
+
+  // Sorted caches built during Graph::finalize() — reused by StaticTaskInfo constructor.
+  std::vector<dataid_t> sorted_read_cache;
+  std::vector<dataid_t> sorted_write_cache;
+  std::vector<dataid_t> sorted_retire_cache;
+  std::vector<taskid_t> sorted_recent_writer_cache;
+  std::vector<uint32_t> sorted_read_gen_cache;
+  std::vector<uint32_t> sorted_write_gen_cache;
+
+  // Sorted caches for deps/dependents built during Graph::finalize().
+  std::vector<taskid_t> sorted_dependencies_cache;
+  std::vector<taskid_t> sorted_dependents_cache;
+  std::vector<taskid_t> sorted_data_dependencies_cache;
+  std::vector<taskid_t> sorted_data_dependents_cache;
 
   std::vector<uint8_t> arch;
   std::vector<vcu_t> vcu;
@@ -201,8 +218,9 @@ public:
   ankerl::unordered_dense::set<taskid_t> dependencies;
   ankerl::unordered_dense::set<taskid_t> dependents;
 
-  ankerl::unordered_dense::set<taskid_t> temp_dependencies;
-  ankerl::unordered_dense::set<taskid_t> temp_dependents;
+  // Sorted caches built during Graph::finalize() — reused by StaticTaskInfo constructor.
+  std::vector<taskid_t> sorted_dependencies_cache;
+  std::vector<taskid_t> sorted_dependents_cache;
 };
 
 class Graph {
@@ -215,8 +233,23 @@ public:
 
   Graph() = default;
 
-  ankerl::unordered_dense::map<dataid_t, taskid_t>
-      writers; // Maps data IDs to their most recent writer task ID
+  // Dense vector indexed by data_id; value -1 means no writer yet.
+  // Sized to max_data_id+1 during finalize().
+  std::vector<taskid_t> writers;
+  dataid_t max_data_id{-1}; // computed once in finalize() before any data processing
+
+  // Cached totals populated by build_sorted_dependency_caches() — used by StaticTaskInfo ctor
+  // to avoid a separate counting pass.
+  int32_t total_compute_dependencies_cached{0};
+  int32_t total_compute_dependents_cached{0};
+  int32_t total_compute_data_dependencies_cached{0};
+  int32_t total_compute_data_dependents_cached{0};
+  int32_t total_reads_cached{0};
+  int32_t total_writes_cached{0};
+  int32_t total_retire_cached{0};
+  int32_t total_unique_cached{0};
+  int32_t total_data_task_dependencies_cached{0};
+  int32_t total_data_task_dependents_cached{0};
 
   taskid_t add_task(const std::string &name) {
     taskid_t id = static_cast<taskid_t>(tasks.size());
@@ -271,8 +304,6 @@ public:
     auto &task = tasks[task_id];
     for (const auto &data_id : data_ids) {
       task.read.insert(data_id);
-      task.v_read.push_back(data_id);         // Store read data in a vector for ordered access
-      task.most_recent_writers.push_back(-1); // Initialize with -1 for no writer
     }
   }
 
@@ -346,16 +377,18 @@ public:
   }
 
   void populate_dependencies_from_dataflow() {
-    ankerl::unordered_dense::map<dataid_t, taskid_t> last_writer;
+    // Dense vector indexed by data_id; -1 = no writer yet.
+    if (max_data_id < 0) return;
+    std::vector<taskid_t> last_writer(static_cast<std::size_t>(max_data_id) + 1, -1);
     for (auto &task : tasks) {
-      for (const auto &data_id : task.read) {
-        auto it = last_writer.find(data_id);
-        if (it != last_writer.end()) {
-          add_dependency(task.id, it->second);
+      for (const auto data_id : task.read) {
+        const taskid_t w = last_writer[static_cast<std::size_t>(data_id)];
+        if (w != taskid_t(-1)) {
+          add_dependency(task.id, w);
         }
       }
-      for (const auto &data_id : task.write) {
-        last_writer[data_id] = task.id;
+      for (const auto data_id : task.write) {
+        last_writer[static_cast<std::size_t>(data_id)] = task.id;
       }
     }
   }
@@ -389,15 +422,19 @@ public:
   }
 
   void populate_unique_data() {
+    // sorted_read_cache and sorted_write_cache are built by populate_data_dependencies() above.
     for (auto &task : tasks) {
-      std::set<dataid_t> unique_data_set;
-      for (const auto &data_id : task.read) {
-        unique_data_set.insert(data_id);
+      task.unique.clear();
+      if (task.sorted_read_cache.empty()) {
+        task.unique = task.sorted_write_cache;
+      } else if (task.sorted_write_cache.empty()) {
+        task.unique = task.sorted_read_cache;
+      } else {
+        task.unique.reserve(task.sorted_read_cache.size() + task.sorted_write_cache.size());
+        std::set_union(task.sorted_read_cache.begin(), task.sorted_read_cache.end(),
+                       task.sorted_write_cache.begin(), task.sorted_write_cache.end(),
+                       std::back_inserter(task.unique));
       }
-      for (const auto &data_id : task.write) {
-        unique_data_set.insert(data_id);
-      }
-      task.unique.assign(unique_data_set.begin(), unique_data_set.end());
     }
   }
 
@@ -414,17 +451,14 @@ public:
     sorted.clear();
     sorted.reserve(tasks.size());
 
-    std::queue<taskid_t> queue;
-
-    for (auto task_id : initial_tasks) {
-      queue.push(task_id);
+    std::vector<int32_t> in_degree(tasks.size(), 0);
+    for (const auto &task : tasks) {
+      in_degree[task.id] = static_cast<int32_t>(task.dependencies.size());
     }
 
-    for (auto &task : tasks) {
-      task.temp_dependencies.clear();
-      task.temp_dependents.clear();
-      task.temp_dependencies.insert(task.dependencies.begin(), task.dependencies.end());
-      task.temp_dependents.insert(task.dependents.begin(), task.dependents.end());
+    std::queue<taskid_t> queue;
+    for (auto task_id : initial_tasks) {
+      queue.push(task_id);
     }
 
     while (!queue.empty()) {
@@ -432,9 +466,8 @@ public:
       queue.pop();
       sorted.push_back(current);
 
-      for (const auto &dependent : tasks[current].temp_dependents) {
-        tasks[dependent].temp_dependencies.erase(current);
-        if (tasks[dependent].temp_dependencies.empty()) {
+      for (const auto &dependent : tasks[current].dependents) {
+        if (--in_degree[dependent] == 0) {
           queue.push(dependent);
         }
       }
@@ -445,17 +478,14 @@ public:
     sorted.clear();
     sorted.reserve(tasks.size());
 
-    std::stack<taskid_t> stack;
-
-    for (auto &task : initial_tasks) {
-      stack.push(task);
+    std::vector<int32_t> in_degree(tasks.size(), 0);
+    for (const auto &task : tasks) {
+      in_degree[task.id] = static_cast<int32_t>(task.dependencies.size());
     }
 
-    for (auto &task : tasks) {
-      task.temp_dependencies.clear();
-      task.temp_dependents.clear();
-      task.temp_dependencies.insert(task.dependencies.begin(), task.dependencies.end());
-      task.temp_dependents.insert(task.dependents.begin(), task.dependents.end());
+    std::stack<taskid_t> stack;
+    for (auto &task : initial_tasks) {
+      stack.push(task);
     }
 
     while (!stack.empty()) {
@@ -463,9 +493,8 @@ public:
       stack.pop();
       sorted.push_back(current);
 
-      for (const auto &dependent : tasks[current].temp_dependents) {
-        tasks[dependent].temp_dependencies.erase(current);
-        if (tasks[dependent].temp_dependencies.empty()) {
+      for (const auto &dependent : tasks[current].dependents) {
+        if (--in_degree[dependent] == 0) {
           stack.push(dependent);
         }
       }
@@ -476,17 +505,14 @@ public:
     sorted.clear();
     sorted.reserve(tasks.size());
 
-    auto r = ContainerQueue<taskid_t, std::priority_queue>(seed);
-
-    for (auto &task : initial_tasks) {
-      r.push_random(task);
+    std::vector<int32_t> in_degree(tasks.size(), 0);
+    for (const auto &task : tasks) {
+      in_degree[task.id] = static_cast<int32_t>(task.dependencies.size());
     }
 
-    for (auto &task : tasks) {
-      task.temp_dependencies.clear();
-      task.temp_dependents.clear();
-      task.temp_dependencies.insert(task.dependencies.begin(), task.dependencies.end());
-      task.temp_dependents.insert(task.dependents.begin(), task.dependents.end());
+    auto r = ContainerQueue<taskid_t, std::priority_queue>(seed);
+    for (auto &task : initial_tasks) {
+      r.push_random(task);
     }
 
     while (!r.empty()) {
@@ -494,9 +520,8 @@ public:
       r.pop();
       sorted.push_back(current);
 
-      for (const auto &dependent : tasks[current].temp_dependents) {
-        tasks[dependent].temp_dependencies.erase(current);
-        if (tasks[dependent].temp_dependencies.empty()) {
+      for (const auto &dependent : tasks[current].dependents) {
+        if (--in_degree[dependent] == 0) {
           r.push_random(dependent);
         }
       }
@@ -522,8 +547,9 @@ public:
                         taskid_t writer_id = -1) {
 
     auto &task = tasks[task_id];
-    auto data_name = std::to_string(task_id) + "_data_" + std::to_string(data_id);
-    auto data_task_id = add_data_task(data_name, task_id, data_id);
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%d_data_%d", task_id, data_id);
+    auto data_task_id = add_data_task(std::string(buf), task_id, data_id);
     auto &data_task = data_tasks[data_task_id];
 
     if (has_writer) {
@@ -537,67 +563,121 @@ public:
   }
 
   void populate_data_dependencies(bool ensure_dependencies = false, bool create_data_tasks = true) {
-    writers.clear();
+    // Dense vectors indexed by data_id — O(1) lookup with no hashing overhead.
+    // Enables auto-vectorization of the inner read/write loops.
+    const std::size_t sz = (max_data_id >= 0) ? static_cast<std::size_t>(max_data_id) + 1 : 0;
+    writers.assign(sz, taskid_t(-1));
+    std::vector<uint32_t> read_gen_vec(sz, 0);
+    std::vector<uint32_t> write_gen_vec(sz, 0);
 
     // Iterate in a valid topological order
     for (auto task_id : sorted) {
 
       auto &task = tasks[task_id];
 
-      // Create data tasks for all reads from current task
-      if (create_data_tasks) {
-        for (int32_t i = 0; i < task.v_read.size(); ++i) {
-          dataid_t data_id = task.v_read[i];
-          auto it = writers.find(data_id);
-          taskid_t writer_id = -1;
-          bool has_writer = it != writers.end();
-          if (has_writer) {
+      // Sort read set once; cache for reuse by StaticTaskInfo constructor and populate_unique_data.
+      task.sorted_read_cache = as_sorted_vector(task.read);
+      const auto &sorted_read = task.sorted_read_cache;
 
-            writer_id = it->second;
-            task.most_recent_writers[i] = it->second;
-          }
+      task.sorted_recent_writer_cache.clear();
+      task.sorted_recent_writer_cache.reserve(sorted_read.size());
+      task.sorted_read_gen_cache.clear();
+      task.sorted_read_gen_cache.reserve(sorted_read.size());
+
+      for (const auto data_id : sorted_read) {
+        const taskid_t writer_id = writers[static_cast<std::size_t>(data_id)];
+        const bool has_writer = (writer_id != taskid_t(-1));
+        task.sorted_recent_writer_cache.push_back(writer_id);
+        task.sorted_read_gen_cache.push_back(read_gen_vec[static_cast<std::size_t>(data_id)]++);
+
+        // Create data tasks for all reads from current task.
+        if (create_data_tasks) {
           create_data_task(task_id, data_id, has_writer, writer_id);
         }
       }
 
       if (ensure_dependencies) {
-        // writers are compute tasks
-        // Ensure that the compute task depends on all writers of the data it reads
-        for (const auto &data_id : task.read) {
-          auto it = writers.find(data_id);
-          if (it != writers.end()) {
-            task.dependencies.insert(it->second);
-            tasks[it->second].dependents.insert(task_id);
+        // Ensure that the compute task depends on all writers of the data it reads/writes/retires.
+        for (const auto data_id : task.read) {
+          const taskid_t w = writers[static_cast<std::size_t>(data_id)];
+          if (w != taskid_t(-1)) {
+            task.dependencies.insert(w);
+            tasks[w].dependents.insert(task_id);
           }
         }
-
-        // Ensure that the compute task depends on all writers of the data it writes
-        for (const auto &data_id : task.write) {
-          auto it = writers.find(data_id);
-          if (it != writers.end()) {
-            task.dependencies.insert(it->second);
-            tasks[it->second].dependents.insert(task_id);
+        for (const auto data_id : task.write) {
+          const taskid_t w = writers[static_cast<std::size_t>(data_id)];
+          if (w != taskid_t(-1)) {
+            task.dependencies.insert(w);
+            tasks[w].dependents.insert(task_id);
           }
         }
-
-        // Ensure that the compute task depends on all writers of the data it retires
-        for (const auto &data_id : task.retire) {
-          auto it = writers.find(data_id);
-          if (it != writers.end()) {
-            task.dependencies.insert(it->second);
-            tasks[it->second].dependents.insert(task_id);
+        for (const auto data_id : task.retire) {
+          const taskid_t w = writers[static_cast<std::size_t>(data_id)];
+          if (w != taskid_t(-1)) {
+            task.dependencies.insert(w);
+            tasks[w].dependents.insert(task_id);
           }
         }
       }
 
-      // Update writers map with current task's writes
-      for (const auto &data_id : task.write) {
-        writers[data_id] = task_id;
+      // Sort write set once; cache for reuse by StaticTaskInfo constructor and populate_unique_data.
+      task.sorted_write_cache = as_sorted_vector(task.write);
+      const auto &sorted_write = task.sorted_write_cache;
+
+      task.sorted_write_gen_cache.clear();
+      task.sorted_write_gen_cache.reserve(sorted_write.size());
+
+      // Update write generations and writers with current task's writes.
+      for (const auto data_id : sorted_write) {
+        const std::size_t idx = static_cast<std::size_t>(data_id);
+        task.sorted_write_gen_cache.push_back(write_gen_vec[idx]++);
+        writers[idx] = task_id;
       }
     }
   }
 
-  void finalize(bool ensure_dependencies = false, bool create_data_tasks = true) {
+  void build_sorted_dependency_caches() {
+    // Build sorted caches for compute tasks.
+    total_compute_dependencies_cached = 0;
+    total_compute_dependents_cached = 0;
+    total_compute_data_dependencies_cached = 0;
+    total_compute_data_dependents_cached = 0;
+    total_reads_cached = 0;
+    total_writes_cached = 0;
+    total_retire_cached = 0;
+    total_unique_cached = 0;
+
+    for (auto &task : tasks) {
+      task.sorted_dependencies_cache = as_sorted_vector(task.dependencies);
+      task.sorted_dependents_cache = as_sorted_vector(task.dependents);
+      task.sorted_data_dependencies_cache = as_sorted_vector(task.data_dependencies);
+      task.sorted_data_dependents_cache = as_sorted_vector(task.data_dependents);
+      task.sorted_retire_cache = as_sorted_vector(task.retire);
+
+      total_compute_dependencies_cached += static_cast<int32_t>(task.sorted_dependencies_cache.size());
+      total_compute_dependents_cached += static_cast<int32_t>(task.sorted_dependents_cache.size());
+      total_compute_data_dependencies_cached += static_cast<int32_t>(task.sorted_data_dependencies_cache.size());
+      total_compute_data_dependents_cached += static_cast<int32_t>(task.sorted_data_dependents_cache.size());
+      total_reads_cached += static_cast<int32_t>(task.sorted_read_cache.size());
+      total_writes_cached += static_cast<int32_t>(task.sorted_write_cache.size());
+      total_retire_cached += static_cast<int32_t>(task.sorted_retire_cache.size());
+      total_unique_cached += static_cast<int32_t>(task.unique.size());
+    }
+
+    // Build sorted caches for data tasks.
+    total_data_task_dependencies_cached = 0;
+    total_data_task_dependents_cached = 0;
+
+    for (auto &dt : data_tasks) {
+      dt.sorted_dependencies_cache = as_sorted_vector(dt.dependencies);
+      dt.sorted_dependents_cache = as_sorted_vector(dt.dependents);
+      total_data_task_dependencies_cached += static_cast<int32_t>(dt.sorted_dependencies_cache.size());
+      total_data_task_dependents_cached += static_cast<int32_t>(dt.sorted_dependents_cache.size());
+    }
+  }
+
+  void finalize(bool ensure_dependencies = false, bool create_data_tasks_flag = true) {
     if (finalized) {
       std::cerr << "Graph is already finalized. Cannot finalize again." << std::endl;
       std::cerr << "If you want to re-finalize, please create a new Graph instance." << std::endl;
@@ -606,13 +686,34 @@ public:
       return;
     }
     finalized = true;
+
+    // Compute max_data_id first — required for dense-vector allocation in subsequent steps.
+    max_data_id = -1;
+    std::size_t total_read_count = 0;
+    for (const auto &task : tasks) {
+      for (const auto d : task.read)   { if (d > max_data_id) max_data_id = d; }
+      for (const auto d : task.write)  { if (d > max_data_id) max_data_id = d; }
+      for (const auto d : task.retire) { if (d > max_data_id) max_data_id = d; }
+      total_read_count += task.read.size();
+    }
+
     populate_dependencies_from_dataflow();
-    populate_unique_data();
     populate_dependents();
     populate_initial_tasks();
     bfs();
     populate_depth();
-    populate_data_dependencies(ensure_dependencies, create_data_tasks);
+
+    // Reserve data_tasks to avoid repeated reallocations.
+    if (create_data_tasks_flag) {
+      data_tasks.reserve(total_read_count);
+    }
+
+    populate_data_dependencies(ensure_dependencies, create_data_tasks_flag);
+    // populate_unique_data uses sorted caches built by populate_data_dependencies above.
+    populate_unique_data();
+    // Build sorted caches for deps/dependents/retire after all sets are fully populated.
+    // Also accumulates total counts used by StaticTaskInfo constructor.
+    build_sorted_dependency_caches();
     // populate_data_dependents();
   }
 };
@@ -753,10 +854,46 @@ protected:
   std::vector<dataid_t> compute_task_read;
   std::vector<dataid_t> compute_task_write;
   std::vector<dataid_t> compute_task_retire;
-  std::vector<dataid_t> compute_task_recent_writers;
+  std::vector<taskid_t> compute_task_recent_writers;
+  std::vector<uint32_t> compute_task_read_generations;
+  std::vector<uint32_t> compute_task_write_generations;
   std::vector<dataid_t> compute_task_unique;
+
+  // CSR cache for read usage: data_id -> compute tasks that read data_id
+  std::vector<dataid_t> read_usage_data_ids;
+  std::vector<int32_t> read_usage_offsets;
+  std::vector<taskid_t> read_usage_tasks;
+  // Dense row-index vector indexed by data_id; -1 means data_id has no readers.
+  std::vector<int32_t> read_usage_row_by_data_id;
+
+  // CSR cache for write usage: data_id -> compute tasks that write data_id
+  std::vector<dataid_t> write_usage_data_ids;
+  std::vector<int32_t> write_usage_offsets;
+  std::vector<taskid_t> write_usage_tasks;
+  // Dense row-index vector indexed by data_id; -1 means data_id has no writers.
+  std::vector<int32_t> write_usage_row_by_data_id;
+
+  // Secondary CSR: same rows as read/write_usage_*, but entries sorted by generation.
+  // Shares offsets and row maps with the primary CSR above.
+  std::vector<taskid_t> read_usage_by_gen_tasks;
+  std::vector<uint32_t> read_usage_by_gen_generations;
+  std::vector<taskid_t> write_usage_by_gen_tasks;
+  std::vector<uint32_t> write_usage_by_gen_generations;
+
+  // CSR cache for shared-read topology: compute task -> compute tasks sharing a read data id
+  std::vector<int32_t> compute_task_shared_read_offsets;
+  std::vector<taskid_t> compute_task_shared_read_neighbors;
+
+  // Membership checks use binary search on sorted CSR spans (no extra storage needed).
   std::vector<taskid_t> data_task_dependencies;
   std::vector<taskid_t> data_task_dependents;
+
+  // Hot-path lookup caches: built once during static graph construction.
+  std::vector<int32_t> compute_task_dependents_offsets;
+  std::vector<int32_t> compute_task_data_dependents_offsets;
+  std::vector<int32_t> data_task_dependents_offsets;
+  std::vector<dataid_t> data_task_data_id_cache;
+  std::vector<taskid_t> data_task_compute_task_cache;
 
   std::vector<std::string> compute_task_names;
   std::vector<std::string> data_task_names;
@@ -766,17 +903,34 @@ protected:
   bool morton_priority_enabled{false};
   bool random_priority_enabled{false};
 
+  [[nodiscard]] static uint64_t task_data_key(taskid_t task_id, dataid_t data_id) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(task_id)) << 32U) |
+           static_cast<uint64_t>(static_cast<uint32_t>(data_id));
+  }
+
+  // Binary search on sorted CSR spans replaces hash-set membership index.
+  // No build_task_data_membership_index() needed.
+
 public:
   StaticTaskInfo(int32_t num_compute_tasks, int32_t num_data_tasks) {
     compute_task_dep_info.resize(num_compute_tasks);
     compute_task_data_info.resize(num_compute_tasks);
     compute_task_variant_info.resize(num_compute_tasks);
-    compute_task_recent_writers.resize(num_compute_tasks);
     data_task_static_info.resize(num_data_tasks);
     compute_task_static_info.resize(num_compute_tasks);
 
     compute_task_names.resize(num_compute_tasks);
     data_task_names.resize(num_data_tasks);
+    compute_task_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    compute_task_data_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    data_task_dependents_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
+    data_task_data_id_cache.resize(num_data_tasks, 0);
+    data_task_compute_task_cache.resize(num_data_tasks, 0);
+
+    // Keep CSR structures valid even when no precomputation has been run yet.
+    read_usage_offsets.resize(1, 0);
+    write_usage_offsets.resize(1, 0);
+    compute_task_shared_read_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
   }
 
   StaticTaskInfo(Graph &graph) {
@@ -787,12 +941,20 @@ public:
     compute_task_dep_info.resize(num_compute_tasks);
     compute_task_data_info.resize(num_compute_tasks);
     compute_task_variant_info.resize(num_compute_tasks);
-    compute_task_recent_writers.resize(num_compute_tasks);
     data_task_static_info.resize(num_data_tasks);
     compute_task_static_info.resize(num_compute_tasks);
 
     compute_task_names.resize(num_compute_tasks);
     data_task_names.resize(num_data_tasks);
+    compute_task_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    compute_task_data_dependents_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    data_task_dependents_offsets.resize(static_cast<std::size_t>(num_data_tasks) + 1, 0);
+    data_task_data_id_cache.resize(num_data_tasks, 0);
+    data_task_compute_task_cache.resize(num_data_tasks, 0);
+
+    read_usage_offsets.resize(1, 0);
+    write_usage_offsets.resize(1, 0);
+    compute_task_shared_read_offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
 
     // std::cout << "Creating static graph..." << std::endl;
     // std::cout << "Number of compute tasks: " << num_compute_tasks << std::endl;
@@ -800,8 +962,6 @@ public:
 
     auto &tasks = graph.tasks;
     auto &data_tasks = graph.data_tasks;
-
-    StaticTaskInfo static_info(tasks.size(), data_tasks.size());
 
     taskid_t compute_dependency_offset = 0;
     taskid_t compute_dependent_offset = 0;
@@ -816,88 +976,80 @@ public:
     taskid_t data_dependency_offset = 0;
     taskid_t data_dependent_offset = 0;
 
-    taskid_t total_compute_dependencies = 0;
-    taskid_t total_compute_dependents = 0;
-    taskid_t total_compute_data_dependencies = 0;
-    taskid_t total_compute_data_dependents = 0;
-    taskid_t total_data_dependencies = 0;
-    taskid_t total_reads = 0;
-    taskid_t total_writes = 0;
-    taskid_t total_retire = 0;
-    taskid_t total_unique = 0;
-
-    for (const auto &task : tasks) {
-      total_compute_dependencies += task.dependencies.size();
-      total_compute_dependents += task.dependents.size();
-      total_compute_data_dependencies += task.data_dependencies.size();
-      total_compute_data_dependents += task.data_dependents.size();
-      total_reads += task.read.size();
-      total_writes += task.write.size();
-      total_retire += task.retire.size();
-      total_unique += task.unique.size();
-    }
-
-    set_total_compute_task_dependencies(total_compute_dependencies);
-    set_total_compute_task_dependents(total_compute_dependents);
-    set_total_compute_task_data_dependencies(total_compute_data_dependencies);
-    set_total_compute_task_data_dependents(total_compute_data_dependents);
-    set_total_reads(total_reads);
-    set_total_writes(total_writes);
-    set_total_retires(total_retire);
-    set_total_unique(total_unique);
+    // Use totals pre-computed by Graph::build_sorted_dependency_caches() — avoids a separate pass.
+    set_total_compute_task_dependencies(graph.total_compute_dependencies_cached);
+    set_total_compute_task_dependents(graph.total_compute_dependents_cached);
+    set_total_compute_task_data_dependencies(graph.total_compute_data_dependencies_cached);
+    set_total_compute_task_data_dependents(graph.total_compute_data_dependents_cached);
+    set_total_reads(graph.total_reads_cached);
+    set_total_writes(graph.total_writes_cached);
+    set_total_retires(graph.total_retire_cached);
+    set_total_unique(graph.total_unique_cached);
 
     for (const auto &task : tasks) {
       auto compute_dep_info = ComputeTaskDepInfo();
       auto compute_data_info = ComputeTaskDataInfo();
       auto compute_task_info = ComputeTaskStaticInfo();
 
+      // Use sorted-cache sizes (vector size) rather than hash-set sizes for all offsets.
+      const int32_t n_deps      = static_cast<int32_t>(task.sorted_dependencies_cache.size());
+      const int32_t n_deps_end  = static_cast<int32_t>(task.sorted_dependents_cache.size());
+      const int32_t n_ddeps     = static_cast<int32_t>(task.sorted_data_dependencies_cache.size());
+      const int32_t n_ddeps_end = static_cast<int32_t>(task.sorted_data_dependents_cache.size());
+      const int32_t n_read      = static_cast<int32_t>(task.sorted_read_cache.size());
+      const int32_t n_write     = static_cast<int32_t>(task.sorted_write_cache.size());
+      const int32_t n_retire    = static_cast<int32_t>(task.sorted_retire_cache.size());
+      const int32_t n_unique    = static_cast<int32_t>(task.unique.size());
+
       compute_dep_info.s_dependencies = compute_dependency_offset;
-      compute_dep_info.e_dependencies = compute_dependency_offset + task.dependencies.size();
-      compute_dependency_offset += task.dependencies.size();
+      compute_dep_info.e_dependencies = compute_dependency_offset + n_deps;
+      compute_dependency_offset += n_deps;
 
       compute_dep_info.s_dependents = compute_dependent_offset;
-      compute_dep_info.e_dependents = compute_dependent_offset + task.dependents.size();
-      compute_dependent_offset += task.dependents.size();
+      compute_dep_info.e_dependents = compute_dependent_offset + n_deps_end;
+      compute_dependent_offset += n_deps_end;
 
       compute_dep_info.s_data_dependencies = compute_data_dependency_offset;
-      compute_dep_info.e_data_dependencies =
-          compute_data_dependency_offset + task.data_dependencies.size();
-      compute_data_dependency_offset += task.data_dependencies.size();
+      compute_dep_info.e_data_dependencies = compute_data_dependency_offset + n_ddeps;
+      compute_data_dependency_offset += n_ddeps;
 
       compute_dep_info.s_data_dependents = compute_data_dependent_offset;
-      compute_dep_info.e_data_dependents =
-          compute_data_dependent_offset + task.data_dependents.size();
-      compute_data_dependent_offset += task.data_dependents.size();
+      compute_dep_info.e_data_dependents = compute_data_dependent_offset + n_ddeps_end;
+      compute_data_dependent_offset += n_ddeps_end;
 
       compute_data_info.s_read = read_offset;
-      compute_data_info.e_read = read_offset + task.read.size();
-      read_offset += task.read.size();
+      compute_data_info.e_read = read_offset + n_read;
+      read_offset += n_read;
 
       compute_data_info.s_write = write_offset;
-      compute_data_info.e_write = write_offset + task.write.size();
-      write_offset += task.write.size();
+      compute_data_info.e_write = write_offset + n_write;
+      write_offset += n_write;
 
       compute_data_info.s_retire = retire_offset;
-      compute_data_info.e_retire = retire_offset + task.retire.size();
-      retire_offset += task.retire.size();
+      compute_data_info.e_retire = retire_offset + n_retire;
+      retire_offset += n_retire;
 
       compute_data_info.s_unique = unique_offset;
-      compute_data_info.e_unique = unique_offset + task.unique.size();
-      unique_offset += task.unique.size();
+      compute_data_info.e_unique = unique_offset + n_unique;
+      unique_offset += n_unique;
 
       compute_task_info.tag = task.tag;
       compute_task_info.type = task.type;
 
       add_compute_task(task.id, task.name, compute_dep_info, compute_data_info, compute_task_info);
 
-      add_compute_task_dependencies(task.id, as_vector(task.dependencies));
-      add_compute_task_dependents(task.id, as_vector(task.dependents));
-      add_compute_task_data_dependencies(task.id, as_vector(task.data_dependencies));
-      add_compute_task_data_dependents(task.id, as_vector(task.data_dependents));
-      add_read(task.id, task.v_read);
-      add_most_recent_writers(task.id, task.most_recent_writers);
-      add_write(task.id, as_vector(task.write));
-      add_retire(task.id, as_vector(task.retire));
+      // Use caches built during Graph::finalize() — avoids re-sorting and temporary allocations.
+      add_compute_task_dependencies(task.id, task.sorted_dependencies_cache);
+      add_compute_task_dependents(task.id, task.sorted_dependents_cache);
+      add_compute_task_data_dependencies(task.id, task.sorted_data_dependencies_cache);
+      add_compute_task_data_dependents(task.id, task.sorted_data_dependents_cache);
+      add_read(task.id, task.sorted_read_cache);
+      add_most_recent_writers(task.id, task.sorted_recent_writer_cache);
+      add_read_generations(task.id, task.sorted_read_gen_cache);
+      add_write(task.id, task.sorted_write_cache);
+      add_write_generations(task.id, task.sorted_write_gen_cache);
+      add_retire(task.id, task.sorted_retire_cache);
+      // task.unique is already sorted (produced by set_union in populate_unique_data).
       add_unique(task.id, task.unique);
       add_depth(task.id, task.depth);
 
@@ -907,35 +1059,35 @@ public:
       }
     }
 
-    taskid_t total_data_task_dependencies = 0;
-    taskid_t total_data_task_dependents = 0;
-    for (const auto &data_task : data_tasks) {
-      total_data_task_dependencies += data_task.dependencies.size();
-      total_data_task_dependents += data_task.dependents.size();
-    }
-
-    set_total_data_task_dependencies(total_data_task_dependencies);
-    set_total_data_task_dependents(total_data_task_dependents);
+    // Use totals cached by Graph::build_sorted_dependency_caches().
+    set_total_data_task_dependencies(graph.total_data_task_dependencies_cached);
+    set_total_data_task_dependents(graph.total_data_task_dependents_cached);
 
     for (const auto &data_task : data_tasks) {
       auto data_task_info = DataTaskStaticInfo();
 
+      const int32_t n_dt_deps = static_cast<int32_t>(data_task.sorted_dependencies_cache.size());
+      const int32_t n_dt_dpts = static_cast<int32_t>(data_task.sorted_dependents_cache.size());
+
       data_task_info.s_dependencies = data_dependency_offset;
-      data_task_info.e_dependencies = data_dependency_offset + data_task.dependencies.size();
-      data_dependency_offset += data_task.dependencies.size();
+      data_task_info.e_dependencies = data_dependency_offset + n_dt_deps;
+      data_dependency_offset += n_dt_deps;
 
       data_task_info.s_dependents = data_dependent_offset;
-      data_task_info.e_dependents = data_dependent_offset + data_task.dependents.size();
-      data_dependent_offset += data_task.dependents.size();
+      data_task_info.e_dependents = data_dependent_offset + n_dt_dpts;
+      data_dependent_offset += n_dt_dpts;
 
       data_task_info.data_id = data_task.data_id;
       data_task_info.compute_task = data_task.compute_task;
 
       add_data_task(data_task.id, data_task.name, data_task_info);
 
-      add_data_task_dependencies(data_task.id, as_vector(data_task.dependencies));
-      add_data_task_dependents(data_task.id, as_vector(data_task.dependents));
+      // Use pre-sorted caches built during Graph::finalize() — no temporary allocations.
+      add_data_task_dependencies(data_task.id, data_task.sorted_dependencies_cache);
+      add_data_task_dependents(data_task.id, data_task.sorted_dependents_cache);
     }
+
+    build_usage_caches_and_shared_read_topology();
   }
 
   // Update variants
@@ -950,7 +1102,197 @@ public:
     }
   }
 
-  // Creation and Initialization
+  void build_usage_caches_and_shared_read_topology() {
+    const auto n_compute_tasks = get_n_compute_tasks();
+
+    // Flat triple: (data_id, gen, task_id).
+    struct DataGenTask {
+      dataid_t data_id;
+      uint32_t gen;
+      taskid_t task_id;
+    };
+
+    // Build flat arrays of triples from all tasks in one pass.
+    std::vector<DataGenTask> read_triples;
+    read_triples.reserve(compute_task_read.size());
+    std::vector<DataGenTask> write_triples;
+    write_triples.reserve(compute_task_write.size());
+
+    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
+      const auto read_span = get_read(task_id);
+      const auto read_gen_span = get_read_generations(task_id);
+      for (std::size_t i = 0; i < read_span.size(); ++i) {
+        read_triples.push_back({read_span[i], read_gen_span[i], task_id});
+      }
+      const auto write_span = get_write(task_id);
+      const auto write_gen_span = get_write_generations(task_id);
+      for (std::size_t i = 0; i < write_span.size(); ++i) {
+        write_triples.push_back({write_span[i], write_gen_span[i], task_id});
+      }
+    }
+
+    // Comparators for the two sort passes.
+    auto by_data_task = [](const DataGenTask &a, const DataGenTask &b) {
+      if (a.data_id != b.data_id) return a.data_id < b.data_id;
+      return a.task_id < b.task_id;
+    };
+    auto by_data_gen_task = [](const DataGenTask &a, const DataGenTask &b) {
+      if (a.data_id != b.data_id) return a.data_id < b.data_id;
+      if (a.gen != b.gen) return a.gen < b.gen;
+      return a.task_id < b.task_id;
+    };
+
+    // Helper: compute max data_id across a sorted triples array (last element's data_id).
+    auto max_data_id_in = [](const std::vector<DataGenTask> &triples) -> dataid_t {
+      return triples.empty() ? dataid_t(-1) : triples.back().data_id;
+    };
+
+    // ---- Build read usage CSRs (two-sort, no per-group allocations) ----
+
+    read_usage_data_ids.clear();
+    read_usage_offsets.clear();
+    read_usage_offsets.push_back(0);
+    read_usage_tasks.clear();
+    read_usage_tasks.reserve(read_triples.size());
+    read_usage_by_gen_tasks.clear();
+    read_usage_by_gen_tasks.reserve(read_triples.size());
+    read_usage_by_gen_generations.clear();
+    read_usage_by_gen_generations.reserve(read_triples.size());
+
+    std::vector<uint64_t> shared_pair_keys;
+
+    if (!read_triples.empty()) {
+      // Pass 1: sort by (data_id, task_id) → primary CSR + shared pairs.
+      std::sort(read_triples.begin(), read_triples.end(), by_data_task);
+
+      // Compute max read data_id and size dense row map accordingly.
+      const dataid_t max_read_id = max_data_id_in(read_triples);
+      read_usage_row_by_data_id.assign(static_cast<std::size_t>(max_read_id) + 1, -1);
+      read_usage_data_ids.reserve(read_triples.size()); // upper bound
+
+      std::size_t group_start = 0;
+      while (group_start < read_triples.size()) {
+        const dataid_t cur_data = read_triples[group_start].data_id;
+        std::size_t group_end = group_start + 1;
+        while (group_end < read_triples.size() && read_triples[group_end].data_id == cur_data) {
+          ++group_end;
+        }
+        read_usage_row_by_data_id[static_cast<std::size_t>(cur_data)] =
+            static_cast<int32_t>(read_usage_data_ids.size());
+        read_usage_data_ids.push_back(cur_data);
+        for (std::size_t i = group_start; i < group_end; ++i) {
+          read_usage_tasks.push_back(read_triples[i].task_id);
+        }
+        read_usage_offsets.push_back(static_cast<int32_t>(read_usage_tasks.size()));
+
+        // Collect shared-read pairs while triples are task_id-sorted.
+        const auto n_readers = group_end - group_start;
+        if (n_readers >= 2) {
+          shared_pair_keys.reserve(shared_pair_keys.size() + ((n_readers * (n_readers - 1)) / 2));
+          for (std::size_t i = group_start; i < group_end; ++i) {
+            const auto lhs = static_cast<uint64_t>(static_cast<uint32_t>(read_triples[i].task_id));
+            for (std::size_t j = i + 1; j < group_end; ++j) {
+              const auto rhs = static_cast<uint64_t>(static_cast<uint32_t>(read_triples[j].task_id));
+              shared_pair_keys.push_back((lhs << 32U) | rhs);
+            }
+          }
+        }
+        group_start = group_end;
+      }
+
+      // Pass 2: re-sort by (data_id, gen, task_id) → gen CSR.
+      // Group structure (data_id groups and their sizes) is unchanged; only internal order differs.
+      // No per-group allocation: just stream all re-sorted triples.
+      std::sort(read_triples.begin(), read_triples.end(), by_data_gen_task);
+      for (const auto &t : read_triples) {
+        read_usage_by_gen_tasks.push_back(t.task_id);
+        read_usage_by_gen_generations.push_back(t.gen);
+      }
+    }
+
+    write_usage_data_ids.clear();
+    write_usage_offsets.clear();
+    write_usage_offsets.push_back(0);
+    write_usage_tasks.clear();
+    write_usage_tasks.reserve(write_triples.size());
+    write_usage_by_gen_tasks.clear();
+    write_usage_by_gen_tasks.reserve(write_triples.size());
+    write_usage_by_gen_generations.clear();
+    write_usage_by_gen_generations.reserve(write_triples.size());
+
+    if (!write_triples.empty()) {
+      // Pass 1: sort by (data_id, task_id) → primary CSR.
+      std::sort(write_triples.begin(), write_triples.end(), by_data_task);
+
+      const dataid_t max_write_id = max_data_id_in(write_triples);
+      write_usage_row_by_data_id.assign(static_cast<std::size_t>(max_write_id) + 1, -1);
+      write_usage_data_ids.reserve(write_triples.size());
+
+      std::size_t group_start = 0;
+      while (group_start < write_triples.size()) {
+        const dataid_t cur_data = write_triples[group_start].data_id;
+        std::size_t group_end = group_start + 1;
+        while (group_end < write_triples.size() && write_triples[group_end].data_id == cur_data) {
+          ++group_end;
+        }
+        write_usage_row_by_data_id[static_cast<std::size_t>(cur_data)] =
+            static_cast<int32_t>(write_usage_data_ids.size());
+        write_usage_data_ids.push_back(cur_data);
+        for (std::size_t i = group_start; i < group_end; ++i) {
+          write_usage_tasks.push_back(write_triples[i].task_id);
+        }
+        write_usage_offsets.push_back(static_cast<int32_t>(write_usage_tasks.size()));
+        group_start = group_end;
+      }
+
+      // Pass 2: re-sort by (data_id, gen, task_id) → gen CSR.
+      std::sort(write_triples.begin(), write_triples.end(), by_data_gen_task);
+      for (const auto &t : write_triples) {
+        write_usage_by_gen_tasks.push_back(t.task_id);
+        write_usage_by_gen_generations.push_back(t.gen);
+      }
+    }
+
+    compute_task_shared_read_offsets.assign(static_cast<std::size_t>(n_compute_tasks) + 1, 0);
+    compute_task_shared_read_neighbors.clear();
+
+    if (shared_pair_keys.empty()) {
+      return;
+    }
+
+    std::sort(shared_pair_keys.begin(), shared_pair_keys.end());
+    shared_pair_keys.erase(std::unique(shared_pair_keys.begin(), shared_pair_keys.end()),
+                           shared_pair_keys.end());
+
+    for (const auto key : shared_pair_keys) {
+      const auto lhs = static_cast<taskid_t>(key >> 32U);
+      const auto rhs = static_cast<taskid_t>(key & 0xFFFFFFFFULL);
+      compute_task_shared_read_offsets[lhs + 1] += 1;
+      compute_task_shared_read_offsets[rhs + 1] += 1;
+    }
+
+    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
+      compute_task_shared_read_offsets[task_id + 1] += compute_task_shared_read_offsets[task_id];
+    }
+
+    compute_task_shared_read_neighbors.resize(
+        static_cast<std::size_t>(compute_task_shared_read_offsets.back()), -1);
+    auto write_offsets_scatter = compute_task_shared_read_offsets;
+
+    for (const auto key : shared_pair_keys) {
+      const auto lhs = static_cast<taskid_t>(key >> 32U);
+      const auto rhs = static_cast<taskid_t>(key & 0xFFFFFFFFULL);
+      compute_task_shared_read_neighbors[write_offsets_scatter[lhs]++] = rhs;
+      compute_task_shared_read_neighbors[write_offsets_scatter[rhs]++] = lhs;
+    }
+
+    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
+      const auto begin = static_cast<std::size_t>(compute_task_shared_read_offsets[task_id]);
+      const auto end = static_cast<std::size_t>(compute_task_shared_read_offsets[task_id + 1]);
+      std::sort(compute_task_shared_read_neighbors.begin() + begin,
+                compute_task_shared_read_neighbors.begin() + end);
+    }
+  }
 
   void set_total_compute_task_dependencies(int32_t num_deps) {
     compute_task_dependencies.resize(num_deps, 0);
@@ -979,10 +1321,12 @@ public:
   void set_total_reads(int32_t num_read) {
     compute_task_read.resize(num_read, 0);
     compute_task_recent_writers.resize(num_read, 0);
+    compute_task_read_generations.resize(num_read, 0);
   }
 
   void set_total_writes(int32_t num_write) {
     compute_task_write.resize(num_write, 0);
+    compute_task_write_generations.resize(num_write, 0);
   }
 
   void set_total_retires(int32_t num_retire) {
@@ -993,7 +1337,6 @@ public:
     compute_task_unique.resize(num_unique, 0);
   }
 
-  // Optional grid metadata (for priority ordering)
   void set_grid_shape(int32_t h, int32_t w) {
     if (h > 0 && w > 0) {
       grid_h = h;
@@ -1039,11 +1382,23 @@ public:
     compute_task_data_info[id] = data_info;
     compute_task_static_info[id] = compute_info;
     compute_task_names[id] = name;
+
+    const auto idx = static_cast<std::size_t>(id);
+    compute_task_dependents_offsets[idx] = dep_info.s_dependents;
+    compute_task_dependents_offsets[idx + 1] = dep_info.e_dependents;
+    compute_task_data_dependents_offsets[idx] = dep_info.s_data_dependents;
+    compute_task_data_dependents_offsets[idx + 1] = dep_info.e_data_dependents;
   }
 
   void add_data_task(taskid_t id, const std::string &name, const DataTaskStaticInfo &static_info) {
     data_task_static_info[id] = static_info;
     data_task_names[id] = name;
+
+    const auto idx = static_cast<std::size_t>(id);
+    data_task_dependents_offsets[idx] = static_info.s_dependents;
+    data_task_dependents_offsets[idx + 1] = static_info.e_dependents;
+    data_task_data_id_cache[idx] = static_info.data_id;
+    data_task_compute_task_cache[idx] = static_info.compute_task;
   }
 
   void add_compute_task_dependencies(taskid_t id, const std::vector<taskid_t> &dependencies) {
@@ -1118,6 +1473,15 @@ public:
     std::copy(writers.begin(), writers.end(), compute_task_recent_writers.begin() + info.s_read);
   }
 
+  void add_read_generations(taskid_t id, const std::vector<uint32_t> &read_generations) {
+    assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
+    auto &info = compute_task_data_info[id];
+    assert(compute_task_read_generations.size() >= info.e_read &&
+           "Not enough space in compute_task_read_generations vector");
+    std::copy(read_generations.begin(), read_generations.end(),
+              compute_task_read_generations.begin() + info.s_read);
+  }
+
   void add_write(taskid_t id, const std::vector<dataid_t> &write) {
     assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
     auto &info = compute_task_data_info[id];
@@ -1125,6 +1489,15 @@ public:
            "Not enough space in compute_task_write vector");
     // copy write data to corresponding location
     std::copy(write.begin(), write.end(), compute_task_write.begin() + info.s_write);
+  }
+
+  void add_write_generations(taskid_t id, const std::vector<uint32_t> &write_generations) {
+    assert(id < compute_task_data_info.size() && "Task ID is out of bounds");
+    auto &info = compute_task_data_info[id];
+    assert(compute_task_write_generations.size() >= info.e_write &&
+           "Not enough space in compute_task_write_generations vector");
+    std::copy(write_generations.begin(), write_generations.end(),
+              compute_task_write_generations.begin() + info.s_write);
   }
 
   void add_retire(taskid_t id, const std::vector<dataid_t> &retire) {
@@ -1183,9 +1556,10 @@ public:
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_dependents(taskid_t id) const {
-    auto &info = compute_task_dep_info[id];
-    return {compute_task_dependents.data() + info.s_dependents,
-            compute_task_dependents.data() + info.e_dependents};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(compute_task_dependents_offsets[idx]);
+    const auto end = static_cast<std::size_t>(compute_task_dependents_offsets[idx + 1]);
+    return std::span<const taskid_t>(compute_task_dependents).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t> get_data_task_dependencies(taskid_t id) const {
@@ -1195,9 +1569,10 @@ public:
   }
 
   [[nodiscard]] std::span<const taskid_t> get_data_task_dependents(taskid_t id) const {
-    auto &info = data_task_static_info[id];
-    return {data_task_dependents.data() + info.s_dependents,
-            data_task_dependents.data() + info.e_dependents};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(data_task_dependents_offsets[idx]);
+    const auto end = static_cast<std::size_t>(data_task_dependents_offsets[idx + 1]);
+    return std::span<const taskid_t>(data_task_dependents).subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_data_dependencies(taskid_t id) const {
@@ -1207,9 +1582,95 @@ public:
   }
 
   [[nodiscard]] std::span<const taskid_t> get_compute_task_data_dependents(taskid_t id) const {
-    auto &info = compute_task_dep_info[id];
-    return {compute_task_data_dependents.data() + info.s_data_dependents,
-            compute_task_data_dependents.data() + info.e_data_dependents};
+    const auto idx = static_cast<std::size_t>(id);
+    const auto begin = static_cast<std::size_t>(compute_task_data_dependents_offsets[idx]);
+    const auto end = static_cast<std::size_t>(compute_task_data_dependents_offsets[idx + 1]);
+    return std::span<const taskid_t>(compute_task_data_dependents).subspan(begin, end - begin);
+  }
+
+  [[nodiscard]] std::span<const dataid_t> get_read_usage_data_ids() const {
+    return read_usage_data_ids;
+  }
+
+  [[nodiscard]] std::span<const taskid_t> get_tasks_reading_data(dataid_t data_id) const {
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= read_usage_row_by_data_id.size()) return {};
+    const auto row = read_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row) + 1]);
+    return std::span<const taskid_t>(read_usage_tasks).subspan(begin, end - begin);
+  }
+
+  [[nodiscard]] std::span<const dataid_t> get_write_usage_data_ids() const {
+    return write_usage_data_ids;
+  }
+
+  [[nodiscard]] std::span<const taskid_t> get_tasks_writing_data(dataid_t data_id) const {
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= write_usage_row_by_data_id.size()) return {};
+    const auto row = write_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row) + 1]);
+    return std::span<const taskid_t>(write_usage_tasks).subspan(begin, end - begin);
+  }
+
+  // Secondary CSRs: same rows as the primary task-id-sorted CSRs above, but entries are
+  // sorted ascending by generation.  The parallel generations span is always co-indexed
+  // with the tasks span so callers can zip-iterate or binary-search on generation.
+
+  [[nodiscard]] std::span<const taskid_t>
+  get_tasks_reading_data_by_gen(dataid_t data_id) const {
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= read_usage_row_by_data_id.size()) return {};
+    const auto row = read_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row) + 1]);
+    return std::span<const taskid_t>(read_usage_by_gen_tasks).subspan(begin, end - begin);
+  }
+
+  [[nodiscard]] std::span<const uint32_t>
+  get_read_generations_for_data(dataid_t data_id) const {
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= read_usage_row_by_data_id.size()) return {};
+    const auto row = read_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(read_usage_offsets[static_cast<std::size_t>(row) + 1]);
+    return std::span<const uint32_t>(read_usage_by_gen_generations).subspan(begin, end - begin);
+  }
+
+  [[nodiscard]] std::span<const taskid_t>
+  get_tasks_writing_data_by_gen(dataid_t data_id) const {
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= write_usage_row_by_data_id.size()) return {};
+    const auto row = write_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row) + 1]);
+    return std::span<const taskid_t>(write_usage_by_gen_tasks).subspan(begin, end - begin);
+  }
+
+  [[nodiscard]] std::span<const uint32_t>
+  get_write_generations_for_data(dataid_t data_id) const {
+    const auto idx = static_cast<std::size_t>(data_id);
+    if (data_id < 0 || idx >= write_usage_row_by_data_id.size()) return {};
+    const auto row = write_usage_row_by_data_id[idx];
+    if (row < 0) return {};
+    const auto begin = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row)]);
+    const auto end = static_cast<std::size_t>(write_usage_offsets[static_cast<std::size_t>(row) + 1]);
+    return std::span<const uint32_t>(write_usage_by_gen_generations).subspan(begin, end - begin);
+  }
+
+  [[nodiscard]] std::span<const taskid_t>
+  get_compute_task_shared_read_neighbors(taskid_t id) const {
+    assert(id >= 0 && id < get_n_compute_tasks() && "Task ID is out of bounds");
+    const auto begin = static_cast<std::size_t>(compute_task_shared_read_offsets[id]);
+    const auto end = static_cast<std::size_t>(compute_task_shared_read_offsets[id + 1]);
+    return std::span<const taskid_t>(compute_task_shared_read_neighbors)
+        .subspan(begin, end - begin);
   }
 
   [[nodiscard]] std::span<const dataid_t> get_read(taskid_t id) const {
@@ -1232,6 +1693,32 @@ public:
     return {compute_task_unique.data() + info.s_unique, compute_task_unique.data() + info.e_unique};
   }
 
+  [[nodiscard]] bool has_read_data(taskid_t task_id, dataid_t data_id) const {
+    if (task_id < 0 || task_id >= get_n_compute_tasks() || data_id < 0) return false;
+    const auto span = get_read(task_id);
+    return std::binary_search(span.begin(), span.end(), data_id);
+  }
+
+  [[nodiscard]] bool has_write_data(taskid_t task_id, dataid_t data_id) const {
+    if (task_id < 0 || task_id >= get_n_compute_tasks() || data_id < 0) return false;
+    const auto span = get_write(task_id);
+    return std::binary_search(span.begin(), span.end(), data_id);
+  }
+
+  [[nodiscard]] bool has_unique_data(taskid_t task_id, dataid_t data_id) const {
+    if (task_id < 0 || task_id >= get_n_compute_tasks() || data_id < 0) return false;
+    const auto span = get_unique(task_id);
+    return std::binary_search(span.begin(), span.end(), data_id);
+  }
+
+  [[nodiscard]] int32_t get_read_data_index(taskid_t task_id, dataid_t data_id) const {
+    if (task_id < 0 || task_id >= get_n_compute_tasks() || data_id < 0) return -1;
+    const auto span = get_read(task_id);
+    auto it = std::lower_bound(span.begin(), span.end(), data_id);
+    if (it == span.end() || *it != data_id) return -1;
+    return static_cast<int32_t>(it - span.begin());
+  }
+
   [[nodiscard]] int32_t get_out_degree(taskid_t compute_task_id) const {
     return get_compute_task_dependencies(compute_task_id).size();
   }
@@ -1252,6 +1739,18 @@ public:
     auto &info = compute_task_data_info[id];
     return {compute_task_recent_writers.data() + info.s_read,
             compute_task_recent_writers.data() + info.e_read};
+  }
+
+  [[nodiscard]] std::span<const uint32_t> get_read_generations(taskid_t id) const {
+    auto &info = compute_task_data_info[id];
+    return {compute_task_read_generations.data() + info.s_read,
+            compute_task_read_generations.data() + info.e_read};
+  }
+
+  [[nodiscard]] std::span<const uint32_t> get_write_generations(taskid_t id) const {
+    auto &info = compute_task_data_info[id];
+    return {compute_task_write_generations.data() + info.s_write,
+            compute_task_write_generations.data() + info.e_write};
   }
 
   [[nodiscard]] const VariantList &get_variants(taskid_t id) const {
@@ -1313,11 +1812,11 @@ public:
   }
 
   [[nodiscard]] const dataid_t get_data_id(taskid_t id) const {
-    return data_task_static_info[id].data_id;
+    return data_task_data_id_cache[static_cast<std::size_t>(id)];
   }
 
   [[nodiscard]] const taskid_t get_compute_task(taskid_t id) const {
-    return data_task_static_info[id].compute_task;
+    return data_task_compute_task_cache[static_cast<std::size_t>(id)];
   }
 
   // Getters for static task info
@@ -1963,19 +2462,42 @@ public:
     auto &my_time_record = compute_task_time_records[compute_task_id];
     my_info.state = static_cast<uint8_t>(TaskState::COMPLETED);
     my_time_record.completed_time = time;
+    const auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
+    const auto dependent_count = static_cast<taskid_t>(my_dependents.size());
+    if (dependent_count == 0) {
+      if (!compute_task_buffer.empty()) {
+        compute_task_buffer.clear();
+      }
+      return 0;
+    }
+    if (dependent_count == 1) {
+      const auto dependent_id = my_dependents.front();
+      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      if (is_launchable) {
+        compute_task_buffer.resize(1);
+        compute_task_buffer[0] = dependent_id;
+        return 1;
+      }
+      if (!compute_task_buffer.empty()) {
+        compute_task_buffer.clear();
+      }
+      return 0;
+    }
     taskid_t write_idx = 0;
-
-    auto my_dependents = static_info.get_compute_task_dependents(compute_task_id);
     compute_task_buffer.resize(my_dependents.size());
 
     for (const auto &dependent_id : my_dependents) {
-      bool is_launchable = decrement_compute_task_incomplete(dependent_id);
-      compute_task_buffer[write_idx] = dependent_id;
-      write_idx += is_launchable ? 1 : 0;
+      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      if (is_launchable) {
+        compute_task_buffer[write_idx] = dependent_id;
+        write_idx += 1;
+      }
       SPDLOG_DEBUG("compute_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
                    dependent_id, is_launchable, write_idx);
     }
-    compute_task_buffer.resize(write_idx);
+    if (write_idx != dependent_count) {
+      compute_task_buffer.resize(write_idx);
+    }
 
     return write_idx;
   }
@@ -1984,21 +2506,45 @@ public:
                                          const StaticTaskInfo &static_info,
                                          TaskIDList &data_task_buffer) {
     auto &my_info = compute_task_runtime_info[compute_task_id];
-    taskid_t write_idx = 0;
 
     // state and time assumed to be updated by prior call to notify_completed
-    auto my_data_dependents = static_info.get_compute_task_data_dependents(compute_task_id);
+    const auto my_data_dependents = static_info.get_compute_task_data_dependents(compute_task_id);
+    const auto dependent_count = static_cast<taskid_t>(my_data_dependents.size());
+    if (dependent_count == 0) {
+      if (!data_task_buffer.empty()) {
+        data_task_buffer.clear();
+      }
+      return 0;
+    }
+    if (dependent_count == 1) {
+      const auto dependent_id = my_data_dependents.front();
+      const bool is_launchable = decrement_data_task_incomplete(dependent_id);
+      if (is_launchable) {
+        data_task_buffer.resize(1);
+        data_task_buffer[0] = dependent_id;
+        return 1;
+      }
+      if (!data_task_buffer.empty()) {
+        data_task_buffer.clear();
+      }
+      return 0;
+    }
+    taskid_t write_idx = 0;
     data_task_buffer.resize(my_data_dependents.size());
 
     for (const auto &dependent_id : my_data_dependents) {
-      bool is_launchable = decrement_data_task_incomplete(dependent_id);
-      data_task_buffer[write_idx] = dependent_id;
-      write_idx += is_launchable ? 1 : 0;
+      const bool is_launchable = decrement_data_task_incomplete(dependent_id);
+      if (is_launchable) {
+        data_task_buffer[write_idx] = dependent_id;
+        write_idx += 1;
+      }
       SPDLOG_DEBUG("compute_notify_data_completed: dependent_id: {}, is_launchable: {}, "
                    "write_idx: {}",
                    dependent_id, is_launchable, write_idx);
     }
-    data_task_buffer.resize(write_idx);
+    if (write_idx != dependent_count) {
+      data_task_buffer.resize(write_idx);
+    }
 
     return write_idx;
   }
@@ -2031,16 +2577,37 @@ public:
     taskid_t write_idx = 0;
 
     auto my_dependents = static_info.get_data_task_dependents(data_task_id);
+    if (my_dependents.empty()) {
+      compute_task_buffer.clear();
+      return 0;
+    }
+
+    if (my_dependents.size() == 1) {
+      const auto dependent_id = my_dependents.front();
+      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      if (is_launchable) {
+        compute_task_buffer.resize(1);
+        compute_task_buffer[0] = dependent_id;
+        return 1;
+      }
+      compute_task_buffer.clear();
+      return 0;
+    }
+
     compute_task_buffer.resize(my_dependents.size());
 
     for (const auto &dependent_id : my_dependents) {
-      bool is_launchable = decrement_compute_task_incomplete(dependent_id);
-      compute_task_buffer[write_idx] = dependent_id;
-      write_idx += is_launchable ? 1 : 0;
+      const bool is_launchable = decrement_compute_task_incomplete(dependent_id);
+      if (is_launchable) {
+        compute_task_buffer[write_idx] = dependent_id;
+        write_idx += 1;
+      }
       SPDLOG_DEBUG("data_notify_completed: dependent_id: {}, is_launchable: {}, write_idx: {}",
                    dependent_id, is_launchable, write_idx);
     }
-    compute_task_buffer.resize(write_idx);
+    if (write_idx != static_cast<taskid_t>(compute_task_buffer.size())) {
+      compute_task_buffer.resize(write_idx);
+    }
 
     return write_idx;
   }
