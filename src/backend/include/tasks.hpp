@@ -627,8 +627,6 @@ public:
   }
 
   void populate_data_dependencies(bool ensure_dependencies = false, bool create_data_tasks = true) {
-    // Dense vectors indexed by data_id — O(1) lookup with no hashing overhead.
-    // Enables auto-vectorization of the inner read/write loops.
     const std::size_t sz = (max_data_id >= 0) ? static_cast<std::size_t>(max_data_id) + 1 : 0;
     writers.assign(sz, taskid_t(-1));
     // Per-data generation split by writes.
@@ -636,12 +634,10 @@ public:
     // This makes all reads between two writes share one generation.
     std::vector<uint32_t> write_split_gen_vec(sz, 0);
 
-    // Iterate in a valid topological order
     for (auto task_id : sorted) {
 
       auto &task = tasks[task_id];
 
-      // Sort read set once; cache for reuse by StaticTaskInfo constructor and populate_unique_data.
       task.sorted_read_cache = as_sorted_vector(task.read);
       const auto &sorted_read = task.sorted_read_cache;
 
@@ -657,14 +653,12 @@ public:
         task.sorted_read_gen_cache.push_back(
             write_split_gen_vec[static_cast<std::size_t>(data_id)]);
 
-        // Create data tasks for all reads from current task.
         if (create_data_tasks) {
           create_data_task(task_id, data_id, has_writer, writer_id);
         }
       }
 
       if (ensure_dependencies) {
-        // Ensure that the compute task depends on all writers of the data it reads/writes/retires.
         for (const auto data_id : task.read) {
           const taskid_t w = writers[static_cast<std::size_t>(data_id)];
           if (w != taskid_t(-1)) {
@@ -688,14 +682,12 @@ public:
         }
       }
 
-      // Sort write set once; cache for reuse by StaticTaskInfo constructor and populate_unique_data.
       task.sorted_write_cache = as_sorted_vector(task.write);
       const auto &sorted_write = task.sorted_write_cache;
 
       task.sorted_write_gen_cache.clear();
       task.sorted_write_gen_cache.reserve(sorted_write.size());
 
-      // Writes split generations: each write advances the per-data epoch.
       for (const auto data_id : sorted_write) {
         const std::size_t idx = static_cast<std::size_t>(data_id);
         task.sorted_write_gen_cache.push_back(++write_split_gen_vec[idx]);
@@ -705,7 +697,6 @@ public:
   }
 
   void build_sorted_dependency_caches() {
-    // Build sorted caches for compute tasks.
     total_compute_dependencies_cached = 0;
     total_compute_dependents_cached = 0;
     total_compute_data_dependencies_cached = 0;
@@ -754,7 +745,6 @@ public:
     }
     finalized = true;
 
-    // Compute max_data_id first — required for dense-vector allocation in subsequent steps.
     max_data_id = -1;
     std::size_t total_read_count = 0;
     for (const auto &task : tasks) {
@@ -770,16 +760,12 @@ public:
     bfs();
     populate_depth();
 
-    // Reserve data_tasks to avoid repeated reallocations.
     if (create_data_tasks_flag) {
       data_tasks.reserve(total_read_count);
     }
 
     populate_data_dependencies(ensure_dependencies, create_data_tasks_flag);
-    // populate_unique_data uses sorted caches built by populate_data_dependencies above.
     populate_unique_data();
-    // Build sorted caches for deps/dependents/retire after all sets are fully populated.
-    // Also accumulates total counts used by StaticTaskInfo constructor.
     build_sorted_dependency_caches();
     // populate_data_dependents();
   }
@@ -829,7 +815,6 @@ struct ComputeTaskVariantInfo {
   std::array<Variant, num_device_types> variants{};
 };
 
-// Individual state bits — each flag is a distinct power-of-two bit.
 namespace StateBits {
 constexpr uint8_t SPAWNED   = 0x01;
 constexpr uint8_t MAPPED    = 0x02;
@@ -854,8 +839,7 @@ static_assert((StateBits::RESERVED & StateBits::LAUNCHED) == 0);
 static_assert((StateBits::RESERVED & StateBits::COMPLETED) == 0);
 static_assert((StateBits::LAUNCHED & StateBits::COMPLETED) == 0);
 
-// Cumulative state values stored in the SoA state arrays.
-// Each value ORs in all prior bits so "at least MAPPED" == (state & StateBits::MAPPED) != 0.
+
 namespace CumulativeState {
 constexpr uint8_t SPAWNED   = StateBits::SPAWNED;
 constexpr uint8_t MAPPED    = SPAWNED   | StateBits::MAPPED;    // 0x03
@@ -864,7 +848,6 @@ constexpr uint8_t LAUNCHED  = RESERVED  | StateBits::LAUNCHED;  // 0x0F
 constexpr uint8_t COMPLETED = LAUNCHED  | StateBits::COMPLETED; // 0x1F
 } // namespace CumulativeState
 
-// Readiness flags stored in compute.status — maintained incrementally as counters hit zero.
 namespace StatusBits {
 constexpr uint8_t MAPPABLE   = 0x01; // unmapped == 0 && state == SPAWNED
 constexpr uint8_t RESERVABLE = 0x02; // unreserved == 0 && state == MAPPED
@@ -934,9 +917,6 @@ protected:
            static_cast<uint64_t>(static_cast<uint32_t>(data_id));
   }
 
-  // Binary search on sorted CSR spans replaces hash-set membership index.
-  // No build_task_data_membership_index() needed.
-
 public:
   StaticTaskInfo(int32_t num_compute_tasks, int32_t num_data_tasks) {
     num_compute_tasks_ = num_compute_tasks;
@@ -1000,7 +980,6 @@ public:
 
     auto &tasks = graph.tasks;
     auto &data_tasks = graph.data_tasks;
-    // Fill slot [id+1] with span sizes, then prefix-sum in place.
     for (int32_t i = 0; i < num_compute_tasks; ++i) {
       const auto &task = tasks[static_cast<std::size_t>(i)];
       compute_task_dependencies.offsets[static_cast<std::size_t>(i) + 1] =
@@ -1125,14 +1104,12 @@ public:
   void build_usage_caches_and_shared_read_topology() {
     const auto n_compute_tasks = get_n_compute_tasks();
 
-    // Flat triple: (data_id, gen, task_id).
     struct DataGenTask {
       dataid_t data_id;
       uint32_t gen;
       taskid_t task_id;
     };
 
-    // Build flat arrays of triples from all tasks in one pass.
     std::vector<DataGenTask> read_triples;
     read_triples.reserve(compute_task_read.elements.size());
     std::vector<DataGenTask> write_triples;
@@ -1151,7 +1128,6 @@ public:
       }
     }
 
-    // Comparators for the two sort passes.
     auto by_data_task = [](const DataGenTask &a, const DataGenTask &b) {
       if (a.data_id != b.data_id) return a.data_id < b.data_id;
       return a.task_id < b.task_id;
@@ -1162,12 +1138,9 @@ public:
       return a.task_id < b.task_id;
     };
 
-    // Helper: compute max data_id across a sorted triples array (last element's data_id).
     auto max_data_id_in = [](const std::vector<DataGenTask> &triples) -> dataid_t {
       return triples.empty() ? dataid_t(-1) : triples.back().data_id;
     };
-
-    // ---- Build read usage CSRs (two-sort, no per-group allocations) ----
 
     read_usage_data_ids.clear();
     read_usage.offsets.clear();
@@ -1185,7 +1158,6 @@ public:
       // Pass 1: sort by (data_id, task_id) → primary CSR + shared pairs.
       std::sort(read_triples.begin(), read_triples.end(), by_data_task);
 
-      // Compute max read data_id and size dense row map accordingly.
       const dataid_t max_read_id = max_data_id_in(read_triples);
       read_usage_row_by_data_id.assign(static_cast<std::size_t>(max_read_id) + 1, -1);
       read_usage_data_ids.reserve(read_triples.size()); // upper bound
@@ -1205,7 +1177,6 @@ public:
         }
         read_usage.offsets.push_back(static_cast<int32_t>(read_usage.elements.size()));
 
-        // Collect shared-read pairs while triples are task_id-sorted.
         const auto n_readers = group_end - group_start;
         if (n_readers >= 2) {
           shared_pair_keys.reserve(shared_pair_keys.size() + ((n_readers * (n_readers - 1)) / 2));
@@ -1220,9 +1191,6 @@ public:
         group_start = group_end;
       }
 
-      // Pass 2: re-sort by (data_id, gen, task_id) → gen CSR.
-      // Group structure (data_id groups and their sizes) is unchanged; only internal order differs.
-      // No per-group allocation: just stream all re-sorted triples.
       std::sort(read_triples.begin(), read_triples.end(), by_data_gen_task);
       for (const auto &t : read_triples) {
         read_usage_by_gen_tasks.push_back(t.task_id);
@@ -1365,8 +1333,6 @@ public:
     //           << ", Time=" << time << std::endl;
   }
 
-  // Getters
-
   [[nodiscard]] int32_t get_n_compute_tasks() const {
     return num_compute_tasks_;
   }
@@ -1430,10 +1396,6 @@ public:
     if (row < 0) return {};
     return write_usage[row];
   }
-
-  // Secondary CSRs: same rows as the primary task-id-sorted CSRs above, but entries are
-  // sorted ascending by generation.  The parallel generations span is always co-indexed
-  // with the tasks span so callers can zip-iterate or binary-search on generation.
 
   [[nodiscard]] std::span<const taskid_t>
   get_tasks_reading_data_by_gen(dataid_t data_id) const {
@@ -1761,8 +1723,6 @@ public:
     n_data = other.n_data;
   }
 
-  // ── Bulk allocation ──────────────────────────────────────────
-
   void resize_compute(int32_t n) {
     compute.resize(n);
   }
@@ -1770,8 +1730,6 @@ public:
   void resize_data(int32_t n) {
     data.resize(n);
   }
-
-  // ── Initialization ───────────────────────────────────────────
 
   void initialize_compute_runtime(int32_t id, const StaticTaskInfo &static_info) {
     compute.state[id] = CumulativeState::SPAWNED;
@@ -1825,8 +1783,6 @@ public:
     return (compute.state[id] & StateBits::COMPLETED) != 0;
   }
 
-  // ── Status checks (precomputed — no counter reads) ──────────
-
   [[nodiscard]] bool is_compute_mappable(taskid_t id) const {
     return (compute.status[id] & StatusBits::MAPPABLE) != 0;
   }
@@ -1857,8 +1813,6 @@ public:
     return (eviction.flags[id] & 0x01) != 0;
   }
 
-  // ── Raw array access (for SIMD bulk operations) ─────────────
-
   [[nodiscard]] const uint8_t *compute_state_data() const { return compute.state.data(); }
   [[nodiscard]] const uint8_t *compute_status_data() const { return compute.status.data(); }
   [[nodiscard]] const int32_t *compute_mapped_device_data() const {
@@ -1867,8 +1821,6 @@ public:
   [[nodiscard]] uint8_t *compute_state_data() { return compute.state.data(); }
   [[nodiscard]] uint8_t *compute_status_data() { return compute.status.data(); }
   [[nodiscard]] int32_t *compute_mapped_device_data() { return compute.mapped_device.data(); }
-
-  // ── Getters ──────────────────────────────────────────────────
 
   [[nodiscard]] int32_t get_n_compute_tasks() const { return n_compute; }
   [[nodiscard]] int32_t get_n_data_tasks() const { return n_data; }
@@ -1947,7 +1899,6 @@ public:
     return eviction.source_device[id];
   }
 
-  // Time record getters
   [[nodiscard]] timecount_t get_compute_task_mapped_time(taskid_t id) const {
     return compute.mapped_time[id];
   }
@@ -2069,7 +2020,6 @@ public:
     eviction.flags[id] = v ? (eviction.flags[id] | 0x01) : (eviction.flags[id] & ~uint8_t{0x01});
   }
 
-  // Time recording
   void record_mapped(taskid_t id, timecount_t t) { compute.mapped_time[id] = t; }
   void record_reserved(taskid_t id, timecount_t t) { compute.reserved_time[id] = t; }
   void record_launched(taskid_t id, timecount_t t) { compute.launched_time[id] = t; }
@@ -2078,10 +2028,6 @@ public:
   void record_data_completed(taskid_t id, timecount_t t) { data.completed_time[id] = t; }
   void record_eviction_launched(taskid_t id, timecount_t t) { eviction.launched_time[id] = t; }
   void record_eviction_completed(taskid_t id, timecount_t t) { eviction.completed_time[id] = t; }
-
-  // ── Counter decrements with status maintenance ───────────────
-  // These update compute.status bits incrementally so callers never need
-  // to recompute readiness from scratch.
 
   bool decrement_compute_task_unmapped(taskid_t id) {
     auto &v = compute.unmapped[id];
@@ -2131,8 +2077,6 @@ public:
     }
     return false;
   }
-
-  // ── Notification methods ─────────────────────────────────────
 
   taskid_t compute_notify_mapped(taskid_t compute_task_id, devid_t mapped_device,
                                 int32_t reserve_priority, int32_t launch_priority,
