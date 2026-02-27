@@ -14,11 +14,14 @@
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
 #include "tasks.hpp"
+#include <bit>
 #include <cassert>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <random>
 #include <stack>
+#include <type_traits>
 #include <tracy/Tracy.hpp>
 #include <unordered_map>
 #include <unordered_set>
@@ -120,7 +123,7 @@ public:
   void push_reservable(taskid_t id, priority_t p, devid_t device) {
     reservable.push_priority_at(device, id, p);
     SPDLOG_DEBUG("Pushing reservable compute task {} with priority {} on device {} top {}", id, p,
-                 device, reservable[device].top_element().value);
+                 device, reservable[device].top());
   }
 
   void push_launchable(taskid_t id, priority_t p, devid_t device) {
@@ -133,7 +136,7 @@ public:
     data_launchable.push_priority_at(device, id, data_queue_count++);
     SPDLOG_DEBUG("Pushing launchable data task {} with priority {} on device {} data_queue_count "
                  "{} current_top {}",
-                 id, p, device, data_queue_count - 1, data_launchable[device].top_element().value);
+                 id, p, device, data_queue_count - 1, data_launchable[device].top());
   }
 
   void push_launchable_eviction(taskid_t id, priority_t p, devid_t device) {
@@ -158,7 +161,7 @@ public:
   }
 
   [[nodiscard]] bool has_active_reservable() const {
-    return reservable.total_active_size() > 0;
+    return reservable.has_active();
   }
 
   [[nodiscard]] bool has_reservable() const {
@@ -180,7 +183,7 @@ public:
   }
 
   [[nodiscard]] bool has_active_launchable() const {
-    return launchable.total_active_size() > 0;
+    return launchable.has_active();
   }
 
   [[nodiscard]] std::size_t n_data_launchable(devid_t device) const {
@@ -193,7 +196,7 @@ public:
   }
 
   [[nodiscard]] bool has_active_data_launchable() const {
-    return data_launchable.total_active_size() > 0;
+    return data_launchable.has_active();
   }
 
   [[nodiscard]] std::size_t n_eviction_launchable(devid_t device) const {
@@ -206,7 +209,7 @@ public:
   }
 
   [[nodiscard]] bool has_active_eviction_launchable() const {
-    return eviction_launchable.total_active_size() > 0;
+    return eviction_launchable.has_active();
   }
 
   [[nodiscard]] bool has_eviction_launchable() const {
@@ -1298,18 +1301,21 @@ protected:
 
   void fill_device_targets(taskid_t compute_task_id, const SchedulerState &state) {
     device_buffer.clear();
-    const auto &devices = state.get_devices();
-    const devid_t n_devices = devices.size();
-    const auto device_mask = state.get_tasks().get_supported_devices_mask(compute_task_id);
+    const std::size_t n_devices = state.get_devices().size();
+    auto device_mask = state.get_tasks().get_supported_devices_mask(compute_task_id);
 
-    SPDLOG_DEBUG("Filling device targets for task {} with mask {}", compute_task_id, device_mask);
-    for (devicemask_t i = 0; i < n_devices; ++i) {
-      const devicemask_t device_flag = 1 << i;
-      SPDLOG_DEBUG("Checking device {} with flag {}", i, device_flag);
-      if (device_mask & device_flag) {
-        SPDLOG_DEBUG("Device {}: supported", i);
-        device_buffer.push_back(static_cast<devid_t>(i));
-      }
+    using UMask = std::make_unsigned_t<devicemask_t>;
+    constexpr std::size_t mask_bits = std::numeric_limits<UMask>::digits;
+    auto mask = static_cast<UMask>(device_mask);
+    if (n_devices < mask_bits) {
+      const auto limit_mask = (UMask{1} << n_devices) - UMask{1};
+      mask &= limit_mask;
+    }
+
+    while (mask) {
+      const auto bit = static_cast<devid_t>(std::countr_zero(mask));
+      device_buffer.push_back(bit);
+      mask &= (mask - UMask{1});
     }
   }
 
@@ -1474,12 +1480,36 @@ class EFTMapper : public Mapper {
 protected:
   // Records the finish time by task id
   std::vector<timecount_t> finish_time_record;
-  // Stores the temporary EFT values for each device
-  std::vector<DeviceTime> finish_time_buffer;
+  // Records the max predecessor finish time for each task id
+  std::vector<timecount_t> max_dependency_finish_time;
+
+  void ensure_task_buffers_size(std::size_t n_tasks) {
+    if (finish_time_record.size() < n_tasks) {
+      finish_time_record.resize(n_tasks, 0);
+    }
+    if (max_dependency_finish_time.size() < n_tasks) {
+      max_dependency_finish_time.resize(n_tasks, 0);
+    }
+  }
+
+  void reset_task_buffers() {
+    std::fill(finish_time_record.begin(), finish_time_record.end(), 0);
+    std::fill(max_dependency_finish_time.begin(), max_dependency_finish_time.end(), 0);
+  }
+
+  [[nodiscard]] bool should_reset_for_new_run(const SchedulerState &state) const {
+    return state.get_global_time() == 0 && state.counts.n_mapped() == 0 &&
+           state.counts.n_reserved() == 0 && state.counts.n_launched() == 0 &&
+           state.counts.n_completed() == 0;
+  }
 
 public:
-  void record_finish_time(taskid_t task_id, timecount_t time) {
+  void record_finish_time(taskid_t task_id, timecount_t time, const SchedulerState &state) {
     finish_time_record[task_id] = time;
+    for (auto dependent_id : state.get_tasks().get_compute_task_dependents(task_id)) {
+      max_dependency_finish_time[dependent_id] =
+          std::max(max_dependency_finish_time[dependent_id], time);
+    }
   }
 
   timecount_t time_for_transfer(dataid_t data_id, devid_t destination,
@@ -1487,6 +1517,7 @@ public:
     auto &data_manager = state.get_data_manager();
     const auto &communication_manager = state.get_communication_manager();
     auto location_flags = data_manager.get_mapped_location_flags(data_id);
+
     const auto &topology = state.get_topology();
     const mem_t data_size = state.get_data().get_size(data_id);
     SourceRequest req =
@@ -1517,23 +1548,17 @@ public:
   }
 
   timecount_t get_dependency_finish_time(taskid_t compute_task_id, const SchedulerState &state) {
-    const auto dependencies = state.get_tasks().get_compute_task_dependencies(compute_task_id);
-
-    timecount_t max_time = 0;
-    for (auto dep_id : dependencies) {
-      timecount_t dep_time = finish_time_record[dep_id];
-      max_time = std::max(max_time, dep_time);
-    }
-
-    return max_time;
+    MONUnusedParameter(state);
+    return max_dependency_finish_time[compute_task_id];
   }
 
-  void fill_finish_time_buffer(taskid_t task_id, const SchedulerState &state) {
-    finish_time_buffer.clear();
-    finish_time_buffer.reserve(device_buffer.size());
+  DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
+    fill_device_targets(task_id, state);
+    assert(!device_buffer.empty());
+    const timecount_t dep_time = get_dependency_finish_time(task_id, state);
 
-    timecount_t dep_time = get_dependency_finish_time(task_id, state);
-
+    auto min_time = MAX_TIME;
+    auto best_device = device_buffer[0];
     for (auto device_id : device_buffer) {
       const timecount_t device_available = get_device_available_time(device_id, state);
       const timecount_t start_time = std::max(device_available, dep_time);
@@ -1541,22 +1566,8 @@ public:
       SPDLOG_DEBUG("Task {} on device {}: start_time = {}, finish_time = {}, dep_time = {}, "
                    "device_available = {}",
                    task_id, device_id, start_time, finish_time, dep_time, device_available);
-      finish_time_buffer.emplace_back(DeviceTime{device_id, finish_time});
-    }
-  }
-
-  DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
-    fill_finish_time_buffer(task_id, state);
-
-    auto min_time = finish_time_buffer[0].time;
-    auto best_device = finish_time_buffer[0].device_id;
-
-    for (int i = 0; i < finish_time_buffer.size(); ++i) {
-      const auto &[device_id, time] = finish_time_buffer[i];
-      SPDLOG_DEBUG("Device {}: finish time = {}", device_id, time);
-      const bool is_better = (time < min_time);
-      if (is_better) {
-        min_time = time;
+      if (finish_time < min_time) {
+        min_time = finish_time;
         best_device = device_id;
       }
     }
@@ -1568,21 +1579,21 @@ public:
 
   EFTMapper(const EFTMapper &other) = default;
 
-  EFTMapper(std::size_t n_tasks, std::size_t n_devices) : finish_time_record(n_tasks, 0) {
-    finish_time_buffer.reserve(n_devices);
-  }
+  EFTMapper(std::size_t n_tasks, std::size_t /*n_devices*/)
+      : finish_time_record(n_tasks, 0), max_dependency_finish_time(n_tasks, 0) {}
 
-  void initialize(std::size_t n_tasks, std::size_t n_devices) {
+  void initialize(std::size_t n_tasks, std::size_t /*n_devices*/) {
     finish_time_record = std::vector<timecount_t>(n_tasks, 0);
+    max_dependency_finish_time = std::vector<timecount_t>(n_tasks, 0);
   }
 
   Action map_task(taskid_t compute_task_id, const SchedulerState &state) override {
-    finish_time_record.resize(state.get_tasks().get_n_compute_tasks());
-    finish_time_buffer.reserve(state.get_devices().size());
-
-    fill_device_targets(compute_task_id, state);
+    ensure_task_buffers_size(static_cast<std::size_t>(state.get_tasks().get_n_compute_tasks()));
+    if (should_reset_for_new_run(state)) {
+      reset_task_buffers();
+    }
     auto [best_device, min_time] = get_best_device(compute_task_id, state);
-    record_finish_time(compute_task_id, min_time);
+    record_finish_time(compute_task_id, min_time, state);
     auto mp = state.get_mapping_priority(compute_task_id);
     return Action(0, best_device, mp, mp);
   }
@@ -1594,7 +1605,7 @@ class DequeueEFTMapper : public EFTMapper {
 
 public:
   timecount_t get_device_available_time(devid_t device_id, const SchedulerState &state) override {
-    return device_available_time_buffer.at(device_id);
+    return std::max(state.get_global_time(), device_available_time_buffer.at(device_id));
   }
 
   void set_device_available_time(devid_t device_id, timecount_t time) {
@@ -1616,13 +1627,18 @@ public:
 
   Action map_task(taskid_t compute_task_id, const SchedulerState &state) override {
     SPDLOG_DEBUG("Mapping compute task {} with DequeueEFTMapper", compute_task_id);
-    finish_time_record.resize(state.get_tasks().get_n_compute_tasks());
-    finish_time_buffer.reserve(state.get_devices().size());
-    device_available_time_buffer.resize(state.get_devices().size());
+    ensure_task_buffers_size(static_cast<std::size_t>(state.get_tasks().get_n_compute_tasks()));
+    if (should_reset_for_new_run(state)) {
+      reset_task_buffers();
+      std::fill(device_available_time_buffer.begin(), device_available_time_buffer.end(),
+                state.get_global_time());
+    }
+    if (device_available_time_buffer.size() < state.get_devices().size()) {
+      device_available_time_buffer.resize(state.get_devices().size(), state.get_global_time());
+    }
 
-    fill_device_targets(compute_task_id, state);
     auto [best_device, min_time] = get_best_device(compute_task_id, state);
-    record_finish_time(compute_task_id, min_time);
+    record_finish_time(compute_task_id, min_time, state);
     set_device_available_time(best_device, min_time);
     const auto mp = state.get_mapping_priority(compute_task_id);
     return Action(0, best_device, mp, mp);

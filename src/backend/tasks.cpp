@@ -1,9 +1,12 @@
 #include "tasks.hpp"
 #include "devices.hpp"
+#include <limits>
+#include <type_traits>
 
 devicemask_t StaticTaskInfo::get_supported_devices_mask(taskid_t compute_task_id) const {
   devicemask_t mask = 0;
-  const devid_t n_devices = 5;
+  using UMask = std::make_unsigned_t<devicemask_t>;
+  constexpr devid_t n_devices = static_cast<devid_t>(std::numeric_limits<UMask>::digits);
 
   auto arch_mask = get_supported_architecture_mask(compute_task_id);
   SPDLOG_DEBUG("Getting supported devices mask for task {} with arch mask: {}", compute_task_id,
@@ -14,7 +17,7 @@ devicemask_t StaticTaskInfo::get_supported_devices_mask(taskid_t compute_task_id
     SPDLOG_DEBUG("Checking device {} with arch type {}", i, arch_type);
     if ((arch_mask & arch_type) != 0) {
       SPDLOG_DEBUG("Device {} is supported for task {}", i, compute_task_id);
-      mask |= (1 << i);
+      mask |= static_cast<devicemask_t>(UMask{1} << i);
     }
   }
   SPDLOG_DEBUG("Supported devices mask for task {}: {}", compute_task_id, static_cast<int>(mask));

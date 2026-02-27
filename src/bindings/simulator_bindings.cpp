@@ -54,6 +54,7 @@ void init_simulator_ext(nb::module_ &m) {
       .def("initialize", &Simulator::initialize, "create_data_tasks"_a = true,
            "initialize_data_manager"_a = false)
       .def("set_steps", &Simulator::set_steps, "steps"_a)
+      .def("set_mapper_boundary_steps", &Simulator::set_mapper_boundary_steps, "boundaries"_a)
       .def("start_drain", &Simulator::start_drain)
       .def("stop_drain", &Simulator::stop_drain)
       .def("initialize_data", &Simulator::initialize_data_manager)

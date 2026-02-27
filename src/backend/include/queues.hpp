@@ -2,8 +2,10 @@
 #include "settings.hpp"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iomanip>
@@ -70,56 +72,83 @@ private:
 
 public:
   ResizeableArray() = default;
-  T &at(std::size_t index) {
-    return arr[index];
-  }
-  T &operator[](int index) {
-    return arr[index];
-  }
-  void remove_at(int index);
-  void erase(T *it);
-  void insert(T *it, T val);
-  void insert_at(int index, T val);
-  void push_back(T val) {
-    arr[l++] = val;
-  }
-  void pop_back() {
+
+  T &at(std::size_t index) { return arr[index]; }
+  T &operator[](int index) { return arr[index]; }
+
+  void remove_at(int index) {
+    assert(index >= 0 && index < static_cast<int>(l));
+    std::move(arr.begin() + index + 1, arr.begin() + l, arr.begin() + index);
     l--;
   }
-  [[nodiscard]] std::size_t size() const {
-    return l;
+
+  void erase(T *it) {
+    assert(it >= arr.data() && it < arr.data() + l);
+    std::move(it + 1, arr.data() + l, it);
+    l--;
   }
-  void pop_front();
-  void push_front(T val);
-  [[nodiscard]] const T &front() const {
-    return arr[0];
+
+  void insert(T *it, T val) {
+    assert(l < s);
+    std::move_backward(it, arr.data() + l, arr.data() + l + 1);
+    *it = std::move(val);
+    l++;
   }
-  [[nodiscard]] const T &back() const {
-    return arr[l - 1];
+
+  void insert_at(int index, T val) {
+    assert(l < s);
+    assert(index >= 0 && index <= static_cast<int>(l));
+    std::move_backward(arr.begin() + index, arr.begin() + l, arr.begin() + l + 1);
+    arr[index] = std::move(val);
+    l++;
   }
-  T &front() {
-    return arr[0];
+
+  void push_back(T val) {
+    assert(l < s);
+    arr[l++] = std::move(val);
   }
-  T &back() {
-    return arr[l - 1];
+
+  void pop_back() {
+    assert(l > 0);
+    l--;
   }
-  T *begin() {
-    return arr.begin();
+
+  [[nodiscard]] std::size_t size() const noexcept { return l; }
+
+  void pop_front() {
+    assert(l > 0);
+    std::move(arr.begin() + 1, arr.begin() + l, arr.begin());
+    l--;
   }
-  T *end() {
-    return arr.begin() + l;
+
+  void push_front(T val) {
+    assert(l < s);
+    std::move_backward(arr.begin(), arr.begin() + l, arr.begin() + l + 1);
+    arr[0] = std::move(val);
+    l++;
   }
-  [[nodiscard]] bool empty() const {
-    return l == 0;
-  }
+
+  [[nodiscard]] const T &front() const { return arr[0]; }
+  [[nodiscard]] const T &back() const { return arr[l - 1]; }
+  T &front() { return arr[0]; }
+  T &back() { return arr[l - 1]; }
+  T *begin() { return arr.data(); }
+  T *end() { return arr.data() + l; }
+  const T *begin() const { return arr.data(); }
+  const T *end() const { return arr.data() + l; }
+
+  [[nodiscard]] bool empty() const noexcept { return l == 0; }
 };
 
 template <typename T> struct Element {
   T value;
   int priority;
 
+  Element() = default;
+  Element(T v, int p) : value(std::move(v)), priority(p) {}
+  explicit Element(T v) : value(std::move(v)), priority(0) {}
+
   bool operator<(const Element &other) const {
-    // Prioritize by lower memory, then by lower priority, then by lower value
     if (priority == other.priority) {
       return value > other.value;
     }
@@ -127,36 +156,91 @@ template <typename T> struct Element {
   }
 };
 
-template <typename T> inline Element<T> make_element(T value, int priority) {
-  return Element{value, priority};
+template <typename T> struct PackedElement {
+  static_assert(sizeof(T) <= 4, "T must be 32-bit or smaller to pack");
+
+  uint64_t key{};
+
+  PackedElement() = default;
+  PackedElement(T v, int p) {
+    uint32_t u_val;
+    if constexpr (std::is_integral_v<T> && std::is_signed_v<T>) {
+      u_val = static_cast<uint32_t>(v) ^ 0x80000000u;
+    } else if constexpr (std::is_same_v<T, float>) {
+      u_val = std::bit_cast<uint32_t>(v);
+      if (u_val & 0x80000000u) u_val = ~u_val;
+      else u_val |= 0x80000000u;
+    } else {
+      u_val = static_cast<uint32_t>(v);
+    }
+    key = (static_cast<uint64_t>(static_cast<uint32_t>(p)) << 32) | u_val;
+  }
+
+  [[nodiscard]] T value() const {
+    uint32_t u_val = static_cast<uint32_t>(key & 0xFFFFFFFFu);
+    if constexpr (std::is_integral_v<T> && std::is_signed_v<T>) {
+      return static_cast<T>(u_val ^ 0x80000000u);
+    } else if constexpr (std::is_same_v<T, float>) {
+      if (u_val & 0x80000000u) u_val &= ~0x80000000u;
+      else u_val = ~u_val;
+      return std::bit_cast<float>(u_val);
+    } else {
+      return static_cast<T>(u_val);
+    }
+  }
+
+  [[nodiscard]] int priority() const {
+    return static_cast<int>(static_cast<uint32_t>(key >> 32));
+  }
+
+  bool operator<(const PackedElement &other) const { return key < other.key; }
+  bool operator==(const PackedElement &other) const { return key == other.key; }
+};
+
+template <typename T>
+using OptimalElement =
+    std::conditional_t<(sizeof(T) <= 4), PackedElement<T>, Element<T>>;
+
+template <typename T> [[nodiscard]] inline const T &element_value(const Element<T> &e) {
+  return e.value;
+}
+template <typename T> [[nodiscard]] inline T element_value(const PackedElement<T> &e) {
+  return e.value();
 }
 
-template <typename T> inline Element<T> make_element(T value) {
-  return Element{value, 0};
+template <typename T> [[nodiscard]] inline int element_priority(const Element<T> &e) {
+  return e.priority;
+}
+template <typename T> [[nodiscard]] inline int element_priority(const PackedElement<T> &e) {
+  return e.priority();
 }
 
-// TODO(wlr): Add support for emplace instead of push to avoid making temporary
-// Elements in ContainerQueue
+template <typename T> inline OptimalElement<T> make_element(T value, int priority) {
+  return OptimalElement<T>{std::move(value), priority};
+}
+
+template <typename T> inline OptimalElement<T> make_element(T value) {
+  return OptimalElement<T>{std::move(value), 0};
+}
 
 template <typename T, template <typename...> class Queue = std::priority_queue,
           typename Compare = std::less<T>>
 class ContainerQueue {
 private:
+  using StoredElement = OptimalElement<T>;
+
   struct ElementCompare {
-    Compare value_compare;
-    bool operator()(const Element<T> &lhs, const Element<T> &rhs) const {
-      // if(lhs.priority != rhs.priority) {
-      //   return lhs.priority < rhs.priority;
-      // }
-      // return value_compare(lhs.value, rhs.value);
-      if (lhs.value == rhs.value) {
-        return value_compare(rhs.priority, lhs.priority);
-      }
-      return value_compare(rhs.value, lhs.value);
+    [[no_unique_address]] Compare value_compare;
+    bool operator()(const StoredElement &lhs, const StoredElement &rhs) const {
+      const auto lhs_val = element_value(lhs);
+      const auto rhs_val = element_value(rhs);
+      if (value_compare(rhs_val, lhs_val)) return true;
+      if (value_compare(lhs_val, rhs_val)) return false;
+      return element_priority(lhs) > element_priority(rhs);
     }
   };
 
-  using QueueType = Queue<Element<T>, std::vector<Element<T>>, ElementCompare>;
+  using QueueType = Queue<StoredElement, std::vector<StoredElement>, ElementCompare>;
   static_assert(PriorityQueueConcept<QueueType>, "Queue must satisfy PriorityQueueConcept");
 
   unsigned long seed = 0;
@@ -166,91 +250,118 @@ private:
 
 public:
   using value_type = T;
-  using element_type = Element<T>;
+  using element_type = StoredElement;
   using value_compare = Compare;
   using element_compare = ElementCompare;
 
-  // Conditionally define ContainerQueue::K if QueueType::K exists to satify
-  // is_top_k_queue if QueueType is a TopKQueue
-  template <typename QT = QueueType>
-    requires HasStaticK<QT>
+  template <typename QT = QueueType> requires HasStaticK<QT>
   static constexpr int K = QT::K;
 
-  ContainerQueue() : dist(MIN_PRIORITY, MAX_PRIORITY) {
-  }
-  ContainerQueue(unsigned long seed) : gen(seed), dist(MIN_PRIORITY, MAX_PRIORITY) {
-  }
-  ContainerQueue(int min, int max) : gen(0), dist(min, max) {
-  }
-  ContainerQueue(unsigned long seed, int min, int max) : gen(seed), dist(min, max) {
+  ContainerQueue() : dist(MIN_PRIORITY, MAX_PRIORITY) {}
+  explicit ContainerQueue(unsigned long seed) : gen(seed), dist(MIN_PRIORITY, MAX_PRIORITY) {}
+  ContainerQueue(int min, int max) : gen(0), dist(min, max) {}
+  ContainerQueue(unsigned long seed, int min, int max) : gen(seed), dist(min, max) {}
+
+  template <typename... Args> void emplace(Args &&...args) {
+    if constexpr (requires(QueueType &q) { q.emplace(std::forward<Args>(args)...); }) {
+      pq.emplace(std::forward<Args>(args)...);
+    } else {
+      pq.push(element_type{std::forward<Args>(args)...});
+    }
   }
 
-  void push(T value) {
-    pq.push(make_element(value));
-  }
+  void push(T value) { emplace(std::move(value), 0); }
+
   void push(T value, priority_t priority) {
-    pq.push(make_element(value, priority));
+    emplace(std::move(value), static_cast<int>(priority));
   }
-  void push(Element<T> element) {
-    pq.push(element);
+
+  void push(element_type element) { pq.push(std::move(element)); }
+  void push_random(T value) { emplace(std::move(value), dist(gen)); }
+
+  [[nodiscard]] T top() const { return element_value(pq.top()); }
+  [[nodiscard]] const element_type &top_element() const { return pq.top(); }
+  element_type &top_element() { return const_cast<element_type &>(std::as_const(*this).top_element()); }
+
+  void pop() { pq.pop(); }
+  
+  [[nodiscard]] bool empty() const noexcept { return pq.empty(); }
+  [[nodiscard]] std::size_t size() const noexcept { return pq.size(); }
+
+  static consteval int get_k() {
+    if constexpr (HasStaticK<QueueType>) return QueueType::K;
+    else return 1;
   }
-  void push_random(T value) {
-    pq.push(make_element(value, dist(gen)));
+
+  int k() const {
+    if constexpr (HasStaticK<QueueType>) return QueueType::K;
+    else if constexpr (HasTopKInterface<QueueType>) return const_cast<QueueType &>(pq).get_k();
+    else return 1;
   }
-  [[nodiscard]] const T &top() const {
-    return pq.top().value;
+
+  int topk_size() {
+    if constexpr (TopKLike<QueueType>) return static_cast<int>(pq.topk_size());
+    else return 1;
   }
-  const T &top() {
-    return const_cast<T &>(std::as_const(*this).top());
+
+  static consteval bool is_top_k() { return TopKLike<QueueType>; }
+
+  T &at(std::size_t i) {
+    if constexpr (TopKLike<QueueType>) return pq.at(i);
+    else throw std::out_of_range("at() called on a non-top-k queue");
   }
-  [[nodiscard]] const Element<T> &top_element() const {
-    return pq.top();
-  };
-  const Element<T> &top_element() {
-    return const_cast<Element<T> &>(std::as_const(*this).top_element());
-  };
-  void pop() {
-    pq.pop();
+
+  void remove_at(std::size_t i) {
+    if constexpr (TopKLike<QueueType>) pq.remove_at(i);
+    else throw std::out_of_range("remove_at() called on a non-top-k queue");
   }
-  [[nodiscard]] bool empty() const {
-    return pq.empty();
+
+  void remove(std::vector<std::size_t> &indices) {
+    if constexpr (TopKLike<QueueType>) pq.remove(indices);
+    else throw std::out_of_range("remove() called on a non-top-k queue");
   }
-  [[nodiscard]] std::size_t size() const {
-    return pq.size();
+
+  auto get_top_k_elements() {
+    if constexpr (TopKLike<QueueType>) return pq.get_top_k();
+    else return std::vector<element_type>{this->top_element()};
   }
-  static consteval int get_k();
-  int k() const;
-  int topk_size();
-  static consteval bool is_top_k() {
-    return TopKLike<QueueType>;
+
+  std::vector<T> get_top_k() {
+    std::vector<T> top_k_values;
+    if constexpr (TopKLike<QueueType>) {
+      auto &top_k_ref = pq.get_top_k();
+      top_k_values.reserve(top_k_ref.size());
+      for (const auto &elem : top_k_ref) {
+        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(elem)>, element_type>) {
+          top_k_values.push_back(element_value(elem));
+        } else top_k_values.push_back(elem);
+      }
+    } else {
+      top_k_values.push_back(this->top());
+    }
+    return top_k_values;
   }
-  T &at(std::size_t i);
-  void remove_at(std::size_t i);
-  void remove(std::vector<std::size_t> &indices);
-  auto get_top_k_elements();
-  std::vector<T> get_top_k();
-  void set_k(int k);
+
+  void set_k(int k_val) {
+    if constexpr (HasDynamicK<QueueType>) pq.set_k(k_val);
+    else (void)k_val;
+  }
 };
 
-static_assert(QueueConcept<ContainerQueue<int, std::priority_queue>>,
-              "Queue must satisfy QueueConcept");
+static_assert(QueueConcept<ContainerQueue<int, std::priority_queue>>, "Queue must satisfy QueueConcept");
 
 template <typename T, int k = 3, typename Container = std::vector<T>,
           typename Compare = std::less<T>>
 class TopKQueue {
 private:
-  // ResizeableArray<T, k> top_k;
   std::vector<T> top_k;
   std::priority_queue<T, Container, Compare> remaining_min_heap;
-  Compare cmp;
-  std::function<bool(const T &, const T &)> r_cmp;
+  [[no_unique_address]] Compare cmp{};
 
-  void insert_top_k(const T &val);
-  void push_front(const T &val) {
-    top_k.insert(top_k.begin(), val);
-  }
-  void pop_front() {
-    top_k.erase(top_k.begin());
+  void insert_top_k(T val) {
+    auto it = std::lower_bound(top_k.begin(), top_k.end(), val, 
+                               [this](const T &a, const T &b) { return cmp(b, a); });
+    top_k.insert(it, std::move(val));
   }
 
 public:
@@ -258,40 +369,74 @@ public:
   using value_compare = Compare;
   static constexpr int K = k;
 
-  TopKQueue() : r_cmp([this](const T &a, const T &b) { return cmp(b, a); }) {
+  TopKQueue() = default;
+
+  [[nodiscard]] value_compare value_comp() const { return cmp; }
+
+  void push(T val) {
+    if (top_k.size() < k) {
+      insert_top_k(std::move(val));
+    } else {
+      if (cmp(val, top_k.back())) {
+        remaining_min_heap.push(std::move(val));
+      } else {
+        remaining_min_heap.push(std::move(top_k.back()));
+        top_k.pop_back();
+        insert_top_k(std::move(val));
+      }
+    }
   }
 
-  [[nodiscard]] value_compare value_comp() const {
-    return Compare{};
-  }
-  void push(const T &val);
-  void pop();
-  [[nodiscard]] const T &top() const;
-  T &top() {
-    return const_cast<T &>(std::as_const(*this).top());
-  }
-  T &at(std::size_t i);
-  void remove_at(std::size_t i);
-  [[nodiscard]] bool empty() const {
-    return top_k.empty();
-  }
-  [[nodiscard]] std::size_t size() const {
-    return top_k.size() + remaining_min_heap.size();
-  }
-  auto &get_top_k() {
-    return top_k;
-  }
-  std::size_t topk_size() {
-    return top_k.size();
-  }
-  static consteval int get_k() {
-    return K;
-  }
-  static consteval bool is_top_k() {
-    return true;
+  void pop() {
+    assert(!top_k.empty() && "pop() called on an empty queue");
+    top_k.erase(top_k.begin());
+
+    if (!remaining_min_heap.empty()) {
+      T v = remaining_min_heap.top();
+      remaining_min_heap.pop();
+      top_k.push_back(std::move(v));
+    }
   }
 
-  void remove(std::vector<std::size_t> &indices);
+  [[nodiscard]] const T &top() const {
+    assert(!top_k.empty() && "top() called on an empty queue");
+    return top_k.front();
+  }
+  
+  T &top() { return const_cast<T &>(std::as_const(*this).top()); }
+
+  T &at(std::size_t i) {
+    assert(i < top_k.size() && "at() index out of range");
+    return top_k[i];
+  }
+
+  void remove_at(std::size_t i) {
+    assert(i < top_k.size() && "remove_at() index out of range");
+    top_k.erase(top_k.begin() + i);
+
+    if (!remaining_min_heap.empty()) {
+      T v = remaining_min_heap.top();
+      remaining_min_heap.pop();
+      top_k.push_back(std::move(v));
+    }
+  }
+
+  void remove(std::vector<std::size_t> &indices) {
+    std::sort(indices.begin(), indices.end(), std::greater<>());
+    for (auto i : indices) {
+      remove_at(i);
+    }
+  }
+
+  [[nodiscard]] bool empty() const noexcept { return top_k.empty(); }
+  [[nodiscard]] std::size_t size() const noexcept { return top_k.size() + remaining_min_heap.size(); }
+  
+  auto &get_top_k() { return top_k; }
+  const auto &get_top_k() const { return top_k; }
+  
+  std::size_t topk_size() const noexcept { return top_k.size(); }
+  static consteval int get_k() { return K; }
+  static consteval bool is_top_k() { return true; }
 };
 
 static_assert(QueueConcept<TopKQueue<int, 3>>, "Queue must satisfy QueueConcept");
@@ -301,32 +446,24 @@ class DynamicTopKQueue {
 private:
   std::vector<T> top_k;
   std::priority_queue<T, Container, Compare> remaining_min_heap;
-  Compare cmp{};
-  std::function<bool(const T &, const T &)> r_cmp;
+  [[no_unique_address]] Compare cmp{};
   int K_ = 1;
 
-  void insert_top_k(const T &val) {
-    auto it = std::lower_bound(top_k.begin(), top_k.end(), val, r_cmp);
-    top_k.insert(it, val);
-  }
-
-  void push_front(const T &val) {
-    top_k.insert(top_k.begin(), val);
-  }
-
-  void pop_front() {
-    top_k.erase(top_k.begin());
+  void insert_top_k(T val) {
+    auto it = std::lower_bound(top_k.begin(), top_k.end(), val, 
+                               [this](const T &a, const T &b) { return cmp(b, a); });
+    top_k.insert(it, std::move(val));
   }
 
   void rebalance() {
     while (static_cast<int>(top_k.size()) > K_) {
-      remaining_min_heap.push(top_k.back());
+      remaining_min_heap.push(std::move(top_k.back()));
       top_k.pop_back();
     }
     while (static_cast<int>(top_k.size()) < K_ && !remaining_min_heap.empty()) {
       T v = remaining_min_heap.top();
       remaining_min_heap.pop();
-      insert_top_k(v);
+      top_k.push_back(std::move(v));
     }
   }
 
@@ -335,39 +472,34 @@ public:
   using value_compare = Compare;
   using topk_tag = void;
 
-  DynamicTopKQueue() : r_cmp([this](const T &a, const T &b) { return cmp(b, a); }) {
-  }
+  DynamicTopKQueue() = default;
 
   explicit DynamicTopKQueue(int k, Compare c = Compare{})
-      : cmp(std::move(c)), r_cmp([this](const T &a, const T &b) { return cmp(b, a); }),
-        K_(std::max(1, k)) {
-  }
+      : cmp(std::move(c)), K_(std::max(1, k)) {}
 
-  [[nodiscard]] value_compare value_comp() const {
-    return cmp;
-  }
+  [[nodiscard]] value_compare value_comp() const { return cmp; }
 
-  void push(const T &val) {
+  void push(T val) {
     if (static_cast<int>(top_k.size()) < K_) {
-      insert_top_k(val);
+      insert_top_k(std::move(val));
     } else {
-      if (cmp(val, top_k.back())) { // worse than window's worst
-        remaining_min_heap.push(val);
+      if (cmp(val, top_k.back())) {
+        remaining_min_heap.push(std::move(val));
       } else {
-        remaining_min_heap.push(top_k.back());
+        remaining_min_heap.push(std::move(top_k.back()));
         top_k.pop_back();
-        insert_top_k(val);
+        insert_top_k(std::move(val));
       }
     }
   }
 
   void pop() {
     assert(!top_k.empty() && "pop() called on an empty DynamicTopKQueue");
-    pop_front();
+    top_k.erase(top_k.begin());
     if (!remaining_min_heap.empty()) {
       T v = remaining_min_heap.top();
       remaining_min_heap.pop();
-      insert_top_k(v);
+      top_k.push_back(std::move(v));
     }
   }
 
@@ -375,9 +507,8 @@ public:
     assert(!top_k.empty() && "top() called on an empty DynamicTopKQueue");
     return top_k.front();
   }
-  T &top() {
-    return const_cast<T &>(std::as_const(*this).top());
-  }
+  
+  T &top() { return const_cast<T &>(std::as_const(*this).top()); }
 
   T &at(std::size_t i) {
     assert(i < top_k.size() && "at() index out of range");
@@ -390,32 +521,26 @@ public:
     if (!remaining_min_heap.empty()) {
       T v = remaining_min_heap.top();
       remaining_min_heap.pop();
-      insert_top_k(v);
+      top_k.push_back(std::move(v));
     }
   }
 
   void remove(std::vector<std::size_t> &indices) {
     std::sort(indices.begin(), indices.end(), std::greater<>());
-    for (auto i : indices)
+    for (auto i : indices) {
       remove_at(i);
+    }
   }
 
-  [[nodiscard]] bool empty() const {
-    return top_k.empty();
-  }
-  [[nodiscard]] std::size_t size() const {
-    return top_k.size() + remaining_min_heap.size();
-  }
-  auto &get_top_k() {
-    return top_k;
-  }
-  std::size_t topk_size() {
-    return top_k.size();
-  }
-
-  int get_k() const {
-    return K_;
-  }
+  [[nodiscard]] bool empty() const noexcept { return top_k.empty(); }
+  [[nodiscard]] std::size_t size() const noexcept { return top_k.size() + remaining_min_heap.size(); }
+  
+  auto &get_top_k() { return top_k; }
+  const auto &get_top_k() const { return top_k; }
+  
+  std::size_t topk_size() const noexcept { return top_k.size(); }
+  
+  int get_k() const noexcept { return K_; }
   void set_k(int k) {
     K_ = std::max(1, k);
     rebalance();
@@ -433,265 +558,46 @@ static_assert(QueueConcept<ContainerQueue<int, DynamicTopKQueue>>,
               "ContainerQueue of DynamicTopKQueue must satisfy QueueConcept");
 
 static_assert(TopKLike<TopKQueue<int, 3>>, "TopKQueue must satisfy is_topk_queue");
-
 static_assert(TopKLike<TopKQueueHelper<3>::queue_type<int>>);
 
 static_assert(QueueConcept<ContainerQueue<int, TopKQueueHelper<3>::queue_type>>,
               "ContainerQueue of TopKQueue must satisfy QueueConcept");
-static_assert(QueueConcept<ContainerQueue<int, DynamicTopKQueue>>,
-              "ContainerQueue of DynamicTopKQueue must satisfy QueueConcept");
 
 using Top3Queue = TopKQueue<int, 3>;
 using Top10Queue = TopKQueue<int, 10>;
 
-template <typename T, int S> void print(TopKQueue<T, S> &q);
-template <QueueConcept Q> std::vector<typename Q::value_type> as_vector(Q &q);
-template <WrappedQueueConcept Q> std::vector<typename Q::element_type> as_vector(Q &q);
 template <WrappedQueueConcept Q> void print_table(Q &q);
 
-template <typename T, int s> void ResizeableArray<T, s>::remove_at(int index) {
-  for (int i = index; i < l - 1; i++) {
-    assert(i + 1 < s);
-    arr[i] = arr[i + 1];
-  }
-  l--;
-}
-
-template <typename T, int s> void ResizeableArray<T, s>::erase(T *it) {
-  for (T *i = it; i != arr.begin() + l - 1; i++) {
-    // check in bounds
-    assert(i + 1 < arr.end());
-    *i = *(i + 1);
-  }
-  l--;
-}
-
-template <typename T, int s> void ResizeableArray<T, s>::insert(T *it, T val) {
-  for (T *i = arr.begin() + l - 1; i >= it; i--) {
-    // check in bounds
-    assert(i + 1 < arr.end());
-    *(i + 1) = *i;
-  }
-  *it = val;
-  l++;
-}
-
-template <typename T, int s> void ResizeableArray<T, s>::insert_at(int index, T val) {
-  for (int i = l - 1; i >= index; i--) {
-    assert(i + 1 < s);
-    arr[i + 1] = arr[i];
-  }
-  arr[index] = val;
-  l++;
-}
-
-template <typename T, int s> void ResizeableArray<T, s>::pop_front() {
-  for (int i = 0; i < l - 1; i++) {
-    assert(i + 1 < s);
-    arr[i] = arr[i + 1];
-  }
-  l--;
-}
-
-template <typename T, int s> void ResizeableArray<T, s>::push_front(T val) {
-  for (int i = l - 1; i >= 0; i--) {
-    assert(i + 1 < s);
-    arr[i + 1] = arr[i];
-  }
-  arr[0] = val;
-  l++;
-}
-
-template <typename T, template <typename...> class Queue, typename Compare>
-consteval int ContainerQueue<T, Queue, Compare>::get_k() {
-  if constexpr (HasStaticK<QueueType>) {
-    return QueueType::K;
-  } else {
-    return 1;
-  }
-}
-
-template <typename T, template <typename...> class Queue, typename Compare>
-int ContainerQueue<T, Queue, Compare>::k() const {
-  if constexpr (HasStaticK<QueueType>) {
-    return QueueType::K;
-  } else if constexpr (HasTopKInterface<QueueType>) {
-    // pq may have only non-const get_k()
-    return const_cast<QueueType &>(pq).get_k();
-  } else {
-    return 1;
-  }
-}
-
-template <typename T, template <typename...> class Queue, typename Compare>
-void ContainerQueue<T, Queue, Compare>::remove(std::vector<std::size_t> &indices) {
-  if constexpr (TopKLike<QueueType>) {
-    pq.remove(indices);
-  } else {
-    throw std::out_of_range("remove() called on a non-top-k queue");
-  }
-}
-
-template <typename T, template <typename...> class Queue, typename Compare>
-int ContainerQueue<T, Queue, Compare>::topk_size() {
-  if constexpr (TopKLike<QueueType>) {
-    return static_cast<int>(pq.topk_size());
-  } else {
-    return 1;
-  }
-}
-template <typename T, template <typename...> class Queue, typename Compare>
-T &ContainerQueue<T, Queue, Compare>::at(std::size_t i) {
-  if constexpr (TopKLike<QueueType>) {
-    return pq.at(i);
-  } else {
-    throw std::out_of_range("at() called on a non-top-k queue");
-  }
-}
-template <typename T, template <typename...> class Queue, typename Compare>
-void ContainerQueue<T, Queue, Compare>::remove_at(std::size_t i) {
-  if constexpr (TopKLike<QueueType>) {
-    pq.remove_at(i);
-  } else {
-    throw std::out_of_range("remove_at() called on a non-top-k queue");
-  }
-}
-template <typename T, template <typename...> class Queue, typename Compare>
-auto ContainerQueue<T, Queue, Compare>::get_top_k_elements() {
-  if constexpr (TopKLike<QueueType>) {
-    return pq.get_top_k();
-  } else {
-    return std::vector<typename ContainerQueue::element_type>{this->top_element()};
-  }
-}
-
-template <typename T, template <typename...> class Queue, typename Compare>
-std::vector<T> ContainerQueue<T, Queue, Compare>::get_top_k() {
-  std::vector<T> top_k_values;
-  if constexpr (TopKLike<QueueType>) {
-    auto &top_k = pq.get_top_k();
-    for (auto it = top_k.begin(); it != top_k.end(); ++it) {
-      if constexpr (std::is_same_v<std::remove_cvref_t<decltype(*it)>, Element<T>>) {
-        top_k_values.push_back(it->value);
-      } else {
-        top_k_values.push_back(*it);
-      }
-    }
-  } else {
-    return std::vector<T>{this->top()};
-  }
-  return top_k_values;
-}
-
-template <typename T, int k, typename Container, typename Compare>
-void TopKQueue<T, k, Container, Compare>::insert_top_k(const T &val) {
-  auto it = std::lower_bound(top_k.begin(), top_k.end(), val, r_cmp);
-  top_k.insert(it, val);
-}
-
-template <typename T, int k, typename Container, typename Compare>
-void TopKQueue<T, k, Container, Compare>::push(const T &val) {
-  if (top_k.size() < k) {
-    insert_top_k(val);
-  } else {
-    if (cmp(val, top_k.back())) {
-      remaining_min_heap.push(val);
-    } else {
-      remaining_min_heap.push(top_k.back());
-      top_k.pop_back();
-      insert_top_k(val);
-    }
-  }
-}
-
-template <typename T, int k, typename Container, typename Compare>
-void TopKQueue<T, k, Container, Compare>::pop() {
-  assert(!top_k.empty() && "pop() called on an empty queue");
-  pop_front();
-
-  if (!remaining_min_heap.empty()) {
-    top_k.push_back(remaining_min_heap.top());
-    remaining_min_heap.pop();
-    // T v = remaining_min_heap.top();
-    // remaining_min_heap.pop();
-    // insert_top_k(v);
-  }
-}
-
-template <typename T, int k, typename Container, typename Compare>
-const T &TopKQueue<T, k, Container, Compare>::top() const {
-  assert(!top_k.empty() && "top() called on an empty queue");
-  return top_k.front();
-}
-
-template <typename T, int k, typename Container, typename Compare>
-T &TopKQueue<T, k, Container, Compare>::at(std::size_t i) {
-  assert(i < top_k.size() && "at() called with an index out of range");
-  return top_k[i];
-}
-template <typename T, int k, typename Container, typename Compare>
-void TopKQueue<T, k, Container, Compare>::remove_at(std::size_t i) {
-  assert(i < top_k.size() && "remove_at() called with an index out of range");
-  top_k.erase(top_k.begin() + i);
-
-  if (!remaining_min_heap.empty()) {
-    top_k.push_back(remaining_min_heap.top());
-    remaining_min_heap.pop();
-    // T v = remaining_min_heap.top();
-    // remaining_min_heap.pop();
-    // insert_top_k(v);
-  }
-}
-
-template <typename T, int k, typename Container, typename Compare>
-void TopKQueue<T, k, Container, Compare>::remove(std::vector<std::size_t> &indices) {
-  std::sort(indices.begin(), indices.end(), std::greater<>());
-  for (auto i : indices) {
-    remove_at(i);
-  }
-}
-
 template <typename T, int S> void print(TopKQueue<T, S> &q) {
-  auto &top_k = q.get_top_k();
-  for (auto it = top_k.begin(); it != top_k.end(); ++it) {
-    std::cout << *it << " ";
+  for (const auto &elem : q.get_top_k()) {
+    std::cout << elem << " ";
   }
 }
 
 template <QueueConcept Q> std::vector<typename Q::value_type> as_vector(Q &q) {
-  typedef typename Q::value_type Value_t;
-  // drain store and refill queue
+  using Value_t = typename Q::value_type;
   std::vector<Value_t> elements;
+  elements.reserve(q.size()); // Pre-allocating to avoid multiple resize passes
   while (!q.empty()) {
     elements.push_back(q.top());
     q.pop();
   }
-  for (auto &element : elements) {
+  for (const auto &element : elements) {
     q.push(element);
   }
   return elements;
 }
 
 template <WrappedQueueConcept Q> std::vector<typename Q::element_type> as_vector(Q &q) {
-  typedef typename Q::element_type Element_t;
-  // drain store and refill queue
+  using Element_t = typename Q::element_type;
   std::vector<Element_t> elements;
+  elements.reserve(q.size());
   while (!q.empty()) {
     elements.push_back(q.top_element());
     q.pop();
   }
-  for (auto &element : elements) {
+  for (const auto &element : elements) {
     q.push(element);
   }
   return elements;
-}
-
-template <typename T, template <typename...> class Queue, typename Compare>
-void ContainerQueue<T, Queue, Compare>::set_k(int k) {
-  if constexpr (HasDynamicK<QueueType>) {
-    pq.set_k(k);
-  } else {
-    // No-op for non-dynamic queues
-    (void)k;
-  }
 }

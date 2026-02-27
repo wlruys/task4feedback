@@ -2187,6 +2187,12 @@ class SimulatorDriver:
         """
         self.simulator.set_steps(steps)
 
+    def set_mapper_boundary_steps(self, boundaries: int):
+        """
+        Set mapper-boundary breakpoints (counted on mapper dispatch boundaries).
+        """
+        self.simulator.set_mapper_boundary_steps(boundaries)
+
     def start_drain(self):
         self.simulator.start_drain()
 

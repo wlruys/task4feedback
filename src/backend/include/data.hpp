@@ -145,11 +145,13 @@ public:
     return std::accumulate(sizes.begin(), sizes.end(), static_cast<mem_t>(0));
   }
 
-  [[nodiscard]] devid_t get_location(dataid_t id) const {
-    return initial_location.at(id);
+  [[nodiscard]] devid_t get_location(dataid_t id) const { 
+      assert(id < initial_location.size()); 
+      return initial_location[id]; 
   }
-  [[nodiscard]] const std::string &get_name(dataid_t id) const {
-    return data_names.at(id);
+  [[nodiscard]] const std::string &get_name(dataid_t id) const { 
+      assert(id < data_names.size()); 
+      return data_names[id]; 
   }
 
   [[nodiscard]] auto get_sizes() const {
@@ -1000,8 +1002,20 @@ public:
     for (dataid_t i = 0; i < data.size(); i++) {
       auto initial_location = data.get_location(i);
       const auto data_size = data.get_size(i);
+      const bool initial_location_in_bounds =
+          initial_location >= 0 && initial_location < devices.size();
 
-      if (initial_location > -1 && (lru_manager.get_mem(initial_location) + data_size) <=
+      if (initial_location > -1 && !initial_location_in_bounds) {
+        SPDLOG_CRITICAL(
+            "DataManager::initialize(): data_id {} has invalid initial location {} (valid "
+            "device ids: 0..{})",
+            i, initial_location, devices.size() - 1);
+        assert(false &&
+               "DataManager::initialize(): initial data location out of bounds for system "
+               "devices");
+      }
+
+      if (initial_location_in_bounds && (lru_manager.get_mem(initial_location) + data_size) <=
                                        devices.get_max_resources(initial_location).mem) {
         mapped_locations.set_valid(i, initial_location, 0);
         reserved_locations.set_valid(i, initial_location, 0);
@@ -1031,7 +1045,16 @@ public:
                                  DeviceManager &device_manager, dataid_t data_id,
                                  devid_t device_id) {
     const auto data_size = data.get_size(data_id);
-    if (device_id > -1 &&
+    const bool device_id_in_bounds = device_id >= 0 && device_id < devices.size();
+
+    if (device_id > -1 && !device_id_in_bounds) {
+      SPDLOG_CRITICAL("DataManager::initialize_data_replicate(): invalid device_id {} "
+                      "(valid device ids: 0..{})",
+                      device_id, devices.size() - 1);
+      assert(false && "DataManager::initialize_data_replicate(): device_id out of bounds");
+    }
+
+    if (device_id_in_bounds &&
         (lru_manager.get_mem(device_id) + data_size) <= devices.get_max_resources(device_id).mem &&
         !mapped_locations.is_valid(data_id, device_id)) {
       mapped_locations.set_valid(data_id, device_id, 0);
