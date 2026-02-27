@@ -118,26 +118,26 @@ public:
   }
 
   void push_reservable(taskid_t id, priority_t p, devid_t device) {
-    reservable[device].push(id, p);
+    reservable.push_priority_at(device, id, p);
     SPDLOG_DEBUG("Pushing reservable compute task {} with priority {} on device {} top {}", id, p,
                  device, reservable[device].top_element().value);
   }
 
   void push_launchable(taskid_t id, priority_t p, devid_t device) {
     SPDLOG_DEBUG("Pushing launchable compute task {} with priority {} on device {}", id, p, device);
-    launchable[device].push(id, p);
+    launchable.push_priority_at(device, id, p);
   }
 
   void push_launchable_data(taskid_t id, priority_t p, devid_t device) {
     // TODO: change this to normal queue if needed keeping priority queue semantics for now
-    data_launchable[device].push(id, data_queue_count++);
+    data_launchable.push_priority_at(device, id, data_queue_count++);
     SPDLOG_DEBUG("Pushing launchable data task {} with priority {} on device {} data_queue_count "
                  "{} current_top {}",
                  id, p, device, data_queue_count - 1, data_launchable[device].top_element().value);
   }
 
   void push_launchable_eviction(taskid_t id, priority_t p, devid_t device) {
-    eviction_launchable[device].push(id, p);
+    eviction_launchable.push_priority_at(device, id, p);
   }
 
   [[nodiscard]] std::size_t n_mappable() const {
@@ -1036,14 +1036,28 @@ enum class EvictionState : int8_t {
 class Scheduler {
 
 protected:
+  struct EvictionInvalidationInfo {
+    bool future_usage = false;
+    bool write_after_read = false;
+  };
+
   SchedulerState state;
   SchedulerQueues queues;
   TaskDeviceList tasks_requesting_eviction;
   int64_t success_count = 0;
   int64_t eviction_count = 0;
   EvictionState eviction_state = EvictionState::NONE;
+  ankerl::unordered_dense::map<uint64_t, uint8_t> eviction_invalidation_cache;
+  ankerl::unordered_dense::set<uint64_t> eviction_planned_victim_keys;
 
   void enqueue_data_tasks(taskid_t task_id);
+  [[nodiscard]] EvictionInvalidationInfo
+  get_eviction_invalidation_info(const StaticTaskInfo &static_graph,
+                                 const RuntimeTaskInfo &task_runtime, dataid_t data_id,
+                                 devid_t device_id);
+  void clear_eviction_invalidation_cache() {
+    eviction_invalidation_cache.clear();
+  }
 
 public:
   BreakpointManager breakpoints;
@@ -1056,10 +1070,11 @@ public:
 
   Scheduler(SchedulerInput &input)
       : state(input), queues(input.devices), conditions(input.conditions) {
-    const auto &static_graph = state.get_tasks();
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
+    eviction_invalidation_cache.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
+    eviction_planned_victim_keys.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
     if (input.top_k_candidates > 0) {
       queues.mappable.set_k(static_cast<int>(input.top_k_candidates));
     }

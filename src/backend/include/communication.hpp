@@ -251,6 +251,7 @@ public:
       return used_d2d_outgoing < available_d2d_outgoing &&
              used_d2d_incoming < available_d2d_incoming;
     }
+    return false;
   }
 
   [[nodiscard]] inline bool is_link_available(devid_t src, devid_t dst) const {
