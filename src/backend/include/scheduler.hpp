@@ -472,7 +472,7 @@ protected:
   DeviceManager device_manager;
   CommunicationManager communication_manager;
   DataManager data_manager;
-  ankerl::unordered_dense::set<taskid_t> mapped_but_not_reserved_tasks;
+  // ankerl::unordered_dense::set<taskid_t> mapped_but_not_reserved_tasks;
   std::reference_wrapper<Graph> graph;
   std::reference_wrapper<StaticTaskInfo> tasks;
   std::reference_wrapper<Data> data;
@@ -562,7 +562,8 @@ public:
       : global_time(other.global_time), task_runtime(other.task_runtime),
         device_manager(other.device_manager), communication_manager(other.communication_manager),
         data_manager(other.data_manager),
-        mapped_but_not_reserved_tasks(other.mapped_but_not_reserved_tasks), graph(other.graph),
+        // mapped_but_not_reserved_tasks(other.mapped_but_not_reserved_tasks), 
+        graph(other.graph),
         tasks(other.tasks), data(other.data), devices(other.devices), topology(other.topology),
         task_noise(other.task_noise), counts(other.counts), costs(other.costs), flags(other.flags) {
     // ZoneScoped;
@@ -1090,6 +1091,10 @@ public:
     breakpoints.set_steps_to_go(steps);
   }
 
+  void set_mapper_boundary_steps(int32_t boundaries) {
+    breakpoints.set_mapper_boundaries_to_go(boundaries);
+  }
+
   void start_drain() {
     state.start_drain();
   }
@@ -1238,13 +1243,32 @@ public:
     return state.is_drain_complete();
   }
 
-  [[nodiscard]] bool is_breakpoint() const {
-    bool breakpoint_status = breakpoints.check_breakpoint();
-    return breakpoint_status;
+  [[nodiscard]] bool has_pending_step_breakpoint() const {
+    return breakpoints.has_pending_step_stop();
   }
 
-  void check_time_breakpoint() {
-    breakpoints.check_time_breakpoint(state.get_global_time());
+  bool consume_step_breakpoint() {
+    return breakpoints.consume_step_stop();
+  }
+
+  bool hit_mapper_boundary_breakpoint() {
+    return breakpoints.decrement_mapper_boundaries();
+  }
+
+  [[nodiscard]] bool has_time_breakpoint() const {
+    return breakpoints.has_time_breakpoint();
+  }
+
+  [[nodiscard]] bool hit_time_breakpoint(timecount_t time) const {
+    return breakpoints.check_time_breakpoint(time);
+  }
+
+  [[nodiscard]] bool hit_task_breakpoint(EventType type, taskid_t task_id) {
+    return breakpoints.check_task_breakpoint(type, task_id);
+  }
+
+  [[nodiscard]] bool needs_event_breakpoint_poll() const {
+    return breakpoints.needs_event_poll();
   }
 
   friend class SchedulerState;

@@ -81,7 +81,7 @@ taskid_t Scheduler::map_task(taskid_t compute_task_id, Action &action) {
   // We check if there are any usage of the data by the victim device.
   // If there are, it means that
 
-  s.mapped_but_not_reserved_tasks.insert(compute_task_id);
+  // s.mapped_but_not_reserved_tasks.insert(compute_task_id);
 
   // Notify dependents and enqueue newly mappable tasks
   task_runtime.compute_notify_mapped(compute_task_id, chosen_device, rp, lp, current_time,
@@ -142,7 +142,7 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
     return ExecutionState::EXTERNAL_MAPPING;
   } else {
 
-    if (is_breakpoint()) {
+    if (has_pending_step_breakpoint()) {
       // TODO(wlr): Currently breakpoints of Python mappers are broken.
       // TODO(wlr): Not sure if this is still true. Need to test.
       SPDLOG_DEBUG("Time:{} Breaking from mapper", state.global_time);
@@ -185,7 +185,7 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
 
   while (queues.has_mappable() && conditions.get().should_map(s, queues)) {
 
-    if (is_breakpoint()) {
+    if (has_pending_step_breakpoint()) {
       break_flag = true;
       SPDLOG_DEBUG("Time:{} Breaking from mapper", current_time);
       break;
@@ -240,7 +240,7 @@ bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
   auto &task_runtime = s.task_runtime;
   auto &static_graph = s.get_tasks();
   auto current_time = s.global_time;
-  auto &mapped = s.mapped_but_not_reserved_tasks;
+  // auto &mapped = s.mapped_but_not_reserved_tasks;
   auto &device_manager = s.get_device_manager();
   const auto &data = s.get_data();
 
@@ -276,7 +276,7 @@ bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
       data, device_manager, static_graph.get_write(compute_task_id), device_id, current_time);
 
   // erase task_id from s.mapped_but_not_reserved_tasks
-  mapped.erase(mapped.find(compute_task_id));
+  // mapped.erase(mapped.find(compute_task_id));
 
   task_runtime.compute_notify_reserved(compute_task_id, device_id, current_time, static_graph,
                                        compute_task_buffer);
@@ -316,7 +316,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
   tasks_requesting_eviction.clear();
   while (queues.has_active_reservable() && conditions.get().should_reserve(s, queues)) {
 
-    if (is_breakpoint()) {
+    if (has_pending_step_breakpoint()) {
       break_flag = true;
       SPDLOG_DEBUG("Time:{} Breaking from reserver", current_time);
       break;
@@ -561,7 +561,7 @@ bool Scheduler::launch_compute_tasks(EventManager &event_manager) {
 
     SPDLOG_DEBUG("Time:{} Checking device queue {}", current_time, launchable.get_active_index());
 
-    if (is_breakpoint()) {
+    if (has_pending_step_breakpoint()) {
       SPDLOG_DEBUG("Time:{} Breaking from launcher", current_time);
       break_flag = true;
       break;

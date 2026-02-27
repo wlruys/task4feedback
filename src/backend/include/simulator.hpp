@@ -54,6 +54,12 @@ protected:
   ExecutionState dispatch_mapper(MapperEvent &event) {
     ZoneScoped;
 
+    if (scheduler.hit_mapper_boundary_breakpoint()) {
+      SPDLOG_DEBUG("Time: {} Mapper-boundary breakpoint hit", event.time);
+      event_manager.create_event(EventType::MAPPER, event.time);
+      return ExecutionState::BREAKPOINT;
+    }
+
     auto &queues = scheduler.get_queues();
     auto &state = scheduler.get_state();
 
@@ -101,6 +107,10 @@ public:
 
   void set_steps(int32_t steps) {
     scheduler.set_steps(steps);
+  }
+
+  void set_mapper_boundary_steps(int32_t boundaries) {
+    scheduler.set_mapper_boundary_steps(boundaries);
   }
 
   void start_drain() {
@@ -263,15 +273,6 @@ public:
     }
   }
 
-  [[nodiscard]] ExecutionState check_breakpoints(ExecutionState ex_state) {
-    if (scheduler.is_breakpoint()) {
-      SPDLOG_DEBUG("Breakpoint hit at time: {}", this->get_current_time());
-      scheduler.breakpoints.reset_breakpoint();
-      return ExecutionState::BREAKPOINT;
-    }
-    return ex_state;
-  }
-
   [[nodiscard]] ExecutionState check_complete(ExecutionState ex_state) const {
     // event list has events
     if (!event_manager.has_events()) {
@@ -331,8 +332,13 @@ public:
     ExecutionState execution_state = ExecutionState::RUNNING;
 
     while (execution_state == ExecutionState::RUNNING) {
+      if (scheduler.consume_step_breakpoint()) {
+        SPDLOG_DEBUG("Breakpoint hit at time: {}", this->get_current_time());
+        execution_state = ExecutionState::BREAKPOINT;
+        break;
+      }
+
       execution_state = check_complete(execution_state);
-      execution_state = check_breakpoints(execution_state);
 
       if (execution_state != ExecutionState::RUNNING) {
         SPDLOG_DEBUG("Exiting run loop with state: {}", static_cast<int>(execution_state));
@@ -343,7 +349,34 @@ public:
       events_processed++;
       update_time(current_event);
       execution_state = handle_event(current_event);
-      scheduler.check_time_breakpoint();
+
+      if (execution_state != ExecutionState::RUNNING) {
+        continue;
+      }
+
+      if (scheduler.consume_step_breakpoint()) {
+        SPDLOG_DEBUG("Breakpoint hit at time: {}", this->get_current_time());
+        execution_state = ExecutionState::BREAKPOINT;
+        break;
+      }
+
+      if (scheduler.needs_event_breakpoint_poll()) {
+        const auto event_time = get_time(current_event);
+        if (scheduler.has_time_breakpoint() && scheduler.hit_time_breakpoint(event_time)) {
+          execution_state = ExecutionState::BREAKPOINT;
+          break;
+        }
+
+        if (auto *completer = std::get_if<CompleterVariant>(&current_event)) {
+          const bool hit_task_breakpoint = std::visit(
+              [&](const auto &ce) { return scheduler.hit_task_breakpoint(ce.type, ce.task); },
+              *completer);
+          if (hit_task_breakpoint) {
+            execution_state = ExecutionState::BREAKPOINT;
+            break;
+          }
+        }
+      }
     }
 
     last_state = execution_state;
