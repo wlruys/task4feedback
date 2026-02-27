@@ -10,6 +10,7 @@ protected:
   std::size_t active_index;
   std::size_t num_active;
   std::size_t element_count{0};
+  std::size_t active_element_count{0};
 
 public:
   ActiveIterator() = default;
@@ -49,20 +50,11 @@ public:
     return num_active;
   }
   [[nodiscard]] std::size_t total_size() const noexcept {
-    std::size_t tsize = 0;
-    for (auto &c : containers) {
-      tsize += c.size();
-    }
-    return tsize;
+    return element_count;
   }
 
   [[nodiscard]] std::size_t total_active_size() const noexcept {
-    int32_t tsize = 0;
-    const auto n = containers.size();
-    for (int32_t i = 0; i < containers.size(); i++) {
-      tsize += containers[i].size() * std::size_t(active[i]);
-    }
-    return tsize;
+    return active_element_count;
   }
 
   void set_active_queue(int index) noexcept {
@@ -73,23 +65,27 @@ public:
   }
 
   void deactivate(int index) noexcept {
-    active[index] = false;
-    num_active--;
+    if (active[index]) {
+      active[index] = 0;
+      num_active--;
+      active_element_count -= containers[index].size();
+    }
   }
 
   void deactivate() {
-    active[active_index] = false;
-    num_active--;
+    deactivate(static_cast<int>(active_index));
   }
 
   void activate(std::size_t index) noexcept {
-    active[index] = 1;
-    num_active++;
+    if (!active[index]) {
+      active[index] = 1;
+      num_active++;
+      active_element_count += containers[index].size();
+    }
   }
 
   void activate() noexcept {
-    active[active_index] = 1;
-    num_active++;
+    activate(active_index);
   }
 
   void next() noexcept {
@@ -125,6 +121,7 @@ public:
       active[i] = 1;
     }
     num_active = containers.size();
+    active_element_count = element_count;
   }
 };
 
@@ -133,27 +130,51 @@ template <PriorityQueueConcept Q> class ActiveQueueIterator : public ActiveItera
 public:
   void push(Q::value_type value) noexcept {
     this->containers[this->active_index].push(value);
+    this->element_count++;
+    if (this->active[this->active_index]) {
+      this->active_element_count++;
+    }
   }
 
   void push(Q::value_type value, priority_t priority) noexcept {
     this->containers[this->active_index].push(value, priority);
+    this->element_count++;
+    if (this->active[this->active_index]) {
+      this->active_element_count++;
+    }
   }
 
   void push_at(std::size_t index, Q::value_type value) noexcept {
     this->containers[index].push(value);
+    this->element_count++;
+    if (this->active[index]) {
+      this->active_element_count++;
+    }
   }
 
   void push_priority_at(std::size_t index, Q::value_type value, priority_t priority) noexcept {
     this->activate(index);
     this->containers[index].push(value, priority);
+    this->element_count++;
+    if (this->active[index]) {
+      this->active_element_count++;
+    }
   }
 
   void push_random(Q::value_type value) noexcept {
     this->containers[this->active_index].push_random(value);
+    this->element_count++;
+    if (this->active[this->active_index]) {
+      this->active_element_count++;
+    }
   }
 
   void push_random_at(std::size_t index, Q::value_type value) noexcept {
     this->containers[index].push_random(value);
+    this->element_count++;
+    if (this->active[index]) {
+      this->active_element_count++;
+    }
   }
 
   [[nodiscard]] const Q::value_type &top() const noexcept {
@@ -165,6 +186,11 @@ public:
   };
 
   void pop() noexcept {
+    assert(!this->containers[this->active_index].empty());
     this->containers[this->active_index].pop();
+    this->element_count--;
+    if (this->active[this->active_index]) {
+      this->active_element_count--;
+    }
   }
 };

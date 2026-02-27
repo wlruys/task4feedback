@@ -322,50 +322,44 @@ public:
   }
 };
 
-struct MovementPair {
-  dataid_t data_id{};
-  devid_t destination{};
-
-  MovementPair(dataid_t data_id, devid_t destination) : data_id(data_id), destination(destination) {
-  }
-
-  auto operator==(const MovementPair &other) const -> bool {
-    return data_id == other.data_id && destination == other.destination;
-  }
-};
-
-struct mp_hash {
-  using is_avalanching = void;
-
-  [[nodiscard]] auto operator()(MovementPair const &f) const noexcept -> uint64_t {
-    static_assert(std::has_unique_object_representations_v<MovementPair>);
-    return ankerl::unordered_dense::detail::wyhash::hash(&f, sizeof(f));
-  }
-};
+[[nodiscard]] inline uint64_t pack_movement_key(dataid_t data_id, devid_t destination) {
+  return (static_cast<uint64_t>(static_cast<uint32_t>(destination)) << 32U) |
+         static_cast<uint32_t>(data_id);
+}
 
 class MovementManager {
 protected:
-  ankerl::unordered_dense::map<MovementPair, timecount_t, mp_hash> movement_times;
+  ankerl::unordered_dense::map<uint64_t, timecount_t> movement_times;
 
 public:
   MovementManager() = default;
 
   bool is_moving(dataid_t data_id, devid_t destination) const {
-    return movement_times.find({data_id, destination}) != movement_times.end();
+    return movement_times.find(pack_movement_key(data_id, destination)) != movement_times.end();
   }
 
   [[nodiscard]] inline timecount_t get_time(dataid_t data_id, devid_t destination) const {
-    auto it = movement_times.find({data_id, destination});
+    auto it = movement_times.find(pack_movement_key(data_id, destination));
     return it == movement_times.end() ? 0 : it->second;
+  }
+
+  [[nodiscard]] inline bool try_get_time(dataid_t data_id, devid_t destination,
+                                         timecount_t &completion_time) const {
+    auto it = movement_times.find(pack_movement_key(data_id, destination));
+    if (it == movement_times.end()) {
+      return false;
+    }
+    completion_time = it->second;
+    return true;
   }
 
   inline void set_completion(dataid_t data_id, devid_t destination,
                              timecount_t global_completion_time) {
-    movement_times[{data_id, destination}] = global_completion_time;
+    movement_times[pack_movement_key(data_id, destination)] = global_completion_time;
   }
 
   inline void remove(dataid_t data_id, devid_t destination) {
-    movement_times.erase({data_id, destination});
+    movement_times.erase(pack_movement_key(data_id, destination));
   }
 };
 
@@ -1320,9 +1314,9 @@ public:
                             devid_t source, devid_t destination, timecount_t current_time) {
     assert(launched_locations.is_valid(data_id, source));
 
-    bool is_moving = movement_manager.is_moving(data_id, destination);
-    if (is_moving) {
-      timecount_t time_left = movement_manager.get_time(data_id, destination) - current_time;
+    timecount_t completion_time = 0;
+    if (movement_manager.try_get_time(data_id, destination, completion_time)) {
+      timecount_t time_left = completion_time - current_time;
       SPDLOG_DEBUG("Data block {} already moving to device {} expected to end after {}", data_id,
                    destination, time_left);
       return {.is_virtual = true, .duration = time_left};
