@@ -7,18 +7,6 @@
 #include <utility>
 #include <vector>
 
-// ActiveIterator manages a collection of per-device containers with round-robin
-// cycling and per-phase device viability tracking. Two bitmasks replace the
-// old byte-array active flags:
-//
-//   tasks_mask  — bit i is set when containers[i] is non-empty
-//   viable_mask — bit i is set when device i has not been deactivated this phase
-//
-// A device is "drainable" when both bits are set. Using bit operations keeps
-// all state transitions to single instructions and eliminates array scans.
-//
-// Supports up to 64 devices (one uint64_t per mask).
-
 template <typename T> class ActiveIterator {
 protected:
   std::vector<T> containers;
@@ -31,7 +19,7 @@ protected:
   [[nodiscard]] uint64_t drainable_mask() const noexcept { return tasks_mask & viable_mask; }
   
   [[nodiscard]] uint64_t all_viable_mask() const noexcept {
-    // Branch prevents Undefined Behavior via `1ULL << 64` when n_devices exactly == 64
+    // Branch prevents UB when n_devices exactly == 64
     return (n_devices == 64) ? ~uint64_t{0} : (1ULL << n_devices) - 1;
   }
 
@@ -43,9 +31,6 @@ public:
     viable_mask = all_viable_mask();
   }
 
-  // --- Observation ---
-
-  // True when at least one device has both tasks and viability.
   [[nodiscard]] bool has_active() const noexcept { return drainable_mask() != 0; }
   [[nodiscard]] bool has_active_elements() const noexcept { return tasks_mask != 0; }
   [[nodiscard]] bool is_active(std::size_t index) const noexcept {
@@ -65,11 +50,9 @@ public:
     return static_cast<std::size_t>(std::popcount(viable_mask));
   }
 
-  // Sums elements across currently drainable queues. Iterates set bits — fine
-  // for debug logging, not intended for the hot path.
   [[nodiscard]] std::size_t total_active_size() const noexcept {
     std::size_t count = 0;
-    for (uint64_t d = drainable_mask(); d; d &= d - 1) { // Kernighan's iteration
+    for (uint64_t d = drainable_mask(); d; d &= d - 1) {
       count += containers[std::countr_zero(d)].size();
     }
     return count;
@@ -78,19 +61,14 @@ public:
   [[nodiscard]] std::size_t get_active_index() const noexcept { return active_index; }
   void set_active_queue(uint32_t index) noexcept { active_index = index; }
 
-  // --- Viability control ---
-
   void deactivate(uint32_t index) noexcept { viable_mask &= ~(1ULL << index); }
   void deactivate() noexcept { viable_mask &= ~(1ULL << active_index); }
   void activate(std::size_t index) noexcept { viable_mask |= (1ULL << index); }
   void activate() noexcept { viable_mask |= (1ULL << active_index); }
 
-  // Mark all devices viable for a new phase.
   void reset() noexcept {
     viable_mask = all_viable_mask();
   }
-
-  // --- Cursor movement ---
 
   void next() noexcept {
     active_index = (active_index + 1 == n_devices) ? 0 : active_index + 1;
@@ -100,7 +78,6 @@ public:
     active_index = (active_index == 0) ? n_devices - 1 : active_index - 1;
   }
 
-  // Position active_index at the lowest-indexed drainable device to seed a drain loop.
   void seek_drainable() noexcept {
     if (uint64_t d = drainable_mask()) {
       active_index = std::countr_zero(d);
@@ -108,7 +85,6 @@ public:
   }
 
   // Advance active_index to the next drainable device in round-robin order.
-  // When has_active() is true, the result always lands on a drainable device.
   void next_drainable() noexcept {
     uint64_t d = drainable_mask();
     if (!d) return;
@@ -126,7 +102,7 @@ public:
     active_index = hi ? next + std::countr_zero(hi) : std::countr_zero(v);
   }
 
-  // Moves backward to the previous viable device. Branchless O(1) bit math traversal
+  // Moves backward to the previous viable device.
   void prev_active() noexcept {
     uint64_t v = viable_mask;
     if (!v) return;
@@ -160,9 +136,7 @@ public:
     this->tasks_mask |= (1ULL << index);
   }
 
-  // Pushing new work to a device re-enables it as viable: a device that was
-  // deactivated due to resource pressure may succeed on a task with different
-  // requirements pushed mid-phase.
+  // Pushing new work to a device re-enables it as viable
   void push_priority_at(std::size_t index, Q::value_type value, priority_t priority) noexcept {
     this->viable_mask |= (1ULL << index);
     this->containers[index].push(std::move(value), priority);

@@ -508,11 +508,9 @@ private:
 #endif
 
     InsertResult insert_or_update(dataid_t id, mem_t bytes) {
-      // Single lookup: Try to insert dummy node '0'. If item already exists, 'inserted' is false.
       auto [it, inserted] = where.try_emplace(id, 0);
 
       if (!inserted) {
-        // FAST PATH: Already existed.
         const node_t n = it->second;
         if (nodes[n].bytes != bytes) {
           used_bytes += (bytes - nodes[n].bytes);
@@ -525,9 +523,8 @@ private:
         return InsertResult::Updated;
       }
 
-      // SLOW PATH: Brand new item
       if (!ensure_free_node_()) {
-        where.erase(it); // Rollback dummy insertion
+        where.erase(it);
         return InsertResult::Failed;
       }
 
@@ -576,7 +573,6 @@ private:
       node_t cur = nodes[0].prev;
 
       if (used_ids.empty()) {
-        // Fast path: No filter overhead
         while (cur != 0 && acc < bytes_needed) {
           acc += static_cast<std::size_t>(nodes[cur].bytes);
           out.push_back(nodes[cur].id);

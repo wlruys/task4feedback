@@ -196,7 +196,6 @@ public:
     }
   }
 
-  // Push an existing variant:
   inline void add_event(EventVariant ev) {
     events_.push(std::move(ev));
   }

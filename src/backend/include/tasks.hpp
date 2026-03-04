@@ -249,7 +249,6 @@ public:
 
   std::vector<dataid_t> unique;
 
-  // Sorted caches built during Graph::finalize() — reused by StaticTaskInfo constructor.
   std::vector<dataid_t> sorted_read_cache;
   std::vector<dataid_t> sorted_write_cache;
   std::vector<dataid_t> sorted_retire_cache;
@@ -257,7 +256,6 @@ public:
   std::vector<uint32_t> sorted_read_gen_cache;
   std::vector<uint32_t> sorted_write_gen_cache;
 
-  // Sorted caches for deps/dependents built during Graph::finalize().
   std::vector<taskid_t> sorted_dependencies_cache;
   std::vector<taskid_t> sorted_dependents_cache;
   std::vector<taskid_t> sorted_data_dependencies_cache;
@@ -282,7 +280,6 @@ public:
   ankerl::unordered_dense::set<taskid_t> dependencies;
   ankerl::unordered_dense::set<taskid_t> dependents;
 
-  // Sorted caches built during Graph::finalize() — reused by StaticTaskInfo constructor.
   std::vector<taskid_t> sorted_dependencies_cache;
   std::vector<taskid_t> sorted_dependents_cache;
 };
@@ -302,8 +299,6 @@ public:
   std::vector<taskid_t> writers;
   dataid_t max_data_id{-1}; // computed once in finalize() before any data processing
 
-  // Cached totals populated by build_sorted_dependency_caches() — used by StaticTaskInfo ctor
-  // to avoid a separate counting pass.
   int32_t total_compute_dependencies_cached{0};
   int32_t total_compute_dependents_cached{0};
   int32_t total_compute_data_dependencies_cached{0};
@@ -723,7 +718,6 @@ public:
       total_unique_cached += static_cast<int32_t>(task.unique.size());
     }
 
-    // Build sorted caches for data tasks.
     total_data_task_dependencies_cached = 0;
     total_data_task_dependents_cached = 0;
 
@@ -811,7 +805,7 @@ struct ComputeTaskStaticInfo {
 };
 
 struct ComputeTaskVariantInfo {
-  uint8_t mask = 0; // bitmask for supported architectures
+  uint8_t mask = 0;
   std::array<Variant, num_device_types> variants{};
 };
 
@@ -821,7 +815,7 @@ constexpr uint8_t MAPPED    = 0x02;
 constexpr uint8_t RESERVED  = 0x04;
 constexpr uint8_t LAUNCHED  = 0x08;
 constexpr uint8_t COMPLETED = 0x10;
-} // namespace StateBits
+}
 
 static_assert((StateBits::SPAWNED & (StateBits::SPAWNED - 1)) == 0);
 static_assert((StateBits::MAPPED & (StateBits::MAPPED - 1)) == 0);
@@ -846,13 +840,13 @@ constexpr uint8_t MAPPED    = SPAWNED   | StateBits::MAPPED;    // 0x03
 constexpr uint8_t RESERVED  = MAPPED    | StateBits::RESERVED;  // 0x07
 constexpr uint8_t LAUNCHED  = RESERVED  | StateBits::LAUNCHED;  // 0x0F
 constexpr uint8_t COMPLETED = LAUNCHED  | StateBits::COMPLETED; // 0x1F
-} // namespace CumulativeState
+}
 
 namespace StatusBits {
 constexpr uint8_t MAPPABLE   = 0x01; // unmapped == 0 && state == SPAWNED
 constexpr uint8_t RESERVABLE = 0x02; // unreserved == 0 && state == MAPPED
 constexpr uint8_t LAUNCHABLE = 0x04; // incomplete == 0 && state == RESERVED
-} // namespace StatusBits
+}
 
 class StaticTaskInfo {
 
@@ -875,29 +869,21 @@ protected:
   std::vector<uint32_t> compute_task_write_generations;
   CsrData<dataid_t> compute_task_unique;
 
-  // CSR cache for read usage: data_id -> compute tasks that read data_id
   std::vector<dataid_t> read_usage_data_ids;
   CsrData<taskid_t> read_usage;
-  // Dense row-index vector indexed by data_id; -1 means data_id has no readers.
   std::vector<int32_t> read_usage_row_by_data_id;
 
-  // CSR cache for write usage: data_id -> compute tasks that write data_id
   std::vector<dataid_t> write_usage_data_ids;
   CsrData<taskid_t> write_usage;
-  // Dense row-index vector indexed by data_id; -1 means data_id has no writers.
   std::vector<int32_t> write_usage_row_by_data_id;
 
-  // Secondary CSR: same rows as read/write_usage_*, but entries sorted by generation.
   // Shares offsets and row maps with the primary CSR above.
   std::vector<taskid_t> read_usage_by_gen_tasks;
   std::vector<uint32_t> read_usage_by_gen_generations;
   std::vector<taskid_t> write_usage_by_gen_tasks;
   std::vector<uint32_t> write_usage_by_gen_generations;
 
-  // CSR cache for shared-read topology: compute task -> compute tasks sharing a read data id
   CsrData<taskid_t> compute_task_shared_read_neighbors;
-
-  // Membership checks use binary search on sorted CSR spans (no extra storage needed).
   CsrData<taskid_t> data_task_dependencies;
   CsrData<taskid_t> data_task_dependents;
 
@@ -939,7 +925,6 @@ public:
     data_task_data_id_cache.resize(num_data_tasks, 0);
     data_task_compute_task_cache.resize(num_data_tasks, 0);
 
-    // Keep CSR structures valid even when no precomputation has been run yet.
     read_usage.offsets.resize(1, 0);
     write_usage.offsets.resize(1, 0);
     compute_task_shared_read_neighbors.offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
@@ -973,10 +958,6 @@ public:
     read_usage.offsets.resize(1, 0);
     write_usage.offsets.resize(1, 0);
     compute_task_shared_read_neighbors.offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
-
-    // std::cout << "Creating static graph..." << std::endl;
-    // std::cout << "Number of compute tasks: " << num_compute_tasks << std::endl;
-    // std::cout << "Number of data tasks: " << num_data_tasks << std::endl;
 
     auto &tasks = graph.tasks;
     auto &data_tasks = graph.data_tasks;
@@ -1155,7 +1136,6 @@ public:
     std::vector<uint64_t> shared_pair_keys;
 
     if (!read_triples.empty()) {
-      // Pass 1: sort by (data_id, task_id) → primary CSR + shared pairs.
       std::sort(read_triples.begin(), read_triples.end(), by_data_task);
 
       const dataid_t max_read_id = max_data_id_in(read_triples);
@@ -1209,7 +1189,6 @@ public:
     write_usage_by_gen_generations.reserve(write_triples.size());
 
     if (!write_triples.empty()) {
-      // Pass 1: sort by (data_id, task_id) → primary CSR.
       std::sort(write_triples.begin(), write_triples.end(), by_data_task);
 
       const dataid_t max_write_id = max_data_id_in(write_triples);
@@ -1233,7 +1212,6 @@ public:
         group_start = group_end;
       }
 
-      // Pass 2: re-sort by (data_id, gen, task_id) → gen CSR.
       std::sort(write_triples.begin(), write_triples.end(), by_data_gen_task);
       for (const auto &t : write_triples) {
         write_usage_by_gen_tasks.push_back(t.task_id);
@@ -1768,8 +1746,6 @@ public:
     return id;
   }
 
-  // ── State checks (single AND — SIMD-friendly) ───────────────
-
   [[nodiscard]] bool is_compute_mapped(taskid_t id) const {
     return (compute.state[id] & StateBits::MAPPED) != 0;
   }
@@ -2221,7 +2197,7 @@ static inline taskid_t filter_tasks(std::span<const taskid_t> tasks, TaskIDList&
   }
   
   out.resize(static_cast<std::size_t>(w));
-  return w; // Return the count of tasks that satisfied the predicate
+  return w; // Return the count of tasks where predicate is true
 }
 
 template <typename Predicate>

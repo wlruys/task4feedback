@@ -20,16 +20,12 @@
 
 void init_simulator_logger() {
   try {
-    // Use a simpler, static logger name to avoid potential threading issues
     static bool logger_initialized = false;
     if (logger_initialized) {
       return;
     }
 
-    // Use a simple static name instead of dynamic generation
     std::string logger_name = "simulator_console";
-
-    // Drop existing logger if it exists
     spdlog::drop(logger_name);
 
     auto logger = spdlog::stdout_color_mt(logger_name);
