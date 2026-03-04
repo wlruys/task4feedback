@@ -51,6 +51,7 @@ public:
   }
 
   void set_size(dataid_t id, mem_t size) {
+    assert(id < sizes.size());
     sizes[id] = size;
   }
 
@@ -60,30 +61,37 @@ public:
   }
 
   void set_x_pos(dataid_t id, float x) {
+    assert(id < xy_positions.size());
     xy_positions[id].x = x;
   }
 
   void set_y_pos(dataid_t id, float y) {
+    assert(id < xy_positions.size());
     xy_positions[id].y = y;
   }
 
   [[nodiscard]] float get_x_pos(dataid_t id) const {
+    assert(id < xy_positions.size());
     return xy_positions[id].x;
   }
 
   [[nodiscard]] float get_y_pos(dataid_t id) const {
+    assert(id < xy_positions.size());
     return xy_positions[id].y;
   }
 
   int get_tag(dataid_t id) const {
+    assert(id < data_tags.size());
     return data_tags[id];
   }
 
   void set_type(dataid_t id, int type) {
+    assert(id < data_types.size());
     data_types[id] = type;
   }
 
   int get_type(dataid_t id) const {
+    assert(id < data_types.size());
     return data_types[id];
   }
 
@@ -93,6 +101,7 @@ public:
     initial_location[id] = location;
   }
   void set_name(dataid_t id, std::string name) {
+    assert(id < data_names.size());
     data_names[id] = std::move(name);
     name_to_id[data_names[id]] = id;
   }
@@ -798,9 +807,15 @@ public:
     auto it = pos.find(data_id);
     assert(it != pos.end() && "invalidate(): data_id not present");
 
+    std::cout << "Invalidating data_id " << data_id << " from device " << device_id
+              << " with size " << smap[data_id] << "\n";
+    //std::cout << "Current size before invalidation: " << size << "\n";
+
     lst.erase(it->second);
     pos.erase(it);
-    size -= smap[data_id]; // update size
+    auto removed = smap[data_id];
+    //assert(removed > 0 && "invalidate(): data_id not present in size map");
+    size -= removed; // update size
     if (evict)
       evicted_size += smap[data_id];
     smap.erase(data_id);
@@ -919,11 +934,15 @@ protected:
 
   static bool read_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
                           timecount_t current_time) {
-    return locations.validate(data_id, device_id, current_time);
+    const bool changed = locations.validate(data_id, device_id, current_time);
+    assert(locations.is_valid(data_id, device_id));
+    return changed;
   }
 
   static auto write_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
                            timecount_t current_time) {
+    assert(locations.is_valid(data_id, device_id) &&
+           "write_update requires data to be valid on the writing device");
     auto updated_ids = locations.invalidate_except(data_id, device_id, current_time);
     return updated_ids;
   }
@@ -1095,7 +1114,7 @@ public:
     return check_valid(data_id, mapped_locations, device_id);
   }
 
-  bool check_valid_reserved(std::span<const dataid_t> &list, devid_t device_id) const {
+  bool check_valid_reserved(std::span<const dataid_t> list, devid_t device_id) const {
     return check_valid(list, reserved_locations, device_id);
   }
 
@@ -1109,6 +1128,10 @@ public:
 
   bool check_valid_launched(dataid_t data_id, devid_t device_id) const {
     return check_valid(data_id, launched_locations, device_id);
+  }
+
+  [[nodiscard]] bool is_moving(dataid_t data_id, devid_t device_id) const {
+    return movement_manager.is_moving(data_id, device_id);
   }
 
   [[nodiscard]] mem_t total_size(const Data &data, std::span<const dataid_t> list) const {
@@ -1187,6 +1210,7 @@ public:
                           timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, mapped_locations, current_time);
+      assert(mapped_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task request in mapper
   }
@@ -1196,6 +1220,7 @@ public:
                            timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, mapped_locations, current_time);
+      assert(mapped_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task complete
   }
@@ -1205,6 +1230,7 @@ public:
                             timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, reserved_locations, current_time);
+      assert(reserved_locations.is_valid(data_id, device_id));
     }
     // Memory change is handeled by task request in reserver
   }
@@ -1214,6 +1240,7 @@ public:
                              timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, reserved_locations, current_time);
+      assert(reserved_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task complete
   }
@@ -1234,6 +1261,7 @@ public:
       if (changed) {
         add_memory(device_manager, device_id, data_id, size, current_time);
       }
+      assert(launched_locations.is_valid(data_id, device_id));
     }
   }
 
@@ -1244,12 +1272,14 @@ public:
       auto changed_flags = write_update(data_id, device_id, launched_locations, current_time);
       const auto size = data.get_size(data_id);
       remove_memory(device_manager, changed_flags, data_id, size, current_time);
+      assert(launched_locations.is_valid(data_id, device_id));
     }
   }
 
   void evict_on_update_launched(const Data &data, DeviceManager &device_manager, dataid_t data_id,
                                 devid_t device_id, timecount_t current_time, bool future_usage,
                                 bool write_after_read) {
+    assert(launched_locations.is_valid(data_id, device_id));
     auto updated_devices_launched =
         evict_on_update(data_id, device_id, launched_locations, current_time);
     evict_on_update(data_id, device_id, reserved_locations, current_time);
@@ -1305,6 +1335,11 @@ public:
       // After eviction launched_location has changed and the removal doesn't happen.
       device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
     }
+    assert(launched_locations.is_invalid(data_id, device_id));
+    assert(reserved_locations.is_invalid(data_id, device_id));
+    if (!future_usage) {
+      assert(mapped_locations.is_invalid(data_id, device_id));
+    }
   }
 
   devicemask_t get_mapped_location_flags(dataid_t data_id) const {
@@ -1328,6 +1363,10 @@ public:
 
     SourceRequest req =
         comm_manager.get_best_available_source(topology, destination, location_flags);
+    if (req.found) {
+      assert(launched_locations.is_valid(data_id, req.source) &&
+             "Selected source must have a launched-valid copy");
+    }
 
     return req;
   }
@@ -1336,9 +1375,13 @@ public:
                             DeviceManager &device_manager, const Data &data, dataid_t data_id,
                             devid_t source, devid_t destination, timecount_t current_time) {
     assert(launched_locations.is_valid(data_id, source));
+    assert(source >= 0 && source < device_manager.n_devices);
+    assert(destination >= 0 && destination < device_manager.n_devices);
 
     timecount_t completion_time = 0;
     if (movement_manager.try_get_time(data_id, destination, completion_time)) {
+      assert(completion_time >= current_time &&
+             "Outstanding move completion time cannot be in the past");
       timecount_t time_left = completion_time - current_time;
       SPDLOG_DEBUG("Data block {} already moving to device {} expected to end after {}", data_id,
                    destination, time_left);
@@ -1349,11 +1392,14 @@ public:
       SPDLOG_DEBUG("Data block {} already at device {}", data_id, destination);
       return {.is_virtual = true, .duration = 0};
     }
+    assert(!movement_manager.is_moving(data_id, destination));
 
     SPDLOG_DEBUG("Starting move of data block {} from device {} to device {}", data_id, source,
                  destination);
 
     const auto size = data.get_size(data_id);
+    assert(device_manager.overflow_mem<TaskState::LAUNCHED>(destination, size) == 0 &&
+           "start_move would exceed LAUNCHED memory on destination");
 
     lru_manager.read(destination, data_id, size);
     add_memory(device_manager, destination, data_id, size, current_time);
@@ -1367,6 +1413,7 @@ public:
     }
 
     movement_manager.set_completion(data_id, destination, current_time + duration);
+    assert(movement_manager.is_moving(data_id, destination));
 
     comm_manager.reserve_connection(source, destination);
 
@@ -1403,8 +1450,11 @@ public:
                  source, destination);
 
     assert(movement_manager.is_moving(data_id, destination));
+    assert(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
     movement_manager.remove(data_id, destination);
+    assert(!movement_manager.is_moving(data_id, destination));
+    assert(launched_locations.is_valid(data_id, destination));
 
     comm_manager.release_connection(source, destination);
   }
@@ -1437,10 +1487,15 @@ public:
                  source, destination);
 
     assert(movement_manager.is_moving(data_id, destination));
+    assert(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
     reserved_locations.set_valid(data_id, destination, current_time);
     mapped_locations.set_valid(data_id, destination, current_time);
     movement_manager.remove(data_id, destination);
+    assert(!movement_manager.is_moving(data_id, destination));
+    assert(launched_locations.is_valid(data_id, destination));
+    assert(reserved_locations.is_valid(data_id, destination));
+    assert(mapped_locations.is_valid(data_id, destination));
 
     comm_manager.release_connection(source, destination);
   }
@@ -1455,6 +1510,7 @@ public:
       device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
       device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
       lru_manager.invalidate(device, data_id);
+      assert(launched_locations.is_invalid(data_id, device));
       mask &= (mask - 1);
     }
   }
@@ -1484,6 +1540,9 @@ public:
       }
       mask &= (mask - 1);
     }
+    assert(mapped_locations.get_location_flags(data_id) == 0);
+    assert(reserved_locations.get_location_flags(data_id) == 0);
+    assert(launched_locations.get_location_flags(data_id) == 0);
   }
 
   void finalize(timecount_t current_time) {
