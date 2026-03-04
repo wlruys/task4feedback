@@ -23,7 +23,79 @@ option(SIM_RECORD  "Enable resource-usage and data-location logging"  OFF)
 option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
 option(ENABLE_TRACY         "Enable Tracy profiler support"   OFF)
 option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" OFF)
-option(ENABLE_PARMETIS "Enable ParMETIS, everything needs to be installed in ~/local" ON)
+option(ENABLE_PARMETIS "Enable ParMETIS support" ON)
+
+if(ENABLE_PARMETIS)
+    find_package(MPI REQUIRED)
+    
+    # GKlib needs to know if we are on x86 or not to disable x86 specific instructions
+    if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64)")
+        set(NO_X86 ON CACHE BOOL "Disable x86 specific code" FORCE)
+    endif()
+
+    FetchContent_Declare(GKlib
+        GIT_REPOSITORY https://github.com/KarypisLab/GKlib.git
+        GIT_TAG        master
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+    )
+    FetchContent_MakeAvailable(GKlib)
+
+    set(GKLIB_PATH ${gklib_SOURCE_DIR} CACHE PATH "Path to GKlib" FORCE)
+
+    FetchContent_Declare(METIS
+        GIT_REPOSITORY https://github.com/KarypisLab/METIS.git
+        GIT_TAG        master
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+    )
+    FetchContent_GetProperties(METIS)
+    if(NOT metis_POPULATED)
+        FetchContent_Populate(METIS)
+        # METIS normally builds 'xinclude' during a 'make config' step via a Makefile that invokes CMake
+        # Instead of creating it, we can just remove it from their CMakeLists.txt since it's just meant for make install
+        file(READ ${metis_SOURCE_DIR}/CMakeLists.txt METIS_CMAKE_CONTENT)
+        string(REPLACE "add_subdirectory(\"build/xinclude\")" "#add_subdirectory(\"build/xinclude\")" METIS_CMAKE_CONTENT "${METIS_CMAKE_CONTENT}")
+        string(REPLACE "add_subdirectory(programs)" "#add_subdirectory(programs)" METIS_CMAKE_CONTENT "${METIS_CMAKE_CONTENT}")
+        file(WRITE ${metis_SOURCE_DIR}/CMakeLists.txt "${METIS_CMAKE_CONTENT}")
+        
+        # We also need to copy metis.h to build/xinclude so the rest of the build can find it
+        file(MAKE_DIRECTORY ${metis_SOURCE_DIR}/build/xinclude)
+        file(COPY ${metis_SOURCE_DIR}/include/metis.h DESTINATION ${metis_SOURCE_DIR}/build/xinclude)
+        
+        add_subdirectory(${metis_SOURCE_DIR} ${metis_BINARY_DIR})
+    endif()
+
+    set(METIS_PATH ${metis_SOURCE_DIR} CACHE PATH "Path to METIS" FORCE)
+    set(MPI_INCLUDE_PATH ${MPI_CXX_INCLUDE_DIRS} CACHE PATH "MPI include path for ParMETIS" FORCE)
+    
+    # ParMETIS requires an older cmake policy
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
+
+    FetchContent_Declare(ParMETIS
+        GIT_REPOSITORY https://github.com/KarypisLab/ParMETIS.git
+        GIT_TAG        main
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+    )
+    FetchContent_GetProperties(ParMETIS)
+    if(NOT parmetis_POPULATED)
+        FetchContent_Populate(ParMETIS)
+        # We rewrite the cmake_minimum_required logic in ParMETIS directly to silence the warning/error in CMake 3.27+
+        # We also skip building test programs since they fail to link MPI locally
+        file(READ ${parmetis_SOURCE_DIR}/CMakeLists.txt PARMETIS_CMAKE_CONTENT)
+        string(REPLACE "cmake_minimum_required(VERSION 2.8)" "cmake_minimum_required(VERSION 3.10...3.27)" PARMETIS_CMAKE_CONTENT "${PARMETIS_CMAKE_CONTENT}")
+        string(REPLACE "add_subdirectory(programs)" "#add_subdirectory(programs)" PARMETIS_CMAKE_CONTENT "${PARMETIS_CMAKE_CONTENT}")
+        file(WRITE ${parmetis_SOURCE_DIR}/CMakeLists.txt "${PARMETIS_CMAKE_CONTENT}")
+        
+        add_subdirectory(${parmetis_SOURCE_DIR} ${parmetis_BINARY_DIR})
+    endif()
+
+    # Apply configuration defines that 'make config' would have normally generated
+    # into xinclude/metis.h so that both metis and parmetis can see them.
+    target_compile_definitions(metis PUBLIC IDXTYPEWIDTH=32 REALTYPEWIDTH=32)
+    target_compile_definitions(parmetis PUBLIC IDXTYPEWIDTH=32 REALTYPEWIDTH=32)
+endif()
 
 
 if(ENABLE_CCACHE)
