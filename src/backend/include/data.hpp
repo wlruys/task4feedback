@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <tracy/Tracy.hpp>
+#include <type_traits>
 #include <unordered_map>
 
 struct XYPosition {
@@ -345,7 +346,7 @@ protected:
 public:
   MovementManager() = default;
 
-  bool is_moving(dataid_t data_id, devid_t destination) const {
+  [[nodiscard]] bool is_moving(dataid_t data_id, devid_t destination) const {
     return movement_times.find(pack_movement_key(data_id, destination)) != movement_times.end();
   }
 
@@ -364,13 +365,18 @@ public:
     return true;
   }
 
-  inline void set_completion(dataid_t data_id, devid_t destination,
-                             timecount_t global_completion_time) {
-    movement_times[pack_movement_key(data_id, destination)] = global_completion_time;
+  [[nodiscard]] inline bool try_set_completion(dataid_t data_id, devid_t destination,
+                                               timecount_t global_completion_time) {
+    auto [it, inserted] =
+        movement_times.emplace(pack_movement_key(data_id, destination), global_completion_time);
+    if (!inserted) {
+      it->second = global_completion_time;
+    }
+    return inserted;
   }
 
-  inline void remove(dataid_t data_id, devid_t destination) {
-    movement_times.erase(pack_movement_key(data_id, destination));
+  [[nodiscard]] inline bool remove(dataid_t data_id, devid_t destination) {
+    return movement_times.erase(pack_movement_key(data_id, destination)) > 0;
   }
 };
 
@@ -1290,7 +1296,6 @@ public:
       SPDLOG_DEBUG("Data block {} already at device {}", data_id, destination);
       return {.is_virtual = true, .duration = 0};
     }
-    T4F_INVARIANT(!movement_manager.is_moving(data_id, destination));
 
     SPDLOG_DEBUG("Starting move of data block {} from device {} to device {}", data_id, source,
                  destination);
@@ -1310,8 +1315,9 @@ public:
                    destination);
     }
 
-    movement_manager.set_completion(data_id, destination, current_time + duration);
-    T4F_INVARIANT(movement_manager.is_moving(data_id, destination));
+    const bool inserted =
+        movement_manager.try_set_completion(data_id, destination, current_time + duration);
+    T4F_INVARIANT(inserted && "Duplicate in-flight movement for (data_id, destination)");
 
     comm_manager.reserve_connection(source, destination);
 
@@ -1347,11 +1353,10 @@ public:
     SPDLOG_DEBUG("Completing real move of data block {} from device {} to device {}", data_id,
                  source, destination);
 
-    T4F_INVARIANT(movement_manager.is_moving(data_id, destination));
     T4F_INVARIANT(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
-    movement_manager.remove(data_id, destination);
-    T4F_INVARIANT(!movement_manager.is_moving(data_id, destination));
+    const bool removed = movement_manager.remove(data_id, destination);
+    T4F_INVARIANT(removed && "Expected in-flight movement to exist at completion");
     T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
 
     comm_manager.release_connection(source, destination);
@@ -1384,13 +1389,12 @@ public:
     SPDLOG_DEBUG("Completing eviction move of data block {} from device {} to device {}", data_id,
                  source, destination);
 
-    T4F_INVARIANT(movement_manager.is_moving(data_id, destination));
     T4F_INVARIANT(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
     reserved_locations.set_valid(data_id, destination, current_time);
     mapped_locations.set_valid(data_id, destination, current_time);
-    movement_manager.remove(data_id, destination);
-    T4F_INVARIANT(!movement_manager.is_moving(data_id, destination));
+    const bool removed = movement_manager.remove(data_id, destination);
+    T4F_INVARIANT(removed && "Expected in-flight movement to exist at completion");
     T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
     T4F_INVARIANT(reserved_locations.is_valid(data_id, destination));
     T4F_INVARIANT(mapped_locations.is_valid(data_id, destination));
