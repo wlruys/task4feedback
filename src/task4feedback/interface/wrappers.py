@@ -1,43 +1,46 @@
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Optional, Type, Self
-from .types import (
-    DeviceTuple,
-    TaskTuple,
-    DataBlockTuple,
-    VariantTuple,
-    ConnectionTuple,
-    _bytes_to_readable,
-)
+from typing import Optional, Self, Type
+
 import cxxfilt
-from .lambdas import VariantBuilder, TaskLabeler, DataBlockTransformer
-from rich import print
 import numpy as np
+import torch
+from rich import print
+from tensordict.tensordict import TensorDict
+from torch_geometric.data import Batch, HeteroData
+
 import task4feedback.fastsim2 as fastsim
 from task4feedback.fastsim2 import (
-    Devices,
-    Topology,
-    Graph,
-    TaskNoise,
-    LognormalTaskNoise,
-    StaticTaskInfo,
-    RuntimeTaskInfo,
-    Data,
-    DeviceType,
-    SchedulerInput,
-    RangeTransitionConditions,
-    DefaultTransitionConditions,
     BatchTransitionConditions,
+    Data,
+    DefaultTransitionConditions,
+    Devices,
+    DeviceType,
+    EventType,
+    ExecutionState,
+    Graph,
+    LognormalTaskNoise,
+    ParMETIS_wrapper,
+    RangeTransitionConditions,
+    RuntimeTaskInfo,
+    SchedulerInput,
     SchedulerState,
     Simulator,
-    ExecutionState,
+    StaticTaskInfo,
+    TaskNoise,
+    Topology,
     start_logger,
-    EventType,
-    ParMETIS_wrapper,
 )
-import torch
-from tensordict.tensordict import TensorDict
-from torch_geometric.data import HeteroData, Batch
+
+from .lambdas import DataBlockTransformer, TaskLabeler, VariantBuilder
+from .types import (
+    ConnectionTuple,
+    DataBlockTuple,
+    DeviceTuple,
+    TaskTuple,
+    VariantTuple,
+    _bytes_to_readable,
+)
 
 
 def _make_node_tensor(nodes, dim, single=False):
@@ -104,7 +107,7 @@ class HashHolder:
             self.cache[h] = {}
         self.cache[h][feature] = value
 
-    def get(self, keys: tuple, feature: tuple) -> Optional[TensorDict]:
+    def get(self, keys: tuple, feature: tuple) -> TensorDict | None:
         h = self._keys_to_hash(keys)
         if h in self.cache and feature in self.cache[h]:
             y = self.cache[h][feature].detach().clone()
@@ -224,7 +227,7 @@ class TaskGraph:
         """
         Convert the older (2023-2024) python graph format to the new c++ stored graph format.
         """
-        from task4feedback.legacy_types import Device, Architecture
+        from task4feedback.legacy_types import Architecture, Device
 
         ids_to_tasks = {}
         tasks_to_ids = {}
@@ -342,6 +345,21 @@ class TaskGraph:
 
         return "\n".join(result)
 
+    def info_to_dict(self):
+        info = {}
+
+        task_count = self.graph.get_n_compute_tasks()
+
+        for i in range(task_count):
+            task = self.get_task(i)
+            info[task.id] = {
+                "dependencies": [self.get_task(dep).id for dep in task.dependencies],
+                "read": list(task.read),
+                "write": list(task.write),
+            }
+
+        return info
+
 
 class DataBlocks:
     def __init__(self, initial_size=0):
@@ -457,6 +475,9 @@ class DataBlocks:
 
         return "\n".join(result)
 
+    def __len__(self):
+        return self.data.size()
+
 
 class System:
     def __init__(
@@ -493,8 +514,8 @@ class System:
         h2d_max_copy,
         d2d_max_copy,
         memory,
-        flops: Optional[int] = None,
-        gmbw: Optional[int] = None,
+        flops: int | None = None,
+        gmbw: int | None = None,
     ):
         id = self.devices.append_device(name, arch, h2d_max_copy, d2d_max_copy, memory)
         if flops is not None:
@@ -663,7 +684,7 @@ class System:
 
 
 class ExternalMapper:
-    def __init__(self, mapper: Optional[Self] = None):
+    def __init__(self, mapper: Self | None = None):
         pass
 
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
@@ -679,9 +700,7 @@ class ExternalMapper:
 
 
 class StaticExternalMapper:
-    def __init__(
-        self, mapper: Optional[Self] = None, mapping_dict: Optional[dict] = None
-    ):
+    def __init__(self, mapper: Self | None = None, mapping_dict: dict | None = None):
         if mapper is not None:
             self.mapping_dict = mapper.mapping_dict
 
@@ -718,8 +737,8 @@ class SimulatorInput:
         graph: TaskGraph,
         data: DataBlocks,
         system: System,
-        task_noise: Optional[TaskNoise] = None,
-        transition_conditions: Optional[fastsim.TransitionConditions] = None,
+        task_noise: TaskNoise | None = None,
+        transition_conditions: fastsim.TransitionConditions | None = None,
         top_k_candidates: int = 1,
     ):
         if transition_conditions is None:
@@ -751,8 +770,8 @@ class SimulatorInput:
 class FeatureExtractorFactory:
     def __init__(
         self,
-        feature_list: Optional[list] = None,
-        options: Optional[dict[Type, tuple]] = None,
+        feature_list: list | None = None,
+        options: dict[type, tuple] | None = None,
     ):
         if feature_list is None:
             feature_list = []
@@ -769,7 +788,7 @@ class FeatureExtractorFactory:
             feature_extractor.add_feature(feature_t.create(state, *args))
         return feature_extractor
 
-    def add(self, feature_t: Type, *args):
+    def add(self, feature_t: type, *args):
         self.feature_list.append(feature_t)
 
         if args:
@@ -779,8 +798,8 @@ class FeatureExtractorFactory:
 class EdgeFeatureExtractorFactory:
     def __init__(
         self,
-        feature_list: Optional[list] = None,
-        options: Optional[dict[Type, tuple]] = None,
+        feature_list: list | None = None,
+        options: dict[type, tuple] | None = None,
     ):
         if feature_list is None:
             feature_list = []
@@ -797,7 +816,7 @@ class EdgeFeatureExtractorFactory:
             feature_extractor.add_feature(feature_t.create(state, *args))
         return feature_extractor
 
-    def add(self, feature_t: Type, *args):
+    def add(self, feature_t: type, *args):
         self.feature_list.append(feature_t)
 
         if args:
@@ -807,16 +826,16 @@ class EdgeFeatureExtractorFactory:
 @dataclass
 class ExternalObserverFactory:
     graph_spec: fastsim.GraphSpec
-    graph_extractor_t: Type[fastsim.GraphExtractor]
+    graph_extractor_t: type[fastsim.GraphExtractor]
     task_feature_factory: FeatureExtractorFactory
     data_feature_factory: FeatureExtractorFactory
     device_feature_factory: FeatureExtractorFactory
     task_task_feature_factory: EdgeFeatureExtractorFactory
-    task_data_feature_factory: Optional[EdgeFeatureExtractorFactory] = None
-    task_device_feature_factory: Optional[EdgeFeatureExtractorFactory] = None
-    data_device_feature_factory: Optional[EdgeFeatureExtractorFactory] = None
-    task_read_data_feature_factory: Optional[EdgeFeatureExtractorFactory] = None
-    task_write_data_feature_factory: Optional[EdgeFeatureExtractorFactory] = None
+    task_data_feature_factory: EdgeFeatureExtractorFactory | None = None
+    task_device_feature_factory: EdgeFeatureExtractorFactory | None = None
+    data_device_feature_factory: EdgeFeatureExtractorFactory | None = None
+    task_read_data_feature_factory: EdgeFeatureExtractorFactory | None = None
+    task_write_data_feature_factory: EdgeFeatureExtractorFactory | None = None
 
     def set_graph_spec(self, spec: fastsim.GraphSpec):
         self.graph_spec = spec
@@ -1142,11 +1161,11 @@ class ExternalObserver:
     data_features: fastsim.RuntimeFeatureExtractor
     device_features: fastsim.RuntimeFeatureExtractor
     task_task_features: fastsim.RuntimeEdgeFeatureExtractor
-    task_read_data_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = (None,)
-    task_write_data_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = (None,)
-    task_data_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
-    task_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
-    data_device_features: Optional[fastsim.RuntimeEdgeFeatureExtractor] = None
+    task_read_data_features: fastsim.RuntimeEdgeFeatureExtractor | None = (None,)
+    task_write_data_features: fastsim.RuntimeEdgeFeatureExtractor | None = (None,)
+    task_data_features: fastsim.RuntimeEdgeFeatureExtractor | None = None
+    task_device_features: fastsim.RuntimeEdgeFeatureExtractor | None = None
+    data_device_features: fastsim.RuntimeEdgeFeatureExtractor | None = None
     truncate: bool = True
     cache: bool = False
     remapped_candidates: bool = False
@@ -1440,7 +1459,7 @@ class ExternalObserver:
         else:
             return g1[l]
 
-    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
+    def new_observation_buffer(self, spec: fastsim.GraphSpec | None = None):
         if spec is None:
             spec = self.graph_spec
 
@@ -1514,7 +1533,7 @@ class ExternalObserver:
     def task_observation(
         self,
         output: TensorDict,
-        task_ids: Optional[torch.Tensor] = None,
+        task_ids: torch.Tensor | None = None,
         k: int = 1,
         neighborhood_type: NeighborhoodType = NeighborhoodType.ITERATIVE,
     ):
@@ -1846,7 +1865,7 @@ class ExternalObserver:
         # Get ordering of NN output for this observer
         self.get_candidate_action_map(output)
 
-    def get_observation(self, output: Optional[TensorDict] = None):
+    def get_observation(self, output: TensorDict | None = None):
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
 
@@ -1865,6 +1884,7 @@ class ExternalObserver:
         output.set_at_(("aux", "progress"), -2.0, 0)
         output.set_at_(("aux", "time"), self.simulator.time, 0)
         output.set_at_(("aux", "improvement"), -100.0, 0)
+        output.set_at_(("aux", "vs_policy"), -100.0, 0)
         # output["hetero_data"] = observation_to_heterodata(output)
 
         return output
@@ -1883,7 +1903,7 @@ class CandidateObserver(ExternalObserver):
     Only 1 vector no graph information is directly collected. Useful for testing without overhead of graph extraction.
     """
 
-    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
+    def new_observation_buffer(self, spec: fastsim.GraphSpec | None = None):
         if spec is None:
             spec = self.graph_spec
 
@@ -1913,6 +1933,7 @@ class CandidateObserver(ExternalObserver):
                 "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
                 "z_ch": torch.zeros((8), dtype=torch.float32),
                 "z_spa": torch.zeros((8), dtype=torch.float32),
+                "vs_policy": torch.zeros((1), dtype=torch.float32),
             }
         )
 
@@ -1925,7 +1946,7 @@ class CandidateObserver(ExternalObserver):
 
         return obs_tensor
 
-    def get_observation(self, output: Optional[TensorDict] = None):
+    def get_observation(self, output: TensorDict | None = None):
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
             raise Warning("Allocating new observation buffer, this is not efficient!")
@@ -1961,7 +1982,7 @@ class CandidateObserver(ExternalObserver):
         output.set_at_(("aux", "progress"), -2.0, 0)
         output.set_at_(("aux", "time"), self.simulator.time, 0)
         output.set_at_(("aux", "improvement"), -100.0, 0)
-
+        output.set_at_(("aux", "vs_policy"), -100.0, 0)
         return output
 
 
@@ -1990,7 +2011,7 @@ class CnnSingleTaskObserver(ExternalObserver):
             )
         self.prev_candidate = -1
 
-    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
+    def new_observation_buffer(self, spec: fastsim.GraphSpec | None = None):
         if spec is None:
             spec = self.graph_spec
         graph = self.simulator.input.graph
@@ -2012,6 +2033,7 @@ class CnnSingleTaskObserver(ExternalObserver):
                 "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
                 "z_ch": torch.zeros((8), dtype=torch.float32),
                 "z_spa": torch.zeros((8), dtype=torch.float32),
+                "vs_policy": torch.zeros((1), dtype=torch.float32),
             }
         )
 
@@ -2038,7 +2060,7 @@ class CnnSingleTaskObserver(ExternalObserver):
 
         return obs_tensor
 
-    def get_observation(self, output: Optional[TensorDict] = None):
+    def get_observation(self, output: TensorDict | None = None):
         graph = self.simulator.input.graph
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
@@ -2086,6 +2108,7 @@ class CnnSingleTaskObserver(ExternalObserver):
         output.set_at_(("aux", "progress"), -2.0, 0)
         output.set_at_(("aux", "time"), self.simulator.time, 0)
         output.set_at_(("aux", "improvement"), -100.0, 0)
+        output.set_at_(("aux", "vs_policy"), -100.0, 0)
 
         return output
 
@@ -2123,7 +2146,7 @@ class CnnBatchTaskObserver(ExternalObserver):
         self._task_to_grid_index = lookup
         return lookup
 
-    def new_observation_buffer(self, spec: Optional[fastsim.GraphSpec] = None):
+    def new_observation_buffer(self, spec: fastsim.GraphSpec | None = None):
         if spec is None:
             spec = self.graph_spec
         graph = self.simulator.input.graph
@@ -2145,6 +2168,7 @@ class CnnBatchTaskObserver(ExternalObserver):
                 "device_load": torch.zeros(2 * (spec.max_devices), dtype=torch.float32),
                 "z_ch": torch.zeros((8), dtype=torch.float32),
                 "z_spa": torch.zeros((8), dtype=torch.float32),
+                "vs_policy": torch.zeros((1), dtype=torch.float32),
             }
         )
 
@@ -2206,7 +2230,7 @@ class CnnBatchTaskObserver(ExternalObserver):
 
         action_map[:n_candidates].copy_(mapped)
 
-    def get_observation(self, output: Optional[TensorDict] = None):
+    def get_observation(self, output: TensorDict | None = None):
         graph = self.simulator.input.graph
         if output is None:
             output = self.new_observation_buffer(self.graph_spec)
@@ -2241,6 +2265,7 @@ class CnnBatchTaskObserver(ExternalObserver):
         output.set_at_(("aux", "progress"), -2.0, 0)
         output.set_at_(("aux", "time"), self.simulator.time, 0)
         output.set_at_(("aux", "improvement"), -100.0, 0)
+        output.set_at_(("aux", "vs_policy"), -100.0, 0)
 
         return output
 
@@ -2251,18 +2276,18 @@ class SimulatorDriver:
     internal_mapper: fastsim.Mapper
     external_mapper: ExternalMapper
     simulator: fastsim.Simulator
-    observer_factory: Optional[ExternalObserverFactory]
-    observer: Optional[ExternalObserver]
+    observer_factory: ExternalObserverFactory | None
+    observer: ExternalObserver | None
     use_external_mapper: bool = False
 
     def __init__(
         self,
         input: SimulatorInput,
         internal_mapper: fastsim.Mapper
-        | Type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
-        external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
-        observer_factory: Optional[ExternalObserverFactory] = None,
-        simulator: Optional[fastsim.Simulator] = None,
+        | type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
+        external_mapper: ExternalMapper | type[ExternalMapper] = ExternalMapper,
+        observer_factory: ExternalObserverFactory | None = None,
+        simulator: fastsim.Simulator | None = None,
     ):
         """
         Initializes the wrapper with the provided input, mappers, observer, and simulator.
@@ -2345,6 +2370,13 @@ class SimulatorDriver:
         """
         self.simulator.initialize_data()
 
+    def initialize_data_replicate(self, data_id, device_id):
+        """
+        Replicate a data block to a device during initialization.
+        This is used to set up initial data placements before simulation starts.
+        """
+        self.simulator.initialize_data_replicate(data_id, device_id)
+
     @property
     def mapper(self):
         if self.use_external_mapper:
@@ -2352,7 +2384,7 @@ class SimulatorDriver:
         return self.internal_mapper
 
     def enable_external_mapper(
-        self, external_mapper: Optional[ExternalMapper | Type[ExternalMapper]] = None
+        self, external_mapper: ExternalMapper | type[ExternalMapper] | None = None
     ):
         """
         Use external mapper for mapping tasks (run Python callback).
@@ -2553,10 +2585,10 @@ class SimulatorFactory:
         self,
         input: SimulatorInput,
         graph_spec: fastsim.GraphSpec,
-        observer_factory: ExternalObserverFactory | Type[ExternalObserverFactory],
+        observer_factory: ExternalObserverFactory | type[ExternalObserverFactory],
         internal_mapper: fastsim.Mapper
-        | Type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
-        external_mapper: ExternalMapper | Type[ExternalMapper] = ExternalMapper,
+        | type[fastsim.Mapper] = fastsim.DequeueEFTMapper,
+        external_mapper: ExternalMapper | type[ExternalMapper] = ExternalMapper,
         seed: int = 0,
         priority_seed: int = 0,
         comm_seed: int = 0,
@@ -2576,9 +2608,9 @@ class SimulatorFactory:
 
     def create(
         self,
-        duration_seed: Optional[int] = None,
-        priority_seed: Optional[int] = None,
-        comm_seed: Optional[int] = None,
+        duration_seed: int | None = None,
+        priority_seed: int | None = None,
+        comm_seed: int | None = None,
         use_external_mapper: bool = True,
     ) -> SimulatorDriver:
         if duration_seed is None:
@@ -2614,8 +2646,8 @@ class SimulatorFactory:
 
     def set_seed(
         self,
-        seed: Optional[int] = None,
-        priority_seed: Optional[int] = None,
+        seed: int | None = None,
+        priority_seed: int | None = None,
     ):
         """
         Set the seed for the simulator.
@@ -2657,14 +2689,14 @@ def uniform_connected_devices(
         s = System(**system_specs)
     n_gpus = n_devices - 1
 
-    s.create_device("CPU:0", DeviceType.CPU, cpu_copyengines, 0, int(2**62))
+    s.create_device("CPU:0", DeviceType.CPU, cpu_copyengines, 0, (2**62))
     for i in range(n_gpus):
         s.create_device(
             f"GPU:{i}",
             DeviceType.GPU,
             2,
             device_copyengines,
-            int(mem) if mem != float("inf") else int(2**62),
+            int(mem) if mem != float("inf") else (2**62),
         )
 
     s.finalize_devices()

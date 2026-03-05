@@ -203,5 +203,7 @@ compile_commands.json
 *.pyi
 
 experiments/models_*
+
 *.pdf
 *.png
+backup

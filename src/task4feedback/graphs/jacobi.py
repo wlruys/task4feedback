@@ -1,34 +1,35 @@
-from .mesh.base import Geometry, Cell, Edge
-from .mesh.partition import block_cyclic, ij_partition
+import math
+import random
+from collections import defaultdict, deque
+from dataclasses import dataclass
+from itertools import permutations
+from typing import Dict, List, Optional, Self, Tuple
+
+import numpy as np
+import sympy
+import torch
+from scipy.optimize import linear_sum_assignment
+
+from task4feedback import fastsim2 as fastsim
+
 from ..interface import DataBlocks, DeviceType, TaskTuple, VariantTuple
+from ..interface.lambdas import VariantBuilder
+from ..interface.types import _bytes_to_readable
+from ..interface.wrappers import *
+from ..interface.wrappers import StaticExternalMapper
 from .base import (
+    ComputeDataGraph,
     DataGeometry,
     DataKey,
     GeometryIDMap,
-    ComputeDataGraph,
-    WeightedCellGraph,
     GraphConfig,
+    WeightedCellGraph,
+    register_graph,
     weighted_cell_partition,
     weighted_partition,
-    register_graph,
 )
-from dataclasses import dataclass
-from ..interface.lambdas import VariantBuilder
-from ..interface.wrappers import StaticExternalMapper
-import random
-from itertools import permutations
-from collections import defaultdict
-import torch
-from typing import Self, List, Optional, Tuple, Dict
-from task4feedback import fastsim2 as fastsim
-from ..interface.wrappers import *
-from scipy.optimize import linear_sum_assignment
-import sympy
-from ..interface.types import _bytes_to_readable
-import numpy as np
-
-from collections import deque
-import math
+from .mesh.base import Cell, Edge, Geometry
+from .mesh.partition import block_cyclic, ij_partition
 
 
 @dataclass
@@ -46,12 +47,12 @@ class JacobiConfig(GraphConfig):
     level_memory: int = 1000000
     randomness: float = 0.0
     permute_idx: int = 0
-    task_time: Optional[int] = None
-    interior_time: Optional[int] = None
-    boundary_time: Optional[int] = None
-    interior_size: Optional[int] = None
-    boundary_size: Optional[int] = None
-    compute_time: Optional[int] = None
+    task_time: int | None = None
+    interior_time: int | None = None
+    boundary_time: int | None = None
+    interior_size: int | None = None
+    boundary_size: int | None = None
+    compute_time: int | None = None
     vcu_usage: float = 1.0
     task_internal_memory: int = 0
     bytes_per_element: int = 4  # Assuming float32 data type
@@ -66,11 +67,11 @@ def get_length_from_config(cfg: JacobiConfig):
 class JacobiData(DataGeometry):
     @staticmethod
     def from_mesh(
-        geometry: Geometry, config: JacobiConfig, system: Optional[System] = None
+        geometry: Geometry, config: JacobiConfig, system: System | None = None
     ):
         return JacobiData(geometry, config, system)
 
-    def _create_blocks(self, system: Optional[System] = None):
+    def _create_blocks(self, system: System | None = None):
         interiors_per_level = self.geometry.get_num_cells()
         edges_per_level = self.geometry.get_num_edges()
 
@@ -196,7 +197,7 @@ class JacobiData(DataGeometry):
         self,
         geometry: Geometry,
         config: JacobiConfig = JacobiConfig(),
-        system: Optional[System] = None,
+        system: System | None = None,
     ):
         super().__init__(geometry, DataBlocks(), GeometryIDMap())
         self.config = config
@@ -217,7 +218,7 @@ class JacobiData(DataGeometry):
     def idx_at_step(self, step: int):
         return step % 2
 
-    def set_location(self, obj: Cell | Edge, location: int, step: Optional[int] = None):
+    def set_location(self, obj: Cell | Edge, location: int, step: int | None = None):
         step_list = None if step is None else [step]
         id_list = self.map.key_to_block.get_leaves(obj, values=step_list)
 
@@ -234,13 +235,13 @@ class JacobiData(DataGeometry):
                     self.blocks.set_location(i, location)
 
     def set_locations_from_list(
-        self, location_list: list[int], step: Optional[int] = None
+        self, location_list: list[int], step: int | None = None
     ):
         for i, location in enumerate(location_list):
             self.set_location(Cell(i), location, step)
 
     def randomize_locations(
-        self, num_changes: int, location_list: list[int], step: Optional[int] = None
+        self, num_changes: int, location_list: list[int], step: int | None = None
     ):
         new_locations = []
 
@@ -277,7 +278,7 @@ class JacobiData(DataGeometry):
                 self.set_location(Cell(cell_id), new_location)
 
     def permute_locations(
-        self, location_map: dict[int, int], permutation_idx: Optional[int] = None
+        self, location_map: dict[int, int], permutation_idx: int | None = None
     ):
         # Form and apply a permutation of the location_map
         # NOTE: This is a brute force implementation (FORMS ALL PERMUTATIONS AT EVERY CALL)
@@ -423,26 +424,18 @@ class JacobiGraph(ComputeDataGraph):
                 if i > 0 and retire_data:
                     self.add_retire_data(task_id, prev_interiors[(cell, i - 1)])
 
-    def __init__(
-        self,
-        geometry: Geometry,
-        config: JacobiConfig,
-        system: Optional[System] = None,
-        variant: Optional[type[VariantBuilder]] = None,
-    ):
+    def _build_reference_partition(
+        self, config: JacobiConfig, system: System | None
+    ) -> list[int]:
         assert system is not None
-        super(JacobiGraph, self).__init__()
-        self.data = JacobiData.from_mesh(geometry, config, system=system)
-        self.config = config
-        self._build_graph()
-        self.dynamic = False
-        self.reference_partition = []  # Zero indexed partition list
         assert config.domain_ratio == 1.0, (
             "DynamicJacobiGraph only supports square domains for now."
         )
-        num_partitions = system.devices.size() - 1
 
-        # Find a grid (rows × cols) that exactly matches
+        reference_partition: list[int] = []
+        num_partitions = system.devices.size() - 1  # Assumes 1 CPU and rest are GPUs
+
+        # Find a grid (rows x cols) that exactly matches
         rows = int(math.sqrt(num_partitions))
         while rows > 0 and num_partitions % rows != 0:
             rows -= 1
@@ -464,7 +457,26 @@ class JacobiGraph(ComputeDataGraph):
                 block_row = i // block_h
                 block_col = j // block_w
                 partition_id = block_row * cols + block_col
-                self.reference_partition.append(partition_id)
+                reference_partition.append(partition_id)
+
+        return reference_partition
+
+    def __init__(
+        self,
+        geometry: Geometry,
+        config: JacobiConfig,
+        system: System | None = None,
+        variant: type[VariantBuilder] | None = None,
+    ):
+        assert system is not None
+        super().__init__()
+        self.data = JacobiData.from_mesh(geometry, config, system=system)
+        self.config = config
+        self._build_graph()
+        self.dynamic = False
+        self.reference_partition = self._build_reference_partition(
+            config, system
+        )  # Zero indexed partition list
 
         if variant is not None:
             self.apply_variant(variant)
@@ -483,9 +495,7 @@ class JacobiGraph(ComputeDataGraph):
 
         class JacobiVariant(VariantBuilder):
             @staticmethod
-            def build_variant(
-                arch: DeviceType, task: TaskTuple
-            ) -> Optional[VariantTuple]:
+            def build_variant(arch: DeviceType, task: TaskTuple) -> VariantTuple | None:
                 memory_usage = self.config.task_internal_memory
                 vcu_usage = self.config.vcu_usage
 
@@ -525,11 +535,11 @@ class JacobiGraph(ComputeDataGraph):
     def randomize_locations(
         self,
         perc_change: float,
-        location_list: Optional[list[int]] = None,
+        location_list: list[int] | None = None,
         min_loc: int = 0,
-        max_loc: Optional[int] = None,
+        max_loc: int | None = None,
         verbose: bool = False,
-        step: Optional[int] = None,
+        step: int | None = None,
     ):
         num_changes = int(perc_change * len(self.data.geometry.cells))
         if verbose:
@@ -549,12 +559,12 @@ class JacobiGraph(ComputeDataGraph):
             print(
                 f"Randomized locations for {len(selected_cells)} cells on step {step}:"
             )
-            for cell, new_location in zip(selected_cells, new_locations):
+            for cell, new_location in zip(selected_cells, new_locations, strict=False):
                 print(f"Cell {cell} -> New Location: {new_location}")
 
         return selected_cells, new_locations
 
-    def set_cell_locations(self, location_list: list[int], step: Optional[int] = None):
+    def set_cell_locations(self, location_list: list[int], step: int | None = None):
         self.data.set_locations_from_list(location_list, step)
 
     def set_cell_locations_from_dict(self, location_dict: dict[int, int]):
@@ -592,12 +602,12 @@ class JacobiGraph(ComputeDataGraph):
         return self.num_iterations
 
     def permute_locations(
-        self, location_map: dict[int, int], permutation_idx: Optional[int] = None
+        self, location_map: dict[int, int], permutation_idx: int | None = None
     ):
         return self.data.permute_locations(location_map, permutation_idx)
 
     def get_weighted_cell_graph(
-        self, arch: DeviceType, bandwidth=1000, levels: Optional[list[int]] = None
+        self, arch: DeviceType, bandwidth=1000, levels: list[int] | None = None
     ):
         """
         Given a list of levels, return the weighted cell interactions
@@ -664,21 +674,21 @@ class JacobiGraph(ComputeDataGraph):
     def get_distributed_weighted_graph(
         self,
         bandwidth: int,
-        task_ids: List[int],
-        partition: List[int],
+        task_ids: list[int],
+        partition: list[int],
         arch: DeviceType = DeviceType.GPU,
         future_levels: int = 0,
         width: int = 8,
         length: int = 8,
         n_compute_devices: int = 4,
-    ) -> Tuple[
-        List[List[int]],  # partitioned_tasks
+    ) -> tuple[
+        list[list[int]],  # partitioned_tasks
         np.ndarray,  # vtxdist
-        List[np.ndarray],  # xadj
-        List[np.ndarray],  # adjncy
-        List[np.ndarray],  # vwgt
-        List[np.ndarray],  # adjwgt
-        List[np.ndarray],  # vsize
+        list[np.ndarray],  # xadj
+        list[np.ndarray],  # adjncy
+        list[np.ndarray],  # vwgt
+        list[np.ndarray],  # adjwgt
+        list[np.ndarray],  # vsize
     ]:
         """
         Build a weighted graph (CSR per partition) for distributed partitioning.
@@ -715,28 +725,28 @@ class JacobiGraph(ComputeDataGraph):
 
         # ---------- Data structures per partition ----------
         # CSR components and weights per partition
-        xadj: List[List[int]] = [[0] for _ in range(n_compute_devices)]
-        adjncy: List[List[int]] = [[] for _ in range(n_compute_devices)]
-        vwgt: List[List[int]] = [[] for _ in range(n_compute_devices)]  # compute time
-        adjwgt: List[List[int]] = [
+        xadj: list[list[int]] = [[0] for _ in range(n_compute_devices)]
+        adjncy: list[list[int]] = [[] for _ in range(n_compute_devices)]
+        vwgt: list[list[int]] = [[] for _ in range(n_compute_devices)]  # compute time
+        adjwgt: list[list[int]] = [
             [] for _ in range(n_compute_devices)
         ]  # data transfer time
-        vsize: List[List[int]] = [
+        vsize: list[list[int]] = [
             [] for _ in range(n_compute_devices)
         ]  # internal data size proxy
 
-        vtxdist: List[int] = [
+        vtxdist: list[int] = [
             0
         ]  # prefix of vertex counts (will accumulate when partition changes)
-        partitioned_tasks: List[List[int]] = [[] for _ in range(n_compute_devices)]
+        partitioned_tasks: list[list[int]] = [[] for _ in range(n_compute_devices)]
 
         # Pair tasks with their partition and sort by partition to make vtxdist/xadj simpler.
-        pairs: List[Tuple[int, int]] = sorted(
-            zip(task_ids, partition), key=lambda x: x[1]
+        pairs: list[tuple[int, int]] = sorted(
+            zip(task_ids, partition, strict=False), key=lambda x: x[1]
         )
 
         # Map task_id -> "global-local" index (i.e., index into the sorted 'pairs' list).
-        task_to_local: Dict[int, int] = {
+        task_to_local: dict[int, int] = {
             task_id: i for i, (task_id, _) in enumerate(pairs)
         }
 
@@ -1095,17 +1105,17 @@ class JacobiGraph(ComputeDataGraph):
             raise ValueError("Labels must be non-negative integers (0..K-1).")
 
         # Global K across both labelings
-        K = int(max(ref.max(), cur.max())) + 1
+        k = int(max(ref.max(), cur.max())) + 1
 
         # Confusion matrix via bincount over flattened pair indices
-        idx = ref * K + cur
-        cm = np.bincount(idx, minlength=K * K).reshape(K, K)
+        idx = ref * k + cur
+        cm = np.bincount(idx, minlength=k * k).reshape(k, k)
 
         # Max-agreement assignment
         row_ind, col_ind = linear_sum_assignment(-cm)
 
         # Build label mapping: map each label in `cur` (columns) -> label in `ref` (rows)
-        perm = np.arange(K, dtype=int)
+        perm = np.arange(k, dtype=int)
         perm[col_ind] = row_ind
 
         # Apply mapping
@@ -1131,7 +1141,7 @@ register_graph(JacobiGraph, JacobiConfig)
 
 class JacobiVariant(VariantBuilder):
     @staticmethod
-    def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
+    def build_variant(arch: DeviceType, task: TaskTuple) -> VariantTuple | None:
         memory_usage = 0
         vcu_usage = 1
         expected_time = 1000
@@ -1145,7 +1155,7 @@ class PredictWorkload:
     def __init__(
         self,
         cells: int,
-        window_size: Optional[int] = None,
+        window_size: int | None = None,
         alpha: float = 0.3,
     ):
         """
@@ -1159,16 +1169,16 @@ class PredictWorkload:
 
         # Buffers retained if you still want to keep history; otherwise you can drop this.
         if window_size is not None:
-            self.buffers: List[deque[float]] = [
+            self.buffers: list[deque[float]] = [
                 deque(maxlen=window_size) for _ in range(cells)
             ]
         else:
-            self.buffers: List[List[float]] = [[] for _ in range(cells)]
+            self.buffers: list[list[float]] = [[] for _ in range(cells)]
 
         # Initialize EMA values to None (will be set on first submit)
-        self.ema_values: List[Optional[float]] = [None] * cells
+        self.ema_values: list[float | None] = [None] * cells
 
-    def submit_workload(self, workloads: List[float]):
+    def submit_workload(self, workloads: list[float]):
         """
         Append the new workloads and update EMA for each cell.
         """
@@ -1189,7 +1199,7 @@ class PredictWorkload:
                     self.alpha * w + (1.0 - self.alpha) * self.ema_values[i]
                 )
 
-    def compute_next_k(self, i: int, k: int) -> List[float]:
+    def compute_next_k(self, i: int, k: int) -> list[float]:
         """
         Forecast k steps for cell i by projecting the current EMA forward.
         """
@@ -1197,12 +1207,12 @@ class PredictWorkload:
         assert ema is not None, f"No EMA for cell {i}, cannot predict."
         return [ema] * k
 
-    def predict_workload(self, k: int) -> List[int]:
+    def predict_workload(self, k: int) -> list[int]:
         """
         For each cell i, forecast the next k steps (using EMA) and
         return the integer total (sum over k).
         """
-        preds: List[int] = []
+        preds: list[int] = []
         for i in range(self.cells):
             next_vals = self.compute_next_k(i, k)
             preds.append(int(sum(next_vals)))
@@ -1212,10 +1222,10 @@ class PredictWorkload:
 class GraphMETISMapper(StaticExternalMapper):
     def __init__(
         self,
-        mapper: Optional[Self] = None,
+        mapper: Self | None = None,
         n_devices: int = 4,
         offset: int = 1,
-        graph: Optional[ComputeDataGraph] = None,
+        graph: ComputeDataGraph | None = None,
         arch: DeviceType = DeviceType.GPU,
         bandwidth: int = 100e9,
     ):
@@ -1255,8 +1265,8 @@ class GraphMETISMapper(StaticExternalMapper):
 class PartitionMapper:
     def __init__(
         self,
-        mapper: Optional[Self] = None,
-        cell_to_mapping: Optional[dict] = None,
+        mapper: Self | None = None,
+        cell_to_mapping: dict | None = None,
         level_start: int = 0,
     ):
         if mapper is not None:
@@ -1318,8 +1328,8 @@ class PartitionMapper:
 class BlockCyclicMapper(PartitionMapper):
     def __init__(
         self,
-        mapper: Optional[Self] = None,
-        geometry: Optional[Geometry] = None,
+        mapper: Self | None = None,
+        geometry: Geometry | None = None,
         n_devices: int = 4,
         block_size: int = 2,
         offset: int = 1,
@@ -1363,77 +1373,10 @@ class BlockCyclicMapper(PartitionMapper):
             )
 
 
-class RowColCyclicMapper(PartitionMapper):
-    def __init__(
-        self,
-        geometry: Geometry,
-        n_devices: int = 4,
-        setting: int = 0,
-        offset: int = 1,
-        level_start: int = 0,
-        mapper: Optional[Self] = None,
-        round: int = 2,
-    ):
-        """
-        setting == 0 : Checkerboard
-        setting == 1 : Row cyclic
-        setting == 2 : Column cyclic
-        """
-        self.geometry = geometry
-        self.n_devices = n_devices
-        self.setting = setting
-        self.offset = offset
-        self.level_start = level_start
-
-        if mapper is not None:
-            assert isinstance(mapper, RowColCyclicMapper)
-            self.cell_to_mapping = mapper.cell_to_mapping
-            return
-
-        # Use the same (i,j) partitioning as block_cyclic
-        _, _, row_keys, col_keys, ij_map = ij_partition(geometry, round=round)
-
-        cell_to_mapping = {}
-
-        for i, rv in enumerate(row_keys):
-            for j, cv in enumerate(col_keys):
-                cells = ij_map[(rv, cv)]
-
-                if setting == 0:
-                    # Checkerboard
-                    if n_devices == 2:
-                        device = (i + j) & 1
-                    elif n_devices == 4:
-                        device = (i & 1) * 2 + (j & 1)
-                    else:
-                        device = (i + j) % n_devices
-
-                elif setting == 1:
-                    # Row cyclic
-                    device = i % n_devices
-
-                elif setting == 2:
-                    # Column cyclic
-                    device = j % n_devices
-
-                else:
-                    raise ValueError(f"Invalid setting {setting}")
-
-                device += offset
-
-                for c in cells:
-                    cell_to_mapping[c] = device
-
-        super().__init__(
-            cell_to_mapping=cell_to_mapping,
-            level_start=level_start,
-        )
-
-
 class LevelPartitionMapper:
     def __init__(
         self,
-        mapper: Optional[Self] = None,
+        mapper: Self | None = None,
         level_cell_mapping: dict[tuple[int, int] : list[int]] = None,
     ):
         if mapper is not None:
@@ -1485,7 +1428,7 @@ class JacobiRoundRobinMapper:
         n_devices: int = 4,
         setting: int = 0,
         offset: int = 1,
-        mapper: Optional[Self] = None,
+        mapper: Self | None = None,
     ):
         """
         Initialize the JacobiRoundRobinMapper.
@@ -1550,7 +1493,7 @@ class JacobiQuadrantMapper:
         n_devices: int,
         graph: JacobiGraph,
         offset: int = 1,
-        mapper: Optional[Self] = None,
+        mapper: Self | None = None,
     ):
         self.n_devices = n_devices
         self.width = graph.nx
@@ -1589,7 +1532,7 @@ class JacobiQuadrantMapper:
 
 class JacobiVariantGPUOnly(VariantBuilder):
     @staticmethod
-    def build_variant(arch: DeviceType, task: TaskTuple) -> Optional[VariantTuple]:
+    def build_variant(arch: DeviceType, task: TaskTuple) -> VariantTuple | None:
         memory_usage = 0
         vcu_usage = 1
         expected_time = 1000
@@ -1597,122 +1540,6 @@ class JacobiVariantGPUOnly(VariantBuilder):
             return VariantTuple(arch, memory_usage, vcu_usage, expected_time)
         else:
             return None
-
-
-@dataclass(kw_only=True)
-class XYExternalObserver(ExternalObserver):
-    def data_observation(self, output):
-        super().data_observation(output)
-        graph: JacobiGraph = self.simulator.input.graph
-        data: JacobiData = graph.data
-
-        count = output["nodes"]["data"]["count"][0]
-        for i, id in enumerate(output["nodes"]["data"]["glb"][:count]):
-            id = int(id)
-            datakey = data.get_key(id)
-            if isinstance(datakey.id, Cell):
-                datakey = datakey.id.id
-            elif isinstance(datakey.id, tuple):
-                datakey = datakey.id[0].id
-            else:
-                datakey = datakey.object.id
-            centroid = graph.data.geometry.get_centroid(datakey)
-
-            # Assume last two entries are x, y coordinates
-            output["nodes"]["data"]["attr"][i][-2] = centroid[0]
-            output["nodes"]["data"]["attr"][i][-1] = centroid[1]
-
-
-@dataclass(kw_only=True)
-class XYNormalizedDeviceQueueObserver(XYExternalObserver):
-    def device_observation(self, output: TensorDict):
-        super().device_observation(output)
-
-        count = output["nodes"]["devices"]["count"][0]
-
-        # Assume each device feature vector is only duration queue lengths
-        with torch.no_grad():
-            max_length = 0
-            for i in range(count):
-                total_queue_length = output["nodes"]["devices"]["attr"][i].sum()
-                if total_queue_length > max_length:
-                    max_length = total_queue_length
-
-            if max_length > 0:
-                for i in range(count):
-                    output["nodes"]["devices"]["attr"][i] /= max_length
-
-
-@dataclass(kw_only=True)
-class XYExternalObserverFactory(ExternalObserverFactory):
-    def create(self, simulator: SimulatorDriver):
-        state = simulator.get_state()
-        graph_spec = self.graph_spec
-        graph_extractor = self.graph_extractor_t(state)
-        task_feature_extractor = self.task_feature_factory.create(state)
-        data_feature_extractor = self.data_feature_factory.create(state)
-        device_feature_extractor = self.device_feature_factory.create(state)
-        task_task_feature_extractor = self.task_task_feature_factory.create(state)
-        task_data_feature_extractor = self.task_data_feature_factory.create(state)
-        task_device_feature_extractor = (
-            self.task_device_feature_factory.create(state)
-            if self.task_device_feature_factory is not None
-            else None
-        )
-        data_device_feature_extractor = (
-            self.data_device_feature_factory.create(state)
-            if self.data_device_feature_factory is not None
-            else None
-        )
-
-        return XYNormalizedDeviceQueueObserver(
-            simulator,
-            graph_spec,
-            graph_extractor,
-            task_feature_extractor,
-            data_feature_extractor,
-            device_feature_extractor,
-            task_task_feature_extractor,
-            task_data_feature_extractor,
-            task_device_feature_extractor,
-            data_device_feature_extractor,
-        )
-
-
-# @dataclass(kw_only=True)
-# class XYExternalHeterogeneousObserverFactory(ExternalObserverFactory):
-#     def create(self, simulator: SimulatorDriver):
-#         state = simulator.get_state()
-#         graph_spec = self.graph_spec
-#         graph_extractor = self.graph_extractor_t(state)
-#         task_feature_extractor = self.task_feature_factory.create(state)
-#         data_feature_extractor = self.data_feature_factory.create(state)
-#         device_feature_extractor = self.device_feature_factory.create(state)
-#         task_task_feature_extractor = self.task_task_feature_factory.create(state)
-#         task_data_feature_extractor = self.task_data_feature_factory.create(state)
-#         task_device_feature_extractor = (
-#             self.task_device_feature_factory.create(state)
-#             if self.task_device_feature_factory is not None
-#             else None
-#         )
-#         data_device_feature_extractor = (
-#             self.data_device_feature_factory.create(state)
-#             if self.data_device_feature_factory is not None
-#             else None
-#         )
-
-#         return XYHeterogeneousObserver(
-#             simulator,
-#             graph_spec,
-#             graph_extractor,
-#             task_feature_extractor,
-#             data_feature_extractor,
-#             device_feature_extractor,
-#             task_task_feature_extractor,
-#             task_data_feature_extractor,
-#             task_device_feature_extractor,
-#             data_device_feature_extractor,
-#         )
 
 
 @dataclass(kw_only=True)
@@ -1748,264 +1575,6 @@ class CandidateExternalObserverFactory(ExternalObserverFactory):
             task_data_feature_extractor,
             task_device_feature_extractor,
             data_device_feature_extractor,
-        )
-
-
-@dataclass(kw_only=True)
-class GATExternalObserverFactory(ExternalObserverFactory):
-    def create(self, simulator: SimulatorDriver):
-        state = simulator.get_state()
-        graph_spec = self.graph_spec
-        graph_extractor = self.graph_extractor_t(state)
-        task_feature_extractor = self.task_feature_factory.create(state)
-        data_feature_extractor = self.data_feature_factory.create(state)
-        device_feature_extractor = self.device_feature_factory.create(state)
-        task_task_feature_extractor = self.task_task_feature_factory.create(state)
-        task_read_data_feature_extractor = self.task_read_data_feature_factory.create(
-            state
-        )
-
-        return ExternalObserver(
-            simulator,
-            graph_spec,
-            graph_extractor,
-            task_features=task_feature_extractor,
-            data_features=data_feature_extractor,
-            device_features=device_feature_extractor,
-            task_task_features=task_task_feature_extractor,
-            task_read_data_features=task_read_data_feature_extractor,
-            cache=True,
-        )
-
-
-# class XYHeterogeneousObserverFactory(XYExternalHeterogeneousObserverFactory):
-#     def __init__(self, spec: fastsim.GraphSpec):
-#         graph_extractor_t = fastsim.GraphExtractor
-#         task_feature_factory = FeatureExtractorFactory()
-#         task_feature_factory.add(fastsim.DepthTaskFeature)
-#         # task_feature_factory.add(fastsim.InDegreeTaskFeature)
-#         # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-#         task_feature_factory.add(fastsim.TaskStateFeature)
-
-#         data_feature_factory = FeatureExtractorFactory()
-#         data_feature_factory.add(fastsim.DataSizeFeature)
-#         data_feature_factory.add(fastsim.EmptyDataFeature, 2)
-
-#         device_feature_factory = FeatureExtractorFactory()
-#         device_feature_factory.add(fastsim.DeviceIDFeature)
-#         device_feature_factory.add(fastsim.DeviceTimeFeature)
-
-#         task_task_feature_factory = EdgeFeatureExtractorFactory()
-#         task_task_feature_factory.add(fastsim.TaskTaskDefaultEdgeFeature)
-
-#         task_data_feature_factory = EdgeFeatureExtractorFactory()
-#         task_data_feature_factory.add(fastsim.TaskDataDefaultEdgeFeature)
-
-#         task_device_feature_factory = EdgeFeatureExtractorFactory()
-#         task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
-
-#         data_device_feature_factory = EdgeFeatureExtractorFactory()
-#         data_device_feature_factory.add(fastsim.DataDeviceDefaultEdgeFeature)
-
-#         super().__init__(
-#             spec,
-#             graph_extractor_t,
-#             task_feature_factory,
-#             data_feature_factory,
-#             device_feature_factory,
-#             task_task_feature_factory,
-#             task_data_feature_factory,
-#             task_device_feature_factory,
-#             data_device_feature_factory,
-#         )
-
-
-class XYObserverFactory(XYExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec):
-        graph_extractor_t = fastsim.GraphExtractor
-        task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.PrevMappedDeviceTaskFeature)
-        task_feature_factory.add(fastsim.DepthTaskFeature)
-        task_feature_factory.add(fastsim.TagTaskFeature)
-        # task_feature_factory.add(fastsim.TaskStateFeature)
-
-        data_feature_factory = FeatureExtractorFactory()
-        data_feature_factory.add(fastsim.ScaledDataMappedLocationsFeature)
-        data_feature_factory.add(fastsim.EmptyDataFeature, 2)
-
-        device_feature_factory = FeatureExtractorFactory()
-        device_feature_factory.add(fastsim.DeviceTimeFeature)
-
-        task_task_feature_factory = EdgeFeatureExtractorFactory()
-        task_task_feature_factory.add(fastsim.TaskTaskDefaultEdgeFeature)
-
-        task_data_feature_factory = EdgeFeatureExtractorFactory()
-        task_data_feature_factory.add(fastsim.TaskDataDefaultEdgeFeature)
-
-        task_device_feature_factory = EdgeFeatureExtractorFactory()
-        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
-
-        data_device_feature_factory = EdgeFeatureExtractorFactory()
-        data_device_feature_factory.add(fastsim.DataDeviceDefaultEdgeFeature)
-
-        super().__init__(
-            spec,
-            graph_extractor_t,
-            task_feature_factory,
-            data_feature_factory,
-            device_feature_factory,
-            task_task_feature_factory,
-            task_data_feature_factory,
-            task_device_feature_factory,
-            data_device_feature_factory,
-        )
-
-
-# class XYMinimalObserverFactory(XYExternalObserverFactory):
-#     def __init__(self, spec: fastsim.GraphSpec):
-#         graph_extractor_t = fastsim.GraphExtractor
-#         task_feature_factory = FeatureExtractorFactory()
-#         # task_feature_factory.add(fastsim.InDegreeTaskFeature)
-#         # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-#         # task_feature_factory.add(fastsim.TaskStateFeature)
-#         # task_feature_factory.add(fastsim.PrevMappedDeviceTaskFeature)
-#         task_feature_factory.add(
-#             fastsim.EmptyTaskFeature, 1
-#         )  # 2 for x, y position, last for whether it is mapped
-
-#         data_feature_factory = FeatureExtractorFactory()
-#         data_feature_factory.add(fastsim.DataSizeFeature)
-#         data_feature_factory.add(fastsim.EmptyDataFeature, 2)
-#         # data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-
-#         device_feature_factory = FeatureExtractorFactory()
-#         # device_feature_factory.add(fastsim.DeviceArchitectureFeature)
-#         device_feature_factory.add(fastsim.DeviceIDFeature)
-#         # device_feature_factory.add(fastsim.DeviceMemoryFeature)
-#         device_feature_factory.add(fastsim.DeviceTimeFeature)
-
-#         task_task_feature_factory = EdgeFeatureExtractorFactory()
-#         task_task_feature_factory.add(fastsim.TaskTaskSharedDataFeature)
-
-#         task_data_feature_factory = EdgeFeatureExtractorFactory()
-#         task_data_feature_factory.add(fastsim.TaskDataRelativeSizeFeature)
-#         # task_data_feature_factory.add(fastsim.TaskDataUsageFeature)
-
-#         task_device_feature_factory = EdgeFeatureExtractorFactory()
-#         task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
-
-#         data_device_feature_factory = None
-
-#         super().__init__(
-#             spec,
-#             graph_extractor_t,
-#             task_feature_factory,
-#             data_feature_factory,
-#             device_feature_factory,
-#             task_task_feature_factory,
-#             task_data_feature_factory,
-#             task_device_feature_factory,
-#             data_device_feature_factory,
-#         )
-
-
-class GATObserverFactory(GATExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, version: str = "C", **_ignored):
-        graph_extractor_t = fastsim.GraphExtractor
-        task_feature_factory = FeatureExtractorFactory()
-        data_feature_factory = FeatureExtractorFactory()
-
-        # task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        # task_feature_factory.add(fastsim.OutDegreeTaskFeature)
-
-        device_feature_factory = FeatureExtractorFactory()
-        device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
-
-        task_task_feature_factory = EdgeFeatureExtractorFactory()
-        task_task_feature_factory.add(fastsim.TaskTaskDefaultEdgeFeature)
-
-        task_read_data_feature_factory = EdgeFeatureExtractorFactory()
-        task_read_data_feature_factory.add(fastsim.TaskDataMappedFeature)
-
-        task_write_data_feature_factory = EdgeFeatureExtractorFactory()
-        task_write_data_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
-
-        # "DFGH" have removed [-4:0] normalization
-
-        if "A" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            data_feature_factory.add(fastsim.DataSizeFeature)
-        elif "B" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            data_feature_factory.add(fastsim.DataSizeFeature)
-            data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-        elif "C" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            data_feature_factory.add(fastsim.DataSizeFeature)
-            data_feature_factory.add(fastsim.DataCoordinateFeature)
-        elif "L" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            data_feature_factory.add(fastsim.DataSizeFeature)
-            data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-            data_feature_factory.add(fastsim.DataCoordinateFeature)
-        elif "K" in version:
-            task_feature_factory.add(fastsim.InputOutputTaskFeature)
-            task_feature_factory.add(fastsim.TaskStateFeature)
-            data_feature_factory.add(fastsim.DataSizeFeature)
-            data_feature_factory.add(fastsim.DataMappedLocationsFeature)
-            data_feature_factory.add(fastsim.DataCoordinateFeature)
-
-        super().__init__(
-            spec,
-            graph_extractor_t,
-            task_feature_factory=task_feature_factory,
-            data_feature_factory=data_feature_factory,
-            device_feature_factory=device_feature_factory,
-            task_task_feature_factory=task_task_feature_factory,
-            task_read_data_feature_factory=task_read_data_feature_factory,
-            task_write_data_feature_factory=task_write_data_feature_factory,
-        )
-
-
-class CandidateObserverFactory(CandidateExternalObserverFactory):
-    def __init__(self, spec: fastsim.GraphSpec, **_ignored):
-        graph_extractor_t = fastsim.GraphExtractor
-        task_feature_factory = FeatureExtractorFactory()
-        task_feature_factory.add(fastsim.CandidateVectorFeature)
-        # task_feature_factory.add(fastsim.TaskDeviceMappedTimeFeature)
-        # task_feature_factory.add(fastsim.TaskDataMappedLocationsFeature)
-        # task_feature_factory.add(fastsim.InDegreeTaskFeature)
-        # #task_feature_factory.add(fastsim.StandardizedGPUDurationTaskFeature)
-        # task_feature_factory.add(fastsim.StandardizedInputOutputTaskFeature)
-
-        data_feature_factory = FeatureExtractorFactory()
-        data_feature_factory.add(fastsim.EmptyDataFeature, 1)
-
-        device_feature_factory = FeatureExtractorFactory()
-        device_feature_factory.add(fastsim.EmptyDeviceFeature, 1)
-
-        task_task_feature_factory = EdgeFeatureExtractorFactory()
-        task_task_feature_factory.add(fastsim.EmptyTaskTaskFeature, 1)
-
-        task_data_feature_factory = EdgeFeatureExtractorFactory()
-        task_data_feature_factory.add(fastsim.EmptyTaskDataFeature, 1)
-
-        task_device_feature_factory = EdgeFeatureExtractorFactory()
-        task_device_feature_factory.add(fastsim.TaskDeviceDefaultEdgeFeature)
-
-        data_device_feature_factory = EdgeFeatureExtractorFactory()
-        data_device_feature_factory.add(fastsim.DataDeviceDefaultEdgeFeature)
-
-        super().__init__(
-            spec,
-            graph_extractor_t,
-            task_feature_factory,
-            data_feature_factory,
-            device_feature_factory,
-            task_task_feature_factory,
-            task_data_feature_factory,
-            task_device_feature_factory,
-            data_device_feature_factory,
         )
 
 

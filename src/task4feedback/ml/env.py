@@ -1,40 +1,38 @@
-import task4feedback.fastsim2 as fastsim
-from task4feedback.interface import *
-import torch
-from typing import Optional, List
-import numpy as np
 import gc
+import random
+from time import perf_counter
+from typing import List, Optional
 
-from torchrl.envs import EnvBase
+import numpy as np
+import torch
+from tensordict import TensorDict
+from torch_geometric.data import HeteroData
+
+import task4feedback.fastsim2 as fastsim
+from task4feedback.fastsim2 import GraphExtractor, SchedulerState
+from task4feedback.graphs.base import ComputeDataGraph, DataBlocks, TaskGraph
+from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
+from task4feedback.graphs.jacobi import (
+    BlockCyclicMapper,
+    JacobiGraph,
+    JacobiQuadrantMapper,
+    JacobiRoundRobinMapper,
+    LevelPartitionMapper,
+)
+from task4feedback.graphs.mesh.plot import *
+from task4feedback.interface import *
 from task4feedback.interface.wrappers import (
     DefaultObserverFactory,
     SimulatorFactory,
+    System,
     create_graph_spec,
     observation_to_heterodata,
-    System,
 )
-from task4feedback.fastsim2 import GraphExtractor, SchedulerState
-from torchrl.data import Composite, TensorSpec, Unbounded, Binary, Bounded
-from torchrl.envs.utils import make_composite_from_td
-from torchrl.envs import StepCounter, TrajCounter, TransformedEnv
-from tensordict import TensorDict
-from task4feedback.graphs.base import TaskGraph, DataBlocks, ComputeDataGraph
-import random
-from task4feedback.graphs.mesh.plot import *
 from task4feedback.legacy_graphs import *
-from task4feedback.graphs.jacobi import (
-    JacobiGraph,
-    JacobiRoundRobinMapper,
-    JacobiQuadrantMapper,
-    LevelPartitionMapper,
-    BlockCyclicMapper,
-)
-from task4feedback.graphs.dynamic_jacobi import DynamicJacobiGraph
-from torch_geometric.data import HeteroData
-from torchrl.data import Categorical
 from task4feedback.logging import training
-from time import perf_counter
-import gc
+from torchrl.data import Binary, Bounded, Categorical, Composite, TensorSpec, Unbounded
+from torchrl.envs import EnvBase, StepCounter, TrajCounter, TransformedEnv
+from torchrl.envs.utils import make_composite_from_td
 
 
 def rle_reward(f, z):
@@ -66,14 +64,13 @@ class RuntimeEnv(EnvBase):
         workload_seed=0,
         priority_seed=0,
         location_randomness=1,
-        location_list: Optional[List[int]] = None,
+        location_list: list[int] | None = None,
         max_samples_per_iter: int = 0,
         random_start: bool = False,
         verbose: bool = True,
         sample_z: bool = False,
         burn_in_resets: int = 10,
         extra_logging_policy: str = "EFT",
-        fixed_baseline: Optional[float] = None,
         **_ignored,
     ):
         super().__init__(device=device)
@@ -89,7 +86,6 @@ class RuntimeEnv(EnvBase):
         self.random_start = random_start
         self.sample_z = sample_z
         self.burn_in_resets = burn_in_resets
-        self.fixed_baseline = fixed_baseline
 
         if location_list is None:
             location_list = [
@@ -321,7 +317,7 @@ class RuntimeEnv(EnvBase):
         comp = make_composite_from_td(td, unsqueeze_null_shapes=False)
         return comp
 
-    def get_graph(self, active_idx: Optional[int] = None):
+    def get_graph(self, active_idx: int | None = None):
         if active_idx is None:
             active_idx = self.active_idx
         return self.simulator_factory[active_idx].input.graph
@@ -504,8 +500,8 @@ class RuntimeEnv(EnvBase):
     def set_reset_counter(self, count):
         self.resets = count
 
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
-        training.info("Resetting environment (reset count: {})".format(self.resets))
+    def _reset(self, td: TensorDict | None = None) -> TensorDict:
+        training.info(f"Resetting environment (reset count: {self.resets})")
         self.resets += 1
         self.step_count = 0
         current_priority_seed = self.simulator_factory[self.active_idx].pseed
@@ -549,6 +545,9 @@ class RuntimeEnv(EnvBase):
             graph.randomize_workload(
                 seed=new_workload_seed,
                 system=self.simulator_factory[self.active_idx].input.system,
+            )
+            assert hasattr(graph, "make_partition"), (
+                "Graph must have make_partition method."
             )
             partition = graph.make_partition(
                 arch=DeviceType.GPU,
@@ -603,7 +602,7 @@ class RuntimeEnv(EnvBase):
     def observer(self):
         return self.simulator.observer
 
-    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
+    def _set_seed(self, seed: int | None = None, static_seed: int | None = None):
         if self.verbose:
             print(
                 f"""
@@ -902,7 +901,7 @@ class SparseLookbackKStep(RuntimeEnv):
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+    def _reset(self, td: TensorDict | None = None) -> TensorDict:
         if self.random_offset:
             self.offset = random.randint(1, self.k)
         return super()._reset(td)
@@ -1114,11 +1113,8 @@ class IncrementalSchedule(RuntimeEnv):
     def _step(self, td: TensorDict) -> TensorDict:
         # print(f"Step", self.step_count)
         if self.step_count == 0 and not self.disable_reward_flag:
-            if self.fixed_baseline:
-                self.EFT_baseline = self.fixed_baseline
-            else:
-                print(f"Calculating baseline with policy {self.baseline_policy}...")
-                self.EFT_baseline = self._get_baseline(policy=self.baseline_policy)
+            print(f"Calculating baseline with policy {self.baseline_policy}...")
+            self.EFT_baseline = self._get_baseline(policy=self.baseline_policy)
             self.prev_makespan = self.EFT_baseline
             self.eft_time = self.EFT_baseline
             sim_current = self.simulator.copy()
@@ -1277,7 +1273,7 @@ class DelayIncrementalEFT(IncrementalEFT):
         buf.set(self.done_n, torch.tensor(done, device=self.device, dtype=torch.bool))
         return buf
 
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+    def _reset(self, td: TensorDict | None = None) -> TensorDict:
         if self.random_offset:
             self.offset = random.randint(1, self.delay)
         return super()._reset(td)
@@ -1834,7 +1830,7 @@ class MapperRuntimeEnv(RuntimeEnv):
     def disable_external_mapper(self):
         self.use_external_mapper = False
 
-    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
+    def _set_seed(self, seed: int | None = None, static_seed: int | None = None):
         if seed is None:
             seed = 0
         else:
@@ -1920,7 +1916,7 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
                 self.location_randomness, self.location_list, verbose=False
             )
 
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+    def _reset(self, td: TensorDict | None = None) -> TensorDict:
         self.resets += 1
         current_priority_seed = self.simulator_factory[self.active_idx].pseed
         current_duration_seed = self.simulator_factory[self.active_idx].seed
@@ -1961,7 +1957,7 @@ class RandomLocationMapperRuntimeEnv(MapperRuntimeEnv):
         obs = self._get_observation()
         return obs
 
-    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
+    def _set_seed(self, seed: int | None = None, static_seed: int | None = None):
         s = super()._set_seed(seed, static_seed)
         # if s is not None:
         #     self.location_seed = s
@@ -2008,7 +2004,7 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
                 self.location_randomness, self.location_list, verbose=False
             )
 
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+    def _reset(self, td: TensorDict | None = None) -> TensorDict:
         self.resets += 1
         current_priority_seed = self.simulator_factory[self.active_idx].pseed
         current_duration_seed = self.simulator_factory[self.active_idx].seed
@@ -2049,7 +2045,7 @@ class RandomLocationRuntimeEnv(RuntimeEnv):
         obs = self._get_observation()
         return obs
 
-    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
+    def _set_seed(self, seed: int | None = None, static_seed: int | None = None):
         s = super()._set_seed(seed, static_seed)
         # if s is not None:
         #     self.location_seed = s
@@ -2157,11 +2153,11 @@ class IncrementalMappingEnv(EnvBase):
         obs.set("done", torch.tensor([False], device=self.device, dtype=torch.bool))
         return obs
 
-    def _prealloc_step_buffers(self, n: int) -> List[TensorDict]:
+    def _prealloc_step_buffers(self, n: int) -> list[TensorDict]:
         return [self._get_new_step_buffer() for _ in range(n)]
 
     def _get_preallocated_step_buffer(
-        self, buffers: List[TensorDict], i: int
+        self, buffers: list[TensorDict], i: int
     ) -> TensorDict:
         if i >= len(buffers):
             buffers.extend(self._prealloc_step_buffers(2 * len(buffers)))
@@ -2215,7 +2211,7 @@ class IncrementalMappingEnv(EnvBase):
         out.set("done", done)
         return out
 
-    def _reset(self, td: Optional[TensorDict] = None) -> TensorDict:
+    def _reset(self, td: TensorDict | None = None) -> TensorDict:
         self.resets += 1
 
         current_priority_seed = self.simulator_factory[self.active_idx].pseed
@@ -2263,7 +2259,7 @@ class IncrementalMappingEnv(EnvBase):
     def observer(self):
         return self.simulator.observer
 
-    def _set_seed(self, seed: Optional[int] = None, static_seed: Optional[int] = None):
+    def _set_seed(self, seed: int | None = None, static_seed: int | None = None):
         torch.manual_seed(seed)
         if self.change_priority:
             self.simulator_factory.set_seed(priority_seed=seed)

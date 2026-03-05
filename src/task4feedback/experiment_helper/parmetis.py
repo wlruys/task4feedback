@@ -1,22 +1,24 @@
-from ..ml.env import RuntimeEnv
-from ..graphs.jacobi import JacobiGraph
-from ..graphs.base import weighted_cell_partition
-from ..interface.wrappers import DeviceType, SimulatorDriver
-import task4feedback.fastsim2 as fastsim
-from task4feedback.fastsim2 import ParMETIS_wrapper
-from mpi4py import MPI
-import torch
-import numpy as np
-from ..graphs.jacobi import get_length_from_config
-import hydra
 import hashlib
 import pickle
-from pathlib import Path
-from omegaconf import OmegaConf
-import optuna
-from enum import Enum
 from collections import defaultdict
+from enum import Enum
+from pathlib import Path
+
+import hydra
+import numpy as np
+import optuna
+import torch
+from mpi4py import MPI
+from omegaconf import OmegaConf
+
+import task4feedback.fastsim2 as fastsim
+from task4feedback.fastsim2 import ParMETIS_wrapper
+
+from ..graphs.base import weighted_cell_partition
+from ..graphs.jacobi import JacobiGraph, get_length_from_config
 from ..graphs.mesh.base import Cell, Edge
+from ..interface.wrappers import DeviceType, SimulatorDriver
+from ..ml.env import RuntimeEnv
 
 
 class ParMETISState(Enum):
@@ -528,6 +530,7 @@ def find_best_cfg_optuna(
     cache_dir="parmetis_cfg",
     n_trials=100,
     skip_search=False,
+    search_again_if_cached=False,
     mode="optuna",
 ):
     # ---------------------------
@@ -569,7 +572,7 @@ def find_best_cfg_optuna(
     # Return early if cache hit and we aren't forcing a new search
     if skip_search:
         return best_cfg
-    if best_cfg is not None:
+    if best_cfg is not None and not search_again_if_cached:
         return best_cfg
 
     # ---------------------------
@@ -588,7 +591,8 @@ def find_best_cfg_optuna(
     else:
         study = None
 
-    best_time = float("inf")
+    best_time = best_cfg[2] if best_cfg is not None else float("inf")
+    cached_best_time = best_cfg[2] if best_cfg is not None else float("inf")
 
     # ---------------------------
     # 2. Optimization Loop
@@ -600,10 +604,10 @@ def find_best_cfg_optuna(
             trial = study.ask()
             itr = trial.suggest_categorical(
                 "itr",
-                [0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000],
+                [0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000],
             )
             # itr = trial.suggest_float("itr", 1e-4, 1e6, log=True)
-            ub = trial.suggest_float("ub", 1.0, float(cfg.system.n_devices - 1))
+            ub = trial.suggest_float("ub", 1.0, 2)
             print(f"Trial {step}: itr={itr}, ub={ub}, best={best_time}", flush=True)
         else:
             itr = ub = None
@@ -643,17 +647,26 @@ def find_best_cfg_optuna(
         itr = best.params["itr"]
         ub = best.params["ub"]
         best_time = best.value
+        new_best_cfg = (itr, ub, best_time)
 
-        # Save result to cache
-        best_cfg = (itr, ub, best_time)
-        with cache_file.open("wb") as f:
-            pickle.dump(best_cfg, f)
-
-        print(
-            f"Best Optuna config saved (graph={graph_hash[:8]}): "
-            f"itr={itr}, ub={ub}, time={best_time}",
-            flush=True,
-        )
+        if best_time < cached_best_time:
+            with cache_file.open("wb") as f:
+                pickle.dump(new_best_cfg, f)
+            best_cfg = new_best_cfg
+            print(
+                f"Best Optuna config saved (graph={graph_hash[:8]}): "
+                f"itr={itr}, ub={ub}, time={best_time}",
+                flush=True,
+            )
+        else:
+            if best_cfg is None:
+                best_cfg = new_best_cfg
+            print(
+                f"No better Optuna config found (graph={graph_hash[:8]}): "
+                f"candidate_time={best_time}, cached_time={cached_best_time}",
+                flush=True,
+            )
+        itr, ub, best_time = best_cfg
     else:
         itr = ub = best_time = None
 

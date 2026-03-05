@@ -1,10 +1,9 @@
+import argparse
+import glob
 import os
+import shutil
 import subprocess
 import sys
-import glob
-import shutil
-
-import argparse
 
 
 def run_command(command, cwd=None, env=None):
@@ -13,10 +12,14 @@ def run_command(command, cwd=None, env=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Update IDE support files (compile_commands.json, stubs)")
+    parser = argparse.ArgumentParser(
+        description="Update IDE support files (compile_commands.json, stubs)"
+    )
     parser.add_argument("--release", action="store_true", help="Build in Release mode")
     parser.add_argument("--debug", action="store_true", help="Build in Debug mode")
-    parser.add_argument("--build-type", help="Explicit build type (e.g. RelWithDebInfo)")
+    parser.add_argument(
+        "--build-type", help="Explicit build type (e.g. RelWithDebInfo)"
+    )
     args = parser.parse_args()
 
     project_root = os.path.dirname(os.path.abspath(__file__))
@@ -34,13 +37,17 @@ def main():
     print(f"--- 1. Triggering Build ({env.get('CMAKE_BUILD_TYPE', 'Default')}) ---")
 
     # We use --no-build-isolation to use the installed build backend
-    run_command(f"{sys.executable} -m pip install -e . --no-build-isolation -v", env=env)
+    run_command(
+        f"{sys.executable} -m pip install -e . --no-build-isolation -v", env=env
+    )
 
     print("\n--- 2. Linking compile_commands.json ---")
     # Find compile_commands.json in the build directory
     # The build dir is configured as build/{wheel_tag} in pyproject.toml
     # We'll search recursively in build/
-    compile_commands_candidates = glob.glob("build/**/compile_commands.json", recursive=True)
+    compile_commands_candidates = glob.glob(
+        "build/**/compile_commands.json", recursive=True
+    )
 
     if not compile_commands_candidates:
         print("Error: Could not find compile_commands.json in build/ directory.")

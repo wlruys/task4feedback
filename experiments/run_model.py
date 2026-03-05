@@ -3,11 +3,12 @@ import random
 import pickle
 import fcntl
 from pathlib import Path
-from typing import Iterable, Tuple, List
+from typing import Iterable, Tuple, List, Dict, Any
 
+import numpy as np
+from collections import defaultdict
 import hydra
 import torch
-import numpy as np
 from omegaconf import DictConfig
 from torchrl.envs import set_exploration_type, ExplorationType
 from task4feedback.graphs.mesh.plot import _build_state
@@ -62,7 +63,9 @@ def csv_entry_exists(path: str, key: Tuple[str, ...]) -> bool:
     with open(path, "r") as f:
         for line in f:
             parts = line.strip().split(",")
-            if len(parts) >= len(key) and tuple(parts[: len(key)]) == tuple(map(str, key)):
+            if len(parts) >= len(key) and tuple(parts[: len(key)]) == tuple(
+                map(str, key)
+            ):
                 return True
     return False
 
@@ -86,7 +89,13 @@ def prepare_eval_cfg(cfg: DictConfig) -> int:
     cfg.graph.config.steps = EVAL_GRAPH_STEPS
     cfg.graph.config.workload_args.traj_specifics.phase_length = PHASE_LENGTH
 
-    return 20 if cfg.graph.env.change_duration else 12 if cfg.graph.env.change_workload else 1
+    return (
+        20
+        if cfg.graph.env.change_duration
+        else 12
+        if cfg.graph.env.change_workload
+        else 1
+    )
 
 
 def build_env_and_model(cfg: DictConfig, norm, model_path: Path):
@@ -98,16 +107,16 @@ def build_env_and_model(cfg: DictConfig, norm, model_path: Path):
         eval=True,
     )
 
-    cfg.system.mem = INFINITE_MEMORY
+    # cfg.system.mem = INFINITE_MEMORY
 
-    infenv = make_env(
-        graph_builder=graph_builder,
-        cfg=cfg,
-        normalization=norm,
-        eval=True,
-    )
+    # infenv = make_env(
+    #     graph_builder=graph_builder,
+    #     cfg=cfg,
+    #     normalization=norm,
+    #     eval=True,
+    # )
 
-    cfg.system.mem = SYSTEM_MEMORY
+    # cfg.system.mem = SYSTEM_MEMORY
 
     feature_config = FeatureDimConfig.from_observer(env.get_observer())
     model, _, _ = create_td_actor_critic_models(cfg, feature_config)
@@ -115,16 +124,12 @@ def build_env_and_model(cfg: DictConfig, norm, model_path: Path):
     if not load_policy_from_checkpoint(model, model_path):
         raise RuntimeError(f"Failed to load model from {model_path}")
 
-    return env, infenv, model
+    return env, None, model
 
 
 # =============================================================================
 # Evaluation Logic
 # =============================================================================
-
-import numpy as np
-from collections import defaultdict
-from typing import Dict, Any, List, Tuple
 
 
 class ReplayMapper:
@@ -132,14 +137,20 @@ class ReplayMapper:
         self.history = history
 
     def map_tasks(self, simulator: "SimulatorDriver") -> list[fastsim.Action]:
-        candidates = torch.zeros((simulator.observer.graph_spec.max_candidates), dtype=torch.int64)
+        candidates = torch.zeros(
+            (simulator.observer.graph_spec.max_candidates), dtype=torch.int64
+        )
         num_candidates = simulator.simulator.get_mappable_candidates(candidates)
         mapping_result = []
         for i in range(num_candidates):
             global_task_id = candidates[i].item()
             device = self.history[global_task_id]
-            mapping_priority = simulator.simulator.get_state().get_mapping_priority(global_task_id)
-            mapping_result.append(fastsim.Action(i, device, mapping_priority, mapping_priority))
+            mapping_priority = simulator.simulator.get_state().get_mapping_priority(
+                global_task_id
+            )
+            mapping_result.append(
+                fastsim.Action(i, device, mapping_priority, mapping_priority)
+            )
         return mapping_result
 
 
@@ -226,7 +237,9 @@ def analyze_policy_run(env) -> Dict[str, Any]:
     all_compute_merged = merge_intervals(all_compute_intervals)
     all_comm_merged = merge_intervals(comm_intervals)
 
-    per_device_compute = {d: merge_intervals(v) for d, v in compute_intervals_per_device.items()}
+    per_device_compute = {
+        d: merge_intervals(v) for d, v in compute_intervals_per_device.items()
+    }
 
     # ------------------------------------------------------------
     # Makespan
@@ -286,7 +299,9 @@ def analyze_policy_run(env) -> Dict[str, Any]:
     }
 
 
-def evaluate_model(env: RuntimeEnv, infenv: RuntimeEnv, model, num_runs: int) -> Tuple[float, float]:
+def evaluate_model(
+    env: RuntimeEnv, infenv: RuntimeEnv, model, num_runs: int
+) -> Tuple[float, float]:
     """
     Run evaluation rollouts and return (avg_time, avg_evictions).
     """
@@ -341,7 +356,11 @@ def evaluate_model(env: RuntimeEnv, infenv: RuntimeEnv, model, num_runs: int) ->
     # inf_avg_data_movement = sum(r[2] for r in inf_results) / len(inf_results)
 
     return {
-        "rl": {"time": avg_time, "eviction": avg_eviction, "data_movement": avg_data_movement},
+        "rl": {
+            "time": avg_time,
+            "eviction": avg_eviction,
+            "data_movement": avg_data_movement,
+        },
         # "eft": {"time": eft_avg_time, "eviction": eft_avg_eviction, "data_movement": eft_avg_data_movement},
         # "inf": {"time": inf_avg_time, "eviction": inf_avg_eviction, "data_movement": inf_avg_data_movement},
     }
@@ -354,12 +373,20 @@ def evaluate_model(env: RuntimeEnv, infenv: RuntimeEnv, model, num_runs: int) ->
 
 def configure_training(cfg: DictConfig) -> None:
     folder_name, _, _, _ = make_folder_name(cfg, change_name=False)
-    model_dir = Path(f"./models_{EVAL_GRAPH_STEPS}") / folder_name
+    model_dir = Path(f"./models/{cfg.system.n_devices - 1}gpus") / folder_name
+    default_mem = cfg.graph.config.level_memory
+    while not model_dir.exists():
+        cfg.graph.config.level_memory += 1e9
+        folder_name, _, _, _ = make_folder_name(cfg, change_name=False)
+        model_dir = Path(f"./models/{cfg.system.n_devices - 1}gpus") / folder_name
+    cfg.graph.config.level_memory = default_mem
+    print(f"Using models from {model_dir}", flush=True)
+
     graph_name = cfg.graph.config.workload_args.traj_type
     if cfg.graph.env.change_duration:
-        RESULTS_CSV = f"./results/{cfg.system.n_devices-1}gpus/noise_results_rl_{EVAL_GRAPH_STEPS}.csv"
+        RESULTS_CSV = f"./results/{cfg.system.n_devices - 1}gpus/noise_results_rl_{EVAL_GRAPH_STEPS}.csv"
     else:
-        RESULTS_CSV = f"./results/{cfg.system.n_devices-1}gpus/results_rl_{EVAL_GRAPH_STEPS}.csv"
+        RESULTS_CSV = f"./results/{cfg.system.n_devices - 1}gpus/results_rl_{EVAL_GRAPH_STEPS}.csv"
 
     norm = load_normalization(
         folder_name,
@@ -438,12 +465,9 @@ def configure_training(cfg: DictConfig) -> None:
         #     f"{results['rl']['eviction']:.0f},"
         #     f"{results['eft']['time']:.0f},"
         # )
-        output_lines.append(line)
+        write_results_atomic(RESULTS_CSV, [line])
         # output_lines.append(line_inf)
         # output_lines_with_eft.append(line_eft)
-
-    if output_lines:
-        write_results_atomic(RESULTS_CSV, output_lines)
         # write_results_atomic(RESULTS_SANITY, output_lines_with_eft)
 
 

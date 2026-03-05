@@ -1,27 +1,29 @@
 import os
 import pickle
-from ..interface import SimulatorFactory, SimulatorInput, create_graph_spec
-from ..interface import TaskNoise
-from ..graphs.jacobi import get_length_from_config
-from typing import Callable, Dict, Any, Optional, Tuple, List, Sequence
-from .graph import GraphBuilder
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
 import hydra
-from omegaconf import DictConfig, OmegaConf, ListConfig
-from ..ml.env import RuntimeEnv
+import numpy as np
+import torch
+from omegaconf import DictConfig, ListConfig, OmegaConf
+
 from torchrl.envs import (
-    TransformedEnv,
     Compose,
     InitTracker,
+    ObservationNorm,
     StepCounter,
     TrajCounter,
-    ObservationNorm,
+    TransformedEnv,
 )
 from torchrl.modules import LSTMModule
-from typing import Optional
-from dataclasses import dataclass
-import torch
-from pathlib import Path
-import numpy as np
+
+from ..graphs.jacobi import get_length_from_config
+from ..interface import SimulatorFactory, SimulatorInput, TaskNoise, create_graph_spec
+from ..ml.env import RuntimeEnv
+from .graph import GraphBuilder
 
 
 def create_system(cfg: DictConfig):
@@ -79,7 +81,7 @@ def create_task_noise(cfg: DictConfig, static_graph):
 
 @dataclass
 class NormalizationDetails:
-    states: Dict[str, Dict[str, Any]]
+    states: dict[str, dict[str, Any]]
 
 
 def _oc_to_py(x: Any) -> Any:
@@ -88,7 +90,7 @@ def _oc_to_py(x: Any) -> Any:
     return x
 
 
-def _parse_norm_specs(cfg: DictConfig) -> Tuple[bool, int, List[dict]]:
+def _parse_norm_specs(cfg: DictConfig) -> tuple[bool, int, list[dict]]:
     norm_cfg = getattr(cfg.feature, "normalization", None)
     if norm_cfg is None:
         return False, 0, []
@@ -101,13 +103,13 @@ def _parse_norm_specs(cfg: DictConfig) -> Tuple[bool, int, List[dict]]:
 def _setup_observation_norms(
     env: RuntimeEnv,
     cfg: DictConfig,
-    normalization: Optional[NormalizationDetails],
-) -> Optional[NormalizationDetails]:
+    normalization: NormalizationDetails | None,
+) -> NormalizationDetails | None:
     enabled, warmup, specs = _parse_norm_specs(cfg)
     if not enabled:
         return None
 
-    created: Dict[str, ObservationNorm] = {}
+    created: dict[str, ObservationNorm] = {}
     # Build & attach; seed shapes from saved state if available
     for spec in specs:
         name = spec["name"]
@@ -127,7 +129,7 @@ def _setup_observation_norms(
         created[name] = norm
 
     # Load or init
-    to_init: List[Tuple[str, ObservationNorm, dict]] = []
+    to_init: list[tuple[str, ObservationNorm, dict]] = []
     for spec in specs:
         name = spec["name"]
         state = normalization.states.get(name) if normalization else None
@@ -175,11 +177,11 @@ def _setup_observation_norms(
 def make_env(
     graph_builder: GraphBuilder,
     cfg: DictConfig,
-    lstm: Optional[LSTMModule] = None,
-    normalization: Optional[NormalizationDetails] = None,
+    lstm: LSTMModule | None = None,
+    normalization: NormalizationDetails | None = None,
     eval=False,
 ) -> RuntimeEnv | tuple[RuntimeEnv, NormalizationDetails]:
-    from task4feedback.graphs.mesh import gmsh, initialize_gmsh, finalize_gmsh
+    from task4feedback.graphs.mesh import finalize_gmsh, gmsh, initialize_gmsh
 
     gmsh.initialize()
 
@@ -200,13 +202,6 @@ def make_env(
         top_k_candidates = graph.nx * graph.ny
     else:
         top_k_candidates = 1
-
-    if os.path.exists(cfg.eval.pickle_path):
-        eval_log = pickle.load(open(cfg.eval.pickle_path, "rb"))
-        baselines = eval_log.get("policy_times", [])
-        fixed_baseline = sum(baselines) / len(baselines) if baselines else None
-    else:
-        fixed_baseline = None
 
     input = SimulatorInput(
         m,
@@ -246,7 +241,6 @@ def make_env(
                 else cfg.algorithm.rollout_steps + 1
             )
         ),
-        fixed_baseline=fixed_baseline,
     )
     env = TransformedEnv(env, StepCounter())
     env.append_transform(TrajCounter())

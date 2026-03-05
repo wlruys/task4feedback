@@ -1,14 +1,13 @@
+from collections.abc import Callable
+
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf
+
 from ..graphs import *
 from ..graphs.mesh import (
     build_geometry,
-    generate_quad_mesh,
-    generate_tri_mesh,
 )
 from ..graphs.mesh.partition import *
-from typing import Callable
-import hydra
-from omegaconf import DictConfig, OmegaConf
-from hydra.utils import instantiate
 
 
 @dataclass
@@ -27,47 +26,32 @@ def make_graph_function(
 
         geom = build_geometry(mesh)
         graph = build_graph(geom, graph_cfg, system=system)
-        if cfg.graph.init.partitioner == "metis" and cfg.system.n_devices > 2:
-            graph.make_partition = graph.initial_mincut_partition
-        elif cfg.graph.init.partitioner == "quad":
-            graph.make_partition = graph.quadrant_partition
-        else:
-            # Default to quadrant partition
-            graph.make_partition = graph.quadrant_partition
-        partition = graph.make_partition(
-            arch=DeviceType.GPU,
-            bandwidth=cfg.system.d2d_bw,
-            n_parts=cfg.system.n_devices - 1,
-            offset=0,
-        )
-        print(
-            f"{graph.make_partition.__name__} {cfg.system.n_devices} partition: {partition}"
-        )
-        # print(f"Initial partition: {partition}")
-        # if isinstance(graph, DynamicJacobiGraph):
-        #     for x in range(graph.nx):
-        #         for y in range(graph.ny):
-        #             print(f"{partition[graph.xy_from_id(x * graph.ny + y)]}", end=" ")
-        #         print()
-        # print()
-        partition = graph.maximize_matches(partition)
-        # print(f"Maximized partition: {partition}")
-        # print(graph.reference_partition)
 
-        # if isinstance(graph, DynamicJacobiGraph):
-        #     for x in range(graph.nx):
-        #         for y in range(graph.ny):
-        #             print(f"{partition[graph.xy_from_id(x * graph.ny + y)]}", end=" ")
-        #         print()
-        # exit()
+        if isinstance(graph, DynamicJacobiGraph | JacobiGraph):
+            # Initial partitioning
+            if cfg.graph.init.partitioner == "metis" and cfg.system.n_devices > 2:
+                graph.make_partition = graph.initial_mincut_partition
+            elif cfg.graph.init.partitioner == "quad":
+                graph.make_partition = graph.quadrant_partition
+            else:
+                # Default to quadrant partition
+                graph.make_partition = graph.quadrant_partition
+
+            partition = graph.make_partition(
+                arch=DeviceType.GPU,
+                bandwidth=cfg.system.d2d_bw,
+                n_parts=cfg.system.n_devices - 1,
+                offset=0,
+            )
+
+            # partition needs minimum number of flips from initial partition
+            partition = graph.maximize_matches(partition)
 
         if cfg.graph.init.gpu_only:
             partition = [x + 1 for x in partition]  # offset by 1 to ignore cpu
             location_list = [i + 1 for i in range(0, cfg.graph.init.nparts)]
         else:
-            location_list = [
-                i for i in range(cfg.graph.init.nparts + 1)
-            ]  # include cpu as 0
+            location_list = list(range(cfg.graph.init.nparts + 1))  # include cpu as 0
 
         if isinstance(graph, DynamicJacobiGraph):
             graph.set_cell_locations([-1 for _ in range(len(partition))])

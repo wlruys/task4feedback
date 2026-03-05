@@ -37,6 +37,8 @@ graph:
     change_location: False
     change_duration: False
     seed: 1
+  init:
+    nparts: 8
 
 algorithm:
   num_collections: 20000
