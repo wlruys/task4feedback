@@ -385,471 +385,325 @@ enum class InsertResult {
   Failed
 };
 
-// class LRU_manager {
-// private:
-//   mem_t evicted_size = 0;
-//   mem_t max_usage = 0;
-
-//   struct alignas(64) DeviceLRU {
-//     using node_t = int32_t;
-//     static constexpr node_t kNull = -1;
-
-//     struct Node {
-//       dataid_t id;
-//       mem_t bytes;
-//       node_t next;
-//       node_t prev;
-//     };
-
-//     std::vector<Node> nodes;
-//     ankerl::unordered_dense::map<dataid_t, node_t> where;
-//     node_t free_head = kNull;
-//     mem_t used_bytes = 0;
-//     mem_t capacity_bytes = 0;
-//     std::size_t hard_max_items = 0;
-
-// #ifndef NDEBUG
-//     uint32_t op_counter = 0;
-//     static constexpr uint32_t kCheckPeriod = 8192;
-// #endif
-
-//     void init(std::size_t initial_max_items, mem_t cap_bytes,
-//               std::size_t reserve_items_hint, std::size_t hard_cap_items = 0) {
-//       capacity_bytes = cap_bytes;
-//       hard_max_items = hard_cap_items;
-
-//       nodes.resize(initial_max_items + 1);
-//       nodes[0] = {dataid_t(-1), 0, 0, 0}; // Sentinel node
-
-//       free_head = initial_max_items > 0 ? 1 : kNull;
-//       for (node_t i = 1; i < static_cast<node_t>(initial_max_items); ++i) {
-//         nodes[i].next = i + 1;
-//       }
-//       if (initial_max_items > 0) {
-//         nodes[initial_max_items].next = kNull;
-//       }
-
-//       where.clear();
-//       where.reserve(reserve_items_hint);
-//       used_bytes = 0;
-
-// #ifndef NDEBUG
-//       op_counter = 0;
-// #endif
-//     }
-
-//     bool ensure_free_node_() {
-//       if (free_head != kNull) return true;
-
-//       const std::size_t old_user_items = nodes.size() - 1;
-//       std::size_t new_user_items = old_user_items == 0 ? 1024 : old_user_items * 2;
-
-//       if (hard_max_items != 0 && new_user_items > hard_max_items) {
-//         new_user_items = hard_max_items;
-//         if (new_user_items <= old_user_items) return false;
-//       }
-
-//       const std::size_t new_n = new_user_items + 1;
-//       nodes.resize(new_n);
-
-//       free_head = static_cast<node_t>(old_user_items + 1);
-//       for (node_t i = free_head; i < static_cast<node_t>(new_n - 1); ++i) {
-//         nodes[i].next = i + 1;
-//       }
-//       nodes[new_n - 1].next = kNull;
-
-//       SPDLOG_WARN("LRU_manager: expanding DeviceLRU node pool from {} -> {} user nodes",
-//                   old_user_items, new_user_items);
-//       return true;
-//     }
-
-//     void unlink_(node_t n) {
-//       const node_t p = nodes[n].prev;
-//       const node_t q = nodes[n].next;
-//       nodes[p].next = q;
-//       nodes[q].prev = p;
-//     }
-
-//     void link_front_(node_t n) {
-//       const node_t head = nodes[0].next;
-//       nodes[n].prev = 0;
-//       nodes[n].next = head;
-//       nodes[head].prev = n;
-//       nodes[0].next = n;
-//     }
-
-//     void touch_node_(node_t n) {
-//       if (nodes[0].next == n) return;
-//       unlink_(n);
-//       link_front_(n);
-//     }
-
-// #ifndef NDEBUG
-//     void maybe_check_invariants_() {
-//       if ((++op_counter % kCheckPeriod) != 0) return;
-      
-//       const node_t head = nodes[0].next;
-//       const node_t tail = nodes[0].prev;
-      
-//       if (head == 0) {
-//         T4F_INVARIANT(tail == 0 && where.empty());
-//         return;
-//       }
-
-//       T4F_INVARIANT(nodes[head].prev == 0 && nodes[tail].next == 0);
-
-//       std::size_t seen = 0;
-//       node_t cur = head;
-//       node_t last = 0;
-      
-//       while (cur != 0) {
-//         T4F_INVARIANT(nodes[cur].id != dataid_t(-1));
-//         auto it = where.find(nodes[cur].id);
-//         T4F_INVARIANT(it != where.end() && it->second == cur);
-//         T4F_INVARIANT(nodes[cur].prev == last);
-
-//         last = cur;
-//         cur = nodes[cur].next;
-//         T4F_INVARIANT(++seen <= nodes.size());
-//       }
-//       T4F_INVARIANT(last == tail && seen == where.size());
-//     }
-// #endif
-
-//     InsertResult insert_or_update(dataid_t id, mem_t bytes) {
-//       auto [it, inserted] = where.try_emplace(id, 0);
-
-//       if (!inserted) {
-//         const node_t n = it->second;
-//         if (nodes[n].bytes != bytes) {
-//           used_bytes += (bytes - nodes[n].bytes);
-//           nodes[n].bytes = bytes;
-//         }
-//         touch_node_(n);
-// #ifndef NDEBUG
-//         maybe_check_invariants_();
-// #endif
-//         return InsertResult::Updated;
-//       }
-
-//       if (!ensure_free_node_()) {
-//         where.erase(it);
-//         return InsertResult::Failed;
-//       }
-
-//       const node_t n = free_head;
-//       free_head = nodes[n].next;
-
-//       it->second = n;
-
-//       nodes[n].id = id;
-//       nodes[n].bytes = bytes;
-//       link_front_(n);
-
-//       used_bytes += bytes;
-
-// #ifndef NDEBUG
-//       maybe_check_invariants_();
-// #endif
-//       return InsertResult::Inserted;
-//     }
-
-//     mem_t erase(dataid_t id) {
-//       auto it = where.find(id);
-//       if (it == where.end()) return 0;
-
-//       const node_t n = it->second;
-//       where.erase(it);
-//       unlink_(n);
-
-//       const mem_t b = nodes[n].bytes;
-//       used_bytes -= b;
-
-//       nodes[n].next = free_head;
-//       free_head = n;
-
-// #ifndef NDEBUG
-//       maybe_check_invariants_();
-// #endif
-//       return b;
-//     }
-
-//     std::size_t collect_lru_victims(std::size_t bytes_needed,
-//                                     std::span<const dataid_t> used_ids,
-//                                     DataIDList &out) const {
-//       out.clear();
-//       std::size_t acc = 0;
-//       node_t cur = nodes[0].prev;
-
-//       if (used_ids.empty()) {
-//         while (cur != 0 && acc < bytes_needed) {
-//           acc += static_cast<std::size_t>(nodes[cur].bytes);
-//           out.push_back(nodes[cur].id);
-//           cur = nodes[cur].prev;
-//         }
-//       } else {
-//         // Check that this data is not used by the requester before adding to eviction list
-//         while (cur != 0 && acc < bytes_needed) {
-//           const dataid_t id = nodes[cur].id;
-          
-//           if (!std::binary_search(used_ids.begin(), used_ids.end(), id)) {
-//             acc += static_cast<std::size_t>(nodes[cur].bytes);
-//             out.push_back(id);
-//           }
-//           cur = nodes[cur].prev;
-//         }
-//       }
-//       return acc;
-//     }
-//   };
-
-//   std::vector<DeviceLRU> lrus_;
-//   mutable DataIDList id_buffer;
-
-//   bool is_valid_device(devid_t id) const {
-//     return id >= 0 && static_cast<std::size_t>(id) < lrus_.size();
-//   }
-
-// public:
-//   LRU_manager() = default;
-
-//   explicit LRU_manager(const Devices &devices,
-//                        mem_t median_block_size,
-//                        std::size_t hard_max_items_per_device = 0,
-//                        std::size_t distinct_items_hint = static_cast<std::size_t>(-1))
-//       : lrus_(devices.size()) {
-        
-//     median_block_size = median_block_size > 0 ? median_block_size : 1;
-//     constexpr std::size_t kMinItems = 4096;
-//     constexpr std::size_t kMaxItems = 1'000'000;
-//     const bool has_distinct_items_hint = distinct_items_hint != static_cast<std::size_t>(-1);
-
-//     for (std::size_t dev = 0; dev < lrus_.size(); ++dev) {
-//       const mem_t cap = devices.get_max_resources(dev).mem;
-//       std::size_t expected = static_cast<std::size_t>(cap / median_block_size);
-
-//       if (has_distinct_items_hint) expected = std::min(expected, distinct_items_hint);
-//       if (hard_max_items_per_device != 0) expected = std::min(expected, hard_max_items_per_device);
-
-//       std::size_t initial_items, reserve_items;
-//       if (has_distinct_items_hint) {
-//         initial_items = expected == 0 ? 0 : 2 * expected;
-//         reserve_items = expected;
-//       } else {
-//         initial_items = std::clamp(2 * expected, kMinItems, kMaxItems);
-//         reserve_items = std::clamp(expected, kMinItems / 2, initial_items);
-//       }
-
-//       if (hard_max_items_per_device != 0) {
-//         initial_items = std::min(initial_items, hard_max_items_per_device);
-//         reserve_items = std::min(reserve_items, initial_items);
-//       }
-
-//       lrus_[dev].init(initial_items, cap, reserve_items, hard_max_items_per_device);
-//     }
-
-//     id_buffer.reserve(20);
-//   }
-
-//   LRU_manager(const LRU_manager &other)
-//       : evicted_size(other.evicted_size),
-//         max_usage(other.max_usage),
-//         lrus_(other.lrus_) {
-//     id_buffer.reserve(other.id_buffer.capacity());
-//   }
-
-//   void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
-//     T4F_INVARIANT(is_valid_device(device_id));
-//     auto &lru = lrus_[device_id];
-
-//     const InsertResult result = lru.insert_or_update(data_id, mem_size);
-
-//     if (result == InsertResult::Failed) [[unlikely]] {
-//       SPDLOG_ERROR("LRU_manager::read(): hard cap hit on device {}; data_id {} not tracked", device_id, data_id);
-//       T4F_INVARIANT(false && "LRU_manager::read(): hard cap hit; increase hard_max_items_per_device");
-//       return;
-//     }
-
-//     if (result == InsertResult::Inserted) {
-//       if (device_id > 0 && lru.used_bytes > max_usage) {
-//         max_usage = lru.used_bytes;
-//       }
-//       if (lru.used_bytes > lru.capacity_bytes) [[unlikely]] {
-//         SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id, data_id, mem_size);
-//         T4F_INVARIANT(lru.used_bytes <= lru.capacity_bytes && "LRU_manager::read(): size exceeds max size");
-//       }
-//     }
-//   }
-
-//   void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
-//     T4F_INVARIANT(is_valid_device(device_id));
-//     const mem_t removed = lrus_[device_id].erase(data_id);
-//     T4F_INVARIANT(removed > 0 && "invalidate(): data_id not present");
-
-//     if (evict) evicted_size += removed;
-//   }
-
-//   std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
-//                                       std::span<const dataid_t> used_ids) const {
-//     T4F_INVARIANT(is_valid_device(device_id));
-    
-//     const std::size_t accumulated = lrus_[device_id].collect_lru_victims(mem_size, used_ids, id_buffer);
-//     T4F_INVARIANT(accumulated >= mem_size && "getLRUids(): evictable memory size is smaller than requested");
-    
-//     return id_buffer;
-//   }
-
-//   mem_t get_mem(devid_t device_id) const {
-//     T4F_INVARIANT(is_valid_device(device_id));
-//     return lrus_[device_id].used_bytes;
-//   }
-
-//   mem_t get_evicted_memory_size() const {
-//     return evicted_size;
-//   }
-
-//   mem_t get_max_memory_usage() const {
-//     mem_t sum = 0;
-//     for (const auto& lru : lrus_) sum += lru.used_bytes;
-//     return sum;
-//   }
-// };
-
-
 class LRU_manager {
 private:
   mem_t evicted_size = 0;
   mem_t max_usage = 0;
-  uint32_t n_devices_{0};
-  // For each device:
-  //  - a list maintaining LRU (front) → MRU (back)
-  //  - a map from data_id → its position in that list
-  //  - a map from data_id → its mem_size
-  std::vector<std::list<dataid_t>> lru_lists_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<dataid_t>::iterator>>
-      position_maps_;
-  std::vector<ankerl::unordered_dense::map<dataid_t, mem_t>> size_maps_;
-  std::vector<mem_t> sizes_;
-  std::vector<mem_t> max_sizes_;
+
+  struct alignas(64) DeviceLRU {
+    using node_t = int32_t;
+    static constexpr node_t kNull = -1;
+
+    struct Node {
+      dataid_t id;
+      mem_t bytes;
+      node_t next;
+      node_t prev;
+    };
+
+    std::vector<Node> nodes;
+    ankerl::unordered_dense::map<dataid_t, node_t> where;
+    node_t free_head = kNull;
+    mem_t used_bytes = 0;
+    mem_t capacity_bytes = 0;
+    std::size_t hard_max_items = 0;
+
+#ifndef NDEBUG
+    uint32_t op_counter = 0;
+    static constexpr uint32_t kCheckPeriod = 8192;
+#endif
+
+    void init(std::size_t initial_max_items, mem_t cap_bytes,
+              std::size_t reserve_items_hint, std::size_t hard_cap_items = 0) {
+      capacity_bytes = cap_bytes;
+      hard_max_items = hard_cap_items;
+
+      nodes.resize(initial_max_items + 1);
+      nodes[0] = {dataid_t(-1), 0, 0, 0}; // Sentinel node
+
+      free_head = initial_max_items > 0 ? 1 : kNull;
+      for (node_t i = 1; i < static_cast<node_t>(initial_max_items); ++i) {
+        nodes[i].next = i + 1;
+      }
+      if (initial_max_items > 0) {
+        nodes[initial_max_items].next = kNull;
+      }
+
+      where.clear();
+      where.reserve(reserve_items_hint);
+      used_bytes = 0;
+
+#ifndef NDEBUG
+      op_counter = 0;
+#endif
+    }
+
+    bool ensure_free_node_() {
+      if (free_head != kNull) return true;
+
+      const std::size_t old_user_items = nodes.size() - 1;
+      std::size_t new_user_items = old_user_items == 0 ? 1024 : old_user_items * 2;
+
+      if (hard_max_items != 0 && new_user_items > hard_max_items) {
+        new_user_items = hard_max_items;
+        if (new_user_items <= old_user_items) return false;
+      }
+
+      const std::size_t new_n = new_user_items + 1;
+      nodes.resize(new_n);
+
+      free_head = static_cast<node_t>(old_user_items + 1);
+      for (node_t i = free_head; i < static_cast<node_t>(new_n - 1); ++i) {
+        nodes[i].next = i + 1;
+      }
+      nodes[new_n - 1].next = kNull;
+
+      SPDLOG_WARN("LRU_manager: expanding DeviceLRU node pool from {} -> {} user nodes",
+                  old_user_items, new_user_items);
+      return true;
+    }
+
+    void unlink_(node_t n) {
+      const node_t p = nodes[n].prev;
+      const node_t q = nodes[n].next;
+      nodes[p].next = q;
+      nodes[q].prev = p;
+    }
+
+    void link_front_(node_t n) {
+      const node_t head = nodes[0].next;
+      nodes[n].prev = 0;
+      nodes[n].next = head;
+      nodes[head].prev = n;
+      nodes[0].next = n;
+    }
+
+    void touch_node_(node_t n) {
+      if (nodes[0].next == n) return;
+      unlink_(n);
+      link_front_(n);
+    }
+
+#ifndef NDEBUG
+    void maybe_check_invariants_() {
+      if ((++op_counter % kCheckPeriod) != 0) return;
+      
+      const node_t head = nodes[0].next;
+      const node_t tail = nodes[0].prev;
+      
+      if (head == 0) {
+        T4F_INVARIANT(tail == 0 && where.empty());
+        return;
+      }
+
+      T4F_INVARIANT(nodes[head].prev == 0 && nodes[tail].next == 0);
+
+      std::size_t seen = 0;
+      node_t cur = head;
+      node_t last = 0;
+      
+      while (cur != 0) {
+        T4F_INVARIANT(nodes[cur].id != dataid_t(-1));
+        auto it = where.find(nodes[cur].id);
+        T4F_INVARIANT(it != where.end() && it->second == cur);
+        T4F_INVARIANT(nodes[cur].prev == last);
+
+        last = cur;
+        cur = nodes[cur].next;
+        T4F_INVARIANT(++seen <= nodes.size());
+      }
+      T4F_INVARIANT(last == tail && seen == where.size());
+    }
+#endif
+
+    InsertResult insert_or_update(dataid_t id, mem_t bytes) {
+      auto [it, inserted] = where.try_emplace(id, 0);
+
+      if (!inserted) {
+        const node_t n = it->second;
+        if (nodes[n].bytes != bytes) {
+          used_bytes += (bytes - nodes[n].bytes);
+          nodes[n].bytes = bytes;
+        }
+        touch_node_(n);
+#ifndef NDEBUG
+        maybe_check_invariants_();
+#endif
+        return InsertResult::Updated;
+      }
+
+      if (!ensure_free_node_()) {
+        where.erase(it);
+        return InsertResult::Failed;
+      }
+
+      const node_t n = free_head;
+      free_head = nodes[n].next;
+
+      it->second = n;
+
+      nodes[n].id = id;
+      nodes[n].bytes = bytes;
+      link_front_(n);
+
+      used_bytes += bytes;
+
+#ifndef NDEBUG
+      maybe_check_invariants_();
+#endif
+      return InsertResult::Inserted;
+    }
+
+    mem_t erase(dataid_t id) {
+      auto it = where.find(id);
+      if (it == where.end()) return 0;
+
+      const node_t n = it->second;
+      where.erase(it);
+      unlink_(n);
+
+      const mem_t b = nodes[n].bytes;
+      used_bytes -= b;
+
+      nodes[n].next = free_head;
+      free_head = n;
+
+#ifndef NDEBUG
+      maybe_check_invariants_();
+#endif
+      return b;
+    }
+
+    std::size_t collect_lru_victims(std::size_t bytes_needed,
+                                    std::span<const dataid_t> used_ids,
+                                    DataIDList &out) const {
+      out.clear();
+      std::size_t acc = 0;
+      node_t cur = nodes[0].prev;
+
+      if (used_ids.empty()) {
+        while (cur != 0 && acc < bytes_needed) {
+          acc += static_cast<std::size_t>(nodes[cur].bytes);
+          out.push_back(nodes[cur].id);
+          cur = nodes[cur].prev;
+        }
+      } else {
+        // Check that this data is not used by the requester before adding to eviction list
+        while (cur != 0 && acc < bytes_needed) {
+          const dataid_t id = nodes[cur].id;
+          
+          if (!std::binary_search(used_ids.begin(), used_ids.end(), id)) {
+            acc += static_cast<std::size_t>(nodes[cur].bytes);
+            out.push_back(id);
+          }
+          cur = nodes[cur].prev;
+        }
+      }
+      return acc;
+    }
+  };
+
+  std::vector<DeviceLRU> lrus_;
   mutable DataIDList id_buffer;
+
+  bool is_valid_device(devid_t id) const {
+    return id >= 0 && static_cast<std::size_t>(id) < lrus_.size();
+  }
 
 public:
   LRU_manager() = default;
 
-  // Constructor: initialize for n_devices [0 .. n_devices-1]
-  explicit LRU_manager(const Devices &devices)
-      : n_devices_(devices.size()), lru_lists_(devices.size()), position_maps_(devices.size()),
-        size_maps_(devices.size()), sizes_(devices.size()), max_sizes_(devices.size()) {
-    for (auto &size : sizes_) {
-      size = 0;
+  explicit LRU_manager(const Devices &devices,
+                       mem_t median_block_size,
+                       std::size_t hard_max_items_per_device = 0,
+                       std::size_t distinct_items_hint = static_cast<std::size_t>(-1))
+      : lrus_(devices.size()) {
+        
+    median_block_size = median_block_size > 0 ? median_block_size : 1;
+    constexpr std::size_t kMinItems = 4096;
+    constexpr std::size_t kMaxItems = 1'000'000;
+    const bool has_distinct_items_hint = distinct_items_hint != static_cast<std::size_t>(-1);
+
+    for (std::size_t dev = 0; dev < lrus_.size(); ++dev) {
+      const mem_t cap = devices.get_max_resources(dev).mem;
+      std::size_t expected = static_cast<std::size_t>(cap / median_block_size);
+
+      if (has_distinct_items_hint) expected = std::min(expected, distinct_items_hint);
+      if (hard_max_items_per_device != 0) expected = std::min(expected, hard_max_items_per_device);
+
+      std::size_t initial_items, reserve_items;
+      if (has_distinct_items_hint) {
+        initial_items = expected == 0 ? 0 : 2 * expected;
+        reserve_items = expected;
+      } else {
+        initial_items = std::clamp(2 * expected, kMinItems, kMaxItems);
+        reserve_items = std::clamp(expected, kMinItems / 2, initial_items);
+      }
+
+      if (hard_max_items_per_device != 0) {
+        initial_items = std::min(initial_items, hard_max_items_per_device);
+        reserve_items = std::min(reserve_items, initial_items);
+      }
+
+      lrus_[dev].init(initial_items, cap, reserve_items, hard_max_items_per_device);
     }
-    for (int i = 0; i < devices.size(); i++) {
-      max_sizes_[i] = devices.get_max_resources(i).mem;
-    }
+
     id_buffer.reserve(20);
   }
 
-  // read: add (device_id, data_id, mem_size). If present, update MRU; else insert.
-  void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
-    T4F_INVARIANT(device_id >= 0 && device_id < n_devices_);
-
-    auto &lst = lru_lists_[device_id];
-    auto &pos = position_maps_[device_id];
-    auto &smap = size_maps_[device_id];
-    auto &size = sizes_[device_id];
-    auto &max_size = max_sizes_[device_id];
-    auto it = pos.find(data_id);
-    if (it != pos.end()) {
-      // already present: move to MRU
-      lst.erase(it->second);
-    } else {
-      size += mem_size;
-      if (size > max_usage && device_id > 0) {
-        max_usage = size;
-      }
-      if (size > max_size) {
-        SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
-                     data_id, mem_size);
-        T4F_INVARIANT(size <= max_size && "LRU_manager::read(): size exceeds max size");
-      }
-    }
-    // insert at MRU (back)
-    lst.push_back(data_id);
-    auto new_it = std::prev(lst.end());
-    pos[data_id] = new_it;
-    smap[data_id] = mem_size; // update size
-  }
-
   LRU_manager(const LRU_manager &other)
-      : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
-        position_maps_(other.n_devices_), size_maps_(other.size_maps_), sizes_(other.sizes_),
-        max_sizes_(other.max_sizes_), evicted_size(other.evicted_size), max_usage(other.max_usage) {
-    ZoneScoped;
-    // Rebuild position_maps_
-    for (devid_t dev = 0; dev < n_devices_; ++dev) {
-      position_maps_[dev].reserve(other.position_maps_[dev].size());
-      for (auto it = lru_lists_[dev].begin(); it != lru_lists_[dev].end(); ++it) {
-        position_maps_[dev][*it] = it;
-      }
-    }
+      : evicted_size(other.evicted_size),
+        max_usage(other.max_usage),
+        lrus_(other.lrus_) {
     id_buffer.reserve(other.id_buffer.capacity());
   }
 
-  // invalidate: remove (device_id, data_id); assert if missing
-  void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
-    T4F_INVARIANT(device_id >= 0 && device_id < n_devices_);
+  void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
+    T4F_INVARIANT(is_valid_device(device_id));
 
-    auto &lst = lru_lists_[device_id];
-    auto &pos = position_maps_[device_id];
-    auto &smap = size_maps_[device_id];
-    auto &size = sizes_[device_id];
+    auto &lru = lrus_[device_id];
 
-    auto it = pos.find(data_id);
-    T4F_INVARIANT(it != pos.end() && "invalidate(): data_id not present");
+    const InsertResult result = lru.insert_or_update(data_id, mem_size);
 
-    // std::cout << "Invalidating data_id " << data_id << " from device " << device_id
-    //           << " with size " << smap[data_id] << "\n";
-    //std::cout << "Current size before invalidation: " << size << "\n";
+    if (result == InsertResult::Failed) [[unlikely]] {
+      SPDLOG_ERROR("LRU_manager::read(): hard cap hit on device {}; data_id {} not tracked", device_id, data_id);
+      T4F_INVARIANT(false && "LRU_manager::read(): hard cap hit; increase hard_max_items_per_device");
+      return;
+    }
 
-    lst.erase(it->second);
-    pos.erase(it);
-    auto removed = smap[data_id];
-    //T4F_INVARIANT(removed > 0 && "invalidate(): data_id not present in size map");
-    size -= removed; // update size
-    if (evict)
-      evicted_size += smap[data_id];
-    smap.erase(data_id);
+    if (result == InsertResult::Inserted) {
+      if (device_id > 0 && lru.used_bytes > max_usage) {
+        max_usage = lru.used_bytes;
+      }
+      if (lru.used_bytes > lru.capacity_bytes) [[unlikely]] {
+        SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id, data_id, mem_size);
+        T4F_INVARIANT(lru.used_bytes <= lru.capacity_bytes && "LRU_manager::read(): size exceeds max size");
+      }
+    }
   }
 
-  // getLRUids: fill id_buffer[device_id] with the least-recently-used data_ids
-  // until their cumulative mem_size ≥ requested mem_size, and return it.
-  const std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
-                                            std::span<const dataid_t> used_ids) const {
-    T4F_INVARIANT(device_id >= 0 && device_id < n_devices_);
+  void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
+    T4F_INVARIANT(is_valid_device(device_id));
+    const mem_t removed = lrus_[device_id].erase(data_id);
 
-    auto &lst = lru_lists_[device_id];
-    auto &smap = size_maps_[device_id];
-    id_buffer.clear();
-    std::size_t accumulated = 0;
+    //T4F_INVARIANT(removed >= 0 && "invalidate(): data_id not present");
 
-    for (auto it = lst.begin(); it != lst.end() && accumulated < mem_size; ++it) {
-      dataid_t did = *it;
-      if (std::find(used_ids.begin(), used_ids.end(), did) != used_ids.end()) {
-        continue; // skip if used by the task
-      }
-      auto sz_it = smap.find(did);
-      T4F_INVARIANT(sz_it != smap.end() && "size missing for data_id");
-      accumulated += sz_it->second;
-      id_buffer.push_back(did);
-    }
-    T4F_INVARIANT(accumulated >= mem_size &&
-           "getLRUids(): evictable memory isze is smaller than the requested size");
+    if (evict) evicted_size += removed;
+  }
+
+  std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
+                                      std::span<const dataid_t> used_ids) const {
+    T4F_INVARIANT(is_valid_device(device_id));
+    
+    const std::size_t accumulated = lrus_[device_id].collect_lru_victims(mem_size, used_ids, id_buffer);
+    T4F_INVARIANT(accumulated >= mem_size && "getLRUids(): evictable memory size is smaller than requested");
+    
     return id_buffer;
   }
 
   mem_t get_mem(devid_t device_id) const {
-    T4F_INVARIANT((device_id >= 0) && (device_id < n_devices_));
-    return sizes_[device_id];
+    T4F_INVARIANT(is_valid_device(device_id));
+    return lrus_[device_id].used_bytes;
   }
 
   mem_t get_evicted_memory_size() const {
@@ -857,13 +711,161 @@ public:
   }
 
   mem_t get_max_memory_usage() const {
-    mem_t total = 0;
-    for (const auto size : sizes_) {
-      total += size;
-    }
-    return total;
+    mem_t sum = 0;
+    for (const auto& lru : lrus_) sum += lru.used_bytes;
+    return sum;
   }
 };
+
+
+// class LRU_manager {
+// private:
+//   mem_t evicted_size = 0;
+//   mem_t max_usage = 0;
+//   uint32_t n_devices_{0};
+//   // For each device:
+//   //  - a list maintaining LRU (front) → MRU (back)
+//   //  - a map from data_id → its position in that list
+//   //  - a map from data_id → its mem_size
+//   std::vector<std::list<dataid_t>> lru_lists_;
+//   std::vector<ankerl::unordered_dense::map<dataid_t, typename std::list<dataid_t>::iterator>>
+//       position_maps_;
+//   std::vector<ankerl::unordered_dense::map<dataid_t, mem_t>> size_maps_;
+//   std::vector<mem_t> sizes_;
+//   std::vector<mem_t> max_sizes_;
+//   mutable DataIDList id_buffer;
+
+// public:
+//   LRU_manager() = default;
+
+//   // Constructor: initialize for n_devices [0 .. n_devices-1]
+//   explicit LRU_manager(const Devices &devices)
+//       : n_devices_(devices.size()), lru_lists_(devices.size()), position_maps_(devices.size()),
+//         size_maps_(devices.size()), sizes_(devices.size()), max_sizes_(devices.size()) {
+//     for (auto &size : sizes_) {
+//       size = 0;
+//     }
+//     for (int i = 0; i < devices.size(); i++) {
+//       max_sizes_[i] = devices.get_max_resources(i).mem;
+//     }
+//     id_buffer.reserve(20);
+//   }
+
+//   // read: add (device_id, data_id, mem_size). If present, update MRU; else insert.
+//   void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
+//     T4F_INVARIANT(device_id >= 0 && device_id < n_devices_);
+
+//     auto &lst = lru_lists_[device_id];
+//     auto &pos = position_maps_[device_id];
+//     auto &smap = size_maps_[device_id];
+//     auto &size = sizes_[device_id];
+//     auto &max_size = max_sizes_[device_id];
+//     auto it = pos.find(data_id);
+//     if (it != pos.end()) {
+//       // already present: move to MRU
+//       lst.erase(it->second);
+//     } else {
+//       size += mem_size;
+//       if (size > max_usage && device_id > 0) {
+//         max_usage = size;
+//       }
+//       if (size > max_size) {
+//         SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
+//                      data_id, mem_size);
+//         T4F_INVARIANT(size <= max_size && "LRU_manager::read(): size exceeds max size");
+//       }
+//     }
+//     // insert at MRU (back)
+//     lst.push_back(data_id);
+//     auto new_it = std::prev(lst.end());
+//     pos[data_id] = new_it;
+//     smap[data_id] = mem_size; // update size
+//   }
+
+//   LRU_manager(const LRU_manager &other)
+//       : n_devices_(other.n_devices_), lru_lists_(other.lru_lists_),
+//         position_maps_(other.n_devices_), size_maps_(other.size_maps_), sizes_(other.sizes_),
+//         max_sizes_(other.max_sizes_), evicted_size(other.evicted_size), max_usage(other.max_usage) {
+//     ZoneScoped;
+//     // Rebuild position_maps_
+//     for (devid_t dev = 0; dev < n_devices_; ++dev) {
+//       position_maps_[dev].reserve(other.position_maps_[dev].size());
+//       for (auto it = lru_lists_[dev].begin(); it != lru_lists_[dev].end(); ++it) {
+//         position_maps_[dev][*it] = it;
+//       }
+//     }
+//     id_buffer.reserve(other.id_buffer.capacity());
+//   }
+
+//   // invalidate: remove (device_id, data_id); assert if missing
+//   void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
+//     T4F_INVARIANT(device_id >= 0 && device_id < n_devices_);
+
+//     auto &lst = lru_lists_[device_id];
+//     auto &pos = position_maps_[device_id];
+//     auto &smap = size_maps_[device_id];
+//     auto &size = sizes_[device_id];
+
+//     auto it = pos.find(data_id);
+//     T4F_INVARIANT(it != pos.end() && "invalidate(): data_id not present");
+
+//     // std::cout << "Invalidating data_id " << data_id << " from device " << device_id
+//     //           << " with size " << smap[data_id] << "\n";
+//     //std::cout << "Current size before invalidation: " << size << "\n";
+
+//     lst.erase(it->second);
+//     pos.erase(it);
+//     auto removed = smap[data_id];
+//     //T4F_INVARIANT(removed > 0 && "invalidate(): data_id not present in size map");
+//     size -= removed; // update size
+//     if (evict)
+//       evicted_size += smap[data_id];
+//     smap.erase(data_id);
+//   }
+
+//   // getLRUids: fill id_buffer[device_id] with the least-recently-used data_ids
+//   // until their cumulative mem_size ≥ requested mem_size, and return it.
+//   const std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
+//                                             std::span<const dataid_t> used_ids) const {
+//     T4F_INVARIANT(device_id >= 0 && device_id < n_devices_);
+
+//     auto &lst = lru_lists_[device_id];
+//     auto &smap = size_maps_[device_id];
+//     id_buffer.clear();
+//     std::size_t accumulated = 0;
+
+//     for (auto it = lst.begin(); it != lst.end() && accumulated < mem_size; ++it) {
+//       dataid_t did = *it;
+//       if (std::find(used_ids.begin(), used_ids.end(), did) != used_ids.end()) {
+//         continue; // skip if used by the task
+//       }
+//       auto sz_it = smap.find(did);
+//       T4F_INVARIANT(sz_it != smap.end() && "size missing for data_id");
+//       accumulated += sz_it->second;
+//       id_buffer.push_back(did);
+//     }
+//     T4F_INVARIANT(accumulated >= mem_size &&
+//            "getLRUids(): evictable memory isze is smaller than the requested size");
+//     return id_buffer;
+//   }
+
+//   mem_t get_mem(devid_t device_id) const {
+//     T4F_INVARIANT((device_id >= 0) && (device_id < n_devices_));
+//     return sizes_[device_id];
+//   }
+
+//   mem_t get_evicted_memory_size() const {
+//     return evicted_size;
+//   }
+
+//   mem_t get_max_memory_usage() const {
+//     mem_t total = 0;
+//     for (const auto size : sizes_) {
+//       total += size;
+//     }
+//     return total;
+//   }
+// };
 
 class MovementCounter {
 private:
@@ -983,7 +985,7 @@ public:
       : mapped_locations(data.size(), devices.size()),
         reserved_locations(data.size(), devices.size()),
         launched_locations(data.size(), devices.size()),
-        lru_manager(devices),
+        lru_manager(devices, estimate_lru_block_size(data), 0, data.size()),
         movement_counter(devices.size()) {
   }
 
