@@ -9,6 +9,7 @@
 #include "scheduler.hpp"
 #include "simulator.hpp"
 #include "tasks.hpp"
+#include <array>
 
 class SimulatorFixture {
 protected:
@@ -91,6 +92,101 @@ TEST_CASE_FIXTURE(SimulatorFixture, "Breakpoints") {
   // Continue execution
   state = simulator.run();
   CHECK_EQ(state, ExecutionState::COMPLETE);
+}
+
+TEST_CASE_FIXTURE(SimulatorFixture, "Mapper single-wave batched enqueue") {
+  auto simulator = Simulator(input);
+  simulator.initialize(false);
+
+  MapperEvent mapper_event(0);
+  simulator.scheduler.map_tasks(mapper_event, simulator.event_manager, simulator.mapper.get());
+
+  const auto &state = simulator.scheduler.get_state();
+  const auto &queues = simulator.scheduler.get_queues();
+  const auto &runtime = state.get_task_runtime();
+
+  CHECK_EQ(state.counts.n_mapped(), 1);
+  CHECK_EQ(queues.n_mappable(), 1);
+  CHECK(queues.has_reservable());
+  CHECK_EQ(queues.n_reservable(0) + queues.n_reservable(1), 1);
+  CHECK(runtime.is_compute_mapped(0));
+  CHECK(!runtime.is_compute_mapped(1));
+}
+
+TEST_CASE_FIXTURE(SimulatorFixture, "Reserver single-wave batched enqueue") {
+  auto simulator = Simulator(input);
+  simulator.initialize(false);
+
+  MapperEvent mapper_event_0(0);
+  simulator.scheduler.map_tasks(mapper_event_0, simulator.event_manager, simulator.mapper.get());
+  MapperEvent mapper_event_1(0);
+  simulator.scheduler.map_tasks(mapper_event_1, simulator.event_manager, simulator.mapper.get());
+
+  auto &state = simulator.scheduler.get_state();
+  const auto &queues = simulator.scheduler.get_queues();
+
+  CHECK_EQ(state.counts.n_mapped(), 2);
+  CHECK_EQ(state.counts.n_reserved(), 0);
+  CHECK_EQ(queues.n_reservable(0) + queues.n_reservable(1), 1);
+
+  ReserverEvent reserve_event(0);
+  simulator.scheduler.reserve_tasks(reserve_event, simulator.event_manager);
+
+  CHECK_EQ(state.counts.n_reserved(), 1);
+  CHECK_EQ(queues.n_reservable(0) + queues.n_reservable(1), 1);
+  CHECK(state.get_task_runtime().is_compute_reservable(1));
+}
+
+TEST_CASE_FIXTURE(SimulatorFixture, "Python mapper break flushes partial action batch") {
+  auto tasks = Tasks(2);
+  tasks.create_compute_task(0, "Task0", {});
+  tasks.create_compute_task(1, "Task1", {});
+  for (int i = 0; i < 2; ++i) {
+    tasks.add_variant(i, DeviceType::CPU, 1, 1024, 100);
+    tasks.add_variant(i, DeviceType::GPU, 1, 2048, 50);
+  }
+
+  auto local_data = Data(1);
+  local_data.create_block(0, 1024, 0, "Data0");
+
+  RandomMapper local_mapper(seed);
+  TaskNoise local_noise(tasks, seed);
+  local_noise.generate();
+  CommunicationNoise local_comm_noise(topology);
+  input = SchedulerInput(tasks, local_data, devices, topology, local_mapper, local_noise,
+                         local_comm_noise, 2);
+
+  auto simulator = Simulator(input);
+  simulator.initialize(false);
+  simulator.set_use_python_mapper(true);
+  simulator.set_steps(1);
+
+  auto state = simulator.run();
+  CHECK_EQ(state, ExecutionState::EXTERNAL_MAPPING);
+
+  std::array<int64_t, 2> candidates{-1, -1};
+  const auto n_candidates = simulator.get_mappable_candidates(candidates);
+  CHECK_EQ(n_candidates, 2);
+
+  ActionList actions;
+  Action action0;
+  action0.pos = 0;
+  action0.device = 0;
+  actions.push_back(action0);
+  Action action1;
+  action1.pos = 1;
+  action1.device = 0;
+  actions.push_back(action1);
+
+  simulator.map_tasks(actions);
+  CHECK_EQ(simulator.last_state, ExecutionState::BREAKPOINT);
+  CHECK_EQ(simulator.scheduler.get_state().counts.n_mapped(), 1);
+  CHECK_EQ(simulator.scheduler.get_queues().n_mappable(), 1);
+  CHECK(simulator.scheduler.get_queues().has_reservable());
+
+  std::array<int64_t, 2> remaining{-1, -1};
+  const auto n_remaining = simulator.get_mappable_candidates(remaining);
+  CHECK_EQ(n_remaining, 1);
 }
 
 TEST_CASE_FIXTURE(SimulatorFixture, "Copy") {
