@@ -52,7 +52,10 @@ def bin_partition(geometry: Geometry, round=2, direction=None, n_parts=2):
     for i in range(len(geometry.cells)):
         projection = projection[i]
         for j in range(n_parts):
-            if projection >= min_val + j * delta and projection < min_val + (j + 1) * delta:
+            if (
+                projection >= min_val + j * delta
+                and projection < min_val + (j + 1) * delta
+            ):
                 partition_vector[i] = j
                 break
     return partition_vector

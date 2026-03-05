@@ -14,7 +14,7 @@ class DeviceTuple:
     flops: int = 0
 
 
-@dataclass
+@dataclass(slots=True)
 class TaskTuple:
     id: int = 0
     name: str = ""

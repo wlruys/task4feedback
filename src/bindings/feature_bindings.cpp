@@ -301,6 +301,10 @@ void init_feature_ext(nb::module_ &m) {
   bind_int_feature<EmptyTaskFeature>(m, "EmptyTaskFeature");
   bind_state_feature<InDegreeTaskFeature>(m, "InDegreeTaskFeature");
   bind_state_feature<OutDegreeTaskFeature>(m, "OutDegreeTaskFeature");
+  bind_state_feature<ReadDegreeTaskFeature>(m, "ReadDegreeTaskFeature");
+  bind_state_feature<TaskInputDegreesFeature>(m, "TaskInputDegreesFeature");
+  bind_state_feature<PredecessorSizeFeature>(m, "PredecessorSizeFeature");
+  bind_state_feature<PredecessorMappedDevice>(m, "PredecessorMappedDeviceFeature");
   bind_state_feature<GPUDurationTaskFeature>(m, "DurationTaskFeature");
   bind_state_feature<OneHotMappedDeviceTaskFeature>(m, "OneHotMappedDeviceTaskFeature");
   bind_state_feature<TaskStateFeature>(m, "TaskStateFeature");
@@ -308,6 +312,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_feature<DepthTaskFeature>(m, "DepthTaskFeature");
   bind_state_feature<TaskDeviceMappedTime>(m, "TaskDeviceMappedTimeFeature");
   bind_state_feature<TaskCoordinates>(m, "TaskCoordinatesFeature");
+  bind_state_feature<TaskReadCoordinate>(m, "TaskReadCoordinateFeature");
   bind_state_feature<TaskDataMappedSize>(m, "TaskDataMappedSizeFeature");
   bind_state_feature<TaskDataMappedCoordinates>(m, "TaskDataMappedCoordinatesFeature");
   bind_state_feature<CandidateVector>(m, "CandidateVectorFeature");
@@ -343,7 +348,7 @@ void init_feature_ext(nb::module_ &m) {
   bind_state_edge_feature<TaskDataMappedFeature>(m, "TaskDataMappedFeature");
   bind_state_edge_feature<TaskDataMappedOneHotFeature>(m, "TaskDataMappedOneHotFeature");
   bind_state_edge_feature<TaskDataSizeFeature>(m, "TaskDataSizeFeature");
-  
+
   // Task Device Features
   bind_state_edge_feature<TaskDeviceDefaultEdgeFeature>(m, "TaskDeviceDefaultEdgeFeature");
 
@@ -459,6 +464,7 @@ void init_feature_ext(nb::module_ &m) {
       .def("get_k_hop_dependencies", &GraphExtractor::get_k_hop_dependencies)
       .def("get_k_hop_dependents", &GraphExtractor::get_k_hop_dependents)
       .def("get_k_hop_bidirectional", &GraphExtractor::get_k_hop_bidirectional)
+      .def("get_k_hop_neighborhood", &GraphExtractor::get_k_hop_neighborhood)
       .def("get_active_tasks", &GraphExtractor::get_active_tasks)
       .def("get_task_task_edges", &GraphExtractor::get_task_task_edges)
       .def("get_task_task_edges_reverse", &GraphExtractor::get_task_task_edges_reverse)

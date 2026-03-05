@@ -133,6 +133,8 @@ class CommunicationManager {
   std::vector<LinkUsage> link_usage; // (src, dst) links
   std::vector<double> bandwidth_reciprocals;
   std::vector<bool> is_host;
+  std::vector<std::vector<devid_t>> preferred_sources_by_destination;
+  std::vector<uint8_t> source_rank_by_destination_source;
 
   void precompute_reciprocals(const Topology &topology) {
     bandwidth_reciprocals.resize(num_devices * num_devices);
@@ -165,6 +167,33 @@ class CommunicationManager {
     }
   }
 
+  void precompute_source_order(const Topology &topology) {
+    source_rank_by_destination_source.assign(num_devices * num_devices,
+                                             std::numeric_limits<uint8_t>::max());
+    preferred_sources_by_destination.resize(num_devices);
+
+    for (devid_t dst = 0; dst < num_devices; ++dst) {
+      auto &order = preferred_sources_by_destination[dst];
+      order.clear();
+      order.reserve(num_devices);
+      for (devid_t src = 0; src < num_devices; ++src) {
+        order.push_back(src);
+      }
+      std::stable_sort(order.begin(), order.end(), [&](devid_t lhs, devid_t rhs) {
+        return topology.get_bandwidth(lhs, dst) > topology.get_bandwidth(rhs, dst);
+      });
+
+      for (std::size_t rank = 0; rank < order.size(); ++rank) {
+        source_rank_by_destination_source[dst * num_devices + order[rank]] =
+            static_cast<uint8_t>(rank);
+      }
+    }
+  }
+
+  [[nodiscard]] inline uint8_t get_source_rank(devid_t dst, devid_t src) const {
+    return source_rank_by_destination_source[dst * num_devices + src];
+  }
+
 public:
   CommunicationManager() = default;
 
@@ -174,6 +203,7 @@ public:
     precompute_reciprocals(topology_);
     precompute_max_copies(devices_);
     precompute_link_max_copies(topology_);
+    precompute_source_order(topology_);
   }
 
   CommunicationManager(const CommunicationManager &c) = default;
@@ -251,6 +281,10 @@ public:
       return used_d2d_outgoing < available_d2d_outgoing &&
              used_d2d_incoming < available_d2d_incoming;
     }
+    if (is_h2h(src, dst)) {
+      return true;
+    }
+    return false;
   }
 
   [[nodiscard]] inline bool is_link_available(devid_t src, devid_t dst) const {
@@ -303,6 +337,7 @@ public:
   [[nodiscard]] inline SourceRequest
   get_best_available_source(const Topology &topology, devid_t dst,
                             const devicemask_t possible_source_flags) const {
+    MONUnusedParameter(topology);
 
     const devicemask_t destination_mask = (1 << dst);
 
@@ -312,28 +347,35 @@ public:
       return {true, dst};
     }
 
-    devid_t best_source = 0;
-    mem_t best_bandwidth = 0;
+    devicemask_t candidates = possible_source_flags & ~destination_mask;
+    if (candidates == 0) {
+      return {false, 0};
+    }
+
     bool found = false;
+    devid_t best_source = 0;
+    auto best_rank = std::numeric_limits<uint8_t>::max();
 
-    const auto size = topology.num_devices;
-    for (devid_t src = 0; src < size; ++src) {
-      const devicemask_t src_mask = (1 << src);
+    while (candidates) {
+      const auto src = static_cast<devid_t>(__builtin_ctz(static_cast<unsigned>(candidates)));
+      candidates &= static_cast<devicemask_t>(candidates - 1);
 
-      const bool is_valid = (possible_source_flags & src_mask) && is_link_available(src, dst) &&
-                            is_device_available(src, dst);
+      if (src >= num_devices) {
+        continue;
+      }
+      if (!is_link_available(src, dst) || !is_device_available(src, dst)) {
+        continue;
+      }
 
-      SPDLOG_DEBUG("Checking source {} for destination {}: is_valid = {}", src, dst, is_valid);
-      SPDLOG_DEBUG("HAS_DATA = {}", possible_source_flags & src_mask);
-      SPDLOG_DEBUG("LINK_AVAILABLE = {}", is_link_available(src, dst));
-      SPDLOG_DEBUG("SRC2DST_CE_AVAILABLE = {}", is_device_available(src, dst));
-
-      const auto bandwidth = topology.get_bandwidth(src, dst);
-
-      const bool is_better = is_valid && (bandwidth > best_bandwidth);
-      best_bandwidth = is_better ? bandwidth : best_bandwidth;
-      best_source = is_better ? src : best_source;
-      found = found || is_better;
+      const auto rank = get_source_rank(dst, src);
+      if (!found || rank < best_rank) {
+        found = true;
+        best_source = src;
+        best_rank = rank;
+        if (best_rank == 0) {
+          break;
+        }
+      }
     }
 
     return {found, best_source};
@@ -342,26 +384,41 @@ public:
   [[nodiscard]] inline SourceRequest
   get_best_source(const Topology &topology, devid_t dst,
                   const devicemask_t possible_source_flags) const {
+    MONUnusedParameter(topology);
 
     const devicemask_t destination_mask = (1 << dst);
     if (possible_source_flags & destination_mask) {
       return {true, dst}; // Local data is always available
     }
 
-    devid_t best_source = 0;
-    mem_t best_bandwidth = 0;
-    bool found = false;
-
-    for (devid_t src = 0; src < topology.num_devices; ++src) {
-      const devicemask_t src_mask = (1 << src);
-      bool is_valid = (possible_source_flags & src_mask);
-
-      auto bandwidth = get_available_bandwidth(topology, src, dst);
-      const bool is_better = is_valid && (bandwidth > best_bandwidth);
-      best_bandwidth = is_better ? bandwidth : best_bandwidth;
-      best_source = is_better ? src : best_source;
-      found = found || is_better;
+    devicemask_t candidates = possible_source_flags & ~destination_mask;
+    if (candidates == 0) {
+      return {false, 0};
     }
+
+    bool found = false;
+    devid_t best_source = 0;
+    auto best_rank = std::numeric_limits<uint8_t>::max();
+
+    while (candidates) {
+      const auto src = static_cast<devid_t>(__builtin_ctz(static_cast<unsigned>(candidates)));
+      candidates &= static_cast<devicemask_t>(candidates - 1);
+
+      if (src >= num_devices) {
+        continue;
+      }
+
+      const auto rank = get_source_rank(dst, src);
+      if (!found || rank < best_rank) {
+        found = true;
+        best_source = src;
+        best_rank = rank;
+        if (best_rank == 0) {
+          break;
+        }
+      }
+    }
+
     return {found, best_source};
   }
 

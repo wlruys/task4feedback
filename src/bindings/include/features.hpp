@@ -1175,8 +1175,8 @@ public:
 
     for (int i = 0; i < n_devices; i++) {
       auto reserved_mem = static_cast<double>(device_manager.get_mem<TaskState::RESERVED>(i));
-      auto log_reserved_mem = std::log1p(1 + reserved_mem);
-      v(i * vals_per_device + 0) = static_cast<f_t>(log_reserved_mem);
+      //auto log_reserved_mem = std::log1p(1 + reserved_mem);
+      v(i * vals_per_device + 0) = static_cast<f_t>(reserved_mem);
     }
 
     // std::cout << "Device Memory: [";
@@ -1328,6 +1328,23 @@ template <typename Derived> struct IntEdgeFeature : StateEdgeFeature<Derived> {
   }
 };
 
+struct ReadDegreeTaskFeature : public StateFeature<ReadDegreeTaskFeature> {
+  ReadDegreeTaskFeature(const SchedulerState &state)
+      : StateFeature<ReadDegreeTaskFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &read = static_graph.get_read(task_id);
+    auto degree = static_cast<f_t>(read.size());
+    output[0] = 1 / (std::sqrt(1 + degree));
+  }
+};
+
 struct InDegreeTaskFeature : public StateFeature<InDegreeTaskFeature> {
   InDegreeTaskFeature(const SchedulerState &state)
       : StateFeature<InDegreeTaskFeature>(state, NodeType::TASK) {
@@ -1357,6 +1374,28 @@ struct OutDegreeTaskFeature : public StateFeature<OutDegreeTaskFeature> {
     const auto &static_graph = state.get_tasks();
     auto degree = static_cast<f_t>(static_graph.get_out_degree(task_id));
     output[0] = 1 / (std::sqrt(1 + degree));
+  }
+};
+
+struct TaskInputDegreesFeature : public StateFeature<TaskInputDegreesFeature> {
+  TaskInputDegreesFeature(const SchedulerState &state)
+      : StateFeature<TaskInputDegreesFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 3;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto dependency_degree =
+        static_cast<double>(static_graph.get_compute_task_dependencies(task_id).size());
+    const auto read_degree = static_cast<double>(static_graph.get_read(task_id).size());
+    const auto write_degree = static_cast<double>(static_graph.get_write(task_id).size());
+
+    output[0] = static_cast<f_t>(std::log(1.0 + dependency_degree));
+    output[1] = static_cast<f_t>(std::log(1.0 + read_degree));
+    output[2] = static_cast<f_t>(std::log(1.0 + write_degree));
   }
 };
 
@@ -1447,6 +1486,72 @@ struct TaskMeanDurationFeature : public StateFeature<TaskMeanDurationFeature> {
     const auto &data = state.get_data();
     auto n_devices = state.get_devices().size();
     output[0] = static_graph.get_mean_duration(task_id, DeviceType::GPU);
+  }
+};
+
+
+
+struct PredecessorSizeFeature : public StateFeature<PredecessorSizeFeature> {
+  PredecessorSizeFeature(const SchedulerState &state)
+      : StateFeature<PredecessorSizeFeature>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 1;
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    // Loop over dependencies, gather total average size of their input data
+    const auto &static_graph = state.get_tasks();
+    const auto &data = state.get_data();
+    const auto dependencies = static_graph.get_compute_task_dependencies(task_id);
+    f_t total_size = 0.0;
+    int n_dependencies = static_cast<int>(dependencies.size());
+    for (auto dep_id : dependencies) {
+      for (auto data_id : static_graph.get_read(dep_id)) {
+        total_size += static_cast<double>(data.get_size(data_id));
+      }
+    }
+    f_t average_size = n_dependencies > 0 ? guarded_divide(static_cast<double>(total_size), static_cast<double>(n_dependencies)) : 0.0f;
+
+    output[0] = average_size;
+  }
+};
+
+
+struct PredecessorMappedDevice : public StateFeature<PredecessorMappedDevice> {
+  // Returns device.size() - 1 (exclude CPU) averaged counts what device a predecessor was mapped to
+  PredecessorMappedDevice(const SchedulerState &state)
+      : StateFeature<PredecessorMappedDevice>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    const auto &devices = this->state.get_devices();
+    return devices.size() - 1; // Exclude CPU
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &task_runtime = state.get_task_runtime();
+    const auto &devices = state.get_devices();
+    const auto predecessors = static_graph.get_compute_task_dependencies(task_id);
+    const auto n_devices = static_cast<int32_t>(devices.size());
+
+    for (int32_t i = 0; i < n_devices - 1; ++i) {
+      output[i] = 0.0f;
+    }
+
+    for (const auto predecessor_id : predecessors) {
+      const int32_t mapped_device = task_runtime.get_compute_task_mapped_device(predecessor_id);
+      if (mapped_device > 0 && mapped_device < n_devices) {
+        output[mapped_device - 1] += 1.0f;
+      }
+    }
+
+    const auto predecessor_count = static_cast<double>(predecessors.size());
+    for (int32_t i = 0; i < n_devices - 1; ++i) {
+      output[i] = guarded_divide(output[i], predecessor_count);
+    }
   }
 };
 
@@ -1821,6 +1926,55 @@ struct TaskCoordinates : public StateFeature<TaskCoordinates> {
 
     output[0] = static_cast<f_t>(sum_x / read.size());
     output[1] = static_cast<f_t>(sum_y / read.size());
+  }
+};
+
+struct TaskReadCoordinate : public StateFeature<TaskReadCoordinate> {
+  TaskReadCoordinate(const SchedulerState &state)
+      : StateFeature<TaskReadCoordinate>(state, NodeType::TASK) {
+  }
+
+  size_t getFeatureDimImpl() const {
+    return 4; // mean_x, mean_y, weighted_mean_x, weighted_mean_y
+  }
+
+  template <typename ID, typename Span> void extractFeatureImpl(ID task_id, Span output) const {
+    const auto &static_graph = state.get_tasks();
+    const auto &data = state.get_data();
+    const auto read = static_graph.get_read(task_id);
+
+    output[0] = 0.0f;
+    output[1] = 0.0f;
+    output[2] = 0.0f;
+    output[3] = 0.0f;
+
+    if (read.empty()) {
+      return;
+    }
+
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    double weighted_sum_x = 0.0;
+    double weighted_sum_y = 0.0;
+    double total_weight = 0.0;
+
+    for (int i = 0; i < read.size(); ++i) {
+      auto data_id = read[i];
+      const auto x_pos = static_cast<double>(data.get_x_pos(data_id));
+      const auto y_pos = static_cast<double>(data.get_y_pos(data_id));
+      const auto size = static_cast<double>(data.get_size(data_id));
+
+      sum_x += x_pos;
+      sum_y += y_pos;
+      weighted_sum_x += x_pos * size;
+      weighted_sum_y += y_pos * size;
+      total_weight += size;
+    }
+
+    output[0] = guarded_divide(sum_x, static_cast<double>(read.size()));
+    output[1] = guarded_divide(sum_y, static_cast<double>(read.size()));
+    output[2] = guarded_divide(weighted_sum_x, total_weight);
+    output[3] = guarded_divide(weighted_sum_y, total_weight);
   }
 };
 

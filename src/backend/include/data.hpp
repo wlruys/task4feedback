@@ -51,6 +51,7 @@ public:
   }
 
   void set_size(dataid_t id, mem_t size) {
+    assert(id < sizes.size());
     sizes[id] = size;
   }
 
@@ -60,30 +61,37 @@ public:
   }
 
   void set_x_pos(dataid_t id, float x) {
+    assert(id < xy_positions.size());
     xy_positions[id].x = x;
   }
 
   void set_y_pos(dataid_t id, float y) {
+    assert(id < xy_positions.size());
     xy_positions[id].y = y;
   }
 
   [[nodiscard]] float get_x_pos(dataid_t id) const {
+    assert(id < xy_positions.size());
     return xy_positions[id].x;
   }
 
   [[nodiscard]] float get_y_pos(dataid_t id) const {
+    assert(id < xy_positions.size());
     return xy_positions[id].y;
   }
 
   int get_tag(dataid_t id) const {
+    assert(id < data_tags.size());
     return data_tags[id];
   }
 
   void set_type(dataid_t id, int type) {
+    assert(id < data_types.size());
     data_types[id] = type;
   }
 
   int get_type(dataid_t id) const {
+    assert(id < data_types.size());
     return data_types[id];
   }
 
@@ -93,6 +101,7 @@ public:
     initial_location[id] = location;
   }
   void set_name(dataid_t id, std::string name) {
+    assert(id < data_names.size());
     data_names[id] = std::move(name);
     name_to_id[data_names[id]] = id;
   }
@@ -146,10 +155,12 @@ public:
   }
 
   [[nodiscard]] devid_t get_location(dataid_t id) const {
-    return initial_location.at(id);
+    assert(id < initial_location.size());
+    return initial_location[id];
   }
   [[nodiscard]] const std::string &get_name(dataid_t id) const {
-    return data_names.at(id);
+    assert(id < data_names.size());
+    return data_names[id];
   }
 
   [[nodiscard]] auto get_sizes() const {
@@ -231,7 +242,6 @@ public:
 #ifdef SIM_RECORD
     if (record) {
       if (is_valid(data_id, device_id)) {
-        locations[data_id * num_devices + device_id] = 0;
         // close the current interval
         valid_intervals[data_id * num_devices + device_id].stops.back() = current_time;
       }
@@ -243,8 +253,7 @@ public:
   }
 
   [[nodiscard]] inline std::size_t count_valid(dataid_t data_id) const {
-    return std::count(locations.data() + data_id * num_devices,
-                      locations.data() + (data_id + 1) * num_devices, 1);
+    return std::popcount(static_cast<std::make_unsigned_t<devicemask_t>>(locations[data_id]));
   }
 
   [[nodiscard]] inline devicemask_t get_location_flags(dataid_t data_id) const {
@@ -256,10 +265,11 @@ public:
   }
 
   void populate_valid_locations(dataid_t data_id, std::vector<devid_t> &valid_locations) const {
-    for (devicemask_t i = 0; i < num_devices; i++) {
-      if (is_valid(data_id, i)) {
-        valid_locations.push_back(i);
-      }
+    auto mask = locations[data_id];
+    while (mask) {
+      auto bit = std::countr_zero(mask);
+      valid_locations.push_back(static_cast<devid_t>(bit));
+      mask &= (mask - 1);
     }
   }
 
@@ -323,50 +333,44 @@ public:
   }
 };
 
-struct MovementPair {
-  dataid_t data_id{};
-  devid_t destination{};
-
-  MovementPair(dataid_t data_id, devid_t destination) : data_id(data_id), destination(destination) {
-  }
-
-  auto operator==(const MovementPair &other) const -> bool {
-    return data_id == other.data_id && destination == other.destination;
-  }
-};
-
-struct mp_hash {
-  using is_avalanching = void;
-
-  [[nodiscard]] auto operator()(MovementPair const &f) const noexcept -> uint64_t {
-    static_assert(std::has_unique_object_representations_v<MovementPair>);
-    return ankerl::unordered_dense::detail::wyhash::hash(&f, sizeof(f));
-  }
-};
+[[nodiscard]] inline uint64_t pack_movement_key(dataid_t data_id, devid_t destination) {
+  return (static_cast<uint64_t>(static_cast<uint32_t>(destination)) << 32U) |
+         static_cast<uint32_t>(data_id);
+}
 
 class MovementManager {
 protected:
-  ankerl::unordered_dense::map<MovementPair, timecount_t, mp_hash> movement_times;
+  ankerl::unordered_dense::map<uint64_t, timecount_t> movement_times;
 
 public:
   MovementManager() = default;
 
   bool is_moving(dataid_t data_id, devid_t destination) const {
-    return movement_times.find({data_id, destination}) != movement_times.end();
+    return movement_times.find(pack_movement_key(data_id, destination)) != movement_times.end();
   }
 
   [[nodiscard]] inline timecount_t get_time(dataid_t data_id, devid_t destination) const {
-    auto it = movement_times.find({data_id, destination});
+    auto it = movement_times.find(pack_movement_key(data_id, destination));
     return it == movement_times.end() ? 0 : it->second;
+  }
+
+  [[nodiscard]] inline bool try_get_time(dataid_t data_id, devid_t destination,
+                                         timecount_t &completion_time) const {
+    auto it = movement_times.find(pack_movement_key(data_id, destination));
+    if (it == movement_times.end()) {
+      return false;
+    }
+    completion_time = it->second;
+    return true;
   }
 
   inline void set_completion(dataid_t data_id, devid_t destination,
                              timecount_t global_completion_time) {
-    movement_times[{data_id, destination}] = global_completion_time;
+    movement_times[pack_movement_key(data_id, destination)] = global_completion_time;
   }
 
   inline void remove(dataid_t data_id, devid_t destination) {
-    movement_times.erase({data_id, destination});
+    movement_times.erase(pack_movement_key(data_id, destination));
   }
 };
 
@@ -374,6 +378,345 @@ struct MovementStatus {
   bool is_virtual = false;
   timecount_t duration = 0;
 };
+
+enum class InsertResult {
+  Updated,
+  Inserted,
+  Failed
+};
+
+// class LRU_manager {
+// private:
+//   mem_t evicted_size = 0;
+//   mem_t max_usage = 0;
+
+//   struct alignas(64) DeviceLRU {
+//     using node_t = int32_t;
+//     static constexpr node_t kNull = -1;
+
+//     struct Node {
+//       dataid_t id;
+//       mem_t bytes;
+//       node_t next;
+//       node_t prev;
+//     };
+
+//     std::vector<Node> nodes;
+//     ankerl::unordered_dense::map<dataid_t, node_t> where;
+//     node_t free_head = kNull;
+//     mem_t used_bytes = 0;
+//     mem_t capacity_bytes = 0;
+//     std::size_t hard_max_items = 0;
+
+// #ifndef NDEBUG
+//     uint32_t op_counter = 0;
+//     static constexpr uint32_t kCheckPeriod = 8192;
+// #endif
+
+//     void init(std::size_t initial_max_items, mem_t cap_bytes,
+//               std::size_t reserve_items_hint, std::size_t hard_cap_items = 0) {
+//       capacity_bytes = cap_bytes;
+//       hard_max_items = hard_cap_items;
+
+//       nodes.resize(initial_max_items + 1);
+//       nodes[0] = {dataid_t(-1), 0, 0, 0}; // Sentinel node
+
+//       free_head = initial_max_items > 0 ? 1 : kNull;
+//       for (node_t i = 1; i < static_cast<node_t>(initial_max_items); ++i) {
+//         nodes[i].next = i + 1;
+//       }
+//       if (initial_max_items > 0) {
+//         nodes[initial_max_items].next = kNull;
+//       }
+
+//       where.clear();
+//       where.reserve(reserve_items_hint);
+//       used_bytes = 0;
+
+// #ifndef NDEBUG
+//       op_counter = 0;
+// #endif
+//     }
+
+//     bool ensure_free_node_() {
+//       if (free_head != kNull) return true;
+
+//       const std::size_t old_user_items = nodes.size() - 1;
+//       std::size_t new_user_items = old_user_items == 0 ? 1024 : old_user_items * 2;
+
+//       if (hard_max_items != 0 && new_user_items > hard_max_items) {
+//         new_user_items = hard_max_items;
+//         if (new_user_items <= old_user_items) return false;
+//       }
+
+//       const std::size_t new_n = new_user_items + 1;
+//       nodes.resize(new_n);
+
+//       free_head = static_cast<node_t>(old_user_items + 1);
+//       for (node_t i = free_head; i < static_cast<node_t>(new_n - 1); ++i) {
+//         nodes[i].next = i + 1;
+//       }
+//       nodes[new_n - 1].next = kNull;
+
+//       SPDLOG_WARN("LRU_manager: expanding DeviceLRU node pool from {} -> {} user nodes",
+//                   old_user_items, new_user_items);
+//       return true;
+//     }
+
+//     void unlink_(node_t n) {
+//       const node_t p = nodes[n].prev;
+//       const node_t q = nodes[n].next;
+//       nodes[p].next = q;
+//       nodes[q].prev = p;
+//     }
+
+//     void link_front_(node_t n) {
+//       const node_t head = nodes[0].next;
+//       nodes[n].prev = 0;
+//       nodes[n].next = head;
+//       nodes[head].prev = n;
+//       nodes[0].next = n;
+//     }
+
+//     void touch_node_(node_t n) {
+//       if (nodes[0].next == n) return;
+//       unlink_(n);
+//       link_front_(n);
+//     }
+
+// #ifndef NDEBUG
+//     void maybe_check_invariants_() {
+//       if ((++op_counter % kCheckPeriod) != 0) return;
+
+//       const node_t head = nodes[0].next;
+//       const node_t tail = nodes[0].prev;
+
+//       if (head == 0) {
+//         assert(tail == 0 && where.empty());
+//         return;
+//       }
+
+//       assert(nodes[head].prev == 0 && nodes[tail].next == 0);
+
+//       std::size_t seen = 0;
+//       node_t cur = head;
+//       node_t last = 0;
+
+//       while (cur != 0) {
+//         assert(nodes[cur].id != dataid_t(-1));
+//         auto it = where.find(nodes[cur].id);
+//         assert(it != where.end() && it->second == cur);
+//         assert(nodes[cur].prev == last);
+
+//         last = cur;
+//         cur = nodes[cur].next;
+//         assert(++seen <= nodes.size());
+//       }
+//       assert(last == tail && seen == where.size());
+//     }
+// #endif
+
+//     InsertResult insert_or_update(dataid_t id, mem_t bytes) {
+//       auto [it, inserted] = where.try_emplace(id, 0);
+
+//       if (!inserted) {
+//         const node_t n = it->second;
+//         if (nodes[n].bytes != bytes) {
+//           used_bytes += (bytes - nodes[n].bytes);
+//           nodes[n].bytes = bytes;
+//         }
+//         touch_node_(n);
+// #ifndef NDEBUG
+//         maybe_check_invariants_();
+// #endif
+//         return InsertResult::Updated;
+//       }
+
+//       if (!ensure_free_node_()) {
+//         where.erase(it);
+//         return InsertResult::Failed;
+//       }
+
+//       const node_t n = free_head;
+//       free_head = nodes[n].next;
+
+//       it->second = n;
+
+//       nodes[n].id = id;
+//       nodes[n].bytes = bytes;
+//       link_front_(n);
+
+//       used_bytes += bytes;
+
+// #ifndef NDEBUG
+//       maybe_check_invariants_();
+// #endif
+//       return InsertResult::Inserted;
+//     }
+
+//     mem_t erase(dataid_t id) {
+//       auto it = where.find(id);
+//       if (it == where.end()) return 0;
+
+//       const node_t n = it->second;
+//       where.erase(it);
+//       unlink_(n);
+
+//       const mem_t b = nodes[n].bytes;
+//       used_bytes -= b;
+
+//       nodes[n].next = free_head;
+//       free_head = n;
+
+// #ifndef NDEBUG
+//       maybe_check_invariants_();
+// #endif
+//       return b;
+//     }
+
+//     std::size_t collect_lru_victims(std::size_t bytes_needed,
+//                                     std::span<const dataid_t> used_ids,
+//                                     DataIDList &out) const {
+//       out.clear();
+//       std::size_t acc = 0;
+//       node_t cur = nodes[0].prev;
+
+//       if (used_ids.empty()) {
+//         while (cur != 0 && acc < bytes_needed) {
+//           acc += static_cast<std::size_t>(nodes[cur].bytes);
+//           out.push_back(nodes[cur].id);
+//           cur = nodes[cur].prev;
+//         }
+//       } else {
+//         // Check that this data is not used by the requester before adding to eviction list
+//         while (cur != 0 && acc < bytes_needed) {
+//           const dataid_t id = nodes[cur].id;
+
+//           if (!std::binary_search(used_ids.begin(), used_ids.end(), id)) {
+//             acc += static_cast<std::size_t>(nodes[cur].bytes);
+//             out.push_back(id);
+//           }
+//           cur = nodes[cur].prev;
+//         }
+//       }
+//       return acc;
+//     }
+//   };
+
+//   std::vector<DeviceLRU> lrus_;
+//   mutable DataIDList id_buffer;
+
+//   bool is_valid_device(devid_t id) const {
+//     return id >= 0 && static_cast<std::size_t>(id) < lrus_.size();
+//   }
+
+// public:
+//   LRU_manager() = default;
+
+//   explicit LRU_manager(const Devices &devices,
+//                        mem_t median_block_size,
+//                        std::size_t hard_max_items_per_device = 0,
+//                        std::size_t distinct_items_hint = static_cast<std::size_t>(-1))
+//       : lrus_(devices.size()) {
+
+//     median_block_size = median_block_size > 0 ? median_block_size : 1;
+//     constexpr std::size_t kMinItems = 4096;
+//     constexpr std::size_t kMaxItems = 1'000'000;
+//     const bool has_distinct_items_hint = distinct_items_hint != static_cast<std::size_t>(-1);
+
+//     for (std::size_t dev = 0; dev < lrus_.size(); ++dev) {
+//       const mem_t cap = devices.get_max_resources(dev).mem;
+//       std::size_t expected = static_cast<std::size_t>(cap / median_block_size);
+
+//       if (has_distinct_items_hint) expected = std::min(expected, distinct_items_hint);
+//       if (hard_max_items_per_device != 0) expected = std::min(expected,
+//       hard_max_items_per_device);
+
+//       std::size_t initial_items, reserve_items;
+//       if (has_distinct_items_hint) {
+//         initial_items = expected == 0 ? 0 : 2 * expected;
+//         reserve_items = expected;
+//       } else {
+//         initial_items = std::clamp(2 * expected, kMinItems, kMaxItems);
+//         reserve_items = std::clamp(expected, kMinItems / 2, initial_items);
+//       }
+
+//       if (hard_max_items_per_device != 0) {
+//         initial_items = std::min(initial_items, hard_max_items_per_device);
+//         reserve_items = std::min(reserve_items, initial_items);
+//       }
+
+//       lrus_[dev].init(initial_items, cap, reserve_items, hard_max_items_per_device);
+//     }
+
+//     id_buffer.reserve(20);
+//   }
+
+//   LRU_manager(const LRU_manager &other)
+//       : evicted_size(other.evicted_size),
+//         max_usage(other.max_usage),
+//         lrus_(other.lrus_) {
+//     id_buffer.reserve(other.id_buffer.capacity());
+//   }
+
+//   void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
+//     assert(is_valid_device(device_id));
+//     auto &lru = lrus_[device_id];
+
+//     const InsertResult result = lru.insert_or_update(data_id, mem_size);
+
+//     if (result == InsertResult::Failed) [[unlikely]] {
+//       SPDLOG_ERROR("LRU_manager::read(): hard cap hit on device {}; data_id {} not tracked",
+//       device_id, data_id); assert(false && "LRU_manager::read(): hard cap hit; increase
+//       hard_max_items_per_device"); return;
+//     }
+
+//     if (result == InsertResult::Inserted) {
+//       if (device_id > 0 && lru.used_bytes > max_usage) {
+//         max_usage = lru.used_bytes;
+//       }
+//       if (lru.used_bytes > lru.capacity_bytes) [[unlikely]] {
+//         SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
+//         data_id, mem_size); assert(lru.used_bytes <= lru.capacity_bytes && "LRU_manager::read():
+//         size exceeds max size");
+//       }
+//     }
+//   }
+
+//   void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
+//     assert(is_valid_device(device_id));
+//     const mem_t removed = lrus_[device_id].erase(data_id);
+//     assert(removed > 0 && "invalidate(): data_id not present");
+
+//     if (evict) evicted_size += removed;
+//   }
+
+//   std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
+//                                       std::span<const dataid_t> used_ids) const {
+//     assert(is_valid_device(device_id));
+
+//     const std::size_t accumulated = lrus_[device_id].collect_lru_victims(mem_size, used_ids,
+//     id_buffer); assert(accumulated >= mem_size && "getLRUids(): evictable memory size is smaller
+//     than requested");
+
+//     return id_buffer;
+//   }
+
+//   mem_t get_mem(devid_t device_id) const {
+//     assert(is_valid_device(device_id));
+//     return lrus_[device_id].used_bytes;
+//   }
+
+//   mem_t get_evicted_memory_size() const {
+//     return evicted_size;
+//   }
+
+//   mem_t get_max_memory_usage() const {
+//     mem_t sum = 0;
+//     for (const auto& lru : lrus_) sum += lru.used_bytes;
+//     return sum;
+//   }
+// };
 
 class LRU_manager {
 private:
@@ -468,7 +811,9 @@ public:
 
     lst.erase(it->second);
     pos.erase(it);
-    size -= smap[data_id]; // update size
+    auto removed = smap[data_id];
+    // assert(removed > 0 && "invalidate(): data_id not present in size map");
+    size -= removed; // update size
     if (evict)
       evicted_size += smap[data_id];
     smap.erase(data_id);
@@ -510,9 +855,14 @@ public:
   }
 
   mem_t get_max_memory_usage() const {
-    return max_usage;
+    mem_t total = 0;
+    for (const auto size : sizes_) {
+      total += size;
+    }
+    return total;
   }
 };
+
 class MovementCounter {
 private:
   std::vector<mem_t> total_data_movement;
@@ -582,11 +932,15 @@ protected:
 
   static bool read_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
                           timecount_t current_time) {
-    return locations.validate(data_id, device_id, current_time);
+    const bool changed = locations.validate(data_id, device_id, current_time);
+    assert(locations.is_valid(data_id, device_id));
+    return changed;
   }
 
   static auto write_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
                            timecount_t current_time) {
+    assert(locations.is_valid(data_id, device_id) &&
+           "write_update requires data to be valid on the writing device");
     auto updated_ids = locations.invalidate_except(data_id, device_id, current_time);
     return updated_ids;
   }
@@ -595,6 +949,27 @@ protected:
                               timecount_t current_time) {
     auto updated_ids = locations.invalidate_on(data_id, device_id, current_time);
     return updated_ids;
+  }
+
+  static mem_t estimate_lru_block_size(const Data &data) {
+    if (data.empty()) {
+      return 1;
+    }
+
+    auto sizes = data.get_sizes();
+    sizes.erase(std::remove_if(sizes.begin(), sizes.end(), [](mem_t s) { return s <= 0; }),
+                sizes.end());
+    if (sizes.empty()) {
+      return 1;
+    }
+
+    int64_t total = 0;
+    for (const mem_t size : sizes) {
+      total += size;
+    }
+
+    const mem_t average = static_cast<mem_t>(total / static_cast<int64_t>(sizes.size()));
+    return average > 0 ? average : 1;
   }
 
 public:
@@ -643,9 +1018,20 @@ public:
     for (dataid_t i = 0; i < data.size(); i++) {
       auto initial_location = data.get_location(i);
       const auto data_size = data.get_size(i);
+      const bool initial_location_in_bounds =
+          initial_location >= 0 && initial_location < devices.size();
 
-      if (initial_location > -1 && (lru_manager.get_mem(initial_location) + data_size) <=
-                                       devices.get_max_resources(initial_location).mem) {
+      if (initial_location > -1 && !initial_location_in_bounds) {
+        SPDLOG_CRITICAL(
+            "DataManager::initialize(): data_id {} has invalid initial location {} (valid "
+            "device ids: 0..{})",
+            i, initial_location, devices.size() - 1);
+        assert(false && "DataManager::initialize(): initial data location out of bounds for system "
+                        "devices");
+      }
+
+      if (initial_location_in_bounds && (lru_manager.get_mem(initial_location) + data_size) <=
+                                            devices.get_max_resources(initial_location).mem) {
         mapped_locations.set_valid(i, initial_location, 0);
         reserved_locations.set_valid(i, initial_location, 0);
         launched_locations.set_valid(i, initial_location, 0);
@@ -674,7 +1060,16 @@ public:
                                  DeviceManager &device_manager, dataid_t data_id,
                                  devid_t device_id) {
     const auto data_size = data.get_size(data_id);
-    if (device_id > -1 &&
+    const bool device_id_in_bounds = device_id >= 0 && device_id < devices.size();
+
+    if (device_id > -1 && !device_id_in_bounds) {
+      SPDLOG_CRITICAL("DataManager::initialize_data_replicate(): invalid device_id {} "
+                      "(valid device ids: 0..{})",
+                      device_id, devices.size() - 1);
+      assert(false && "DataManager::initialize_data_replicate(): device_id out of bounds");
+    }
+
+    if (device_id_in_bounds &&
         (lru_manager.get_mem(device_id) + data_size) <= devices.get_max_resources(device_id).mem &&
         !mapped_locations.is_valid(data_id, device_id)) {
       mapped_locations.set_valid(data_id, device_id, 0);
@@ -715,7 +1110,7 @@ public:
     return check_valid(data_id, mapped_locations, device_id);
   }
 
-  bool check_valid_reserved(std::span<const dataid_t> &list, devid_t device_id) const {
+  bool check_valid_reserved(std::span<const dataid_t> list, devid_t device_id) const {
     return check_valid(list, reserved_locations, device_id);
   }
 
@@ -729,6 +1124,10 @@ public:
 
   bool check_valid_launched(dataid_t data_id, devid_t device_id) const {
     return check_valid(data_id, launched_locations, device_id);
+  }
+
+  [[nodiscard]] bool is_moving(dataid_t data_id, devid_t device_id) const {
+    return movement_manager.is_moving(data_id, device_id);
   }
 
   [[nodiscard]] mem_t total_size(const Data &data, std::span<const dataid_t> list) const {
@@ -807,6 +1206,7 @@ public:
                           timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, mapped_locations, current_time);
+      assert(mapped_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task request in mapper
   }
@@ -816,6 +1216,7 @@ public:
                            timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, mapped_locations, current_time);
+      assert(mapped_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task complete
   }
@@ -825,6 +1226,7 @@ public:
                             timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, reserved_locations, current_time);
+      assert(reserved_locations.is_valid(data_id, device_id));
     }
     // Memory change is handeled by task request in reserver
   }
@@ -834,6 +1236,7 @@ public:
                              timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, reserved_locations, current_time);
+      assert(reserved_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task complete
   }
@@ -854,6 +1257,7 @@ public:
       if (changed) {
         add_memory(device_manager, device_id, data_id, size, current_time);
       }
+      assert(launched_locations.is_valid(data_id, device_id));
     }
   }
 
@@ -864,25 +1268,27 @@ public:
       auto changed_flags = write_update(data_id, device_id, launched_locations, current_time);
       const auto size = data.get_size(data_id);
       remove_memory(device_manager, changed_flags, data_id, size, current_time);
+      assert(launched_locations.is_valid(data_id, device_id));
     }
   }
 
   void evict_on_update_launched(const Data &data, DeviceManager &device_manager, dataid_t data_id,
                                 devid_t device_id, timecount_t current_time, bool future_usage,
                                 bool write_after_read) {
+    assert(launched_locations.is_valid(data_id, device_id));
     auto updated_devices_launched =
         evict_on_update(data_id, device_id, launched_locations, current_time);
     evict_on_update(data_id, device_id, reserved_locations, current_time);
 
     auto size = data.get_size(data_id);
-    const devid_t n_devices = device_manager.n_devices;
-    for (devid_t device = 0; device < n_devices; device++) {
-      if (updated_devices_launched & (1 << device)) {
-        SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
-        device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
-        device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        lru_manager.invalidate(device, data_id, true);
-      }
+    auto mask = static_cast<std::make_unsigned_t<devicemask_t>>(updated_devices_launched);
+    while (mask) {
+      const auto device = static_cast<devid_t>(std::countr_zero(mask));
+      SPDLOG_DEBUG("Evicting data block {} from device {} with size {}", data_id, device, size);
+      device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
+      device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+      lru_manager.invalidate(device, data_id, true);
+      mask &= (mask - 1);
     }
     if (!future_usage) {
       // If there are no further usage for the data block (in mapped but not reserved tasks).
@@ -925,6 +1331,11 @@ public:
       // After eviction launched_location has changed and the removal doesn't happen.
       device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
     }
+    assert(launched_locations.is_invalid(data_id, device_id));
+    assert(reserved_locations.is_invalid(data_id, device_id));
+    if (!future_usage) {
+      assert(mapped_locations.is_invalid(data_id, device_id));
+    }
   }
 
   devicemask_t get_mapped_location_flags(dataid_t data_id) const {
@@ -948,6 +1359,10 @@ public:
 
     SourceRequest req =
         comm_manager.get_best_available_source(topology, destination, location_flags);
+    if (req.found) {
+      assert(launched_locations.is_valid(data_id, req.source) &&
+             "Selected source must have a launched-valid copy");
+    }
 
     return req;
   }
@@ -956,10 +1371,14 @@ public:
                             DeviceManager &device_manager, const Data &data, dataid_t data_id,
                             devid_t source, devid_t destination, timecount_t current_time) {
     assert(launched_locations.is_valid(data_id, source));
+    assert(source >= 0 && source < device_manager.n_devices);
+    assert(destination >= 0 && destination < device_manager.n_devices);
 
-    bool is_moving = movement_manager.is_moving(data_id, destination);
-    if (is_moving) {
-      timecount_t time_left = movement_manager.get_time(data_id, destination) - current_time;
+    timecount_t completion_time = 0;
+    if (movement_manager.try_get_time(data_id, destination, completion_time)) {
+      assert(completion_time >= current_time &&
+             "Outstanding move completion time cannot be in the past");
+      timecount_t time_left = completion_time - current_time;
       SPDLOG_DEBUG("Data block {} already moving to device {} expected to end after {}", data_id,
                    destination, time_left);
       return {.is_virtual = true, .duration = time_left};
@@ -969,24 +1388,19 @@ public:
       SPDLOG_DEBUG("Data block {} already at device {}", data_id, destination);
       return {.is_virtual = true, .duration = 0};
     }
+    assert(!movement_manager.is_moving(data_id, destination));
 
     SPDLOG_DEBUG("Starting move of data block {} from device {} to device {}", data_id, source,
                  destination);
 
     const auto size = data.get_size(data_id);
+    assert(device_manager.overflow_mem<TaskState::LAUNCHED>(destination, size) == 0 &&
+           "start_move would exceed LAUNCHED memory on destination");
 
     lru_manager.read(destination, data_id, size);
     add_memory(device_manager, destination, data_id, size, current_time);
 
     timecount_t duration = comm_manager.ideal_time_to_transfer(topology, size, source, destination);
-
-    // if (rand() % 100 < 10) {
-    //   duration = duration * 146 / 100;
-    // }
-
-    // // if (size < 64 * 1024 * 1024) {
-    // //   duration = duration * 129 / 100;
-    // // }
 
     if (duration == 0) {
       assert(source != destination);
@@ -995,6 +1409,7 @@ public:
     }
 
     movement_manager.set_completion(data_id, destination, current_time + duration);
+    assert(movement_manager.is_moving(data_id, destination));
 
     comm_manager.reserve_connection(source, destination);
 
@@ -1031,8 +1446,11 @@ public:
                  source, destination);
 
     assert(movement_manager.is_moving(data_id, destination));
+    assert(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
     movement_manager.remove(data_id, destination);
+    assert(!movement_manager.is_moving(data_id, destination));
+    assert(launched_locations.is_valid(data_id, destination));
 
     comm_manager.release_connection(source, destination);
   }
@@ -1065,25 +1483,31 @@ public:
                  source, destination);
 
     assert(movement_manager.is_moving(data_id, destination));
+    assert(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
     reserved_locations.set_valid(data_id, destination, current_time);
     mapped_locations.set_valid(data_id, destination, current_time);
     movement_manager.remove(data_id, destination);
+    assert(!movement_manager.is_moving(data_id, destination));
+    assert(launched_locations.is_valid(data_id, destination));
+    assert(reserved_locations.is_valid(data_id, destination));
+    assert(mapped_locations.is_valid(data_id, destination));
 
     comm_manager.release_connection(source, destination);
   }
 
   void remove_memory(DeviceManager &device_manager, const devicemask_t changed_flags,
                      dataid_t data_id, mem_t size, timecount_t current_time) {
-    const devid_t n_devices = device_manager.n_devices;
-    for (devid_t device = 0; device < n_devices; device++) {
-      if (changed_flags & (1 << device)) {
-        SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device, size);
-        device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
-        device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
-        device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
-        lru_manager.invalidate(device, data_id);
-      }
+    auto mask = static_cast<std::make_unsigned_t<devicemask_t>>(changed_flags);
+    while (mask) {
+      const auto device = static_cast<devid_t>(std::countr_zero(mask));
+      SPDLOG_DEBUG("Removing data block {} from device {} with size {}", data_id, device, size);
+      device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
+      device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
+      device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
+      lru_manager.invalidate(device, data_id);
+      assert(launched_locations.is_invalid(data_id, device));
+      mask &= (mask - 1);
     }
   }
 
@@ -1095,9 +1519,10 @@ public:
     auto mapped_flags = mapped_locations.invalidate_all(data_id, current_time);
     auto reserved_flags = reserved_locations.invalidate_all(data_id, current_time);
     auto launched_flags = launched_locations.invalidate_all(data_id, current_time);
-    const devid_t n_devices = device_manager.n_devices;
-
-    for (devid_t device = 0; device < n_devices; device++) {
+    auto mask = static_cast<std::make_unsigned_t<devicemask_t>>(mapped_flags | reserved_flags |
+                                                                launched_flags);
+    while (mask) {
+      const auto device = static_cast<devid_t>(std::countr_zero(mask));
       const devicemask_t device_mask = (1 << device);
       if (mapped_flags & device_mask) {
         device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
@@ -1109,7 +1534,11 @@ public:
         device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
         lru_manager.invalidate(device, data_id);
       }
+      mask &= (mask - 1);
     }
+    assert(mapped_locations.get_location_flags(data_id) == 0);
+    assert(reserved_locations.get_location_flags(data_id) == 0);
+    assert(launched_locations.get_location_flags(data_id) == 0);
   }
 
   void finalize(timecount_t current_time) {

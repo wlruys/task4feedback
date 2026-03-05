@@ -4,7 +4,7 @@ import pygmsh
 import meshio
 from dataclasses import dataclass
 from typing import Optional
-import math 
+import math
 
 GMSH_INITIALIZED = False
 
@@ -77,7 +77,7 @@ class Geometry:
         Get the number of cells in the mesh.
         """
         return len(self.cells)
-    
+
     def get_num_edges(self):
         """
         Get the number of edges in the mesh.
@@ -141,7 +141,7 @@ class Geometry:
             return np.min(self.cell_points[:, 1])
         else:
             raise ValueError("Direction must be 0 (x) or 1 (y).")
-        
+
     def get_cell_polygon(self, cell, round_out=None):
         vertices = self.cells[cell]
         polygon = self.cell_points[vertices][:, :2]  # Get the coordinates of the vertices
@@ -199,7 +199,7 @@ class Geometry:
             normal = np.round(normal, round_out)
 
         return normal
-    
+
     def get_edges_of_cells(self, cells: np.array) -> list[int]:
         """
         Get the unique edges of a list of cells.
@@ -228,7 +228,7 @@ def finalize_gmsh():
 def generate_quad_mesh(L: float = 1.0,
                        n: int = 4,
                        domain_ratio: float = 1.0):
-    
+
     W = 1.0 * domain_ratio
     nw = int(np.ceil(n * domain_ratio))
 
@@ -240,16 +240,15 @@ def generate_quad_mesh(L: float = 1.0,
 
     print(f"Generating quad mesh with {nx} x {ny} elements.")
 
-    gmsh.option.set_number("Mesh.RecombineAll", 1)
-    gmsh.option.set_number("Mesh.Algorithm", 8)
-
     with pygmsh.geo.Geometry() as geom:
+        gmsh.option.set_number("Mesh.RecombineAll", 1)
+        gmsh.option.set_number("Mesh.Algorithm", 8)
         rect = geom.add_rectangle(0.0, L, 0.0, W, 0.0)
         c0, c1, c2, c3 = rect.curves
-        geom.set_transfinite_curve(c0, nx + 1, "Progression", 1.0)  
-        geom.set_transfinite_curve(c2, nx + 1, "Progression", 1.0)  
-        geom.set_transfinite_curve(c1, ny + 1, "Progression", 1.0) 
-        geom.set_transfinite_curve(c3, ny + 1, "Progression", 1.0)  
+        geom.set_transfinite_curve(c0, nx + 1, "Progression", 1.0)
+        geom.set_transfinite_curve(c2, nx + 1, "Progression", 1.0)
+        geom.set_transfinite_curve(c1, ny + 1, "Progression", 1.0)
+        geom.set_transfinite_curve(c3, ny + 1, "Progression", 1.0)
         geom.set_transfinite_surface(rect.surface, "Left", tuple(rect.curves))
         mesh = geom.generate_mesh(dim=2)
 
