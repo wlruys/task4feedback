@@ -51,57 +51,57 @@ public:
   }
 
   void set_size(dataid_t id, mem_t size) {
-    assert(id < sizes.size());
+    T4F_INVARIANT(id < sizes.size());
     sizes[id] = size;
   }
 
   void set_tag(dataid_t id, int tag) {
-    assert(id < data_tags.size());
+    T4F_INVARIANT(id < data_tags.size());
     data_tags[id] = tag;
   }
 
   void set_x_pos(dataid_t id, float x) {
-    assert(id < xy_positions.size());
+    T4F_INVARIANT(id < xy_positions.size());
     xy_positions[id].x = x;
   }
 
   void set_y_pos(dataid_t id, float y) {
-    assert(id < xy_positions.size());
+    T4F_INVARIANT(id < xy_positions.size());
     xy_positions[id].y = y;
   }
 
   [[nodiscard]] float get_x_pos(dataid_t id) const {
-    assert(id < xy_positions.size());
+    T4F_INVARIANT(id < xy_positions.size());
     return xy_positions[id].x;
   }
 
   [[nodiscard]] float get_y_pos(dataid_t id) const {
-    assert(id < xy_positions.size());
+    T4F_INVARIANT(id < xy_positions.size());
     return xy_positions[id].y;
   }
 
   int get_tag(dataid_t id) const {
-    assert(id < data_tags.size());
+    T4F_INVARIANT(id < data_tags.size());
     return data_tags[id];
   }
 
   void set_type(dataid_t id, int type) {
-    assert(id < data_types.size());
+    T4F_INVARIANT(id < data_types.size());
     data_types[id] = type;
   }
 
   int get_type(dataid_t id) const {
-    assert(id < data_types.size());
+    T4F_INVARIANT(id < data_types.size());
     return data_types[id];
   }
 
   void set_location(dataid_t id, devid_t location) {
-    assert(id < initial_location.size());
+    T4F_INVARIANT(id < initial_location.size());
 
     initial_location[id] = location;
   }
   void set_name(dataid_t id, std::string name) {
-    assert(id < data_names.size());
+    T4F_INVARIANT(id < data_names.size());
     data_names[id] = std::move(name);
     name_to_id[data_names[id]] = id;
   }
@@ -121,7 +121,7 @@ public:
       xy_positions.resize(id + 1);
     }
 
-    assert(id < sizes.size());
+    T4F_INVARIANT(id < sizes.size());
     set_size(id, size);
     set_location(id, location);
     set_name(id, std::move(name));
@@ -155,11 +155,11 @@ public:
   }
 
   [[nodiscard]] devid_t get_location(dataid_t id) const { 
-      assert(id < initial_location.size()); 
+      T4F_INVARIANT(id < initial_location.size()); 
       return initial_location[id]; 
   }
   [[nodiscard]] const std::string &get_name(dataid_t id) const { 
-      assert(id < data_names.size()); 
+      T4F_INVARIANT(id < data_names.size()); 
       return data_names[id]; 
   }
 
@@ -209,7 +209,7 @@ public:
   LocationManager(const LocationManager &) = default;
 
   [[nodiscard]] inline bool is_valid(dataid_t data_id, devid_t device_id) const {
-    assert(data_id < num_data && device_id < num_devices);
+    T4F_INVARIANT(data_id < num_data && device_id < num_devices);
     // Check if "device_id"-th bit of "data_id"-th location is set
     return locations[data_id] & (1 << device_id);
   }
@@ -279,7 +279,7 @@ public:
 
   inline devicemask_t invalidate_except(dataid_t data_id, devid_t device_id,
                                         timecount_t current_time) {
-    assert(data_id < num_data && device_id < num_devices);
+    T4F_INVARIANT(data_id < num_data && device_id < num_devices);
     devicemask_t old_status = locations[data_id];
     devicemask_t keep_mask = (1 << device_id);
     // Keep only the specified device, invalidate all others
@@ -492,27 +492,27 @@ enum class InsertResult {
 //       const node_t tail = nodes[0].prev;
       
 //       if (head == 0) {
-//         assert(tail == 0 && where.empty());
+//         T4F_INVARIANT(tail == 0 && where.empty());
 //         return;
 //       }
 
-//       assert(nodes[head].prev == 0 && nodes[tail].next == 0);
+//       T4F_INVARIANT(nodes[head].prev == 0 && nodes[tail].next == 0);
 
 //       std::size_t seen = 0;
 //       node_t cur = head;
 //       node_t last = 0;
       
 //       while (cur != 0) {
-//         assert(nodes[cur].id != dataid_t(-1));
+//         T4F_INVARIANT(nodes[cur].id != dataid_t(-1));
 //         auto it = where.find(nodes[cur].id);
-//         assert(it != where.end() && it->second == cur);
-//         assert(nodes[cur].prev == last);
+//         T4F_INVARIANT(it != where.end() && it->second == cur);
+//         T4F_INVARIANT(nodes[cur].prev == last);
 
 //         last = cur;
 //         cur = nodes[cur].next;
-//         assert(++seen <= nodes.size());
+//         T4F_INVARIANT(++seen <= nodes.size());
 //       }
-//       assert(last == tail && seen == where.size());
+//       T4F_INVARIANT(last == tail && seen == where.size());
 //     }
 // #endif
 
@@ -659,14 +659,14 @@ enum class InsertResult {
 //   }
 
 //   void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
-//     assert(is_valid_device(device_id));
+//     T4F_INVARIANT(is_valid_device(device_id));
 //     auto &lru = lrus_[device_id];
 
 //     const InsertResult result = lru.insert_or_update(data_id, mem_size);
 
 //     if (result == InsertResult::Failed) [[unlikely]] {
 //       SPDLOG_ERROR("LRU_manager::read(): hard cap hit on device {}; data_id {} not tracked", device_id, data_id);
-//       assert(false && "LRU_manager::read(): hard cap hit; increase hard_max_items_per_device");
+//       T4F_INVARIANT(false && "LRU_manager::read(): hard cap hit; increase hard_max_items_per_device");
 //       return;
 //     }
 
@@ -676,31 +676,31 @@ enum class InsertResult {
 //       }
 //       if (lru.used_bytes > lru.capacity_bytes) [[unlikely]] {
 //         SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id, data_id, mem_size);
-//         assert(lru.used_bytes <= lru.capacity_bytes && "LRU_manager::read(): size exceeds max size");
+//         T4F_INVARIANT(lru.used_bytes <= lru.capacity_bytes && "LRU_manager::read(): size exceeds max size");
 //       }
 //     }
 //   }
 
 //   void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
-//     assert(is_valid_device(device_id));
+//     T4F_INVARIANT(is_valid_device(device_id));
 //     const mem_t removed = lrus_[device_id].erase(data_id);
-//     assert(removed > 0 && "invalidate(): data_id not present");
+//     T4F_INVARIANT(removed > 0 && "invalidate(): data_id not present");
 
 //     if (evict) evicted_size += removed;
 //   }
 
 //   std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
 //                                       std::span<const dataid_t> used_ids) const {
-//     assert(is_valid_device(device_id));
+//     T4F_INVARIANT(is_valid_device(device_id));
     
 //     const std::size_t accumulated = lrus_[device_id].collect_lru_victims(mem_size, used_ids, id_buffer);
-//     assert(accumulated >= mem_size && "getLRUids(): evictable memory size is smaller than requested");
+//     T4F_INVARIANT(accumulated >= mem_size && "getLRUids(): evictable memory size is smaller than requested");
     
 //     return id_buffer;
 //   }
 
 //   mem_t get_mem(devid_t device_id) const {
-//     assert(is_valid_device(device_id));
+//     T4F_INVARIANT(is_valid_device(device_id));
 //     return lrus_[device_id].used_bytes;
 //   }
 
@@ -751,7 +751,7 @@ public:
 
   // read: add (device_id, data_id, mem_size). If present, update MRU; else insert.
   void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
-    assert(device_id >= 0 && device_id < n_devices_);
+    T4F_INVARIANT(device_id >= 0 && device_id < n_devices_);
 
     auto &lst = lru_lists_[device_id];
     auto &pos = position_maps_[device_id];
@@ -770,7 +770,7 @@ public:
       if (size > max_size) {
         SPDLOG_DEBUG("LRU_manager::read(): Device {}: Adding data_id {} with size {}", device_id,
                      data_id, mem_size);
-        assert(size <= max_size && "LRU_manager::read(): size exceeds max size");
+        T4F_INVARIANT(size <= max_size && "LRU_manager::read(): size exceeds max size");
       }
     }
     // insert at MRU (back)
@@ -797,7 +797,7 @@ public:
 
   // invalidate: remove (device_id, data_id); assert if missing
   void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
-    assert(device_id >= 0 && device_id < n_devices_);
+    T4F_INVARIANT(device_id >= 0 && device_id < n_devices_);
 
     auto &lst = lru_lists_[device_id];
     auto &pos = position_maps_[device_id];
@@ -805,16 +805,16 @@ public:
     auto &size = sizes_[device_id];
 
     auto it = pos.find(data_id);
-    assert(it != pos.end() && "invalidate(): data_id not present");
+    T4F_INVARIANT(it != pos.end() && "invalidate(): data_id not present");
 
-    std::cout << "Invalidating data_id " << data_id << " from device " << device_id
-              << " with size " << smap[data_id] << "\n";
+    // std::cout << "Invalidating data_id " << data_id << " from device " << device_id
+    //           << " with size " << smap[data_id] << "\n";
     //std::cout << "Current size before invalidation: " << size << "\n";
 
     lst.erase(it->second);
     pos.erase(it);
     auto removed = smap[data_id];
-    //assert(removed > 0 && "invalidate(): data_id not present in size map");
+    //T4F_INVARIANT(removed > 0 && "invalidate(): data_id not present in size map");
     size -= removed; // update size
     if (evict)
       evicted_size += smap[data_id];
@@ -825,7 +825,7 @@ public:
   // until their cumulative mem_size ≥ requested mem_size, and return it.
   const std::span<const dataid_t> getLRUids(devid_t device_id, std::size_t mem_size,
                                             std::span<const dataid_t> used_ids) const {
-    assert(device_id >= 0 && device_id < n_devices_);
+    T4F_INVARIANT(device_id >= 0 && device_id < n_devices_);
 
     auto &lst = lru_lists_[device_id];
     auto &smap = size_maps_[device_id];
@@ -838,17 +838,17 @@ public:
         continue; // skip if used by the task
       }
       auto sz_it = smap.find(did);
-      assert(sz_it != smap.end() && "size missing for data_id");
+      T4F_INVARIANT(sz_it != smap.end() && "size missing for data_id");
       accumulated += sz_it->second;
       id_buffer.push_back(did);
     }
-    assert(accumulated >= mem_size &&
+    T4F_INVARIANT(accumulated >= mem_size &&
            "getLRUids(): evictable memory isze is smaller than the requested size");
     return id_buffer;
   }
 
   mem_t get_mem(devid_t device_id) const {
-    assert((device_id >= 0) && (device_id < n_devices_));
+    T4F_INVARIANT((device_id >= 0) && (device_id < n_devices_));
     return sizes_[device_id];
   }
 
@@ -878,8 +878,8 @@ public:
   }
 
   void add_total_movement(devid_t src, devid_t dest, mem_t size) {
-    assert(src < total_data_movement.size());
-    assert(dest < total_data_movement.size());
+    T4F_INVARIANT(src < total_data_movement.size());
+    T4F_INVARIANT(dest < total_data_movement.size());
     total_data_movement[src] += size;
     total_data_movement[dest] += size;
     if (dest == 0) {
@@ -889,7 +889,7 @@ public:
   }
 
   void add_eviction_movement(devid_t device_id, mem_t size) {
-    assert(device_id < eviction_data_movement.size());
+    T4F_INVARIANT(device_id < eviction_data_movement.size());
     eviction_data_movement[device_id] += size;
   }
 
@@ -898,7 +898,7 @@ public:
   }
 
   const mem_t get_total_data_movement(devid_t device_id) const {
-    assert(device_id < total_data_movement.size());
+    T4F_INVARIANT(device_id < total_data_movement.size());
     return total_data_movement[device_id];
   }
 
@@ -907,7 +907,7 @@ public:
   }
 
   const mem_t get_eviction_data_movement(devid_t device_id) const {
-    assert(device_id < eviction_data_movement.size());
+    T4F_INVARIANT(device_id < eviction_data_movement.size());
     return eviction_data_movement[device_id];
   }
 };
@@ -935,13 +935,13 @@ protected:
   static bool read_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
                           timecount_t current_time) {
     const bool changed = locations.validate(data_id, device_id, current_time);
-    assert(locations.is_valid(data_id, device_id));
+    T4F_INVARIANT(locations.is_valid(data_id, device_id));
     return changed;
   }
 
   static auto write_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
                            timecount_t current_time) {
-    assert(locations.is_valid(data_id, device_id) &&
+    T4F_INVARIANT(locations.is_valid(data_id, device_id) &&
            "write_update requires data to be valid on the writing device");
     auto updated_ids = locations.invalidate_except(data_id, device_id, current_time);
     return updated_ids;
@@ -1029,7 +1029,7 @@ public:
             "DataManager::initialize(): data_id {} has invalid initial location {} (valid "
             "device ids: 0..{})",
             i, initial_location, devices.size() - 1);
-        assert(false &&
+        T4F_INVARIANT(false &&
                "DataManager::initialize(): initial data location out of bounds for system "
                "devices");
       }
@@ -1070,7 +1070,7 @@ public:
       SPDLOG_CRITICAL("DataManager::initialize_data_replicate(): invalid device_id {} "
                       "(valid device ids: 0..{})",
                       device_id, devices.size() - 1);
-      assert(false && "DataManager::initialize_data_replicate(): device_id out of bounds");
+      T4F_INVARIANT(false && "DataManager::initialize_data_replicate(): device_id out of bounds");
     }
 
     if (device_id_in_bounds &&
@@ -1210,7 +1210,7 @@ public:
                           timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, mapped_locations, current_time);
-      assert(mapped_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(mapped_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task request in mapper
   }
@@ -1220,7 +1220,7 @@ public:
                            timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, mapped_locations, current_time);
-      assert(mapped_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(mapped_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task complete
   }
@@ -1230,7 +1230,7 @@ public:
                             timecount_t current_time) {
     for (auto data_id : list) {
       read_update(data_id, device_id, reserved_locations, current_time);
-      assert(reserved_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(reserved_locations.is_valid(data_id, device_id));
     }
     // Memory change is handeled by task request in reserver
   }
@@ -1240,7 +1240,7 @@ public:
                              timecount_t current_time) {
     for (auto data_id : list) {
       write_update(data_id, device_id, reserved_locations, current_time);
-      assert(reserved_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(reserved_locations.is_valid(data_id, device_id));
     }
     // Memory change is handled by task complete
   }
@@ -1261,7 +1261,7 @@ public:
       if (changed) {
         add_memory(device_manager, device_id, data_id, size, current_time);
       }
-      assert(launched_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(launched_locations.is_valid(data_id, device_id));
     }
   }
 
@@ -1272,14 +1272,14 @@ public:
       auto changed_flags = write_update(data_id, device_id, launched_locations, current_time);
       const auto size = data.get_size(data_id);
       remove_memory(device_manager, changed_flags, data_id, size, current_time);
-      assert(launched_locations.is_valid(data_id, device_id));
+      T4F_INVARIANT(launched_locations.is_valid(data_id, device_id));
     }
   }
 
   void evict_on_update_launched(const Data &data, DeviceManager &device_manager, dataid_t data_id,
                                 devid_t device_id, timecount_t current_time, bool future_usage,
                                 bool write_after_read) {
-    assert(launched_locations.is_valid(data_id, device_id));
+    T4F_INVARIANT(launched_locations.is_valid(data_id, device_id));
     auto updated_devices_launched =
         evict_on_update(data_id, device_id, launched_locations, current_time);
     evict_on_update(data_id, device_id, reserved_locations, current_time);
@@ -1335,10 +1335,10 @@ public:
       // After eviction launched_location has changed and the removal doesn't happen.
       device_manager.remove_mem<TaskState::MAPPED>(device_id, size, current_time);
     }
-    assert(launched_locations.is_invalid(data_id, device_id));
-    assert(reserved_locations.is_invalid(data_id, device_id));
+    T4F_INVARIANT(launched_locations.is_invalid(data_id, device_id));
+    T4F_INVARIANT(reserved_locations.is_invalid(data_id, device_id));
     if (!future_usage) {
-      assert(mapped_locations.is_invalid(data_id, device_id));
+      T4F_INVARIANT(mapped_locations.is_invalid(data_id, device_id));
     }
   }
 
@@ -1364,7 +1364,7 @@ public:
     SourceRequest req =
         comm_manager.get_best_available_source(topology, destination, location_flags);
     if (req.found) {
-      assert(launched_locations.is_valid(data_id, req.source) &&
+      T4F_INVARIANT(launched_locations.is_valid(data_id, req.source) &&
              "Selected source must have a launched-valid copy");
     }
 
@@ -1374,13 +1374,13 @@ public:
   MovementStatus start_move(const Topology &topology, CommunicationManager &comm_manager,
                             DeviceManager &device_manager, const Data &data, dataid_t data_id,
                             devid_t source, devid_t destination, timecount_t current_time) {
-    assert(launched_locations.is_valid(data_id, source));
-    assert(source >= 0 && source < device_manager.n_devices);
-    assert(destination >= 0 && destination < device_manager.n_devices);
+    T4F_INVARIANT(launched_locations.is_valid(data_id, source));
+    T4F_INVARIANT(source >= 0 && source < device_manager.n_devices);
+    T4F_INVARIANT(destination >= 0 && destination < device_manager.n_devices);
 
     timecount_t completion_time = 0;
     if (movement_manager.try_get_time(data_id, destination, completion_time)) {
-      assert(completion_time >= current_time &&
+      T4F_INVARIANT(completion_time >= current_time &&
              "Outstanding move completion time cannot be in the past");
       timecount_t time_left = completion_time - current_time;
       SPDLOG_DEBUG("Data block {} already moving to device {} expected to end after {}", data_id,
@@ -1392,13 +1392,13 @@ public:
       SPDLOG_DEBUG("Data block {} already at device {}", data_id, destination);
       return {.is_virtual = true, .duration = 0};
     }
-    assert(!movement_manager.is_moving(data_id, destination));
+    T4F_INVARIANT(!movement_manager.is_moving(data_id, destination));
 
     SPDLOG_DEBUG("Starting move of data block {} from device {} to device {}", data_id, source,
                  destination);
 
     const auto size = data.get_size(data_id);
-    assert(device_manager.overflow_mem<TaskState::LAUNCHED>(destination, size) == 0 &&
+    T4F_INVARIANT(device_manager.overflow_mem<TaskState::LAUNCHED>(destination, size) == 0 &&
            "start_move would exceed LAUNCHED memory on destination");
 
     lru_manager.read(destination, data_id, size);
@@ -1407,13 +1407,13 @@ public:
     timecount_t duration = comm_manager.ideal_time_to_transfer(topology, size, source, destination);
 
     if (duration == 0) {
-      assert(source != destination);
+      T4F_INVARIANT(source != destination);
       SPDLOG_DEBUG("Block moving instantly from {} to {}. Check bandwidth settings.", source,
                    destination);
     }
 
     movement_manager.set_completion(data_id, destination, current_time + duration);
-    assert(movement_manager.is_moving(data_id, destination));
+    T4F_INVARIANT(movement_manager.is_moving(data_id, destination));
 
     comm_manager.reserve_connection(source, destination);
 
@@ -1440,8 +1440,8 @@ public:
         // NOTE(wlr): I'm not 100% sure about the source check
         // Could something that starts at the same time as the move completes be
         // a problem?
-        assert(launched_locations.is_valid(data_id, source));
-        assert(launched_locations.is_valid(data_id, destination));
+        T4F_INVARIANT(launched_locations.is_valid(data_id, source));
+        T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
       }
       return;
     }
@@ -1449,12 +1449,12 @@ public:
     SPDLOG_DEBUG("Completing real move of data block {} from device {} to device {}", data_id,
                  source, destination);
 
-    assert(movement_manager.is_moving(data_id, destination));
-    assert(source != destination);
+    T4F_INVARIANT(movement_manager.is_moving(data_id, destination));
+    T4F_INVARIANT(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
     movement_manager.remove(data_id, destination);
-    assert(!movement_manager.is_moving(data_id, destination));
-    assert(launched_locations.is_valid(data_id, destination));
+    T4F_INVARIANT(!movement_manager.is_moving(data_id, destination));
+    T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
 
     comm_manager.release_connection(source, destination);
   }
@@ -1477,8 +1477,8 @@ public:
         // NOTE(wlr): I'm not 100% sure about the source check
         // Could something that starts at the same time as the move completes be
         // a problem?
-        assert(launched_locations.is_valid(data_id, source));
-        assert(launched_locations.is_valid(data_id, destination));
+        T4F_INVARIANT(launched_locations.is_valid(data_id, source));
+        T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
       }
       return;
     }
@@ -1486,16 +1486,16 @@ public:
     SPDLOG_DEBUG("Completing eviction move of data block {} from device {} to device {}", data_id,
                  source, destination);
 
-    assert(movement_manager.is_moving(data_id, destination));
-    assert(source != destination);
+    T4F_INVARIANT(movement_manager.is_moving(data_id, destination));
+    T4F_INVARIANT(source != destination);
     launched_locations.set_valid(data_id, destination, current_time);
     reserved_locations.set_valid(data_id, destination, current_time);
     mapped_locations.set_valid(data_id, destination, current_time);
     movement_manager.remove(data_id, destination);
-    assert(!movement_manager.is_moving(data_id, destination));
-    assert(launched_locations.is_valid(data_id, destination));
-    assert(reserved_locations.is_valid(data_id, destination));
-    assert(mapped_locations.is_valid(data_id, destination));
+    T4F_INVARIANT(!movement_manager.is_moving(data_id, destination));
+    T4F_INVARIANT(launched_locations.is_valid(data_id, destination));
+    T4F_INVARIANT(reserved_locations.is_valid(data_id, destination));
+    T4F_INVARIANT(mapped_locations.is_valid(data_id, destination));
 
     comm_manager.release_connection(source, destination);
   }
@@ -1510,7 +1510,7 @@ public:
       device_manager.remove_mem<TaskState::RESERVED>(device, size, current_time);
       device_manager.remove_mem<TaskState::LAUNCHED>(device, size, current_time);
       lru_manager.invalidate(device, data_id);
-      assert(launched_locations.is_invalid(data_id, device));
+      T4F_INVARIANT(launched_locations.is_invalid(data_id, device));
       mask &= (mask - 1);
     }
   }
@@ -1540,9 +1540,9 @@ public:
       }
       mask &= (mask - 1);
     }
-    assert(mapped_locations.get_location_flags(data_id) == 0);
-    assert(reserved_locations.get_location_flags(data_id) == 0);
-    assert(launched_locations.get_location_flags(data_id) == 0);
+    T4F_INVARIANT(mapped_locations.get_location_flags(data_id) == 0);
+    T4F_INVARIANT(reserved_locations.get_location_flags(data_id) == 0);
+    T4F_INVARIANT(launched_locations.get_location_flags(data_id) == 0);
   }
 
   void finalize(timecount_t current_time) {

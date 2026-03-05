@@ -2,7 +2,6 @@
 #include "queues.hpp"
 #include "settings.hpp"
 #include <bit>
-#include <cassert>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -27,7 +26,7 @@ public:
   ActiveIterator() = default;
   ActiveIterator(std::size_t num_containers)
       : containers(num_containers), n_devices(static_cast<uint32_t>(num_containers)) {
-    assert(num_containers <= 64);
+    T4F_INVARIANT(num_containers <= 64);
     viable_mask = all_viable_mask();
   }
 
@@ -166,7 +165,7 @@ public:
 
   void pop() noexcept {
     auto &container = this->containers[this->active_index];
-    assert(!container.empty());
+    T4F_INVARIANT(!container.empty());
     container.pop();
     this->element_count--;
     if (container.empty()) {

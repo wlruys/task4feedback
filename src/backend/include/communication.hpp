@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <ankerl/unordered_dense.h>
 #include <array>
-#include <cassert>
 #include <cstdint>
 #include <fstream>
 #include <functional>
@@ -247,7 +246,7 @@ public:
   }
 
   inline void decrease_active_links(devid_t src, devid_t dst) {
-    assert(link_usage[src * num_devices + dst].active >= 1);
+    T4F_INVARIANT(link_usage[src * num_devices + dst].active >= 1);
     link_usage[src * num_devices + dst].active -= 1;
   }
 

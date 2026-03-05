@@ -21,6 +21,6 @@ devicemask_t StaticTaskInfo::get_supported_devices_mask(taskid_t compute_task_id
     }
   }
   SPDLOG_DEBUG("Supported devices mask for task {}: {}", compute_task_id, static_cast<int>(mask));
-  assert(mask != 0 && "No supported devices found for the task");
+  T4F_INVARIANT(mask != 0 && "No supported devices found for the task");
   return mask;
 }

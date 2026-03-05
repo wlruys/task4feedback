@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <ankerl/unordered_dense.h>
 #include <array>
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -104,18 +103,18 @@ template <typename T> struct CsrData {
   }
 
   [[nodiscard]] std::span<const T> operator[](int32_t row) const {
-    assert(row >= 0);
+    T4F_INVARIANT(row >= 0);
     const auto idx = static_cast<std::size_t>(row);
-    assert(idx + 1 < offsets.size());
+    T4F_INVARIANT(idx + 1 < offsets.size());
     const auto start = static_cast<std::size_t>(offsets[idx]);
     const auto len = static_cast<std::size_t>(offsets[idx + 1] - offsets[idx]);
     return std::span<const T>(elements).subspan(start, len);
   }
 
   [[nodiscard]] int32_t row_size(int32_t row) const {
-    assert(row >= 0);
+    T4F_INVARIANT(row >= 0);
     const auto idx = static_cast<std::size_t>(row);
-    assert(idx + 1 < offsets.size());
+    T4F_INVARIANT(idx + 1 < offsets.size());
     return offsets[idx + 1] - offsets[idx];
   }
 };
@@ -125,9 +124,9 @@ template <typename T> struct CsrView {
   std::span<const T> elements;
 
   [[nodiscard]] std::span<const T> operator[](int32_t row) const {
-    assert(row >= 0);
+    T4F_INVARIANT(row >= 0);
     const auto idx = static_cast<std::size_t>(row);
-    assert(idx + 1 < offsets.size());
+    T4F_INVARIANT(idx + 1 < offsets.size());
     const auto start = static_cast<std::size_t>(offsets[idx]);
     const auto len = static_cast<std::size_t>(offsets[idx + 1] - offsets[idx]);
     return elements.subspan(start, len);
@@ -331,7 +330,7 @@ public:
   }
 
   timecount_t get_time(taskid_t task_id, DeviceType arch) const {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     for (std::size_t i = 0; i < task.arch.size(); i++) {
       if (task.arch[i] == static_cast<uint8_t>(arch)) {
@@ -343,7 +342,7 @@ public:
 
   // Returns a vector of dependency task IDs for the given task
   std::vector<taskid_t> get_task_dependencies(taskid_t task_id) const {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     const auto &deps = tasks[task_id].dependencies;
     return std::vector<taskid_t>(deps.begin(), deps.end());
   }
@@ -359,7 +358,7 @@ public:
   }
 
   void add_read_data(taskid_t task_id, std::vector<dataid_t> &data_ids) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     for (const auto &data_id : data_ids) {
       task.read.insert(data_id);
@@ -367,7 +366,7 @@ public:
   }
 
   void add_write_data(taskid_t task_id, std::vector<dataid_t> &data_ids) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     for (const auto &data_id : data_ids) {
       task.write.insert(data_id);
@@ -375,7 +374,7 @@ public:
   }
 
   void add_retire_data(taskid_t task_id, std::vector<dataid_t> &data_ids) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     for (const auto &data_id : data_ids) {
       task.retire.insert(data_id);
@@ -383,17 +382,17 @@ public:
   }
 
   void set_tag(taskid_t task_id, int32_t tag) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     tasks[task_id].tag = tag;
   }
 
   void set_type(taskid_t task_id, int32_t type) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     tasks[task_id].type = type;
   }
 
   void clear_variants(taskid_t task_id) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
     task.arch.clear();
     task.vcu.clear();
@@ -411,7 +410,7 @@ public:
   }
 
   void set_variant(taskid_t task_id, DeviceType arch, vcu_t vcu, mem_t mem, timecount_t time) {
-    assert(task_id < tasks.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(task_id < tasks.size() && "Task ID is out of bounds");
     auto &task = tasks[task_id];
 
     // std::cout << "[Graph] Setting variant for task " << task_id << ": "
@@ -1299,12 +1298,12 @@ public:
   }
 
   void add_compute_variant(taskid_t id, DeviceType arch, mem_t mem, vcu_t vcu, timecount_t time) {
-    assert(id < compute_task_variant_info.size() && "Task ID is out of bounds");
+    T4F_INVARIANT(id < compute_task_variant_info.size() && "Task ID is out of bounds");
     auto &info = compute_task_variant_info[id];
     uint8_t arch_type = static_cast<uint8_t>(arch);
     info.mask |= arch_type;
     const auto idx = __builtin_ctz(arch_type);
-    assert(idx < info.variants.size() && "Architecture index out of bounds");
+    T4F_INVARIANT(idx < info.variants.size() && "Architecture index out of bounds");
     info.variants[idx] = Variant(arch, vcu, mem, time);
     // std::cout << "[StaticGraph] Added variant for task " << id << ": "
     //           << "Arch=" << to_string(arch) << ", VCU=" << vcu << ", Mem=" << mem
@@ -1413,7 +1412,7 @@ public:
 
   [[nodiscard]] std::span<const taskid_t>
   get_compute_task_shared_read_neighbors(taskid_t id) const {
-    assert(id >= 0 && id < get_n_compute_tasks() && "Task ID is out of bounds");
+    T4F_INVARIANT(id >= 0 && id < get_n_compute_tasks() && "Task ID is out of bounds");
     return compute_task_shared_read_neighbors[id];
   }
 
@@ -1515,7 +1514,7 @@ public:
 
   [[nodiscard]] const Variant &get_variant(taskid_t id, DeviceType arch) const {
     const auto idx = __builtin_ctz(static_cast<uint8_t>(arch));
-    assert(idx < compute_task_variant_info[id].variants.size() &&
+    T4F_INVARIANT(idx < compute_task_variant_info[id].variants.size() &&
            "Architecture index out of bounds for compute task variants");
     return compute_task_variant_info[id].variants[idx];
   }
@@ -1524,9 +1523,9 @@ public:
     auto &info = compute_task_variant_info[id];
     uint8_t arch_type = static_cast<uint8_t>(arch);
     // assert that mask flag is set for the given architecture
-    assert((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
+    T4F_INVARIANT((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
     const auto idx = __builtin_ctz(arch_type);
-    assert(idx < info.variants.size() && "Architecture index out of bounds");
+    T4F_INVARIANT(idx < info.variants.size() && "Architecture index out of bounds");
     const auto &variant = info.variants[idx];
     return variant.get_resources();
   }
@@ -1535,9 +1534,9 @@ public:
     auto &info = compute_task_variant_info[id];
     uint8_t arch_type = static_cast<uint8_t>(arch);
     // assert that mask flag is set for the given architecture
-    assert((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
+    T4F_INVARIANT((info.mask & arch_type) != 0 && "Architecture not supported for this compute task");
     const auto idx = __builtin_ctz(arch_type);
-    assert(idx < info.variants.size() && "Architecture index out of bounds");
+    T4F_INVARIANT(idx < info.variants.size() && "Architecture index out of bounds");
     const auto &variant = info.variants[idx];
     return variant.get_mean_duration();
   }
@@ -2008,7 +2007,7 @@ public:
   bool decrement_compute_task_unmapped(taskid_t id) {
     auto &v = compute.unmapped[id];
     const int16_t nv = --v;
-    assert(nv >= 0 && "Unmapped count cannot be negative");
+    T4F_INVARIANT(nv >= 0 && "Unmapped count cannot be negative");
     if (nv == 0) {
       if (compute.state[id] == CumulativeState::SPAWNED) {
         compute.status[id] |= StatusBits::MAPPABLE;
@@ -2021,7 +2020,7 @@ public:
   bool decrement_compute_task_unreserved(taskid_t id) {
     auto &v = compute.unreserved[id];
     const int16_t nv = --v;
-    assert(nv >= 0 && "Unreserved count cannot be negative");
+    T4F_INVARIANT(nv >= 0 && "Unreserved count cannot be negative");
     if (nv == 0) { // boundary only
       if (compute.state[id] == CumulativeState::MAPPED) {
         compute.status[id] |= StatusBits::RESERVABLE;
@@ -2034,7 +2033,7 @@ public:
   bool decrement_compute_task_incomplete(taskid_t id) {
     auto &v = compute.incomplete[id];
     const int16_t nv = --v;
-    assert(nv >= 0 && "Incomplete count cannot be negative");
+    T4F_INVARIANT(nv >= 0 && "Incomplete count cannot be negative");
     if (nv == 0) { // boundary only
       if (compute.state[id] == CumulativeState::RESERVED) {
         compute.status[id] |= StatusBits::LAUNCHABLE;
@@ -2047,7 +2046,7 @@ public:
   bool decrement_data_task_incomplete(taskid_t id) {
     auto &v = data.incomplete[id];
     const int16_t nv = --v;
-    assert(nv >= 0 && "Data incomplete count cannot be negative");
+    T4F_INVARIANT(nv >= 0 && "Data incomplete count cannot be negative");
     if (nv == 0) { // boundary only
       return data.state[id] == CumulativeState::RESERVED;
     }

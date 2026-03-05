@@ -15,7 +15,6 @@
 #include "spdlog/spdlog.h"
 #include "tasks.hpp"
 #include <bit>
-#include <cassert>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -632,8 +631,8 @@ public:
 
   void update_time(timecount_t time) {
     global_time = std::max(global_time, time);
-    assert(time >= global_time);
-    assert(global_time >= 0);
+    T4F_INVARIANT(time >= global_time);
+    T4F_INVARIANT(global_time >= 0);
   }
 
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = true) {
@@ -830,7 +829,7 @@ public:
   }
 
   [[nodiscard]] timecount_t get_global_time() const {
-    assert(global_time >= 0);
+    T4F_INVARIANT(global_time >= 0);
     return global_time;
   }
 
@@ -972,7 +971,7 @@ public:
     MONUnusedParameter(queues);
     auto n_mapped = state.counts.n_mapped();
     auto n_reserved = state.counts.n_reserved();
-    assert(n_mapped >= n_reserved);
+    T4F_INVARIANT(n_mapped >= n_reserved);
     return ((n_mapped - n_reserved) <= mapped_reserved_gap) && (n_mapped <= total_in_flight);
   }
 
@@ -980,7 +979,7 @@ public:
     MONUnusedParameter(queues);
     auto n_reserved = state.counts.n_reserved();
     auto n_launched = state.counts.n_launched();
-    assert(n_reserved >= n_launched);
+    T4F_INVARIANT(n_reserved >= n_launched);
     return (n_reserved - n_launched) <= reserved_launched_gap;
   }
 };
@@ -1048,11 +1047,25 @@ protected:
   SchedulerState state;
   SchedulerQueues queues;
   TaskDeviceList tasks_requesting_eviction;
+  TaskIDList deferred_mappable;
+  TaskIDList deferred_reservable;
+  TaskIDList deferred_launchable_compute;
+  TaskIDList deferred_launchable_data;
   int64_t success_count = 0;
   int64_t eviction_count = 0;
   EvictionState eviction_state = EvictionState::NONE;
   ankerl::unordered_dense::map<uint64_t, uint8_t> eviction_invalidation_cache;
   ankerl::unordered_dense::set<uint64_t> eviction_planned_victim_keys;
+
+  void assert_deferred_enqueue_buffers_empty() const;
+  void clear_deferred_enqueue_buffers();
+  void collect_deferred_mappable(std::span<const taskid_t> compute_task_ids);
+  void collect_deferred_reservable(taskid_t compute_task_id);
+  void collect_deferred_reservable(std::span<const taskid_t> compute_task_ids);
+  void collect_deferred_launchable_compute(taskid_t compute_task_id);
+  void collect_deferred_launchable_data(taskid_t data_task_id);
+  void flush_deferred_mapper_enqueues();
+  void flush_deferred_reserver_enqueues();
 
   void enqueue_data_tasks(taskid_t task_id);
   [[nodiscard]] EvictionInvalidationInfo
@@ -1076,6 +1089,10 @@ public:
       : state(input), queues(input.devices), conditions(input.conditions) {
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
+    deferred_mappable.reserve(INITIAL_TASK_BUFFER_SIZE);
+    deferred_reservable.reserve(INITIAL_TASK_BUFFER_SIZE);
+    deferred_launchable_compute.reserve(INITIAL_TASK_BUFFER_SIZE);
+    deferred_launchable_data.reserve(INITIAL_TASK_BUFFER_SIZE);
     tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
     eviction_invalidation_cache.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
     eviction_planned_victim_keys.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
@@ -1135,7 +1152,7 @@ public:
   void skip_map_tasks(MapperEvent &map_event, EventManager &event_manager);
   void map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper);
   ExecutionState map_tasks_from_python(ActionList &action_list, EventManager &event_manager);
-  void remove_mapped_tasks(ActionList &action_list);
+  void remove_mapped_tasks(std::span<const std::size_t> mapped_positions);
 
   bool reserve_task(taskid_t task_id, devid_t device_id);
   void skip_reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager);
@@ -1445,9 +1462,9 @@ public:
       lp = launching_priorities.at(compute_task_id % launching_priorities.size());
     }
 
-    assert(state.get_tasks().is_architecture_supported(compute_task_id,
+    T4F_INVARIANT(state.get_tasks().is_architecture_supported(compute_task_id,
                                                        state.get_devices().get_type(device_id)));
-    assert(device_id < state.get_devices().size());
+    T4F_INVARIANT(device_id < state.get_devices().size());
 
     return Action(0, device_id, rp, lp);
   }
@@ -1522,7 +1539,7 @@ public:
     const mem_t data_size = state.get_data().get_size(data_id);
     SourceRequest req =
         communication_manager.get_best_source(topology, destination, location_flags);
-    assert(req.found);
+    T4F_INVARIANT(req.found);
     return communication_manager.ideal_time_to_transfer(topology, data_size, req.source,
                                                         destination);
   }
@@ -1554,7 +1571,7 @@ public:
 
   DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
     fill_device_targets(task_id, state);
-    assert(!device_buffer.empty());
+    T4F_INVARIANT(!device_buffer.empty());
     const timecount_t dep_time = get_dependency_finish_time(task_id, state);
 
     auto min_time = MAX_TIME;
