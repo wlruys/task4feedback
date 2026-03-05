@@ -25,7 +25,7 @@ from task4feedback.fastsim2 import (
     Data,
     DeviceType,
     SchedulerInput,
-    BatchTransitionConditions,
+    HysteresisTransitionConditions,
     SchedulerState,
     Simulator,
     ExecutionState,
@@ -674,7 +674,7 @@ class SimulatorInput:
     data: DataBlocks
     system: System
     task_noise: TaskNoise
-    transition_conditions: fastsim.BatchTransitionConditions
+    transition_conditions: fastsim.HysteresisTransitionConditions
     top_k_candidates: int = 1
 
     def __init__(
@@ -683,14 +683,14 @@ class SimulatorInput:
         data: DataBlocks,
         system: System,
         task_noise: Optional[TaskNoise] = None,
-        transition_conditions: Optional[fastsim.BatchTransitionConditions] = None,
+        transition_conditions: Optional[fastsim.HysteresisTransitionConditions] = None,
         top_k_candidates: int = 1,
     ):
         if transition_conditions is None:
-            transition_conditions = fastsim.BatchTransitionConditions()
-        if not isinstance(transition_conditions, fastsim.BatchTransitionConditions):
+            transition_conditions = fastsim.HysteresisTransitionConditions()
+        if not isinstance(transition_conditions, fastsim.HysteresisTransitionConditions):
             raise TypeError(
-                "transition_conditions must be BatchTransitionConditions"
+                "transition_conditions must be HysteresisTransitionConditions"
             )
 
         if task_noise is None:

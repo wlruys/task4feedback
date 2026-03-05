@@ -34,7 +34,7 @@ void init_simulator_ext(nb::module_ &m) {
            nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(),
            nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>())
       .def(nb::init<Graph &, StaticTaskInfo &, Data &, Devices &, Topology &, TaskNoise &,
-                    BatchTransitionConditions &, int32_t>(),
+                    HysteresisTransitionConditions &, int32_t>(),
            nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(),
            nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>())
       .def(nb::init<Graph &, StaticTaskInfo &, Data &, Devices &, Topology &, TaskNoise &,

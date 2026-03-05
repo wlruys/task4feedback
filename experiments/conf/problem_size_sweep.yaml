@@ -84,9 +84,9 @@ network:
       hidden_channels: 128
 
 runtime:
-  batch_size: 5
-  queue_threshold: 5
-  max_in_flight: 64
+  open_in_flight: 64
+  close_in_flight: 69
+  starvation_threshold: 5
 
 wandb:
   enabled: true

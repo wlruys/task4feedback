@@ -48,7 +48,7 @@ def make_jacobi_env(config: JacobiConfig):
     m.finalize_tasks()
     spec = create_graph_spec()
     input = SimulatorInput(
-        m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
+        m, d, s, transition_conditions=fastsim.HysteresisTransitionConditions(16, 21, 2)
     )
 
     internal_mapper = fastsim.DequeueEFTMapper
@@ -83,7 +83,7 @@ def make_dynamic_jacobi_env(config: DynamicJacobiConfig):
     m.finalize_tasks()
     spec = create_graph_spec()
     input = SimulatorInput(
-        m, d, s, transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16)
+        m, d, s, transition_conditions=fastsim.HysteresisTransitionConditions(16, 21, 2)
     )
 
     internal_mapper = fastsim.DequeueEFTMapper

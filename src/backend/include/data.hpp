@@ -458,8 +458,10 @@ private:
       }
       nodes[new_n - 1].next = kNull;
 
-      SPDLOG_WARN("LRU_manager: expanding DeviceLRU node pool from {} -> {} user nodes",
-                  old_user_items, new_user_items);
+      #ifndef NDEBUG
+        SPDLOG_WARN("LRU_manager: expanding DeviceLRU node pool from {} -> {} user nodes",
+            old_user_items, new_user_items);
+      #endif
       return true;
     }
 
@@ -602,23 +604,24 @@ private:
       return acc;
     }
 
-    static DeviceLRU clone_with_headroom(const DeviceLRU &src) {
+    static DeviceLRU clone_with_headroom(const DeviceLRU &src, std::size_t min_items = 0) {
       DeviceLRU dst;
       const std::size_t active_items = src.where.size();
-      if (active_items == 0) {
-        dst.init(0, src.capacity_bytes, 0, src.hard_max_items);
-        return dst;
+      std::size_t target_items = active_items;
+
+      if (active_items != 0) {
+        const std::size_t src_user_capacity = src.nodes.size() > 0 ? src.nodes.size() - 1 : 0;
+        const std::size_t active_half = active_items / 2;
+        const std::size_t retained_slack_half =
+            src_user_capacity > active_items
+                ? std::min((src_user_capacity - active_items) / 2, active_items)
+                : 0;
+        const std::size_t headroom = std::max<std::size_t>({64, active_half, retained_slack_half});
+
+        target_items = active_items + headroom;
       }
 
-      const std::size_t src_user_capacity = src.nodes.size() > 0 ? src.nodes.size() - 1 : 0;
-      const std::size_t active_half = active_items / 2;
-      const std::size_t retained_slack_half =
-          src_user_capacity > active_items
-              ? std::min((src_user_capacity - active_items) / 2, active_items)
-              : 0;
-      const std::size_t headroom = std::max<std::size_t>({64, active_half, retained_slack_half});
-
-      std::size_t target_items = active_items + headroom;
+      target_items = std::max(target_items, min_items);
       target_items = std::max(target_items, active_items);
 
       if (src.hard_max_items != 0) {
@@ -689,8 +692,9 @@ public:
 
   LRU_manager(const LRU_manager &other)
       : evicted_size(other.evicted_size), max_usage(other.max_usage), lrus_(other.lrus_.size()) {
+    constexpr std::size_t kMinCloneItems = 4096;
     for (std::size_t dev = 0; dev < lrus_.size(); ++dev) {
-      lrus_[dev] = DeviceLRU::clone_with_headroom(other.lrus_[dev]);
+      lrus_[dev] = DeviceLRU::clone_with_headroom(other.lrus_[dev], kMinCloneItems);
     }
     id_buffer.reserve(other.id_buffer.capacity());
   }

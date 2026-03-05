@@ -78,9 +78,9 @@ network:
     add_progress: True
 
 runtime:
-  batch_size: 5
-  queue_threshold: 5
-  max_in_flight: 16
+  open_in_flight: 16
+  close_in_flight: 21
+  starvation_threshold: 5
 
 wandb:
   enabled: true

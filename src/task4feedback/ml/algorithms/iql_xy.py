@@ -51,7 +51,7 @@ def collect_eft_runs(
                 m,
                 d,
                 s,
-                transition_conditions=fastsim.BatchTransitionConditions(5, 2, 16),
+                transition_conditions=fastsim.HysteresisTransitionConditions(16, 21, 2),
             )
 
             env = MapperRuntimeEnv(
@@ -123,11 +123,11 @@ def evaluate_policy(
                 m,
                 d,
                 s,
-                transition_conditions=fastsim.BatchTransitionConditions(5, 5, 16),
+                transition_conditions=fastsim.HysteresisTransitionConditions(16, 21, 5),
             )
         else:
             input = SimulatorInput(
-                m, d, s, transition_conditions=fastsim.BatchTransitionConditions()
+                m, d, s, transition_conditions=fastsim.HysteresisTransitionConditions()
             )
         env = RuntimeEnv(
             SimulatorFactory(

@@ -14,6 +14,7 @@
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
 #include "tasks.hpp"
+#include <algorithm>
 #include <bit>
 #include <cassert>
 #include <functional>
@@ -44,8 +45,8 @@ using DeviceQueue = ActiveQueueIterator<TaskQueue>;
 using TaskIDTimeList = std::pair<TaskIDList, std::vector<timecount_t>>;
 
 class Mapper;
-class BatchTransitionConditions;
-using TransitionConditions = BatchTransitionConditions;
+class HysteresisTransitionConditions;
+using TransitionConditions = HysteresisTransitionConditions;
 template <typename TransitionConditionT> class SchedulerT;
 
 enum class ExecutionState : int8_t {
@@ -240,11 +241,10 @@ public:
   TaskCountInfo() = default;
 
   TaskCountInfo(std::size_t n_devices)
-      : n_devices(n_devices), per_device_counts(n_devices * n_per_device_counts) {
+      : n_devices(n_devices), per_device_counts(n_devices * n_per_device_counts),
+        non_host_mapped_counts(n_devices, 0) {
     if (n_devices > 1) {
-      for (std::size_t i = 1; i < n_devices; ++i) {
-        mapped_non_host_counts.insert(0);
-      }
+      min_non_host_mapped = 0;
     }
   };
 
@@ -354,10 +354,10 @@ public:
   }
 
   [[nodiscard]] bool any_non_host_mapped_below(precision_t threshold) const {
-    if (threshold <= 0 || mapped_non_host_counts.empty()) {
+    if (threshold <= 0 || n_devices <= 1) {
       return false;
     }
-    return *mapped_non_host_counts.begin() < threshold;
+    return min_non_host_mapped < threshold;
   }
 
   [[nodiscard]] auto n_reserved(devid_t device_id) const {
@@ -387,7 +387,21 @@ protected:
   precision_t n_completed_tasks{};
   precision_t n_data_completed_tasks{};
   std::vector<precision_t> per_device_counts{};
-  std::multiset<precision_t> mapped_non_host_counts{};
+  std::vector<precision_t> non_host_mapped_counts{};
+  precision_t min_non_host_mapped{std::numeric_limits<precision_t>::max()};
+
+  void recompute_min_non_host_mapped() {
+    if (n_devices <= 1) {
+      min_non_host_mapped = std::numeric_limits<precision_t>::max();
+      return;
+    }
+
+    precision_t min_val = non_host_mapped_counts[1];
+    for (precision_t device_id = 2; device_id < n_devices; ++device_id) {
+      min_val = std::min(min_val, non_host_mapped_counts[device_id]);
+    }
+    min_non_host_mapped = min_val;
+  }
 
   void update_non_host_mapped_count(devid_t device_id, precision_t delta) {
     if (device_id <= 0) {
@@ -396,13 +410,16 @@ protected:
 
     const precision_t offset = mapped_offset * n_devices + device_id;
     const precision_t old_count = per_device_counts[offset];
-    if (auto it = mapped_non_host_counts.find(old_count); it != mapped_non_host_counts.end()) {
-      mapped_non_host_counts.erase(it);
-    } else {
-      T4F_INVARIANT(false && "mapped_non_host_counts out of sync");
-    }
+    const precision_t new_count = old_count + delta;
+    non_host_mapped_counts[device_id] = new_count;
 
-    mapped_non_host_counts.insert(old_count + delta);
+    if (new_count < min_non_host_mapped) {
+      min_non_host_mapped = new_count;
+      return;
+    }
+    if (old_count == min_non_host_mapped && new_count > old_count) {
+      recompute_min_non_host_mapped();
+    }
   }
 };
 
@@ -1013,41 +1030,50 @@ public:
   }
 };
 
-class BatchTransitionConditions : public TransitionConditionBase {
+class HysteresisTransitionConditions : public TransitionConditionBase {
 public:
-  BatchTransitionConditions() = default;
-  timecount_t last_accessed = 0;
-  int32_t batch_size = 20;
-  int32_t queue_threshold = 2;
-  int32_t max_in_flight = 16;
-  int32_t active_batch = 0;
+  HysteresisTransitionConditions() = default;
+  timecount_t last_window_opened = 0;
+  int32_t open_in_flight = 16;
+  int32_t close_in_flight = 36;
+  int32_t starvation_threshold = 2;
+  bool window_open = false;
 
-  BatchTransitionConditions(int32_t batch_size_, int32_t queue_threshold_, int32_t max_in_flight_)
-      : batch_size(batch_size_), queue_threshold(queue_threshold_), max_in_flight(max_in_flight_) {
+  HysteresisTransitionConditions(int32_t open_in_flight_, int32_t close_in_flight_,
+                                 int32_t starvation_threshold_)
+      : open_in_flight(open_in_flight_),
+        close_in_flight(std::max(close_in_flight_, open_in_flight_)),
+        starvation_threshold(starvation_threshold_) {
   }
 
   bool should_map(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(queues);
     auto &counts = state.counts;
-    auto n_mapped = counts.n_mapped();
-    bool space_flag = (n_mapped <= max_in_flight + active_batch);
-    bool workqueue_flag = counts.any_non_host_mapped_below(queue_threshold);
+    const auto n_mapped = counts.n_mapped();
+    const bool starved = counts.any_non_host_mapped_below(starvation_threshold);
 
-    bool flag = space_flag || workqueue_flag;
-
-    if (flag) {
-      if (active_batch == 0) {
-        last_accessed = state.get_global_time();
-        active_batch = batch_size;
-      }
-    } else {
-      active_batch = 0;
+    if (!window_open) {
+      return (n_mapped <= open_in_flight) || starved;
     }
 
-    return flag;
+    return !(n_mapped >= close_in_flight && !starved);
   }
 
   bool update_map(SchedulerState &state, SchedulerQueues &queues) {
+    MONUnusedParameter(queues);
+    auto &counts = state.counts;
+    const auto n_mapped = counts.n_mapped();
+    const bool starved = counts.any_non_host_mapped_below(starvation_threshold);
+    const bool open_condition = (n_mapped <= open_in_flight) || starved;
+    const bool close_condition = (n_mapped >= close_in_flight) && !starved;
+
+    if (!window_open && open_condition) {
+      window_open = true;
+      last_window_opened = state.get_global_time();
+    } else if (window_open && close_condition) {
+      window_open = false;
+    }
+
     return should_map(state, queues);
   }
 };

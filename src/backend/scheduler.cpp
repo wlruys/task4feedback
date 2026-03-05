@@ -126,13 +126,13 @@ ExecutionState SchedulerT<TransitionConditions>::map_tasks_from_python(ActionLis
   auto &scheduler_conditions = conditions;
   const auto current_time = s.global_time;
   auto &mappable = queues.mappable;
-  auto top_k_tasks = mappable.get_top_k();
+  const auto &top_k_tasks = mappable.top_k_view();
 
   python_mapper_buffer.clear();
 
   if (!action_list.empty()) {
     for (auto &action : action_list) {
-      const auto task_id = top_k_tasks[action.pos];
+      const auto task_id = static_cast<taskid_t>(element_value(top_k_tasks[action.pos]));
       map_task(task_id, action);
 
       python_mapper_buffer.insert(python_mapper_buffer.end(), compute_task_buffer.begin(),
@@ -145,8 +145,12 @@ ExecutionState SchedulerT<TransitionConditions>::map_tasks_from_python(ActionLis
   }
 
   /*If we still should be mapping, continue making calls to the mapper */
-
-  if (queues.has_mappable() && scheduler_conditions.update_map(s, queues)) {
+  bool can_continue_mapping = false;
+  if (queues.has_mappable()) {
+    can_continue_mapping = action_list.empty() ? scheduler_conditions.should_map(s, queues)
+                                               : scheduler_conditions.update_map(s, queues);
+  }
+  if (can_continue_mapping) {
     return ExecutionState::EXTERNAL_MAPPING;
   } else {
 
@@ -370,12 +374,7 @@ void SchedulerT<TransitionConditions>::reserve_tasks(ReserverEvent &reserve_even
 
     // Keep devices that already triggered eviction blocked for this reserve pass.
     // push_reservable() can reactivate queues via push_priority_at(), so re-apply.
-    auto blocked = eviction_blocked_mask;
-    while (blocked) {
-      const auto blocked_device = static_cast<uint32_t>(std::countr_zero(blocked));
-      reservable.deactivate(blocked_device);
-      blocked &= (blocked - 1);
-    }
+    reservable.deactivate_mask(eviction_blocked_mask);
 
     // Cycle to the next active device queue
     reservable.next_drainable();
