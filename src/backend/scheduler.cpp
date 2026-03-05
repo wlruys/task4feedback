@@ -320,6 +320,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
   SPDLOG_DEBUG("Time:{} Reservable Queue Size: {}", current_time,
                queues.reservable.total_active_size());
   bool break_flag = false;
+  uint64_t eviction_blocked_mask = 0;
 
   tasks_requesting_eviction.clear();
   while (queues.has_active_reservable() && scheduler_conditions.should_reserve(s, queues)) {
@@ -335,6 +336,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
     taskid_t task_id = reservable.top();
     bool success = reserve_task(task_id, device_id);
     if (!success) {
+      eviction_blocked_mask |= (1ULL << static_cast<uint32_t>(device_id));
       reservable.deactivate();
       reservable.next_drainable();
       continue;
@@ -343,6 +345,15 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
     reservable.pop();
 
     push_reservable(compute_task_buffer);
+
+    // Keep devices that already triggered eviction blocked for this reserve pass.
+    // push_reservable() can reactivate queues via push_priority_at(), so re-apply.
+    auto blocked = eviction_blocked_mask;
+    while (blocked) {
+      const auto blocked_device = static_cast<uint32_t>(std::countr_zero(blocked));
+      reservable.deactivate(blocked_device);
+      blocked &= (blocked - 1);
+    }
 
     // Cycle to the next active device queue
     reservable.next_drainable();
