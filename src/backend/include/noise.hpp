@@ -86,16 +86,16 @@ public:
   [[nodiscard]] timecount_t get(taskid_t task_id, DeviceType arch) const {
     const uint8_t arch_type = static_cast<uint8_t>(arch);
     const auto idx = __builtin_ctz(arch_type);
-    assert(task_id < n_tasks && "Task ID is out of bounds");
-    assert(idx < num_device_types && "Architecture index out of bounds");
+    T4F_INVARIANT(task_id < n_tasks && "Task ID is out of bounds");
+    T4F_INVARIANT(idx < num_device_types && "Architecture index out of bounds");
     return task_durations[task_id * num_device_types + idx];
   }
 
   void set(taskid_t task_id, DeviceType arch, timecount_t value) {
     const uint8_t arch_type = static_cast<uint8_t>(arch);
     const auto idx = __builtin_ctz(arch_type);
-    assert(task_id < n_tasks && "Task ID is out of bounds");
-    assert(idx < num_device_types && "Architecture index out of bounds");
+    T4F_INVARIANT(task_id < n_tasks && "Task ID is out of bounds");
+    T4F_INVARIANT(idx < num_device_types && "Architecture index out of bounds");
     task_durations[task_id * num_device_types + idx] = value;
   }
 
@@ -436,7 +436,7 @@ protected:
 
     std::lognormal_distribution<noise_t> dist(u, s);
     const noise_t duration = dist(gen);
-    assert(duration >= 0);
+    T4F_INVARIANT(duration >= 0);
 
     // std::cout << "LognormalTaskNoise: mean=" << mean << ", stddev=" << stddev
     //           << ", sampled duration=" << duration << std::endl;
@@ -473,7 +473,7 @@ protected:
 
     std::lognormal_distribution<noise_t> dist(u, s);
     const noise_t duration = dist(gen);
-    assert(duration >= 0);
+    T4F_INVARIANT(duration >= 0);
 
     // std::cout << "StaticLognormalTaskNoise: mean=" << mean << ", stddev=" << stddev
     //           << ", sampled duration=" << duration << std::endl;

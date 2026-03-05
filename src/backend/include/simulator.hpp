@@ -152,13 +152,13 @@ public:
     ZoneScoped;
     if (!initialized) {
       SPDLOG_CRITICAL("Simulator not initialized.");
-      assert(false);
+      T4F_INVARIANT(false);
       return;
     }
 
     if (data_initialized) {
       SPDLOG_WARN("Data Manager already initialized. ...skipping.");
-      assert(false);
+      T4F_INVARIANT(false);
       return;
     }
     scheduler.initialize_data_manager();
@@ -169,13 +169,13 @@ public:
     ZoneScoped;
     if (!initialized) {
       SPDLOG_CRITICAL("Simulator not initialized.");
-      assert(false);
+      T4F_INVARIANT(false);
       return;
     }
 
     if (!data_initialized) {
       SPDLOG_CRITICAL("Data Manager not initialized.");
-      assert(false);
+      T4F_INVARIANT(false);
       return;
     }
 
@@ -243,7 +243,7 @@ public:
   void map_tasks(ActionList &action_list) {
     if (this->last_state != ExecutionState::EXTERNAL_MAPPING) {
       spdlog::critical("Simulator not in external mapping state.");
-      assert(false);
+      T4F_INVARIANT(false);
       return;
     }
 
@@ -255,7 +255,7 @@ public:
   void skip_external_mapping(bool enqueue_mapping_event = true) {
     if (last_state != ExecutionState::EXTERNAL_MAPPING) {
       spdlog::critical("Simulator not in external mapping state.");
-      assert(false);
+      T4F_INVARIANT(false);
       return;
     }
 
@@ -278,7 +278,7 @@ public:
         return ExecutionState::BREAKPOINT;
       }
       spdlog::critical("No more events and not complete.");
-      assert(false);
+      T4F_INVARIANT(false);
       return ExecutionState::ERROR;
     }
 
@@ -296,20 +296,20 @@ public:
     if (!initialized) {
       last_state = ExecutionState::ERROR;
       spdlog::critical("Simulator not initialized.");
-      assert(false);
+      T4F_INVARIANT(false);
       return ExecutionState::ERROR;
     }
 
     if (!data_initialized) {
       last_state = ExecutionState::ERROR;
       spdlog::critical("Data Manager not initialized.");
-      assert(false);
+      T4F_INVARIANT(false);
       return ExecutionState::ERROR;
     }
 
     if (last_state == ExecutionState::ERROR) {
       spdlog::critical("Simulator in error state.");
-      assert(false);
+      T4F_INVARIANT(false);
       return ExecutionState::ERROR;
     }
 

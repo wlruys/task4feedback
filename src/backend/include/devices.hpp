@@ -73,12 +73,12 @@ template <typename T> struct ResourceEventArray {
   }
 
   [[nodiscard]] timecount_t get_time(std::size_t index) const {
-    assert(index < times.size());
+    T4F_INVARIANT(index < times.size());
     return times[index];
   }
 
   [[nodiscard]] T get_resource(std::size_t index) const {
-    assert(index < resources.size());
+    T4F_INVARIANT(index < resources.size());
     return resources[index];
   }
 
@@ -140,13 +140,13 @@ public:
     vcu_tracker = other.vcu_tracker;
     mem_tracker = other.mem_tracker;
     mem_max = other.mem_max;
-    assert(vcu.size() == mem.size());
+    T4F_INVARIANT(vcu.size() == mem.size());
   }
 
   DeviceResources &operator=(const DeviceResources &other) = default;
 
   void set_max_mem(devid_t id, mem_t m) {
-    assert(id < mem_max.size());
+    T4F_INVARIANT(id < mem_max.size());
     mem_max[id] = m;
   }
 
@@ -160,23 +160,23 @@ public:
   }
 
   [[nodiscard]] vcu_t get_vcu(devid_t id) const {
-    assert(id < vcu.size());
+    T4F_INVARIANT(id < vcu.size());
     return vcu[id];
   }
   [[nodiscard]] mem_t get_mem(devid_t id) const {
-    assert(id < mem.size());
+    T4F_INVARIANT(id < mem.size());
     return mem[id];
   }
 
   vcu_t add_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
-    assert(id < vcu.size());
+    T4F_INVARIANT(id < vcu.size());
     auto &v = vcu[id];
     v += vcu_;
     vcu_tracker[id].add_change(current_time, v);
     return v;
   }
   mem_t add_mem(devid_t id, mem_t m, timecount_t current_time) {
-    assert(id < mem.size());
+    T4F_INVARIANT(id < mem.size());
     auto &v = mem[id];
     v += m;
     mem_tracker[id].add_change(current_time, v);
@@ -184,16 +184,16 @@ public:
   }
 
   vcu_t remove_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
-    assert(id < vcu.size());
-    assert(vcu[id] >= vcu_);
+    T4F_INVARIANT(id < vcu.size());
+    T4F_INVARIANT(vcu[id] >= vcu_);
     auto &v = vcu[id];
     v -= vcu_;
     vcu_tracker[id].add_change(current_time, v);
     return v;
   }
   mem_t remove_mem(devid_t id, mem_t m, timecount_t current_time) {
-    assert(id < mem.size());
-    assert(mem[id] >= m);
+    T4F_INVARIANT(id < mem.size());
+    T4F_INVARIANT(mem[id] >= m);
     auto &v = mem[id];
     v -= m;
     mem_tracker[id].add_change(current_time, v);
@@ -318,8 +318,8 @@ public:
 
   [[nodiscard]] devid_t get_global_id(DeviceType arch, devid_t local_id) const {
     const auto idx = __builtin_ctz(static_cast<uint8_t>(arch));
-    assert(idx < type_map.size() && "Invalid device type index");
-    assert(local_id < type_map[idx].size() && "Local ID out of bounds for device type");
+    T4F_INVARIANT(idx < type_map.size() && "Invalid device type index");
+    T4F_INVARIANT(local_id < type_map[idx].size() && "Local ID out of bounds for device type");
     return type_map[idx][local_id];
   }
 
@@ -329,10 +329,10 @@ public:
       resize(id + 1);
     }
 
-    assert(id < devices.size());
+    T4F_INVARIANT(id < devices.size());
     devices[id] = Device(id, arch, h2d_max_copy, d2d_max_copy, MAX_VCUS, mem);
     const auto idx = __builtin_ctz(static_cast<uint8_t>(arch));
-    assert(idx < type_map.size() && "Invalid device type index");
+    T4F_INVARIANT(idx < type_map.size() && "Invalid device type index");
     type_map[idx].push_back(id);
 
     device_name_map[name] = id;

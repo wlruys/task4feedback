@@ -632,8 +632,8 @@ public:
 
   void update_time(timecount_t time) {
     global_time = std::max(global_time, time);
-    assert(time >= global_time);
-    assert(global_time >= 0);
+    T4F_INVARIANT(time >= global_time);
+    T4F_INVARIANT(global_time >= 0);
   }
 
   void initialize(bool create_data_tasks = false, bool initialize_data_manager = true) {
@@ -830,7 +830,7 @@ public:
   }
 
   [[nodiscard]] timecount_t get_global_time() const {
-    assert(global_time >= 0);
+    T4F_INVARIANT(global_time >= 0);
     return global_time;
   }
 
@@ -972,7 +972,7 @@ public:
     MONUnusedParameter(queues);
     auto n_mapped = state.counts.n_mapped();
     auto n_reserved = state.counts.n_reserved();
-    assert(n_mapped >= n_reserved);
+    T4F_INVARIANT(n_mapped >= n_reserved);
     return ((n_mapped - n_reserved) <= mapped_reserved_gap) && (n_mapped <= total_in_flight);
   }
 
@@ -980,7 +980,7 @@ public:
     MONUnusedParameter(queues);
     auto n_reserved = state.counts.n_reserved();
     auto n_launched = state.counts.n_launched();
-    assert(n_reserved >= n_launched);
+    T4F_INVARIANT(n_reserved >= n_launched);
     return (n_reserved - n_launched) <= reserved_launched_gap;
   }
 };
@@ -1445,9 +1445,9 @@ public:
       lp = launching_priorities.at(compute_task_id % launching_priorities.size());
     }
 
-    assert(state.get_tasks().is_architecture_supported(compute_task_id,
+    T4F_INVARIANT(state.get_tasks().is_architecture_supported(compute_task_id,
                                                        state.get_devices().get_type(device_id)));
-    assert(device_id < state.get_devices().size());
+    T4F_INVARIANT(device_id < state.get_devices().size());
 
     return Action(0, device_id, rp, lp);
   }
@@ -1522,7 +1522,7 @@ public:
     const mem_t data_size = state.get_data().get_size(data_id);
     SourceRequest req =
         communication_manager.get_best_source(topology, destination, location_flags);
-    assert(req.found);
+    T4F_INVARIANT(req.found);
     return communication_manager.ideal_time_to_transfer(topology, data_size, req.source,
                                                         destination);
   }
@@ -1554,7 +1554,7 @@ public:
 
   DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
     fill_device_targets(task_id, state);
-    assert(!device_buffer.empty());
+    T4F_INVARIANT(!device_buffer.empty());
     const timecount_t dep_time = get_dependency_finish_time(task_id, state);
 
     auto min_time = MAX_TIME;
