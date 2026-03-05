@@ -4,23 +4,28 @@
 #include <type_traits>
 
 devicemask_t StaticTaskInfo::get_supported_devices_mask(taskid_t compute_task_id) const {
-  devicemask_t mask = 0;
   using UMask = std::make_unsigned_t<devicemask_t>;
-  constexpr devid_t n_devices = static_cast<devid_t>(std::numeric_limits<UMask>::digits);
+  // assumes exactly two DeviceType values:
+  // CPU maps to device bit 0, and GPU maps to all remaining device bits.
+  // If additional DeviceType values are added, this mapping must be revisited.
+  constexpr UMask cpu_device_bit = UMask{1};
+  constexpr UMask gpu_device_bits = std::numeric_limits<UMask>::max() & ~cpu_device_bit;
 
-  auto arch_mask = get_supported_architecture_mask(compute_task_id);
+  const auto arch_mask = get_supported_architecture_mask(compute_task_id);
   SPDLOG_DEBUG("Getting supported devices mask for task {} with arch mask: {}", compute_task_id,
                arch_mask);
-  for (devid_t i = 0; i < n_devices; ++i) {
-    const auto arch = (i == 0) ? DeviceType::CPU : DeviceType::GPU;
-    uint8_t arch_type = static_cast<uint8_t>(arch);
-    SPDLOG_DEBUG("Checking device {} with arch type {}", i, arch_type);
-    if ((arch_mask & arch_type) != 0) {
-      SPDLOG_DEBUG("Device {} is supported for task {}", i, compute_task_id);
-      mask |= static_cast<devicemask_t>(UMask{1} << i);
-    }
+
+  UMask mask = 0;
+  if ((arch_mask & static_cast<uint8_t>(DeviceType::CPU)) != 0) {
+    mask |= cpu_device_bit;
   }
-  SPDLOG_DEBUG("Supported devices mask for task {}: {}", compute_task_id, static_cast<int>(mask));
-  assert(mask != 0 && "No supported devices found for the task");
-  return mask;
+  if ((arch_mask & static_cast<uint8_t>(DeviceType::GPU)) != 0) {
+    mask |= gpu_device_bits;
+  }
+
+  const auto device_mask = static_cast<devicemask_t>(mask);
+  SPDLOG_DEBUG("Supported devices mask for task {}: {}", compute_task_id,
+               static_cast<int>(device_mask));
+  assert(device_mask != 0 && "No supported devices found for the task");
+  return device_mask;
 }
