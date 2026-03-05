@@ -651,10 +651,10 @@ public:
 
   void read(devid_t device_id, dataid_t data_id, mem_t mem_size) {
     assert(is_valid_device(device_id));
-    if (mem_size <= 0) {
-      // Zero-sized objects are intentionally not tracked in the LRU.
-      return;
-    }
+    // if (mem_size <= 0) {
+    //   // Zero-sized objects are intentionally not tracked in the LRU.
+    //   return;
+    // }
     auto &lru = lrus_[device_id];
 
     const InsertResult result = lru.insert_or_update(data_id, mem_size);
@@ -679,10 +679,10 @@ public:
   void invalidate(devid_t device_id, dataid_t data_id, bool evict = false) {
     assert(is_valid_device(device_id));
     const mem_t removed = lrus_[device_id].erase(data_id);
-    if (removed <= 0) {
-      // Object is not tracked by LRU (e.g., zero-sized); nothing to invalidate.
-      return;
-    }
+    // if (removed <= 0) {
+    //   // Object is not tracked by LRU (e.g., zero-sized); nothing to invalidate.
+    //   return;
+    // }
 
     if (evict) evicted_size += removed;
   }
