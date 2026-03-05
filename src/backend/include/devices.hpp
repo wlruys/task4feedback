@@ -3,6 +3,7 @@
 #include "resources.hpp"
 #include "settings.hpp"
 #include "tasks.hpp"
+#include <algorithm>
 #include <ankerl/unordered_dense.h>
 #include <cassert>
 #include <functional>
@@ -101,6 +102,8 @@ protected:
   void resize(std::size_t n) {
     vcu.resize(n, 0);
     mem.resize(n, 0);
+    vcu_peak.resize(n, 0);
+    mem_peak.resize(n, 0);
     vcu_tracker.resize(n);
     mem_tracker.resize(n);
   }
@@ -108,6 +111,8 @@ protected:
 public:
   std::vector<vcu_t> vcu;
   std::vector<mem_t> mem;
+  std::vector<vcu_t> vcu_peak;
+  std::vector<mem_t> mem_peak;
   std::vector<mem_t> mem_max;
 
   std::vector<ResourceEventArray<vcu_t>> vcu_tracker;
@@ -117,7 +122,8 @@ public:
   DeviceResources() {};
 
   DeviceResources(devid_t n)
-      : vcu(n, 0), mem(n, 0), mem_max(n, MAX_MEM), vcu_tracker(n), mem_tracker(n) {
+      : vcu(n, 0), mem(n, 0), vcu_peak(n, 0), mem_peak(n, 0), mem_max(n, MAX_MEM),
+        vcu_tracker(n), mem_tracker(n) {
   }
 
   void start_record() {
@@ -137,9 +143,12 @@ public:
   DeviceResources(const DeviceResources &other) {
     vcu = other.vcu;
     mem = other.mem;
+    vcu_peak = other.vcu_peak;
+    mem_peak = other.mem_peak;
     vcu_tracker = other.vcu_tracker;
     mem_tracker = other.mem_tracker;
     mem_max = other.mem_max;
+    record = other.record;
     T4F_INVARIANT(vcu.size() == mem.size());
   }
 
@@ -152,11 +161,17 @@ public:
 
   void set_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
     vcu[id] = vcu_;
-    vcu_tracker[id].add_set(current_time, vcu_);
+    vcu_peak[id] = std::max(vcu_peak[id], vcu_);
+    if (record) {
+      vcu_tracker[id].add_set(current_time, vcu_);
+    }
   }
   void set_mem(devid_t id, mem_t m, timecount_t current_time) {
     mem[id] = m;
-    mem_tracker[id].add_set(current_time, m);
+    mem_peak[id] = std::max(mem_peak[id], m);
+    if (record) {
+      mem_tracker[id].add_set(current_time, m);
+    }
   }
 
   [[nodiscard]] vcu_t get_vcu(devid_t id) const {
@@ -172,14 +187,20 @@ public:
     T4F_INVARIANT(id < vcu.size());
     auto &v = vcu[id];
     v += vcu_;
-    vcu_tracker[id].add_change(current_time, v);
+    vcu_peak[id] = std::max(vcu_peak[id], v);
+    if (record) {
+      vcu_tracker[id].add_change(current_time, v);
+    }
     return v;
   }
   mem_t add_mem(devid_t id, mem_t m, timecount_t current_time) {
     T4F_INVARIANT(id < mem.size());
     auto &v = mem[id];
     v += m;
-    mem_tracker[id].add_change(current_time, v);
+    mem_peak[id] = std::max(mem_peak[id], v);
+    if (record) {
+      mem_tracker[id].add_change(current_time, v);
+    }
     return v;
   }
 
@@ -188,7 +209,9 @@ public:
     T4F_INVARIANT(vcu[id] >= vcu_);
     auto &v = vcu[id];
     v -= vcu_;
-    vcu_tracker[id].add_change(current_time, v);
+    if (record) {
+      vcu_tracker[id].add_change(current_time, v);
+    }
     return v;
   }
   mem_t remove_mem(devid_t id, mem_t m, timecount_t current_time) {
@@ -196,7 +219,9 @@ public:
     T4F_INVARIANT(mem[id] >= m);
     auto &v = mem[id];
     v -= m;
-    mem_tracker[id].add_change(current_time, v);
+    if (record) {
+      mem_tracker[id].add_change(current_time, v);
+    }
     return v;
   }
 
@@ -234,6 +259,11 @@ public:
   }
   [[nodiscard]] bool fit_mem(devid_t id, mem_t query) const {
     return mem[id] + query <= mem_max[id];
+  }
+
+  [[nodiscard]] mem_t get_mem_peak(devid_t id) const {
+    T4F_INVARIANT(id < mem_peak.size());
+    return mem_peak[id];
   }
 
   [[nodiscard]] bool fit_resources(devid_t id, Resources &r) const {
@@ -388,6 +418,18 @@ public:
       reserved.set_max_mem(id, devices_.get_max_resources(id).mem);
       launched.set_max_mem(id, devices_.get_max_resources(id).mem);
     }
+  }
+
+  void start_record() {
+    mapped.start_record();
+    reserved.start_record();
+    launched.start_record();
+  }
+
+  void stop_record() {
+    mapped.stop_record();
+    reserved.stop_record();
+    launched.stop_record();
   }
 
   template <TaskState State> [[nodiscard]] const DeviceResources &get_resources() const {

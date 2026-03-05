@@ -6,15 +6,17 @@
 #include "settings.hpp"
 #include "spdlog/spdlog.h"
 #include "tasks.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 
 // Scheduler
 
-size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
+template <>
+size_t SchedulerT<TransitionConditions>::get_mappable_candidates(std::span<int64_t> v) {
 
   auto &s = this->state;
-  auto &scheduler_conditions = conditions.get();
+  auto &scheduler_conditions = conditions;
   bool condition = queues.has_mappable() && scheduler_conditions.should_map(s, queues);
 
   if (!condition) {
@@ -22,17 +24,16 @@ size_t Scheduler::get_mappable_candidates(std::span<int64_t> v) {
   }
 
   auto &mappable = queues.mappable;
-  auto top_k_tasks = mappable.get_top_k();
-
+  const auto &top_k_tasks = mappable.top_k_view();
   const auto copy_size = std::min(v.size(), top_k_tasks.size());
-
-  for (size_t i = 0; i < copy_size; i++) {
-    v[i] = top_k_tasks[i];
+  for (std::size_t i = 0; i < copy_size; ++i) {
+    v[i] = static_cast<int64_t>(element_value(top_k_tasks[i]));
   }
   return copy_size;
 }
 
-taskid_t Scheduler::map_task(taskid_t compute_task_id, Action &action) {
+template <>
+taskid_t SchedulerT<TransitionConditions>::map_task(taskid_t compute_task_id, Action &action) {
   ZoneScoped;
   auto &s = state;
   auto &task_runtime = s.task_runtime;
@@ -104,7 +105,8 @@ taskid_t Scheduler::map_task(taskid_t compute_task_id, Action &action) {
   return compute_task_buffer.size();
 }
 
-void Scheduler::remove_mapped_tasks(ActionList &action_list) {
+template <>
+void SchedulerT<TransitionConditions>::remove_mapped_tasks(ActionList &action_list) {
   std::vector<std::size_t> positions;
   positions.reserve(action_list.size());
 
@@ -115,12 +117,13 @@ void Scheduler::remove_mapped_tasks(ActionList &action_list) {
   queues.mappable.remove(positions);
 }
 
-ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
+template <>
+ExecutionState SchedulerT<TransitionConditions>::map_tasks_from_python(ActionList &action_list,
                                                 EventManager &event_manager) {
   ZoneScoped;
   success_count = 0;
   auto &s = this->state;
-  auto &scheduler_conditions = conditions.get();
+  auto &scheduler_conditions = conditions;
   const auto current_time = s.global_time;
   auto &mappable = queues.mappable;
   auto top_k_tasks = mappable.get_top_k();
@@ -132,9 +135,8 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
       const auto task_id = top_k_tasks[action.pos];
       map_task(task_id, action);
 
-      python_mapper_buffer.reserve(python_mapper_buffer.size() + compute_task_buffer.size());
-      std::copy(compute_task_buffer.begin(), compute_task_buffer.end(),
-                std::back_inserter(python_mapper_buffer));
+      python_mapper_buffer.insert(python_mapper_buffer.end(), compute_task_buffer.begin(),
+                                  compute_task_buffer.end());
     }
 
     remove_mapped_tasks(action_list);
@@ -144,7 +146,7 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
 
   /*If we still should be mapping, continue making calls to the mapper */
 
-  if (queues.has_mappable() && scheduler_conditions.should_map(s, queues)) {
+  if (queues.has_mappable() && scheduler_conditions.update_map(s, queues)) {
     return ExecutionState::EXTERNAL_MAPPING;
   } else {
 
@@ -164,7 +166,8 @@ ExecutionState Scheduler::map_tasks_from_python(ActionList &action_list,
   }
 }
 
-void Scheduler::skip_map_tasks(MapperEvent &map_event, EventManager &event_manager) {
+template <>
+void SchedulerT<TransitionConditions>::skip_map_tasks(MapperEvent &map_event, EventManager &event_manager) {
   success_count = 0;
   const auto current_time = state.global_time;
   SPDLOG_DEBUG("Time:{} Skipping mapper", current_time);
@@ -172,28 +175,33 @@ void Scheduler::skip_map_tasks(MapperEvent &map_event, EventManager &event_manag
   event_manager.create_event(EventType::RESERVER, reserver_time);
 }
 
-void Scheduler::skip_reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
+template <>
+void SchedulerT<TransitionConditions>::skip_reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
   const auto current_time = state.global_time;
   SPDLOG_DEBUG("Time:{} Skipping reserver", current_time);
   timecount_t launcher_time = current_time + SCHEDULER_TIME_GAP;
   event_manager.create_event(EventType::LAUNCHER, launcher_time);
 }
 
-void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper) {
+template <>
+void SchedulerT<TransitionConditions>::map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper,
+                          bool prechecked) {
   ZoneScoped;
 
   success_count = 0;
   auto &s = this->state;
   auto &task_runtime = s.task_runtime;
-  auto &scheduler_conditions = conditions.get();
+  auto &scheduler_conditions = conditions;
   auto &mappable = queues.mappable;
   auto current_time = s.global_time;
 
   SPDLOG_DEBUG("Time:{} Starting mapper", current_time);
   SPDLOG_DEBUG("Time:{} Mappable Queue Size: {}", current_time, mappable.size());
   bool break_flag = false;
+  bool can_map = prechecked ? queues.has_mappable()
+                            : (queues.has_mappable() && scheduler_conditions.should_map(s, queues));
 
-  while (queues.has_mappable() && scheduler_conditions.should_map(s, queues)) {
+  while (can_map) {
 
     if (has_pending_step_breakpoint()) {
       break_flag = true;
@@ -208,6 +216,7 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
     map_task(task_id, action);
 
     push_mappable(compute_task_buffer);
+    can_map = queues.has_mappable() && scheduler_conditions.update_map(s, queues);
   }
 
   if (break_flag) {
@@ -219,7 +228,8 @@ void Scheduler::map_tasks(MapperEvent &map_event, EventManager &event_manager, M
   }
 }
 
-void Scheduler::enqueue_data_tasks(taskid_t compute_task_id) {
+template <>
+void SchedulerT<TransitionConditions>::enqueue_data_tasks(taskid_t compute_task_id) {
   auto &s = this->state;
   auto &task_runtime = s.task_runtime;
   auto &static_graph = s.get_tasks();
@@ -244,7 +254,8 @@ void Scheduler::enqueue_data_tasks(taskid_t compute_task_id) {
   }
 }
 
-bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
+template <>
+bool SchedulerT<TransitionConditions>::reserve_task(taskid_t compute_task_id, devid_t device_id) {
   ZoneScoped;
   auto &s = this->state;
   auto &task_runtime = s.task_runtime;
@@ -269,10 +280,11 @@ bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
         "memory",
         current_time, static_graph.get_compute_task_name(compute_task_id), device_id, requested.mem,
         missing.mem);
-    for (const auto &[pending_task_id, pending_device_id] : tasks_requesting_eviction) {
+    T4F_DEBUG_ONLY(for (const auto &[pending_task_id, pending_device_id] :
+                        tasks_requesting_eviction) {
       T4F_INVARIANT(!(pending_task_id == compute_task_id && pending_device_id == device_id) &&
                     "Duplicate eviction request for the same compute task/device");
-    }
+    });
     tasks_requesting_eviction.push_back(std::make_tuple(compute_task_id, device_id));
     return false;
   }
@@ -312,15 +324,15 @@ bool Scheduler::reserve_task(taskid_t compute_task_id, devid_t device_id) {
   return true;
 }
 
-void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
+template <>
+void SchedulerT<TransitionConditions>::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_manager) {
   ZoneScoped;
   // Can't reserve tasks if we are in the middle of an eviction
   auto current_time = this->state.global_time;
   T4F_INVARIANT(this->eviction_state == EvictionState::NONE);
 
   auto &s = this->state;
-  auto &task_runtime = s.task_runtime;
-  auto &scheduler_conditions = conditions.get();
+  auto &scheduler_conditions = conditions;
 
   auto &reservable = queues.reservable;
   reservable.reset();
@@ -368,8 +380,9 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
     // Cycle to the next active device queue
     reservable.next_drainable();
   }
-  for (std::size_t i = 0; i < tasks_requesting_eviction.size(); ++i) {
+  T4F_DEBUG_ONLY(for (std::size_t i = 0; i < tasks_requesting_eviction.size(); ++i) {
     const auto [task_i, device_i] = tasks_requesting_eviction[i];
+    const auto &task_runtime = s.task_runtime;
     T4F_INVARIANT(task_runtime.is_compute_reservable(task_i));
     T4F_INVARIANT(task_runtime.get_compute_task_mapped_device(task_i) == device_i);
     for (std::size_t j = i + 1; j < tasks_requesting_eviction.size(); ++j) {
@@ -377,7 +390,7 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
       T4F_INVARIANT(!(task_i == task_j && device_i == device_j) &&
                     "Duplicate entries in tasks_requesting_eviction");
     }
-  }
+  });
 
   if (break_flag) [[unlikely]] {
     timecount_t reserver_time = current_time;
@@ -408,7 +421,8 @@ void Scheduler::reserve_tasks(ReserverEvent &reserve_event, EventManager &event_
   event_manager.create_event(EventType::LAUNCHER, launcher_time);
 }
 
-bool Scheduler::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
+template <>
+bool SchedulerT<TransitionConditions>::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
                                     EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
@@ -476,7 +490,8 @@ bool Scheduler::launch_compute_task(taskid_t compute_task_id, devid_t device_id,
   return true;
 }
 
-bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_device_id,
+template <>
+bool SchedulerT<TransitionConditions>::launch_data_task(taskid_t data_task_id, devid_t destination_device_id,
                                  EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
@@ -540,7 +555,8 @@ bool Scheduler::launch_data_task(taskid_t data_task_id, devid_t destination_devi
   return true;
 }
 
-bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destination_device_id,
+template <>
+bool SchedulerT<TransitionConditions>::launch_eviction_task(taskid_t eviction_task_id, devid_t destination_device_id,
                                      EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
@@ -610,11 +626,12 @@ bool Scheduler::launch_eviction_task(taskid_t eviction_task_id, devid_t destinat
   return true;
 }
 
-bool Scheduler::launch_compute_tasks(EventManager &event_manager) {
+template <>
+bool SchedulerT<TransitionConditions>::launch_compute_tasks(EventManager &event_manager) {
   ZoneScoped;
 
   auto &s = this->state;
-  auto &scheduler_conditions = conditions.get();
+  auto &scheduler_conditions = conditions;
   auto current_time = s.global_time;
   auto &launchable = queues.launchable;
 
@@ -659,11 +676,12 @@ bool Scheduler::launch_compute_tasks(EventManager &event_manager) {
   return break_flag;
 }
 
-bool Scheduler::launch_data_tasks(EventManager &event_manager) {
+template <>
+bool SchedulerT<TransitionConditions>::launch_data_tasks(EventManager &event_manager) {
   ZoneScoped;
 
   auto &s = this->state;
-  auto &scheduler_conditions = conditions.get();
+  auto &scheduler_conditions = conditions;
   auto current_time = s.global_time;
   auto &data_launchable = queues.data_launchable;
 
@@ -695,11 +713,12 @@ bool Scheduler::launch_data_tasks(EventManager &event_manager) {
   return break_flag;
 }
 
-bool Scheduler::launch_eviction_tasks(EventManager &event_manager) {
+template <>
+bool SchedulerT<TransitionConditions>::launch_eviction_tasks(EventManager &event_manager) {
   ZoneScoped;
 
   auto &s = this->state;
-  auto &scheduler_conditions = conditions.get();
+  auto &scheduler_conditions = conditions;
   auto current_time = s.global_time;
   auto &eviction_launchable = queues.eviction_launchable;
 
@@ -743,7 +762,8 @@ bool Scheduler::launch_eviction_tasks(EventManager &event_manager) {
   return break_flag;
 }
 
-void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_manager) {
+template <>
+void SchedulerT<TransitionConditions>::launch_tasks(LauncherEvent &launch_event, EventManager &event_manager) {
   ZoneScoped;
   auto current_time = this->state.global_time;
 
@@ -785,8 +805,9 @@ void Scheduler::launch_tasks(LauncherEvent &launch_event, EventManager &event_ma
          static_cast<uint32_t>(data_id);
 }
 
-Scheduler::EvictionInvalidationInfo
-Scheduler::get_eviction_invalidation_info(const StaticTaskInfo &static_graph,
+template <>
+SchedulerT<TransitionConditions>::EvictionInvalidationInfo
+SchedulerT<TransitionConditions>::get_eviction_invalidation_info(const StaticTaskInfo &static_graph,
                                           const RuntimeTaskInfo &task_runtime, dataid_t data_id,
                                           devid_t device_id) {
   const auto cache_key = pack_eviction_key(data_id, device_id);
@@ -826,7 +847,8 @@ Scheduler::get_eviction_invalidation_info(const StaticTaskInfo &static_graph,
 
 
 // TODO(wlr, jae): We need to work together to check this after the refactor
-void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager) {
+template <>
+void SchedulerT<TransitionConditions>::evict(EvictorEvent &eviction_event, EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
   auto &task_runtime = s.task_runtime;
@@ -926,7 +948,8 @@ void Scheduler::evict(EvictorEvent &eviction_event, EventManager &event_manager)
   }
 }
 
-void Scheduler::complete_task_postmatter(EventManager &event_manager) {
+template <>
+void SchedulerT<TransitionConditions>::complete_task_postmatter(EventManager &event_manager) {
   auto &s = this->state;
   auto current_time = s.global_time;
   success_count += 1;
@@ -977,7 +1000,8 @@ void Scheduler::complete_task_postmatter(EventManager &event_manager) {
 #endif
 }
 
-void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager &event_manager) {
+template <>
+void SchedulerT<TransitionConditions>::complete_compute_task(ComputeCompleterEvent &event, EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
   auto &static_graph = s.get_tasks();
@@ -1025,7 +1049,8 @@ void Scheduler::complete_compute_task(ComputeCompleterEvent &event, EventManager
   complete_task_postmatter(event_manager);
 }
 
-void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &event_manager) {
+template <>
+void SchedulerT<TransitionConditions>::complete_data_task(DataCompleterEvent &event, EventManager &event_manager) {
   ZoneScoped;
   auto &s = this->state;
   auto current_time = s.global_time;
@@ -1065,7 +1090,8 @@ void Scheduler::complete_data_task(DataCompleterEvent &event, EventManager &even
   complete_task_postmatter(event_manager);
 }
 
-void Scheduler::complete_eviction_task(EvictorCompleterEvent &event, EventManager &event_manager) {
+template <>
+void SchedulerT<TransitionConditions>::complete_eviction_task(EvictorCompleterEvent &event, EventManager &event_manager) {
   auto &s = this->state;
   auto current_time = s.global_time;
   auto &task_runtime = s.task_runtime;

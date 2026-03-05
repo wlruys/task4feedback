@@ -20,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <random>
+#include <set>
 #include <stack>
 #include <type_traits>
 #include <tracy/Tracy.hpp>
@@ -42,9 +43,10 @@ using DeviceQueue = ActiveQueueIterator<TaskQueue>;
 
 using TaskIDTimeList = std::pair<TaskIDList, std::vector<timecount_t>>;
 
-class TransitionConditions;
-class Scheduler;
 class Mapper;
+class BatchTransitionConditions;
+using TransitionConditions = BatchTransitionConditions;
+template <typename TransitionConditionT> class SchedulerT;
 
 enum class ExecutionState : int8_t {
   NONE = 0,
@@ -216,7 +218,7 @@ public:
     return eviction_launchable.total_size() > 0;
   }
 
-  friend class Scheduler;
+  template <typename> friend class SchedulerT;
 };
 
 class TaskCountInfo {
@@ -238,9 +240,16 @@ public:
   TaskCountInfo() = default;
 
   TaskCountInfo(std::size_t n_devices)
-      : n_devices(n_devices), per_device_counts(n_devices * n_per_device_counts) {};
+      : n_devices(n_devices), per_device_counts(n_devices * n_per_device_counts) {
+    if (n_devices > 1) {
+      for (std::size_t i = 1; i < n_devices; ++i) {
+        mapped_non_host_counts.insert(0);
+      }
+    }
+  };
 
   void count_mapped(taskid_t task_id, devid_t device_id) {
+    update_non_host_mapped_count(device_id, 1);
     n_active_tasks += 1;
     n_mapped_tasks += 1;
     per_device_counts[mapped_offset * n_devices + device_id] += 1;
@@ -256,6 +265,7 @@ public:
   }
 
   void count_completed(taskid_t task_id, devid_t device_id) {
+    update_non_host_mapped_count(device_id, -1);
     n_active_tasks -= 1;
     n_mapped_tasks -= 1;
     n_reserved_tasks -= 1;
@@ -343,6 +353,13 @@ public:
     return per_device_counts[mapped_offset * n_devices + device_id];
   }
 
+  [[nodiscard]] bool any_non_host_mapped_below(precision_t threshold) const {
+    if (threshold <= 0 || mapped_non_host_counts.empty()) {
+      return false;
+    }
+    return *mapped_non_host_counts.begin() < threshold;
+  }
+
   [[nodiscard]] auto n_reserved(devid_t device_id) const {
     return per_device_counts[reserved_offset * n_devices + device_id];
   }
@@ -370,6 +387,23 @@ protected:
   precision_t n_completed_tasks{};
   precision_t n_data_completed_tasks{};
   std::vector<precision_t> per_device_counts{};
+  std::multiset<precision_t> mapped_non_host_counts{};
+
+  void update_non_host_mapped_count(devid_t device_id, precision_t delta) {
+    if (device_id <= 0) {
+      return;
+    }
+
+    const precision_t offset = mapped_offset * n_devices + device_id;
+    const precision_t old_count = per_device_counts[offset];
+    if (auto it = mapped_non_host_counts.find(old_count); it != mapped_non_host_counts.end()) {
+      mapped_non_host_counts.erase(it);
+    } else {
+      T4F_INVARIANT(false && "mapped_non_host_counts out of sync");
+    }
+
+    mapped_non_host_counts.insert(old_count + delta);
+  }
 };
 
 class TaskCostInfo {
@@ -425,48 +459,38 @@ struct ResourceRequest {
   Resources missing{0, 0};
 };
 
-struct SchedulerInput {
+template <typename TransitionConditionT = TransitionConditions>
+struct SchedulerInputT {
   std::reference_wrapper<Graph> graph;
   std::reference_wrapper<StaticTaskInfo> tasks;
   std::reference_wrapper<Data> data;
   std::reference_wrapper<Devices> devices;
   std::reference_wrapper<Topology> topology;
   std::reference_wrapper<TaskNoise> task_noise;
-  std::reference_wrapper<TransitionConditions> conditions;
+  TransitionConditionT conditions{};
   int32_t top_k_candidates = 0;
 
-  SchedulerInput(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
-                 Topology &topology, TaskNoise &task_noise, TransitionConditions &conditions,
-                 int32_t top_k_candidates = 1)
+  SchedulerInputT(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
+                  Topology &topology, TaskNoise &task_noise, int32_t top_k_candidates = 1)
+      : graph(graph), tasks(tasks), data(data), devices(devices), topology(topology),
+        task_noise(task_noise), top_k_candidates(top_k_candidates) {
+  }
+
+  SchedulerInputT(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
+                  Topology &topology, TaskNoise &task_noise,
+                  const TransitionConditionT &conditions, int32_t top_k_candidates = 1)
       : graph(graph), tasks(tasks), data(data), devices(devices), topology(topology),
         task_noise(task_noise), conditions(conditions), top_k_candidates(top_k_candidates) {
   }
 
-  SchedulerInput(const SchedulerInput &other) = default;
+  SchedulerInputT(const SchedulerInputT &other) = default;
 
-  SchedulerInput &operator=(const SchedulerInput &other) = default;
-
-  // Shallow copy constructor
-  SchedulerInput(SchedulerInput &&other) noexcept
-      : graph(other.graph), tasks(other.tasks), data(other.data), devices(other.devices),
-        topology(other.topology), task_noise(other.task_noise), conditions(other.conditions),
-        top_k_candidates(other.top_k_candidates) {
-  }
-
-  SchedulerInput &operator=(SchedulerInput &&other) noexcept {
-    if (this != &other) {
-      graph = other.graph;
-      tasks = other.tasks;
-      data = other.data;
-      devices = other.devices;
-      topology = other.topology;
-      task_noise = other.task_noise;
-      conditions = other.conditions;
-      top_k_candidates = other.top_k_candidates;
-    }
-    return *this;
-  }
+  SchedulerInputT &operator=(const SchedulerInputT &other) = default;
+  SchedulerInputT(SchedulerInputT &&other) noexcept = default;
+  SchedulerInputT &operator=(SchedulerInputT &&other) noexcept = default;
 };
+
+using SchedulerInput = SchedulerInputT<TransitionConditions>;
 
 class SchedulerState {
 protected:
@@ -552,7 +576,8 @@ public:
   TaskCostInfo costs;
   uint8_t flags = 0;
 
-  SchedulerState(SchedulerInput &input)
+  template <typename TransitionConditionT>
+  SchedulerState(SchedulerInputT<TransitionConditionT> &input)
       : global_time(0), graph(input.graph), tasks(input.tasks), data(input.data),
         devices(input.devices), topology(input.topology), task_noise(input.task_noise),
         task_runtime(RuntimeTaskInfo(input.tasks)), device_manager(DeviceManager(input.devices)),
@@ -612,10 +637,12 @@ public:
 
   void start_record() {
     flags |= RECORD_FLAG;
+    device_manager.start_record();
   }
 
   void stop_record() {
     flags &= ~RECORD_FLAG;
+    device_manager.stop_record();
   }
 
   [[nodiscard]] bool is_recording() const {
@@ -906,7 +933,7 @@ public:
     return data_manager;
   }
 
-  friend class Scheduler;
+  template <typename> friend class SchedulerT;
   friend class TransitionConstraints;
 };
 
@@ -919,44 +946,41 @@ concept TransitionConditionConcept = requires(T t, SchedulerState &state, Schedu
   { t.should_launch_data(state, queues) } -> std::convertible_to<bool>;
 };
 
-class TransitionConditions {
+class TransitionConditionBase {
 public:
-  virtual bool should_map(SchedulerState &state, SchedulerQueues &queues) {
+  bool should_map(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool update_map(SchedulerState &state, SchedulerQueues &queues) {
+  bool update_map(SchedulerState &state, SchedulerQueues &queues) {
+    return should_map(state, queues);
+  }
+
+  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
+  bool should_launch(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool should_launch(SchedulerState &state, SchedulerQueues &queues) {
+  bool should_launch_data(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(state);
     MONUnusedParameter(queues);
     return true;
   }
 
-  virtual bool should_launch_data(SchedulerState &state, SchedulerQueues &queues) {
-    MONUnusedParameter(state);
-    MONUnusedParameter(queues);
-    return true;
-  }
 };
 
-static_assert(TransitionConditionConcept<TransitionConditions>);
+class DefaultTransitionConditions : public TransitionConditionBase {};
 
-class DefaultTransitionConditions : public TransitionConditions {};
-
-class RangeTransitionConditions : public TransitionConditions {
+class RangeTransitionConditions : public TransitionConditionBase {
 public:
   int32_t mapped_reserved_gap = 1;
   int32_t reserved_launched_gap = 1;
@@ -968,7 +992,7 @@ public:
         total_in_flight(total_in_flight_) {
   }
 
-  bool should_map(SchedulerState &state, SchedulerQueues &queues) override {
+  bool should_map(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(queues);
     auto n_mapped = state.counts.n_mapped();
     auto n_reserved = state.counts.n_reserved();
@@ -976,17 +1000,22 @@ public:
     return ((n_mapped - n_reserved) <= mapped_reserved_gap) && (n_mapped <= total_in_flight);
   }
 
-  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) override {
+  bool should_reserve(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(queues);
     auto n_reserved = state.counts.n_reserved();
     auto n_launched = state.counts.n_launched();
     T4F_INVARIANT(n_reserved >= n_launched);
     return (n_reserved - n_launched) <= reserved_launched_gap;
   }
+
+  bool update_map(SchedulerState &state, SchedulerQueues &queues) {
+    return should_map(state, queues);
+  }
 };
 
-class BatchTransitionConditions : public TransitionConditions {
+class BatchTransitionConditions : public TransitionConditionBase {
 public:
+  BatchTransitionConditions() = default;
   timecount_t last_accessed = 0;
   int32_t batch_size = 20;
   int32_t queue_threshold = 2;
@@ -997,19 +1026,12 @@ public:
       : batch_size(batch_size_), queue_threshold(queue_threshold_), max_in_flight(max_in_flight_) {
   }
 
-  bool should_map(SchedulerState &state, SchedulerQueues &queues) override {
+  bool should_map(SchedulerState &state, SchedulerQueues &queues) {
     MONUnusedParameter(queues);
     auto &counts = state.counts;
     auto n_mapped = counts.n_mapped();
     bool space_flag = (n_mapped <= max_in_flight + active_batch);
-    bool workqueue_flag = false;
-    const devid_t n_devices = state.get_devices().size();
-    for (int i = 1; i < n_devices; i++) {
-      if (counts.n_mapped(i) < queue_threshold) {
-        workqueue_flag = true;
-        break;
-      }
-    }
+    bool workqueue_flag = counts.any_non_host_mapped_below(queue_threshold);
 
     bool flag = space_flag || workqueue_flag;
 
@@ -1024,7 +1046,13 @@ public:
 
     return flag;
   }
+
+  bool update_map(SchedulerState &state, SchedulerQueues &queues) {
+    return should_map(state, queues);
+  }
 };
+
+static_assert(TransitionConditionConcept<TransitionConditions>);
 
 // struct SuccessPair {
 //   bool success = false;
@@ -1037,7 +1065,9 @@ enum class EvictionState : int8_t {
   RUNNING = 4,
 };
 
-class Scheduler {
+template <typename TransitionConditionT = TransitionConditions>
+class SchedulerT {
+  static_assert(TransitionConditionConcept<TransitionConditionT>);
 
 protected:
   struct EvictionInvalidationInfo {
@@ -1068,11 +1098,11 @@ public:
   TaskIDList compute_task_buffer;
   TaskIDList data_task_buffer;
   TaskIDList python_mapper_buffer;
-  std::reference_wrapper<TransitionConditions> conditions;
+  TransitionConditionT conditions;
   int64_t scheduler_event_count = 1;
   bool initialized = false;
 
-  Scheduler(SchedulerInput &input)
+  SchedulerT(SchedulerInputT<TransitionConditionT> &input)
       : state(input), queues(input.devices), conditions(input.conditions) {
     compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
     data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
@@ -1084,9 +1114,9 @@ public:
     }
   }
 
-  Scheduler(const Scheduler &other) = default;
+  SchedulerT(const SchedulerT &other) = default;
 
-  void set_transition_conditions(TransitionConditions &conditions_) {
+  void set_transition_conditions(const TransitionConditionT &conditions_) {
     conditions = conditions_;
   }
 
@@ -1133,7 +1163,8 @@ public:
 
   taskid_t map_task(taskid_t task_id, Action &action);
   void skip_map_tasks(MapperEvent &map_event, EventManager &event_manager);
-  void map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper);
+  void map_tasks(MapperEvent &map_event, EventManager &event_manager, Mapper &mapper,
+                 bool prechecked = false);
   ExecutionState map_tasks_from_python(ActionList &action_list, EventManager &event_manager);
   void remove_mapped_tasks(ActionList &action_list);
 
@@ -1277,6 +1308,8 @@ public:
   friend class SchedulerState;
   friend class SchedulerQueues;
 };
+
+using Scheduler = SchedulerT<TransitionConditions>;
 
 class Mapper {
 

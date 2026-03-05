@@ -40,7 +40,8 @@ void init_simulator_logger() {
   }
 }
 
-class Simulator {
+template <typename TransitionConditionT = TransitionConditions>
+class SimulatorT {
 protected:
   void add_initial_event() {
     ZoneScoped;
@@ -60,13 +61,13 @@ protected:
     auto &state = scheduler.get_state();
 
     if (state.not_draining() && queues.has_mappable() &&
-        scheduler.conditions.get().should_map(state, queues)) {
+        scheduler.conditions.should_map(state, queues)) {
       if (use_python_mapper) {
         SPDLOG_DEBUG("Time: {} Releasing control to Python mapper", event.time);
         return ExecutionState::EXTERNAL_MAPPING;
       } else {
         SPDLOG_DEBUG("Time: {} Running C++ mapper", event.time);
-        scheduler.map_tasks(event, event_manager, mapper.get());
+        scheduler.map_tasks(event, event_manager, mapper.get(), true);
         return ExecutionState::RUNNING;
       }
     } else {
@@ -78,7 +79,7 @@ protected:
 
 public:
   EventManager event_manager;
-  Scheduler scheduler;
+  SchedulerT<TransitionConditionT> scheduler;
   std::reference_wrapper<Mapper> mapper;
   uint64_t events_processed{0};
   bool initialized{false};
@@ -93,8 +94,8 @@ public:
   ExecutionState last_state{ExecutionState::NONE};
   EventVariant last_event{MapperEvent(0)};
 
-  Simulator(SchedulerInput &input, Mapper &mapper)
-      : event_manager(EventManager()), scheduler(Scheduler(input)), mapper(mapper) {
+  SimulatorT(SchedulerInputT<TransitionConditionT> &input, Mapper &mapper)
+      : event_manager(EventManager()), scheduler(input), mapper(mapper) {
   }
 
   void set_use_python_mapper(bool use_python_mapper_) {
@@ -182,7 +183,7 @@ public:
     scheduler.initialize_data_replicate(data_id, device_id);
   }
 
-  void set_transition_conditions(TransitionConditions &conditions) {
+  void set_transition_conditions(const TransitionConditionT &conditions) {
     scheduler.set_transition_conditions(conditions);
   }
 
@@ -393,11 +394,7 @@ public:
     const auto &dm = scheduler.get_state().get_device_manager();
     mem_t overall_max = 0;
     for (devid_t i = 1; i < dm.n_devices; ++i) {
-      const auto &tracker = dm.launched.mem_tracker[i];
-      if (!tracker.empty()) {
-        mem_t device_max = *std::max_element(tracker.resources.begin(), tracker.resources.end());
-        overall_max = std::max(overall_max, device_max);
-      }
+      overall_max = std::max(overall_max, dm.launched.get_mem_peak(i));
     }
     return overall_max;
   }
@@ -428,3 +425,5 @@ public:
     scheduler.breakpoints.add_time_breakpoint(time);
   }
 };
+
+using Simulator = SimulatorT<TransitionConditions>;

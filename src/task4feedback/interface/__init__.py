@@ -22,8 +22,6 @@ from .wrappers import (
     ExternalMapper,
     ExternalObserver,
     TaskNoise,
-    RangeTransitionConditions,
-    DefaultTransitionConditions,
     uniform_connected_devices,
     start_logger,
     SchedulerState,

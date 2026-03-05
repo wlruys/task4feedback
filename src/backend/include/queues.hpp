@@ -342,6 +342,11 @@ public:
     return top_k_values;
   }
 
+  template <typename QT = QueueType> requires TopKLike<QT>
+  [[nodiscard]] const auto &top_k_view() const {
+    return pq.get_top_k();
+  }
+
   void set_k(int k_val) {
     if constexpr (HasDynamicK<QueueType>) pq.set_k(k_val);
     else (void)k_val;

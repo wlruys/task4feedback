@@ -65,11 +65,11 @@ def evaluate_policy(
                 m,
                 d,
                 s,
-                transition_conditions=fastsim.RangeTransitionConditions(5, 5, 16),
+                transition_conditions=fastsim.BatchTransitionConditions(5, 5, 16),
             )
         else:
             input = SimulatorInput(
-                m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
+                m, d, s, transition_conditions=fastsim.BatchTransitionConditions()
             )
         env = RuntimeEnv(
             SimulatorFactory(
@@ -134,7 +134,7 @@ def run_dqn(
         m.finalize_tasks()
         spec = create_graph_spec()
         input = SimulatorInput(
-            m, d, s, transition_conditions=fastsim.DefaultTransitionConditions()
+            m, d, s, transition_conditions=fastsim.BatchTransitionConditions()
         )
         env = RuntimeEnv(
             SimulatorFactory(
