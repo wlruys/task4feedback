@@ -289,11 +289,8 @@ public:
   std::string name;
   taskid_t compute_task{-1}; // ID of the compute task that produces this data
   dataid_t data_id{-1};      // Unique ID for the data
-  ankerl::unordered_dense::set<taskid_t> dependencies;
-  ankerl::unordered_dense::set<taskid_t> dependents;
-
-  std::vector<taskid_t> sorted_dependencies_cache;
-  std::vector<taskid_t> sorted_dependents_cache;
+  taskid_t dependency{-1}; // optional writer compute task
+  taskid_t dependent{-1};  // optional consumer compute task
 };
 
 class Graph {
@@ -532,17 +529,17 @@ public:
     // Iterate data tasks
     // Update data dependents of the compute tasks based on data dependencies
     for (auto &data_task : data_tasks) {
-      for (const auto &dependency_id : data_task.dependencies) {
-        tasks[dependency_id].data_dependents.insert(data_task.id);
+      if (data_task.dependency != taskid_t(-1)) {
+        tasks[data_task.dependency].data_dependents.insert(data_task.id);
       }
     }
 
     // Compute tasks depend on data tasks
     // Iterate compute tasks
     // Update dependents of the data tasks based on data dependencies
-    for (auto &task : tasks) {
-      for (const auto &data_task_id : task.data_dependencies) {
-        data_tasks[data_task_id].dependents.insert(task.id);
+    for (auto &data_task : data_tasks) {
+      if (data_task.dependent != taskid_t(-1)) {
+        tasks[data_task.dependent].data_dependencies.insert(data_task.id);
       }
     }
   }
@@ -752,11 +749,13 @@ public:
           data_task.data_id = data_id;
 
           if (writer_id != taskid_t(-1)) {
-            data_task.dependencies.insert(writer_id);
+            data_task.dependency = writer_id;
             tasks[writer_id].data_dependents.insert(data_task_id);
+          } else {
+            data_task.dependency = taskid_t(-1);
           }
 
-          data_task.dependents.insert(task_id);
+          data_task.dependent = task_id;
           task.data_dependencies.insert(data_task_id);
         }
       }
@@ -804,11 +803,9 @@ public:
     total_data_task_dependencies_cached = 0;
     total_data_task_dependents_cached = 0;
 
-    for (auto &dt : data_tasks) {
-      dt.sorted_dependencies_cache = as_sorted_vector(dt.dependencies);
-      dt.sorted_dependents_cache = as_sorted_vector(dt.dependents);
-      total_data_task_dependencies_cached += static_cast<int32_t>(dt.sorted_dependencies_cache.size());
-      total_data_task_dependents_cached += static_cast<int32_t>(dt.sorted_dependents_cache.size());
+    for (const auto &dt : data_tasks) {
+      total_data_task_dependencies_cached += (dt.dependency != taskid_t(-1)) ? 1 : 0;
+      total_data_task_dependents_cached += (dt.dependent != taskid_t(-1)) ? 1 : 0;
     }
   }
 
@@ -1065,9 +1062,9 @@ public:
     for (int32_t i = 0; i < num_data_tasks; ++i) {
       const auto &data_task = data_tasks[static_cast<std::size_t>(i)];
       data_task_dependencies.offsets[static_cast<std::size_t>(i) + 1] =
-          static_cast<int32_t>(data_task.sorted_dependencies_cache.size());
+          (data_task.dependency != taskid_t(-1)) ? 1 : 0;
       data_task_dependents.offsets[static_cast<std::size_t>(i) + 1] =
-          static_cast<int32_t>(data_task.sorted_dependents_cache.size());
+          (data_task.dependent != taskid_t(-1)) ? 1 : 0;
     }
 
     auto prefix_sum_offsets = [](std::vector<int32_t> &offsets) {
@@ -1141,10 +1138,12 @@ public:
       data_task_data_id_cache[idx] = data_task.data_id;
       data_task_compute_task_cache[idx] = data_task.compute_task;
 
-      std::copy(data_task.sorted_dependencies_cache.begin(), data_task.sorted_dependencies_cache.end(),
-                data_task_dependencies.elements.begin() + data_task_dependencies.offsets[idx]);
-      std::copy(data_task.sorted_dependents_cache.begin(), data_task.sorted_dependents_cache.end(),
-                data_task_dependents.elements.begin() + data_task_dependents.offsets[idx]);
+      if (data_task.dependency != taskid_t(-1)) {
+        data_task_dependencies.elements[data_task_dependencies.offsets[idx]] = data_task.dependency;
+      }
+      if (data_task.dependent != taskid_t(-1)) {
+        data_task_dependents.elements[data_task_dependents.offsets[idx]] = data_task.dependent;
+      }
     }
 
     build_usage_caches_and_shared_read_topology();
