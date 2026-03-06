@@ -2,10 +2,13 @@
 #include "macros.hpp"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <iostream>
 #include <list>
+#include <limits>
 #include <numeric>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -15,8 +18,38 @@ using dataid_t = int32_t;
 using devid_t = int32_t;
 using depcount_t = int32_t;
 
-// Number of bits must be greater than or equal to the number of devices (including host)
-using devicemask_t = uint16_t;
+#ifndef T4F_MAX_DEVICES
+#define T4F_MAX_DEVICES 16
+#endif
+
+constexpr std::size_t kMaxDevices = static_cast<std::size_t>(T4F_MAX_DEVICES);
+static_assert(kMaxDevices >= 5 && kMaxDevices <= 64,
+              "T4F_MAX_DEVICES must be in [5, 64]");
+
+// Number of bits is chosen from {8,16,32,64} and must cover max devices.
+using devicemask_t = std::conditional_t<
+    (kMaxDevices <= 8), uint8_t,
+    std::conditional_t<(kMaxDevices <= 16), uint16_t,
+                       std::conditional_t<(kMaxDevices <= 32), uint32_t, uint64_t>>>;
+using devicemask_unsigned_t = std::make_unsigned_t<devicemask_t>;
+constexpr std::size_t kDeviceMaskBits = std::numeric_limits<devicemask_unsigned_t>::digits;
+static_assert(kMaxDevices <= kDeviceMaskBits, "Mask width must cover T4F_MAX_DEVICES");
+
+constexpr devicemask_unsigned_t kAllDeviceBits =
+    (kMaxDevices == kDeviceMaskBits)
+        ? std::numeric_limits<devicemask_unsigned_t>::max()
+        : ((devicemask_unsigned_t{1} << kMaxDevices) - devicemask_unsigned_t{1});
+
+[[nodiscard]] constexpr devicemask_t device_bit(devid_t device_id) {
+  return static_cast<devicemask_t>(
+      devicemask_unsigned_t{1} << static_cast<devicemask_unsigned_t>(device_id));
+}
+
+[[nodiscard]] constexpr devicemask_unsigned_t mask_for_n_devices(std::size_t n_devices) {
+  if (n_devices == 0) return devicemask_unsigned_t{0};
+  if (n_devices >= kDeviceMaskBits) return std::numeric_limits<devicemask_unsigned_t>::max();
+  return (devicemask_unsigned_t{1} << n_devices) - devicemask_unsigned_t{1};
+}
 
 // using priority_t = int32_t;
 // using taskid_t = int32_t;

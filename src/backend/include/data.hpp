@@ -143,10 +143,21 @@ public:
     return sizes[id];
   }
 
+  [[nodiscard]] const mem_t * __restrict__ sizes_data() const noexcept {
+    return sizes.data();
+  }
+
+  [[nodiscard]] mem_t * __restrict__ sizes_data() noexcept {
+    return sizes.data();
+  }
+
   [[nodiscard]] mem_t get_total_size(const std::span<const dataid_t> ids) const {
     mem_t total_size = 0;
-    for (const auto &id : ids) {
-      total_size += sizes[id];
+    const mem_t * __restrict__ size_ptr = sizes.data();
+    const dataid_t * __restrict__ it = ids.data();
+    const dataid_t *end = it + ids.size();
+    for (; it != end; ++it) {
+      total_size += size_ptr[static_cast<std::size_t>(*it)];
     }
     return total_size;
   }
@@ -187,16 +198,33 @@ class LocationManager {
 protected:
   uint8_t num_devices{0};
   dataid_t num_data{0};
-  std::vector<devicemask_t> locations;
+  devicemask_t * __restrict__ locations{nullptr};
+  SoABuffer buf_;
+#ifdef SIM_RECORD
   std::vector<ValidEventArray> valid_intervals;
   bool record{false};
+#endif
+
+  void reset_moved_from() noexcept {
+    num_devices = 0;
+    num_data = 0;
+    locations = nullptr;
+#ifdef SIM_RECORD
+    record = false;
+#endif
+  }
 
 public:
   LocationManager() = default;
 
   LocationManager(dataid_t num_data, devid_t num_devices)
-      : num_devices(num_devices), num_data(num_data), locations(num_data, 0) {
-
+      : num_devices(num_devices), num_data(num_data) {
+    T4F_INVARIANT(num_devices >= 0 && static_cast<std::size_t>(num_devices) <= kMaxDevices);
+    if (num_data > 0) {
+      buf_ = SoABuffer::allocate(sizeof(devicemask_t) * static_cast<std::size_t>(num_data));
+      locations = soa_ptr_at<devicemask_t>(buf_.base(), 0);
+      // buf_ is zero-filled, so all locations are initialized to 0.
+    }
 #ifdef SIM_RECORD
     constexpr size_t buffer_initial_size = 100;
     valid_intervals.resize(num_data * num_devices);
@@ -207,12 +235,63 @@ public:
 #endif
   }
 
-  LocationManager(const LocationManager &) = default;
+  LocationManager(const LocationManager &other)
+      : num_devices(other.num_devices), num_data(other.num_data)
+#ifdef SIM_RECORD
+      , valid_intervals(other.valid_intervals), record(other.record)
+#endif
+  {
+    if (other.buf_.byte_size > 0) {
+      buf_ = other.buf_.deep_copy();
+      locations = soa_ptr_at<devicemask_t>(buf_.base(), 0);
+    }
+  }
+
+  LocationManager &operator=(const LocationManager &other) {
+    if (this != &other) {
+      LocationManager tmp(other);
+      using std::swap;
+      swap(num_devices, tmp.num_devices);
+      swap(num_data, tmp.num_data);
+      swap(locations, tmp.locations);
+      swap(buf_, tmp.buf_);
+#ifdef SIM_RECORD
+      swap(valid_intervals, tmp.valid_intervals);
+      swap(record, tmp.record);
+#endif
+    }
+    return *this;
+  }
+
+  LocationManager(LocationManager &&other) noexcept
+      : num_devices(other.num_devices), num_data(other.num_data), locations(other.locations),
+        buf_(std::move(other.buf_))
+#ifdef SIM_RECORD
+      , valid_intervals(std::move(other.valid_intervals)), record(other.record)
+#endif
+  {
+    other.reset_moved_from();
+  }
+
+  LocationManager &operator=(LocationManager &&other) noexcept {
+    if (this != &other) {
+      num_devices = other.num_devices;
+      num_data = other.num_data;
+      locations = other.locations;
+      buf_ = std::move(other.buf_);
+#ifdef SIM_RECORD
+      valid_intervals = std::move(other.valid_intervals);
+      record = other.record;
+#endif
+      other.reset_moved_from();
+    }
+    return *this;
+  }
 
   [[nodiscard]] inline bool is_valid(dataid_t data_id, devid_t device_id) const {
     T4F_INVARIANT(data_id < num_data && device_id < num_devices);
     // Check if "device_id"-th bit of "data_id"-th location is set
-    return locations[data_id] & (1 << device_id);
+    return (locations[data_id] & device_bit(device_id)) != 0;
   }
 
   [[nodiscard]] inline bool is_invalid(dataid_t data_id, devid_t device_id) const {
@@ -220,7 +299,7 @@ public:
   }
 
   inline devicemask_t set_valid(dataid_t data_id, devid_t device_id, timecount_t current_time) {
-    const devicemask_t mask = (1 << device_id);
+    const devicemask_t mask = device_bit(device_id);
     auto old_status = locations[data_id] & mask;
 
 #ifdef SIM_RECORD
@@ -238,7 +317,7 @@ public:
   }
 
   inline devicemask_t set_invalid(dataid_t data_id, devid_t device_id, timecount_t current_time) {
-    const devicemask_t mask = (1 << device_id);
+    const devicemask_t mask = device_bit(device_id);
     auto old_status = locations[data_id] & mask;
 #ifdef SIM_RECORD
     if (record) {
@@ -249,7 +328,9 @@ public:
     }
 #endif
 
-    locations[data_id] &= ~mask;
+    locations[data_id] =
+        static_cast<devicemask_t>(static_cast<devicemask_unsigned_t>(locations[data_id]) &
+                                  ~static_cast<devicemask_unsigned_t>(mask));
     return old_status;
   }
 
@@ -263,6 +344,14 @@ public:
 
   [[nodiscard]] inline devicemask_t get_location_flags(dataid_t data_id) {
     return locations[data_id];
+  }
+
+  [[nodiscard]] const devicemask_t * __restrict__ flags_data() const noexcept {
+    return locations;
+  }
+
+  [[nodiscard]] devicemask_t * __restrict__ flags_data() noexcept {
+    return locations;
   }
 
   void populate_valid_locations(dataid_t data_id, std::vector<devid_t> &valid_locations) const {
@@ -282,7 +371,7 @@ public:
                                         timecount_t current_time) {
     T4F_INVARIANT(data_id < num_data && device_id < num_devices);
     devicemask_t old_status = locations[data_id];
-    devicemask_t keep_mask = (1 << device_id);
+    devicemask_t keep_mask = device_bit(device_id);
     // Keep only the specified device, invalidate all others
     locations[data_id] &= keep_mask;
 
@@ -310,7 +399,9 @@ public:
 
     devicemask_t old_status = locations[data_id];
 
-    locations[data_id] &= ~(1 << device_id); // invalidate the specified device
+    const auto inverted_device_mask = ~static_cast<devicemask_unsigned_t>(device_bit(device_id));
+    locations[data_id] = static_cast<devicemask_t>(
+        static_cast<devicemask_unsigned_t>(locations[data_id]) & inverted_device_mask);
     devicemask_t changed_bits = old_status ^ locations[data_id];
 
     return changed_bits;
@@ -319,18 +410,30 @@ public:
   void finalize(timecount_t current_time) {
 // tie off any open/hanging interval at the end of the simulation
 #ifdef SIM_RECORD
+    const devicemask_t * __restrict__ flags = flags_data();
     for (dataid_t i = 0; i < num_data; i++) {
-      for (devicemask_t j = 0; j < num_devices; j++) {
-        if (is_valid(i, j)) {
-          valid_intervals[i * num_devices + j].stops.back() = current_time;
-        }
+      auto mask = static_cast<devicemask_unsigned_t>(
+          static_cast<devicemask_unsigned_t>(flags[i]) &
+          mask_for_n_devices(static_cast<std::size_t>(num_devices)));
+      while (mask) {
+        const auto bit = static_cast<devid_t>(std::countr_zero(mask));
+        valid_intervals[i * num_devices + bit].stops.back() = current_time;
+        mask &= (mask - 1);
       }
     }
 #endif
   }
 
   ValidEventArray &get_valid_intervals(dataid_t data_id, devid_t device_id) {
+#ifdef SIM_RECORD
     return valid_intervals[data_id * num_devices + device_id];
+#else
+    MONUnusedParameter(data_id);
+    MONUnusedParameter(device_id);
+    T4F_INVARIANT(false && "LocationManager recording is disabled in non-SIM_RECORD builds");
+    static ValidEventArray dummy{};
+    return dummy;
+#endif
   }
 };
 
@@ -677,19 +780,19 @@ public:
   LRU_manager() = default;
 
   explicit LRU_manager(const Devices &devices,
-                       mem_t median_block_size,
+                       mem_t mean_block_size,
                        std::size_t hard_max_items_per_device = 0,
                        std::size_t distinct_items_hint = static_cast<std::size_t>(-1))
       : lrus_(devices.size()) {
         
-    median_block_size = median_block_size > 0 ? median_block_size : 1;
+    mean_block_size = mean_block_size > 0 ? mean_block_size : 1;
     constexpr std::size_t kMinItems = 4096;
     constexpr std::size_t kMaxItems = 1'000'000;
     const bool has_distinct_items_hint = distinct_items_hint != static_cast<std::size_t>(-1);
 
     for (std::size_t dev = 0; dev < lrus_.size(); ++dev) {
       const mem_t cap = devices.get_max_resources(dev).mem;
-      std::size_t expected = static_cast<std::size_t>(cap / median_block_size);
+      std::size_t expected = static_cast<std::size_t>(cap / mean_block_size);
 
       if (has_distinct_items_hint) expected = std::min(expected, distinct_items_hint);
       if (hard_max_items_per_device != 0) expected = std::min(expected, hard_max_items_per_device);
@@ -789,19 +892,79 @@ public:
 
 class MovementCounter {
 private:
-  std::vector<mem_t> total_data_movement;
-  std::vector<mem_t> eviction_data_movement;
+  mem_t * __restrict__ total_data_movement{nullptr};
+  mem_t * __restrict__ eviction_data_movement{nullptr};
+  SoABuffer buf_;
+  int32_t n_devices_{0};
+
+  void reset_moved_from() noexcept {
+    total_data_movement = nullptr;
+    eviction_data_movement = nullptr;
+    n_devices_ = 0;
+  }
+
+  void seat_pointers() {
+    SoALayout layout;
+    layout.begin();
+    auto off_total    = layout.add_field<mem_t>(static_cast<std::size_t>(n_devices_));
+    auto off_eviction = layout.add_field<mem_t>(static_cast<std::size_t>(n_devices_));
+    total_data_movement    = soa_ptr_at<mem_t>(buf_.base(), off_total);
+    eviction_data_movement = soa_ptr_at<mem_t>(buf_.base(), off_eviction);
+  }
 
 public:
   MovementCounter() = default;
 
-  MovementCounter(devid_t n_devices)
-      : total_data_movement(n_devices, 0), eviction_data_movement(n_devices, 0) {
+  explicit MovementCounter(devid_t n_devices) : n_devices_(n_devices) {
+    SoALayout layout;
+    layout.begin();
+    auto off_total    = layout.add_field<mem_t>(static_cast<std::size_t>(n_devices));
+    auto off_eviction = layout.add_field<mem_t>(static_cast<std::size_t>(n_devices));
+    buf_ = SoABuffer::allocate(layout.total()); // zero-filled
+    total_data_movement    = soa_ptr_at<mem_t>(buf_.base(), off_total);
+    eviction_data_movement = soa_ptr_at<mem_t>(buf_.base(), off_eviction);
+  }
+
+  MovementCounter(const MovementCounter &other) : n_devices_(other.n_devices_) {
+    if (other.buf_.byte_size > 0) {
+      buf_ = other.buf_.deep_copy();
+      seat_pointers();
+    }
+  }
+
+  MovementCounter &operator=(const MovementCounter &other) {
+    if (this != &other) {
+      MovementCounter tmp(other);
+      using std::swap;
+      swap(total_data_movement,    tmp.total_data_movement);
+      swap(eviction_data_movement, tmp.eviction_data_movement);
+      swap(buf_,      tmp.buf_);
+      swap(n_devices_, tmp.n_devices_);
+    }
+    return *this;
+  }
+
+  MovementCounter(MovementCounter &&other) noexcept
+      : total_data_movement(other.total_data_movement),
+        eviction_data_movement(other.eviction_data_movement), buf_(std::move(other.buf_)),
+        n_devices_(other.n_devices_) {
+    other.reset_moved_from();
+  }
+
+  MovementCounter &operator=(MovementCounter &&other) noexcept {
+    if (this != &other) {
+      total_data_movement = other.total_data_movement;
+      eviction_data_movement = other.eviction_data_movement;
+      buf_ = std::move(other.buf_);
+      n_devices_ = other.n_devices_;
+      other.reset_moved_from();
+    }
+    return *this;
   }
 
   void add_total_movement(devid_t src, devid_t dest, mem_t size) {
-    T4F_INVARIANT(src < total_data_movement.size());
-    T4F_INVARIANT(dest < total_data_movement.size());
+    T4F_INVARIANT(src < n_devices_);
+    T4F_INVARIANT(dest < n_devices_);
     total_data_movement[src] += size;
     total_data_movement[dest] += size;
     if (dest == 0) {
@@ -811,25 +974,25 @@ public:
   }
 
   void add_eviction_movement(devid_t device_id, mem_t size) {
-    T4F_INVARIANT(device_id < eviction_data_movement.size());
+    T4F_INVARIANT(device_id < n_devices_);
     eviction_data_movement[device_id] += size;
   }
 
-  const std::vector<mem_t> &get_total_data_movement() const {
-    return total_data_movement;
+  [[nodiscard]] std::span<const mem_t> get_total_data_movement() const {
+    return {total_data_movement, static_cast<std::size_t>(n_devices_)};
   }
 
-  const mem_t get_total_data_movement(devid_t device_id) const {
-    T4F_INVARIANT(device_id < total_data_movement.size());
+  [[nodiscard]] mem_t get_total_data_movement(devid_t device_id) const {
+    T4F_INVARIANT(device_id < n_devices_);
     return total_data_movement[device_id];
   }
 
-  const std::vector<mem_t> &get_eviction_data_movement() const {
-    return eviction_data_movement;
+  [[nodiscard]] std::span<const mem_t> get_eviction_data_movement() const {
+    return {eviction_data_movement, static_cast<std::size_t>(n_devices_)};
   }
 
-  const mem_t get_eviction_data_movement(devid_t device_id) const {
-    T4F_INVARIANT(device_id < eviction_data_movement.size());
+  [[nodiscard]] mem_t get_eviction_data_movement(devid_t device_id) const {
+    T4F_INVARIANT(device_id < n_devices_);
     return eviction_data_movement[device_id];
   }
 };
@@ -850,8 +1013,15 @@ protected:
 
   static bool check_valid(std::span<const dataid_t> list, const LocationManager &locations,
                           devid_t device_id) {
-    return std::ranges::all_of(
-        list, [&](auto data_id) { return !locations.is_invalid(data_id, device_id); });
+    const auto device_mask = device_bit(device_id);
+    const devicemask_t * __restrict__ flags = locations.flags_data();
+    const dataid_t * __restrict__ it = list.data();
+    const dataid_t *end = it + list.size();
+    bool all_valid = true;
+    for (; it != end; ++it) {
+      all_valid &= (flags[static_cast<std::size_t>(*it)] & device_mask) != 0;
+    }
+    return all_valid;
   }
 
   static bool read_update(dataid_t data_id, devid_t device_id, LocationManager &locations,
@@ -875,7 +1045,7 @@ protected:
     return updated_ids;
   }
 
-  static mem_t estimate_lru_block_size(const Data &data) {
+  static mem_t estimate_lru_mean_block_size(const Data &data) {
     if (data.empty()) {
       return 1;
     }
@@ -892,8 +1062,8 @@ protected:
       total += size;
     }
 
-    const mem_t average = static_cast<mem_t>(total / static_cast<int64_t>(sizes.size()));
-    return average > 0 ? average : 1;
+    const mem_t mean = static_cast<mem_t>(total / static_cast<int64_t>(sizes.size()));
+    return mean > 0 ? mean : 1;
   }
 
 public:
@@ -905,7 +1075,7 @@ public:
       : mapped_locations(data.size(), devices.size()),
         reserved_locations(data.size(), devices.size()),
         launched_locations(data.size(), devices.size()),
-        lru_manager(devices, estimate_lru_block_size(data), 0, data.size()),
+        lru_manager(devices, estimate_lru_mean_block_size(data), 0, data.size()),
         movement_counter(devices.size()) {
   }
 
@@ -1059,11 +1229,11 @@ public:
 
   [[nodiscard]] mem_t total_size(const Data &data, std::span<const dataid_t> list) const {
     mem_t total_size = 0;
-    const auto *sizes = data.sizes.data();
-    const auto *it = list.data();
-    const auto *end = it + list.size();
+    const mem_t * __restrict__ sizes = data.sizes_data();
+    const dataid_t * __restrict__ it = list.data();
+    const dataid_t *end = it + list.size();
     for (; it != end; ++it) {
-      total_size += sizes[*it];
+      total_size += sizes[static_cast<std::size_t>(*it)];
     }
     return total_size;
   }
@@ -1071,14 +1241,14 @@ public:
   [[nodiscard]] mem_t local_size(const Data &data, std::span<const dataid_t> list,
                                  const LocationManager &locations, devid_t device_id) const {
     mem_t local_size = 0;
-    const auto device_mask = static_cast<devicemask_t>(1 << device_id);
-    const auto *sizes = data.sizes.data();
-    const auto *it = list.data();
-    const auto *end = it + list.size();
+    const auto device_mask = device_bit(device_id);
+    const mem_t * __restrict__ sizes = data.sizes_data();
+    const devicemask_t * __restrict__ flags = locations.flags_data();
+    const dataid_t * __restrict__ it = list.data();
+    const dataid_t *end = it + list.size();
     for (; it != end; ++it) {
-      const auto data_id = *it;
-      const auto flags = locations.get_location_flags(data_id);
-      local_size += (flags & device_mask) ? sizes[data_id] : 0;
+      const auto idx = static_cast<std::size_t>(*it);
+      local_size += (flags[idx] & device_mask) ? sizes[idx] : 0;
     }
     return local_size;
   }
@@ -1101,14 +1271,14 @@ public:
   [[nodiscard]] mem_t non_local_size(const Data &data, std::span<const dataid_t> list,
                                      const LocationManager &locations, devid_t device_id) const {
     mem_t non_local_size = 0;
-    const auto device_mask = static_cast<devicemask_t>(1 << device_id);
-    const auto *sizes = data.sizes.data();
-    const auto *it = list.data();
-    const auto *end = it + list.size();
+    const auto device_mask = device_bit(device_id);
+    const mem_t * __restrict__ sizes = data.sizes_data();
+    const devicemask_t * __restrict__ flags = locations.flags_data();
+    const dataid_t * __restrict__ it = list.data();
+    const dataid_t *end = it + list.size();
     for (; it != end; ++it) {
-      const auto data_id = *it;
-      const auto flags = locations.get_location_flags(data_id);
-      non_local_size += (flags & device_mask) ? 0 : sizes[data_id];
+      const auto idx = static_cast<std::size_t>(*it);
+      non_local_size += (flags[idx] & device_mask) ? 0 : sizes[idx];
     }
     return non_local_size;
   }
@@ -1131,10 +1301,23 @@ public:
   mem_t shared_size(const Data &data, std::span<const dataid_t> list1,
                     std::span<const dataid_t> list2) const {
     mem_t shared_size = 0;
-    for (auto data_id : list1) {
-      if (std::find(list2.begin(), list2.end(), data_id) != list2.end()) {
-        shared_size += data.get_size(data_id);
+    // Contract: list1 and list2 are sorted by data_id.
+    const dataid_t *it1 = list1.data();
+    const dataid_t *it2 = list2.data();
+    const dataid_t *end1 = it1 + list1.size();
+    const dataid_t *end2 = it2 + list2.size();
+    while (it1 != end1 && it2 != end2) {
+      if (*it1 < *it2) {
+        ++it1;
+        continue;
       }
+      if (*it2 < *it1) {
+        ++it2;
+        continue;
+      }
+      shared_size += data.get_size(*it1);
+      ++it1;
+      ++it2;
     }
     return shared_size;
   }
@@ -1458,7 +1641,7 @@ public:
         mapped_flags | reserved_flags | launched_flags);
     while (mask) {
       const auto device = static_cast<devid_t>(std::countr_zero(mask));
-      const devicemask_t device_mask = (1 << device);
+      const devicemask_t device_mask = device_bit(device);
       if (mapped_flags & device_mask) {
         device_manager.remove_mem<TaskState::MAPPED>(device, size, current_time);
       }

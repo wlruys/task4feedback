@@ -12,10 +12,10 @@ enum class EventType : int8_t {
   MAPPER = 0,
   RESERVER = 1,
   LAUNCHER = 2,
-  EVICTOR = 3,
-  COMPUTE_COMPLETER = 4,
-  DATA_COMPLETER = 5,
-  EVICTOR_COMPLETER = 6
+  EVICTOR = 4,
+  COMPUTE_COMPLETER = 8,
+  DATA_COMPLETER = 16,
+  EVICTOR_COMPLETER = 32
 };
 constexpr std::size_t num_event_types = 7;
 

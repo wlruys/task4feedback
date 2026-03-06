@@ -60,6 +60,7 @@ target_compile_definitions(backend
   PUBLIC
     $<$<CONFIG:Debug>:DEBUG>
     $<$<CONFIG:RelWithDebInfo>:DEBUG>
+    T4F_MAX_DEVICES=${T4F_MAX_DEVICES}
 )
 
 target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt tracy_headers unordered_dense::unordered_dense)

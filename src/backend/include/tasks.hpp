@@ -1,4 +1,5 @@
 #pragma once
+#include "flat_soa.hpp"
 #include "queues.hpp"
 #include "resources.hpp"
 #include "settings.hpp"
@@ -149,12 +150,14 @@ static inline taskid_t collect_ready(std::span<const taskid_t> neighbors,
   }
 
   out.resize(n);
+  const taskid_t * __restrict__ neighbors_ptr = neighbors.data();
+  taskid_t * __restrict__ out_ptr = out.data();
 
   taskid_t w = 0;
   for (std::size_t i = 0; i < n; ++i) {
-    const taskid_t tid = neighbors[i];
+    const taskid_t tid = neighbors_ptr[i];
     const bool ready = dec_ready(tid);
-    out[static_cast<std::size_t>(w)] = tid;
+    out_ptr[static_cast<std::size_t>(w)] = tid;
     w += static_cast<taskid_t>(ready);
   }
 
@@ -1752,12 +1755,25 @@ public:
     return compute_task_dependencies.row_size(id);
   }
 
+  [[nodiscard]] const int32_t * __restrict__ compute_task_dependency_offsets_data() const noexcept {
+    return compute_task_dependencies.offsets.data();
+  }
+
   [[nodiscard]] int32_t get_compute_task_data_dependency_count(taskid_t id) const {
     return compute_task_data_dependencies.row_size(id);
   }
 
+  [[nodiscard]] const int32_t * __restrict__
+  compute_task_data_dependency_offsets_data() const noexcept {
+    return compute_task_data_dependencies.offsets.data();
+  }
+
   [[nodiscard]] int32_t get_data_task_dependency_count(taskid_t id) const {
     return data_task_dependencies.row_size(id);
+  }
+
+  [[nodiscard]] const int32_t * __restrict__ data_task_dependency_offsets_data() const noexcept {
+    return data_task_dependencies.offsets.data();
   }
 
   [[nodiscard]] const ComputeTaskStaticInfo &get_compute_task_static_info(taskid_t id) const {
@@ -1768,86 +1784,437 @@ public:
 class RuntimeTaskInfo {
 protected:
   struct ComputeRuntimeSoA {
-    std::vector<uint8_t> state;
-    std::vector<uint8_t> status;
-    std::vector<uint8_t> flags;
-    std::vector<int16_t> unmapped;
-    std::vector<int16_t> unreserved;
-    std::vector<int16_t> incomplete;
-    std::vector<int32_t> mapped_device;
-    std::vector<int32_t> reserve_priority;
-    std::vector<int32_t> launch_priority;
-    std::vector<timecount_t> mapped_time;
-    std::vector<timecount_t> reserved_time;
-    std::vector<timecount_t> launched_time;
-    std::vector<timecount_t> completed_time;
+    // Raw pointers into buf_; indexed by task id.
+    // __restrict__ tells the compiler none of these alias each other,
+    // enabling reordering/CSE across same-type fields.
+    uint8_t * __restrict__ state{nullptr};
+    uint8_t * __restrict__ status{nullptr};
+    uint8_t * __restrict__ flags{nullptr};
+    int16_t * __restrict__ unmapped{nullptr};
+    int16_t * __restrict__ unreserved{nullptr};
+    int16_t * __restrict__ incomplete{nullptr};
+    int32_t * __restrict__ mapped_device{nullptr};
+    int32_t * __restrict__ reserve_priority{nullptr};
+    int32_t * __restrict__ launch_priority{nullptr};
+    timecount_t * __restrict__ mapped_time{nullptr};
+    timecount_t * __restrict__ reserved_time{nullptr};
+    timecount_t * __restrict__ launched_time{nullptr};
+    timecount_t * __restrict__ completed_time{nullptr};
+
+    SoABuffer buf_;
+
+    ComputeRuntimeSoA() = default;
+
+    // Deep copy: single memcpy + pointer fixup.
+    ComputeRuntimeSoA(const ComputeRuntimeSoA &other, int32_t n) {
+      buf_ = other.buf_.deep_copy();
+      seat_pointers(n);
+      // mapped_device was filled with -1, already copied via memcpy.
+    }
+
+    ComputeRuntimeSoA(ComputeRuntimeSoA &&other) noexcept
+        : state(other.state), status(other.status), flags(other.flags), unmapped(other.unmapped),
+          unreserved(other.unreserved), incomplete(other.incomplete),
+          mapped_device(other.mapped_device), reserve_priority(other.reserve_priority),
+          launch_priority(other.launch_priority), mapped_time(other.mapped_time),
+          reserved_time(other.reserved_time), launched_time(other.launched_time),
+          completed_time(other.completed_time), buf_(std::move(other.buf_)) {
+      other.reset_moved_from();
+    }
+
+    ComputeRuntimeSoA &operator=(ComputeRuntimeSoA &&other) noexcept {
+      if (this != &other) {
+        state = other.state;
+        status = other.status;
+        flags = other.flags;
+        unmapped = other.unmapped;
+        unreserved = other.unreserved;
+        incomplete = other.incomplete;
+        mapped_device = other.mapped_device;
+        reserve_priority = other.reserve_priority;
+        launch_priority = other.launch_priority;
+        mapped_time = other.mapped_time;
+        reserved_time = other.reserved_time;
+        launched_time = other.launched_time;
+        completed_time = other.completed_time;
+        buf_ = std::move(other.buf_);
+        other.reset_moved_from();
+      }
+      return *this;
+    }
 
     void resize(int32_t n) {
-      state.resize(n, 0);
-      status.resize(n, 0);
-      flags.resize(n, 0);
-      unmapped.resize(n, 0);
-      unreserved.resize(n, 0);
-      incomplete.resize(n, 0);
-      mapped_device.resize(n, -1);
-      reserve_priority.resize(n, 0);
-      launch_priority.resize(n, 0);
-      mapped_time.resize(n, 0);
-      reserved_time.resize(n, 0);
-      launched_time.resize(n, 0);
-      completed_time.resize(n, 0);
+      SoALayout layout;
+      layout.begin();
+      // Order: group by alignment (largest first) to minimize padding.
+      auto off_mapped_time     = layout.add_field<timecount_t>(n);
+      auto off_reserved_time   = layout.add_field<timecount_t>(n);
+      auto off_launched_time   = layout.add_field<timecount_t>(n);
+      auto off_completed_time  = layout.add_field<timecount_t>(n);
+      auto off_mapped_device   = layout.add_field<int32_t>(n);
+      auto off_reserve_priority = layout.add_field<int32_t>(n);
+      auto off_launch_priority = layout.add_field<int32_t>(n);
+      auto off_unmapped        = layout.add_field<int16_t>(n);
+      auto off_unreserved      = layout.add_field<int16_t>(n);
+      auto off_incomplete      = layout.add_field<int16_t>(n);
+      auto off_state           = layout.add_field<uint8_t>(n);
+      auto off_status          = layout.add_field<uint8_t>(n);
+      auto off_flags           = layout.add_field<uint8_t>(n);
+
+      buf_ = SoABuffer::allocate(layout.total()); // zero-filled
+      seat_pointers_impl(buf_.base(), off_mapped_time, off_reserved_time,
+                         off_launched_time, off_completed_time, off_mapped_device,
+                         off_reserve_priority, off_launch_priority, off_unmapped,
+                         off_unreserved, off_incomplete, off_state, off_status, off_flags);
+      // Fill mapped_device with -1 (default).
+      std::memset(mapped_device, 0xFF, sizeof(int32_t) * static_cast<std::size_t>(n));
+    }
+
+  private:
+    void reset_moved_from() noexcept {
+      state = nullptr;
+      status = nullptr;
+      flags = nullptr;
+      unmapped = nullptr;
+      unreserved = nullptr;
+      incomplete = nullptr;
+      mapped_device = nullptr;
+      reserve_priority = nullptr;
+      launch_priority = nullptr;
+      mapped_time = nullptr;
+      reserved_time = nullptr;
+      launched_time = nullptr;
+      completed_time = nullptr;
+    }
+
+    void seat_pointers(int32_t n) {
+      SoALayout layout;
+      layout.begin();
+      auto off_mapped_time     = layout.add_field<timecount_t>(n);
+      auto off_reserved_time   = layout.add_field<timecount_t>(n);
+      auto off_launched_time   = layout.add_field<timecount_t>(n);
+      auto off_completed_time  = layout.add_field<timecount_t>(n);
+      auto off_mapped_device   = layout.add_field<int32_t>(n);
+      auto off_reserve_priority = layout.add_field<int32_t>(n);
+      auto off_launch_priority = layout.add_field<int32_t>(n);
+      auto off_unmapped        = layout.add_field<int16_t>(n);
+      auto off_unreserved      = layout.add_field<int16_t>(n);
+      auto off_incomplete      = layout.add_field<int16_t>(n);
+      auto off_state           = layout.add_field<uint8_t>(n);
+      auto off_status          = layout.add_field<uint8_t>(n);
+      auto off_flags           = layout.add_field<uint8_t>(n);
+      seat_pointers_impl(buf_.base(), off_mapped_time, off_reserved_time,
+                         off_launched_time, off_completed_time, off_mapped_device,
+                         off_reserve_priority, off_launch_priority, off_unmapped,
+                         off_unreserved, off_incomplete, off_state, off_status, off_flags);
+    }
+
+    void seat_pointers_impl(char *base,
+                            std::size_t off_mapped_time, std::size_t off_reserved_time,
+                            std::size_t off_launched_time, std::size_t off_completed_time,
+                            std::size_t off_mapped_device, std::size_t off_reserve_priority,
+                            std::size_t off_launch_priority, std::size_t off_unmapped,
+                            std::size_t off_unreserved, std::size_t off_incomplete,
+                            std::size_t off_state, std::size_t off_status, std::size_t off_flags) {
+      mapped_time      = soa_ptr_at<timecount_t>(base, off_mapped_time);
+      reserved_time    = soa_ptr_at<timecount_t>(base, off_reserved_time);
+      launched_time    = soa_ptr_at<timecount_t>(base, off_launched_time);
+      completed_time   = soa_ptr_at<timecount_t>(base, off_completed_time);
+      mapped_device    = soa_ptr_at<int32_t>(base, off_mapped_device);
+      reserve_priority = soa_ptr_at<int32_t>(base, off_reserve_priority);
+      launch_priority  = soa_ptr_at<int32_t>(base, off_launch_priority);
+      unmapped         = soa_ptr_at<int16_t>(base, off_unmapped);
+      unreserved       = soa_ptr_at<int16_t>(base, off_unreserved);
+      incomplete       = soa_ptr_at<int16_t>(base, off_incomplete);
+      state            = soa_ptr_at<uint8_t>(base, off_state);
+      status           = soa_ptr_at<uint8_t>(base, off_status);
+      flags            = soa_ptr_at<uint8_t>(base, off_flags);
     }
   };
 
   struct DataRuntimeSoA {
-    std::vector<uint8_t> state;
-    std::vector<uint8_t> flags;
-    std::vector<int16_t> incomplete;
-    std::vector<int32_t> source_device;
-    std::vector<int32_t> mapped_device;
-    std::vector<int32_t> launch_priority;
-    std::vector<timecount_t> launched_time;
-    std::vector<timecount_t> completed_time;
+    uint8_t * __restrict__ state{nullptr};
+    uint8_t * __restrict__ flags{nullptr};
+    int16_t * __restrict__ incomplete{nullptr};
+    int32_t * __restrict__ source_device{nullptr};
+    int32_t * __restrict__ mapped_device{nullptr};
+    int32_t * __restrict__ launch_priority{nullptr};
+    timecount_t * __restrict__ launched_time{nullptr};
+    timecount_t * __restrict__ completed_time{nullptr};
+
+    SoABuffer buf_;
+
+    DataRuntimeSoA() = default;
+
+    DataRuntimeSoA(const DataRuntimeSoA &other, int32_t n) {
+      buf_ = other.buf_.deep_copy();
+      seat_pointers(n);
+    }
+
+    DataRuntimeSoA(DataRuntimeSoA &&other) noexcept
+        : state(other.state), flags(other.flags), incomplete(other.incomplete),
+          source_device(other.source_device), mapped_device(other.mapped_device),
+          launch_priority(other.launch_priority), launched_time(other.launched_time),
+          completed_time(other.completed_time), buf_(std::move(other.buf_)) {
+      other.reset_moved_from();
+    }
+
+    DataRuntimeSoA &operator=(DataRuntimeSoA &&other) noexcept {
+      if (this != &other) {
+        state = other.state;
+        flags = other.flags;
+        incomplete = other.incomplete;
+        source_device = other.source_device;
+        mapped_device = other.mapped_device;
+        launch_priority = other.launch_priority;
+        launched_time = other.launched_time;
+        completed_time = other.completed_time;
+        buf_ = std::move(other.buf_);
+        other.reset_moved_from();
+      }
+      return *this;
+    }
 
     void resize(int32_t n) {
-      state.resize(n, 0);
-      flags.resize(n, 0);
-      incomplete.resize(n, 0);
-      source_device.resize(n, 0);
-      mapped_device.resize(n, -1);
-      launch_priority.resize(n, 0);
-      launched_time.resize(n, 0);
-      completed_time.resize(n, 0);
+      SoALayout layout;
+      layout.begin();
+      auto off_launched_time   = layout.add_field<timecount_t>(n);
+      auto off_completed_time  = layout.add_field<timecount_t>(n);
+      auto off_source_device   = layout.add_field<int32_t>(n);
+      auto off_mapped_device   = layout.add_field<int32_t>(n);
+      auto off_launch_priority = layout.add_field<int32_t>(n);
+      auto off_incomplete      = layout.add_field<int16_t>(n);
+      auto off_state           = layout.add_field<uint8_t>(n);
+      auto off_flags           = layout.add_field<uint8_t>(n);
+
+      buf_ = SoABuffer::allocate(layout.total());
+      seat_pointers_impl(buf_.base(), off_launched_time, off_completed_time,
+                         off_source_device, off_mapped_device, off_launch_priority,
+                         off_incomplete, off_state, off_flags);
+      std::memset(mapped_device, 0xFF, sizeof(int32_t) * static_cast<std::size_t>(n));
+    }
+
+  private:
+    void reset_moved_from() noexcept {
+      state = nullptr;
+      flags = nullptr;
+      incomplete = nullptr;
+      source_device = nullptr;
+      mapped_device = nullptr;
+      launch_priority = nullptr;
+      launched_time = nullptr;
+      completed_time = nullptr;
+    }
+
+    void seat_pointers(int32_t n) {
+      SoALayout layout;
+      layout.begin();
+      auto off_launched_time   = layout.add_field<timecount_t>(n);
+      auto off_completed_time  = layout.add_field<timecount_t>(n);
+      auto off_source_device   = layout.add_field<int32_t>(n);
+      auto off_mapped_device   = layout.add_field<int32_t>(n);
+      auto off_launch_priority = layout.add_field<int32_t>(n);
+      auto off_incomplete      = layout.add_field<int16_t>(n);
+      auto off_state           = layout.add_field<uint8_t>(n);
+      auto off_flags           = layout.add_field<uint8_t>(n);
+      seat_pointers_impl(buf_.base(), off_launched_time, off_completed_time,
+                         off_source_device, off_mapped_device, off_launch_priority,
+                         off_incomplete, off_state, off_flags);
+    }
+
+    void seat_pointers_impl(char *base,
+                            std::size_t off_launched_time, std::size_t off_completed_time,
+                            std::size_t off_source_device, std::size_t off_mapped_device,
+                            std::size_t off_launch_priority, std::size_t off_incomplete,
+                            std::size_t off_state, std::size_t off_flags) {
+      launched_time  = soa_ptr_at<timecount_t>(base, off_launched_time);
+      completed_time = soa_ptr_at<timecount_t>(base, off_completed_time);
+      source_device  = soa_ptr_at<int32_t>(base, off_source_device);
+      mapped_device  = soa_ptr_at<int32_t>(base, off_mapped_device);
+      launch_priority = soa_ptr_at<int32_t>(base, off_launch_priority);
+      incomplete     = soa_ptr_at<int16_t>(base, off_incomplete);
+      state          = soa_ptr_at<uint8_t>(base, off_state);
+      flags          = soa_ptr_at<uint8_t>(base, off_flags);
     }
   };
 
   struct EvictionRuntimeSoA {
-    std::vector<uint8_t> state;
-    std::vector<uint8_t> flags;
-    std::vector<int32_t> data_id;
-    std::vector<int32_t> evicting_on;
-    std::vector<int32_t> compute_task;
-    std::vector<int32_t> source_device;
-    std::vector<int32_t> launch_priority;
-    std::vector<timecount_t> launched_time;
-    std::vector<timecount_t> completed_time;
-#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
-    mutable std::vector<std::string> names;
-#endif
+    uint8_t * __restrict__ state{nullptr};
+    uint8_t * __restrict__ flags{nullptr};
+    int32_t * __restrict__ data_id{nullptr};
+    int32_t * __restrict__ evicting_on{nullptr};
+    int32_t * __restrict__ compute_task{nullptr};
+    int32_t * __restrict__ source_device{nullptr};
+    int32_t * __restrict__ launch_priority{nullptr};
+    timecount_t * __restrict__ launched_time{nullptr};
+    timecount_t * __restrict__ completed_time{nullptr};
+
+    SoABuffer buf_;
+    int32_t size_{0};
+    int32_t capacity_{0};
+
+    EvictionRuntimeSoA() = default;
+
+    // Default copy is fine: deep_copy buf + copy size/cap + reseat.
+    EvictionRuntimeSoA(const EvictionRuntimeSoA &other)
+        : size_(other.size_), capacity_(other.capacity_) {
+      if (capacity_ > 0) {
+        buf_ = other.buf_.deep_copy();
+        seat_pointers(capacity_);
+      }
+    }
+
+    EvictionRuntimeSoA &operator=(const EvictionRuntimeSoA &other) {
+      if (this != &other) {
+        EvictionRuntimeSoA tmp(other);
+        swap(*this, tmp);
+      }
+      return *this;
+    }
+
+    EvictionRuntimeSoA(EvictionRuntimeSoA &&other) noexcept
+        : state(other.state), flags(other.flags), data_id(other.data_id),
+          evicting_on(other.evicting_on), compute_task(other.compute_task),
+          source_device(other.source_device), launch_priority(other.launch_priority),
+          launched_time(other.launched_time), completed_time(other.completed_time),
+          buf_(std::move(other.buf_)), size_(other.size_), capacity_(other.capacity_) {
+      other.reset_moved_from();
+    }
+
+    EvictionRuntimeSoA &operator=(EvictionRuntimeSoA &&other) noexcept {
+      if (this != &other) {
+        state = other.state;
+        flags = other.flags;
+        data_id = other.data_id;
+        evicting_on = other.evicting_on;
+        compute_task = other.compute_task;
+        source_device = other.source_device;
+        launch_priority = other.launch_priority;
+        launched_time = other.launched_time;
+        completed_time = other.completed_time;
+        buf_ = std::move(other.buf_);
+        size_ = other.size_;
+        capacity_ = other.capacity_;
+        other.reset_moved_from();
+      }
+      return *this;
+    }
+
+    friend void swap(EvictionRuntimeSoA &a, EvictionRuntimeSoA &b) noexcept {
+      using std::swap;
+      swap(a.buf_, b.buf_);
+      swap(a.size_, b.size_);
+      swap(a.capacity_, b.capacity_);
+      swap(a.state, b.state);
+      swap(a.flags, b.flags);
+      swap(a.data_id, b.data_id);
+      swap(a.evicting_on, b.evicting_on);
+      swap(a.compute_task, b.compute_task);
+      swap(a.source_device, b.source_device);
+      swap(a.launch_priority, b.launch_priority);
+      swap(a.launched_time, b.launched_time);
+      swap(a.completed_time, b.completed_time);
+    }
+
+    [[nodiscard]] int32_t size() const { return size_; }
+    [[nodiscard]] bool empty() const { return size_ == 0; }
 
     void reserve(std::size_t n) {
-      state.reserve(n);
-      flags.reserve(n);
-      data_id.reserve(n);
-      evicting_on.reserve(n);
-      compute_task.reserve(n);
-      source_device.reserve(n);
-      launch_priority.reserve(n);
-      launched_time.reserve(n);
-      completed_time.reserve(n);
-#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
-      names.reserve(n);
-#endif
+      auto new_cap = static_cast<int32_t>(n);
+      if (new_cap <= capacity_) return;
+      grow_to(new_cap);
+    }
+
+    // Append a new slot, returns its index.
+    int32_t push_back_slot() {
+      if (size_ == capacity_) {
+        int32_t new_cap = capacity_ == 0 ? 64 : capacity_ * 2;
+        grow_to(new_cap);
+      }
+      return size_++;
+    }
+
+  private:
+    void reset_moved_from() noexcept {
+      state = nullptr;
+      flags = nullptr;
+      data_id = nullptr;
+      evicting_on = nullptr;
+      compute_task = nullptr;
+      source_device = nullptr;
+      launch_priority = nullptr;
+      launched_time = nullptr;
+      completed_time = nullptr;
+      size_ = 0;
+      capacity_ = 0;
+    }
+
+    static std::size_t compute_layout(int32_t cap, SoALayout &layout) {
+      layout.begin();
+      layout.add_field<timecount_t>(cap);  // launched_time
+      layout.add_field<timecount_t>(cap);  // completed_time
+      layout.add_field<int32_t>(cap);      // data_id
+      layout.add_field<int32_t>(cap);      // evicting_on
+      layout.add_field<int32_t>(cap);      // compute_task
+      layout.add_field<int32_t>(cap);      // source_device
+      layout.add_field<int32_t>(cap);      // launch_priority
+      layout.add_field<uint8_t>(cap);      // state
+      layout.add_field<uint8_t>(cap);      // flags
+      return layout.total();
+    }
+
+    void seat_pointers(int32_t cap) {
+      SoALayout layout;
+      layout.begin();
+      char *base = buf_.base();
+      launched_time  = soa_ptr_at<timecount_t>(base, layout.add_field<timecount_t>(cap));
+      completed_time = soa_ptr_at<timecount_t>(base, layout.add_field<timecount_t>(cap));
+      data_id        = soa_ptr_at<int32_t>(base, layout.add_field<int32_t>(cap));
+      evicting_on    = soa_ptr_at<int32_t>(base, layout.add_field<int32_t>(cap));
+      compute_task   = soa_ptr_at<int32_t>(base, layout.add_field<int32_t>(cap));
+      source_device  = soa_ptr_at<int32_t>(base, layout.add_field<int32_t>(cap));
+      launch_priority = soa_ptr_at<int32_t>(base, layout.add_field<int32_t>(cap));
+      state          = soa_ptr_at<uint8_t>(base, layout.add_field<uint8_t>(cap));
+      flags          = soa_ptr_at<uint8_t>(base, layout.add_field<uint8_t>(cap));
+    }
+
+    void grow_to(int32_t new_cap) {
+      SoALayout new_layout;
+      auto new_bytes = compute_layout(new_cap, new_layout);
+      auto new_buf = SoABuffer::allocate(new_bytes);
+
+      if (size_ > 0 && buf_.data) {
+        // Copy existing data field-by-field (different strides).
+        SoALayout old_layout;
+        old_layout.begin();
+        SoALayout dst_layout;
+        dst_layout.begin();
+        char *old_base = buf_.base();
+        char *new_base = new_buf.base();
+
+        auto copy_field = [&](std::size_t elem_size, std::size_t elem_align) {
+          auto old_off = soa_align_up(old_layout.offset, elem_align);
+          auto new_off = soa_align_up(dst_layout.offset, elem_align);
+          std::memcpy(new_base + new_off, old_base + old_off,
+                      elem_size * static_cast<std::size_t>(size_));
+          old_layout.offset = old_off + elem_size * static_cast<std::size_t>(capacity_);
+          dst_layout.offset = new_off + elem_size * static_cast<std::size_t>(new_cap);
+        };
+
+        copy_field(sizeof(timecount_t), alignof(timecount_t)); // launched_time
+        copy_field(sizeof(timecount_t), alignof(timecount_t)); // completed_time
+        copy_field(sizeof(int32_t), alignof(int32_t));         // data_id
+        copy_field(sizeof(int32_t), alignof(int32_t));         // evicting_on
+        copy_field(sizeof(int32_t), alignof(int32_t));         // compute_task
+        copy_field(sizeof(int32_t), alignof(int32_t));         // source_device
+        copy_field(sizeof(int32_t), alignof(int32_t));         // launch_priority
+        copy_field(sizeof(uint8_t), alignof(uint8_t));         // state
+        copy_field(sizeof(uint8_t), alignof(uint8_t));         // flags
+      }
+
+      buf_ = std::move(new_buf);
+      capacity_ = new_cap;
+      seat_pointers(new_cap);
     }
   };
 
@@ -1866,29 +2233,43 @@ public:
     n_data = static_cast<int32_t>(static_info.get_n_data_tasks());
     resize_compute(n_compute);
     resize_data(n_data);
-    for (int32_t i = 0; i < n_compute; ++i) {
-      initialize_compute_runtime(i, static_info);
+    {
+      auto * __restrict__ c_state = compute.state;
+      auto * __restrict__ c_status = compute.status;
+      auto * __restrict__ c_unmapped = compute.unmapped;
+      auto * __restrict__ c_unreserved = compute.unreserved;
+      auto * __restrict__ c_incomplete = compute.incomplete;
+      const int32_t * __restrict__ dep_offsets =
+          static_info.compute_task_dependency_offsets_data();
+      const int32_t * __restrict__ data_dep_offsets =
+          static_info.compute_task_data_dependency_offsets_data();
+      for (int32_t i = 0; i < n_compute; ++i) {
+        c_state[i] = CumulativeState::SPAWNED;
+        const auto n_deps = static_cast<int16_t>(dep_offsets[i + 1] - dep_offsets[i]);
+        const auto n_data_deps = static_cast<int16_t>(data_dep_offsets[i + 1] - data_dep_offsets[i]);
+        c_unmapped[i] = n_deps;
+        c_unreserved[i] = n_deps;
+        c_incomplete[i] = static_cast<int16_t>(n_deps + n_data_deps);
+        c_status[i] = (n_deps == 0) ? StatusBits::MAPPABLE : 0;
+      }
     }
-    for (int32_t i = 0; i < n_data; ++i) {
-      initialize_data_runtime(i, static_info);
+    {
+      auto * __restrict__ d_state = data.state;
+      auto * __restrict__ d_incomplete = data.incomplete;
+      const int32_t * __restrict__ dep_offsets = static_info.data_task_dependency_offsets_data();
+      for (int32_t i = 0; i < n_data; ++i) {
+        d_state[i] = CumulativeState::SPAWNED;
+        d_incomplete[i] = static_cast<int16_t>(dep_offsets[i + 1] - dep_offsets[i]);
+      }
     }
   }
 
-  RuntimeTaskInfo(const RuntimeTaskInfo &other) {
-    {
-      ZoneScopedN("Copy ComputeTask SoA");
-      compute = other.compute;
-    }
-    {
-      ZoneScopedN("Copy DataTask SoA");
-      data = other.data;
-    }
-    {
-      ZoneScopedN("Copy EvictionTask SoA");
-      eviction = other.eviction;
-    }
-    n_compute = other.n_compute;
-    n_data = other.n_data;
+  RuntimeTaskInfo(const RuntimeTaskInfo &other)
+      : compute(other.compute, other.n_compute),
+        data(other.data, other.n_data),
+        eviction(other.eviction),
+        n_compute(other.n_compute),
+        n_data(other.n_data) {
   }
 
   void resize_compute(int32_t n) {
@@ -1905,10 +2286,12 @@ public:
 
   void initialize_compute_runtime(int32_t id, const StaticTaskInfo &static_info) {
     compute.state[id] = CumulativeState::SPAWNED;
-    const auto n_deps =
-        static_cast<int16_t>(static_info.get_compute_task_dependency_count(id));
-    const auto n_data_deps =
-        static_cast<int16_t>(static_info.get_compute_task_data_dependency_count(id));
+    const auto idx = static_cast<std::size_t>(id);
+    const int32_t * __restrict__ dep_offsets = static_info.compute_task_dependency_offsets_data();
+    const int32_t * __restrict__ data_dep_offsets =
+        static_info.compute_task_data_dependency_offsets_data();
+    const auto n_deps = static_cast<int16_t>(dep_offsets[idx + 1] - dep_offsets[idx]);
+    const auto n_data_deps = static_cast<int16_t>(data_dep_offsets[idx + 1] - data_dep_offsets[idx]);
     compute.unmapped[id] = n_deps;
     compute.unreserved[id] = n_deps;
     compute.incomplete[id] = n_deps + n_data_deps;
@@ -1917,26 +2300,24 @@ public:
 
   void initialize_data_runtime(int32_t id, const StaticTaskInfo &static_info) {
     data.state[id] = CumulativeState::SPAWNED;
-    data.incomplete[id] =
-        static_cast<int16_t>(static_info.get_data_task_dependency_count(id));
+    const auto idx = static_cast<std::size_t>(id);
+    const int32_t * __restrict__ dep_offsets = static_info.data_task_dependency_offsets_data();
+    data.incomplete[id] = static_cast<int16_t>(dep_offsets[idx + 1] - dep_offsets[idx]);
   }
 
-  int32_t add_eviction_task(int32_t compute_task_id, int32_t data_id,
+  int32_t add_eviction_task(int32_t compute_task_id, int32_t data_id_val,
                             int32_t evicting_on_device_id) {
-    taskid_t id = static_cast<taskid_t>(eviction.state.size());
-    eviction.state.push_back(CumulativeState::RESERVED);
-    eviction.flags.push_back(0);
-    eviction.data_id.push_back(data_id);
-    eviction.evicting_on.push_back(evicting_on_device_id);
-    eviction.compute_task.push_back(compute_task_id);
-    eviction.source_device.push_back(0);
-    eviction.launch_priority.push_back(0);
-    eviction.launched_time.push_back(0);
-    eviction.completed_time.push_back(0);
-#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
-    eviction.names.emplace_back();
-#endif
-    return id;
+    auto idx = eviction.push_back_slot();
+    eviction.state[idx] = CumulativeState::RESERVED;
+    eviction.flags[idx] = 0;
+    eviction.data_id[idx] = data_id_val;
+    eviction.evicting_on[idx] = evicting_on_device_id;
+    eviction.compute_task[idx] = compute_task_id;
+    eviction.source_device[idx] = 0;
+    eviction.launch_priority[idx] = 0;
+    eviction.launched_time[idx] = 0;
+    eviction.completed_time[idx] = 0;
+    return idx;
   }
 
   [[nodiscard]] bool is_compute_mapped(taskid_t id) const {
@@ -1982,25 +2363,31 @@ public:
     return (eviction.flags[id] & 0x01) != 0;
   }
 
-  [[nodiscard]] const uint8_t *compute_state_data() const { return compute.state.data(); }
-  [[nodiscard]] const uint8_t *compute_status_data() const { return compute.status.data(); }
+  [[nodiscard]] const uint8_t *compute_state_data() const { return compute.state; }
+  [[nodiscard]] const uint8_t *compute_status_data() const { return compute.status; }
   [[nodiscard]] const int32_t *compute_mapped_device_data() const {
-    return compute.mapped_device.data();
+    return compute.mapped_device;
   }
-  [[nodiscard]] uint8_t *compute_state_data() { return compute.state.data(); }
-  [[nodiscard]] uint8_t *compute_status_data() { return compute.status.data(); }
-  [[nodiscard]] int32_t *compute_mapped_device_data() { return compute.mapped_device.data(); }
+  [[nodiscard]] uint8_t *compute_state_data() { return compute.state; }
+  [[nodiscard]] uint8_t *compute_status_data() { return compute.status; }
+  [[nodiscard]] int32_t *compute_mapped_device_data() { return compute.mapped_device; }
+  [[nodiscard]] const uint8_t * __restrict__ compute_state_restrict_data() const {
+    return compute.state;
+  }
+  [[nodiscard]] const int32_t * __restrict__ compute_mapped_device_restrict_data() const {
+    return compute.mapped_device;
+  }
 
   [[nodiscard]] int32_t get_n_compute_tasks() const { return n_compute; }
   [[nodiscard]] int32_t get_n_data_tasks() const { return n_data; }
   [[nodiscard]] int32_t get_n_eviction_tasks() const {
-    return static_cast<int32_t>(eviction.state.size());
+    return eviction.size();
   }
   [[nodiscard]] int32_t get_n_tasks() const {
     return get_n_compute_tasks() + get_n_data_tasks() + get_n_eviction_tasks();
   }
   [[nodiscard]] bool empty() const {
-    return n_compute == 0 && n_data == 0 && eviction.state.empty();
+    return n_compute == 0 && n_data == 0 && eviction.empty();
   }
 
   [[nodiscard]] TaskState get_compute_task_state(taskid_t id) const {
@@ -2059,30 +2446,19 @@ public:
 
   [[nodiscard]] std::string get_eviction_task_name(taskid_t id) const {
     const auto idx = static_cast<std::size_t>(id);
-#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
-    auto &name = eviction.names[idx];
-    if (!name.empty()) {
-      return name;
-    }
-#endif
     constexpr std::size_t kPrefixLen = 13; // "EvictionTask_"
     constexpr std::size_t kSepLen = 2;     // two underscores
     constexpr std::size_t kMaxIntChars =
         static_cast<std::size_t>(std::numeric_limits<int32_t>::digits10) + 2;
-    std::string generated;
-    generated.reserve(kPrefixLen + kSepLen + (3 * kMaxIntChars));
-    generated.append("EvictionTask_");
-    append_decimal(generated, eviction.compute_task[idx]);
-    generated.push_back('_');
-    append_decimal(generated, eviction.data_id[idx]);
-    generated.push_back('_');
-    append_decimal(generated, eviction.evicting_on[idx]);
-#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
-    name = generated;
+    std::string name;
+    name.reserve(kPrefixLen + kSepLen + (3 * kMaxIntChars));
+    name.append("EvictionTask_");
+    append_decimal(name, eviction.compute_task[idx]);
+    name.push_back('_');
+    append_decimal(name, eviction.data_id[idx]);
+    name.push_back('_');
+    append_decimal(name, eviction.evicting_on[idx]);
     return name;
-#else
-    return generated;
-#endif
   }
   [[nodiscard]] int32_t get_eviction_task_evicting_on(taskid_t id) const {
     return eviction.evicting_on[id];
@@ -2384,15 +2760,15 @@ namespace task_query {
 namespace detail {
 
 [[nodiscard]] inline auto is_exact_mapped(const RuntimeTaskInfo& runtime_info) {
-  const uint8_t* states = runtime_info.compute_state_data();
+  const uint8_t * __restrict__ states = runtime_info.compute_state_restrict_data();
   return [states](taskid_t tid) -> bool {
     return (states[tid] & CumulativeState::COMPLETED) == CumulativeState::MAPPED;
   };
 }
 
 [[nodiscard]] inline auto is_exact_mapped_on_device(const RuntimeTaskInfo& runtime_info, devid_t device_id) {
-  const uint8_t* states = runtime_info.compute_state_data();
-  const int32_t* mapped_devices = runtime_info.compute_mapped_device_data();
+  const uint8_t * __restrict__ states = runtime_info.compute_state_restrict_data();
+  const int32_t * __restrict__ mapped_devices = runtime_info.compute_mapped_device_restrict_data();
   return [states, mapped_devices, device_id](taskid_t tid) -> bool {
     return (states[tid] & CumulativeState::COMPLETED) == CumulativeState::MAPPED &&
            mapped_devices[tid] == device_id;
@@ -2407,12 +2783,13 @@ static inline taskid_t filter_tasks(std::span<const taskid_t> tasks, TaskIDList&
   }
   
   out.resize(tasks.size());
+  taskid_t * __restrict__ out_ptr = out.data();
   taskid_t w = 0;
-  const taskid_t *it = tasks.data();
+  const taskid_t * __restrict__ it = tasks.data();
   const taskid_t *end = it + tasks.size();
   for (; it != end; ++it) {
     const taskid_t tid = *it;
-    out[w] = tid;
+    out_ptr[static_cast<std::size_t>(w)] = tid;
     w += static_cast<taskid_t>(pred(tid));
   }
   
@@ -2423,7 +2800,7 @@ static inline taskid_t filter_tasks(std::span<const taskid_t> tasks, TaskIDList&
 template <typename Predicate>
 static inline taskid_t count_tasks(std::span<const taskid_t> tasks, Predicate&& pred) {
   taskid_t count = 0;
-  const taskid_t *it = tasks.data();
+  const taskid_t * __restrict__ it = tasks.data();
   const taskid_t *end = it + tasks.size();
   for (; it != end; ++it) {
     const taskid_t tid = *it;
@@ -2434,7 +2811,7 @@ static inline taskid_t count_tasks(std::span<const taskid_t> tasks, Predicate&& 
 
 template <typename Predicate>
 [[nodiscard]] static inline bool any_tasks(std::span<const taskid_t> tasks, Predicate&& pred) {
-  const taskid_t *it = tasks.data();
+  const taskid_t * __restrict__ it = tasks.data();
   const taskid_t *end = it + tasks.size();
   for (; it != end; ++it) {
     const taskid_t tid = *it;

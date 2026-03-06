@@ -99,31 +99,126 @@ template <typename T> struct ResourceEventArray {
 
 class DeviceResources {
 protected:
+  SoABuffer buf_;
+  std::size_t n_{0};
+
+  // __restrict__ tells the compiler none of these alias each other,
+  // enabling reordering/CSE across same-type fields (vcu/vcu_peak and mem/mem_peak/mem_max
+  // are all int64_t* so aliasing analysis would otherwise be conservative).
+  void seat_pointers_impl(char *base,
+                          std::size_t off_vcu, std::size_t off_mem,
+                          std::size_t off_vcu_peak, std::size_t off_mem_peak,
+                          std::size_t off_mem_max) noexcept {
+    vcu      = soa_ptr_at<vcu_t, soa_hot_alignment_v<vcu_t>>(base, off_vcu);
+    mem      = soa_ptr_at<mem_t, soa_hot_alignment_v<mem_t>>(base, off_mem);
+    vcu_peak = soa_ptr_at<vcu_t, soa_hot_alignment_v<vcu_t>>(base, off_vcu_peak);
+    mem_peak = soa_ptr_at<mem_t, soa_hot_alignment_v<mem_t>>(base, off_mem_peak);
+    mem_max  = soa_ptr_at<mem_t, soa_hot_alignment_v<mem_t>>(base, off_mem_max);
+  }
+
+  void seat_pointers(std::size_t n) {
+    SoALayout layout;
+    layout.begin();
+    auto off_vcu      = layout.add_hot_field<vcu_t>(n);
+    auto off_mem      = layout.add_hot_field<mem_t>(n);
+    auto off_vcu_peak = layout.add_hot_field<vcu_t>(n);
+    auto off_mem_peak = layout.add_hot_field<mem_t>(n);
+    auto off_mem_max  = layout.add_hot_field<mem_t>(n);
+    seat_pointers_impl(buf_.base(), off_vcu, off_mem, off_vcu_peak, off_mem_peak, off_mem_max);
+  }
+
   void resize(std::size_t n) {
-    vcu.resize(n, 0);
-    mem.resize(n, 0);
-    vcu_peak.resize(n, 0);
-    mem_peak.resize(n, 0);
+    n_ = n;
+    SoALayout layout;
+    layout.begin();
+    auto off_vcu      = layout.add_hot_field<vcu_t>(n);
+    auto off_mem      = layout.add_hot_field<mem_t>(n);
+    auto off_vcu_peak = layout.add_hot_field<vcu_t>(n);
+    auto off_mem_peak = layout.add_hot_field<mem_t>(n);
+    auto off_mem_max  = layout.add_hot_field<mem_t>(n);
+    buf_ = SoABuffer::allocate(layout.total()); // zero-fills vcu, mem, vcu_peak, mem_peak
+    seat_pointers_impl(buf_.base(), off_vcu, off_mem, off_vcu_peak, off_mem_peak, off_mem_max);
+    std::fill(mem_max, mem_max + n, MAX_MEM);
     vcu_tracker.resize(n);
     mem_tracker.resize(n);
   }
 
+  void reset_moved_from() noexcept {
+    vcu = nullptr;
+    mem = nullptr;
+    vcu_peak = nullptr;
+    mem_peak = nullptr;
+    mem_max = nullptr;
+    n_ = 0;
+    record = false;
+  }
+
 public:
-  std::vector<vcu_t> vcu;
-  std::vector<mem_t> mem;
-  std::vector<vcu_t> vcu_peak;
-  std::vector<mem_t> mem_peak;
-  std::vector<mem_t> mem_max;
+  vcu_t * __restrict__ vcu{nullptr};
+  mem_t * __restrict__ mem{nullptr};
+  vcu_t * __restrict__ vcu_peak{nullptr};
+  mem_t * __restrict__ mem_peak{nullptr};
+  mem_t * __restrict__ mem_max{nullptr};
 
   std::vector<ResourceEventArray<vcu_t>> vcu_tracker;
   std::vector<ResourceEventArray<mem_t>> mem_tracker;
   bool record{false};
 
-  DeviceResources() {};
+  DeviceResources() = default;
 
-  DeviceResources(devid_t n)
-      : vcu(n, 0), mem(n, 0), vcu_peak(n, 0), mem_peak(n, 0), mem_max(n, MAX_MEM),
-        vcu_tracker(n), mem_tracker(n) {
+  DeviceResources(devid_t n) {
+    resize(static_cast<std::size_t>(n));
+  }
+
+  // Deep copy: single memcpy + pointer fixup.
+  DeviceResources(const DeviceResources &other)
+      : vcu_tracker(other.vcu_tracker), mem_tracker(other.mem_tracker),
+        record(other.record), n_(other.n_) {
+    if (n_ > 0) {
+      buf_ = other.buf_.deep_copy();
+      seat_pointers(n_);
+    }
+  }
+
+  DeviceResources &operator=(const DeviceResources &other) {
+    if (this == &other) return *this;
+    DeviceResources tmp(other);
+    std::swap(buf_, tmp.buf_);
+    std::swap(vcu, tmp.vcu);
+    std::swap(mem, tmp.mem);
+    std::swap(vcu_peak, tmp.vcu_peak);
+    std::swap(mem_peak, tmp.mem_peak);
+    std::swap(mem_max, tmp.mem_max);
+    std::swap(vcu_tracker, tmp.vcu_tracker);
+    std::swap(mem_tracker, tmp.mem_tracker);
+    std::swap(record, tmp.record);
+    std::swap(n_, tmp.n_);
+    return *this;
+  }
+
+  DeviceResources(DeviceResources &&other) noexcept
+      : buf_(std::move(other.buf_)), n_(other.n_), vcu(other.vcu), mem(other.mem),
+        vcu_peak(other.vcu_peak), mem_peak(other.mem_peak), mem_max(other.mem_max),
+        vcu_tracker(std::move(other.vcu_tracker)), mem_tracker(std::move(other.mem_tracker)),
+        record(other.record) {
+    other.reset_moved_from();
+  }
+
+  DeviceResources &operator=(DeviceResources &&other) noexcept {
+    if (this != &other) {
+      buf_ = std::move(other.buf_);
+      n_ = other.n_;
+      vcu = other.vcu;
+      mem = other.mem;
+      vcu_peak = other.vcu_peak;
+      mem_peak = other.mem_peak;
+      mem_max = other.mem_max;
+      vcu_tracker = std::move(other.vcu_tracker);
+      mem_tracker = std::move(other.mem_tracker);
+      record = other.record;
+      other.reset_moved_from();
+    }
+    return *this;
   }
 
   void start_record() {
@@ -140,22 +235,8 @@ public:
     }
   }
 
-  DeviceResources(const DeviceResources &other) {
-    vcu = other.vcu;
-    mem = other.mem;
-    vcu_peak = other.vcu_peak;
-    mem_peak = other.mem_peak;
-    vcu_tracker = other.vcu_tracker;
-    mem_tracker = other.mem_tracker;
-    mem_max = other.mem_max;
-    record = other.record;
-    T4F_INVARIANT(vcu.size() == mem.size());
-  }
-
-  DeviceResources &operator=(const DeviceResources &other) = default;
-
   void set_max_mem(devid_t id, mem_t m) {
-    T4F_INVARIANT(id < mem_max.size());
+    T4F_INVARIANT(id < n_);
     mem_max[id] = m;
   }
 
@@ -175,16 +256,16 @@ public:
   }
 
   [[nodiscard]] vcu_t get_vcu(devid_t id) const {
-    T4F_INVARIANT(id < vcu.size());
+    T4F_INVARIANT(id < n_);
     return vcu[id];
   }
   [[nodiscard]] mem_t get_mem(devid_t id) const {
-    T4F_INVARIANT(id < mem.size());
+    T4F_INVARIANT(id < n_);
     return mem[id];
   }
 
   vcu_t add_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
-    T4F_INVARIANT(id < vcu.size());
+    T4F_INVARIANT(id < n_);
     auto &v = vcu[id];
     v += vcu_;
     vcu_peak[id] = std::max(vcu_peak[id], v);
@@ -194,7 +275,7 @@ public:
     return v;
   }
   mem_t add_mem(devid_t id, mem_t m, timecount_t current_time) {
-    T4F_INVARIANT(id < mem.size());
+    T4F_INVARIANT(id < n_);
     auto &v = mem[id];
     v += m;
     mem_peak[id] = std::max(mem_peak[id], v);
@@ -205,7 +286,7 @@ public:
   }
 
   vcu_t remove_vcu(devid_t id, vcu_t vcu_, timecount_t current_time) {
-    T4F_INVARIANT(id < vcu.size());
+    T4F_INVARIANT(id < n_);
     T4F_INVARIANT(vcu[id] >= vcu_);
     auto &v = vcu[id];
     v -= vcu_;
@@ -215,7 +296,7 @@ public:
     return v;
   }
   mem_t remove_mem(devid_t id, mem_t m, timecount_t current_time) {
-    T4F_INVARIANT(id < mem.size());
+    T4F_INVARIANT(id < n_);
     T4F_INVARIANT(mem[id] >= m);
     auto &v = mem[id];
     v -= m;
@@ -262,7 +343,7 @@ public:
   }
 
   [[nodiscard]] mem_t get_mem_peak(devid_t id) const {
-    T4F_INVARIANT(id < mem_peak.size());
+    T4F_INVARIANT(id < n_);
     return mem_peak[id];
   }
 

@@ -63,6 +63,7 @@ public:
   Topology(devid_t num_devices)
       : latency(num_devices * num_devices), bandwidths(num_devices * num_devices),
         links(num_devices * num_devices), num_devices(num_devices) {
+    T4F_INVARIANT(num_devices >= 0 && static_cast<std::size_t>(num_devices) <= kMaxDevices);
 
     for (devid_t i = 0; i < num_devices; ++i) {
       for (devid_t j = 0; j < num_devices; ++j) {
@@ -132,27 +133,31 @@ class CommunicationManager {
   std::vector<DeviceUsage> device_usage;
   std::vector<LinkUsage> link_usage; // (src, dst) links
   std::vector<double> bandwidth_reciprocals;
-  std::vector<bool> is_host;
+  std::vector<uint8_t> is_host;
   std::vector<std::vector<devid_t>> preferred_sources_by_destination;
   std::vector<uint8_t> source_rank_by_destination_source;
 
   void precompute_reciprocals(const Topology &topology) {
     bandwidth_reciprocals.resize(num_devices * num_devices);
     const auto &bandwidth = topology.bandwidths;
-    for (size_t i = 0; i < bandwidth.size(); ++i) {
-      bandwidth_reciprocals[i] = 1.0 / static_cast<double>(bandwidth[i]);
+    const std::size_t n = bandwidth.size();
+    const auto * __restrict__ bw = bandwidth.data();
+    auto * __restrict__ recip = bandwidth_reciprocals.data();
+    for (std::size_t i = 0; i < n; ++i) {
+      recip[i] = 1.0 / static_cast<double>(bw[i]);
     }
   }
 
   void precompute_max_copies(const Devices &devices) {
     device_usage.resize(num_devices);
+    is_host.resize(num_devices, 0);
     for (devid_t i = 0; i < num_devices; ++i) {
       const auto &device = devices.get_device(i);
       device_usage[i].h2d_max = device.get_h2d_max_copy();
       device_usage[i].d2d_max = device.get_d2d_max_copy();
       SPDLOG_DEBUG("Precomputed max copies for device {}: h2d={}, d2d={}", i,
                    device_usage[i].h2d_max, device_usage[i].d2d_max);
-      is_host.push_back(device.arch == DeviceType::CPU);
+      is_host[i] = (device.arch == DeviceType::CPU) ? 1 : 0;
     }
   }
 
@@ -200,6 +205,7 @@ public:
   CommunicationManager(const Topology &topology_, const Devices &devices_)
       : num_devices(devices_.size()), device_usage(num_devices),
         link_usage(num_devices * num_devices) {
+    T4F_INVARIANT(num_devices >= 0 && static_cast<std::size_t>(num_devices) <= kMaxDevices);
     precompute_reciprocals(topology_);
     precompute_max_copies(devices_);
     precompute_link_max_copies(topology_);
@@ -211,11 +217,11 @@ public:
   CommunicationManager &operator=(const CommunicationManager &c) = default;
 
   inline bool is_h2d(devid_t src, devid_t dst) const {
-    return (is_host[src] && !is_host[dst]) || (!is_host[src] && is_host[dst]);
+    return (is_host[src] != 0 && is_host[dst] == 0) || (is_host[src] == 0 && is_host[dst] != 0);
   }
 
   inline bool is_d2d(devid_t src, devid_t dst) const {
-    return !is_host[src] && !is_host[dst];
+    return is_host[src] == 0 && is_host[dst] == 0;
   }
 
   inline bool is_h2h(devid_t src, devid_t dst) const {
@@ -339,7 +345,7 @@ public:
                             const devicemask_t possible_source_flags) const {
     MONUnusedParameter(topology);
 
-    const devicemask_t destination_mask = (1 << dst);
+    const devicemask_t destination_mask = device_bit(dst);
 
     // Early return for local data
     if (possible_source_flags & destination_mask) {
@@ -357,8 +363,9 @@ public:
     auto best_rank = std::numeric_limits<uint8_t>::max();
 
     while (candidates) {
-      const auto src = static_cast<devid_t>(__builtin_ctz(static_cast<unsigned>(candidates)));
-      candidates &= static_cast<devicemask_t>(candidates - 1);
+      const auto candidate_bits = static_cast<devicemask_unsigned_t>(candidates);
+      const auto src = static_cast<devid_t>(std::countr_zero(candidate_bits));
+      candidates = static_cast<devicemask_t>(candidate_bits & (candidate_bits - 1));
 
       if (src >= num_devices) {
         continue;
@@ -386,7 +393,7 @@ public:
                   const devicemask_t possible_source_flags) const {
     MONUnusedParameter(topology);
 
-    const devicemask_t destination_mask = (1 << dst);
+    const devicemask_t destination_mask = device_bit(dst);
     if (possible_source_flags & destination_mask) {
       return {true, dst}; // Local data is always available
     }
@@ -401,8 +408,9 @@ public:
     auto best_rank = std::numeric_limits<uint8_t>::max();
 
     while (candidates) {
-      const auto src = static_cast<devid_t>(__builtin_ctz(static_cast<unsigned>(candidates)));
-      candidates &= static_cast<devicemask_t>(candidates - 1);
+      const auto candidate_bits = static_cast<devicemask_unsigned_t>(candidates);
+      const auto src = static_cast<devid_t>(std::countr_zero(candidate_bits));
+      candidates = static_cast<devicemask_t>(candidate_bits & (candidate_bits - 1));
 
       if (src >= num_devices) {
         continue;

@@ -4,12 +4,12 @@
 #include <type_traits>
 
 devicemask_t StaticTaskInfo::get_supported_devices_mask(taskid_t compute_task_id) const {
-  using UMask = std::make_unsigned_t<devicemask_t>;
+  using UMask = devicemask_unsigned_t;
   // assumes exactly two DeviceType values:
   // CPU maps to device bit 0, and GPU maps to all remaining device bits.
   // If additional DeviceType values are added, this mapping must be revisited.
   constexpr UMask cpu_device_bit = UMask{1};
-  constexpr UMask gpu_device_bits = std::numeric_limits<UMask>::max() & ~cpu_device_bit;
+  constexpr UMask gpu_device_bits = static_cast<UMask>(kAllDeviceBits & ~cpu_device_bit);
 
   const auto arch_mask = get_supported_architecture_mask(compute_task_id);
   SPDLOG_DEBUG("Getting supported devices mask for task {} with arch mask: {}", compute_task_id,

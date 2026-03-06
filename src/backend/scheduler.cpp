@@ -455,10 +455,9 @@ bool SchedulerT<TransitionConditions>::launch_compute_task(taskid_t compute_task
                                      current_time); // This invalidates other devices
   T4F_INVARIANT(data_manager.check_valid_launched(write_data, device_id));
   for (const auto data_id : write_data) {
-    const auto launched_flags = static_cast<std::make_unsigned_t<devicemask_t>>(
+    const auto launched_flags = static_cast<devicemask_unsigned_t>(
         data_manager.get_launched_location_flags(data_id));
-    const auto writer_mask =
-        static_cast<std::make_unsigned_t<devicemask_t>>(static_cast<devicemask_t>(1) << device_id);
+    const auto writer_mask = static_cast<devicemask_unsigned_t>(device_bit(device_id));
     T4F_INVARIANT((launched_flags & writer_mask) != 0);
     T4F_INVARIANT((launched_flags & ~writer_mask) == 0 &&
                   "Write-invalidate must remove non-writer launched copies");
@@ -888,12 +887,13 @@ void SchedulerT<TransitionConditions>::evict(EvictorEvent &eviction_event, Event
 
 
             auto location_flags = data_manager.get_launched_location_flags(data_id);
-            devid_t n_sources = __builtin_popcount(location_flags);
+            devid_t n_sources = static_cast<devid_t>(
+                std::popcount(static_cast<devicemask_unsigned_t>(location_flags)));
             T4F_INVARIANT(n_sources > 0);
             T4F_INVARIANT(data_manager.check_valid_launched(data_id, device_id));
 
             if (n_sources == 1) {
-              T4F_INVARIANT((location_flags & (1 << device_id)) != 0);
+              T4F_INVARIANT((location_flags & device_bit(device_id)) != 0);
               eviction_count += 1;
               auto eviction_task_id =
                   task_runtime.add_eviction_task(compute_task_id, data_id, device_id);
