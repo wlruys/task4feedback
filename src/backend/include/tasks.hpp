@@ -324,6 +324,7 @@ public:
   int32_t total_unique_cached{0};
   int32_t total_data_task_dependencies_cached{0};
   int32_t total_data_task_dependents_cached{0};
+  bool sorted_data_task_caches_built_directly{false};
 
   taskid_t add_task(const std::string &name) {
     taskid_t id = static_cast<taskid_t>(tasks.size());
@@ -718,7 +719,11 @@ public:
     for (auto &task : tasks) {
       task.data_dependencies.clear();
       task.data_dependents.clear();
+      task.sorted_data_dependencies_cache.clear();
+      task.sorted_data_dependents_cache.clear();
+      task.sorted_data_dependencies_cache.reserve(task.sorted_read_cache.size());
     }
+    sorted_data_task_caches_built_directly = false;
 
     if (create_data_tasks) {
       data_tasks.clear();
@@ -750,13 +755,13 @@ public:
 
           if (writer_id != taskid_t(-1)) {
             data_task.dependency = writer_id;
-            tasks[writer_id].data_dependents.insert(data_task_id);
+            tasks[writer_id].sorted_data_dependents_cache.push_back(data_task_id);
           } else {
             data_task.dependency = taskid_t(-1);
           }
 
           data_task.dependent = task_id;
-          task.data_dependencies.insert(data_task_id);
+          task.sorted_data_dependencies_cache.push_back(data_task_id);
         }
       }
       const auto &sorted_write = task.sorted_write_cache;
@@ -770,6 +775,7 @@ public:
     }
 
     if (create_data_tasks) {
+      sorted_data_task_caches_built_directly = true;
       T4F_INVARIANT(next_data_task_id == static_cast<taskid_t>(total_read_count));
     }
   }
@@ -787,8 +793,10 @@ public:
     for (auto &task : tasks) {
       task.sorted_dependencies_cache = as_sorted_vector(task.dependencies);
       task.sorted_dependents_cache = as_sorted_vector(task.dependents);
-      task.sorted_data_dependencies_cache = as_sorted_vector(task.data_dependencies);
-      task.sorted_data_dependents_cache = as_sorted_vector(task.data_dependents);
+      if (!sorted_data_task_caches_built_directly) {
+        task.sorted_data_dependencies_cache = as_sorted_vector(task.data_dependencies);
+        task.sorted_data_dependents_cache = as_sorted_vector(task.data_dependents);
+      }
 
       total_compute_dependencies_cached += static_cast<int32_t>(task.sorted_dependencies_cache.size());
       total_compute_dependents_cached += static_cast<int32_t>(task.sorted_dependents_cache.size());
@@ -975,6 +983,8 @@ protected:
   int32_t grid_w{-1};
   bool morton_priority_enabled{false};
   bool random_priority_enabled{false};
+  bool shared_read_neighbors_ready_{false};
+  uint32_t shared_read_neighbors_build_count_{0};
 
   [[nodiscard]] static uint64_t task_data_key(taskid_t task_id, dataid_t data_id) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(task_id)) << 32U) |
@@ -1005,7 +1015,7 @@ public:
 
     read_usage.offsets.resize(1, 0);
     write_usage.offsets.resize(1, 0);
-    compute_task_shared_read_neighbors.offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    reset_shared_read_neighbors_topology_cache();
   }
 
   StaticTaskInfo(Graph &graph) {
@@ -1035,7 +1045,7 @@ public:
 
     read_usage.offsets.resize(1, 0);
     write_usage.offsets.resize(1, 0);
-    compute_task_shared_read_neighbors.offsets.resize(static_cast<std::size_t>(num_compute_tasks) + 1, 0);
+    reset_shared_read_neighbors_topology_cache();
 
     auto &tasks = graph.tasks;
     auto &data_tasks = graph.data_tasks;
@@ -1163,6 +1173,7 @@ public:
 
   void build_usage_caches_and_shared_read_topology() {
     const auto n_compute_tasks = get_n_compute_tasks();
+    reset_shared_read_neighbors_topology_cache();
 
     struct DataGenTask {
       dataid_t data_id;
@@ -1211,8 +1222,7 @@ public:
     read_usage_by_gen_tasks.reserve(read_triples.size());
     read_usage_by_gen_generations.clear();
     read_usage_by_gen_generations.reserve(read_triples.size());
-
-    std::vector<uint64_t> shared_pair_keys;
+    read_usage_row_by_data_id.clear();
 
     if (!read_triples.empty()) {
       std::sort(read_triples.begin(), read_triples.end(), by_data_task);
@@ -1235,18 +1245,6 @@ public:
           read_usage.elements.push_back(read_triples[i].task_id);
         }
         read_usage.offsets.push_back(static_cast<int32_t>(read_usage.elements.size()));
-
-        const auto n_readers = group_end - group_start;
-        if (n_readers >= 2) {
-          shared_pair_keys.reserve(shared_pair_keys.size() + ((n_readers * (n_readers - 1)) / 2));
-          for (std::size_t i = group_start; i < group_end; ++i) {
-            const auto lhs = static_cast<uint64_t>(static_cast<uint32_t>(read_triples[i].task_id));
-            for (std::size_t j = i + 1; j < group_end; ++j) {
-              const auto rhs = static_cast<uint64_t>(static_cast<uint32_t>(read_triples[j].task_id));
-              shared_pair_keys.push_back((lhs << 32U) | rhs);
-            }
-          }
-        }
         group_start = group_end;
       }
 
@@ -1266,6 +1264,7 @@ public:
     write_usage_by_gen_tasks.reserve(write_triples.size());
     write_usage_by_gen_generations.clear();
     write_usage_by_gen_generations.reserve(write_triples.size());
+    write_usage_row_by_data_id.clear();
 
     if (!write_triples.empty()) {
       std::sort(write_triples.begin(), write_triples.end(), by_data_task);
@@ -1298,45 +1297,6 @@ public:
       }
     }
 
-    compute_task_shared_read_neighbors.offsets.assign(static_cast<std::size_t>(n_compute_tasks) + 1, 0);
-    compute_task_shared_read_neighbors.elements.clear();
-
-    if (shared_pair_keys.empty()) {
-      return;
-    }
-
-    std::sort(shared_pair_keys.begin(), shared_pair_keys.end());
-    shared_pair_keys.erase(std::unique(shared_pair_keys.begin(), shared_pair_keys.end()),
-                           shared_pair_keys.end());
-
-    for (const auto key : shared_pair_keys) {
-      const auto lhs = static_cast<taskid_t>(key >> 32U);
-      const auto rhs = static_cast<taskid_t>(key & 0xFFFFFFFFULL);
-      compute_task_shared_read_neighbors.offsets[lhs + 1] += 1;
-      compute_task_shared_read_neighbors.offsets[rhs + 1] += 1;
-    }
-
-    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
-      compute_task_shared_read_neighbors.offsets[task_id + 1] += compute_task_shared_read_neighbors.offsets[task_id];
-    }
-
-    compute_task_shared_read_neighbors.elements.resize(
-        static_cast<std::size_t>(compute_task_shared_read_neighbors.offsets.back()), -1);
-    auto write_offsets_scatter = compute_task_shared_read_neighbors.offsets;
-
-    for (const auto key : shared_pair_keys) {
-      const auto lhs = static_cast<taskid_t>(key >> 32U);
-      const auto rhs = static_cast<taskid_t>(key & 0xFFFFFFFFULL);
-      compute_task_shared_read_neighbors.elements[write_offsets_scatter[lhs]++] = rhs;
-      compute_task_shared_read_neighbors.elements[write_offsets_scatter[rhs]++] = lhs;
-    }
-
-    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
-      const auto begin = static_cast<std::size_t>(compute_task_shared_read_neighbors.offsets[task_id]);
-      const auto end = static_cast<std::size_t>(compute_task_shared_read_neighbors.offsets[task_id + 1]);
-      std::sort(compute_task_shared_read_neighbors.elements.begin() + begin,
-                compute_task_shared_read_neighbors.elements.begin() + end);
-    }
   }
 
   void set_grid_shape(int32_t h, int32_t w) {
@@ -1490,9 +1450,125 @@ public:
     return CsrView<uint32_t>{write_usage.offsets, write_usage_by_gen_generations}[row];
   }
 
+private:
+  [[nodiscard]] std::span<const dataid_t> get_read_unchecked(taskid_t id) const {
+    T4F_INVARIANT(id >= 0);
+    const auto idx = static_cast<std::size_t>(id);
+    T4F_INVARIANT(idx + 1 < compute_task_read.offsets.size());
+    const auto begin = static_cast<std::size_t>(compute_task_read.offsets[idx]);
+    const auto len = static_cast<std::size_t>(compute_task_read.offsets[idx + 1] -
+                                              compute_task_read.offsets[idx]);
+    return std::span<const dataid_t>(compute_task_read.elements).subspan(begin, len);
+  }
+
+  [[nodiscard]] std::span<const taskid_t> get_tasks_reading_data_unchecked(dataid_t data_id) const {
+    T4F_INVARIANT(data_id >= 0);
+    const auto data_idx = static_cast<std::size_t>(data_id);
+    T4F_INVARIANT(data_idx < read_usage_row_by_data_id.size());
+    const auto row = read_usage_row_by_data_id[data_idx];
+    T4F_INVARIANT(row >= 0);
+    const auto row_idx = static_cast<std::size_t>(row);
+    T4F_INVARIANT(row_idx + 1 < read_usage.offsets.size());
+    const auto begin = static_cast<std::size_t>(read_usage.offsets[row_idx]);
+    const auto len = static_cast<std::size_t>(read_usage.offsets[row_idx + 1] -
+                                              read_usage.offsets[row_idx]);
+    return std::span<const taskid_t>(read_usage.elements).subspan(begin, len);
+  }
+
+  void reset_shared_read_neighbors_topology_cache() {
+    compute_task_shared_read_neighbors.offsets.assign(
+        static_cast<std::size_t>(num_compute_tasks_) + 1, 0);
+    compute_task_shared_read_neighbors.elements.clear();
+    shared_read_neighbors_ready_ = false;
+    shared_read_neighbors_build_count_ = 0;
+  }
+
+  void ensure_shared_read_neighbors_built() const {
+    if (shared_read_neighbors_ready_) {
+      return;
+    }
+    auto &self = const_cast<StaticTaskInfo &>(*this);
+    self.build_compute_task_shared_read_neighbors_csr();
+    self.shared_read_neighbors_ready_ = true;
+    self.shared_read_neighbors_build_count_ += 1;
+  }
+
+  void build_compute_task_shared_read_neighbors_csr() {
+    const auto n_compute_tasks = get_n_compute_tasks();
+    compute_task_shared_read_neighbors.offsets.assign(static_cast<std::size_t>(n_compute_tasks) + 1, 0);
+    compute_task_shared_read_neighbors.elements.clear();
+    if (n_compute_tasks <= 0) {
+      return;
+    }
+
+    std::vector<uint32_t> seen_epoch(static_cast<std::size_t>(n_compute_tasks), 0);
+    uint32_t epoch = 1;
+
+    std::vector<taskid_t> scratch;
+    std::vector<taskid_t> flattened_neighbors;
+    flattened_neighbors.reserve(compute_task_read.elements.size());
+
+    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
+      if (epoch == 0) {
+        std::fill(seen_epoch.begin(), seen_epoch.end(), 0);
+        epoch = 1;
+      }
+      const uint32_t local_epoch = epoch++;
+      scratch.clear();
+      const auto read_span = get_read_unchecked(task_id);
+      const auto *read_ptr = read_span.data();
+      const auto n_reads = read_span.size();
+
+      for (std::size_t read_idx = 0; read_idx < n_reads; ++read_idx) {
+        const auto data_id = read_ptr[read_idx];
+        const auto readers_span = get_tasks_reading_data_unchecked(data_id);
+        const auto *readers_ptr = readers_span.data();
+        const auto n_readers = readers_span.size();
+        for (std::size_t reader_idx = 0; reader_idx < n_readers; ++reader_idx) {
+          const auto reader = readers_ptr[reader_idx];
+          if (reader == task_id) {
+            continue;
+          }
+          const auto seen_idx = static_cast<std::size_t>(reader);
+          if (seen_epoch[seen_idx] == local_epoch) {
+            continue;
+          }
+          seen_epoch[seen_idx] = local_epoch;
+          scratch.push_back(reader);
+        }
+      }
+
+      std::sort(scratch.begin(), scratch.end());
+      compute_task_shared_read_neighbors.offsets[static_cast<std::size_t>(task_id) + 1] =
+          static_cast<int32_t>(scratch.size());
+      flattened_neighbors.insert(flattened_neighbors.end(), scratch.begin(), scratch.end());
+    }
+
+    int32_t running_offset = 0;
+    for (taskid_t task_id = 0; task_id < n_compute_tasks; ++task_id) {
+      const auto offset_idx = static_cast<std::size_t>(task_id) + 1;
+      running_offset += compute_task_shared_read_neighbors.offsets[offset_idx];
+      compute_task_shared_read_neighbors.offsets[offset_idx] = running_offset;
+    }
+    T4F_INVARIANT(static_cast<std::size_t>(running_offset) == flattened_neighbors.size() &&
+                  "Shared-read neighbor CSR flatten mismatch");
+
+    compute_task_shared_read_neighbors.elements = std::move(flattened_neighbors);
+  }
+
+public:
+  [[nodiscard]] bool shared_read_neighbors_built() const {
+    return shared_read_neighbors_ready_;
+  }
+
+  [[nodiscard]] uint32_t shared_read_neighbors_build_count() const {
+    return shared_read_neighbors_build_count_;
+  }
+
   [[nodiscard]] std::span<const taskid_t>
   get_compute_task_shared_read_neighbors(taskid_t id) const {
     T4F_INVARIANT(id >= 0 && id < get_n_compute_tasks() && "Task ID is out of bounds");
+    ensure_shared_read_neighbors_built();
     return compute_task_shared_read_neighbors[id];
   }
 
