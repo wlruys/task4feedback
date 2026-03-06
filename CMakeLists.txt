@@ -23,6 +23,13 @@ option(ENABLE_TRACY         "Enable Tracy profiler support"   OFF)
 option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" OFF)
 option(ENABLE_PARMETIS "Enable ParMETIS, everything needs to be installed in ~/local" OFF)
 option(ENABLE_VECTORIZATION_REPORT "Emit compiler vectorization reports" OFF)
+set(T4F_MAX_DEVICES "16" CACHE STRING "Compile-time maximum number of devices [5..64]")
+if(NOT T4F_MAX_DEVICES MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "T4F_MAX_DEVICES must be an integer in [5, 64]")
+endif()
+if(T4F_MAX_DEVICES LESS 5 OR T4F_MAX_DEVICES GREATER 64)
+    message(FATAL_ERROR "T4F_MAX_DEVICES must be in [5, 64]")
+endif()
 
 
 if(ENABLE_CCACHE)
