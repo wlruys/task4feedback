@@ -64,19 +64,15 @@ public:
       : latency(num_devices * num_devices), bandwidths(num_devices * num_devices),
         links(num_devices * num_devices), num_devices(num_devices) {
     T4F_INVARIANT(num_devices >= 0 && static_cast<std::size_t>(num_devices) <= kMaxDevices);
-
+    const auto n = static_cast<std::size_t>(num_devices);
+    std::fill(latency.begin(), latency.end(), 0);
+    std::fill(bandwidths.begin(), bandwidths.end(), 0);
+    std::fill(links.begin(), links.end(), 0);
+    const auto self_links = std::numeric_limits<copy_t>::max(); // Self-links are always available
     for (devid_t i = 0; i < num_devices; ++i) {
-      for (devid_t j = 0; j < num_devices; ++j) {
-        if (i == j) {
-          latency[i * num_devices + j] = 0;
-          bandwidths[i * num_devices + j] = MAX_MEM;
-          links[i * num_devices + j] =
-              std::numeric_limits<copy_t>::max(); // Self-links are always available
-        } else {
-          bandwidths[i * num_devices + j] = 0;
-          links[i * num_devices + j] = 0; // No links by default
-        }
-      }
+      const auto idx = static_cast<std::size_t>(i) * n + static_cast<std::size_t>(i);
+      bandwidths[idx] = MAX_MEM;
+      links[idx] = self_links;
     }
   }
 
@@ -123,15 +119,11 @@ struct DeviceUsage {
   copy_t d2d_max = 0;
 };
 
-struct LinkUsage {
-  copy_t active = 0;
-  copy_t max = 0;
-};
-
 class CommunicationManager {
   devid_t num_devices = 0;
   std::vector<DeviceUsage> device_usage;
-  std::vector<LinkUsage> link_usage; // (src, dst) links
+  std::vector<copy_t> link_active; // (src, dst) active link usage
+  std::vector<copy_t> link_max;    // (src, dst) max connections
   std::vector<double> bandwidth_reciprocals;
   std::vector<uint8_t> is_host;
   std::vector<std::vector<devid_t>> preferred_sources_by_destination;
@@ -162,12 +154,21 @@ class CommunicationManager {
   }
 
   void precompute_link_max_copies(const Topology &topology) {
-    link_usage.resize(num_devices * num_devices);
+    const auto n = static_cast<std::size_t>(num_devices);
+    const auto n2 = n * n;
+    link_active.assign(n2, 0);
+    link_max.resize(n2);
+    const auto * __restrict__ topo_links = topology.links.data();
+    auto * __restrict__ max_ptr = link_max.data();
+    for (std::size_t i = 0; i < n2; ++i) {
+      max_ptr[i] = topo_links[i];
+    }
+
     for (devid_t src = 0; src < num_devices; ++src) {
       for (devid_t dst = 0; dst < num_devices; ++dst) {
-        link_usage[src * num_devices + dst].max = topology.get_max_connections(src, dst);
+        const auto idx = static_cast<std::size_t>(src) * n + static_cast<std::size_t>(dst);
         SPDLOG_DEBUG("Precomputed max connections from device {} to device {}: {}", src, dst,
-                     link_usage[src * num_devices + dst].max);
+                     link_max[idx]);
       }
     }
   }
@@ -203,8 +204,7 @@ public:
   CommunicationManager() = default;
 
   CommunicationManager(const Topology &topology_, const Devices &devices_)
-      : num_devices(devices_.size()), device_usage(num_devices),
-        link_usage(num_devices * num_devices) {
+      : num_devices(devices_.size()), device_usage(num_devices) {
     T4F_INVARIANT(num_devices >= 0 && static_cast<std::size_t>(num_devices) <= kMaxDevices);
     precompute_reciprocals(topology_);
     precompute_max_copies(devices_);
@@ -249,12 +249,12 @@ public:
   }
 
   inline void increase_active_links(devid_t src, devid_t dst) {
-    link_usage[src * num_devices + dst].active += 1;
+    link_active[src * num_devices + dst] += 1;
   }
 
   inline void decrease_active_links(devid_t src, devid_t dst) {
-    T4F_INVARIANT(link_usage[src * num_devices + dst].active >= 1);
-    link_usage[src * num_devices + dst].active -= 1;
+    T4F_INVARIANT(link_active[src * num_devices + dst] >= 1);
+    link_active[src * num_devices + dst] -= 1;
   }
 
   inline void reserve_connection(devid_t src, devid_t dst) {
@@ -268,7 +268,7 @@ public:
   }
 
   [[nodiscard]] inline copy_t get_active(devid_t src, devid_t dst) const {
-    return link_usage[src * num_devices + dst].active;
+    return link_active[src * num_devices + dst];
   }
 
   [[nodiscard]] inline bool is_device_available(devid_t src, devid_t dst) const {
@@ -295,7 +295,7 @@ public:
 
   [[nodiscard]] inline bool is_link_available(devid_t src, devid_t dst) const {
     const auto used = get_active(src, dst);
-    const auto available = link_usage[src * num_devices + dst].max;
+    const auto available = link_max[src * num_devices + dst];
     return used < available;
   }
 
