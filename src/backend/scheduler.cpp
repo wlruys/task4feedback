@@ -159,12 +159,12 @@ ExecutionState SchedulerT<TransitionConditions>::map_tasks_from_python(ActionLis
       // TODO(wlr): Not sure if this is still true. Need to test.
       SPDLOG_DEBUG("Time:{} Breaking from mapper", current_time);
       timecount_t mapper_time = current_time;
-      event_manager.create_event(EventType::MAPPER, mapper_time);
+      event_manager.create_mapper(mapper_time);
       return ExecutionState::BREAKPOINT;
     } else {
       SPDLOG_DEBUG("Time:{} Ending mapper", current_time);
       timecount_t reserver_time = current_time + TIME_TO_RESERVE;
-      event_manager.create_event(EventType::RESERVER, reserver_time);
+      event_manager.create_reserver(reserver_time);
       return ExecutionState::RUNNING;
     }
   }
@@ -176,7 +176,7 @@ void SchedulerT<TransitionConditions>::skip_map_tasks(MapperEvent &map_event, Ev
   const auto current_time = state.global_time;
   SPDLOG_DEBUG("Time:{} Skipping mapper", current_time);
   timecount_t reserver_time = current_time + SCHEDULER_TIME_GAP;
-  event_manager.create_event(EventType::RESERVER, reserver_time);
+  event_manager.create_reserver(reserver_time);
 }
 
 template <>
@@ -184,7 +184,7 @@ void SchedulerT<TransitionConditions>::skip_reserve_tasks(ReserverEvent &reserve
   const auto current_time = state.global_time;
   SPDLOG_DEBUG("Time:{} Skipping reserver", current_time);
   timecount_t launcher_time = current_time + SCHEDULER_TIME_GAP;
-  event_manager.create_event(EventType::LAUNCHER, launcher_time);
+  event_manager.create_launcher(launcher_time);
 }
 
 template <>
@@ -225,10 +225,10 @@ void SchedulerT<TransitionConditions>::map_tasks(MapperEvent &map_event, EventMa
 
   if (break_flag) {
     timecount_t mapper_time = current_time;
-    event_manager.create_event(EventType::MAPPER, mapper_time);
+    event_manager.create_mapper(mapper_time);
   } else {
     timecount_t reserver_time = current_time + SCHEDULER_TIME_GAP;
-    event_manager.create_event(EventType::RESERVER, reserver_time);
+    event_manager.create_reserver(reserver_time);
   }
 }
 
@@ -393,7 +393,7 @@ void SchedulerT<TransitionConditions>::reserve_tasks(ReserverEvent &reserve_even
 
   if (break_flag) [[unlikely]] {
     timecount_t reserver_time = current_time;
-    event_manager.create_event(EventType::RESERVER, reserver_time);
+    event_manager.create_reserver(reserver_time);
     return;
   }
 
@@ -408,7 +408,7 @@ void SchedulerT<TransitionConditions>::reserve_tasks(ReserverEvent &reserve_even
       this->eviction_state = EvictionState::WAITING_FOR_COMPLETION; // This should be set to false
                                                                     // after the eviction is over
       // Create an event to start the eviction process
-      event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
+      event_manager.create_evictor(current_time + SCHEDULER_TIME_GAP);
       return;
     } else {
       SPDLOG_DEBUG("Time:{} Eviction will start after launching {} tasks", current_time,
@@ -417,7 +417,7 @@ void SchedulerT<TransitionConditions>::reserve_tasks(ReserverEvent &reserve_even
   }
 
   timecount_t launcher_time = current_time + TIME_TO_LAUNCH;
-  event_manager.create_event(EventType::LAUNCHER, launcher_time);
+  event_manager.create_launcher(launcher_time);
 }
 
 template <>
@@ -483,8 +483,7 @@ bool SchedulerT<TransitionConditions>::launch_compute_task(taskid_t compute_task
                static_graph.get_compute_task_name(compute_task_id), compute_task_id,
                execution_time);
   timecount_t completion_time = current_time + execution_time;
-  event_manager.create_event(EventType::COMPUTE_COMPLETER, completion_time, compute_task_id,
-                             device_id);
+  event_manager.create_compute_completer(completion_time, compute_task_id, device_id);
 
   return true;
 }
@@ -548,8 +547,7 @@ bool SchedulerT<TransitionConditions>::launch_data_task(taskid_t data_task_id, d
 
   // Create completion event
   timecount_t completion_time = current_time + duration.duration;
-  event_manager.create_event(EventType::DATA_COMPLETER, completion_time, data_task_id,
-                             destination_device_id);
+  event_manager.create_data_completer(completion_time, data_task_id, destination_device_id);
 
   return true;
 }
@@ -619,8 +617,7 @@ bool SchedulerT<TransitionConditions>::launch_eviction_task(taskid_t eviction_ta
 
   // Create completion event
   timecount_t completion_time = current_time + duration.duration;
-  event_manager.create_event(EventType::EVICTOR_COMPLETER, completion_time, eviction_task_id,
-                             destination_device_id);
+  event_manager.create_evictor_completer(completion_time, eviction_task_id);
 
   return true;
 }
@@ -734,7 +731,7 @@ bool SchedulerT<TransitionConditions>::launch_eviction_tasks(EventManager &event
   //   tasks,
   //   // it means that evictor has not been launched yet.
   //   // We need to launch the evictor to start the eviction process.
-  //   event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
+  //   event_manager.create_evictor(current_time + SCHEDULER_TIME_GAP);
   // }
 
   bool break_flag = false;
@@ -769,7 +766,7 @@ void SchedulerT<TransitionConditions>::launch_tasks(LauncherEvent &launch_event,
   auto break_flag = launch_compute_tasks(event_manager);
 
   if (break_flag) [[unlikely]] {
-    event_manager.create_event(EventType::LAUNCHER, current_time);
+    event_manager.create_launcher(current_time);
     return;
   }
 
@@ -787,14 +784,13 @@ void SchedulerT<TransitionConditions>::launch_tasks(LauncherEvent &launch_event,
       if (this->eviction_state == EvictionState::RUNNING &&
           eviction_count == 0) { // Sometimes eviction completes before launcher
         SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
-        event_manager.create_event(EventType::RESERVER, current_time);
+        event_manager.create_reserver(current_time);
         this->eviction_state = EvictionState::NONE;
         clear_eviction_invalidation_cache();
       } else
         return;
     } else
-      event_manager.create_event(EventType::MAPPER,
-                                 current_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
+      event_manager.create_mapper(current_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
     scheduler_event_count += 1;
   }
 }
@@ -863,7 +859,7 @@ void SchedulerT<TransitionConditions>::evict(EvictorEvent &eviction_event, Event
     if (s.counts.n_reserved() + s.counts.n_data_reserved() > 0) {
       SPDLOG_DEBUG("Time:{} Evictor waiting for all {} compute and {} data task to finish",
                    current_time, s.counts.n_reserved(), s.counts.n_data_reserved());
-      event_manager.create_event(EventType::LAUNCHER, current_time);
+      event_manager.create_launcher(current_time);
       return;
     } else {
       T4F_INVARIANT(s.counts.n_reserved() == 0);
@@ -936,11 +932,11 @@ void SchedulerT<TransitionConditions>::evict(EvictorEvent &eviction_event, Event
     T4F_INVARIANT(static_cast<int64_t>(queues.eviction_launchable.total_size()) <= eviction_count);
     if (eviction_count) {
       SPDLOG_DEBUG("Time:{} Evictor waiting for all eviction tasks to finish", current_time);
-      event_manager.create_event(EventType::LAUNCHER, current_time);
+      event_manager.create_launcher(current_time);
       return;
     } else {
       SPDLOG_DEBUG("Time:{} Evictor finished", current_time);
-      event_manager.create_event(EventType::RESERVER, current_time);
+      event_manager.create_reserver(current_time);
       this->eviction_state = EvictionState::NONE;
       clear_eviction_invalidation_cache();
     }
@@ -960,18 +956,17 @@ void SchedulerT<TransitionConditions>::complete_task_postmatter(EventManager &ev
   const auto eviction_state = this->eviction_state;
   if (scheduler_event_count == 0) {
     if (eviction_state == EvictionState::WAITING_FOR_COMPLETION) {
-      event_manager.create_event(EventType::EVICTOR, current_time + SCHEDULER_TIME_GAP);
+      event_manager.create_evictor(current_time + SCHEDULER_TIME_GAP);
     } else if (eviction_state == EvictionState::RUNNING) {
       if (eviction_count) {
-        event_manager.create_event(EventType::LAUNCHER, current_time + SCHEDULER_TIME_GAP);
+        event_manager.create_launcher(current_time + SCHEDULER_TIME_GAP);
       } else {
-        event_manager.create_event(EventType::RESERVER, current_time + SCHEDULER_TIME_GAP);
+        event_manager.create_reserver(current_time + SCHEDULER_TIME_GAP);
         this->eviction_state = EvictionState::NONE;
         clear_eviction_invalidation_cache();
       }
     } else {
-      event_manager.create_event(EventType::MAPPER,
-                                 current_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
+      event_manager.create_mapper(current_time + SCHEDULER_TIME_GAP + TIME_TO_MAP);
     }
     scheduler_event_count += 1;
   }

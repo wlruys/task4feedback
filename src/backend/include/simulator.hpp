@@ -45,7 +45,7 @@ class SimulatorT {
 protected:
   void add_initial_event() {
     ZoneScoped;
-    event_manager.create_event(EventType::MAPPER, 0);
+    event_manager.create_mapper(0);
   }
 
   ExecutionState dispatch_mapper(MapperEvent &event) {
@@ -53,7 +53,7 @@ protected:
 
     if (scheduler.hit_mapper_boundary_breakpoint()) {
       SPDLOG_DEBUG("Time: {} Mapper-boundary breakpoint hit", event.time);
-      event_manager.create_event(EventType::MAPPER, event.time);
+      event_manager.create_mapper(event.time);
       return ExecutionState::BREAKPOINT;
     }
 
@@ -126,7 +126,7 @@ public:
 
     if (!event_manager.has_events()) {
       const auto current_time = scheduler.get_state().get_global_time();
-      event_manager.create_event(EventType::MAPPER, current_time);
+      event_manager.create_mapper(current_time);
       scheduler.scheduler_event_count += 1;
     }
   }
@@ -270,7 +270,7 @@ public:
     // Create a new event to run the mapper
     if (enqueue_mapping_event) {
       const auto current_time = scheduler.get_state().get_global_time();
-      event_manager.create_event(EventType::MAPPER, current_time);
+      event_manager.create_mapper(current_time);
     }
   }
 

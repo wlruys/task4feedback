@@ -219,20 +219,50 @@ public:
     events_.reserve(reserve_hint);
   }
 
+  inline void create_mapper(timecount_t time) {
+    events_.push(Event{.type = EventType::MAPPER, .time = time});
+  }
+
+  inline void create_reserver(timecount_t time) {
+    events_.push(Event{.type = EventType::RESERVER, .time = time});
+  }
+
+  inline void create_launcher(timecount_t time) {
+    events_.push(Event{.type = EventType::LAUNCHER, .time = time});
+  }
+
+  inline void create_evictor(timecount_t time) {
+    events_.push(Event{.type = EventType::EVICTOR, .time = time});
+  }
+
+  inline void create_compute_completer(timecount_t time, taskid_t task_id, devid_t device_id) {
+    events_.push(Event{
+        .type = EventType::COMPUTE_COMPLETER, .time = time, .task = task_id, .device = device_id});
+  }
+
+  inline void create_data_completer(timecount_t time, taskid_t task_id, devid_t device_id) {
+    events_.push(
+        Event{.type = EventType::DATA_COMPLETER, .time = time, .task = task_id, .device = device_id});
+  }
+
+  inline void create_evictor_completer(timecount_t time, taskid_t task_id) {
+    events_.push(Event{.type = EventType::EVICTOR_COMPLETER, .time = time, .task = task_id});
+  }
+
   // No-payload events:
   inline void create_event(EventType t, timecount_t time) {
     switch (t) {
     case EventType::MAPPER:
-      events_.push(Event{.type = EventType::MAPPER, .time = time});
+      create_mapper(time);
       break;
     case EventType::RESERVER:
-      events_.push(Event{.type = EventType::RESERVER, .time = time});
+      create_reserver(time);
       break;
     case EventType::LAUNCHER:
-      events_.push(Event{.type = EventType::LAUNCHER, .time = time});
+      create_launcher(time);
       break;
     case EventType::EVICTOR:
-      events_.push(Event{.type = EventType::EVICTOR, .time = time});
+      create_evictor(time);
       break;
     default:
       throw std::invalid_argument(
@@ -243,11 +273,13 @@ public:
   inline void create_event(EventType t, timecount_t time, taskid_t task_id, devid_t device_id) {
     switch (t) {
     case EventType::COMPUTE_COMPLETER:
+      create_compute_completer(time, task_id, device_id);
+      break;
     case EventType::DATA_COMPLETER:
-      events_.push(Event{.type = t, .time = time, .task = task_id, .device = device_id});
+      create_data_completer(time, task_id, device_id);
       break;
     case EventType::EVICTOR_COMPLETER:
-      events_.push(Event{.type = t, .time = time, .task = task_id, .device = 0});
+      create_evictor_completer(time, task_id);
       break;
     default:
       throw std::invalid_argument("create_event(type,time, task_id, device_id) only for "
