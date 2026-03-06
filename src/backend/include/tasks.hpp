@@ -7,10 +7,12 @@
 #include <ankerl/unordered_dense.h>
 #include <array>
 #include <cassert>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <limits>
 #include <ostream>
 #include <set>
 #include <span>
@@ -158,6 +160,15 @@ static inline taskid_t collect_ready(std::span<const taskid_t> neighbors,
 
   out.resize(static_cast<std::size_t>(w));
   return w;
+}
+
+template <typename Int> static inline void append_decimal(std::string &dst, Int value) {
+  static_assert(std::is_integral_v<Int>);
+  constexpr std::size_t kMaxDigits = static_cast<std::size_t>(std::numeric_limits<Int>::digits10) + 3;
+  char buf[kMaxDigits];
+  const auto [ptr, ec] = std::to_chars(buf, buf + kMaxDigits, value);
+  T4F_INVARIANT(ec == std::errc{});
+  dst.append(buf, ptr);
 }
 
 enum class TaskType : uint8_t {
@@ -740,15 +751,9 @@ public:
           data_task.compute_task = task_id;
           data_task.data_id = data_id;
 
-          char buf[48];
-          std::snprintf(buf, sizeof(buf), "%d_data_%d", task_id, data_id);
-          data_task.name.assign(buf);
-
           if (writer_id != taskid_t(-1)) {
             data_task.dependencies.insert(writer_id);
             tasks[writer_id].data_dependents.insert(data_task_id);
-          } else {
-            data_task.dependencies.clear();
           }
 
           data_task.dependents.insert(task_id);
@@ -967,7 +972,7 @@ protected:
   std::vector<taskid_t> data_task_compute_task_cache;
 
   std::vector<std::string> compute_task_names;
-  std::vector<std::string> data_task_names;
+  mutable std::vector<std::string> data_task_names;
 
   int32_t grid_h{-1};
   int32_t grid_w{-1};
@@ -1133,7 +1138,6 @@ public:
 
     for (const auto &data_task : data_tasks) {
       const auto idx = static_cast<std::size_t>(data_task.id);
-      data_task_names[idx] = data_task.name;
       data_task_data_id_cache[idx] = data_task.data_id;
       data_task_compute_task_cache[idx] = data_task.compute_task;
 
@@ -1640,7 +1644,19 @@ public:
   }
 
   [[nodiscard]] const std::string &get_data_task_name(taskid_t id) const {
-    return data_task_names[id];
+    const auto idx = static_cast<std::size_t>(id);
+    auto &name = data_task_names[idx];
+    if (name.empty()) {
+      constexpr std::size_t kTaskPrefixReserve =
+          static_cast<std::size_t>(std::numeric_limits<taskid_t>::digits10) + 8;
+      constexpr std::size_t kMaxDataIdChars =
+          static_cast<std::size_t>(std::numeric_limits<dataid_t>::digits10) + 2;
+      name.reserve(kTaskPrefixReserve + kMaxDataIdChars);
+      append_decimal(name, data_task_compute_task_cache[idx]);
+      name.append("_data_");
+      append_decimal(name, data_task_data_id_cache[idx]);
+    }
+    return name;
   }
 
   [[nodiscard]] const dataid_t get_data_id(taskid_t id) const {
