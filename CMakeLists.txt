@@ -1,10 +1,16 @@
 cmake_minimum_required(VERSION 3.22)
+
 include(FetchContent)
 include(CheckCXXCompilerFlag)
 
-project(${SKBUILD_PROJECT_NAME}
-        VERSION 0.2.0
-        LANGUAGES C CXX)
+set(T4F_PROJECT_NAME task4feedback)
+if(DEFINED SKBUILD_PROJECT_NAME AND NOT SKBUILD_PROJECT_NAME STREQUAL "")
+    set(T4F_PROJECT_NAME "${SKBUILD_PROJECT_NAME}")
+endif()
+
+project(${T4F_PROJECT_NAME} VERSION 0.2.0 LANGUAGES C CXX)
+
+include(GNUInstallDirs) # for install dir variables used by subdirectories
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,13 +22,20 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(ENABLE_ASAN          "Compile with AddressSanitizer"          OFF)
 option(ENABLE_MIMALLOC      "Use mimalloc memory allocator"          OFF)
 option(ENABLE_NATIVE_TUNING "Add -march=native / -mtune=native"      ON)
-option(PGO_MODE "PGO mode: Generate / Use / None"       "None")
+set(PGO_MODE "None" CACHE STRING "PGO mode: None, Generate, or Use")
+set_property(CACHE PGO_MODE PROPERTY STRINGS None Generate Use)
 option(SIM_RECORD  "Enable resource-usage and data-location logging"  OFF)
 option(ENABLE_CCACHE       "Enable ccache for faster builds" OFF)
 option(ENABLE_TRACY         "Enable Tracy profiler support"   OFF)
 option(ENABLE_TRACY_LIBDEBUG "Enable Tracy to fetch system debug in" OFF)
 option(ENABLE_PARMETIS "Enable ParMETIS, everything needs to be installed in ~/local" OFF)
 option(ENABLE_VECTORIZATION_REPORT "Emit compiler vectorization reports" OFF)
+
+set(_t4f_valid_pgo_modes None Generate Use)
+if(NOT PGO_MODE IN_LIST _t4f_valid_pgo_modes)
+    message(FATAL_ERROR "PGO_MODE must be one of: None, Generate, Use")
+endif()
+
 set(T4F_MAX_DEVICES "16" CACHE STRING "Compile-time maximum number of devices [5..64]")
 if(NOT T4F_MAX_DEVICES MATCHES "^[0-9]+$")
     message(FATAL_ERROR "T4F_MAX_DEVICES must be an integer in [5, 64]")
@@ -188,8 +201,6 @@ endif()
 
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 
-include_directories(${Python_INCLUDE_DIRS})
-
 add_library(project_warnings INTERFACE)
 
 if(ENABLE_ASAN)
@@ -204,5 +215,4 @@ endif()
 add_subdirectory(src/backend)      # builds simulator library
 add_subdirectory(src/bindings)     # builds python module 
 
-include(CPack)                     #for packaging
-include(GNUInstallDirs)            #for install dirs
+include(CPack)                     # for packaging
