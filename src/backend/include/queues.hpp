@@ -223,6 +223,78 @@ template <typename T> inline OptimalElement<T> make_element(T value) {
   return OptimalElement<T>{std::move(value), 0};
 }
 
+template <typename T> class FifoQueue {
+private:
+  std::vector<T> values;
+  std::size_t head{0};
+
+  void maybe_compact() {
+    if (head == 0) {
+      return;
+    }
+    if (head < 4096 && head * 2 < values.size()) {
+      return;
+    }
+    values.erase(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(head));
+    head = 0;
+  }
+
+public:
+  using value_type = T;
+  using element_type = T;
+  using value_compare = std::less<T>;
+
+  FifoQueue() = default;
+
+  void reserve(std::size_t reserve_hint) {
+    values.reserve(reserve_hint);
+  }
+
+  void push(T value) {
+    values.push_back(std::move(value));
+  }
+
+  void push(T value, priority_t /*priority*/) {
+    values.push_back(std::move(value));
+  }
+
+  [[nodiscard]] const T &top() const {
+    T4F_INVARIANT(head < values.size() && "top() called on an empty FifoQueue");
+    return values[head];
+  }
+
+  T &top() {
+    return const_cast<T &>(std::as_const(*this).top());
+  }
+
+  [[nodiscard]] const element_type &top_element() const {
+    return top();
+  }
+
+  element_type &top_element() {
+    return top();
+  }
+
+  void pop() {
+    T4F_INVARIANT(head < values.size() && "pop() called on an empty FifoQueue");
+    ++head;
+    if (head == values.size()) {
+      values.clear();
+      head = 0;
+      return;
+    }
+    maybe_compact();
+  }
+
+  [[nodiscard]] bool empty() const noexcept {
+    return head >= values.size();
+  }
+
+  [[nodiscard]] std::size_t size() const noexcept {
+    return values.size() - head;
+  }
+};
+
 template <typename T, template <typename...> class Queue = std::priority_queue,
           typename Compare = std::less<T>>
 class ContainerQueue {
@@ -297,6 +369,24 @@ public:
     if constexpr (HasStaticK<QueueType>) return QueueType::K;
     else if constexpr (HasTopKInterface<QueueType>) return const_cast<QueueType &>(pq).get_k();
     else return 1;
+  }
+
+  void reserve(std::size_t reserve_hint) {
+    if constexpr (requires(QueueType &q, std::size_t n) { q.reserve(n); }) {
+      pq.reserve(reserve_hint);
+    } else if constexpr (requires(const element_compare &cmp, std::vector<StoredElement> storage) {
+                           QueueType(cmp, std::move(storage));
+                         }) {
+      if (!pq.empty()) {
+        return;
+      }
+      std::vector<StoredElement> storage;
+      storage.reserve(reserve_hint);
+      element_compare cmp{};
+      pq = QueueType(cmp, std::move(storage));
+    } else {
+      MONUnusedParameter(reserve_hint);
+    }
   }
 
   int topk_size() {
@@ -435,6 +525,10 @@ public:
 
   [[nodiscard]] bool empty() const noexcept { return top_k.empty(); }
   [[nodiscard]] std::size_t size() const noexcept { return top_k.size() + remaining_min_heap.size(); }
+
+  void reserve(std::size_t reserve_hint) {
+    top_k.reserve(std::min<std::size_t>(static_cast<std::size_t>(K), reserve_hint));
+  }
   
   auto &get_top_k() { return top_k; }
   const auto &get_top_k() const { return top_k; }
@@ -539,6 +633,11 @@ public:
 
   [[nodiscard]] bool empty() const noexcept { return top_k.empty(); }
   [[nodiscard]] std::size_t size() const noexcept { return top_k.size() + remaining_min_heap.size(); }
+
+  void reserve(std::size_t reserve_hint) {
+    top_k.reserve(
+        std::min<std::size_t>(static_cast<std::size_t>(std::max(1, K_)), reserve_hint));
+  }
   
   auto &get_top_k() { return top_k; }
   const auto &get_top_k() const { return top_k; }

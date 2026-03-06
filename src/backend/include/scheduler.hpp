@@ -40,7 +40,9 @@
 // using MappableTaskQueue = ContainerQueue<taskid_t, TopKQueueHelper<1>::queue_type>;
 using MappableTaskQueue = ContainerQueue<taskid_t, DynamicTopKQueue>;
 using TaskQueue = ContainerQueue<taskid_t, std::priority_queue>;
-using DeviceQueue = ActiveQueueIterator<TaskQueue>;
+using FIFODeviceTaskQueue = FifoQueue<taskid_t>;
+using ComputeDeviceQueue = ActiveQueueIterator<TaskQueue>;
+using FifoDeviceQueue = ActiveQueueIterator<FIFODeviceTaskQueue>;
 
 using TaskIDTimeList = std::pair<TaskIDList, std::vector<timecount_t>>;
 
@@ -92,10 +94,10 @@ inline std::ostream &operator<<(std::ostream &os, const ExecutionState &state) {
 class SchedulerQueues {
 protected:
   MappableTaskQueue mappable;
-  DeviceQueue reservable;
-  DeviceQueue launchable;
-  DeviceQueue data_launchable;
-  DeviceQueue eviction_launchable;
+  ComputeDeviceQueue reservable;
+  ComputeDeviceQueue launchable;
+  FifoDeviceQueue data_launchable;
+  FifoDeviceQueue eviction_launchable;
 
   // static TaskType id_to_type(taskid_t id, const Tasks &tasks);
 
@@ -103,7 +105,6 @@ protected:
 
 public:
   SchedulerQueues() = default;
-  priority_t data_queue_count = 0;
 
   SchedulerQueues(Devices &devices)
       : reservable(devices.size()), launchable(devices.size()), data_launchable(devices.size()),
@@ -135,11 +136,9 @@ public:
   }
 
   void push_launchable_data(taskid_t id, priority_t p, devid_t device) {
-    // TODO: change this to normal queue if needed keeping priority queue semantics for now
-    data_launchable.push_priority_at(device, id, data_queue_count++);
-    SPDLOG_DEBUG("Pushing launchable data task {} with priority {} on device {} data_queue_count "
-                 "{} current_top {}",
-                 id, p, device, data_queue_count - 1, data_launchable[device].top());
+    data_launchable.push_priority_at(device, id, p);
+    SPDLOG_DEBUG("Pushing launchable data task {} with priority {} on device {} current_top {}",
+                 id, p, device, data_launchable[device].top());
   }
 
   void push_launchable_eviction(taskid_t id, priority_t p, devid_t device) {
@@ -220,6 +219,14 @@ public:
   }
 
   template <typename> friend class SchedulerT;
+
+  void reserve_per_device(std::size_t reservable_hint, std::size_t launchable_hint,
+                          std::size_t data_hint, std::size_t eviction_hint) {
+    reservable.reserve_each(reservable_hint);
+    launchable.reserve_each(launchable_hint);
+    data_launchable.reserve_each(data_hint);
+    eviction_launchable.reserve_each(eviction_hint);
+  }
 };
 
 class TaskCountInfo {
@@ -486,18 +493,33 @@ struct SchedulerInputT {
   std::reference_wrapper<TaskNoise> task_noise;
   TransitionConditionT conditions{};
   int32_t top_k_candidates = 0;
+  std::size_t expected_inflight_events = 0;
+  std::size_t expected_eviction_tasks = 0;
+  std::size_t expected_eviction_wave_keys = 0;
 
   SchedulerInputT(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
-                  Topology &topology, TaskNoise &task_noise, int32_t top_k_candidates = 1)
+                  Topology &topology, TaskNoise &task_noise, int32_t top_k_candidates = 1,
+                  std::size_t expected_inflight_events = 0,
+                  std::size_t expected_eviction_tasks = 0,
+                  std::size_t expected_eviction_wave_keys = 0)
       : graph(graph), tasks(tasks), data(data), devices(devices), topology(topology),
-        task_noise(task_noise), top_k_candidates(top_k_candidates) {
+        task_noise(task_noise), top_k_candidates(top_k_candidates),
+        expected_inflight_events(expected_inflight_events),
+        expected_eviction_tasks(expected_eviction_tasks),
+        expected_eviction_wave_keys(expected_eviction_wave_keys) {
   }
 
   SchedulerInputT(Graph &graph, StaticTaskInfo &tasks, Data &data, Devices &devices,
                   Topology &topology, TaskNoise &task_noise,
-                  const TransitionConditionT &conditions, int32_t top_k_candidates = 1)
+                  const TransitionConditionT &conditions, int32_t top_k_candidates = 1,
+                  std::size_t expected_inflight_events = 0,
+                  std::size_t expected_eviction_tasks = 0,
+                  std::size_t expected_eviction_wave_keys = 0)
       : graph(graph), tasks(tasks), data(data), devices(devices), topology(topology),
-        task_noise(task_noise), conditions(conditions), top_k_candidates(top_k_candidates) {
+        task_noise(task_noise), conditions(conditions), top_k_candidates(top_k_candidates),
+        expected_inflight_events(expected_inflight_events),
+        expected_eviction_tasks(expected_eviction_tasks),
+        expected_eviction_wave_keys(expected_eviction_wave_keys) {
   }
 
   SchedulerInputT(const SchedulerInputT &other) = default;
@@ -1130,11 +1152,41 @@ public:
 
   SchedulerT(SchedulerInputT<TransitionConditionT> &input)
       : state(input), queues(input.devices), conditions(input.conditions) {
-    compute_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
-    data_task_buffer.reserve(INITIAL_TASK_BUFFER_SIZE);
-    tasks_requesting_eviction.reserve(INITIAL_TASK_BUFFER_SIZE);
-    eviction_invalidation_cache.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
-    eviction_planned_victim_keys.reserve(INITIAL_TASK_BUFFER_SIZE * 8);
+    const auto n_compute = static_cast<std::size_t>(input.tasks.get().get_n_compute_tasks());
+    const auto n_data = static_cast<std::size_t>(input.tasks.get().get_n_data_tasks());
+    const auto n_devices = input.devices.get().size();
+
+    const std::size_t expected_eviction_tasks_hint =
+        input.expected_eviction_tasks > 0
+            ? input.expected_eviction_tasks
+            : std::max<std::size_t>(INITIAL_TASK_BUFFER_SIZE * 16, n_compute / 8);
+    const std::size_t expected_eviction_wave_keys_hint =
+        input.expected_eviction_wave_keys > 0
+            ? input.expected_eviction_wave_keys
+            : std::max<std::size_t>(expected_eviction_tasks_hint * 2,
+                                    INITIAL_TASK_BUFFER_SIZE * 32);
+
+    compute_task_buffer.reserve(std::max<std::size_t>(INITIAL_TASK_BUFFER_SIZE, n_compute / 4));
+    data_task_buffer.reserve(std::max<std::size_t>(INITIAL_TASK_BUFFER_SIZE, n_data / 8));
+    tasks_requesting_eviction.reserve(expected_eviction_tasks_hint);
+    eviction_invalidation_cache.reserve(expected_eviction_wave_keys_hint);
+    eviction_planned_victim_keys.reserve(expected_eviction_wave_keys_hint);
+
+    const std::size_t per_device_reservable_hint =
+        std::max<std::size_t>(INITIAL_TASK_BUFFER_SIZE,
+                              n_devices == 0 ? 0 : (n_compute / std::max<std::size_t>(1, n_devices)));
+    const std::size_t per_device_data_hint =
+        std::max<std::size_t>(INITIAL_TASK_BUFFER_SIZE,
+                              n_devices == 0 ? 0 : (n_data / std::max<std::size_t>(1, n_devices)));
+    const std::size_t per_device_eviction_hint =
+        std::max<std::size_t>(
+            INITIAL_TASK_BUFFER_SIZE,
+            n_devices == 0 ? 0
+                           : (expected_eviction_tasks_hint / std::max<std::size_t>(1, n_devices)));
+
+    queues.reserve_per_device(per_device_reservable_hint, per_device_reservable_hint,
+                              per_device_data_hint, per_device_eviction_hint);
+    state.task_runtime.reserve_eviction_tasks(expected_eviction_tasks_hint);
     if (input.top_k_candidates > 0) {
       queues.mappable.set_k(static_cast<int>(input.top_k_candidates));
     }

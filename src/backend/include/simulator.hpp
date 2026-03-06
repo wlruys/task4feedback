@@ -92,10 +92,17 @@ public:
   // constexpr static uint8_t FLAG_DATA_INITIALIZED = 0x04;
 
   ExecutionState last_state{ExecutionState::NONE};
-  EventVariant last_event{MapperEvent(0)};
+  Event last_event{.type = EventType::MAPPER, .time = 0, .task = 0, .device = 0};
 
   SimulatorT(SchedulerInputT<TransitionConditionT> &input, Mapper &mapper)
-      : event_manager(EventManager()), scheduler(input), mapper(mapper) {
+      : event_manager(), scheduler(input), mapper(mapper) {
+    const auto n_compute = static_cast<std::size_t>(input.tasks.get().get_n_compute_tasks());
+    const auto n_data = static_cast<std::size_t>(input.tasks.get().get_n_data_tasks());
+    std::size_t reserve_hint = input.expected_inflight_events;
+    if (reserve_hint == 0) {
+      reserve_hint = std::max<std::size_t>(INITIAL_EVENT_BUFFER_SIZE, (n_compute + n_data) / 2);
+    }
+    event_manager.reserve(reserve_hint);
   }
 
   void set_use_python_mapper(bool use_python_mapper_) {
@@ -187,54 +194,51 @@ public:
     scheduler.set_transition_conditions(conditions);
   }
 
-  ExecutionState handle_event(EventVariant &event) {
+  ExecutionState handle_event(const Event &event) {
     ZoneScoped;
-    return std::visit(
-        [this](auto &e) -> ExecutionState {
-          using T = std::decay_t<decltype(e)>;
-
-          if constexpr (std::is_same_v<T, MapperEvent>) {
-            return dispatch_mapper(e);
-          } else if constexpr (std::is_same_v<T, ReserverEvent>) {
-            scheduler.reserve_tasks(e, event_manager);
-            return ExecutionState::RUNNING;
-          } else if constexpr (std::is_same_v<T, LauncherEvent>) {
-            scheduler.launch_tasks(e, event_manager);
-            return ExecutionState::RUNNING;
-          } else if constexpr (std::is_same_v<T, EvictorEvent>) {
-            scheduler.evict(e, event_manager);
-            return ExecutionState::RUNNING;
-          } else if constexpr (std::is_same_v<T, CompleterVariant>) {
-            return std::visit(
-                [this](auto &completer_event) -> ExecutionState {
-                  using CT = std::decay_t<decltype(completer_event)>;
-
-                  if constexpr (std::is_same_v<CT, ComputeCompleterEvent>) {
-                    scheduler.complete_compute_task(completer_event, event_manager);
-                    return ExecutionState::RUNNING;
-                  } else if constexpr (std::is_same_v<CT, DataCompleterEvent>) {
-                    scheduler.complete_data_task(completer_event, event_manager);
-                    return ExecutionState::RUNNING;
-                  } else if constexpr (std::is_same_v<CT, EvictorCompleterEvent>) {
-                    scheduler.complete_eviction_task(completer_event, event_manager);
-                    return ExecutionState::RUNNING;
-                  } else {
-                    spdlog::critical("Unknown completer event type: {}",
-                                     typeid(completer_event).name());
-                    return ExecutionState::ERROR;
-                  }
-                },
-                e);
-          } else {
-            spdlog::critical("Unknown event type: {}", typeid(e).name());
-            return ExecutionState::ERROR;
-          }
-        },
-        event);
+    switch (event.type) {
+    case EventType::MAPPER: {
+      MapperEvent mapper_event{event.time};
+      return dispatch_mapper(mapper_event);
+    }
+    case EventType::RESERVER: {
+      ReserverEvent reserve_event{event.time};
+      scheduler.reserve_tasks(reserve_event, event_manager);
+      return ExecutionState::RUNNING;
+    }
+    case EventType::LAUNCHER: {
+      LauncherEvent launch_event{event.time};
+      scheduler.launch_tasks(launch_event, event_manager);
+      return ExecutionState::RUNNING;
+    }
+    case EventType::EVICTOR: {
+      EvictorEvent evictor_event{event.time};
+      scheduler.evict(evictor_event, event_manager);
+      return ExecutionState::RUNNING;
+    }
+    case EventType::COMPUTE_COMPLETER: {
+      ComputeCompleterEvent complete_event{event.time, event.task, event.device};
+      scheduler.complete_compute_task(complete_event, event_manager);
+      return ExecutionState::RUNNING;
+    }
+    case EventType::DATA_COMPLETER: {
+      DataCompleterEvent complete_event{event.time, event.task, event.device};
+      scheduler.complete_data_task(complete_event, event_manager);
+      return ExecutionState::RUNNING;
+    }
+    case EventType::EVICTOR_COMPLETER: {
+      EvictorCompleterEvent complete_event{event.time, event.task};
+      scheduler.complete_eviction_task(complete_event, event_manager);
+      return ExecutionState::RUNNING;
+    }
+    default:
+      spdlog::critical("Unknown event type: {}", static_cast<int>(event.type));
+      return ExecutionState::ERROR;
+    }
   }
 
-  void update_time(EventVariant &event) {
-    scheduler.update_time(get_time(event));
+  void update_time(const Event &event) {
+    scheduler.update_time(event.time);
   }
 
   size_t get_mappable_candidates(std::span<int64_t> v) {
@@ -325,7 +329,7 @@ public:
       return ExecutionState::EXTERNAL_MAPPING;
     }
 
-    EventVariant current_event = MapperEvent(0);
+    Event current_event{.type = EventType::MAPPER, .time = 0, .task = 0, .device = 0};
     ExecutionState execution_state = ExecutionState::RUNNING;
 
     while (execution_state == ExecutionState::RUNNING) {
@@ -358,20 +362,19 @@ public:
       }
 
       if (scheduler.needs_event_breakpoint_poll()) {
-        const auto event_time = get_time(current_event);
+        const auto event_time = current_event.time;
         if (scheduler.has_time_breakpoint() && scheduler.hit_time_breakpoint(event_time)) {
           execution_state = ExecutionState::BREAKPOINT;
           break;
         }
 
-        if (auto *completer = std::get_if<CompleterVariant>(&current_event)) {
-          const bool hit_task_breakpoint = std::visit(
-              [&](const auto &ce) { return scheduler.hit_task_breakpoint(ce.type, ce.task); },
-              *completer);
-          if (hit_task_breakpoint) {
-            execution_state = ExecutionState::BREAKPOINT;
-            break;
-          }
+        const bool is_completer = current_event.type == EventType::COMPUTE_COMPLETER ||
+                                  current_event.type == EventType::DATA_COMPLETER ||
+                                  current_event.type == EventType::EVICTOR_COMPLETER;
+        if (is_completer &&
+            scheduler.hit_task_breakpoint(current_event.type, current_event.task)) {
+          execution_state = ExecutionState::BREAKPOINT;
+          break;
         }
       }
     }

@@ -70,6 +70,15 @@ endif()
 
 if(DEFINED SPDLOG_ACTIVE_LEVEL)
     target_compile_definitions(backend PUBLIC SPDLOG_ACTIVE_LEVEL=${SPDLOG_ACTIVE_LEVEL})
+else()
+    target_compile_definitions(backend PUBLIC $<$<CONFIG:Release>:SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO>)
+endif()
+
+if(ENABLE_VECTORIZATION_REPORT)
+    target_compile_options(backend PRIVATE
+        $<$<CXX_COMPILER_ID:Clang>:-Rpass=loop-vectorize -Rpass-missed=loop-vectorize>
+        $<$<CXX_COMPILER_ID:GNU>:-fopt-info-vec-optimized -fopt-info-vec-missed>
+    )
 endif()
 
 if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)

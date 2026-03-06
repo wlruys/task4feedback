@@ -61,6 +61,16 @@ public:
   [[nodiscard]] std::size_t get_active_index() const noexcept { return active_index; }
   void set_active_queue(uint32_t index) noexcept { active_index = index; }
 
+  void reserve_each(std::size_t reserve_hint) noexcept {
+    if constexpr (requires(T &container, std::size_t n) { container.reserve(n); }) {
+      for (auto &container : containers) {
+        container.reserve(reserve_hint);
+      }
+    } else {
+      MONUnusedParameter(reserve_hint);
+    }
+  }
+
   void deactivate(uint32_t index) noexcept { viable_mask &= ~(1ULL << index); }
   void deactivate() noexcept { viable_mask &= ~(1ULL << active_index); }
   void deactivate_mask(uint64_t mask) noexcept { viable_mask &= ~mask; }

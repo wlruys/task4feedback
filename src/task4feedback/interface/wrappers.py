@@ -676,6 +676,9 @@ class SimulatorInput:
     task_noise: TaskNoise
     transition_conditions: fastsim.HysteresisTransitionConditions
     top_k_candidates: int = 1
+    expected_inflight_events: int = 0
+    expected_eviction_tasks: int = 0
+    expected_eviction_wave_keys: int = 0
 
     def __init__(
         self,
@@ -685,6 +688,9 @@ class SimulatorInput:
         task_noise: Optional[TaskNoise] = None,
         transition_conditions: Optional[fastsim.HysteresisTransitionConditions] = None,
         top_k_candidates: int = 1,
+        expected_inflight_events: int = 0,
+        expected_eviction_tasks: int = 0,
+        expected_eviction_wave_keys: int = 0,
     ):
         if transition_conditions is None:
             transition_conditions = fastsim.HysteresisTransitionConditions()
@@ -702,6 +708,9 @@ class SimulatorInput:
         self.system = system
         self.transition_conditions = transition_conditions
         self.top_k_candidates = top_k_candidates
+        self.expected_inflight_events = expected_inflight_events
+        self.expected_eviction_tasks = expected_eviction_tasks
+        self.expected_eviction_wave_keys = expected_eviction_wave_keys
 
     def to_input(self):
         return SchedulerInput(
@@ -713,6 +722,9 @@ class SimulatorInput:
             self.task_noise,
             self.transition_conditions,
             self.top_k_candidates,
+            self.expected_inflight_events,
+            self.expected_eviction_tasks,
+            self.expected_eviction_wave_keys,
         )
 
 

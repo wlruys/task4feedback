@@ -345,6 +345,24 @@ protected:
 
 public:
   MovementManager() = default;
+  MovementManager(const MovementManager &other) {
+    const auto active = other.movement_times.size();
+    const auto headroom = std::max<std::size_t>(64, active / 2);
+    movement_times.reserve(active + headroom);
+    movement_times.insert(other.movement_times.begin(), other.movement_times.end());
+  }
+
+  MovementManager &operator=(const MovementManager &other) {
+    if (this == &other) {
+      return *this;
+    }
+    const auto active = other.movement_times.size();
+    const auto headroom = std::max<std::size_t>(64, active / 2);
+    movement_times.clear();
+    movement_times.reserve(active + headroom);
+    movement_times.insert(other.movement_times.begin(), other.movement_times.end());
+    return *this;
+  }
 
   [[nodiscard]] bool is_moving(dataid_t data_id, devid_t destination) const {
     return movement_times.find(pack_movement_key(data_id, destination)) != movement_times.end();
@@ -913,6 +931,7 @@ public:
       movement_manager = o_.movement_manager;
     }
     initialized = o_.initialized;
+    valid_location_buffer.reserve(o_.valid_location_buffer.capacity());
   }
 
   void initialize(const Data &data, const Devices &devices, DeviceManager &device_manager) {
@@ -1040,8 +1059,11 @@ public:
 
   [[nodiscard]] mem_t total_size(const Data &data, std::span<const dataid_t> list) const {
     mem_t total_size = 0;
-    for (auto data_id : list) {
-      total_size += data.get_size(data_id);
+    const auto *sizes = data.sizes.data();
+    const auto *it = list.data();
+    const auto *end = it + list.size();
+    for (; it != end; ++it) {
+      total_size += sizes[*it];
     }
     return total_size;
   }
@@ -1049,10 +1071,14 @@ public:
   [[nodiscard]] mem_t local_size(const Data &data, std::span<const dataid_t> list,
                                  const LocationManager &locations, devid_t device_id) const {
     mem_t local_size = 0;
-    for (auto data_id : list) {
-      if (locations.is_valid(data_id, device_id)) {
-        local_size += data.get_size(data_id);
-      }
+    const auto device_mask = static_cast<devicemask_t>(1 << device_id);
+    const auto *sizes = data.sizes.data();
+    const auto *it = list.data();
+    const auto *end = it + list.size();
+    for (; it != end; ++it) {
+      const auto data_id = *it;
+      const auto flags = locations.get_location_flags(data_id);
+      local_size += (flags & device_mask) ? sizes[data_id] : 0;
     }
     return local_size;
   }
@@ -1075,10 +1101,14 @@ public:
   [[nodiscard]] mem_t non_local_size(const Data &data, std::span<const dataid_t> list,
                                      const LocationManager &locations, devid_t device_id) const {
     mem_t non_local_size = 0;
-    for (auto data_id : list) {
-      if (locations.is_invalid(data_id, device_id)) {
-        non_local_size += data.get_size(data_id);
-      }
+    const auto device_mask = static_cast<devicemask_t>(1 << device_id);
+    const auto *sizes = data.sizes.data();
+    const auto *it = list.data();
+    const auto *end = it + list.size();
+    for (; it != end; ++it) {
+      const auto data_id = *it;
+      const auto flags = locations.get_location_flags(data_id);
+      non_local_size += (flags & device_mask) ? 0 : sizes[data_id];
     }
     return non_local_size;
   }

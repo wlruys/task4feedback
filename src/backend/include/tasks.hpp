@@ -934,6 +934,12 @@ constexpr uint8_t RESERVABLE = 0x02; // unreserved == 0 && state == MAPPED
 constexpr uint8_t LAUNCHABLE = 0x04; // incomplete == 0 && state == RESERVED
 }
 
+#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
+constexpr bool kStoreEvictionTaskNames = true;
+#else
+constexpr bool kStoreEvictionTaskNames = false;
+#endif
+
 class StaticTaskInfo {
 
 protected:
@@ -1825,7 +1831,24 @@ protected:
     std::vector<int32_t> launch_priority;
     std::vector<timecount_t> launched_time;
     std::vector<timecount_t> completed_time;
+#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
     mutable std::vector<std::string> names;
+#endif
+
+    void reserve(std::size_t n) {
+      state.reserve(n);
+      flags.reserve(n);
+      data_id.reserve(n);
+      evicting_on.reserve(n);
+      compute_task.reserve(n);
+      source_device.reserve(n);
+      launch_priority.reserve(n);
+      launched_time.reserve(n);
+      completed_time.reserve(n);
+#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
+      names.reserve(n);
+#endif
+    }
   };
 
   ComputeRuntimeSoA compute;
@@ -1876,6 +1899,10 @@ public:
     data.resize(n);
   }
 
+  void reserve_eviction_tasks(std::size_t n) {
+    eviction.reserve(n);
+  }
+
   void initialize_compute_runtime(int32_t id, const StaticTaskInfo &static_info) {
     compute.state[id] = CumulativeState::SPAWNED;
     const auto n_deps =
@@ -1906,7 +1933,9 @@ public:
     eviction.launch_priority.push_back(0);
     eviction.launched_time.push_back(0);
     eviction.completed_time.push_back(0);
+#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
     eviction.names.emplace_back();
+#endif
     return id;
   }
 
@@ -2028,23 +2057,32 @@ public:
   }
   [[nodiscard]] uint8_t get_data_task_flags(taskid_t id) const { return data.flags[id]; }
 
-  [[nodiscard]] const std::string &get_eviction_task_name(taskid_t id) const {
+  [[nodiscard]] std::string get_eviction_task_name(taskid_t id) const {
     const auto idx = static_cast<std::size_t>(id);
+#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
     auto &name = eviction.names[idx];
-    if (name.empty()) {
-      constexpr std::size_t kPrefixLen = 13; // "EvictionTask_"
-      constexpr std::size_t kSepLen = 2;     // two underscores
-      constexpr std::size_t kMaxIntChars =
-          static_cast<std::size_t>(std::numeric_limits<int32_t>::digits10) + 2;
-      name.reserve(kPrefixLen + kSepLen + (3 * kMaxIntChars));
-      name.append("EvictionTask_");
-      append_decimal(name, eviction.compute_task[idx]);
-      name.push_back('_');
-      append_decimal(name, eviction.data_id[idx]);
-      name.push_back('_');
-      append_decimal(name, eviction.evicting_on[idx]);
+    if (!name.empty()) {
+      return name;
     }
+#endif
+    constexpr std::size_t kPrefixLen = 13; // "EvictionTask_"
+    constexpr std::size_t kSepLen = 2;     // two underscores
+    constexpr std::size_t kMaxIntChars =
+        static_cast<std::size_t>(std::numeric_limits<int32_t>::digits10) + 2;
+    std::string generated;
+    generated.reserve(kPrefixLen + kSepLen + (3 * kMaxIntChars));
+    generated.append("EvictionTask_");
+    append_decimal(generated, eviction.compute_task[idx]);
+    generated.push_back('_');
+    append_decimal(generated, eviction.data_id[idx]);
+    generated.push_back('_');
+    append_decimal(generated, eviction.evicting_on[idx]);
+#if T4F_ENABLE_DEBUG_CHECKS || (defined(SPDLOG_ACTIVE_LEVEL) && SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG)
+    name = generated;
     return name;
+#else
+    return generated;
+#endif
   }
   [[nodiscard]] int32_t get_eviction_task_evicting_on(taskid_t id) const {
     return eviction.evicting_on[id];
@@ -2370,7 +2408,10 @@ static inline taskid_t filter_tasks(std::span<const taskid_t> tasks, TaskIDList&
   
   out.resize(tasks.size());
   taskid_t w = 0;
-  for (const taskid_t tid : tasks) {
+  const taskid_t *it = tasks.data();
+  const taskid_t *end = it + tasks.size();
+  for (; it != end; ++it) {
+    const taskid_t tid = *it;
     out[w] = tid;
     w += static_cast<taskid_t>(pred(tid));
   }
@@ -2382,7 +2423,10 @@ static inline taskid_t filter_tasks(std::span<const taskid_t> tasks, TaskIDList&
 template <typename Predicate>
 static inline taskid_t count_tasks(std::span<const taskid_t> tasks, Predicate&& pred) {
   taskid_t count = 0;
-  for (const taskid_t tid : tasks) {
+  const taskid_t *it = tasks.data();
+  const taskid_t *end = it + tasks.size();
+  for (; it != end; ++it) {
+    const taskid_t tid = *it;
     count += static_cast<taskid_t>(pred(tid));
   }
   return count;
@@ -2390,7 +2434,10 @@ static inline taskid_t count_tasks(std::span<const taskid_t> tasks, Predicate&& 
 
 template <typename Predicate>
 [[nodiscard]] static inline bool any_tasks(std::span<const taskid_t> tasks, Predicate&& pred) {
-  for (const taskid_t tid : tasks) {
+  const taskid_t *it = tasks.data();
+  const taskid_t *end = it + tasks.size();
+  for (; it != end; ++it) {
+    const taskid_t tid = *it;
     if (pred(tid)) {
       return true;
     }

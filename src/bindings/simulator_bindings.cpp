@@ -34,11 +34,18 @@ void init_simulator_ext(nb::module_ &m) {
            nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(),
            nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>())
       .def(nb::init<Graph &, StaticTaskInfo &, Data &, Devices &, Topology &, TaskNoise &,
-                    HysteresisTransitionConditions &, int32_t>(),
+                    HysteresisTransitionConditions &, int32_t, std::size_t, std::size_t,
+                    std::size_t>(),
+           "graph"_a, "tasks"_a, "data"_a, "devices"_a, "topology"_a, "task_noise"_a,
+           "transition_conditions"_a, "top_k_candidates"_a, "expected_inflight_events"_a = 0,
+           "expected_eviction_tasks"_a = 0, "expected_eviction_wave_keys"_a = 0,
            nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(),
            nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>())
       .def(nb::init<Graph &, StaticTaskInfo &, Data &, Devices &, Topology &, TaskNoise &,
-                    int32_t>(),
+                    int32_t, std::size_t, std::size_t, std::size_t>(),
+           "graph"_a, "tasks"_a, "data"_a, "devices"_a, "topology"_a, "task_noise"_a,
+           "top_k_candidates"_a, "expected_inflight_events"_a = 0,
+           "expected_eviction_tasks"_a = 0, "expected_eviction_wave_keys"_a = 0,
            nb::keep_alive<1, 2>(), nb::keep_alive<1, 3>(), nb::keep_alive<1, 4>(),
            nb::keep_alive<1, 5>(), nb::keep_alive<1, 6>(), nb::keep_alive<1, 7>())
       .def(nb::init<SchedulerInput &>(), nb::keep_alive<1, 2>());

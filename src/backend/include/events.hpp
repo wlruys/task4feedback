@@ -2,10 +2,10 @@
 
 #include "resources.hpp"
 #include "settings.hpp"
+#include <algorithm>
 #include <cstddef>
-#include <queue>
+#include <stdexcept>
 #include <utility>
-#include <variant>
 #include <vector>
 
 enum class EventType : int8_t {
@@ -46,28 +46,28 @@ inline std::ostream &operator<<(std::ostream &os, EventType t) {
 struct MapperEvent {
   static constexpr EventType type = EventType::MAPPER;
   timecount_t time;
-  explicit MapperEvent(timecount_t t) : time(t) {
+  explicit MapperEvent(timecount_t t = 0) : time(t) {
   }
 };
 
 struct ReserverEvent {
   static constexpr EventType type = EventType::RESERVER;
   timecount_t time;
-  explicit ReserverEvent(timecount_t t) : time(t) {
+  explicit ReserverEvent(timecount_t t = 0) : time(t) {
   }
 };
 
 struct LauncherEvent {
   static constexpr EventType type = EventType::LAUNCHER;
   timecount_t time;
-  explicit LauncherEvent(timecount_t t) : time(t) {
+  explicit LauncherEvent(timecount_t t = 0) : time(t) {
   }
 };
 
 struct EvictorEvent {
   static constexpr EventType type = EventType::EVICTOR;
   timecount_t time;
-  explicit EvictorEvent(timecount_t t) : time(t) {
+  explicit EvictorEvent(timecount_t t = 0) : time(t) {
   }
 };
 
@@ -75,129 +75,188 @@ struct CompleterEvent {
   timecount_t time;
   taskid_t task;
   devid_t device;
-  CompleterEvent(timecount_t t, taskid_t tid, devid_t did) : time(t), task(tid), device(did) {
+  CompleterEvent(timecount_t t = 0, taskid_t tid = 0, devid_t did = 0)
+      : time(t), task(tid), device(did) {
   }
 };
 
 struct ComputeCompleterEvent : public CompleterEvent {
   static constexpr EventType type = EventType::COMPUTE_COMPLETER;
-  ComputeCompleterEvent(timecount_t t, taskid_t tid, devid_t did) : CompleterEvent(t, tid, did) {
+  ComputeCompleterEvent(timecount_t t = 0, taskid_t tid = 0, devid_t did = 0)
+      : CompleterEvent(t, tid, did) {
   }
 };
 
 struct DataCompleterEvent : public CompleterEvent {
   static constexpr EventType type = EventType::DATA_COMPLETER;
-  DataCompleterEvent(timecount_t t, taskid_t tid, devid_t did) : CompleterEvent(t, tid, did) {
+  DataCompleterEvent(timecount_t t = 0, taskid_t tid = 0, devid_t did = 0)
+      : CompleterEvent(t, tid, did) {
   }
 };
 
 struct EvictorCompleterEvent : public CompleterEvent {
   static constexpr EventType type = EventType::EVICTOR_COMPLETER;
-  EvictorCompleterEvent(timecount_t t, taskid_t tid) : CompleterEvent(t, tid, 0) {
+  EvictorCompleterEvent(timecount_t t = 0, taskid_t tid = 0) : CompleterEvent(t, tid, 0) {
   }
 };
 
-using CompleterVariant =
-    std::variant<ComputeCompleterEvent, DataCompleterEvent, EvictorCompleterEvent>;
-
-using EventVariant =
-    std::variant<MapperEvent, ReserverEvent, LauncherEvent, EvictorEvent, CompleterVariant>;
-
-struct TypeExtractor {
-  EventType operator()(MapperEvent const &) const noexcept {
-    return EventType::MAPPER;
-  }
-  EventType operator()(ReserverEvent const &) const noexcept {
-    return EventType::RESERVER;
-  }
-  EventType operator()(LauncherEvent const &) const noexcept {
-    return EventType::LAUNCHER;
-  }
-  EventType operator()(EvictorEvent const &) const noexcept {
-    return EventType::EVICTOR;
-  }
-  EventType operator()(CompleterVariant const &cv) const noexcept {
-    return std::visit([](auto const &e) -> EventType { return e.type; }, cv);
-  }
+struct Event {
+  EventType type{EventType::MAPPER};
+  timecount_t time{0};
+  taskid_t task{0};
+  devid_t device{0};
 };
 
-inline EventType get_type(EventVariant const &v) {
-  return std::visit(TypeExtractor{}, v);
-}
+class EventHeap {
+  std::vector<Event> heap_;
 
-inline timecount_t get_time(EventVariant const &v) {
-  return std::visit(
-      [](auto const &e) -> timecount_t {
-        if constexpr (std::is_same_v<std::decay_t<decltype(e)>, CompleterVariant>) {
-          return std::visit([](auto const &ce) -> timecount_t { return ce.time; }, e);
-        } else {
-          return e.time;
-        }
-      },
-      v);
-}
-
-// Comparator for our min-heap priority queue (earlier time ⇒ higher priority);
-// on tie, larger EventType -> higher priority so COMPLETER (4) goes first)
-struct EventVariantCompare {
-  bool operator()(EventVariant const &a, EventVariant const &b) const {
-    auto ta = get_time(a), tb = get_time(b);
-    if (ta != tb)
-      return ta > tb;
-    // if same time, we want the one with larger EventType first:
-    return get_type(a) < get_type(b);
+  [[nodiscard]] static bool higher_priority(const Event &lhs, const Event &rhs) noexcept {
+    if (lhs.time != rhs.time) {
+      return lhs.time < rhs.time;
+    }
+    return lhs.type > rhs.type;
   }
-};
 
-using EventQueue =
-    std::priority_queue<EventVariant, std::vector<EventVariant>, EventVariantCompare>;
+  void sift_up(std::size_t idx) noexcept {
+    while (idx > 0) {
+      const std::size_t parent = (idx - 1) / 2;
+      if (!higher_priority(heap_[idx], heap_[parent])) {
+        break;
+      }
+      std::swap(heap_[idx], heap_[parent]);
+      idx = parent;
+    }
+  }
 
-class EventManager {
-  EventQueue events_;
+  void sift_down(std::size_t idx) noexcept {
+    const std::size_t n = heap_.size();
+    while (true) {
+      const std::size_t left = idx * 2 + 1;
+      const std::size_t right = left + 1;
+      std::size_t best = idx;
+      if (left < n && higher_priority(heap_[left], heap_[best])) {
+        best = left;
+      }
+      if (right < n && higher_priority(heap_[right], heap_[best])) {
+        best = right;
+      }
+      if (best == idx) {
+        return;
+      }
+      std::swap(heap_[idx], heap_[best]);
+      idx = best;
+    }
+  }
 
 public:
+  EventHeap() = default;
+  explicit EventHeap(std::size_t reserve_hint) {
+    heap_.reserve(reserve_hint);
+  }
+  EventHeap(const EventHeap &other) {
+    const auto active = other.heap_.size();
+    const auto headroom = std::max<std::size_t>(64, active / 2);
+    heap_.reserve(active + headroom);
+    heap_.insert(heap_.end(), other.heap_.begin(), other.heap_.end());
+  }
+  EventHeap &operator=(const EventHeap &other) {
+    if (this == &other) {
+      return *this;
+    }
+    const auto active = other.heap_.size();
+    const auto headroom = std::max<std::size_t>(64, active / 2);
+    heap_.clear();
+    heap_.reserve(active + headroom);
+    heap_.insert(heap_.end(), other.heap_.begin(), other.heap_.end());
+    return *this;
+  }
+
+  void reserve(std::size_t reserve_hint) {
+    heap_.reserve(reserve_hint);
+  }
+
+  void push(Event event) noexcept {
+    heap_.push_back(event);
+    sift_up(heap_.size() - 1);
+  }
+
+  [[nodiscard]] const Event &top() const noexcept {
+    T4F_INVARIANT(!heap_.empty());
+    return heap_.front();
+  }
+
+  Event pop() noexcept {
+    T4F_INVARIANT(!heap_.empty());
+    Event next = heap_.front();
+    if (heap_.size() == 1) {
+      heap_.pop_back();
+      return next;
+    }
+    heap_.front() = heap_.back();
+    heap_.pop_back();
+    sift_down(0);
+    return next;
+  }
+
+  [[nodiscard]] bool empty() const noexcept {
+    return heap_.empty();
+  }
+
+  [[nodiscard]] std::size_t size() const noexcept {
+    return heap_.size();
+  }
+};
+
+class EventManager {
+  EventHeap events_;
+
+public:
+  EventManager() = default;
+  explicit EventManager(std::size_t reserve_hint) : events_(reserve_hint) {
+  }
+
+  void reserve(std::size_t reserve_hint) {
+    events_.reserve(reserve_hint);
+  }
+
   // No-payload events:
   inline void create_event(EventType t, timecount_t time) {
     switch (t) {
     case EventType::MAPPER:
-      events_.push(MapperEvent{time});
+      events_.push(Event{.type = EventType::MAPPER, .time = time});
       break;
     case EventType::RESERVER:
-      events_.push(ReserverEvent{time});
+      events_.push(Event{.type = EventType::RESERVER, .time = time});
       break;
     case EventType::LAUNCHER:
-      events_.push(LauncherEvent{time});
+      events_.push(Event{.type = EventType::LAUNCHER, .time = time});
       break;
     case EventType::EVICTOR:
-      events_.push(EvictorEvent{time});
+      events_.push(Event{.type = EventType::EVICTOR, .time = time});
       break;
     default:
-      throw std::invalid_argument("create_event(type,time) only for MAPPER/RESERVER/LAUNCHER");
+      throw std::invalid_argument(
+          "create_event(type,time) only for MAPPER/RESERVER/LAUNCHER/EVICTOR");
     }
   }
 
   inline void create_event(EventType t, timecount_t time, taskid_t task_id, devid_t device_id) {
     switch (t) {
-    case EventType::COMPUTE_COMPLETER: {
-      events_.push(ComputeCompleterEvent{time, task_id, device_id});
+    case EventType::COMPUTE_COMPLETER:
+    case EventType::DATA_COMPLETER:
+      events_.push(Event{.type = t, .time = time, .task = task_id, .device = device_id});
       break;
-    }
-    case EventType::DATA_COMPLETER: {
-      events_.push(DataCompleterEvent{time, task_id, device_id});
+    case EventType::EVICTOR_COMPLETER:
+      events_.push(Event{.type = t, .time = time, .task = task_id, .device = 0});
       break;
-    }
-    case EventType::EVICTOR_COMPLETER: {
-      events_.push(EvictorCompleterEvent{time, task_id});
-      break;
-    }
     default:
       throw std::invalid_argument("create_event(type,time, task_id, device_id) only for "
                                   "COMPUTE_COMPLETER/DATA_COMPLETER/EVICTOR_COMPLETER");
     }
   }
 
-  inline void add_event(EventVariant ev) {
-    events_.push(std::move(ev));
+  inline void add_event(Event ev) {
+    events_.push(ev);
   }
 
   [[nodiscard]] bool has_events() const {
@@ -208,14 +267,12 @@ public:
   }
 
   // Peek at the next event (by const‐ref):
-  [[nodiscard]] inline EventVariant const &peek_next_event() const {
+  [[nodiscard]] inline Event const &peek_next_event() const {
     return events_.top();
   }
 
   // Pop and return by value:
-  inline EventVariant pop_event() {
-    auto ev = events_.top();
-    events_.pop();
-    return ev;
+  inline Event pop_event() {
+    return events_.pop();
   }
 };
