@@ -1749,7 +1749,7 @@ protected:
     std::vector<int32_t> launch_priority;
     std::vector<timecount_t> launched_time;
     std::vector<timecount_t> completed_time;
-    std::vector<std::string> names;
+    mutable std::vector<std::string> names;
   };
 
   ComputeRuntimeSoA compute;
@@ -1830,10 +1830,7 @@ public:
     eviction.launch_priority.push_back(0);
     eviction.launched_time.push_back(0);
     eviction.completed_time.push_back(0);
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "EvictionTask_%d_%d_%d", compute_task_id, data_id,
-                  evicting_on_device_id);
-    eviction.names.emplace_back(buf);
+    eviction.names.emplace_back();
     return id;
   }
 
@@ -1956,7 +1953,22 @@ public:
   [[nodiscard]] uint8_t get_data_task_flags(taskid_t id) const { return data.flags[id]; }
 
   [[nodiscard]] const std::string &get_eviction_task_name(taskid_t id) const {
-    return eviction.names[id];
+    const auto idx = static_cast<std::size_t>(id);
+    auto &name = eviction.names[idx];
+    if (name.empty()) {
+      constexpr std::size_t kPrefixLen = 13; // "EvictionTask_"
+      constexpr std::size_t kSepLen = 2;     // two underscores
+      constexpr std::size_t kMaxIntChars =
+          static_cast<std::size_t>(std::numeric_limits<int32_t>::digits10) + 2;
+      name.reserve(kPrefixLen + kSepLen + (3 * kMaxIntChars));
+      name.append("EvictionTask_");
+      append_decimal(name, eviction.compute_task[idx]);
+      name.push_back('_');
+      append_decimal(name, eviction.data_id[idx]);
+      name.push_back('_');
+      append_decimal(name, eviction.evicting_on[idx]);
+    }
+    return name;
   }
   [[nodiscard]] int32_t get_eviction_task_evicting_on(taskid_t id) const {
     return eviction.evicting_on[id];
