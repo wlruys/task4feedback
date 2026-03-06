@@ -57,16 +57,7 @@ void init_mapper_ext(nb::module_ &m) {
   nb::class_<EFTMapper, Mapper>(m, "EFTMapper")
       .def(nb::init<>())
       .def(nb::init<std::size_t, std::size_t>(), "num_tasks"_a, "num_devices"_a)
-      .def(nb::init<EFTMapper &>(), "other"_a)
-      .def("get_best_device", &EFTMapper::get_best_device, "task_id"_a, "state"_a)
-      .def("get_dependency_finish_time", &EFTMapper::get_dependency_finish_time, "task_id"_a,
-           "state"_a)
-      .def("get_device_available_time", &EFTMapper::get_device_available_time, "device_id"_a,
-           "state"_a)
-      .def("get_finish_time", &EFTMapper::get_finish_time, "task_id"_a, "device_id"_a, "start_t"_a,
-           "state"_a)
-      .def("time_for_transfer", &EFTMapper::time_for_transfer, "task_id"_a, "device_id"_a,
-           "state"_a);
+      .def(nb::init<EFTMapper &>(), "other"_a);
 
   nb::class_<DequeueEFTMapper, EFTMapper>(m, "DequeueEFTMapper")
       .def(nb::init<>())

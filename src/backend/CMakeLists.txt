@@ -1,4 +1,5 @@
 add_library(backend STATIC)
+
 target_sources(backend
   PRIVATE
     queues.cpp
@@ -30,19 +31,15 @@ target_sources(backend
         include/parmetis_wrapper.hpp
 )
 
-                                         
 target_compile_features(backend PUBLIC cxx_std_20)
 set_target_properties(backend PROPERTIES
-    POSITION_INDEPENDENT_CODE ON
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE ON 
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN YES
-    PUBLIC_HEADER_SET          cxx_hdr
-    BUILD_RPATH "$ORIGIN"
-    INSTALL_RPATH "$ORIGIN"
-)
-
-set_target_properties(backend PROPERTIES
+  POSITION_INDEPENDENT_CODE ON
+  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES
+  PUBLIC_HEADER_SET cxx_hdr
+  BUILD_RPATH "$ORIGIN"
+  INSTALL_RPATH "$ORIGIN"
   UNITY_BUILD ON
 )
 
@@ -63,7 +60,14 @@ target_compile_definitions(backend
     T4F_MAX_DEVICES=${T4F_MAX_DEVICES}
 )
 
-target_link_libraries(backend PUBLIC project_warnings spdlog::spdlog_header_only fmt::fmt tracy_headers unordered_dense::unordered_dense)
+target_link_libraries(backend
+  PUBLIC
+    project_warnings
+    spdlog::spdlog_header_only
+    fmt::fmt
+    tracy_headers
+    unordered_dense::unordered_dense
+)
 
 if(SIM_RECORD)
     target_compile_definitions(backend PUBLIC SIM_RECORD)
@@ -85,11 +89,6 @@ endif()
 if(ENABLE_MIMALLOC AND NOT ENABLE_ASAN)
     target_link_libraries(backend PRIVATE mimalloc::mimalloc)
     target_compile_definitions(backend PRIVATE MI_MALLOC_OVERRIDE=1)
-endif()
-
-if(ENABLE_TRACY)
-    target_link_libraries(backend PUBLIC TracyClient)
-    target_compile_definitions(backend PUBLIC ENABLE_TRACY TRACY_ENABLE TRACY_ON_DEMAND)
 endif()
 
 if(ENABLE_PARMETIS)

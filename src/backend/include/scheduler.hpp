@@ -1598,6 +1598,11 @@ protected:
   // __restrict__ helps loads/stores in hot mapping paths.
   timecount_t * __restrict__ finish_time_record{nullptr};
 
+  // Pre-allocated vectors for hot mapping loops to avoid reallocations
+  std::vector<mem_t> cached_data_sizes_;
+  std::vector<devicemask_t> cached_data_locations_;
+  std::vector<std::pair<DeviceType, timecount_t>> cached_durations_;
+
   void reset_moved_from() noexcept {
     n_tasks_ = 0;
     finish_time_record = nullptr;
@@ -1645,47 +1650,11 @@ protected:
            state.counts.n_completed() == 0;
   }
 
-public:
   void record_finish_time(taskid_t task_id, timecount_t time) {
     finish_time_record[task_id] = time;
   }
 
-  timecount_t time_for_transfer(dataid_t data_id, devid_t destination,
-                                const SchedulerState &state) {
-    auto &data_manager = state.get_data_manager();
-    const auto &communication_manager = state.get_communication_manager();
-    auto location_flags = data_manager.get_mapped_location_flags(data_id);
-
-    const auto &topology = state.get_topology();
-    const mem_t data_size = state.get_data().get_size(data_id);
-    SourceRequest req =
-        communication_manager.get_best_source(topology, destination, location_flags);
-    T4F_INVARIANT(req.found);
-    return communication_manager.ideal_time_to_transfer(topology, data_size, req.source,
-                                                        destination);
-  }
-
-  timecount_t get_finish_time(taskid_t compute_task_id, devid_t device_id, timecount_t start_t,
-                              const SchedulerState &state) {
-    const auto read_set = state.get_tasks().get_read(compute_task_id);
-    const DeviceType arch = state.get_devices().get_type(device_id);
-    timecount_t duration = state.get_tasks().get_mean_duration(compute_task_id, arch);
-    timecount_t data_time = 0;
-
-    for (auto data_id : read_set) {
-      timecount_t transfer_time = time_for_transfer(data_id, device_id, state);
-      data_time += transfer_time;
-    }
-
-    return start_t + data_time + duration;
-  }
-
-  timecount_t virtual get_device_available_time(devid_t device_id, const SchedulerState &state) {
-    timecount_t reserved_workload = state.costs.get_reserved_time(device_id);
-    return state.get_global_time() + reserved_workload;
-  }
-
-  timecount_t get_dependency_finish_time(taskid_t compute_task_id, const SchedulerState &state) {
+  timecount_t get_dependency_finish_time(taskid_t compute_task_id, const SchedulerState &state) const {
     const auto dependencies = state.get_tasks().get_compute_task_dependencies(compute_task_id);
     timecount_t max_finish = 0;
     for (const auto dependency_id : dependencies) {
@@ -1694,20 +1663,71 @@ public:
     return max_finish;
   }
 
-  DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state) {
+  template <typename AvailTimeFunc>
+  DeviceTime get_best_device(taskid_t task_id, const SchedulerState &state, AvailTimeFunc&& get_device_available) {
     fill_device_targets(task_id, state);
     T4F_INVARIANT(!device_buffer.empty());
     const timecount_t dep_time = get_dependency_finish_time(task_id, state);
 
+    const auto &tasks = state.get_tasks();
+    const auto &data_manager = state.get_data_manager();
+    const auto &data = state.get_data();
+    const auto &communication_manager = state.get_communication_manager();
+    const auto &topology = state.get_topology();
+    const auto &devices = state.get_devices();
+
+    const auto read_set = tasks.get_read(task_id);
+
+    cached_data_sizes_.clear();
+    cached_data_locations_.clear();
+    
+    // Hint the capacity to prevent re-allocations
+    cached_data_sizes_.reserve(read_set.size());
+    cached_data_locations_.reserve(read_set.size());
+
+    for (auto data_id : read_set) {
+      cached_data_sizes_.push_back(data.get_size(data_id));
+      cached_data_locations_.push_back(data_manager.get_mapped_location_flags(data_id));
+    }
+
+    // Cache the execution duration per architecture type natively to avoid duplicate lookups
+    cached_durations_.clear();
+    auto get_cached_duration = [&](DeviceType arch) {
+      for (const auto& [a, d] : cached_durations_) {
+        if (a == arch) return d;
+      }
+      auto d = tasks.get_mean_duration(task_id, arch);
+      cached_durations_.push_back({arch, d});
+      return d;
+    };
+
     auto min_time = MAX_TIME;
     auto best_device = device_buffer[0];
+
     for (auto device_id : device_buffer) {
-      const timecount_t device_available = get_device_available_time(device_id, state);
+      const timecount_t device_available = get_device_available(device_id);
       const timecount_t start_time = std::max(device_available, dep_time);
-      const timecount_t finish_time = get_finish_time(task_id, device_id, start_time, state);
-      SPDLOG_DEBUG("Task {} on device {}: start_time = {}, finish_time = {}, dep_time = {}, "
-                   "device_available = {}",
-                   task_id, device_id, start_time, finish_time, dep_time, device_available);
+
+      const DeviceType arch = devices.get_type(device_id);
+      timecount_t duration = get_cached_duration(arch);
+
+      // Early Pruning: skip calculating data transfer costs if sheer compute/wait is worse
+      if (start_time + duration >= min_time) {
+        continue;
+      }
+
+      timecount_t data_time = 0;
+
+      for (std::size_t i = 0; i < cached_data_sizes_.size(); ++i) {
+        SourceRequest source_req =
+            communication_manager.get_best_source(topology, device_id, cached_data_locations_[i]);
+        T4F_INVARIANT(source_req.found);
+        data_time += communication_manager.ideal_time_to_transfer(topology, cached_data_sizes_[i],
+                                                                  source_req.source, device_id);
+      }
+
+      const timecount_t finish_time = start_time + data_time + duration;
+
       if (finish_time < min_time) {
         min_time = finish_time;
         best_device = device_id;
@@ -1717,6 +1737,7 @@ public:
     return {best_device, min_time};
   }
 
+public:
   EFTMapper() = default;
 
   EFTMapper(const EFTMapper &other) : Mapper(other), n_tasks_(other.n_tasks_) {
@@ -1728,7 +1749,10 @@ public:
 
   EFTMapper(EFTMapper &&other) noexcept
       : Mapper(std::move(other)), buf_(std::move(other.buf_)), n_tasks_(other.n_tasks_),
-        finish_time_record(other.finish_time_record) {
+        finish_time_record(other.finish_time_record),
+        cached_data_sizes_(std::move(other.cached_data_sizes_)),
+        cached_data_locations_(std::move(other.cached_data_locations_)),
+        cached_durations_(std::move(other.cached_durations_)) {
     other.reset_moved_from();
   }
 
@@ -1738,6 +1762,9 @@ public:
       buf_ = std::move(other.buf_);
       n_tasks_ = other.n_tasks_;
       finish_time_record = other.finish_time_record;
+      cached_data_sizes_ = std::move(other.cached_data_sizes_);
+      cached_data_locations_ = std::move(other.cached_data_locations_);
+      cached_durations_ = std::move(other.cached_durations_);
       other.reset_moved_from();
     }
     return *this;
@@ -1756,7 +1783,9 @@ public:
     if (should_reset_for_new_run(state)) {
       reset_task_buffers();
     }
-    auto [best_device, min_time] = get_best_device(compute_task_id, state);
+    auto [best_device, min_time] = get_best_device(compute_task_id, state, [&](devid_t device_id) {
+      return state.get_global_time() + state.costs.get_reserved_time(device_id);
+    });
     record_finish_time(compute_task_id, min_time);
     auto mp = state.get_mapping_priority(compute_task_id);
     return Action(0, best_device, mp, mp);
@@ -1768,10 +1797,6 @@ class DequeueEFTMapper : public EFTMapper {
   std::vector<timecount_t> device_available_time_buffer;
 
 public:
-  timecount_t get_device_available_time(devid_t device_id, const SchedulerState &state) override {
-    return std::max(state.get_global_time(), device_available_time_buffer.at(device_id));
-  }
-
   void set_device_available_time(devid_t device_id, timecount_t time) {
     device_available_time_buffer.at(device_id) = time;
   }
@@ -1790,7 +1815,6 @@ public:
   }
 
   Action map_task(taskid_t compute_task_id, const SchedulerState &state) override {
-    SPDLOG_DEBUG("Mapping compute task {} with DequeueEFTMapper", compute_task_id);
     ensure_task_buffers_size(static_cast<std::size_t>(state.get_tasks().get_n_compute_tasks()));
     if (should_reset_for_new_run(state)) {
       reset_task_buffers();
@@ -1801,7 +1825,9 @@ public:
       device_available_time_buffer.resize(state.get_devices().size(), state.get_global_time());
     }
 
-    auto [best_device, min_time] = get_best_device(compute_task_id, state);
+    auto [best_device, min_time] = get_best_device(compute_task_id, state, [&](devid_t device_id) {
+      return std::max(state.get_global_time(), device_available_time_buffer.at(device_id));
+    });
     record_finish_time(compute_task_id, min_time);
     set_device_available_time(best_device, min_time);
     const auto mp = state.get_mapping_priority(compute_task_id);
